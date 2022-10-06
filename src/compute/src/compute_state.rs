@@ -170,18 +170,26 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 }
             }
 
-            crate::render::build_compute_dataflow(
-                self.timely_worker,
-                &mut self.compute_state,
-                dataflow,
-            );
+            crate::render::build_compute_dataflow(self.timely_worker, self.compute_state, dataflow);
         }
     }
 
     fn handle_allow_compaction(&mut self, list: Vec<(GlobalId, Antichain<Timestamp>)>) {
+        // Report the final uppers for collections we allow to compact to the empty frontier, to
+        // give clients that don't observe all commands the opportunity to clean up their state for
+        // these collections.
+        //
+        // Note that we must *not* report final uppers for subscribe sinks. We do not emit
+        // `FrontierUppers` for those sinks, as their advancement is tracked through
+        // `SubscribeResponse`s.
+        let mut final_uppers = Vec::new();
+
         for (id, frontier) in list {
             if frontier.is_empty() {
                 // Indicates that we may drop `id`, as there are no more valid times to read.
+
+                let is_subscribe = self.compute_state.sink_tokens.contains_key(&id)
+                    && !self.compute_state.sink_write_frontiers.contains_key(&id);
 
                 // Sink-specific work:
                 self.compute_state.sink_write_frontiers.remove(&id);
@@ -190,22 +198,29 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 self.compute_state.traces.del_trace(&id);
 
                 // Work common to sinks and indexes (removing frontier tracking and cleaning up logging).
-                let frontier = self
+                let prev_frontier = self
                     .compute_state
                     .reported_frontiers
                     .remove(&id)
                     .expect("Dropped compute collection with no frontier");
                 if let Some(logger) = self.compute_state.compute_logger.as_mut() {
                     logger.log(ComputeEvent::Dataflow(id, false));
-                    for time in frontier.elements().iter() {
+                    for time in prev_frontier.elements().iter() {
                         logger.log(ComputeEvent::Frontier(id, *time, -1));
                     }
+                }
+                if !prev_frontier.is_empty() && !is_subscribe {
+                    final_uppers.push((id, Antichain::new()));
                 }
             } else {
                 self.compute_state
                     .traces
                     .allow_compaction(id, frontier.borrow());
             }
+        }
+
+        if !final_uppers.is_empty() {
+            self.send_compute_response(ComputeResponse::FrontierUppers(final_uppers));
         }
     }
 
@@ -316,28 +331,28 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         if !logging.log_logging {
             // Construct logging dataflows and endpoints before registering any.
             t_traces.extend(logging::timely::construct(
-                &mut self.timely_worker,
+                self.timely_worker,
                 logging,
                 self.compute_state,
                 Rc::clone(&t_linked),
                 t_activator.clone(),
             ));
             r_traces.extend(logging::reachability::construct(
-                &mut self.timely_worker,
+                self.timely_worker,
                 logging,
                 self.compute_state,
                 Rc::clone(&r_linked),
                 r_activator.clone(),
             ));
             d_traces.extend(logging::differential::construct(
-                &mut self.timely_worker,
+                self.timely_worker,
                 logging,
                 self.compute_state,
                 Rc::clone(&d_linked),
                 d_activator.clone(),
             ));
             c_traces.extend(logging::compute::construct(
-                &mut self.timely_worker,
+                self.timely_worker,
                 logging,
                 self.compute_state,
                 Rc::clone(&c_linked),
@@ -457,28 +472,28 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             // Create log processing dataflows after registering logging so we can log the
             // logging.
             t_traces.extend(logging::timely::construct(
-                &mut self.timely_worker,
+                self.timely_worker,
                 logging,
                 self.compute_state,
                 t_linked,
                 t_activator,
             ));
             r_traces.extend(logging::reachability::construct(
-                &mut self.timely_worker,
+                self.timely_worker,
                 logging,
                 self.compute_state,
                 r_linked,
                 r_activator,
             ));
             d_traces.extend(logging::differential::construct(
-                &mut self.timely_worker,
+                self.timely_worker,
                 logging,
                 self.compute_state,
                 d_linked,
                 d_activator,
             ));
             c_traces.extend(logging::compute::construct(
-                &mut self.timely_worker,
+                self.timely_worker,
                 logging,
                 self.compute_state,
                 c_linked,
@@ -571,7 +586,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             }
 
             new_uppers.push((id, new_frontier.clone()));
-            prev_frontier.clone_from(&new_frontier);
+            prev_frontier.clone_from(new_frontier);
         };
 
         let mut new_frontier = Antichain::new();

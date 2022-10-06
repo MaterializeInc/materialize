@@ -24,6 +24,7 @@ use tokio::select;
 use tokio::time::{self, Duration, Instant};
 use tracing::{debug, warn, Instrument};
 
+use mz_adapter::catalog::SYSTEM_USER;
 use mz_adapter::session::User;
 use mz_adapter::session::{
     EndTransactionAction, ExternalUserMetadata, InProgressRows, Portal, PortalState,
@@ -121,12 +122,22 @@ where
 
     let user = params.remove("user").unwrap_or_else(String::new);
 
-    // Validate that builtin roles only log in via an internal port.
-    if !internal && mz_adapter::catalog::is_reserved_name(user.as_str()) {
-        let msg = format!("unauthorized login to user '{user}'");
-        return conn
-            .send(ErrorResponse::fatal(SqlState::INSUFFICIENT_PRIVILEGE, msg))
-            .await;
+    if internal {
+        // The internal server can only be used to connect to the system user.
+        if user != SYSTEM_USER.name {
+            let msg = format!("unauthorized login to user '{user}'");
+            return conn
+                .send(ErrorResponse::fatal(SqlState::INSUFFICIENT_PRIVILEGE, msg))
+                .await;
+        }
+    } else {
+        // The external server cannot be used to connect to any system users.
+        if mz_adapter::catalog::is_reserved_name(user.as_str()) {
+            let msg = format!("unauthorized login to user '{user}'");
+            return conn
+                .send(ErrorResponse::fatal(SqlState::INSUFFICIENT_PRIVILEGE, msg))
+                .await;
+        }
     }
 
     // Validate that the connection is compatible with the TLS mode.
@@ -839,7 +850,7 @@ where
         // Start a transaction if we aren't in one.
         self.start_transaction(Some(1)).await;
 
-        let stmt = match self.adapter_client.get_prepared_statement(&name).await {
+        let stmt = match self.adapter_client.get_prepared_statement(name).await {
             Ok(stmt) => stmt,
             Err(err) => {
                 return self
@@ -859,7 +870,7 @@ where
         // though the true result formats are not yet known. A bit
         // weird, but this is the behavior that PostgreSQL specifies.
         let formats = vec![mz_pgrepr::Format::Text; stmt.desc().arity()];
-        let row_desc = describe_rows(&stmt.desc(), &formats);
+        let row_desc = describe_rows(stmt.desc(), &formats);
         self.send_all([parameter_desc, row_desc]).await?;
         Ok(State::Ready)
     }
@@ -1017,7 +1028,7 @@ where
         if self.adapter_client.session().transaction().is_implicit() {
             self.commit_transaction().await?;
         }
-        return self.ready().await;
+        self.ready().await
     }
 
     async fn ready(&mut self) -> Result<State, io::Error> {
@@ -1232,7 +1243,7 @@ where
             | ExecuteResponse::AlteredObject(..)
             | ExecuteResponse::AlteredSystemConfiguraion
             | ExecuteResponse::CreatedComputeInstance { .. }
-            | ExecuteResponse::CreatedComputeInstanceReplica { .. }
+            | ExecuteResponse::CreatedComputeReplica { .. }
             | ExecuteResponse::CreatedConnection { .. }
             | ExecuteResponse::CreatedDatabase { .. }
             | ExecuteResponse::CreatedIndex { .. }
@@ -1252,7 +1263,7 @@ where
             | ExecuteResponse::DiscardedAll
             | ExecuteResponse::DiscardedTemp
             | ExecuteResponse::DroppedComputeInstance
-            | ExecuteResponse::DroppedComputeInstanceReplicas
+            | ExecuteResponse::DroppedComputeReplica
             | ExecuteResponse::DroppedConnection
             | ExecuteResponse::DroppedDatabase
             | ExecuteResponse::DroppedIndex
@@ -1382,7 +1393,7 @@ where
                                 .await;
                         }
                         for (i, (d, t)) in datums.iter().zip(col_types).enumerate() {
-                            if !d.is_instance_of(&t) {
+                            if !d.is_instance_of(t) {
                                 return self
                                     .error(ErrorResponse::error(
                                         SqlState::INTERNAL_ERROR,

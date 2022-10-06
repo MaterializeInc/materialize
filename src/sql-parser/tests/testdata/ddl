@@ -29,7 +29,7 @@ CREATE TABLE uk_cities (
 ----
 CREATE TABLE uk_cities (name varchar(100) NOT NULL, lat float8 NULL, lng float8, constrained int4 NULL CONSTRAINT pkey PRIMARY KEY NOT NULL UNIQUE CHECK (constrained > 0), ref int4 REFERENCES othertable (a, b))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("uk_cities")]), columns: [ColumnDef { name: Ident("name"), data_type: Other { name: Name(UnresolvedObjectName([Ident("varchar")])), typ_mod: [100] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("lat"), data_type: Other { name: Name(UnresolvedObjectName([Ident("float8")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Null }] }, ColumnDef { name: Ident("lng"), data_type: Other { name: Name(UnresolvedObjectName([Ident("float8")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("constrained"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Null }, ColumnOptionDef { name: Some(Ident("pkey")), option: Unique { is_primary: true } }, ColumnOptionDef { name: None, option: NotNull }, ColumnOptionDef { name: None, option: Unique { is_primary: false } }, ColumnOptionDef { name: None, option: Check(Op { op: Op { namespace: [], op: ">" }, expr1: Identifier([Ident("constrained")]), expr2: Some(Value(Number("0"))) }) }] }, ColumnDef { name: Ident("ref"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: ForeignKey { foreign_table: UnresolvedObjectName([Ident("othertable")]), referred_columns: [Ident("a"), Ident("b")] } }] }], constraints: [], with_options: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("uk_cities")]), columns: [ColumnDef { name: Ident("name"), data_type: Other { name: Name(UnresolvedObjectName([Ident("varchar")])), typ_mod: [100] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("lat"), data_type: Other { name: Name(UnresolvedObjectName([Ident("float8")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Null }] }, ColumnDef { name: Ident("lng"), data_type: Other { name: Name(UnresolvedObjectName([Ident("float8")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("constrained"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Null }, ColumnOptionDef { name: Some(Ident("pkey")), option: Unique { is_primary: true } }, ColumnOptionDef { name: None, option: NotNull }, ColumnOptionDef { name: None, option: Unique { is_primary: false } }, ColumnOptionDef { name: None, option: Check(Op { op: Op { namespace: [], op: ">" }, expr1: Identifier([Ident("constrained")]), expr2: Some(Value(Number("0"))) }) }] }, ColumnDef { name: Ident("ref"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: ForeignKey { foreign_table: UnresolvedObjectName([Ident("othertable")]), referred_columns: [Ident("a"), Ident("b")] } }] }], constraints: [], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE t (a int NOT NULL GARBAGE)
@@ -41,16 +41,16 @@ CREATE TABLE t (a int NOT NULL GARBAGE)
 parse-statement
 CREATE TABLE t (c int) WITH (foo = 'bar', a = 123)
 ----
-CREATE TABLE t (c int4) WITH (foo = 'bar', a = 123)
-=>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], with_options: [WithOption { key: Ident("foo"), value: Some(Value(String("bar"))) }, WithOption { key: Ident("a"), value: Some(Value(Number("123"))) }], if_not_exists: false, temporary: false })
+error: Expected end of statement, found WITH
+CREATE TABLE t (c int) WITH (foo = 'bar', a = 123)
+                       ^
 
 parse-statement
 CREATE TABLE types_table (char_col char, bpchar_col bpchar, text_col text, bool_col boolean, date_col date, time_col time, timestamp_col timestamp, uuid_col uuid, double_col double precision);
 ----
 CREATE TABLE types_table (char_col bpchar, bpchar_col bpchar, text_col text, bool_col bool, date_col date, time_col time, timestamp_col timestamp, uuid_col uuid, double_col float8)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("types_table")]), columns: [ColumnDef { name: Ident("char_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("bpchar")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("bpchar_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("bpchar")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("text_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("text")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("bool_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("bool")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("date_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("date")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("time_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("time")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("timestamp_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamp")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("uuid_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("uuid")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("double_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("float8")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], with_options: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("types_table")]), columns: [ColumnDef { name: Ident("char_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("bpchar")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("bpchar_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("bpchar")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("text_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("text")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("bool_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("bool")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("date_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("date")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("time_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("time")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("timestamp_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamp")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("uuid_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("uuid")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("double_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("float8")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE t
@@ -64,14 +64,14 @@ CREATE TABLE t ()
 ----
 CREATE TABLE t ()
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [], constraints: [], with_options: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [], constraints: [], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TEMP TABLE t ()
 ----
 CREATE TEMPORARY TABLE t ()
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [], constraints: [], with_options: [], if_not_exists: false, temporary: true })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [], constraints: [], if_not_exists: false, temporary: true })
 
 parse-statement
 CREATE TABLE foo (bar int,)
@@ -85,14 +85,14 @@ CREATE TABLE foo (bar int list)
 ----
 CREATE TABLE foo (bar int4 list)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("bar"), data_type: List(Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }), collation: None, options: [] }], constraints: [], with_options: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("bar"), data_type: List(Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }), collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE foo (bar int list list)
 ----
 CREATE TABLE foo (bar int4 list list)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("bar"), data_type: List(List(Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] })), collation: None, options: [] }], constraints: [], with_options: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("bar"), data_type: List(List(Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] })), collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE tab (foo int,
@@ -106,105 +106,105 @@ CREATE TABLE foo (id int, CONSTRAINT address_pkey PRIMARY KEY (address_id))
 ----
 CREATE TABLE foo (id int4, CONSTRAINT address_pkey PRIMARY KEY (address_id))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: Some(Ident("address_pkey")), columns: [Ident("address_id")], is_primary: true }], with_options: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: Some(Ident("address_pkey")), columns: [Ident("address_id")], is_primary: true }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE foo (id int, CONSTRAINT uk_task UNIQUE (report_date, task_id))
 ----
 CREATE TABLE foo (id int4, CONSTRAINT uk_task UNIQUE (report_date, task_id))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: Some(Ident("uk_task")), columns: [Ident("report_date"), Ident("task_id")], is_primary: false }], with_options: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: Some(Ident("uk_task")), columns: [Ident("report_date"), Ident("task_id")], is_primary: false }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE foo (id int, CONSTRAINT customer_address_id_fkey FOREIGN KEY (address_id) REFERENCES public.address(address_id))
 ----
 CREATE TABLE foo (id int4, CONSTRAINT customer_address_id_fkey FOREIGN KEY (address_id) REFERENCES public.address(address_id))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [ForeignKey { name: Some(Ident("customer_address_id_fkey")), columns: [Ident("address_id")], foreign_table: Name(UnresolvedObjectName([Ident("public"), Ident("address")])), referred_columns: [Ident("address_id")] }], with_options: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [ForeignKey { name: Some(Ident("customer_address_id_fkey")), columns: [Ident("address_id")], foreign_table: Name(UnresolvedObjectName([Ident("public"), Ident("address")])), referred_columns: [Ident("address_id")] }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TEMPORARY TABLE foo (id int, CONSTRAINT ck CHECK (rtrim(ltrim(ref_code)) <> ''))
 ----
 CREATE TEMPORARY TABLE foo (id int4, CONSTRAINT ck CHECK (rtrim(ltrim(ref_code)) <> ''))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: Some(Ident("ck")), expr: Op { op: Op { namespace: [], op: "<>" }, expr1: Function(Function { name: UnresolvedObjectName([Ident("rtrim")]), args: Args { args: [Function(Function { name: UnresolvedObjectName([Ident("ltrim")]), args: Args { args: [Identifier([Ident("ref_code")])], order_by: [] }, filter: None, over: None, distinct: false })], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(String(""))) } }], with_options: [], if_not_exists: false, temporary: true })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: Some(Ident("ck")), expr: Op { op: Op { namespace: [], op: "<>" }, expr1: Function(Function { name: UnresolvedObjectName([Ident("rtrim")]), args: Args { args: [Function(Function { name: UnresolvedObjectName([Ident("ltrim")]), args: Args { args: [Identifier([Ident("ref_code")])], order_by: [] }, filter: None, over: None, distinct: false })], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(String(""))) } }], if_not_exists: false, temporary: true })
 
 parse-statement
 CREATE TABLE foo (id int, PRIMARY KEY (foo, bar))
 ----
 CREATE TABLE foo (id int4, PRIMARY KEY (foo, bar))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: None, columns: [Ident("foo"), Ident("bar")], is_primary: true }], with_options: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: None, columns: [Ident("foo"), Ident("bar")], is_primary: true }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE foo (id int, UNIQUE (id))
 ----
 CREATE TABLE foo (id int4, UNIQUE (id))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: None, columns: [Ident("id")], is_primary: false }], with_options: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: None, columns: [Ident("id")], is_primary: false }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE foo (id int, FOREIGN KEY (foo, bar) REFERENCES anothertable(foo, bar))
 ----
 CREATE TABLE foo (id int4, FOREIGN KEY (foo, bar) REFERENCES anothertable(foo, bar))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [ForeignKey { name: None, columns: [Ident("foo"), Ident("bar")], foreign_table: Name(UnresolvedObjectName([Ident("anothertable")])), referred_columns: [Ident("foo"), Ident("bar")] }], with_options: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [ForeignKey { name: None, columns: [Ident("foo"), Ident("bar")], foreign_table: Name(UnresolvedObjectName([Ident("anothertable")])), referred_columns: [Ident("foo"), Ident("bar")] }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE foo (id int, CHECK (end_date > start_date OR end_date IS NULL))
 ----
 CREATE TABLE foo (id int4, CHECK (end_date > start_date OR end_date IS NULL))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: Or { left: Op { op: Op { namespace: [], op: ">" }, expr1: Identifier([Ident("end_date")]), expr2: Some(Identifier([Ident("start_date")])) }, right: IsExpr { expr: Identifier([Ident("end_date")]), construct: Null, negated: false } } }], with_options: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: Or { left: Op { op: Op { namespace: [], op: ">" }, expr1: Identifier([Ident("end_date")]), expr2: Some(Identifier([Ident("start_date")])) }, right: IsExpr { expr: Identifier([Ident("end_date")]), construct: Null, negated: false } } }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE foo (id int, CHECK (end_date > start_date OR end_date IS UNKNOWN))
 ----
 CREATE TABLE foo (id int4, CHECK (end_date > start_date OR end_date IS UNKNOWN))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: Or { left: Op { op: Op { namespace: [], op: ">" }, expr1: Identifier([Ident("end_date")]), expr2: Some(Identifier([Ident("start_date")])) }, right: IsExpr { expr: Identifier([Ident("end_date")]), construct: Unknown, negated: false } } }], with_options: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: Or { left: Op { op: Op { namespace: [], op: ">" }, expr1: Identifier([Ident("end_date")]), expr2: Some(Identifier([Ident("start_date")])) }, right: IsExpr { expr: Identifier([Ident("end_date")]), construct: Unknown, negated: false } } }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE foo (id int, CHECK (start_date IS TRUE))
 ----
 CREATE TABLE foo (id int4, CHECK (start_date IS TRUE))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: IsExpr { expr: Identifier([Ident("start_date")]), construct: True, negated: false } }], with_options: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: IsExpr { expr: Identifier([Ident("start_date")]), construct: True, negated: false } }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TEMP TABLE t (c schema.type)
 ----
 CREATE TEMPORARY TABLE t (c schema.type)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedObjectName([Ident("schema"), Ident("type")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], with_options: [], if_not_exists: false, temporary: true })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedObjectName([Ident("schema"), Ident("type")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: true })
 
 parse-statement
 CREATE TABLE t (c db.schema.type)
 ----
 CREATE TABLE t (c db.schema.type)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedObjectName([Ident("db"), Ident("schema"), Ident("type")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], with_options: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedObjectName([Ident("db"), Ident("schema"), Ident("type")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE t (c "db"."schema"."type")
 ----
 CREATE TABLE t (c db.schema.type)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedObjectName([Ident("db"), Ident("schema"), Ident("type")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], with_options: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedObjectName([Ident("db"), Ident("schema"), Ident("type")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE t (c something.db.schema.type)
 ----
 CREATE TABLE t (c something.db.schema.type)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedObjectName([Ident("something"), Ident("db"), Ident("schema"), Ident("type")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], with_options: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedObjectName([Ident("something"), Ident("db"), Ident("schema"), Ident("type")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TEMP TABLE t (c db.schema.type(0,1,100))
 ----
 CREATE TEMPORARY TABLE t (c db.schema.type(0, 1, 100))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedObjectName([Ident("db"), Ident("schema"), Ident("type")])), typ_mod: [0, 1, 100] }, collation: None, options: [] }], constraints: [], with_options: [], if_not_exists: false, temporary: true })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedObjectName([Ident("db"), Ident("schema"), Ident("type")])), typ_mod: [0, 1, 100] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: true })
 
 parse-statement
 CREATE TABLE t (c time with time zone (0,1,100))
@@ -232,14 +232,14 @@ CREATE TABLE t (c "type"(1))
 ----
 CREATE TABLE t (c type(1))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedObjectName([Ident("type")])), typ_mod: [1] }, collation: None, options: [] }], constraints: [], with_options: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedObjectName([Ident("type")])), typ_mod: [1] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE t (c "type"(1) list list)
 ----
 CREATE TABLE t (c type(1) list list)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: List(List(Other { name: Name(UnresolvedObjectName([Ident("type")])), typ_mod: [1] })), collation: None, options: [] }], constraints: [], with_options: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: List(List(Other { name: Name(UnresolvedObjectName([Ident("type")])), typ_mod: [1] })), collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE DATABASE IF EXISTS foo
@@ -407,14 +407,14 @@ CREATE CONNECTION pgconn FOR postgres HOST foo, PORT 1234, SSL CERTIFICATE AUTHO
 ----
 CREATE CONNECTION pgconn FOR POSTGRES HOST = foo, PORT = 1234, SSL CERTIFICATE AUTHORITY = 'foo', SSH TUNNEL = tun
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("pgconn")]), connection: Postgres { with_options: [PostgresConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, PostgresConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("foo"))) }, PostgresConnectionOption { name: SshTunnel, value: Some(Object(Name(UnresolvedObjectName([Ident("tun")])))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("pgconn")]), connection: Postgres { with_options: [PostgresConnectionOption { name: Host, value: Some(Object(Name(UnresolvedObjectName([Ident("foo")])))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, PostgresConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("foo"))) }, PostgresConnectionOption { name: SshTunnel, value: Some(Object(Name(UnresolvedObjectName([Ident("tun")])))) }] }, if_not_exists: false })
 
 parse-statement
 CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red');
 ----
 CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, legacy_with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], subsources: None })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (REPLICATION FACTOR = 7, RETENTION MS = 10000, RETENTION BYTES = 10000000000, TOPIC 'topic') FORMAT BYTES
@@ -457,6 +457,34 @@ CREATE SINK IF EXISTS foo FROM bar INTO 'baz'
 error: Expected NOT, found EXISTS
 CREATE SINK IF EXISTS foo FROM bar INTO 'baz'
                ^
+
+parse-statement
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES WITH (SNAPSHOT = true)
+----
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES WITH (SNAPSHOT = true)
+=>
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(true))) }] })
+
+parse-statement
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES WITH (SNAPSHOT = false)
+----
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES WITH (SNAPSHOT = false)
+=>
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(false))) }] })
+
+parse-statement
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES WITH (SIZE = 'xlarge')
+----
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES WITH (SIZE = 'xlarge')
+=>
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Size, value: Some(Value(String("xlarge"))) }] })
+
+parse-statement
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES WITH (SIZE = 'xlarge', SNAPSHOT = true)
+----
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES WITH (SIZE = 'xlarge', SNAPSHOT = true)
+=>
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Size, value: Some(Value(String("xlarge"))) }, CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(true))) }] })
 
 parse-statement
 CREATE INDEX foo ON myschema.bar (a, b)
@@ -760,9 +788,9 @@ CREATE TABLE public.customer (
         active integer NOT NULL
 ) WITH (fillfactor = 20, user_catalog_table = true, autovacuum_vacuum_threshold = 100)
 ----
-CREATE TABLE public.customer (customer_id int4 DEFAULT nextval(public.customer_customer_id_seq), store_id int2 NOT NULL, first_name varchar(45) NOT NULL, last_name varchar(45) COLLATE "es_ES" NOT NULL, email varchar(50), address_id int2 NOT NULL, activebool bool DEFAULT true NOT NULL, create_date date DEFAULT now()::text NOT NULL, last_update timestamp DEFAULT now() NOT NULL, last_update_tz timestamptz, active int4 NOT NULL) WITH (fillfactor = 20, user_catalog_table = true, autovacuum_vacuum_threshold = 100)
-=>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("public"), Ident("customer")]), columns: [ColumnDef { name: Ident("customer_id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Default(Function(Function { name: UnresolvedObjectName([Ident("nextval")]), args: Args { args: [Identifier([Ident("public"), Ident("customer_customer_id_seq")])], order_by: [] }, filter: None, over: None, distinct: false })) }] }, ColumnDef { name: Ident("store_id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int2")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("first_name"), data_type: Other { name: Name(UnresolvedObjectName([Ident("varchar")])), typ_mod: [45] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("last_name"), data_type: Other { name: Name(UnresolvedObjectName([Ident("varchar")])), typ_mod: [45] }, collation: Some(UnresolvedObjectName([Ident("es_ES")])), options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("email"), data_type: Other { name: Name(UnresolvedObjectName([Ident("varchar")])), typ_mod: [50] }, collation: None, options: [] }, ColumnDef { name: Ident("address_id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int2")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("activebool"), data_type: Other { name: Name(UnresolvedObjectName([Ident("bool")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Default(Value(Boolean(true))) }, ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("create_date"), data_type: Other { name: Name(UnresolvedObjectName([Ident("date")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Default(Cast { expr: Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), data_type: Other { name: Name(UnresolvedObjectName([Ident("text")])), typ_mod: [] } }) }, ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("last_update"), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamp")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Default(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })) }, ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("last_update_tz"), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamptz")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("active"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }], constraints: [], with_options: [WithOption { key: Ident("fillfactor"), value: Some(Value(Number("20"))) }, WithOption { key: Ident("user_catalog_table"), value: Some(Value(Boolean(true))) }, WithOption { key: Ident("autovacuum_vacuum_threshold"), value: Some(Value(Number("100"))) }], if_not_exists: false, temporary: false })
+error: Expected end of statement, found WITH
+) WITH (fillfactor = 20, user_catalog_table = true, autovacuum_vacuum_threshold = 100)
+  ^
 
 parse-statement roundtrip
 CREATE TABLE public.customer (
@@ -857,7 +885,7 @@ ALTER SOURCE name SET (SIZE LARGE)
 ----
 ALTER SOURCE name SET (SIZE = large)
 =>
-AlterSource(AlterSourceStatement { source_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: SetOptions([CreateSourceOption { name: Size, value: Some(Ident(Ident("large"))) }]) })
+AlterSource(AlterSourceStatement { source_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: SetOptions([CreateSourceOption { name: Size, value: Some(Object(Name(UnresolvedObjectName([Ident("large")])))) }]) })
 
 parse-statement
 ALTER SOURCE name RESET (SIZE)
@@ -931,53 +959,18 @@ CREATE CLUSTER cluster REPLICAS ()
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([])] })
 
 parse-statement
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION INTERVAL '1s'
+CREATE CLUSTER cluster WITH REPLICAS ()
 ----
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION INTERVAL '1s'
-=>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionInterval(Value(String("1s")))] })
-
-parse-statement
-CREATE CLUSTER cluster INTROSPECTION INTERVAL '1s', REPLICAS ()
-----
-CREATE CLUSTER cluster INTROSPECTION INTERVAL '1s', REPLICAS ()
-=>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [IntrospectionInterval(Value(String("1s"))), Replicas([])] })
-
-parse-statement
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION INTERVAL = '1s'
-----
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION INTERVAL '1s'
-=>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionInterval(Value(String("1s")))] })
-
-parse-statement
-CREATE CLUSTER cluster WITH REPLICAS (), INTROSPECTION INTERVAL = '1s'
-----
-error: Expected one of REPLICAS or INTROSPECTION, found WITH
-CREATE CLUSTER cluster WITH REPLICAS (), INTROSPECTION INTERVAL = '1s'
+error: Expected end of statement, found WITH
+CREATE CLUSTER cluster WITH REPLICAS ()
                        ^
 
 parse-statement
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION INTERVAL = 0
-----
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION INTERVAL 0
-=>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionInterval(Value(Number("0")))] })
-
-parse-statement
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION INTERVAL = NULL
-----
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION INTERVAL NULL
-=>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionInterval(Value(Null))] })
-
-parse-statement
 CREATE CLUSTER cluster REPLICAS (), BADOPT
 ----
-error: Expected one of REPLICAS or INTROSPECTION, found identifier "badopt"
+error: Expected end of statement, found comma
 CREATE CLUSTER cluster REPLICAS (), BADOPT
-                                    ^
+                                  ^
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1']))
@@ -987,11 +980,18 @@ CREATE CLUSTER cluster REPLICAS (a (REMOTE = ['host1']))
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Value(Array([String("host1")]))) }] }])] })
 
 parse-statement
-CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1']), b (SIZE '1')), INTROSPECTION INTERVAL '1s'
+CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1']), b (SIZE '1'))
 ----
-CREATE CLUSTER cluster REPLICAS (a (REMOTE = ['host1']), b (SIZE = '1')), INTROSPECTION INTERVAL '1s'
+CREATE CLUSTER cluster REPLICAS (a (REMOTE = ['host1']), b (SIZE = '1'))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Value(Array([String("host1")]))) }] }, ReplicaDefinition { name: Ident("b"), options: [ReplicaOption { name: Size, value: Some(Value(String("1"))) }] }]), IntrospectionInterval(Value(String("1s")))] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Value(Array([String("host1")]))) }] }, ReplicaDefinition { name: Ident("b"), options: [ReplicaOption { name: Size, value: Some(Value(String("1"))) }] }])] })
+
+parse-statement
+CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1'], INTROSPECTION INTERVAL '1s', INTROSPECTION DEBUGGING true), b (SIZE '1', INTROSPECTION INTERVAL 0))
+----
+CREATE CLUSTER cluster REPLICAS (a (REMOTE = ['host1'], INTROSPECTION INTERVAL = '1s', INTROSPECTION DEBUGGING = true), b (SIZE = '1', INTROSPECTION INTERVAL = 0))
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Value(Array([String("host1")]))) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(String("1s"))) }, ReplicaOption { name: IntrospectionDebugging, value: Some(Value(Boolean(true))) }] }, ReplicaDefinition { name: Ident("b"), options: [ReplicaOption { name: Size, value: Some(Value(String("1"))) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(Number("0"))) }] }])] })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1'], SIZE '1'))
@@ -1055,6 +1055,27 @@ CREATE CLUSTER REPLICA default.replica REMOTE ['host1'], AVAILABILITY ZONE 'a'
 CREATE CLUSTER REPLICA default.replica REMOTE = ['host1'], AVAILABILITY ZONE = 'a'
 =>
 CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Remote, value: Some(Value(Array([String("host1")]))) }, ReplicaOption { name: AvailabilityZone, value: Some(Value(String("a"))) }] } })
+
+parse-statement
+CREATE CLUSTER REPLICA default.replica SIZE 'small', INTROSPECTION INTERVAL '1s', INTROSPECTION DEBUGGING = false
+----
+CREATE CLUSTER REPLICA default.replica SIZE = 'small', INTROSPECTION INTERVAL = '1s', INTROSPECTION DEBUGGING = false
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(String("1s"))) }, ReplicaOption { name: IntrospectionDebugging, value: Some(Value(Boolean(false))) }] } })
+
+parse-statement
+CREATE CLUSTER REPLICA default.replica INTROSPECTION INTERVAL = 0, SIZE 'small'
+----
+CREATE CLUSTER REPLICA default.replica INTROSPECTION INTERVAL = 0, SIZE = 'small'
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: IntrospectionInterval, value: Some(Value(Number("0"))) }, ReplicaOption { name: Size, value: Some(Value(String("small"))) }] } })
+
+parse-statement
+CREATE CLUSTER REPLICA default.replica REMOTE ['host1'], INTROSPECTION INTERVAL NULL
+----
+CREATE CLUSTER REPLICA default.replica REMOTE = ['host1'], INTROSPECTION INTERVAL = NULL
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Remote, value: Some(Value(Array([String("host1")]))) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(Null)) }] } })
 
 parse-statement
 DROP CLUSTER cluster
@@ -1176,11 +1197,11 @@ DROP CONNECTION conn1
 DropObjects(DropObjectsStatement { object_type: Connection, if_exists: false, names: [UnresolvedObjectName([Ident("conn1")])], cascade: false })
 
 parse-statement
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') LEGACYWITH (consistency = 'lug') FORMAT BYTES
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT BYTES
 ----
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') LEGACYWITH (consistency = 'lug') FORMAT BYTES
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT BYTES
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), legacy_with_options: [WithOption { key: Ident("consistency"), value: Some(Value(String("lug"))) }], include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, key_constraint: None, with_options: [] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, key_constraint: None, with_options: [], subsources: None })
 
 parse-statement
 CREATE CONNECTION conn1 FOR CONFLUENT SCHEMA REGISTRY URL 'http://localhost:8081', USERNAME 'user', PASSWORD 'word'
@@ -1194,7 +1215,7 @@ CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT AVRO USING C
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), legacy_with_options: [], include_metadata: [], format: Bare(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedObjectName([Ident("conn2")])), options: [] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Debezium(Plain)), if_not_exists: false, key_constraint: None, with_options: [] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedObjectName([Ident("conn2")])), options: [] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Debezium(Plain)), if_not_exists: false, key_constraint: None, with_options: [], subsources: None })
 
 
 parse-statement
@@ -1202,7 +1223,7 @@ CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT PROTOBUF USI
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), legacy_with_options: [], include_metadata: [], format: Bare(Protobuf(Csr { csr_connection: CsrConnectionProtobuf { connection: CsrConnection { connection: Name(UnresolvedObjectName([Ident("conn2")])), options: [] }, seed: None } })), envelope: Some(Debezium(Plain)), if_not_exists: false, key_constraint: None, with_options: [] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Protobuf(Csr { csr_connection: CsrConnectionProtobuf { connection: CsrConnection { connection: Name(UnresolvedObjectName([Ident("conn2")])), options: [] }, seed: None } })), envelope: Some(Debezium(Plain)), if_not_exists: false, key_constraint: None, with_options: [], subsources: None })
 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') ENVELOPE DEBEZIUM (TRANSACTION METADATA (SOURCE a.b.c, COLLECTION 'foo'))
@@ -1253,14 +1274,14 @@ CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
 ----
 CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("lg")]), col_names: [], connection: LoadGenerator { generator: Counter, options: [] }, legacy_with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("lg")]), col_names: [], connection: LoadGenerator { generator: Counter, options: [] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], subsources: None })
 
 parse-statement
-CREATE SOURCE lg FROM LOAD GENERATOR COUNTER TICK INTERVAL '1s'
+CREATE SOURCE lg FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1s')
 ----
-CREATE SOURCE lg FROM LOAD GENERATOR COUNTER TICK INTERVAL = '1s'
+CREATE SOURCE lg FROM LOAD GENERATOR COUNTER (TICK INTERVAL = '1s')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("lg")]), col_names: [], connection: LoadGenerator { generator: Counter, options: [LoadGeneratorOption { name: TickInterval, value: Some(Value(String("1s"))) }] }, legacy_with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("lg")]), col_names: [], connection: LoadGenerator { generator: Counter, options: [LoadGeneratorOption { name: TickInterval, value: Some(Value(String("1s"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], subsources: None })
 
 # Ensure that we can parse REMOTE with pg
 parse-statement
@@ -1268,15 +1289,15 @@ CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') with (
 ----
 CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') WITH (REMOTE = 'johto:42')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, legacy_with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Remote, value: Some(Value(String("johto:42"))) }] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Remote, value: Some(Value(String("johto:42"))) }], subsources: None })
 
-# Ensure that we can parse legacy and non-legacy options
+# Ensure that we can parse options
 parse-statement
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') legacywith (a = 'hmm') with (REMOTE 'johto:42');
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') with (REMOTE 'johto:42');
 ----
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') LEGACYWITH (a = 'hmm') WITH (REMOTE = 'johto:42')
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') WITH (REMOTE = 'johto:42')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, legacy_with_options: [WithOption { key: Ident("a"), value: Some(Value(String("hmm"))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Remote, value: Some(Value(String("johto:42"))) }] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Remote, value: Some(Value(String("johto:42"))) }], subsources: None })
 
 parse-statement
 ALTER SYSTEM SET wal_level TO logical

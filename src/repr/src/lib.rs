@@ -35,7 +35,6 @@ pub mod explain_new;
 pub mod global_id;
 pub mod strconv;
 pub mod url;
-pub mod util;
 
 use std::{convert::TryFrom, num::TryFromIntError, time::Duration};
 
@@ -76,6 +75,46 @@ use serde::{Deserialize, Serialize, Serializer};
 pub struct Timestamp {
     /// note no `pub`.
     internal: u64,
+}
+
+pub trait TimestampManipulation:
+    timely::progress::Timestamp
+    + timely::order::TotalOrder
+    + differential_dataflow::lattice::Lattice
+    + std::fmt::Debug
+{
+    /// Advance a timestamp by the least amount possible such that
+    /// `ts.less_than(ts.step_forward())` is true. Panic if unable to do so.
+    fn step_forward(&self) -> Self;
+
+    /// Advance a timestamp forward by the given `amount`. Panic if unable to do so.
+    fn step_forward_by(&self, amount: &Self) -> Self;
+
+    /// Retreat a timestamp by the least amount possible such that
+    /// `ts.step_back().unwrap().less_than(ts)` is true. Return `None` if unable,
+    /// which must only happen if the timestamp is `Timestamp::minimum()`.
+    fn step_back(&self) -> Option<Self>;
+
+    /// Return the maximum value for this timestamp.
+    fn maximum() -> Self;
+}
+
+impl TimestampManipulation for Timestamp {
+    fn step_forward(&self) -> Self {
+        self.step_forward()
+    }
+
+    fn step_forward_by(&self, amount: &Self) -> Self {
+        self.step_forward_by(amount)
+    }
+
+    fn step_back(&self) -> Option<Self> {
+        self.step_back()
+    }
+
+    fn maximum() -> Self {
+        Self::MAX
+    }
 }
 
 impl Timestamp {

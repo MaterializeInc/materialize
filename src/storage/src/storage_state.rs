@@ -170,24 +170,25 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         .insert(ingestion.id, ingestion.description.clone());
 
                     // Initialize shared frontier tracking.
-                    self.storage_state.source_uppers.insert(
-                        ingestion.id,
-                        Rc::new(RefCell::new(Antichain::from_elem(
-                            mz_repr::Timestamp::minimum(),
-                        ))),
-                    );
+                    for export_id in ingestion.description.source_exports.keys() {
+                        self.storage_state.source_uppers.insert(
+                            *export_id,
+                            Rc::new(RefCell::new(Antichain::from_elem(
+                                mz_repr::Timestamp::minimum(),
+                            ))),
+                        );
+                        self.storage_state.reported_frontiers.insert(
+                            *export_id,
+                            Antichain::from_elem(mz_repr::Timestamp::minimum()),
+                        );
+                    }
 
                     crate::render::build_ingestion_dataflow(
-                        &mut self.timely_worker,
+                        self.timely_worker,
                         &mut self.storage_state,
                         ingestion.id,
                         ingestion.description,
                         ingestion.resume_upper,
-                    );
-
-                    self.storage_state.reported_frontiers.insert(
-                        ingestion.id,
-                        Antichain::from_elem(mz_repr::Timestamp::minimum()),
                     );
                 }
             }
@@ -205,7 +206,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     );
 
                     crate::render::build_export_dataflow(
-                        &mut self.timely_worker,
+                        self.timely_worker,
                         &mut self.storage_state,
                         export.id,
                         export.description,
@@ -255,7 +256,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             let reported_frontier = self
                 .storage_state
                 .reported_frontiers
-                .get_mut(&id)
+                .get_mut(id)
                 .expect("Reported frontier missing!");
 
             let observed_frontier = frontier.borrow();

@@ -11,16 +11,19 @@ use std::cmp::{self, Ordering};
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::iter;
+use std::ops::Deref;
 use std::str;
 use std::str::FromStr;
 
 use ::encoding::label::encoding_from_whatwg_label;
 use ::encoding::DecoderTrap;
-use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Timelike, Utc};
 use fallible_iterator::FallibleIterator;
 use hmac::{Hmac, Mac};
 use itertools::Itertools;
 use md5::{Digest, Md5};
+use mz_ore::result::ResultExt;
+use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use num::traits::CheckedNeg;
 use proptest_derive::Arbitrary;
 use regex::RegexBuilder;
@@ -296,35 +299,42 @@ fn add_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     }
 }
 
-fn add_timestamplike_interval<'a, T>(a: T, b: Interval) -> Result<Datum<'a>, EvalError>
+fn add_timestamplike_interval<'a, T>(
+    a: CheckedTimestamp<T>,
+    b: Interval,
+) -> Result<Datum<'a>, EvalError>
 where
     T: TimestampLike,
 {
-    let mut dt = a.date_time();
-    dt = add_timestamp_months(dt, b.months)?;
-    dt = dt
+    let dt = a.date_time();
+    let dt = add_timestamp_months(&dt, b.months)?;
+    let dt = dt
         .checked_add_signed(b.duration_as_chrono())
         .ok_or(EvalError::TimestampOutOfRange)?;
-    Ok(T::from_date_time(dt).into())
+    T::from_date_time(dt).try_into().err_into()
 }
 
-fn sub_timestamplike_interval<'a, T>(a: T, b: Datum) -> Result<Datum<'a>, EvalError>
+fn sub_timestamplike_interval<'a, T>(
+    a: CheckedTimestamp<T>,
+    b: Datum,
+) -> Result<Datum<'a>, EvalError>
 where
     T: TimestampLike,
 {
     neg_interval_inner(b).and_then(|i| add_timestamplike_interval(a, i))
 }
 
-fn add_date_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn add_date_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let date = a.unwrap_date();
     let time = b.unwrap_time();
 
-    Datum::Timestamp(NaiveDate::from(date).and_hms_nano(
+    let dt = NaiveDate::from(date).and_hms_nano(
         time.hour(),
         time.minute(),
         time.second(),
         time.nanosecond(),
-    ))
+    );
+    Ok(dt.try_into()?)
 }
 
 fn add_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -332,11 +342,11 @@ fn add_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalEr
     let interval = b.unwrap_interval();
 
     let dt = NaiveDate::from(date).and_hms(0, 0, 0);
-    let dt = add_timestamp_months(dt, interval.months)?;
-    Ok(Datum::Timestamp(
-        dt.checked_add_signed(interval.duration_as_chrono())
-            .ok_or(EvalError::TimestampOutOfRange)?,
-    ))
+    let dt = add_timestamp_months(&dt, interval.months)?;
+    let dt = dt
+        .checked_add_signed(interval.duration_as_chrono())
+        .ok_or(EvalError::TimestampOutOfRange)?;
+    Ok(dt.try_into()?)
 }
 
 fn add_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -465,12 +475,12 @@ fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>
     }
 }
 
-pub fn add_timestamp_months(
-    dt: NaiveDateTime,
+pub fn add_timestamp_months<T: TimestampLike>(
+    dt: &T,
     mut months: i32,
-) -> Result<NaiveDateTime, EvalError> {
+) -> Result<CheckedTimestamp<T>, EvalError> {
     if months == 0 {
-        return Ok(dt);
+        return Ok(CheckedTimestamp::from_timestamplike(dt.clone())?);
     }
 
     let (mut year, mut month, mut day) = (dt.year(), dt.month0() as i32, dt.day());
@@ -507,7 +517,9 @@ pub fn add_timestamp_months(
     //
     // Both my testing and https://dba.stackexchange.com/a/105829 support the
     // idea that we should ignore leap seconds
-    Ok(new_d.and_hms_nano(dt.hour(), dt.minute(), dt.second(), dt.nanosecond()))
+    let new_dt = new_d.and_hms_nano(dt.hour(), dt.minute(), dt.second(), dt.nanosecond());
+    let new_dt = T::from_date_time(new_dt);
+    Ok(CheckedTimestamp::from_timestamplike(new_dt)?)
 }
 
 fn add_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -792,12 +804,11 @@ fn sub_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalEr
         .months
         .checked_neg()
         .ok_or(EvalError::IntervalOutOfRange)
-        .and_then(|months| add_timestamp_months(dt, months))?;
-
-    Ok(Datum::Timestamp(
-        dt.checked_sub_signed(interval.duration_as_chrono())
-            .ok_or(EvalError::TimestampOutOfRange)?,
-    ))
+        .and_then(|months| add_timestamp_months(&dt, months))?;
+    let dt = dt
+        .checked_sub_signed(interval.duration_as_chrono())
+        .ok_or(EvalError::TimestampOutOfRange)?;
+    Ok(dt.try_into()?)
 }
 
 fn sub_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -1246,7 +1257,7 @@ fn gte<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a >= b)
 }
 
-fn to_char_timestamplike<'a, T>(ts: T, format: &str, temp_storage: &'a RowArena) -> Datum<'a>
+fn to_char_timestamplike<'a, T>(ts: &T, format: &str, temp_storage: &'a RowArena) -> Datum<'a>
 where
     T: TimestampLike,
 {
@@ -1523,280 +1534,6 @@ fn jsonb_delete_string<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowAren
     }
 }
 
-/// A timestamp with both a date and a time component, but not necessarily a
-/// timezone component.
-pub trait TimestampLike:
-    Clone
-    + PartialOrd
-    + std::ops::Add<Duration, Output = Self>
-    + std::ops::Sub<Duration, Output = Self>
-    + std::ops::Sub<Output = Duration>
-    + for<'a> Into<Datum<'a>>
-    + for<'a> TryFrom<Datum<'a>, Error = ()>
-    + TimeLike
-    + DateLike
-{
-    fn new(date: NaiveDate, time: NaiveTime) -> Self;
-
-    /// Returns the weekday as a `usize` between 0 and 6, where 0 represents
-    /// Sunday and 6 represents Saturday.
-    fn weekday0(&self) -> usize {
-        self.weekday().num_days_from_sunday() as usize
-    }
-
-    /// Like [`chrono::Datelike::year_ce`], but works on the ISO week system.
-    fn iso_year_ce(&self) -> u32 {
-        let year = self.iso_week().year();
-        if year < 1 {
-            (1 - year) as u32
-        } else {
-            year as u32
-        }
-    }
-
-    fn timestamp(&self) -> i64;
-
-    fn timestamp_subsec_micros(&self) -> u32;
-
-    fn extract_epoch<T>(&self) -> T
-    where
-        T: DecimalLike,
-    {
-        T::lossy_from(self.timestamp()) + T::from(self.timestamp_subsec_micros()) / T::from(1e6)
-    }
-
-    fn truncate_microseconds(&self) -> Self {
-        let time = NaiveTime::from_hms_micro(
-            self.hour(),
-            self.minute(),
-            self.second(),
-            self.nanosecond() / 1_000,
-        );
-
-        Self::new(self.date(), time)
-    }
-
-    fn truncate_milliseconds(&self) -> Self {
-        let time = NaiveTime::from_hms_milli(
-            self.hour(),
-            self.minute(),
-            self.second(),
-            self.nanosecond() / 1_000_000,
-        );
-
-        Self::new(self.date(), time)
-    }
-
-    fn truncate_second(&self) -> Self {
-        let time = NaiveTime::from_hms(self.hour(), self.minute(), self.second());
-
-        Self::new(self.date(), time)
-    }
-
-    fn truncate_minute(&self) -> Self {
-        Self::new(
-            self.date(),
-            NaiveTime::from_hms(self.hour(), self.minute(), 0),
-        )
-    }
-
-    fn truncate_hour(&self) -> Self {
-        Self::new(self.date(), NaiveTime::from_hms(self.hour(), 0, 0))
-    }
-
-    fn truncate_day(&self) -> Self {
-        Self::new(self.date(), NaiveTime::from_hms(0, 0, 0))
-    }
-
-    fn truncate_week(&self) -> Result<Self, EvalError> {
-        let num_days_from_monday = self.date().weekday().num_days_from_monday() as i64;
-        let new_date = NaiveDate::from_ymd(self.year(), self.month(), self.day())
-            .checked_sub_signed(Duration::days(num_days_from_monday))
-            .ok_or(EvalError::TimestampOutOfRange)?;
-        Ok(Self::new(new_date, NaiveTime::from_hms(0, 0, 0)))
-    }
-
-    fn truncate_month(&self) -> Self {
-        Self::new(
-            NaiveDate::from_ymd(self.year(), self.month(), 1),
-            NaiveTime::from_hms(0, 0, 0),
-        )
-    }
-
-    fn truncate_quarter(&self) -> Self {
-        let month = self.month();
-        let quarter = if month <= 3 {
-            1
-        } else if month <= 6 {
-            4
-        } else if month <= 9 {
-            7
-        } else {
-            10
-        };
-
-        Self::new(
-            NaiveDate::from_ymd(self.year(), quarter, 1),
-            NaiveTime::from_hms(0, 0, 0),
-        )
-    }
-
-    fn truncate_year(&self) -> Self {
-        Self::new(
-            NaiveDate::from_ymd(self.year(), 1, 1),
-            NaiveTime::from_hms(0, 0, 0),
-        )
-    }
-    fn truncate_decade(&self) -> Self {
-        Self::new(
-            NaiveDate::from_ymd(self.year() - self.year().rem_euclid(10), 1, 1),
-            NaiveTime::from_hms(0, 0, 0),
-        )
-    }
-    fn truncate_century(&self) -> Self {
-        // Expects the first year of the century, meaning 2001 instead of 2000.
-        Self::new(
-            NaiveDate::from_ymd(
-                if self.year() > 0 {
-                    self.year() - (self.year() - 1) % 100
-                } else {
-                    self.year() - self.year() % 100 - 99
-                },
-                1,
-                1,
-            ),
-            NaiveTime::from_hms(0, 0, 0),
-        )
-    }
-    fn truncate_millennium(&self) -> Self {
-        // Expects the first year of the millennium, meaning 2001 instead of 2000.
-        Self::new(
-            NaiveDate::from_ymd(
-                if self.year() > 0 {
-                    self.year() - (self.year() - 1) % 1000
-                } else {
-                    self.year() - self.year() % 1000 - 999
-                },
-                1,
-                1,
-            ),
-            NaiveTime::from_hms(0, 0, 0),
-        )
-    }
-
-    /// Return the date component of the timestamp
-    fn date(&self) -> NaiveDate;
-
-    /// Return the date and time of the timestamp
-    fn date_time(&self) -> NaiveDateTime;
-
-    /// Return the date and time of the timestamp
-    fn from_date_time(dt: NaiveDateTime) -> Self;
-
-    /// Returns a string representing the timezone's offset from UTC.
-    fn timezone_offset(&self) -> &'static str;
-
-    /// Returns a string representing the hour portion of the timezone's offset
-    /// from UTC.
-    fn timezone_hours(&self) -> &'static str;
-
-    /// Returns a string representing the minute portion of the timezone's
-    /// offset from UTC.
-    fn timezone_minutes(&self) -> &'static str;
-
-    /// Returns the abbreviated name of the timezone with the specified
-    /// capitalization.
-    fn timezone_name(&self, caps: bool) -> &'static str;
-}
-
-impl TimestampLike for chrono::NaiveDateTime {
-    fn new(date: NaiveDate, time: NaiveTime) -> Self {
-        NaiveDateTime::new(date, time)
-    }
-
-    fn date(&self) -> NaiveDate {
-        self.date()
-    }
-
-    fn date_time(&self) -> NaiveDateTime {
-        self.clone()
-    }
-
-    fn from_date_time(dt: NaiveDateTime) -> NaiveDateTime {
-        dt
-    }
-
-    fn timestamp(&self) -> i64 {
-        self.timestamp()
-    }
-
-    fn timestamp_subsec_micros(&self) -> u32 {
-        self.timestamp_subsec_micros()
-    }
-
-    fn timezone_offset(&self) -> &'static str {
-        "+00"
-    }
-
-    fn timezone_hours(&self) -> &'static str {
-        "+00"
-    }
-
-    fn timezone_minutes(&self) -> &'static str {
-        "00"
-    }
-
-    fn timezone_name(&self, _caps: bool) -> &'static str {
-        ""
-    }
-}
-
-impl TimestampLike for chrono::DateTime<chrono::Utc> {
-    fn new(date: NaiveDate, time: NaiveTime) -> Self {
-        Self::from_date_time(NaiveDateTime::new(date, time))
-    }
-
-    fn date(&self) -> NaiveDate {
-        self.naive_utc().date()
-    }
-
-    fn date_time(&self) -> NaiveDateTime {
-        self.naive_utc()
-    }
-
-    fn from_date_time(dt: NaiveDateTime) -> Self {
-        DateTime::<Utc>::from_utc(dt, Utc)
-    }
-
-    fn timestamp(&self) -> i64 {
-        self.timestamp()
-    }
-
-    fn timestamp_subsec_micros(&self) -> u32 {
-        self.timestamp_subsec_micros()
-    }
-
-    fn timezone_offset(&self) -> &'static str {
-        "+00"
-    }
-
-    fn timezone_hours(&self) -> &'static str {
-        "+00"
-    }
-
-    fn timezone_minutes(&self) -> &'static str {
-        "00"
-    }
-
-    fn timezone_name(&self, caps: bool) -> &'static str {
-        if caps {
-            "UTC"
-        } else {
-            "utc"
-        }
-    }
-}
-
 fn date_part_interval<'a, D>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError>
 where
     D: DecimalLike + Into<Datum<'static>>,
@@ -1819,7 +1556,7 @@ where
     }
 }
 
-fn date_part_timestamp<'a, T, D>(a: Datum<'a>, ts: T) -> Result<Datum<'a>, EvalError>
+fn date_part_timestamp<'a, T, D>(a: Datum<'a>, ts: &T) -> Result<Datum<'a>, EvalError>
 where
     T: TimestampLike,
     D: DecimalLike + Into<Datum<'a>>,
@@ -1839,7 +1576,11 @@ fn extract_date<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     }
 }
 
-pub fn date_bin<'a, T>(stride: Interval, source: T, origin: T) -> Result<Datum<'a>, EvalError>
+pub fn date_bin<'a, T>(
+    stride: Interval,
+    source: CheckedTimestamp<T>,
+    origin: CheckedTimestamp<T>,
+) -> Result<Datum<'a>, EvalError>
 where
     T: TimestampLike,
 {
@@ -1878,17 +1619,19 @@ where
         tm_delta -= stride_ns;
     }
 
-    let res = origin + Duration::nanoseconds(tm_delta);
-    Ok(res.into())
+    let res = origin
+        .checked_add_signed(Duration::nanoseconds(tm_delta))
+        .ok_or(EvalError::TimestampOutOfRange)?;
+    Ok(res.try_into()?)
 }
 
-fn date_trunc<'a, T>(a: Datum<'a>, ts: T) -> Result<Datum<'a>, EvalError>
+fn date_trunc<'a, T>(a: Datum<'a>, ts: &T) -> Result<Datum<'a>, EvalError>
 where
     T: TimestampLike,
 {
     let units = a.unwrap_str();
     match units.parse() {
-        Ok(units) => Ok(date_trunc_inner(units, ts)?.into()),
+        Ok(units) => Ok(date_trunc_inner(units, ts)?.try_into()?),
         Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
     }
 }
@@ -1935,7 +1678,10 @@ fn timezone_interval_timestamp(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'stat
     if interval.months != 0 {
         Err(EvalError::InvalidTimezoneInterval)
     } else {
-        Ok(DateTime::from_utc(b.unwrap_timestamp() - interval.duration_as_chrono(), Utc).into())
+        Ok(
+            DateTime::from_utc(b.unwrap_timestamp() - interval.duration_as_chrono(), Utc)
+                .try_into()?,
+        )
     }
 }
 
@@ -1947,7 +1693,7 @@ fn timezone_interval_timestamptz(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'st
     if interval.months != 0 {
         Err(EvalError::InvalidTimezoneInterval)
     } else {
-        Ok((b.unwrap_timestamptz().naive_utc() + interval.duration_as_chrono()).into())
+        Ok((b.unwrap_timestamptz().naive_utc() + interval.duration_as_chrono()).try_into()?)
     }
 }
 
@@ -2163,7 +1909,7 @@ impl BinaryFunc {
                     b.unwrap_interval(),
                 ))
             }
-            BinaryFunc::AddDateTime => Ok(eager!(add_date_time)),
+            BinaryFunc::AddDateTime => eager!(add_date_time),
             BinaryFunc::AddDateInterval => eager!(add_date_interval),
             BinaryFunc::AddTimeInterval => Ok(eager!(add_time_interval)),
             BinaryFunc::AddNumeric => eager!(add_numeric),
@@ -2263,13 +2009,13 @@ impl BinaryFunc {
                 eager!(is_regexp_match_dynamic, *case_insensitive)
             }
             BinaryFunc::ToCharTimestamp => Ok(eager!(|a: Datum, b: Datum| to_char_timestamplike(
-                a.unwrap_timestamp(),
+                a.unwrap_timestamp().deref(),
                 b.unwrap_str(),
                 temp_storage
             ))),
             BinaryFunc::ToCharTimestampTz => {
                 Ok(eager!(|a: Datum, b: Datum| to_char_timestamplike(
-                    a.unwrap_timestamptz(),
+                    a.unwrap_timestamptz().deref(),
                     b.unwrap_str(),
                     temp_storage
                 )))
@@ -2278,14 +2024,19 @@ impl BinaryFunc {
                 eager!(|a: Datum, b: Datum| date_bin(
                     a.unwrap_interval(),
                     b.unwrap_timestamp(),
-                    NaiveDateTime::from_timestamp(0, 0)
+                    CheckedTimestamp::from_timestamplike(NaiveDateTime::from_timestamp(0, 0))
+                        .expect("must fit")
                 ))
             }
             BinaryFunc::DateBinTimestampTz => {
                 eager!(|a: Datum, b: Datum| date_bin(
                     a.unwrap_interval(),
                     b.unwrap_timestamptz(),
-                    DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc)
+                    CheckedTimestamp::from_timestamplike(DateTime::<Utc>::from_utc(
+                        NaiveDateTime::from_timestamp(0, 0),
+                        Utc
+                    ))
+                    .expect("must fit")
                 ))
             }
             BinaryFunc::ExtractInterval => {
@@ -2295,10 +2046,16 @@ impl BinaryFunc {
                 eager!(date_part_time::<Numeric>)
             }
             BinaryFunc::ExtractTimestamp => {
-                eager!(|a, b: Datum| date_part_timestamp::<_, Numeric>(a, b.unwrap_timestamp()))
+                eager!(|a, b: Datum| date_part_timestamp::<_, Numeric>(
+                    a,
+                    b.unwrap_timestamp().deref()
+                ))
             }
             BinaryFunc::ExtractTimestampTz => {
-                eager!(|a, b: Datum| date_part_timestamp::<_, Numeric>(a, b.unwrap_timestamptz()))
+                eager!(|a, b: Datum| date_part_timestamp::<_, Numeric>(
+                    a,
+                    b.unwrap_timestamptz().deref()
+                ))
             }
             BinaryFunc::ExtractDate => {
                 eager!(extract_date)
@@ -2310,27 +2067,36 @@ impl BinaryFunc {
                 eager!(date_part_time::<f64>)
             }
             BinaryFunc::DatePartTimestamp => {
-                eager!(|a, b: Datum| date_part_timestamp::<_, f64>(a, b.unwrap_timestamp()))
+                eager!(|a, b: Datum| date_part_timestamp::<_, f64>(a, b.unwrap_timestamp().deref()))
             }
             BinaryFunc::DatePartTimestampTz => {
-                eager!(|a, b: Datum| date_part_timestamp::<_, f64>(a, b.unwrap_timestamptz()))
+                eager!(|a, b: Datum| date_part_timestamp::<_, f64>(
+                    a,
+                    b.unwrap_timestamptz().deref()
+                ))
             }
             BinaryFunc::DateTruncTimestamp => {
-                eager!(|a, b: Datum| date_trunc(a, b.unwrap_timestamp()))
+                eager!(|a, b: Datum| date_trunc(a, b.unwrap_timestamp().deref()))
             }
             BinaryFunc::DateTruncInterval => {
                 eager!(date_trunc_interval)
             }
             BinaryFunc::DateTruncTimestampTz => {
-                eager!(|a, b: Datum| date_trunc(a, b.unwrap_timestamptz()))
+                eager!(|a, b: Datum| date_trunc(a, b.unwrap_timestamptz().deref()))
             }
             BinaryFunc::TimezoneTimestamp => {
-                eager!(|a: Datum, b: Datum| parse_timezone(a.unwrap_str())
-                    .and_then(|tz| Ok(timezone_timestamp(tz, b.unwrap_timestamp())?.into())))
+                eager!(
+                    |a: Datum, b: Datum| parse_timezone(a.unwrap_str())
+                        .and_then(|tz| timezone_timestamp(tz, b.unwrap_timestamp().into())
+                            .map(Into::into))
+                )
             }
             BinaryFunc::TimezoneTimestampTz => {
-                eager!(|a: Datum, b: Datum| parse_timezone(a.unwrap_str())
-                    .map(|tz| timezone_timestamptz(tz, b.unwrap_timestamptz()).into()))
+                eager!(
+                    |a: Datum, b: Datum| parse_timezone(a.unwrap_str()).and_then(|tz| {
+                        Ok(timezone_timestamptz(tz, b.unwrap_timestamptz().into()).try_into()?)
+                    })
+                )
             }
             BinaryFunc::TimezoneTime { wall_time } => {
                 eager!(
@@ -5565,8 +5331,8 @@ where
         Numeric { .. } => Ok(strconv::format_numeric(buf, &d.unwrap_numeric())),
         Date => Ok(strconv::format_date(buf, d.unwrap_date())),
         Time => Ok(strconv::format_time(buf, d.unwrap_time())),
-        Timestamp => Ok(strconv::format_timestamp(buf, d.unwrap_timestamp())),
-        TimestampTz => Ok(strconv::format_timestamptz(buf, d.unwrap_timestamptz())),
+        Timestamp => Ok(strconv::format_timestamp(buf, &d.unwrap_timestamp())),
+        TimestampTz => Ok(strconv::format_timestamptz(buf, &d.unwrap_timestamptz())),
         Interval => Ok(strconv::format_interval(buf, d.unwrap_interval())),
         Bytes => Ok(strconv::format_bytes(buf, d.unwrap_bytes())),
         String | VarChar { .. } => Ok(strconv::format_string(buf, d.unwrap_str())),
@@ -5733,39 +5499,39 @@ fn list_slice_linear<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Da
     })
 }
 
-fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
+fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     let year: i32 = match datums[0].unwrap_int64().try_into() {
         Ok(year) => year,
-        Err(_) => return Datum::Null,
+        Err(_) => return Ok(Datum::Null),
     };
     let month: u32 = match datums[1].unwrap_int64().try_into() {
         Ok(month) => month,
-        Err(_) => return Datum::Null,
+        Err(_) => return Ok(Datum::Null),
     };
     let day: u32 = match datums[2].unwrap_int64().try_into() {
         Ok(day) => day,
-        Err(_) => return Datum::Null,
+        Err(_) => return Ok(Datum::Null),
     };
     let hour: u32 = match datums[3].unwrap_int64().try_into() {
         Ok(day) => day,
-        Err(_) => return Datum::Null,
+        Err(_) => return Ok(Datum::Null),
     };
     let minute: u32 = match datums[4].unwrap_int64().try_into() {
         Ok(day) => day,
-        Err(_) => return Datum::Null,
+        Err(_) => return Ok(Datum::Null),
     };
     let second_float = datums[5].unwrap_float64();
     let second = second_float as u32;
     let micros = ((second_float - second as f64) * 1_000_000.0) as u32;
     let date = match NaiveDate::from_ymd_opt(year, month, day) {
         Some(date) => date,
-        None => return Datum::Null,
+        None => return Ok(Datum::Null),
     };
     let timestamp = match date.and_hms_micro_opt(hour, minute, second, micros) {
         Some(timestamp) => timestamp,
-        None => return Datum::Null,
+        None => return Ok(Datum::Null),
     };
-    Datum::Timestamp(timestamp)
+    Ok(timestamp.try_into()?)
 }
 
 fn position<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -6259,7 +6025,7 @@ impl VariadicFunc {
             VariadicFunc::Greatest => greatest(datums, temp_storage, exprs),
             VariadicFunc::Least => least(datums, temp_storage, exprs),
             VariadicFunc::Concat => Ok(eager!(text_concat_variadic, temp_storage)),
-            VariadicFunc::MakeTimestamp => Ok(eager!(make_timestamp)),
+            VariadicFunc::MakeTimestamp => eager!(make_timestamp),
             VariadicFunc::PadLeading => eager!(pad_leading, temp_storage),
             VariadicFunc::Substr => eager!(substr),
             VariadicFunc::Replace => Ok(eager!(replace, temp_storage)),
@@ -6653,38 +6419,47 @@ mod test {
     fn add_interval_months() {
         let dt = ym(2000, 1);
 
-        assert_eq!(add_timestamp_months(dt, 0).unwrap(), dt);
-        assert_eq!(add_timestamp_months(dt, 1).unwrap(), ym(2000, 2));
-        assert_eq!(add_timestamp_months(dt, 12).unwrap(), ym(2001, 1));
-        assert_eq!(add_timestamp_months(dt, 13).unwrap(), ym(2001, 2));
-        assert_eq!(add_timestamp_months(dt, 24).unwrap(), ym(2002, 1));
-        assert_eq!(add_timestamp_months(dt, 30).unwrap(), ym(2002, 7));
+        assert_eq!(add_timestamp_months(&*dt, 0).unwrap(), dt);
+        assert_eq!(add_timestamp_months(&*dt, 1).unwrap(), ym(2000, 2));
+        assert_eq!(add_timestamp_months(&*dt, 12).unwrap(), ym(2001, 1));
+        assert_eq!(add_timestamp_months(&*dt, 13).unwrap(), ym(2001, 2));
+        assert_eq!(add_timestamp_months(&*dt, 24).unwrap(), ym(2002, 1));
+        assert_eq!(add_timestamp_months(&*dt, 30).unwrap(), ym(2002, 7));
 
         // and negatives
-        assert_eq!(add_timestamp_months(dt, -1).unwrap(), ym(1999, 12));
-        assert_eq!(add_timestamp_months(dt, -12).unwrap(), ym(1999, 1));
-        assert_eq!(add_timestamp_months(dt, -13).unwrap(), ym(1998, 12));
-        assert_eq!(add_timestamp_months(dt, -24).unwrap(), ym(1998, 1));
-        assert_eq!(add_timestamp_months(dt, -30).unwrap(), ym(1997, 7));
+        assert_eq!(add_timestamp_months(&*dt, -1).unwrap(), ym(1999, 12));
+        assert_eq!(add_timestamp_months(&*dt, -12).unwrap(), ym(1999, 1));
+        assert_eq!(add_timestamp_months(&*dt, -13).unwrap(), ym(1998, 12));
+        assert_eq!(add_timestamp_months(&*dt, -24).unwrap(), ym(1998, 1));
+        assert_eq!(add_timestamp_months(&*dt, -30).unwrap(), ym(1997, 7));
 
         // and going over a year boundary by less than a year
         let dt = ym(1999, 12);
-        assert_eq!(add_timestamp_months(dt, 1).unwrap(), ym(2000, 1));
+        assert_eq!(add_timestamp_months(&*dt, 1).unwrap(), ym(2000, 1));
         let end_of_month_dt = NaiveDate::from_ymd(1999, 12, 31).and_hms(9, 9, 9);
         assert_eq!(
             // leap year
-            add_timestamp_months(end_of_month_dt, 2).unwrap(),
-            NaiveDate::from_ymd(2000, 2, 29).and_hms(9, 9, 9),
+            add_timestamp_months(&end_of_month_dt, 2).unwrap(),
+            NaiveDate::from_ymd(2000, 2, 29)
+                .and_hms(9, 9, 9)
+                .try_into()
+                .unwrap(),
         );
         assert_eq!(
             // not leap year
-            add_timestamp_months(end_of_month_dt, 14).unwrap(),
-            NaiveDate::from_ymd(2001, 2, 28).and_hms(9, 9, 9),
+            add_timestamp_months(&end_of_month_dt, 14).unwrap(),
+            NaiveDate::from_ymd(2001, 2, 28)
+                .and_hms(9, 9, 9)
+                .try_into()
+                .unwrap(),
         );
     }
 
-    fn ym(year: i32, month: u32) -> NaiveDateTime {
-        NaiveDate::from_ymd(year, month, 1).and_hms(9, 9, 9)
+    fn ym(year: i32, month: u32) -> CheckedTimestamp<NaiveDateTime> {
+        NaiveDate::from_ymd(year, month, 1)
+            .and_hms(9, 9, 9)
+            .try_into()
+            .unwrap()
     }
 
     // Tests that `UnaryFunc::output_type` are consistent with

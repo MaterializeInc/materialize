@@ -1,17 +1,13 @@
 ---
 title: "Troubleshooting"
 description: "Troubleshoot performance issues."
-menu:
-  main:
-    parent: ops
-    weight: 80
 aliases:
   - /ops/diagnosing-using-sql
 ---
 
 You can use the queries below for spot debugging, but it may also be
-helpful to monitor their output by `SUBSCRIBE`ing to their change stream, e.g.,
-by issuing a command `COPY (SUBSCRIBE (<query>) TO stdout`.
+helpful to monitor their output by [`SUBSCRIBE`ing](/sql/subscribe) to their change stream, e.g.,
+by issuing a command `COPY (SUBSCRIBE (<query>)) TO stdout`.
 Note that this additional monitoring may, however, itself affect performance.
 
 ### Limitations on Introspection Sources and Views for Troubleshooting
@@ -26,9 +22,9 @@ information within each of the replicas of a cluster. Thus, in a multi-replica
 cluster, the queries below need to be directed to a specific replica by issuing
 the command `SET cluster_replica = <replica_name>`. Materialize also directly
 exposes replica-specific introspection sources by suffixing the respective catalog
-relation names with a replica number. For example, `mz_internal.mz_compute_frontiers_1`
-corresponds to the introspection source `mz_internal.mz_compute_frontiers` in the
-first replica of the cluster.
+relation names with the replica ID (see [mz_cluster_replicas]()). For example, `mz_internal.mz_compute_frontiers_1`
+corresponds to the introspection source `mz_internal.mz_compute_frontiers` in the 
+replica with a globally assigned ID of `1`.
 
 As a consequence of the above, you should expect the answers to the queries below
 to vary dependending on which cluster you are working in. In particular, indexes
@@ -138,25 +134,25 @@ and incriminate the subject.
 
 ```sql
 -- Extract raw scheduling histogram information, by worker.
-SELECT mdo.id, mdo.name, mdo.worker_id, msh.duration_ns, count
-FROM mz_internal.mz_scheduling_histogram AS msh,
-     mz_internal.mz_dataflow_operators AS mdo
-WHERE
-    msh.id = mdo.id AND
-    msh.worker_id = mdo.worker_id
-ORDER BY msh.duration_ns DESC;
+select mdo.id, mdo.name, mdo.worker_id, mrcod.duration_ns, count
+from mz_internal.mz_raw_compute_operator_durations as mrcod,
+     mz_internal.mz_dataflow_operators as mdo
+where
+    mrcod.id = mdo.id and
+    mrcod.worker_id = mdo.worker_id
+order by mrcod.duration_ns desc;
 ```
 
 ```sql
 -- Extract raw scheduling histogram information, summed across workers.
-SELECT mdo.id, mdo.name, msh.duration_ns, sum(msh.count) count
-FROM mz_internal.mz_scheduling_histogram AS msh,
-     mz_internal.mz_dataflow_operators AS mdo
-WHERE
-    msh.id = mdo.id AND
-    msh.worker_id = mdo.worker_id
-GROUP BY mdo.id, mdo.name, msh.duration_ns
-ORDER BY msh.duration_ns DESC;
+select mdo.id, mdo.name, mrcod.duration_ns, sum(mrcod.count) count
+from mz_internal.mz_raw_compute_operator_durations as mrcod,
+     mz_internal.mz_dataflow_operators as mdo
+where
+    mrcod.id = mdo.id and
+    mrcod.worker_id = mdo.worker_id
+group by mdo.id, mdo.name, mrcod.duration_ns
+order by mrcod.duration_ns desc;
 ```
 
 ### Why is Materialize using so much memory?

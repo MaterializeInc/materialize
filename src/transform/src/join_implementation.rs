@@ -409,7 +409,7 @@ mod differential {
 
             let (start, start_keys) = &order[0];
             let start = *start;
-            let start_keys = if available[start].contains(&start_keys) {
+            let start_keys = if available[start].contains(start_keys) {
                 Some(start_keys.clone())
             } else {
                 // if there is not already a pre-existing arrangement
@@ -779,7 +779,7 @@ impl<'a> Orderer<'a> {
                     self.equivalences_active[*equivalence] = true;
                     for expr in self.equivalences[*equivalence].iter() {
                         // find the relations that columns in the expression belong to
-                        let mut rels = self.input_mapper.lookup_inputs(&expr);
+                        let mut rels = self.input_mapper.lookup_inputs(expr);
                         // Skip the expression if
                         // * the expression is a literal -> this would translate
                         //   to `rels` being empty

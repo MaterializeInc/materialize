@@ -31,6 +31,8 @@ fn is_null(schema: &SchemaPieceOrNamed) -> bool {
 mod tests {
     use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
     use mz_repr::adt::date::Date;
+    use mz_repr::adt::timestamp::CheckedTimestamp;
+
     use ordered_float::OrderedFloat;
 
     use mz_avro::types::{DecimalValue, Value};
@@ -115,12 +117,15 @@ mod tests {
             ),
             (
                 ScalarType::Timestamp,
-                Datum::Timestamp(date_time),
+                Datum::Timestamp(CheckedTimestamp::from_timestamplike(date_time).unwrap()),
                 Value::Timestamp(date_time),
             ),
             (
                 ScalarType::TimestampTz,
-                Datum::TimestampTz(DateTime::from_utc(date_time, Utc)),
+                Datum::TimestampTz(
+                    CheckedTimestamp::from_timestamplike(DateTime::from_utc(date_time, Utc))
+                        .unwrap(),
+                ),
                 Value::Timestamp(date_time),
             ),
             (

@@ -49,7 +49,7 @@ $ file-append path=importee.proto
 $ file-append path=importer.proto
 \${importer-schema}
 
-$ protobuf-compile-descriptors inputs=empty.proto,importee.proto,importer.proto output=import.pb
+$ protobuf-compile-descriptors inputs=empty.proto,importee.proto,importer.proto output=import.pb set-var=import-schema
 
 $ kafka-create-topic topic=import partitions=1
 
@@ -61,7 +61,7 @@ $ kafka-ingest topic=import format=protobuf descriptor-file=import.pb message=Im
 
 > CREATE SOURCE import FROM
   KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-import-${testdrive.seed}')
-  FORMAT PROTOBUF MESSAGE '.Importer' USING SCHEMA FILE '${testdrive.temp-dir}/import.pb'
+  FORMAT PROTOBUF MESSAGE '.Importer' USING SCHEMA '${import-schema}'
 
 > SELECT importee1::text, importee2::text FROM import
 importee1  importee2

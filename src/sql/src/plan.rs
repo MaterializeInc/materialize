@@ -90,7 +90,7 @@ pub enum Plan {
     CreateSchema(CreateSchemaPlan),
     CreateRole(CreateRolePlan),
     CreateComputeInstance(CreateComputeInstancePlan),
-    CreateComputeInstanceReplica(CreateComputeInstanceReplicaPlan),
+    CreateComputeReplica(CreateComputeReplicaPlan),
     CreateSource(CreateSourcePlan),
     CreateSecret(CreateSecretPlan),
     CreateSink(CreateSinkPlan),
@@ -106,7 +106,7 @@ pub enum Plan {
     DropSchema(DropSchemaPlan),
     DropRoles(DropRolesPlan),
     DropComputeInstances(DropComputeInstancesPlan),
-    DropComputeInstanceReplica(DropComputeInstanceReplicaPlan),
+    DropComputeReplicas(DropComputeReplicasPlan),
     DropItems(DropItemsPlan),
     EmptyQuery,
     ShowAllVariables,
@@ -175,7 +175,7 @@ impl Plan {
                 PlanKind::Subscribe,
             ],
             StatementKind::CreateCluster => vec![PlanKind::CreateComputeInstance],
-            StatementKind::CreateClusterReplica => vec![PlanKind::CreateComputeInstanceReplica],
+            StatementKind::CreateClusterReplica => vec![PlanKind::CreateComputeReplica],
             StatementKind::CreateConnection => vec![PlanKind::CreateConnection],
             StatementKind::CreateDatabase => vec![PlanKind::CreateDatabase],
             StatementKind::CreateIndex => vec![PlanKind::CreateIndex],
@@ -184,7 +184,9 @@ impl Plan {
             StatementKind::CreateSchema => vec![PlanKind::CreateSchema],
             StatementKind::CreateSecret => vec![PlanKind::CreateSecret],
             StatementKind::CreateSink => vec![PlanKind::CreateSink],
-            StatementKind::CreateSource => vec![PlanKind::CreateSource],
+            StatementKind::CreateSource | StatementKind::CreateSubsource => {
+                vec![PlanKind::CreateSource]
+            }
             StatementKind::CreateTable => vec![PlanKind::CreateTable],
             StatementKind::CreateType => vec![PlanKind::CreateType],
             StatementKind::CreateView => vec![PlanKind::CreateView],
@@ -193,7 +195,7 @@ impl Plan {
             StatementKind::Declare => vec![PlanKind::Declare],
             StatementKind::Delete => vec![PlanKind::ReadThenWrite],
             StatementKind::Discard => vec![PlanKind::DiscardAll, PlanKind::DiscardTemp],
-            StatementKind::DropClusterReplicas => vec![PlanKind::DropComputeInstanceReplica],
+            StatementKind::DropClusterReplicas => vec![PlanKind::DropComputeReplicas],
             StatementKind::DropClusters => vec![PlanKind::DropComputeInstances],
             StatementKind::DropDatabase => vec![PlanKind::DropDatabase],
             StatementKind::DropObjects => vec![PlanKind::DropItems],
@@ -250,20 +252,19 @@ pub struct CreateRolePlan {
 #[derive(Debug)]
 pub struct CreateComputeInstancePlan {
     pub name: String,
-    pub config: Option<ComputeInstanceIntrospectionConfig>,
-    pub replicas: Vec<(String, ComputeInstanceReplicaConfig)>,
+    pub replicas: Vec<(String, ComputeReplicaConfig)>,
 }
 
 #[derive(Debug)]
-pub struct CreateComputeInstanceReplicaPlan {
+pub struct CreateComputeReplicaPlan {
     pub name: String,
     pub of_cluster: String,
-    pub config: ComputeInstanceReplicaConfig,
+    pub config: ComputeReplicaConfig,
 }
 
-/// Configuration of introspection for a compute instance.
+/// Configuration of introspection for a compute replica.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialOrd, Ord, PartialEq, Eq)]
-pub struct ComputeInstanceIntrospectionConfig {
+pub struct ComputeReplicaIntrospectionConfig {
     /// Whether to introspect the introspection.
     pub debugging: bool,
     /// The interval at which to introspect.
@@ -271,29 +272,33 @@ pub struct ComputeInstanceIntrospectionConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ComputeInstanceReplicaConfig {
+pub enum ComputeReplicaConfig {
     Remote {
         addrs: BTreeSet<String>,
         compute_addrs: BTreeSet<String>,
         workers: NonZeroUsize,
+        introspection: Option<ComputeReplicaIntrospectionConfig>,
     },
     Managed {
         size: String,
         availability_zone: Option<String>,
+        introspection: Option<ComputeReplicaIntrospectionConfig>,
     },
 }
 
-impl ComputeInstanceReplicaConfig {
+impl ComputeReplicaConfig {
     pub fn get_az(&self) -> Option<&str> {
         match self {
-            ComputeInstanceReplicaConfig::Remote {
+            ComputeReplicaConfig::Remote {
                 addrs: _,
                 compute_addrs: _,
                 workers: _,
+                introspection: _,
             } => None,
-            ComputeInstanceReplicaConfig::Managed {
+            ComputeReplicaConfig::Managed {
                 size: _,
                 availability_zone,
+                introspection: _,
             } => availability_zone.as_deref(),
         }
     }
@@ -311,7 +316,7 @@ pub struct CreateSourcePlan {
 /// Settings related to storage hosts
 ///
 /// This represents how resources for a storage instance are going to be
-/// provisioned, based on the SQL logic. Storage equivalent of ComputeInstanceReplicaConfig
+/// provisioned, based on the SQL logic. Storage equivalent of ComputeReplicaConfig.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum StorageHostConfig {
     /// Remote unmanaged storage
@@ -349,6 +354,7 @@ pub struct CreateSinkPlan {
     pub sink: Sink,
     pub with_snapshot: bool,
     pub if_not_exists: bool,
+    pub host_config: StorageHostConfig,
 }
 
 #[derive(Debug)]
@@ -417,7 +423,7 @@ pub struct DropComputeInstancesPlan {
 }
 
 #[derive(Debug)]
-pub struct DropComputeInstanceReplicaPlan {
+pub struct DropComputeReplicasPlan {
     pub names: Vec<(String, String)>,
 }
 
@@ -649,9 +655,16 @@ pub struct Table {
 #[derive(Clone, Debug)]
 pub struct Source {
     pub create_sql: String,
-    pub connection_id: Option<GlobalId>,
-    pub source_desc: SourceDesc,
+    pub ingestion: Option<Ingestion>,
     pub desc: RelationDesc,
+}
+
+#[derive(Clone, Debug)]
+pub struct Ingestion {
+    pub connection_id: Option<GlobalId>,
+    pub desc: SourceDesc,
+    pub source_imports: HashSet<GlobalId>,
+    pub subsource_exports: HashMap<GlobalId, usize>,
 }
 
 #[derive(Clone, Debug)]

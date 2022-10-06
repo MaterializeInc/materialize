@@ -351,8 +351,12 @@ impl<'a> FromSql<'a> for Slt {
                 Self(Value::Text(types::text_from_sql(raw)?.to_string()))
             }
             PgType::TIME => Self(Value::Time(NaiveTime::from_sql(ty, raw)?)),
-            PgType::TIMESTAMP => Self(Value::Timestamp(NaiveDateTime::from_sql(ty, raw)?)),
-            PgType::TIMESTAMPTZ => Self(Value::TimestampTz(DateTime::<Utc>::from_sql(ty, raw)?)),
+            PgType::TIMESTAMP => Self(Value::Timestamp(
+                NaiveDateTime::from_sql(ty, raw)?.try_into()?,
+            )),
+            PgType::TIMESTAMPTZ => Self(Value::TimestampTz(
+                DateTime::<Utc>::from_sql(ty, raw)?.try_into()?,
+            )),
             PgType::UUID => Self(Value::Uuid(Uuid::from_sql(ty, raw)?)),
             PgType::RECORD => {
                 let num_fields = read_be_i32(&mut raw)?;
@@ -598,7 +602,7 @@ fn format_row(row: &Row, types: &[Type], mode: Mode, sort: &Sort) -> Vec<String>
         formatted
             .iter()
             .flat_map(|s| {
-                crate::parser::split_cols(&s, types.len())
+                crate::parser::split_cols(s, types.len())
                     .into_iter()
                     .map(ToString::to_string)
                     .collect::<Vec<_>>()
@@ -614,21 +618,21 @@ impl Runner {
         let temp_dir = tempfile::tempdir()?;
         let (consensus_uri, adapter_stash_url, storage_stash_url) = {
             let postgres_url = &config.postgres_url;
-            let (client, conn) = tokio_postgres::connect(&postgres_url, NoTls).await?;
+            let (client, conn) = tokio_postgres::connect(postgres_url, NoTls).await?;
             task::spawn(|| "sqllogictest_connect", async move {
                 if let Err(e) = conn.await {
                     panic!("connection error: {}", e);
                 }
             });
             client
-                .batch_execute(&format!(
+                .batch_execute(
                     "DROP SCHEMA IF EXISTS sqllogictest_consensus CASCADE;
                      DROP SCHEMA IF EXISTS sqllogictest_adapter CASCADE;
                      DROP SCHEMA IF EXISTS sqllogictest_storage CASCADE;
                      CREATE SCHEMA sqllogictest_consensus;
                      CREATE SCHEMA sqllogictest_adapter;
                      CREATE SCHEMA sqllogictest_storage;",
-                ))
+                )
                 .await?;
             (
                 format!("{postgres_url}?options=--search_path=sqllogictest_consensus"),
@@ -666,6 +670,7 @@ impl Runner {
                 },
                 persist_clients,
                 storage_stash_url,
+                now: SYSTEM_TIME.clone(),
             },
             secrets_controller: Arc::clone(&orchestrator) as Arc<dyn SecretsController>,
             // Setting the port to 0 means that the OS will automatically
@@ -983,7 +988,7 @@ impl Runner {
                     location,
                 });
             }
-            let row = format_row(row, &expected_types, *mode, sort);
+            let row = format_row(row, expected_types, *mode, sort);
             formatted_rows.push(row);
         }
 
@@ -1354,7 +1359,7 @@ impl<'a> RewriteBuffer<'a> {
 
 /// Returns extra statements to execute after `stmt` is executed.
 fn mutate(sql: &str) -> Vec<String> {
-    let stmts = parser::parse_statements(&sql).unwrap_or_default();
+    let stmts = parser::parse_statements(sql).unwrap_or_default();
     let mut additional = Vec::new();
     for stmt in stmts {
         match stmt {

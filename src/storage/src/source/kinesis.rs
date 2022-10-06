@@ -221,7 +221,7 @@ impl SourceReader for KinesisSourceReader {
             if let Some((shard_id, mut shard_iterator)) = self.shard_queue.pop_front() {
                 if let Some(iterator) = &shard_iterator {
                     let get_records_output =
-                        match self.tokio_handle.block_on(self.get_records(&iterator)) {
+                        match self.tokio_handle.block_on(self.get_records(iterator)) {
                             Ok(output) => {
                                 shard_iterator = output.next_shard_iterator.clone();
                                 if let Some(millis) = output.millis_behind_latest {
@@ -283,6 +283,7 @@ impl SourceReader for KinesisSourceReader {
                             .unwrap_or_else(Vec::new);
                         self.processed_message_count += 1;
                         let source_message = SourceMessage {
+                            output: 0,
                             partition: PartitionId::None,
                             offset: MzOffset {
                                 //TODO: should MzOffset be modified to be a string?

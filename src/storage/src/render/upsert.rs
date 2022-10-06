@@ -57,8 +57,6 @@ struct UpsertSourceData {
 pub(crate) fn upsert<G>(
     stream: &Stream<G, DecodeResult>,
     as_of_frontier: Antichain<Timestamp>,
-    // Full arity, including the key columns
-    source_arity: usize,
     upsert_envelope: UpsertEnvelope,
     previous: Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     previous_token: Option<Rc<dyn Any>>,
@@ -113,9 +111,12 @@ where
     // when it is transmitted.
     let temporal = Vec::new();
     let predicates = Vec::new();
-    let position_or = (0..source_arity).map(Some).collect::<Vec<_>>();
+    let position_or = (0..upsert_envelope.source_arity)
+        .map(Some)
+        .collect::<Vec<_>>();
     let temporal_plan = if !temporal.is_empty() {
-        let temporal_mfp = mz_expr::MapFilterProject::new(source_arity).filter(temporal);
+        let temporal_mfp =
+            mz_expr::MapFilterProject::new(upsert_envelope.source_arity).filter(temporal);
         Some(temporal_mfp.into_plan().unwrap_or_else(|e| panic!("{}", e)))
     } else {
         None
@@ -186,7 +187,7 @@ fn evaluate(
     let arena = RowArena::new();
     // Each predicate is tested in order.
     for predicate in predicates.iter() {
-        if predicate.eval(&datums[..], &arena)? != Datum::True {
+        if predicate.eval(datums, &arena)? != Datum::True {
             return Ok(None);
         }
     }
@@ -606,7 +607,7 @@ fn process_pending_values_batch(
                                 )
                                 .map_or(Ok(None), |mut datums| {
                                     datums.extend(data.metadata.iter());
-                                    evaluate(&datums, &predicates, &position_or, row_packer)
+                                    evaluate(&datums, predicates, position_or, row_packer)
                                         .map_err(Into::into)
                                 })
                             })
@@ -632,14 +633,14 @@ fn process_pending_values_batch(
                 // key columns, cloning when need-be
                 let thinned_value = new_value
                     .as_ref()
-                    .map(|full_row| thin(key_indices_sorted, &full_row, row_packer))
+                    .map(|full_row| thin(key_indices_sorted, full_row, row_packer))
                     .map_err(|e| e.clone());
                 current_values
                     .insert(decoded_key.clone(), thinned_value)
                     .map(|res| {
                         res.map(|v| {
                             rehydrate(
-                                &key_indices_map,
+                                key_indices_map,
                                 // The value is never `Ok`
                                 // unless the key is also
                                 decoded_key.as_ref().unwrap(),

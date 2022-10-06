@@ -10,6 +10,7 @@
 use std::fmt;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
@@ -388,7 +389,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "mz_sleep"]
-    fn sleep(a: f64) -> Option<DateTime<Utc>> {
+    fn sleep(a: f64) -> Option<CheckedTimestamp<DateTime<Utc>>> {
         let duration = std::time::Duration::from_secs_f64(a);
         std::thread::sleep(duration);
         None
@@ -397,7 +398,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "tots"]
-    fn to_timestamp(f: f64) -> Option<DateTime<Utc>> {
+    fn to_timestamp(f: f64) -> Option<CheckedTimestamp<DateTime<Utc>>> {
         if !f.is_finite() {
             None
         } else {
@@ -409,7 +410,10 @@ sqlfunc!(
             // with common Unix timestamp values (> 1 billion).
             let nanosecs = ((f.fract() * 1_000_000.0).round() as u32) * 1_000;
             match NaiveDateTime::from_timestamp_opt(secs as i64, nanosecs as u32) {
-                Some(ts) => Some(DateTime::<Utc>::from_utc(ts, Utc)),
+                Some(ts) => {
+                    let dt = DateTime::<Utc>::from_utc(ts, Utc);
+                    CheckedTimestamp::from_timestamplike(dt).ok()
+                }
                 None => None,
             }
         }

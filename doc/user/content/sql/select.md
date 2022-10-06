@@ -14,16 +14,6 @@ queries to named [views](../create-view) or [materialized views](../create-mater
  and to interactively query data maintained in Materialize. For interactive queries, you should consider creating [indexes](../create-index)
 on the underlying relations based on common query patterns.
 
-This is covered in much greater detail in our [architecture
-overview](../../overview/architecture), but here's a quick summary of how
-Materialize handles `SELECT` in different circumstances.
-
-Scenario | `SELECT` behavior
----------|------------------
-**Creating view** | The query description is bound to the name given to it by `CREATE VIEW`.
-**Reading from a source or materialized view** | Reads directly from the maintained data.
-**Querying non-materialized views** | Creates a dataflow, which is torn down after returning results to the client.
-
 ## Syntax
 
 {{< diagram "select-stmt.svg" >}}
@@ -40,7 +30,7 @@ _target&lowbar;elem_ | Return identified columns or functions.
 _join&lowbar;expr_ | A join expression; for more details, see the [`JOIN` documentation](../join).
 **WHERE** _expression_ | Filter tuples by _expression_.
 **GROUP BY** _col&lowbar;ref_ | Group aggregations by _col&lowbar;ref_.
-**OPTION (** _hint&lowbar;list_ **)** | Specify one or more [query hints](#query-hints).
+**OPTIONS (** _hint&lowbar;list_ **)** | Specify one or more [query hints](#query-hints).
 **HAVING** _expression_ | Filter aggregations by _expression_.
 **ORDER BY** _col&lowbar;ref_... | Sort results in either **ASC** or **DESC** order (_default: **ASC**_).<br/><br/>Use the **NULLS FIRST** and **NULLS LAST** options to determine whether nulls appear before or after non-null values in the sort ordering _(default: **NULLS LAST** for **ASC**, **NULLS FIRST** for **DESC**)_.<br/><br>
 **LIMIT** | Limit the number of returned results to _integer_.
@@ -63,8 +53,7 @@ different performance profile from performing a `SELECT` in an RDBMS.
 A materialized view has resource and latency costs that should
 be carefully considered depending on its main usage. Materialize must maintain
 the results of the query in durable storage, but often it must also maintain
-additional intermediate state. To learn more about the costs of
-materialization, check out our [architecture overview](../../overview/architecture).
+additional intermediate state.
 
 ### Reading from indexed relations
 
@@ -118,7 +107,7 @@ The following query hints are valid within the `OPTION` clause.
 
 Hint | Value type | Description
 ------|------------|------------
-`expected_group_size` | `int` | How many rows will have the same group key. Materialize can render `min` and `max` expressions more efficiently with this information.
+`EXPECTED GROUP SIZE` | `int` | How many rows will have the same group key. Materialize can render `min` and `max` expressions more efficiently with this information.
 
 For an example, see [Using query hints](#using-query-hints).
 
@@ -227,7 +216,7 @@ SELECT a,
        min(b) AS min
 FROM example
 GROUP BY a
-OPTION (expected_group_size = 100)
+OPTIONS (EXPECTED GROUP SIZE = 100)
 ```
 
 Here the hint indicates that there may be up to a hundred distinct `(a, b)` pairs

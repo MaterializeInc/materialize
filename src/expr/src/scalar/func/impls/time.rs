@@ -11,6 +11,7 @@ use std::fmt;
 
 use chrono::{NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike};
 use mz_repr::adt::datetime::DateTimeField;
+use mz_repr::adt::timestamp::TimeLike;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -22,45 +23,6 @@ use mz_repr::{strconv, ColumnType, ScalarType};
 
 use crate::scalar::func::EagerUnaryFunc;
 use crate::EvalError;
-
-/// Common set of methods for time component.
-pub trait TimeLike: chrono::Timelike {
-    fn extract_epoch<T>(&self) -> T
-    where
-        T: DecimalLike,
-    {
-        T::from(self.hour() * 60 * 60 + self.minute() * 60) + self.extract_second::<T>()
-    }
-
-    fn extract_second<T>(&self) -> T
-    where
-        T: DecimalLike,
-    {
-        let s = T::from(self.second());
-        let ns = T::from(self.nanosecond()) / T::from(1e9);
-        s + ns
-    }
-
-    fn extract_millisecond<T>(&self) -> T
-    where
-        T: DecimalLike,
-    {
-        let s = T::from(self.second() * 1_000);
-        let ns = T::from(self.nanosecond()) / T::from(1e6);
-        s + ns
-    }
-
-    fn extract_microsecond<T>(&self) -> T
-    where
-        T: DecimalLike,
-    {
-        let s = T::from(self.second() * 1_000_000);
-        let ns = T::from(self.nanosecond()) / T::from(1e3);
-        s + ns
-    }
-}
-
-impl<T> TimeLike for T where T: chrono::Timelike {}
 
 sqlfunc!(
     #[sqlname = "time_to_text"]
@@ -177,7 +139,7 @@ impl fmt::Display for DatePartTime {
 pub fn timezone_time(tz: Timezone, t: NaiveTime, wall_time: &NaiveDateTime) -> NaiveTime {
     let offset = match tz {
         Timezone::FixedOffset(offset) => offset,
-        Timezone::Tz(tz) => tz.offset_from_utc_datetime(&wall_time).fix(),
+        Timezone::Tz(tz) => tz.offset_from_utc_datetime(wall_time).fix(),
     };
     t + offset
 }

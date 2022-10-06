@@ -126,15 +126,6 @@ a
 1
 2
 
-# Old with_options do not work
-! CREATE SOURCE IF NOT EXISTS duplicate_option_specified
-  FROM KAFKA CONNECTION kafka_ssl (TOPIC 'testdrive-data-${testdrive.seed}')
-  LEGACYWITH (
-    security_protocol = 'ssl'
-  )
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_ssl
-contains:unexpected parameters for CREATE SOURCE: security_protocol
-
 # Ensure that connectors do not require the certificate authority
 
 > CREATE CONNECTION kafka_sasl_no_ca

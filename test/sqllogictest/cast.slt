@@ -71,16 +71,16 @@ SELECT 1.5::float::bigint
 # TODO(sploiselle): fix return type to indicate custom type
 
 statement ok
-CREATE TYPE int4_list AS LIST (element_type=int4)
+CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4)
 
 statement ok
-CREATE TYPE int4_list_list AS LIST (element_type=int4_list)
+CREATE TYPE int4_list_list AS LIST (ELEMENT TYPE = int4_list)
 
 statement ok
-CREATE TYPE int4_list_too AS LIST (element_type=int4)
+CREATE TYPE int4_list_too AS LIST (ELEMENT TYPE = int4)
 
 statement ok
-CREATE TYPE int4_list_list_too AS LIST (element_type=int4_list_too)
+CREATE TYPE int4_list_list_too AS LIST (ELEMENT TYPE = int4_list_too)
 
 query T
 SELECT pg_typeof('{1}'::int4 list::int4_list)

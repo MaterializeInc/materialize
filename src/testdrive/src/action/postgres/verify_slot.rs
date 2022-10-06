@@ -11,75 +11,61 @@ use std::cmp;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-use async_trait::async_trait;
 
 use mz_ore::retry::Retry;
 
-use crate::action::{Action, ControlFlow, State};
+use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
 use crate::util::postgres::postgres_client;
 
-pub struct VerifySlotAction {
-    connection: String,
-    slot: String,
-    active: bool,
-}
-
-pub fn build_verify_slot(mut cmd: BuiltinCommand) -> Result<VerifySlotAction, anyhow::Error> {
+pub async fn run_verify_slot(
+    mut cmd: BuiltinCommand,
+    state: &mut State,
+) -> Result<ControlFlow, anyhow::Error> {
     let connection = cmd.args.string("connection")?;
     let slot = cmd.args.string("slot")?;
     let active: bool = cmd.args.parse("active")?;
     cmd.args.done()?;
-    Ok(VerifySlotAction {
-        connection,
-        slot,
-        active,
-    })
-}
 
-#[async_trait]
-impl Action for VerifySlotAction {
-    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
-        let (client, conn_handle) = postgres_client(&self.connection).await?;
+    let (client, conn_handle) = postgres_client(&connection).await?;
 
-        Retry::default()
-            .initial_backoff(Duration::from_millis(50))
-            .max_duration(cmp::max(state.default_timeout, Duration::from_secs(10)))
-            .retry_async_canceling(|_| async {
-                println!(">> checking for postgres replication slot {}", &self.slot);
-                let rows = client
-                    .query(
-                        "SELECT active_pid FROM pg_replication_slots WHERE slot_name LIKE $1::TEXT",
-                        &[&self.slot],
-                    )
-                    .await
-                    .context("querying postgres for replication slot")?;
+    Retry::default()
+        .initial_backoff(Duration::from_millis(50))
+        .max_duration(cmp::max(state.default_timeout, Duration::from_secs(10)))
+        .retry_async_canceling(|_| async {
+            println!(">> checking for postgres replication slot {}", &slot);
+            let rows = client
+                .query(
+                    "SELECT active_pid FROM pg_replication_slots WHERE slot_name LIKE $1::TEXT",
+                    &[&slot],
+                )
+                .await
+                .context("querying postgres for replication slot")?;
 
-                if self.active {
-                    if rows.len() != 1 {
-                        bail!(
-                            "expected entry for slot {} in pg_replication slots, found {}",
-                            &self.slot,
-                            rows.len()
-                        );
-                    }
-                    let active_pid: Option<i32> = rows[0].get(0);
-                    if active_pid.is_none() {
-                        bail!("expected slot {} to be active, is inactive", &self.slot);
-                    }
-                } else if rows.len() != 0 {
-                    bail!("expected slot {} to be inactive, is active", &self.slot);
+            if active {
+                if rows.len() != 1 {
+                    bail!(
+                        "expected entry for slot {} in pg_replication slots, found {}",
+                        &slot,
+                        rows.len()
+                    );
                 }
-                Ok(())
-            })
-            .await?;
+                let active_pid: Option<i32> = rows[0].get(0);
+                if active_pid.is_none() {
+                    bail!("expected slot {} to be active, is inactive", &slot);
+                }
+            } else if rows.len() != 0 {
+                bail!("expected slot {} to be inactive, is active", &slot);
+            }
+            Ok(())
+        })
+        .await?;
 
-        drop(client);
-        conn_handle
-            .await
-            .unwrap()
-            .context("postgres connection error")?;
+    drop(client);
+    conn_handle
+        .await
+        .unwrap()
+        .context("postgres connection error")?;
 
-        Ok(ControlFlow::Continue)
-    }
+    Ok(ControlFlow::Continue)
 }

@@ -100,10 +100,13 @@ pub struct Config {
     pub materialize_pgconfig: tokio_postgres::Config,
     /// The internal pgwire connection parameters for the Materialize instance that
     /// testdrive will connect to.
-    pub materialize_pgconfig_internal: tokio_postgres::Config,
+    pub materialize_internal_pgconfig: tokio_postgres::Config,
     /// The port for the public endpoints of the materialize instance that
     /// testdrive will connect to via HTTP.
     pub materialize_http_port: u16,
+    /// The port for the internal endpoints of the materialize instance that
+    /// testdrive will connect to via HTTP.
+    pub materialize_internal_http_port: u16,
     /// Session parameters to set after connecting to materialize.
     pub materialize_params: Vec<(String, String)>,
     /// An optional Postgres connection string to the catalog stash.
@@ -143,12 +146,12 @@ pub struct Config {
 pub struct State {
     // === Testdrive state. ===
     arg_vars: BTreeMap<String, String>,
+    cmd_vars: HashMap<String, String>,
     seed: u32,
     temp_path: PathBuf,
     _tempfile: Option<tempfile::TempDir>,
     default_timeout: Duration,
     timeout: Duration,
-    default_max_tries: usize,
     max_tries: usize,
     initial_backoff: Duration,
     backoff_factor: f64,
@@ -158,8 +161,8 @@ pub struct State {
     // === Materialize state. ===
     materialize_catalog_postgres_stash: Option<String>,
     materialize_sql_addr: String,
-    materialize_sql_addr_internal: String,
-    materialize_http_addr: String,
+    materialize_internal_sql_addr: String,
+    materialize_internal_http_addr: String,
     materialize_user: String,
     pgclient: tokio_postgres::Client,
 
@@ -192,6 +195,151 @@ pub struct State {
 }
 
 impl State {
+    pub async fn initialize_cmd_vars(&mut self) -> Result<(), anyhow::Error> {
+        self.cmd_vars
+            .insert("testdrive.kafka-addr".into(), self.kafka_addr.clone());
+        self.cmd_vars.insert(
+            "testdrive.kafka-addr-resolved".into(),
+            self.kafka_addr
+                .to_socket_addrs()
+                .ok()
+                .and_then(|mut addrs| addrs.next())
+                .map(|addr| addr.to_string())
+                .unwrap_or_else(|| "#RESOLUTION-FAILURE#".into()),
+        );
+        self.cmd_vars.insert(
+            "testdrive.schema-registry-url".into(),
+            self.schema_registry_url.to_string(),
+        );
+        self.cmd_vars
+            .insert("testdrive.seed".into(), self.seed.to_string());
+        self.cmd_vars.insert(
+            "testdrive.temp-dir".into(),
+            self.temp_path.display().to_string(),
+        );
+        self.cmd_vars
+            .insert("testdrive.aws-region".into(), self.aws_region().into());
+        self.cmd_vars
+            .insert("testdrive.aws-endpoint".into(), self.aws_endpoint());
+        self.cmd_vars
+            .insert("testdrive.aws-account".into(), self.aws_account.clone());
+        {
+            let aws_credentials = self
+                .aws_config
+                .credentials_provider()
+                .ok_or_else(|| anyhow!("no AWS credentials provider configured"))?
+                .provide_credentials()
+                .await
+                .context("fetching AWS credentials")?;
+            self.cmd_vars.insert(
+                "testdrive.aws-access-key-id".into(),
+                aws_credentials.access_key_id().to_owned(),
+            );
+            self.cmd_vars.insert(
+                "testdrive.aws-secret-access-key".into(),
+                aws_credentials.secret_access_key().to_owned(),
+            );
+            self.cmd_vars.insert(
+                "testdrive.aws-token".into(),
+                aws_credentials
+                    .session_token()
+                    .map(|token| token.to_owned())
+                    .unwrap_or_else(String::new),
+            );
+        }
+        self.cmd_vars.insert(
+            "testdrive.materialize-sql-addr".into(),
+            self.materialize_sql_addr.clone(),
+        );
+        self.cmd_vars.insert(
+            "testdrive.materialize-internal-sql-addr".into(),
+            self.materialize_internal_sql_addr.clone(),
+        );
+        self.cmd_vars.insert(
+            "testdrive.materialize-user".into(),
+            self.materialize_user.clone(),
+        );
+
+        for (key, value) in env::vars() {
+            self.cmd_vars.insert(format!("env.{}", key), value);
+        }
+
+        self.cmd_vars
+            .insert("testdrive.kafka-addr".into(), self.kafka_addr.clone());
+        self.cmd_vars.insert(
+            "testdrive.kafka-addr-resolved".into(),
+            self.kafka_addr
+                .to_socket_addrs()
+                .ok()
+                .and_then(|mut addrs| addrs.next())
+                .map(|addr| addr.to_string())
+                .unwrap_or_else(|| "#RESOLUTION-FAILURE#".into()),
+        );
+        self.cmd_vars.insert(
+            "testdrive.schema-registry-url".into(),
+            self.schema_registry_url.to_string(),
+        );
+        self.cmd_vars
+            .insert("testdrive.seed".into(), self.seed.to_string());
+        self.cmd_vars.insert(
+            "testdrive.temp-dir".into(),
+            self.temp_path.display().to_string(),
+        );
+        self.cmd_vars
+            .insert("testdrive.aws-region".into(), self.aws_region().into());
+        self.cmd_vars
+            .insert("testdrive.aws-endpoint".into(), self.aws_endpoint());
+        self.cmd_vars
+            .insert("testdrive.aws-account".into(), self.aws_account.clone());
+        {
+            let aws_credentials = self
+                .aws_config
+                .credentials_provider()
+                .ok_or_else(|| anyhow!("no AWS credentials provider configured"))?
+                .provide_credentials()
+                .await
+                .context("fetching AWS credentials")?;
+            self.cmd_vars.insert(
+                "testdrive.aws-access-key-id".into(),
+                aws_credentials.access_key_id().to_owned(),
+            );
+            self.cmd_vars.insert(
+                "testdrive.aws-secret-access-key".into(),
+                aws_credentials.secret_access_key().to_owned(),
+            );
+            self.cmd_vars.insert(
+                "testdrive.aws-token".into(),
+                aws_credentials
+                    .session_token()
+                    .map(|token| token.to_owned())
+                    .unwrap_or_else(String::new),
+            );
+        }
+        self.cmd_vars.insert(
+            "testdrive.materialize-sql-addr".into(),
+            self.materialize_sql_addr.clone(),
+        );
+        self.cmd_vars.insert(
+            "testdrive.materialize-internal-sql-addr".into(),
+            self.materialize_internal_sql_addr.clone(),
+        );
+        self.cmd_vars.insert(
+            "testdrive.materialize-user".into(),
+            self.materialize_user.clone(),
+        );
+
+        for (key, value) in env::vars() {
+            self.cmd_vars.insert(format!("env.{}", key), value);
+        }
+
+        for (key, value) in &self.arg_vars {
+            validate_ident(key)?;
+            self.cmd_vars
+                .insert(format!("arg.{}", key), value.to_string());
+        }
+
+        Ok(())
+    }
     /// Makes of copy of the stash's catalog and runs a function on its
     /// state. Returns `None` if there's no catalog information in the State.
     pub async fn with_catalog_copy<F, T>(&self, f: F) -> Result<Option<T>, anyhow::Error>
@@ -263,7 +411,7 @@ impl State {
     pub async fn reset_materialize(&mut self) -> Result<(), anyhow::Error> {
         let (inner_client, _) = postgres_client(&format!(
             "postgres://mz_system:materialize@{}",
-            self.materialize_sql_addr_internal
+            self.materialize_internal_sql_addr
         ))
         .await?;
         inner_client
@@ -314,10 +462,6 @@ impl State {
     /// Delete Kafka topics + CCSR subjects that were created in this run
     pub async fn reset_kafka(&mut self) -> Result<(), anyhow::Error> {
         let mut errors: Vec<anyhow::Error> = Vec::new();
-
-        if self.kafka_topics.is_empty() {
-            return Ok(());
-        }
 
         let metadata = self.kafka_producer.client().fetch_metadata(
             None,
@@ -381,7 +525,7 @@ impl State {
                     .collect();
 
                 for subject in testdrive_subjects {
-                    match self.ccsr_client.delete_subject(&subject).await {
+                    match self.ccsr_client.delete_subject(subject).await {
                         Ok(()) | Err(mz_ccsr::DeleteError::SubjectNotFound) => (),
                         Err(e) => errors.push(e.into()),
                     }
@@ -518,262 +662,129 @@ impl State {
     }
 }
 
-pub struct PosAction {
-    pub pos: usize,
-    pub action: Box<dyn Action + Send + Sync>,
-}
-
 pub enum ControlFlow {
     Continue,
     Break,
 }
 
 #[async_trait]
-pub trait Action {
-    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error>;
-}
-
-pub trait SyncAction: Send + Sync {
-    fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error>;
+pub(crate) trait Run {
+    async fn run(self, state: &mut State) -> Result<ControlFlow, PosError>;
 }
 
 #[async_trait]
-impl<T> Action for T
-where
-    T: SyncAction,
-{
-    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
-        tokio::task::block_in_place(|| self.run(state))
-    }
-}
-
-pub(crate) async fn build(
-    cmds: Vec<PosCommand>,
-    state: &State,
-) -> Result<Vec<PosAction>, PosError> {
-    let mut out = Vec::new();
-    let mut vars = HashMap::new();
-
-    vars.insert("testdrive.kafka-addr".into(), state.kafka_addr.clone());
-    vars.insert(
-        "testdrive.kafka-addr-resolved".into(),
-        state
-            .kafka_addr
-            .to_socket_addrs()
-            .ok()
-            .and_then(|mut addrs| addrs.next())
-            .map(|addr| addr.to_string())
-            .unwrap_or_else(|| "#RESOLUTION-FAILURE#".into()),
-    );
-    vars.insert(
-        "testdrive.schema-registry-url".into(),
-        state.schema_registry_url.to_string(),
-    );
-    vars.insert("testdrive.seed".into(), state.seed.to_string());
-    vars.insert(
-        "testdrive.temp-dir".into(),
-        state.temp_path.display().to_string(),
-    );
-    vars.insert("testdrive.aws-region".into(), state.aws_region().into());
-    vars.insert("testdrive.aws-endpoint".into(), state.aws_endpoint());
-    vars.insert("testdrive.aws-account".into(), state.aws_account.clone());
-    {
-        let aws_credentials = state
-            .aws_config
-            .credentials_provider()
-            .ok_or_else(|| anyhow!("no AWS credentials provider configured"))?
-            .provide_credentials()
-            .await
-            .context("fetching AWS credentials")?;
-        vars.insert(
-            "testdrive.aws-access-key-id".into(),
-            aws_credentials.access_key_id().to_owned(),
-        );
-        vars.insert(
-            "testdrive.aws-secret-access-key".into(),
-            aws_credentials.secret_access_key().to_owned(),
-        );
-        vars.insert(
-            "testdrive.aws-token".into(),
-            aws_credentials
-                .session_token()
-                .map(|token| token.to_owned())
-                .unwrap_or_else(String::new),
-        );
-    }
-    vars.insert(
-        "testdrive.materialize-sql-addr".into(),
-        state.materialize_sql_addr.clone(),
-    );
-    vars.insert(
-        "testdrive.materialize-sql-addr-internal".into(),
-        state.materialize_sql_addr_internal.clone(),
-    );
-    vars.insert(
-        "testdrive.materialize-user".into(),
-        state.materialize_user.clone(),
-    );
-
-    for (key, value) in env::vars() {
-        vars.insert(format!("env.{}", key), value);
-    }
-
-    for (key, value) in &state.arg_vars {
-        validate_ident(key)?;
-        vars.insert(format!("arg.{}", key), value.to_string());
-    }
-
-    for cmd in cmds {
-        let pos = cmd.pos;
-        let wrap_err = |e| PosError::new(e, pos);
-
-        // Substitute variables at startup except for the command-specific ones
+impl Run for PosCommand {
+    async fn run(self, state: &mut State) -> Result<ControlFlow, PosError> {
+        let wrap_err = |e| PosError::new(e, self.pos);
+        //         Substitute variables at startup except for the command-specific ones
         // Those will be substituted at runtime
-        let ignore_prefix = match &cmd.command {
+        let ignore_prefix = match &self.command {
             Command::Builtin(builtin) => Some(builtin.name.clone()),
             _ => None,
         };
-        let subst =
-            |msg: &str| substitute_vars(msg, &vars, &ignore_prefix, false).map_err(wrap_err);
-        let subst_re =
-            |msg: &str| substitute_vars(msg, &vars, &ignore_prefix, true).map_err(wrap_err);
+        let subst = |msg: &str, vars: &HashMap<String, String>| {
+            substitute_vars(msg, vars, &ignore_prefix, false).map_err(wrap_err)
+        };
+        let subst_re = |msg: &str, vars: &HashMap<String, String>| {
+            substitute_vars(msg, vars, &ignore_prefix, true).map_err(wrap_err)
+        };
 
-        let action: Box<dyn Action + Send + Sync> = match cmd.command {
+        let r = match self.command {
             Command::Builtin(mut builtin) => {
                 for val in builtin.args.values_mut() {
-                    *val = subst(val)?;
+                    *val = subst(val, &state.cmd_vars)?;
                 }
                 for line in &mut builtin.input {
-                    *line = subst(line)?;
+                    *line = subst(line, &state.cmd_vars)?;
                 }
                 match builtin.name.as_ref() {
-                    "file-append" => Box::new(file::build_append(builtin).map_err(wrap_err)?),
-                    "file-delete" => Box::new(file::build_delete(builtin).map_err(wrap_err)?),
-                    "http-request" => Box::new(http::build_request(builtin).map_err(wrap_err)?),
-                    "kafka-add-partitions" => {
-                        Box::new(kafka::build_add_partitions(builtin).map_err(wrap_err)?)
-                    }
-                    "kafka-create-topic" => {
-                        Box::new(kafka::build_create_topic(builtin).map_err(wrap_err)?)
-                    }
-                    "kafka-ingest" => Box::new(kafka::build_ingest(builtin).map_err(wrap_err)?),
-                    "kafka-verify" => Box::new(kafka::build_verify(builtin).map_err(wrap_err)?),
-                    "kafka-verify-schema" => {
-                        Box::new(kafka::build_verify_schema(builtin).map_err(wrap_err)?)
-                    }
-                    "kafka-verify-commit" => {
-                        Box::new(kafka::build_verify_commit(builtin).map_err(wrap_err)?)
-                    }
-                    "kinesis-create-stream" => {
-                        Box::new(kinesis::build_create_stream(builtin).map_err(wrap_err)?)
-                    }
-                    "kinesis-update-shards" => {
-                        Box::new(kinesis::build_update_shards(builtin).map_err(wrap_err)?)
-                    }
-                    "kinesis-ingest" => Box::new(kinesis::build_ingest(builtin).map_err(wrap_err)?),
-                    "kinesis-verify" => Box::new(kinesis::build_verify(builtin).map_err(wrap_err)?),
-                    "mysql-connect" => Box::new(mysql::build_connect(builtin).map_err(wrap_err)?),
-                    "mysql-execute" => Box::new(mysql::build_execute(builtin).map_err(wrap_err)?),
-                    "postgres-connect" => {
-                        Box::new(postgres::build_connect(builtin).map_err(wrap_err)?)
-                    }
-                    "postgres-execute" => {
-                        Box::new(postgres::build_execute(builtin).map_err(wrap_err)?)
-                    }
-                    "postgres-verify-slot" => {
-                        Box::new(postgres::build_verify_slot(builtin).map_err(wrap_err)?)
-                    }
+                    "file-append" => file::run_append(builtin, state).await,
+                    "file-delete" => file::run_delete(builtin, state).await,
+                    "http-request" => http::run_request(builtin, state).await,
+                    "kafka-add-partitions" => kafka::run_add_partitions(builtin, state).await,
+                    "kafka-create-topic" => kafka::run_create_topic(builtin, state).await,
+                    "kafka-ingest" => kafka::run_ingest(builtin, state).await,
+                    "kafka-verify" => kafka::run_verify(builtin, state).await,
+                    "kafka-verify-schema" => kafka::run_verify_schema(builtin, state).await,
+                    "kafka-verify-commit" => kafka::run_verify_commit(builtin, state).await,
+                    "kinesis-create-stream" => kinesis::run_create_stream(builtin, state).await,
+                    "kinesis-update-shards" => kinesis::run_update_shards(builtin, state).await,
+                    "kinesis-ingest" => kinesis::run_ingest(builtin, state).await,
+                    "kinesis-verify" => kinesis::run_verify(builtin, state).await,
+                    "mysql-connect" => mysql::run_connect(builtin, state).await,
+                    "mysql-execute" => mysql::run_execute(builtin, state).await,
+                    "postgres-connect" => postgres::run_connect(builtin, state).await,
+                    "postgres-execute" => postgres::run_execute(builtin, state).await,
+                    "postgres-verify-slot" => postgres::run_verify_slot(builtin, state).await,
                     "protobuf-compile-descriptors" => {
-                        Box::new(protobuf::build_compile_descriptors(builtin).map_err(wrap_err)?)
+                        protobuf::run_compile_descriptors(builtin, state).await
                     }
-                    "psql-execute" => Box::new(psql::build_execute(builtin).map_err(wrap_err)?),
-                    "schema-registry-publish" => {
-                        Box::new(schema_registry::build_publish(builtin).map_err(wrap_err)?)
-                    }
+                    "psql-execute" => psql::run_execute(builtin, state).await,
+                    "schema-registry-publish" => schema_registry::run_publish(builtin, state).await,
                     "schema-registry-wait-schema" => {
-                        Box::new(schema_registry::build_wait(builtin).map_err(wrap_err)?)
+                        schema_registry::run_wait(builtin, state).await
                     }
-                    "skip-if" => Box::new(skip_if::build_skip_if(builtin).map_err(wrap_err)?),
-                    "sql-server-connect" => {
-                        Box::new(sql_server::build_connect(builtin).map_err(wrap_err)?)
-                    }
-                    "sql-server-execute" => {
-                        Box::new(sql_server::build_execute(builtin).map_err(wrap_err)?)
-                    }
-                    "random-sleep" => {
-                        Box::new(sleep::build_random_sleep(builtin).map_err(wrap_err)?)
-                    }
-                    "s3-create-bucket" => {
-                        Box::new(s3::build_create_bucket(builtin).map_err(wrap_err)?)
-                    }
-                    "s3-put-object" => Box::new(s3::build_put_object(builtin).map_err(wrap_err)?),
-                    "s3-delete-objects" => {
-                        Box::new(s3::build_delete_object(builtin).map_err(wrap_err)?)
-                    }
-                    "s3-add-notifications" => {
-                        Box::new(s3::build_add_notifications(builtin).map_err(wrap_err)?)
-                    }
-                    "set-regex" => Box::new(set::build_regex_set(builtin).map_err(wrap_err)?),
-                    "unset-regex" => Box::new(set::build_regex_unset(builtin).map_err(wrap_err)?),
-                    "set-sql-timeout" => {
-                        Box::new(set::build_sql_timeout(builtin).map_err(wrap_err)?)
-                    }
-                    "set-max-tries" => Box::new(set::build_max_tries(builtin).map_err(wrap_err)?),
+                    "skip-if" => skip_if::run_skip_if(builtin, state).await,
+                    "sql-server-connect" => sql_server::run_connect(builtin, state).await,
+                    "sql-server-execute" => sql_server::run_execute(builtin, state).await,
+                    "random-sleep" => sleep::run_random_sleep(builtin),
+                    "s3-create-bucket" => s3::run_create_bucket(builtin, state).await,
+                    "s3-put-object" => s3::run_put_object(builtin, state).await,
+                    "s3-delete-objects" => s3::run_delete_object(builtin, state).await,
+                    "s3-add-notifications" => s3::run_add_notifications(builtin, state).await,
+                    "set-regex" => set::run_regex_set(builtin, state),
+                    "unset-regex" => set::run_regex_unset(builtin, state),
+                    "set-sql-timeout" => set::run_sql_timeout(builtin, state),
+                    "set-max-tries" => set::run_max_tries(builtin, state),
                     "sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment" => {
-                        Box::new(sleep::build_sleep(builtin).map_err(wrap_err)?)
+                        sleep::run_sleep(builtin)
                     }
-                    "set" => {
-                        for (key, val) in builtin.args {
-                            if val.is_empty() {
-                                vars.insert(key, builtin.input.join("\n"));
-                            } else {
-                                vars.insert(key, val);
-                            }
-                        }
-                        continue;
-                    }
+                    "set" => set::set_vars(builtin, state),
                     // "verify-timestamp-compaction" => Box::new(
-                    //     verify_timestamp_compaction::build_verify_timestamp_compaction_action(
+                    //     verify_timestamp_compaction::run_verify_timestamp_compaction_action(
                     //         builtin,
                     //     )
-                    //     .map_err(wrap_err)?,
+                    //     .await,
                     // ),
                     _ => {
                         return Err(PosError::new(
                             anyhow!("unknown built-in command {}", builtin.name),
-                            cmd.pos,
+                            self.pos,
                         ));
                     }
                 }
             }
             Command::Sql(mut sql) => {
-                sql.query = subst(&sql.query)?;
+                sql.query = subst(&sql.query, &state.cmd_vars)?;
                 if let SqlOutput::Full { expected_rows, .. } = &mut sql.expected_output {
                     for row in expected_rows {
                         for col in row {
-                            *col = subst(col)?;
+                            *col = subst(col, &state.cmd_vars)?;
                         }
                     }
                 }
-                Box::new(sql::build_sql(sql).map_err(wrap_err)?)
+                sql::run_sql(sql, state).await
             }
             Command::FailSql(mut sql) => {
-                sql.query = subst(&sql.query)?;
+                sql.query = subst(&sql.query, &state.cmd_vars)?;
                 sql.expected_error = match &sql.expected_error {
-                    SqlExpectedError::Contains(s) => SqlExpectedError::Contains(subst(s)?),
-                    SqlExpectedError::Exact(s) => SqlExpectedError::Exact(subst(s)?),
-                    SqlExpectedError::Regex(s) => SqlExpectedError::Regex(subst_re(&s)?),
+                    SqlExpectedError::Contains(s) => {
+                        SqlExpectedError::Contains(subst(s, &state.cmd_vars)?)
+                    }
+                    SqlExpectedError::Exact(s) => {
+                        SqlExpectedError::Exact(subst(s, &state.cmd_vars)?)
+                    }
+                    SqlExpectedError::Regex(s) => {
+                        SqlExpectedError::Regex(subst_re(s, &state.cmd_vars)?)
+                    }
                     SqlExpectedError::Timeout => SqlExpectedError::Timeout,
                 };
-                Box::new(sql::build_fail_sql(sql).map_err(wrap_err)?)
+                sql::run_fail_sql(sql, state).await
             }
         };
-        out.push(PosAction {
-            pos: cmd.pos,
-            action,
-        })
+
+        r.map_err(wrap_err)
     }
-    Ok(out)
 }
 
 /// Substituted `${}`-delimited variables from `vars` into `msg`
@@ -841,15 +852,15 @@ pub async fn create_state(
 
     let (
         materialize_sql_addr,
-        materialize_sql_addr_internal,
-        materialize_http_addr,
+        materialize_internal_sql_addr,
+        materialize_internal_http_addr,
         materialize_user,
         pgclient,
         pgconn_task,
     ) = {
         let materialize_url = util::postgres::config_url(&config.materialize_pgconfig)?;
-        let materialize_url_internal =
-            util::postgres::config_url(&config.materialize_pgconfig_internal)?;
+        let materialize_internal_url =
+            util::postgres::config_url(&config.materialize_internal_pgconfig)?;
 
         let (pgclient, pgconn) = Retry::default()
             .max_duration(config.default_timeout)
@@ -883,20 +894,20 @@ pub async fn create_state(
             materialize_url.host_str().unwrap(),
             materialize_url.port().unwrap()
         );
-        let materialize_sql_addr_internal = format!(
+        let materialize_internal_sql_addr = format!(
             "{}:{}",
-            materialize_url_internal.host_str().unwrap(),
-            materialize_url_internal.port().unwrap()
+            materialize_internal_url.host_str().unwrap(),
+            materialize_internal_url.port().unwrap()
         );
-        let materialize_http_addr = format!(
+        let materialize_internal_http_addr = format!(
             "{}:{}",
-            materialize_url.host_str().unwrap(),
-            config.materialize_http_port
+            materialize_internal_url.host_str().unwrap(),
+            config.materialize_internal_http_port
         );
         (
             materialize_sql_addr,
-            materialize_sql_addr_internal,
-            materialize_http_addr,
+            materialize_internal_sql_addr,
+            materialize_internal_http_addr,
             materialize_user,
             pgclient,
             pgconn_task,
@@ -970,15 +981,15 @@ pub async fn create_state(
     let s3_client = aws_sdk_s3::Client::new(&config.aws_config);
     let sqs_client = aws_sdk_sqs::Client::new(&config.aws_config);
 
-    let state = State {
+    let mut state = State {
         // === Testdrive state. ===
         arg_vars: config.arg_vars.clone(),
+        cmd_vars: HashMap::new(),
         seed,
         temp_path,
         _tempfile,
         default_timeout: config.default_timeout,
         timeout: config.default_timeout,
-        default_max_tries: config.default_max_tries,
         max_tries: config.default_max_tries,
         initial_backoff: config.initial_backoff,
         backoff_factor: config.backoff_factor,
@@ -988,8 +999,8 @@ pub async fn create_state(
         // === Materialize state. ===
         materialize_catalog_postgres_stash,
         materialize_sql_addr,
-        materialize_sql_addr_internal,
-        materialize_http_addr,
+        materialize_internal_sql_addr,
+        materialize_internal_http_addr,
         materialize_user,
         pgclient,
 
@@ -1019,5 +1030,6 @@ pub async fn create_state(
         postgres_clients: HashMap::new(),
         sql_server_clients: HashMap::new(),
     };
+    state.initialize_cmd_vars().await?;
     Ok((state, pgconn_task))
 }

@@ -79,7 +79,7 @@ name     pkey1 pkey2
   DATABASE 'source',
   USER 'yshtola',
   SSH TUNNEL johto;
-contains: unknown catalog item 'johto'
+contains: invalid SSH TUNNEL: must provide an object
 
 ! CREATE CONNECTION papalymo
   FOR POSTGRES HOST 'gridania.example.com',

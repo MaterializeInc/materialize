@@ -780,7 +780,7 @@ pub mod public_decoders {
             mut self,
             a: &mut A,
         ) -> Result<Self::Out, AvroError> {
-            Ok((self.conv)(self.inner.record(a)?)?)
+            (self.conv)(self.inner.record(a)?)
         }
 
         fn union_branch<'a, R: AvroRead, D: AvroDeserializer>(
@@ -791,29 +791,29 @@ pub mod public_decoders {
             deserializer: D,
             reader: &'a mut R,
         ) -> Result<Self::Out, AvroError> {
-            Ok((self.conv)(self.inner.union_branch(
+            (self.conv)(self.inner.union_branch(
                 idx,
                 n_variants,
                 null_variant,
                 deserializer,
                 reader,
-            )?)?)
+            )?)
         }
 
         fn array<A: AvroArrayAccess>(mut self, a: &mut A) -> Result<Self::Out, AvroError> {
-            Ok((self.conv)(self.inner.array(a)?)?)
+            (self.conv)(self.inner.array(a)?)
         }
 
         fn map<M: AvroMapAccess>(mut self, m: &mut M) -> Result<Self::Out, AvroError> {
-            Ok((self.conv)(self.inner.map(m)?)?)
+            (self.conv)(self.inner.map(m)?)
         }
 
         fn enum_variant(mut self, symbol: &str, idx: usize) -> Result<Self::Out, AvroError> {
-            Ok((self.conv)(self.inner.enum_variant(symbol, idx)?)?)
+            (self.conv)(self.inner.enum_variant(symbol, idx)?)
         }
 
         fn scalar(mut self, scalar: Scalar) -> Result<Self::Out, AvroError> {
-            Ok((self.conv)(self.inner.scalar(scalar)?)?)
+            (self.conv)(self.inner.scalar(scalar)?)
         }
 
         fn decimal<'a, R: AvroRead>(
@@ -822,42 +822,42 @@ pub mod public_decoders {
             scale: usize,
             r: ValueOrReader<'a, &'a [u8], R>,
         ) -> Result<Self::Out, AvroError> {
-            Ok((self.conv)(self.inner.decimal(precision, scale, r)?)?)
+            (self.conv)(self.inner.decimal(precision, scale, r)?)
         }
 
         fn bytes<'a, R: AvroRead>(
             mut self,
             r: ValueOrReader<'a, &'a [u8], R>,
         ) -> Result<Self::Out, AvroError> {
-            Ok((self.conv)(self.inner.bytes(r)?)?)
+            (self.conv)(self.inner.bytes(r)?)
         }
 
         fn string<'a, R: AvroRead>(
             mut self,
             r: ValueOrReader<'a, &'a str, R>,
         ) -> Result<Self::Out, AvroError> {
-            Ok((self.conv)(self.inner.string(r)?)?)
+            (self.conv)(self.inner.string(r)?)
         }
 
         fn json<'a, R: AvroRead>(
             mut self,
             r: ValueOrReader<'a, &'a serde_json::Value, R>,
         ) -> Result<Self::Out, AvroError> {
-            Ok((self.conv)(self.inner.json(r)?)?)
+            (self.conv)(self.inner.json(r)?)
         }
 
         fn uuid<'a, R: AvroRead>(
             mut self,
             r: ValueOrReader<'a, &'a [u8], R>,
         ) -> Result<Self::Out, AvroError> {
-            Ok((self.conv)(self.inner.uuid(r)?)?)
+            (self.conv)(self.inner.uuid(r)?)
         }
 
         fn fixed<'a, R: AvroRead>(
             mut self,
             r: ValueOrReader<'a, &'a [u8], R>,
         ) -> Result<Self::Out, AvroError> {
-            Ok((self.conv)(self.inner.fixed(r)?)?)
+            (self.conv)(self.inner.fixed(r)?)
         }
     }
     pub struct ArrayAsVecDecoder<

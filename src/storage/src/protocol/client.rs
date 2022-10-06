@@ -432,6 +432,14 @@ pub struct Update<T = mz_repr::Timestamp> {
     pub diff: Diff,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+/// A batch of updates to be fed to a local input; however, the input must
+/// determine the most appropriate timestamps to use.
+pub struct TimestamplessUpdate {
+    pub row: Row,
+    pub diff: Diff,
+}
+
 impl RustType<ProtoTrace> for (GlobalId, Antichain<mz_repr::Timestamp>) {
     fn into_proto(&self) -> ProtoTrace {
         ProtoTrace {

@@ -67,6 +67,10 @@ def main() -> int:
         action="store_true",
     )
     parser.add_argument(
+        "--features",
+        help="Comma separated list of features to activate",
+    )
+    parser.add_argument(
         "--no-default-features",
         help="Do not activate the `default` feature",
         action="store_true",
@@ -166,9 +170,14 @@ def main() -> int:
 def _build(args: argparse.Namespace, extra_programs: list[str] = []) -> int:
     env = dict(os.environ)
     command = _cargo_command(args, "build")
+    features = []
     if args.tokio_console:
-        command += ["--features=tokio-console"]
+        features += ["tokio-console"]
         env["RUSTFLAGS"] = env.get("RUSTFLAGS", "") + " --cfg=tokio_unstable"
+    if args.features:
+        features.extend(args.features.split(","))
+    if features:
+        command += [f"--features={','.join(features)}"]
     for program in [*REQUIRED_SERVICES, *extra_programs]:
         command += ["--bin", program]
     completed_proc = spawn.runv(command, env=env)

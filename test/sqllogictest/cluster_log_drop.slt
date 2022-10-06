@@ -21,7 +21,7 @@ mode cockroach
 query T rowsort
 SELECT (SELECT COUNT(*) FROM mz_catalog.mz_sources WHERE name NOT LIKE '%_1') - (SELECT COUNT(*) FROM mz_catalog.mz_sources WHERE name LIKE '%_1');
 ----
-0
+1
 
 # This test checks if the views in mz_catalog are also present in a postfixed
 # way. If this test fails and you added new view that uses introspection
@@ -36,7 +36,7 @@ SELECT (SELECT COUNT(*) FROM mz_catalog.mz_views WHERE name NOT LIKE '%_1') - (S
 # The default cluster also has log sources, thus we should have one set active at boot.
 # Check the presence of one source and one view
 query T rowsort
-select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
+select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_active_peeks_%';
 ----
 1
 
@@ -49,7 +49,7 @@ statement ok
 CREATE CLUSTER c1 REPLICAS (r1 (SIZE '1'), r2 (SIZE '2'));
 
 query T rowsort
-select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
+select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_active_peeks_%';
 ----
 3
 
@@ -62,7 +62,7 @@ statement ok
 DROP CLUSTER REPLICA c1.r1;
 
 query T rowsort
-select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
+select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_active_peeks_%';
 ----
 2
 
@@ -75,7 +75,7 @@ statement ok
 DROP CLUSTER c1;
 
 query T rowsort
-select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
+select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_active_peeks_%';
 ----
 1
 

@@ -43,7 +43,7 @@ class Generator:
         print("> DROP SCHEMA IF EXISTS public CASCADE;")
         print(f"> CREATE SCHEMA public /* {cls} */;")
         print(
-            "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-sql-addr-internal}"
+            "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}"
         )
 
     @classmethod
@@ -1295,7 +1295,7 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
                 ),
                 replica2 (
                     REMOTE ['computed_2_1:2100', 'computed_2_2:2100'],
-                    COMPUTE ['computed_2_1:2102', 'computed_2_2:2100'],
+                    COMPUTE ['computed_2_1:2102', 'computed_2_2:2102'],
                     WORKERS {args.workers}
                 )
             )
@@ -1366,7 +1366,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
             c.testdrive(
                 dedent(
                     """
-                    $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-sql-addr-internal}
+                    $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
                     """
                     f"""
@@ -1414,7 +1414,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                         f"{replica_name} (REMOTE ["
                         + ", ".join(f"'{n}:2100'" for n in nodes)
                         + "], COMPUTE ["
-                        + ", ".join(f"'{n}:2100'" for n in nodes)
+                        + ", ".join(f"'{n}:2102'" for n in nodes)
                         + f"], WORKERS {args.workers})"
                     )
 

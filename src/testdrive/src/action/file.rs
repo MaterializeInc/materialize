@@ -12,20 +12,12 @@ use std::str::FromStr;
 
 use anyhow::bail;
 use async_compression::tokio::write::GzipEncoder;
-use async_trait::async_trait;
 use tokio::fs::{self, OpenOptions};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-use crate::action::{Action, ControlFlow, State};
+use crate::action::{ControlFlow, State};
 use crate::format::bytes;
 use crate::parser::BuiltinCommand;
-
-pub struct AppendAction {
-    path: String,
-    contents: Vec<u8>,
-    compression: Compression,
-    repeat: usize,
-}
 
 pub enum Compression {
     Gzip,
@@ -61,7 +53,10 @@ fn build_path(cmd: &mut BuiltinCommand) -> Result<String, anyhow::Error> {
     }
 }
 
-pub fn build_append(mut cmd: BuiltinCommand) -> Result<AppendAction, anyhow::Error> {
+pub async fn run_append(
+    mut cmd: BuiltinCommand,
+    state: &mut State,
+) -> Result<ControlFlow, anyhow::Error> {
     let path = build_path(&mut cmd)?;
     let compression = build_compression(&mut cmd)?;
     let trailing_newline = cmd.args.opt_bool("trailing-newline")?.unwrap_or(true);
@@ -75,55 +70,35 @@ pub fn build_append(mut cmd: BuiltinCommand) -> Result<AppendAction, anyhow::Err
     if !trailing_newline {
         contents.pop();
     }
-    Ok(AppendAction {
-        path,
-        contents,
-        compression,
-        repeat,
-    })
-}
+    let path = state.temp_path.join(&path);
+    println!("Appending to file {}", path.display());
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .await?;
 
-#[async_trait]
-impl Action for AppendAction {
-    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
-        let path = state.temp_path.join(&self.path);
-        println!("Appending to file {}", path.display());
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .await?;
+    let mut file: Box<dyn AsyncWrite + Unpin + Send> = match compression {
+        Compression::Gzip => Box::new(GzipEncoder::new(file)),
+        Compression::None => Box::new(file),
+    };
 
-        let mut file: Box<dyn AsyncWrite + Unpin + Send> = match self.compression {
-            Compression::Gzip => Box::new(GzipEncoder::new(file)),
-            Compression::None => Box::new(file),
-        };
-
-        for _ in 0..self.repeat {
-            file.write_all(&self.contents).await?;
-        }
-        file.shutdown().await?;
-
-        Ok(ControlFlow::Continue)
+    for _ in 0..repeat {
+        file.write_all(&contents).await?;
     }
+    file.shutdown().await?;
+
+    Ok(ControlFlow::Continue)
 }
 
-pub struct DeleteAction {
-    path: String,
-}
-
-pub fn build_delete(mut cmd: BuiltinCommand) -> Result<DeleteAction, anyhow::Error> {
+pub async fn run_delete(
+    mut cmd: BuiltinCommand,
+    state: &mut State,
+) -> Result<ControlFlow, anyhow::Error> {
     let path = build_path(&mut cmd)?;
     cmd.args.done()?;
-    Ok(DeleteAction { path })
-}
-
-#[async_trait]
-impl Action for DeleteAction {
-    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
-        let path = state.temp_path.join(&self.path);
-        println!("Deleting file {}", path.display());
-        fs::remove_file(&path).await?;
-        Ok(ControlFlow::Continue)
-    }
+    let path = state.temp_path.join(&path);
+    println!("Deleting file {}", path.display());
+    fs::remove_file(&path).await?;
+    Ok(ControlFlow::Continue)
 }

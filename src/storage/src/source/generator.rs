@@ -144,6 +144,7 @@ impl SourceReader for LoadGeneratorSourceReader {
         // There should be data, but possibly not if a source returned an empty Vec.
         if let Some(value) = self.pending.pop() {
             let message = SourceMessage {
+                output: 0,
                 partition: PartitionId::None,
                 offset: self.offset,
                 upstream_time_millis: None,

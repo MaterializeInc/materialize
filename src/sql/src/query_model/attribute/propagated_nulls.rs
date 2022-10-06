@@ -101,7 +101,7 @@ pub(crate) fn propagated_nulls(expr: &BoxScalarExpr) -> HashSet<ColumnReference>
         &mut |_| (),
     );
 
-    return result;
+    result
 }
 
 #[cfg(test)]

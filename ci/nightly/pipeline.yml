@@ -31,6 +31,7 @@ steps:
           - { value: testdrive-partitions-5 }
           - { value: testdrive-replicas-4}
           - { value: testdrive-replica-size-4}
+          - { value: testdrive-in-cloudtest}
 #          - { value: feature-benchmark-single-node }
 #          - { value: feature-benchmark-cluster }
           - { value: zippy-kafka-sources }
@@ -44,6 +45,9 @@ steps:
           - { value: checks-oneatatime-restart-environmentd-storaged }
           - { value: checks-oneatatime-kill-storaged }
           - { value: checks-oneatatime-restart-postgres-backend }
+          - { value: checks-upgrade-entire-mz }
+          - { value: checks-upgrade-computed-first }
+          - { value: checks-upgrade-computed-last }
           - { value: persist-maelstrom-single-node }
           - { value: persist-maelstrom-multi-node }
           - { value: unused-deps }
@@ -245,6 +249,16 @@ steps:
           composition: testdrive
           args: [--aws-region=us-east-2, --replica-size=4]
 
+  - id: testdrive-in-cloudtest
+    label: Full Testdrive in Cloudtest (K8s)
+    timeout_in_minutes: 300
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/scratch-aws-access: ~
+      - ./ci/plugins/cloudtest:
+          args: [-m=long, test/cloudtest/test_full_testdrive.py]
+
   - id: persistence-testdrive
     label: ":racing_car: testdrive with --persistent-user-tables"
     timeout_in_minutes: 30
@@ -365,6 +379,36 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=RestartPostgresBackend, --execution-mode=oneatatime]
+
+  - id: checks-upgrade-entire-mz
+    label: "Upgrade entire Mz from v0.27.0-alpha.23"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=UpgradeEntireMz]
+
+  - id: checks-upgrade-computed-first
+    label: "Upgrade computed from v0.27.0-alpha.23 first"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=UpgradeComputedFirst]
+
+  - id: checks-upgrade-computed-last
+    label: "Upgrade computed from v0.27.0-alpha.23 last"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=UpgradeComputedLast]
 
   - id: persist-maelstrom-single-node
     label: Long single-node Maelstrom coverage of persist

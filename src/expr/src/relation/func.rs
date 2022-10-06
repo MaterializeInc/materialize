@@ -11,12 +11,11 @@
 
 use std::fmt;
 use std::iter;
+use std::ops::Deref;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use dec::OrderedDecimal;
 use itertools::Itertools;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::adt::date::Date;
 use num::{CheckedAdd, Integer, Signed};
 use ordered_float::OrderedFloat;
 use proptest::prelude::{Arbitrary, Just};
@@ -28,10 +27,14 @@ use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::ArrayDimension;
+use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{self, NumericMaxScale};
 use mz_repr::adt::regex::Regex as ReprRegex;
+use mz_repr::adt::timestamp::CheckedTimestamp;
+use mz_repr::adt::timestamp::TimestampLike;
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
 
 use crate::relation::{
@@ -186,7 +189,7 @@ where
     match datums
         .into_iter()
         .filter(|d| !d.is_null())
-        .max_by(|a, b| a.unwrap_str().cmp(&b.unwrap_str()))
+        .max_by(|a, b| a.unwrap_str().cmp(b.unwrap_str()))
     {
         Some(datum) => datum,
         None => Datum::Null,
@@ -209,7 +212,7 @@ fn max_timestamp<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    let x: Option<NaiveDateTime> = datums
+    let x: Option<CheckedTimestamp<NaiveDateTime>> = datums
         .into_iter()
         .filter(|d| !d.is_null())
         .map(|d| d.unwrap_timestamp())
@@ -221,7 +224,7 @@ fn max_timestamptz<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    let x: Option<DateTime<Utc>> = datums
+    let x: Option<CheckedTimestamp<DateTime<Utc>>> = datums
         .into_iter()
         .filter(|d| !d.is_null())
         .map(|d| d.unwrap_timestamptz())
@@ -368,7 +371,7 @@ where
     match datums
         .into_iter()
         .filter(|d| !d.is_null())
-        .min_by(|a, b| a.unwrap_str().cmp(&b.unwrap_str()))
+        .min_by(|a, b| a.unwrap_str().cmp(b.unwrap_str()))
     {
         Some(datum) => datum,
         None => Datum::Null,
@@ -391,7 +394,7 @@ fn min_timestamp<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    let x: Option<NaiveDateTime> = datums
+    let x: Option<CheckedTimestamp<NaiveDateTime>> = datums
         .into_iter()
         .filter(|d| !d.is_null())
         .map(|d| d.unwrap_timestamp())
@@ -403,7 +406,7 @@ fn min_timestamptz<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    let x: Option<DateTime<Utc>> = datums
+    let x: Option<CheckedTimestamp<DateTime<Utc>>> = datums
         .into_iter()
         .filter(|d| !d.is_null())
         .map(|d| d.unwrap_timestamptz())
@@ -571,7 +574,7 @@ fn string_agg<'a, I>(datums: I, temp_storage: &'a RowArena, order_by: &[ColumnOr
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    const EMPTY_SEP: &'static str = "";
+    const EMPTY_SEP: &str = "";
 
     let datums = order_aggregate_datums(datums, order_by);
     let mut sep_value_pairs = datums.into_iter().filter_map(|d| {
@@ -692,7 +695,7 @@ where
         let right = &right.1;
         let left_datums = left_datum_vec.borrow_with(left);
         let right_datums = right_datum_vec.borrow_with(right);
-        compare_columns(&order_by, &left_datums, &right_datums, || left.cmp(&right))
+        compare_columns(order_by, &left_datums, &right_datums, || left.cmp(right))
     };
     rows.sort_by(&mut sort_by);
     rows.into_iter()
@@ -1885,28 +1888,29 @@ where
 /// [`num::range_step_inclusive`](https://github.com/rust-num/num-iter/blob/ddb14c1e796d401014c6c7a727de61d8109ad986/src/lib.rs#L279),
 /// but for our timestamp types using [`Interval`] for `step`.xwxw
 #[derive(Clone)]
-pub struct TimestampRangeStepInclusive {
-    state: NaiveDateTime,
-    stop: NaiveDateTime,
+pub struct TimestampRangeStepInclusive<T> {
+    state: CheckedTimestamp<T>,
+    stop: CheckedTimestamp<T>,
     step: Interval,
     rev: bool,
     done: bool,
 }
 
-impl Iterator for TimestampRangeStepInclusive {
-    type Item = NaiveDateTime;
+impl<T: TimestampLike> Iterator for TimestampRangeStepInclusive<T> {
+    type Item = CheckedTimestamp<T>;
 
     #[inline]
-    fn next(&mut self) -> Option<NaiveDateTime> {
+    fn next(&mut self) -> Option<CheckedTimestamp<T>> {
         if !self.done
             && ((self.rev && self.state >= self.stop) || (!self.rev && self.state <= self.stop))
         {
             let result = self.state.clone();
-            match add_timestamp_months(self.state, self.step.months) {
+            match add_timestamp_months(self.state.deref(), self.step.months) {
                 Ok(state) => match state.checked_add_signed(self.step.duration_as_chrono()) {
-                    Some(v) => {
-                        self.state = v;
-                    }
+                    Some(v) => match CheckedTimestamp::from_timestamplike(v) {
+                        Ok(v) => self.state = v,
+                        Err(_) => self.done = true,
+                    },
                     None => self.done = true,
                 },
                 Err(..) => {
@@ -1921,11 +1925,11 @@ impl Iterator for TimestampRangeStepInclusive {
     }
 }
 
-fn generate_series_ts(
-    start: NaiveDateTime,
-    stop: NaiveDateTime,
+fn generate_series_ts<T: TimestampLike>(
+    start: CheckedTimestamp<T>,
+    stop: CheckedTimestamp<T>,
     step: Interval,
-    conv: fn(NaiveDateTime) -> Datum<'static>,
+    conv: fn(CheckedTimestamp<T>) -> Datum<'static>,
 ) -> Result<impl Iterator<Item = (Row, Diff)>, EvalError> {
     let normalized_step = step.as_microseconds();
     if normalized_step == 0 {
@@ -2294,7 +2298,7 @@ impl TableFunc {
                 Ok(Box::new(res))
             }
             TableFunc::GenerateSeriesTimestamp => {
-                fn pass_through<'a>(d: NaiveDateTime) -> Datum<'a> {
+                fn pass_through<'a>(d: CheckedTimestamp<NaiveDateTime>) -> Datum<'a> {
                     Datum::from(d)
                 }
                 let res = generate_series_ts(
@@ -2306,12 +2310,12 @@ impl TableFunc {
                 Ok(Box::new(res))
             }
             TableFunc::GenerateSeriesTimestampTz => {
-                fn gen_ts_tz<'a>(d: NaiveDateTime) -> Datum<'a> {
-                    Datum::from(DateTime::<Utc>::from_utc(d, Utc))
+                fn gen_ts_tz<'a>(d: CheckedTimestamp<DateTime<Utc>>) -> Datum<'a> {
+                    Datum::from(d)
                 }
                 let res = generate_series_ts(
-                    datums[0].unwrap_timestamptz().naive_utc(),
-                    datums[1].unwrap_timestamptz().naive_utc(),
+                    datums[0].unwrap_timestamptz(),
+                    datums[1].unwrap_timestamptz(),
                     datums[2].unwrap_interval(),
                     gen_ts_tz,
                 )?;
@@ -2323,7 +2327,7 @@ impl TableFunc {
             TableFunc::Repeat => Ok(Box::new(repeat(datums[0]).into_iter())),
             TableFunc::UnnestArray { .. } => Ok(Box::new(unnest_array(datums[0]))),
             TableFunc::UnnestList { .. } => Ok(Box::new(unnest_list(datums[0]))),
-            TableFunc::Wrap { width, .. } => Ok(Box::new(wrap(&datums, *width))),
+            TableFunc::Wrap { width, .. } => Ok(Box::new(wrap(datums, *width))),
         }
     }
 

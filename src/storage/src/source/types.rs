@@ -223,6 +223,9 @@ pub enum SourceMessageType<Key, Value, Diff> {
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
 pub struct SourceMessage<Key, Value, Diff> {
+    /// The output stream this message belongs to. Later in the pipeline the stream is partitioned
+    /// based on this value and is fed to the appropriate source exports
+    pub output: usize,
     /// Partition from which this message originates
     pub partition: PartitionId,
     /// Materialize offset of the message (1-indexed)
@@ -382,6 +385,8 @@ impl From<anyhow::Error> for SourceReaderError {
 pub struct SourceMetrics {
     /// Value of the capability associated with this source
     pub(crate) capability: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    /// The resume_upper for a source.
+    pub(crate) resume_upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
     /// Per-partition Prometheus metrics.
     pub(crate) partition_metrics: HashMap<PartitionId, PartitionMetrics>,
     source_name: String,
@@ -407,6 +412,10 @@ impl SourceMetrics {
                 .source_specific
                 .capability
                 .get_delete_on_drop_gauge(labels.to_vec()),
+            resume_upper: base
+                .source_specific
+                .resume_upper
+                .get_delete_on_drop_gauge(vec![source_id.to_string()]),
             partition_metrics: Default::default(),
             source_name: source_name.to_string(),
             source_id,
@@ -501,6 +510,56 @@ impl PartitionMetrics {
                 .get_delete_on_drop_counter(labels.to_vec()),
             last_offset: 0,
             last_timestamp: 0,
+        }
+    }
+}
+
+/// Source reader operator specific Prometheus metrics
+pub struct SourceReaderMetrics {
+    /// Per-partition Prometheus metrics.
+    pub(crate) partition_metrics: HashMap<PartitionId, SourceReaderPartitionMetrics>,
+    source_id: GlobalId,
+    base_metrics: SourceBaseMetrics,
+}
+
+impl SourceReaderMetrics {
+    /// Initialises source metrics for a given (source_id, worker_id)
+    pub fn new(base: &SourceBaseMetrics, source_id: GlobalId) -> SourceReaderMetrics {
+        SourceReaderMetrics {
+            partition_metrics: Default::default(),
+            source_id,
+            base_metrics: base.clone(),
+        }
+    }
+
+    /// Log updates to which offsets / timestamps read up to.
+    pub fn metrics_for_partition(&mut self, pid: &PartitionId) -> &SourceReaderPartitionMetrics {
+        self.partition_metrics
+            .entry(pid.clone())
+            .or_insert_with(|| {
+                SourceReaderPartitionMetrics::new(&self.base_metrics, self.source_id, pid)
+            })
+    }
+}
+
+/// Partition-specific metrics, recorded to both Prometheus and a system table
+pub struct SourceReaderPartitionMetrics {
+    /// The offset-domain resume_upper for a source.
+    pub(crate) source_resume_upper: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+}
+
+impl SourceReaderPartitionMetrics {
+    /// Initialises partition metrics for a given (source_id, partition_id)
+    pub fn new(
+        base_metrics: &SourceBaseMetrics,
+        source_id: GlobalId,
+        partition_id: &PartitionId,
+    ) -> SourceReaderPartitionMetrics {
+        let base = &base_metrics.partition_specific;
+        SourceReaderPartitionMetrics {
+            source_resume_upper: base
+                .source_resume_upper
+                .get_delete_on_drop_gauge(vec![source_id.to_string(), partition_id.to_string()]),
         }
     }
 }

@@ -165,7 +165,7 @@ pub fn try_simplify_quantified_comparisons(expr: &mut HirRelationExpr) {
                     let (inner, outers) = outers
                         .split_first_mut()
                         .expect("outers known to have at least one element");
-                    let scalar_type = scalar.typ(&outers, inner, &NO_PARAMS);
+                    let scalar_type = scalar.typ(outers, inner, &NO_PARAMS);
                     inner.column_types.push(scalar_type);
                 }
             }
@@ -276,6 +276,6 @@ fn column_type(
     inner: &HirRelationExpr,
     expr: &HirScalarExpr,
 ) -> ColumnType {
-    let inner_type = inner.typ(&outers, &NO_PARAMS);
-    expr.typ(&outers, &inner_type, &NO_PARAMS)
+    let inner_type = inner.typ(outers, &NO_PARAMS);
+    expr.typ(outers, &inner_type, &NO_PARAMS)
 }

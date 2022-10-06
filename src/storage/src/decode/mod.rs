@@ -36,7 +36,7 @@ use timely::scheduling::SyncActivator;
 use tokio::runtime::Handle as TokioHandle;
 
 use mz_interchange::avro::ConfluentAvroResolver;
-use mz_repr::Datum;
+use mz_repr::{adt::timestamp::CheckedTimestamp, Datum};
 use mz_repr::{Diff, Row, Timestamp};
 use tracing::error;
 
@@ -698,10 +698,14 @@ fn to_metadata_row(
                             millis = 1000 - millis;
                         }
 
-                        packer.push(Datum::from(NaiveDateTime::from_timestamp(
-                            secs,
-                            millis * 1_000_000,
-                        )))
+                        let d: Datum = NaiveDateTime::from_timestamp_opt(secs, millis * 1_000_000)
+                            .and_then(|dt| {
+                                let ct: Option<CheckedTimestamp<NaiveDateTime>> =
+                                    dt.try_into().ok();
+                                ct
+                            })
+                            .into();
+                        packer.push(d)
                     }
                     IncludedColumnSource::Topic => unreachable!("Topic is not implemented yet"),
                     IncludedColumnSource::Headers => {
@@ -715,11 +719,11 @@ fn to_metadata_row(
                                 for (k, v) in headers {
                                     match v {
                                         Some(v) => r.push_list_with(|record_row| {
-                                            record_row.push(Datum::String(&k));
-                                            record_row.push(Datum::Bytes(&v));
+                                            record_row.push(Datum::String(k));
+                                            record_row.push(Datum::Bytes(v));
                                         }),
                                         None => r.push_list_with(|record_row| {
-                                            record_row.push(Datum::String(&k));
+                                            record_row.push(Datum::String(k));
                                             record_row.push(Datum::Null);
                                         }),
                                     }

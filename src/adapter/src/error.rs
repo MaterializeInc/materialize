@@ -12,6 +12,7 @@ use std::fmt;
 use std::num::TryFromIntError;
 
 use dec::TryFromDecimalError;
+use mz_repr::adt::timestamp::TimestampError;
 use tokio::sync::oneshot;
 
 use mz_compute_client::controller::ComputeError;
@@ -53,7 +54,7 @@ pub enum AdapterError {
     IdExhaustionError,
     /// Unexpected internal state was encountered.
     Internal(String),
-    /// Attempted to read from log sources on a cluster with disabled introspection.
+    /// Attempted to read from log sources of a replica with disabled introspection.
     IntrospectionDisabled {
         log_names: Vec<String>,
     },
@@ -221,6 +222,9 @@ impl AdapterError {
                 "The object depends on the following log sources:\n    {}",
                 log_names.join("\n    "),
             )),
+            AdapterError::UnmaterializableFunction(UnmaterializableFunc::CurrentTimestamp) => {
+                Some("See: https://materialize.com/docs/sql/functions/now_and_mz_now/".into())
+            }
             AdapterError::UnstableDependency { unstable_dependencies, .. } => Some(format!(
                 "The object depends on the following unstable objects:\n    {}",
                 unstable_dependencies.join("\n    "),
@@ -266,6 +270,9 @@ impl AdapterError {
             AdapterError::NoClusterReplicasAvailable(_) => {
                 Some("You can create cluster replicas using CREATE CLUSTER REPLICA".into())
             }
+            AdapterError::UnmaterializableFunction(UnmaterializableFunc::CurrentTimestamp) => {
+                Some("Try using `mz_now()` here instead.".into())
+            }
             AdapterError::UntargetedLogRead { .. } => Some(
                 "Use `SET cluster_replica = <replica-name>` to target a specific replica in the \
                  active cluster. Note that subsequent `SELECT` queries will only be answered by \
@@ -307,7 +314,7 @@ impl fmt::Display for AdapterError {
             AdapterError::Internal(e) => write!(f, "internal error: {}", e),
             AdapterError::IntrospectionDisabled { .. } => write!(
                 f,
-                "cannot read log sources on cluster with disabled introspection"
+                "cannot read log sources of replica with disabled introspection"
             ),
             AdapterError::InvalidLogDependency { object_type, .. } => {
                 write!(f, "{object_type} objects cannot depend on log sources")
@@ -536,6 +543,13 @@ impl From<StorageError> for AdapterError {
 impl From<ComputeError> for AdapterError {
     fn from(e: ComputeError) -> Self {
         AdapterError::Compute(e)
+    }
+}
+
+impl From<TimestampError> for AdapterError {
+    fn from(e: TimestampError) -> Self {
+        let e: EvalError = e.into();
+        e.into()
     }
 }
 

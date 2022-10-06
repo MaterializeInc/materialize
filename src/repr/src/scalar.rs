@@ -36,6 +36,7 @@ use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::numeric::{Numeric, NumericMaxScale};
 use crate::adt::system::{Oid, PgLegacyChar, RegClass, RegProc, RegType};
+use crate::adt::timestamp::{CheckedTimestamp, TimestampError};
 use crate::adt::varchar::{VarChar, VarCharMaxLength};
 use crate::GlobalId;
 use crate::{ColumnName, ColumnType, DatumList, DatumMap};
@@ -77,9 +78,9 @@ pub enum Datum<'a> {
     /// A time.
     Time(NaiveTime),
     /// A date and time, without a timezone.
-    Timestamp(NaiveDateTime),
+    Timestamp(CheckedTimestamp<NaiveDateTime>),
     /// A date and time, with a timezone.
-    TimestampTz(DateTime<Utc>),
+    TimestampTz(CheckedTimestamp<DateTime<Utc>>),
     /// A span of time.
     Interval(Interval),
     /// A sequence of untyped bytes.
@@ -366,7 +367,7 @@ impl TryFrom<Datum<'_>> for Option<u64> {
     }
 }
 
-impl TryFrom<Datum<'_>> for NaiveDateTime {
+impl TryFrom<Datum<'_>> for CheckedTimestamp<NaiveDateTime> {
     type Error = ();
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
@@ -376,7 +377,7 @@ impl TryFrom<Datum<'_>> for NaiveDateTime {
     }
 }
 
-impl TryFrom<Datum<'_>> for DateTime<Utc> {
+impl TryFrom<Datum<'_>> for CheckedTimestamp<DateTime<Utc>> {
     type Error = ();
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
@@ -571,7 +572,7 @@ impl<'a> Datum<'a> {
     ///
     /// Panics if the datum is not [`Datum::Timestamp`].
     #[track_caller]
-    pub fn unwrap_timestamp(&self) -> chrono::NaiveDateTime {
+    pub fn unwrap_timestamp(&self) -> CheckedTimestamp<chrono::NaiveDateTime> {
         match self {
             Datum::Timestamp(ts) => *ts,
             _ => panic!("Datum::unwrap_timestamp called on {:?}", self),
@@ -584,7 +585,7 @@ impl<'a> Datum<'a> {
     ///
     /// Panics if the datum is not [`Datum::TimestampTz`].
     #[track_caller]
-    pub fn unwrap_timestamptz(&self) -> chrono::DateTime<Utc> {
+    pub fn unwrap_timestamptz(&self) -> CheckedTimestamp<chrono::DateTime<Utc>> {
         match self {
             Datum::TimestampTz(ts) => *ts,
             _ => panic!("Datum::unwrap_timestamptz called on {:?}", self),
@@ -945,15 +946,33 @@ impl<'a> From<NaiveTime> for Datum<'a> {
     }
 }
 
-impl<'a> From<NaiveDateTime> for Datum<'a> {
-    fn from(dt: NaiveDateTime) -> Datum<'a> {
+impl<'a> From<CheckedTimestamp<NaiveDateTime>> for Datum<'a> {
+    fn from(dt: CheckedTimestamp<NaiveDateTime>) -> Datum<'a> {
         Datum::Timestamp(dt)
     }
 }
 
-impl<'a> From<DateTime<Utc>> for Datum<'a> {
-    fn from(dt: DateTime<Utc>) -> Datum<'a> {
+impl<'a> From<CheckedTimestamp<DateTime<Utc>>> for Datum<'a> {
+    fn from(dt: CheckedTimestamp<DateTime<Utc>>) -> Datum<'a> {
         Datum::TimestampTz(dt)
+    }
+}
+
+impl<'a> TryInto<Datum<'a>> for NaiveDateTime {
+    type Error = TimestampError;
+
+    fn try_into(self) -> Result<Datum<'a>, Self::Error> {
+        let t = CheckedTimestamp::from_timestamplike(self)?;
+        Ok(t.into())
+    }
+}
+
+impl<'a> TryInto<Datum<'a>> for DateTime<Utc> {
+    type Error = TimestampError;
+
+    fn try_into(self) -> Result<Datum<'a>, Self::Error> {
+        let t = CheckedTimestamp::from_timestamplike(self)?;
+        Ok(t.into())
     }
 }
 
@@ -1511,8 +1530,8 @@ impl_datum_type_copy!(u64, UInt64);
 impl_datum_type_copy!(Interval, Interval);
 impl_datum_type_copy!(Date, Date);
 impl_datum_type_copy!(NaiveTime, Time);
-impl_datum_type_copy!(NaiveDateTime, Timestamp);
-impl_datum_type_copy!(DateTime<Utc>, TimestampTz);
+impl_datum_type_copy!(CheckedTimestamp<NaiveDateTime>, Timestamp);
+impl_datum_type_copy!(CheckedTimestamp<DateTime<Utc>>, TimestampTz);
 impl_datum_type_copy!(Uuid, Uuid);
 impl_datum_type_copy!('a, &'a str, String);
 impl_datum_type_copy!('a, &'a [u8], Bytes);
@@ -2346,8 +2365,8 @@ pub enum PropDatum {
 
     Date(Date),
     Time(chrono::NaiveTime),
-    Timestamp(chrono::NaiveDateTime),
-    TimestampTz(chrono::DateTime<chrono::Utc>),
+    Timestamp(CheckedTimestamp<chrono::NaiveDateTime>),
+    TimestampTz(CheckedTimestamp<chrono::DateTime<chrono::Utc>>),
 
     Interval(Interval),
     Numeric(Numeric),
@@ -2380,8 +2399,9 @@ pub fn arb_datum() -> BoxedStrategy<PropDatum> {
         arb_date().prop_map(PropDatum::Date),
         add_arb_duration(chrono::NaiveTime::from_hms(0, 0, 0)).prop_map(PropDatum::Time),
         add_arb_duration(chrono::NaiveDateTime::from_timestamp(0, 0))
-            .prop_map(PropDatum::Timestamp),
-        add_arb_duration(chrono::Utc.timestamp(0, 0)).prop_map(PropDatum::TimestampTz),
+            .prop_map(|t| PropDatum::Timestamp(CheckedTimestamp::from_timestamplike(t).unwrap())),
+        add_arb_duration(chrono::Utc.timestamp(0, 0))
+            .prop_map(|t| PropDatum::TimestampTz(CheckedTimestamp::from_timestamplike(t).unwrap())),
         arb_interval().prop_map(PropDatum::Interval),
         arb_numeric().prop_map(PropDatum::Numeric),
         prop::collection::vec(any::<u8>(), 1024).prop_map(PropDatum::Bytes),
@@ -2458,11 +2478,8 @@ fn arb_dict(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropDic
             entries.sort_by_key(|(k, _)| k.clone());
             entries.dedup_by_key(|(k, _)| k.clone());
             let mut row = Row::default();
-            let entry_iter: Vec<(&str, Datum<'_>)> = entries
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.into()))
-                .collect();
-            row.packer().push_dict(entry_iter.into_iter());
+            let entry_iter = entries.iter().map(|(k, v)| (k.as_str(), Datum::from(v)));
+            row.packer().push_dict(entry_iter);
             PropDict(row, entries)
         })
         .boxed()

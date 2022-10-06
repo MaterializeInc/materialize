@@ -23,7 +23,7 @@ _data_type_name_ | The name of the type to remove.
 
 ### Remove a type with no dependent objects
 ```sql
-CREATE TYPE int4_map AS MAP (key_type=text, value_type=int4);
+CREATE TYPE int4_map AS MAP (KEY TYPE = text, VALUE TYPE = int4);
 
 SHOW TYPES;
 ```
@@ -52,9 +52,9 @@ By default, `DROP TYPE` will not remove a type with dependent objects. The **CAS
 In the example below, the **CASCADE** switch removes `int4_list`, `int4_list_list` (which depends on `int4_list`), and the table *t*, which has a column of data type `int4_list`.
 
 ```sql
-CREATE TYPE int4_list AS LIST (element_type = int4);
+CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4);
 
-CREATE TYPE int4_list_list AS LIST (element_type = int4_list);
+CREATE TYPE int4_list_list AS LIST (ELEMENT TYPE = int4_list);
 
 CREATE TABLE t (a int4_list);
 

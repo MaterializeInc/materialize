@@ -109,31 +109,15 @@ impl<S: Append + 'static> Coordinator<S> {
 
     #[tracing::instrument(level = "debug", skip_all)]
     async fn storage_usage_update(&mut self, shard_sizes: HashMap<Option<ShardId>, u64>) {
-        let object_id = None;
+        let mut ops = vec![];
+        for (shard_id, size_bytes) in shard_sizes {
+            ops.push(catalog::Op::UpdateStorageUsage {
+                shard_id: shard_id.map(|shard_id| shard_id.to_string()),
+                size_bytes,
+            });
+        }
 
-        let mut unk_storage = 0;
-        let mut known_storage = 0;
-        for (key, val) in shard_sizes {
-            match key {
-                Some(_) => known_storage += val,
-                None => unk_storage += val,
-            }
-        }
-        // TODO(jpepin): What, if anything, do we want to do with orphaned storage?
-        if unk_storage > 0 {
-            tracing::debug!("Found {} bytes of orphaned storage", unk_storage);
-        }
-        if let Err(err) = self
-            .catalog_transact(
-                None,
-                vec![catalog::Op::UpdateStorageUsage {
-                    object_id,
-                    size_bytes: known_storage,
-                }],
-                |_| Ok(()),
-            )
-            .await
-        {
+        if let Err(err) = self.catalog_transact(None, ops, |_| Ok(())).await {
             tracing::warn!("Failed to update storage metrics: {:?}", err);
         }
         self.schedule_storage_usage_collection().await;
@@ -153,9 +137,8 @@ impl<S: Append + 'static> Coordinator<S> {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         task::spawn(|| "storage_usage_collection", async move {
             tokio::time::sleep(next_collection_interval).await;
-            // If sending fails, the main thread has shutdown.
             if internal_cmd_tx.send(Message::StorageUsageFetch).is_err() {
-                return;
+                // If sending fails, the main thread has shutdown.
             }
         });
     }
@@ -181,6 +164,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     let remove = pending_subscribes.process_response(response);
                     if remove {
                         self.pending_subscribes.remove(&sink_id);
+                        self.metrics.active_subscribes.dec();
                     }
                 }
             }
@@ -239,11 +223,6 @@ impl<S: Append + 'static> Coordinator<S> {
     ) {
         otel_ctx.attach_as_parent();
 
-        let stmt = match result {
-            Ok(stmt) => stmt,
-            Err(e) => return tx.send(Err(e), session),
-        };
-
         // Ensure that all dependencies still exist after purification, as a
         // `DROP CONNECTION` may have sneaked in. If any have gone missing, we
         // repurify the original statement. This will either produce a nice
@@ -261,15 +240,58 @@ impl<S: Append + 'static> Coordinator<S> {
             return;
         }
 
-        let plan = match self.plan_statement(&mut session, Statement::CreateSource(stmt), &params) {
-            Ok(Plan::CreateSource(plan)) => plan,
-            Ok(_) => unreachable!("planning CREATE SOURCE must result in a Plan::CreateSource"),
+        let (subsource_stmts, stmt) = match result {
+            Ok(ok) => ok,
             Err(e) => return tx.send(Err(e), session),
         };
 
-        let result = self
-            .sequence_create_source(&mut session, plan, depends_on)
-            .await;
+        let mut plans = vec![];
+        let mut id_allocation = HashMap::new();
+
+        // First we'll allocate global ids for each subsource and plan them
+        for (transient_id, subsource_stmt) in subsource_stmts {
+            let depends_on = Vec::from_iter(mz_sql::names::visit_dependencies(&subsource_stmt));
+            let source_id = match self.catalog.allocate_user_id().await {
+                Ok(id) => id,
+                Err(e) => return tx.send(Err(e.into()), session),
+            };
+            let plan = match self.plan_statement(
+                &mut session,
+                Statement::CreateSubsource(subsource_stmt),
+                &params,
+            ) {
+                Ok(Plan::CreateSource(plan)) => plan,
+                Ok(_) => {
+                    unreachable!("planning CREATE SUBSOURCE must result in a Plan::CreateSource")
+                }
+                Err(e) => return tx.send(Err(e), session),
+            };
+            id_allocation.insert(transient_id, source_id);
+            plans.push((source_id, plan, depends_on));
+        }
+
+        // Then, we'll rewrite the source statement to point to the newly minted global ids and
+        // plan it too
+        let stmt = match mz_sql::names::resolve_transient_ids(&id_allocation, stmt) {
+            Ok(ok) => ok,
+            Err(e) => return tx.send(Err(e.into()), session),
+        };
+        let depends_on = Vec::from_iter(mz_sql::names::visit_dependencies(&stmt));
+        let source_id = match self.catalog.allocate_user_id().await {
+            Ok(id) => id,
+            Err(e) => return tx.send(Err(e.into()), session),
+        };
+        let plan = match self.plan_statement(&mut session, Statement::CreateSource(stmt), &params) {
+            Ok(Plan::CreateSource(plan)) => plan,
+            Ok(_) => {
+                unreachable!("planning CREATE SOURCE must result in a Plan::CreateSource")
+            }
+            Err(e) => return tx.send(Err(e), session),
+        };
+        plans.push((source_id, plan, depends_on));
+
+        // Finally, sequence all plans in one go
+        let result = self.sequence_create_source(&mut session, plans).await;
         tx.send(result, session);
     }
 

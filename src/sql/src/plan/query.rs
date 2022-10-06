@@ -44,6 +44,7 @@ use uuid::Uuid;
 
 use mz_expr::virtual_syntax::AlgExcept;
 use mz_expr::{func as expr_func, Id, LocalId, MirScalarExpr, RowSetFinishing};
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::str::StrExt;
@@ -54,21 +55,21 @@ use mz_repr::{
     strconv, ColumnName, ColumnType, Datum, GlobalId, RelationDesc, RelationType, Row, RowArena,
     ScalarType,
 };
-
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     AsOf, Assignment, AstInfo, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
     HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator,
-    Limit, OrderByExpr, Query, Select, SelectItem, SetExpr, SetOperator, ShowStatement,
-    SubscriptPosition, TableAlias, TableFactor, TableFunction, TableWithJoins,
-    UnresolvedObjectName, UpdateStatement, Value, Values, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, WindowSpec,
+    Limit, OrderByExpr, Query, Select, SelectItem, SelectOption, SelectOptionName, SetExpr,
+    SetOperator, ShowStatement, SubscriptPosition, TableAlias, TableFactor, TableFunction,
+    TableWithJoins, UnresolvedObjectName, UpdateStatement, Value, Values, WindowFrame,
+    WindowFrameBound, WindowFrameUnits, WindowSpec,
 };
 
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
 use crate::func::{self, Func, FuncSpec};
 use crate::names::{Aug, PartialObjectName, ResolvedDataType, ResolvedObjectName};
-use crate::normalize::{self, SqlValueOrSecret};
+use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AbstractColumnType, AbstractExpr, AggregateExpr, AggregateFunc, BinaryFunc,
@@ -80,6 +81,7 @@ use crate::plan::plan_utils::{self, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::typeconv::{self, CastContext};
+use crate::plan::with_options::TryFromValue;
 use crate::plan::{transform_ast, PlanContext, SendRowsPlan};
 use crate::plan::{Params, QueryWhen};
 
@@ -334,10 +336,10 @@ pub fn plan_insert_query(
         let mut new_exprs = vec![];
         let mut new_type = RelationType::empty();
         for si in returning {
-            for (select_item, column_name) in expand_select_item(&ecx, &si, &table_func_names)? {
+            for (select_item, column_name) in expand_select_item(ecx, &si, &table_func_names)? {
                 let expr = match &select_item {
                     ExpandedSelectItem::InputOrdinal(i) => HirScalarExpr::column(*i),
-                    ExpandedSelectItem::Expr(expr) => plan_expr(ecx, &expr)?.type_as_any(ecx)?,
+                    ExpandedSelectItem::Expr(expr) => plan_expr(ecx, expr)?.type_as_any(ecx)?,
                 };
                 output_columns.push(column_name);
                 let typ = ecx.column_type(&expr);
@@ -598,7 +600,7 @@ pub fn plan_mutation_query_inner(
                 allow_subqueries: true,
                 allow_windows: false,
             };
-            let expr = plan_expr(&ecx, &expr)?.type_as(&ecx, &ScalarType::Bool)?;
+            let expr = plan_expr(ecx, &expr)?.type_as(ecx, &ScalarType::Bool)?;
             get = get.filter(vec![expr]);
         }
     } else {
@@ -620,7 +622,7 @@ pub fn plan_mutation_query_inner(
                     allow_subqueries: false,
                     allow_windows: false,
                 };
-                let expr = plan_expr(&ecx, &value)?.cast_to(
+                let expr = plan_expr(ecx, &value)?.cast_to(
                     ecx,
                     CastContext::Assignment,
                     &typ.scalar_type,
@@ -701,7 +703,7 @@ fn handle_mutation_using_clause(
         let joined_relation_type = qcx.relation_type(&joined);
 
         let ecx = &ExprContext {
-            qcx: &qcx,
+            qcx,
             name: "WHERE clause",
             scope: &joined_scope,
             relation_type: &joined_relation_type,
@@ -711,7 +713,7 @@ fn handle_mutation_using_clause(
         };
 
         // Plan the filter expression on `FROM, USING...`.
-        let mut expr = plan_expr(&ecx, &expr)?.type_as(&ecx, &ScalarType::Bool)?;
+        let mut expr = plan_expr(ecx, &expr)?.type_as(ecx, &ScalarType::Bool)?;
 
         // Rewrite all column referring to the `FROM` section of `joined` (i.e.
         // those to the right of `using_rel_expr`) to instead be correlated to
@@ -825,12 +827,12 @@ pub fn plan_as_of(
                         qcx: &qcx,
                         name: "AS OF",
                         scope: &scope,
-                        relation_type: &desc.typ(),
+                        relation_type: desc.typ(),
                         allow_aggregates: false,
                         allow_subqueries: false,
                         allow_windows: false,
                     };
-                    let expr = plan_expr(ecx, &expr)?
+                    let expr = plan_expr(ecx, expr)?
                         .type_as_any(ecx)?
                         .lower_uncorrelated()?;
                     match as_of {
@@ -858,7 +860,7 @@ pub fn plan_secret_as(
         qcx: &qcx,
         name: "AS",
         scope: &scope,
-        relation_type: &desc.typ(),
+        relation_type: desc.typ(),
         allow_aggregates: false,
         allow_subqueries: false,
         allow_windows: false,
@@ -884,7 +886,7 @@ pub fn plan_default_expr(
         allow_subqueries: false,
         allow_windows: false,
     };
-    let hir = plan_expr(ecx, &expr)?.cast_to(ecx, CastContext::Assignment, target_ty)?;
+    let hir = plan_expr(ecx, expr)?.cast_to(ecx, CastContext::Assignment, target_ty)?;
     Ok(hir)
 }
 
@@ -926,7 +928,7 @@ pub fn plan_params<'a>(
         if st != *ty {
             sql_bail!(
                 "mismatched parameter type: expected {}, got {}",
-                ecx.humanize_scalar_type(&ty),
+                ecx.humanize_scalar_type(ty),
                 ecx.humanize_scalar_type(&st),
             );
         }
@@ -965,7 +967,7 @@ pub fn plan_index_exprs<'a>(
 }
 
 fn plan_expr_or_col_index(ecx: &ExprContext, e: &Expr<Aug>) -> Result<HirScalarExpr, PlanError> {
-    match check_col_index(&ecx.name, e, ecx.relation_type.column_types.len())? {
+    match check_col_index(ecx.name, e, ecx.relation_type.column_types.len())? {
         Some(column) => Ok(HirScalarExpr::column(column)),
         _ => plan_expr(ecx, e)?.type_as_any(ecx),
     }
@@ -1167,7 +1169,7 @@ fn plan_set_expr(
             // `coerce_homogeneous_exprs`, but implemented in terms of
             // `HirRelationExpr` rather than `HirScalarExpr`.
             let left_ecx = &ExprContext {
-                qcx: &qcx,
+                qcx,
                 name: &op.to_string(),
                 scope: &left_scope,
                 relation_type: &left_type,
@@ -1176,7 +1178,7 @@ fn plan_set_expr(
                 allow_windows: false,
             };
             let right_ecx = &ExprContext {
-                qcx: &qcx,
+                qcx,
                 name: &op.to_string(),
                 scope: &right_scope,
                 relation_type: &right_type,
@@ -1289,23 +1291,23 @@ fn plan_set_expr(
 
             match stmt.clone() {
                 ShowStatement::ShowColumns(stmt) => {
-                    show::show_columns(&qcx.scx, stmt)?.plan_hir(qcx)
+                    show::show_columns(qcx.scx, stmt)?.plan_hir(qcx)
                 }
                 ShowStatement::ShowCreateConnection(stmt) => to_hirscope(
-                    show::plan_show_create_connection(&qcx.scx, stmt.clone())?,
-                    show::describe_show_create_connection(&qcx.scx, stmt)?,
+                    show::plan_show_create_connection(qcx.scx, stmt.clone())?,
+                    show::describe_show_create_connection(qcx.scx, stmt)?,
                 ),
                 ShowStatement::ShowCreateIndex(stmt) => to_hirscope(
-                    show::plan_show_create_index(&qcx.scx, stmt.clone())?,
-                    show::describe_show_create_index(&qcx.scx, stmt)?,
+                    show::plan_show_create_index(qcx.scx, stmt.clone())?,
+                    show::describe_show_create_index(qcx.scx, stmt)?,
                 ),
                 ShowStatement::ShowCreateSink(stmt) => to_hirscope(
-                    show::plan_show_create_sink(&qcx.scx, stmt.clone())?,
-                    show::describe_show_create_sink(&qcx.scx, stmt)?,
+                    show::plan_show_create_sink(qcx.scx, stmt.clone())?,
+                    show::describe_show_create_sink(qcx.scx, stmt)?,
                 ),
                 ShowStatement::ShowCreateSource(stmt) => to_hirscope(
-                    show::plan_show_create_source(&qcx.scx, stmt.clone())?,
-                    show::describe_show_create_source(&qcx.scx, stmt)?,
+                    show::plan_show_create_source(qcx.scx, stmt.clone())?,
+                    show::describe_show_create_source(qcx.scx, stmt)?,
                 ),
                 ShowStatement::ShowCreateTable(stmt) => to_hirscope(
                     show::plan_show_create_table(qcx.scx, stmt.clone())?,
@@ -1320,16 +1322,16 @@ fn plan_set_expr(
                     show::describe_show_create_materialized_view(qcx.scx, stmt)?,
                 ),
                 ShowStatement::ShowDatabases(stmt) => {
-                    show::show_databases(&qcx.scx, stmt)?.plan_hir(qcx)
+                    show::show_databases(qcx.scx, stmt)?.plan_hir(qcx)
                 }
                 ShowStatement::ShowIndexes(stmt) => {
-                    show::show_indexes(&qcx.scx, stmt)?.plan_hir(qcx)
+                    show::show_indexes(qcx.scx, stmt)?.plan_hir(qcx)
                 }
                 ShowStatement::ShowObjects(stmt) => {
-                    show::show_objects(&qcx.scx, stmt)?.plan_hir(qcx)
+                    show::show_objects(qcx.scx, stmt)?.plan_hir(qcx)
                 }
                 ShowStatement::ShowSchemas(stmt) => {
-                    show::show_schemas(&qcx.scx, stmt)?.plan_hir(qcx)
+                    show::show_schemas(qcx.scx, stmt)?.plan_hir(qcx)
                 }
                 ShowStatement::ShowVariable(_) => sql_bail!("unsupported SHOW statement"),
             }
@@ -1451,7 +1453,7 @@ fn plan_values_insert(
         for (column, val) in row.into_iter().enumerate() {
             let target_type = &target_types[column];
             let val = plan_expr(ecx, val)?;
-            let val = typeconv::plan_coerce(&ecx, val, &target_type)?;
+            let val = typeconv::plan_coerce(ecx, val, target_type)?;
             let source_type = &ecx.scalar_type(&val);
             let val = match typeconv::plan_cast(ecx, CastContext::Assignment, val, target_type) {
                 Ok(val) => val,
@@ -1500,6 +1502,8 @@ struct SelectPlan {
     project: Vec<usize>,
 }
 
+generate_extracted_config!(SelectOption, (ExpectedGroupSize, u64));
+
 /// Plans a SELECT query with an intrusive ORDER BY clause.
 ///
 /// Normally, the ORDER BY clause occurs after the columns specified in the
@@ -1530,16 +1534,11 @@ fn plan_view_select(
     // table function support (the UUID mapping). Attempt to change this so callers
     // don't need to clone the Select.
 
-    // Extract hints about group size if there are any
-    let mut options = crate::normalize::options(&s.options)?;
-
-    let option = options.remove("expected_group_size");
-
-    let expected_group_size = match option {
-        Some(SqlValueOrSecret::Value(Value::Number(n))) => Some(n.parse::<usize>()?),
-        Some(_) => sql_bail!("expected_group_size must be a number"),
-        None => None,
-    };
+    // Extract query options.
+    let SelectOptionExtracted {
+        expected_group_size,
+        seen: _,
+    } = SelectOptionExtracted::try_from(s.options.clone())?;
 
     // Step 1. Handle FROM clause, including joins.
     let (mut relation_expr, mut from_scope) =
@@ -1570,7 +1569,7 @@ fn plan_view_select(
             allow_subqueries: true,
             allow_windows: false,
         };
-        let expr = plan_expr(ecx, &selection)
+        let expr = plan_expr(ecx, selection)
             .map_err(|e| sql_err!("WHERE clause error: {}", e))?
             .type_as(ecx, &ScalarType::Bool)?;
         relation_expr = relation_expr.filter(vec![expr]);
@@ -1578,7 +1577,7 @@ fn plan_view_select(
 
     // Step 3. Gather aggregates and table functions.
     let (aggregates, table_funcs) = {
-        let mut visitor = AggregateTableFuncVisitor::new(&qcx.scx);
+        let mut visitor = AggregateTableFuncVisitor::new(qcx.scx);
         visitor.visit_select_mut(&mut s);
         for o in order_by_exprs.iter_mut() {
             visitor.visit_order_by_expr_mut(o);
@@ -1588,7 +1587,7 @@ fn plan_view_select(
     let mut table_func_names: HashMap<String, Ident> = HashMap::new();
     if !table_funcs.is_empty() {
         let (expr, scope) = plan_scalar_table_funcs(
-            &qcx,
+            qcx,
             table_funcs,
             &mut table_func_names,
             &relation_expr,
@@ -1614,7 +1613,7 @@ fn plan_view_select(
             if *si == SelectItem::Wildcard && s.from.is_empty() {
                 sql_bail!("SELECT * with no tables specified is not valid");
             }
-            out.extend(expand_select_item(&ecx, si, &table_func_names)?);
+            out.extend(expand_select_item(ecx, si, &table_func_names)?);
         }
         out
     };
@@ -1706,7 +1705,7 @@ fn plan_view_select(
             relation_expr = relation_expr.map(group_hir_exprs).reduce(
                 group_key,
                 agg_exprs,
-                expected_group_size,
+                expected_group_size.map(usize::cast_from),
             );
             (group_scope, select_all_mapping)
         } else {
@@ -1766,13 +1765,13 @@ fn plan_view_select(
             };
             let expr = match select_item {
                 ExpandedSelectItem::InputOrdinal(i) => {
-                    if let Some(column) = select_all_mapping.get(&i).copied() {
+                    if let Some(column) = select_all_mapping.get(i).copied() {
                         HirScalarExpr::column(column)
                     } else {
                         return Err(PlanError::ungrouped_column(&from_scope.items[*i]));
                     }
                 }
-                ExpandedSelectItem::Expr(expr) => plan_expr(ecx, &expr)
+                ExpandedSelectItem::Expr(expr) => plan_expr(ecx, expr)
                     .map_err(check_ungrouped_col)?
                     .type_as_any(ecx)?,
             };
@@ -1937,7 +1936,7 @@ fn plan_scalar_table_funcs(
     relation_expr: &HirRelationExpr,
     from_scope: &Scope,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
-    let rows_from_qcx = qcx.derived_context(from_scope.clone(), qcx.relation_type(&relation_expr));
+    let rows_from_qcx = qcx.derived_context(from_scope.clone(), qcx.relation_type(relation_expr));
 
     for (table_func, id) in table_funcs.iter() {
         table_func_names.insert(id.clone(), table_func.name.0.last().unwrap().clone());
@@ -2009,15 +2008,14 @@ fn plan_group_by_expr<'a>(
 ) -> Result<(Option<&'a Expr<Aug>>, HirScalarExpr), PlanError> {
     let plan_projection = |column: usize| match &projection[column].0 {
         ExpandedSelectItem::InputOrdinal(column) => Ok((None, HirScalarExpr::column(*column))),
-        ExpandedSelectItem::Expr(expr) => Ok((
-            Some(expr.as_ref()),
-            plan_expr(&ecx, expr)?.type_as_any(ecx)?,
-        )),
+        ExpandedSelectItem::Expr(expr) => {
+            Ok((Some(expr.as_ref()), plan_expr(ecx, expr)?.type_as_any(ecx)?))
+        }
     };
 
     // Check if the expression is a numeric literal, as in `GROUP BY 1`. This is
     // a special case that means to use the ith item in the SELECT clause.
-    if let Some(column) = check_col_index(&ecx.name, group_expr, projection.len())? {
+    if let Some(column) = check_col_index(ecx.name, group_expr, projection.len())? {
         return plan_projection(column);
     }
 
@@ -2052,7 +2050,7 @@ fn plan_group_by_expr<'a>(
         },
         _ => Ok((
             Some(group_expr),
-            plan_expr(&ecx, group_expr)?.type_as_any(ecx)?,
+            plan_expr(ecx, group_expr)?.type_as_any(ecx)?,
         )),
     }
 }
@@ -2109,7 +2107,7 @@ fn plan_order_by_or_distinct_expr(
     expr: &Expr<Aug>,
     output_columns: &[(usize, &ColumnName)],
 ) -> Result<HirScalarExpr, PlanError> {
-    if let Some(i) = check_col_index(&ecx.name, expr, output_columns.len())? {
+    if let Some(i) = check_col_index(ecx.name, expr, output_columns.len())? {
         return Ok(HirScalarExpr::column(output_columns[i].0));
     }
 
@@ -2138,7 +2136,7 @@ fn plan_table_with_joins(
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
     let (mut expr, mut scope) = plan_table_factor(qcx, &table_with_joins.relation)?;
     for join in &table_with_joins.joins {
-        let (new_expr, new_scope) = plan_join(qcx, expr, scope, &join)?;
+        let (new_expr, new_scope) = plan_join(qcx, expr, scope, join)?;
         expr = new_expr;
         scope = new_scope;
     }
@@ -2186,13 +2184,13 @@ fn plan_table_factor(
                 }
             }
             qcx.outer_scopes[0].lateral_barrier = true;
-            let (expr, scope) = plan_nested_query(&mut qcx, &subquery)?;
+            let (expr, scope) = plan_nested_query(&mut qcx, subquery)?;
             let scope = plan_table_alias(scope, alias.as_ref())?;
             Ok((expr, scope))
         }
 
         TableFactor::NestedJoin { join, alias } => {
-            let (expr, scope) = plan_table_with_joins(&qcx, join)?;
+            let (expr, scope) = plan_table_with_joins(qcx, join)?;
             let scope = plan_table_alias(scope, alias.as_ref())?;
             Ok((expr, scope))
         }
@@ -2321,7 +2319,7 @@ fn plan_rows_from_internal<'a>(
     // always the column to join against and is maintained to be the coalescence
     // of the row number column for all prior functions.
     let (mut left_expr, mut left_scope) =
-        plan_table_function_internal(&qcx, functions.next().unwrap(), true, table_name)?;
+        plan_table_function_internal(qcx, functions.next().unwrap(), true, table_name)?;
     num_cols.push(left_scope.len() - 1);
     // Create the coalesced ordinality column.
     left_expr = left_expr.map(vec![HirScalarExpr::column(left_scope.len() - 1)]);
@@ -2436,7 +2434,7 @@ fn plan_table_function_internal(
     }
 
     let ecx = &ExprContext {
-        qcx: &qcx,
+        qcx,
         name: "table function arguments",
         scope: &Scope::empty(),
         relation_type: &RelationType::empty(),
@@ -2744,7 +2742,7 @@ fn expand_select_item<'a>(
             let name = alias
                 .clone()
                 .map(normalize::column_name)
-                .or_else(|| invent_column_name(ecx, &expr, &table_func_names))
+                .or_else(|| invent_column_name(ecx, expr, table_func_names))
                 .unwrap_or_else(|| "?column?".into());
             Ok(vec![(ExpandedSelectItem::Expr(Cow::Borrowed(expr)), name)])
         }
@@ -2778,7 +2776,7 @@ fn plan_join(
         JoinConstraint::On(expr) => {
             let product_scope = left_scope.product(right_scope)?;
             let ecx = &ExprContext {
-                qcx: &left_qcx,
+                qcx: left_qcx,
                 name: "ON clause",
                 scope: &product_scope,
                 relation_type: &RelationType::new(
@@ -2863,7 +2861,7 @@ fn plan_using_constraint(
     }
 
     let ecx = &ExprContext {
-        qcx: &right_qcx,
+        qcx: right_qcx,
         name: "USING clause",
         scope: &both_scope,
         relation_type: &RelationType::new(
@@ -3222,7 +3220,7 @@ fn plan_field_access(
         ScalarType::Record { fields, .. } => fields.iter().position(|(name, _ty)| *name == field),
         ty => sql_bail!(
             "column notation applied to type {}, which is not a composite type",
-            ecx.humanize_scalar_type(&ty)
+            ecx.humanize_scalar_type(ty)
         ),
     };
     match i {
@@ -3263,11 +3261,11 @@ fn plan_subscript(
         ),
         ScalarType::Jsonb => plan_subscript_jsonb(ecx, expr, positions),
         ScalarType::List { element_type, .. } => {
-            let elem_type_name = ecx.humanize_scalar_type(&element_type);
+            let elem_type_name = ecx.humanize_scalar_type(element_type);
             let n_layers = ty.unwrap_list_n_layers();
             plan_subscript_list(ecx, expr, positions, n_layers, &elem_type_name)
         }
-        ty => sql_bail!("cannot subscript type {}", ecx.humanize_scalar_type(&ty)),
+        ty => sql_bail!("cannot subscript type {}", ecx.humanize_scalar_type(ty)),
     }
 }
 
@@ -3338,7 +3336,7 @@ fn plan_subscript_list(
                 expr,
                 indexes.as_slice(),
                 remaining_layers,
-                &elem_type_name,
+                elem_type_name,
             )?;
             remaining_layers = n;
             expr = e;
@@ -3356,7 +3354,7 @@ fn plan_subscript_list(
                 expr,
                 &positions[i..i + j],
                 remaining_layers,
-                &elem_type_name,
+                elem_type_name,
             )?;
             i += j;
         }
@@ -3879,18 +3877,18 @@ pub fn coerce_homogeneous_exprs(
     // Try to cast all expressions to `target`.
     let mut out = Vec::new();
     for expr in exprs {
-        let arg = typeconv::plan_coerce(&ecx, expr, &target)?;
+        let arg = typeconv::plan_coerce(ecx, expr, target)?;
         let ccx = match force_type {
             None => CastContext::Implicit,
             Some(_) => CastContext::Explicit,
         };
-        match typeconv::plan_cast(ecx, ccx, arg.clone(), &target) {
+        match typeconv::plan_cast(ecx, ccx, arg.clone(), target) {
             Ok(expr) => out.push(expr),
             Err(_) => sql_bail!(
                 "{} could not convert type {} to {}",
                 ecx.name,
                 ecx.humanize_scalar_type(&ecx.scalar_type(&arg)),
-                ecx.humanize_scalar_type(&target),
+                ecx.humanize_scalar_type(target),
             ),
         }
     }
@@ -3952,7 +3950,7 @@ fn plan_aggregate(
     // most, so explicitly drop it if the function doesn't care about order. This
     // prevents the projection into Record below from triggering on unsupported
     // functions.
-    let impls = match resolve_func(ecx, &name, &args)? {
+    let impls = match resolve_func(ecx, name, args)? {
         Func::Aggregate(impls) => impls,
         _ => unreachable!("plan_aggregate called on non-aggregate function,"),
     };
@@ -4284,7 +4282,7 @@ pub fn resolve_func(
                     name
                 );
             }
-            plan_exprs(ecx, &args)?
+            plan_exprs(ecx, args)?
         }
     };
 
@@ -4594,7 +4592,7 @@ pub fn scalar_type_from_sql(
 ) -> Result<ScalarType, PlanError> {
     match data_type {
         ResolvedDataType::AnonymousList(elem_type) => {
-            let elem_type = scalar_type_from_sql(scx, &elem_type)?;
+            let elem_type = scalar_type_from_sql(scx, elem_type)?;
             if matches!(elem_type, ScalarType::Char { .. }) {
                 bail_unsupported!("char list");
             }
@@ -4607,7 +4605,7 @@ pub fn scalar_type_from_sql(
             key_type,
             value_type,
         } => {
-            match scalar_type_from_sql(scx, &key_type)? {
+            match scalar_type_from_sql(scx, key_type)? {
                 ScalarType::String => {}
                 other => sql_bail!(
                     "map key type must be {}, got {}",
@@ -4616,7 +4614,7 @@ pub fn scalar_type_from_sql(
                 ),
             }
             Ok(ScalarType::Map {
-                value_type: Box::new(scalar_type_from_sql(scx, &value_type)?),
+                value_type: Box::new(scalar_type_from_sql(scx, value_type)?),
                 custom_id: None,
             })
         }
@@ -5113,7 +5111,7 @@ impl<'a> ExprContext<'a> {
     {
         expr.typ(
             &self.qcx.outer_relation_types,
-            &self.relation_type,
+            self.relation_type,
             &self.qcx.scx.param_types.borrow(),
         )
     }

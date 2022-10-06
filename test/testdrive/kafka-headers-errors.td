@@ -61,15 +61,13 @@ $ s3-put-object bucket=test key=static.csv
 > CREATE CONNECTION s3_conn FOR AWS
   ACCESS KEY ID = '${testdrive.aws-access-key-id}',
   SECRET ACCESS KEY = SECRET s3_conn_secret_access_key,
-  TOKEN = '${testdrive.aws-token}';
+  TOKEN = '${testdrive.aws-token}',
+  REGION = '${testdrive.aws-region}',
+  ENDPOINT = '${testdrive.aws-endpoint}';
 
 ! CREATE SOURCE headers_src
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT CSV WITH HEADER (city, state, zip)
   INCLUDE HEADERS
 contains:INCLUDE HEADERS with non-Kafka sources not supported

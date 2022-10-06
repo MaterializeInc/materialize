@@ -259,7 +259,8 @@ impl Healthchecker {
                 .try_into()
                 .expect("timestamp millis does not fit into a u32"),
         )
-        .into();
+        .try_into()
+        .expect("timestamp does not fit");
         let source_id = self.source_id.to_string();
         let source_name = Datum::String(&self.source_name);
         let source_id = Datum::String(&source_id);

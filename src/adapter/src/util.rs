@@ -216,7 +216,7 @@ pub fn describe<S: Append>(
             let catalog = &catalog.for_session(session);
             let (stmt, _) = mz_sql::names::resolve(catalog, stmt)?;
             Ok(mz_sql::plan::describe(
-                &session.pcx(),
+                session.pcx(),
                 catalog,
                 stmt,
                 param_types,

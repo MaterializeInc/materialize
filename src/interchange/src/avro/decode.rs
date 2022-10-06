@@ -9,6 +9,7 @@
 
 use anyhow::Context;
 use mz_repr::adt::date::Date;
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -53,7 +54,7 @@ mod tests {
 "name": "test",
 "fields": [{"name": "f1", "type": "int"}, {"name": "f2", "type": "int"}]
 }"#;
-        let mut decoder = Decoder::new(&schema, None, "Test".to_string(), false).unwrap();
+        let mut decoder = Decoder::new(schema, None, "Test".to_string(), false).unwrap();
         // This is not a valid Avro blob for the given schema
         let mut bad_bytes: &[u8] = &[0];
         assert!(decoder.decode(&mut bad_bytes).await.is_err());
@@ -347,7 +348,10 @@ impl<'a, 'row> AvroDecode for AvroFlatDecoder<'a, 'row> {
             mz_avro::types::Scalar::Date(val) => self.packer.push(Datum::Date(
                 Date::from_unix_epoch(val).map_err(|_| DecodeError::DateOutOfRange(val))?,
             )),
-            mz_avro::types::Scalar::Timestamp(val) => self.packer.push(Datum::Timestamp(val)),
+            mz_avro::types::Scalar::Timestamp(val) => self.packer.push(Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(val)
+                    .map_err(|_| DecodeError::TimestampOutOfRange(val))?,
+            )),
         }
         Ok(())
     }
@@ -404,7 +408,7 @@ impl<'a, 'row> AvroDecode for AvroFlatDecoder<'a, 'row> {
             ValueOrReader::Reader { len, r } => {
                 self.buf.resize_with(len, Default::default);
                 r.read_exact(self.buf)?;
-                &self.buf
+                self.buf
             }
         };
         self.packer.push(Datum::Bytes(buf));
@@ -424,7 +428,7 @@ impl<'a, 'row> AvroDecode for AvroFlatDecoder<'a, 'row> {
                 // It probably doesn't make a huge difference though.
                 self.buf.resize_with(len, Default::default);
                 r.read_exact(self.buf)?;
-                std::str::from_utf8(&self.buf).map_err(|_| DecodeError::StringUtf8Error)?
+                std::str::from_utf8(self.buf).map_err(|_| DecodeError::StringUtf8Error)?
             }
         };
         self.packer.push(Datum::String(s));
@@ -446,7 +450,7 @@ impl<'a, 'row> AvroDecode for AvroFlatDecoder<'a, 'row> {
                 self.buf.resize_with(len, Default::default);
                 r.read_exact(self.buf)?;
                 JsonbPacker::new(self.packer)
-                    .pack_slice(&self.buf)
+                    .pack_slice(self.buf)
                     .map_err_to_string()
                     .map_err(DecodeError::Custom)?;
             }
@@ -463,10 +467,10 @@ impl<'a, 'row> AvroDecode for AvroFlatDecoder<'a, 'row> {
             ValueOrReader::Reader { len, r } => {
                 self.buf.resize_with(len, Default::default);
                 r.read_exact(self.buf)?;
-                &self.buf
+                self.buf
             }
         };
-        let s = std::str::from_utf8(&buf).map_err(|_e| DecodeError::UuidUtf8Error)?;
+        let s = std::str::from_utf8(buf).map_err(|_e| DecodeError::UuidUtf8Error)?;
         self.packer.push(Datum::Uuid(
             Uuid::parse_str(s).map_err(DecodeError::BadUuid)?,
         ));

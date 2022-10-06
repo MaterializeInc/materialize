@@ -23,6 +23,7 @@ use mz_repr::GlobalId;
 
 use crate::ast::display::{AstDisplay, AstFormatter};
 use crate::ast::fold::{Fold, FoldNode};
+use crate::ast::visit::{Visit, VisitNode};
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
     self, AstInfo, Cte, Ident, Query, Raw, RawClusterName, RawDataType, RawObjectName, Statement,
@@ -577,29 +578,6 @@ impl fmt::Display for ResolvedDataType {
     }
 }
 
-impl ResolvedDataType {
-    pub(crate) fn get_ids(&self) -> Vec<GlobalId> {
-        let mut ids = Vec::new();
-        match self {
-            ResolvedDataType::AnonymousList(typ) => {
-                ids.extend(typ.get_ids());
-            }
-            ResolvedDataType::AnonymousMap {
-                key_type,
-                value_type,
-            } => {
-                ids.extend(key_type.get_ids());
-                ids.extend(value_type.get_ids());
-            }
-            ResolvedDataType::Named { id, .. } => {
-                ids.push(id.clone());
-            }
-            ResolvedDataType::Error => {}
-        };
-        ids
-    }
-}
-
 impl AstInfo for Aug {
     type NestedStatement = Statement<Raw>;
     type ObjectName = ResolvedObjectName;
@@ -741,7 +719,7 @@ impl<'a> NameResolver<'a> {
                             Some(CatalogTypeDetails {
                                 array_id: Some(array_id),
                                 ..
-                            }) => self.catalog.get_item(&array_id),
+                            }) => self.catalog.get_item(array_id),
                             Some(_) => sql_bail!("type \"{}[]\" does not exist", name),
                             None => sql_bail!(
                                 "{} does not refer to a type",
@@ -1084,7 +1062,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 let object_name = self.fold_object_name(secret);
                 match &object_name {
                     ResolvedObjectName::Object { id, .. } => {
-                        let item = self.catalog.get_item(&id);
+                        let item = self.catalog.get_item(id);
                         if item.item_type() != CatalogItemType::Secret {
                             self.status = Err(PlanError::InvalidSecret(object_name.clone()));
                         }
@@ -1097,13 +1075,46 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 Secret(object_name)
             }
             Object(obj) => {
+                // If we are not in an error state, we can treat non-qualified
+                // identifiers that we fail to resolve as if they were entered
+                // as strings.
+                //
+                // This is acceptable because all with option values are more
+                // tightly type-checked in planning, i.e. they must be declared
+                // as either a string or an object. If we fail to find an object
+                // here, and treat it as a string here, the later type checking
+                // will still error.
+                //
+                // The one complex error case this introduces is users expecting
+                // to be able to use a value as a non-quoted "string" when its
+                // ident resolves to an object. In this case, the user will be
+                // forced to quote the string, even though they don't need to do
+                // this elsewhere.
+                let string_candidate = match &obj {
+                    RawObjectName::Name(name) if name.0.len() == 1 && self.status.is_ok() => {
+                        Some(name.0[0].clone().into_string())
+                    }
+                    _ => None,
+                };
+
                 let object_name = self.fold_object_name(obj);
                 match &object_name {
                     ResolvedObjectName::Object { .. } => {}
                     ResolvedObjectName::Cte { .. } => {
                         self.status = Err(PlanError::InvalidObject(object_name.clone()));
                     }
-                    ResolvedObjectName::Error => {}
+                    ResolvedObjectName::Error => {
+                        if let Some(string) = string_candidate {
+                            // We are no longer in an error state; we know that
+                            // we introduced the error during folding the object
+                            // name because we weren't in an error state prior
+                            // to calling it.
+                            self.status = Ok(());
+                            return Value(
+                                self.fold_value(mz_sql_parser::ast::Value::String(string)),
+                            );
+                        }
+                    }
                 }
                 Object(object_name)
             }
@@ -1131,6 +1142,150 @@ where
     Ok((result, resolver.ids))
 }
 
+#[derive(Debug)]
+/// An AST visitor that transforms an AST that contains temporary GlobalId references to one where
+/// every temporary GlobalId has been replaced by its final allocated id, as dictated by the
+/// provided `allocation`
+///
+/// This is useful when trying to create multiple objects in a single DDL transaction and the
+/// objects that are about to be don't have allocated GlobalIds yet. What we can do in that case is
+/// for the planner to assign temporary `GlobalId::Transient` identifiers to all the objects that
+/// it wants to create and use those for any interelationships.
+///
+/// Then, when the coordinator receives the list of plans to be executed it can batch allocate
+/// the final `GlobalIds` and use this TransientResolver to walk through all the ASTs and make them
+/// refer to the final GlobalIds of the objects.
+pub struct TransientResolver<'a> {
+    /// A HashMap mapping each transient global id to its final non-transient global id
+    allocation: &'a HashMap<GlobalId, GlobalId>,
+    status: Result<(), PlanError>,
+}
+
+impl<'a> TransientResolver<'a> {
+    fn new(allocation: &'a HashMap<GlobalId, GlobalId>) -> Self {
+        TransientResolver {
+            allocation,
+            status: Ok(()),
+        }
+    }
+}
+
+impl Fold<Aug, Aug> for TransientResolver<'_> {
+    fn fold_object_name(&mut self, object_name: ResolvedObjectName) -> ResolvedObjectName {
+        match object_name {
+            ResolvedObjectName::Object {
+                id: transient_id @ GlobalId::Transient(_),
+                qualifiers,
+                full_name,
+                print_id,
+            } => {
+                let id = match self.allocation.get(&transient_id) {
+                    Some(id) => *id,
+                    None => {
+                        let obj = ResolvedObjectName::Object {
+                            id: transient_id,
+                            qualifiers: qualifiers.clone(),
+                            full_name: full_name.clone(),
+                            print_id,
+                        };
+                        self.status = Err(PlanError::InvalidObject(obj));
+                        transient_id
+                    }
+                };
+                ResolvedObjectName::Object {
+                    id,
+                    qualifiers,
+                    full_name,
+                    print_id,
+                }
+            }
+            other => other,
+        }
+    }
+    fn fold_cluster_name(
+        &mut self,
+        node: <Aug as AstInfo>::ClusterName,
+    ) -> <Aug as AstInfo>::ClusterName {
+        node
+    }
+    fn fold_cte_id(&mut self, node: <Aug as AstInfo>::CteId) -> <Aug as AstInfo>::CteId {
+        node
+    }
+    fn fold_data_type(&mut self, node: <Aug as AstInfo>::DataType) -> <Aug as AstInfo>::DataType {
+        node
+    }
+    fn fold_database_name(
+        &mut self,
+        node: <Aug as AstInfo>::DatabaseName,
+    ) -> <Aug as AstInfo>::DatabaseName {
+        node
+    }
+    fn fold_nested_statement(
+        &mut self,
+        node: <Aug as AstInfo>::NestedStatement,
+    ) -> <Aug as AstInfo>::NestedStatement {
+        node
+    }
+    fn fold_schema_name(
+        &mut self,
+        node: <Aug as AstInfo>::SchemaName,
+    ) -> <Aug as AstInfo>::SchemaName {
+        node
+    }
+}
+
+pub fn resolve_transient_ids<N>(
+    allocation: &HashMap<GlobalId, GlobalId>,
+    node: N,
+) -> Result<N::Folded, PlanError>
+where
+    N: FoldNode<Aug, Aug>,
+{
+    let mut resolver = TransientResolver::new(allocation);
+    let result = node.fold(&mut resolver);
+    resolver.status?;
+    Ok(result)
+}
+
+#[derive(Debug, Default)]
+pub struct DependencyVisitor {
+    ids: HashSet<GlobalId>,
+}
+
+impl<'ast> Visit<'ast, Aug> for DependencyVisitor {
+    fn visit_object_name(&mut self, object_name: &'ast <Aug as AstInfo>::ObjectName) {
+        if let ResolvedObjectName::Object { id, .. } = object_name {
+            self.ids.insert(*id);
+        }
+    }
+
+    fn visit_data_type(&mut self, data_type: &'ast <Aug as AstInfo>::DataType) {
+        match data_type {
+            ResolvedDataType::AnonymousList(data_type) => self.visit_data_type(data_type),
+            ResolvedDataType::AnonymousMap {
+                key_type,
+                value_type,
+            } => {
+                self.visit_data_type(key_type);
+                self.visit_data_type(value_type);
+            }
+            ResolvedDataType::Named { id, .. } => {
+                self.ids.insert(*id);
+            }
+            ResolvedDataType::Error => {}
+        }
+    }
+}
+
+pub fn visit_dependencies<'ast, N>(node: &'ast N) -> HashSet<GlobalId>
+where
+    N: VisitNode<'ast, Aug> + 'ast,
+{
+    let mut visitor = DependencyVisitor::default();
+    node.visit(&mut visitor);
+    visitor.ids
+}
+
 // Used when displaying a view's source for human creation. If the name
 // specified is the same as the name in the catalog, we don't use the ID format.
 #[derive(Debug)]
@@ -1151,7 +1306,7 @@ impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
             ..
         } = name
         {
-            let item = self.catalog.get_item(&id);
+            let item = self.catalog.get_item(id);
             let catalog_full_name = self.catalog.resolve_full_name(item.name());
             if catalog_full_name == *full_name {
                 *print_id = false;

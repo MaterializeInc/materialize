@@ -167,7 +167,7 @@ where
             }
         };
         for (seqno, key) in remove_rollups {
-            let removed_key = self.rollups.remove(&seqno);
+            let removed_key = self.rollups.remove(seqno);
             debug_assert!(
                 removed_key.as_ref().map_or(true, |x| x == key),
                 "{} vs {:?}",

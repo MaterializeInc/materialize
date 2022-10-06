@@ -148,7 +148,7 @@ impl ReclockFollower {
 
         // Ensure we have enough bindings
         for (pid, offset) in batch_upper {
-            let bindings_upper = inner.source_upper.get(&pid);
+            let bindings_upper = inner.source_upper.get(pid);
             if let Some(bindings_upper) = bindings_upper {
                 if &offset > bindings_upper {
                     trace!("offset {} >= bindings_upper {}", offset, bindings_upper);
@@ -212,13 +212,11 @@ impl ReclockFollower {
     }
 
     /// Compacts the internal state
-    #[allow(dead_code)]
     pub fn compact(&self, new_since: Antichain<Timestamp>) {
         self.inner.borrow_mut().compact(new_since)
     }
 
     /// Invert the `DestTime` frontier into a `SourceTime` frontier.
-    #[allow(dead_code)]
     pub fn source_upper_at_frontier(
         &self,
         ts_upper: AntichainRef<Timestamp>,
@@ -227,7 +225,6 @@ impl ReclockFollower {
     }
 
     /// Create a shallow copy of this struct that shares the underlying trace.
-    #[allow(dead_code)]
     pub fn share(&self) -> Self {
         Self {
             inner: Rc::clone(&self.inner),
@@ -253,7 +250,7 @@ impl ReclockFollowerInner {
     fn partition_bindings(&self, pid: &PartitionId) -> PartitionBindings {
         let bindings = match self.remap_trace.get(pid) {
             Some(bindings) => (*bindings).iter(),
-            None => (&[]).iter(),
+            None => [].iter(),
         };
         PartitionBindings {
             offset: MzOffset::default(),
@@ -294,7 +291,6 @@ impl ReclockFollowerInner {
     /// an _upper_, as opposed to a specific timestamp.
     ///
     /// `ts_upper` must represent a frontier for a totally ordered time.
-    #[allow(dead_code)]
     pub fn source_upper_at_frontier(
         &self,
         ts_upper: AntichainRef<Timestamp>,
@@ -448,7 +444,6 @@ impl ReclockOperator {
     }
 
     /// Compacts the internal state
-    #[allow(dead_code)]
     pub async fn compact(&mut self, new_since: Antichain<Timestamp>) {
         assert!(PartialOrder::less_equal(&self.since, &new_since));
         for bindings in self.remap_trace.values_mut() {
@@ -690,7 +685,7 @@ impl ReclockOperator {
     fn partition_bindings(&self, pid: &PartitionId) -> PartitionBindings {
         let bindings = match self.remap_trace.get(pid) {
             Some(bindings) => (*bindings).iter(),
-            None => (&[]).iter(),
+            None => [].iter(),
         };
         PartitionBindings {
             offset: MzOffset::default(),
@@ -826,7 +821,7 @@ where
     let mut source_upper = OffsetAntichain::with_capacity(remap_trace.len());
     for pid in remap_trace.keys() {
         let binding = partition_bindings(pid)
-            .take_while(|(ts, _)| ts < &ts_to_invert)
+            .take_while(|(ts, _)| ts < ts_to_invert)
             .last();
         if let Some((_, part_upper)) = binding {
             source_upper.insert(pid.clone(), part_upper);
@@ -912,7 +907,7 @@ mod tests {
     ) {
         let trace_updates = operator.mint(source_upper).await;
         let reclock_upper = operator
-            .reclock_frontier(&source_upper)
+            .reclock_frontier(source_upper)
             .expect("wrong source upper");
         follower.push_trace_updates(trace_updates.into_iter());
         follower.push_upper_update(reclock_upper);

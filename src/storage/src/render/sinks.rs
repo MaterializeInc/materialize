@@ -19,13 +19,14 @@ use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use timely::dataflow::Scope;
 
+use mz_interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
+use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
+
 use crate::controller::CollectionMetadata;
 use crate::source::persist_source;
 use crate::storage_state::{SinkToken, StorageState};
 use crate::types::errors::DataflowError;
 use crate::types::sinks::{SinkEnvelope, StorageSinkConnection, StorageSinkDesc};
-use mz_interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
-use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 
 /// _Renders_ complete _differential_ [`Collection`]s
 /// that represent the sink and its errors as requested
@@ -44,7 +45,7 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
     let mut needed_tokens = Vec::new();
     for import_id in import_ids {
         if let Some(token) = tokens.get(&import_id) {
-            needed_tokens.push(Rc::clone(&token))
+            needed_tokens.push(Rc::clone(token))
         }
     }
 

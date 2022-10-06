@@ -25,4 +25,32 @@ statement ok
 CREATE CONNECTION kafka_conn FOR KAFKA BROKER 'broker';
 
 statement error materialize.public.not_a_secret is not a secret
-CREATE SOURCE source FROM KAFKA CONNECTION kafka_conn (TOPIC 'topic') LEGACYWITH (secret = SECRET not_a_secret);
+CREATE CONNECTION kafka_conn FOR KAFKA BROKER 'broker', SASL PASSWORD = SECRET not_a_secret;
+
+statement error unknown catalog item 'not_an_object_at_all'
+CREATE CONNECTION kafka_conn FOR KAFKA BROKER 'broker', SASL PASSWORD = SECRET not_an_object_at_all;
+
+statement ok
+CREATE SECRET pgpass AS 'postgres'
+
+# SSH TUNNELs are required to be objects, but we'll interpret it as a string
+statement error invalid SSH TUNNEL: must provide an object
+CREATE CONNECTION pg FOR POSTGRES
+  HOST postgres,
+  DATABASE postgres,
+  USER postgres,
+  PASSWORD SECRET pgpass,
+  SSL MODE require,
+  SSH TUNNEL not_an_object_at_all
+
+statement ok
+CREATE TABLE object_reference (a int);
+
+statement error invalid HOST: incompatible value types
+CREATE CONNECTION pg FOR POSTGRES
+  HOST object_reference,
+  DATABASE postgres,
+  USER postgres,
+  PASSWORD SECRET pgpass,
+  SSL MODE require,
+  SSH TUNNEL not_an_object_at_all

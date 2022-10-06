@@ -126,6 +126,7 @@ pub fn describe(
         Statement::CreateSecret(stmt) => ddl::describe_create_secret(&scx, stmt)?,
         Statement::CreateSink(stmt) => ddl::describe_create_sink(&scx, stmt)?,
         Statement::CreateSource(stmt) => ddl::describe_create_source(&scx, stmt)?,
+        Statement::CreateSubsource(stmt) => ddl::describe_create_subsource(&scx, stmt)?,
         Statement::CreateTable(stmt) => ddl::describe_create_table(&scx, stmt)?,
         Statement::CreateType(stmt) => ddl::describe_create_type(&scx, stmt)?,
         Statement::CreateView(stmt) => ddl::describe_create_view(&scx, stmt)?,
@@ -266,6 +267,7 @@ pub fn plan(
         Statement::CreateSecret(stmt) => ddl::plan_create_secret(scx, stmt),
         Statement::CreateSink(stmt) => ddl::plan_create_sink(scx, stmt),
         Statement::CreateSource(stmt) => ddl::plan_create_source(scx, stmt),
+        Statement::CreateSubsource(stmt) => ddl::plan_create_subsource(scx, stmt),
         Statement::CreateTable(stmt) => ddl::plan_create_table(scx, stmt),
         Statement::CreateType(stmt) => ddl::plan_create_type(scx, stmt),
         Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt, params),
@@ -360,7 +362,7 @@ pub fn plan_copy_from(
     columns: Vec<usize>,
     rows: Vec<mz_repr::Row>,
 ) -> Result<super::HirRelationExpr, PlanError> {
-    Ok(query::plan_copy_from_rows(pcx, catalog, id, columns, rows)?)
+    query::plan_copy_from_rows(pcx, catalog, id, columns, rows)
 }
 
 /// Whether a SQL object type can be interpreted as matching the type of the given catalog item.

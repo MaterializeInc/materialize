@@ -21,10 +21,9 @@ from materialize.checks.actions import Action
 from materialize.checks.actions import (
     DropCreateDefaultReplica as DropCreateDefaultReplicaAction,
 )
-from materialize.checks.actions import Initialize, KillComputed
+from materialize.checks.actions import Initialize, KillComputed, KillMz
 from materialize.checks.actions import KillStoraged as KillStoragedAction
 from materialize.checks.actions import Manipulate
-from materialize.checks.actions import RestartMz as RestartMzAction
 from materialize.checks.actions import (
     RestartPostgresBackend as RestartPostgresBackendAction,
 )
@@ -64,11 +63,14 @@ class RestartEntireMz(Scenario):
         return [
             StartMz(),
             Initialize(self.checks),
-            RestartMzAction(),
+            KillMz(),
+            StartMz(),
             Manipulate(self.checks, phase=1),
-            RestartMzAction(),
+            KillMz(),
+            StartMz(),
             Manipulate(self.checks, phase=2),
-            RestartMzAction(),
+            KillMz(),
+            StartMz(),
             Validate(self.checks),
         ]
 
@@ -115,11 +117,14 @@ class RestartEnvironmentdStoraged(Scenario):
             StartComputed(),
             UseComputed(),
             Initialize(self.checks),
-            RestartMzAction(),
+            KillMz(),
+            StartMz(),
             Manipulate(self.checks, phase=1),
-            RestartMzAction(),
+            KillMz(),
+            StartMz(),
             Manipulate(self.checks, phase=2),
-            RestartMzAction(),
+            KillMz(),
+            StartMz(),
             Validate(self.checks),
         ]
 

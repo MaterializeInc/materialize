@@ -30,6 +30,7 @@ use crate::command::{
     Canceled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
+use crate::coord::metrics;
 use crate::coord::peek::PendingPeek;
 use crate::coord::{ConnMeta, Coordinator, CreateSourceStatementReady, Message, PendingTxn};
 use crate::error::AdapterError;
@@ -200,6 +201,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let secret_key = rand::thread_rng().gen();
 
+        self.metrics.active_sessions.inc();
         self.active_conns.insert(
             session.conn_id(),
             ConnMeta {
@@ -237,6 +239,13 @@ impl<S: Append + 'static> Coordinator<S> {
             Some(stmt) => stmt.clone(),
             None => return tx.send(Ok(ExecuteResponse::EmptyQuery), session),
         };
+
+        let stmt_type = metrics::statement_type_label_value(&stmt);
+        self.metrics
+            .query_total
+            .with_label_values(&[stmt_type])
+            .inc();
+
         let params = portal.parameters.clone();
         self.handle_execute_inner(stmt, params, session, tx).await
     }
@@ -356,6 +365,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     | Statement::CreateSecret(_)
                     | Statement::CreateSink(_)
                     | Statement::CreateSource(_)
+                    | Statement::CreateSubsource(_)
                     | Statement::CreateTable(_)
                     | Statement::CreateType(_)
                     | Statement::CreateView(_)
@@ -426,6 +436,15 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                 });
             }
+
+            // `CREATE SUBSOURCE` statements are disallowed for users and are only generated
+            // automatically as part of purification
+            Statement::CreateSubsource(_) => tx.send(
+                Err(AdapterError::Unsupported(
+                    "CREATE SUBSOURCE cannot be executed directly",
+                )),
+                session,
+            ),
 
             // All other statements are handled immediately.
             _ => match self.plan_statement(&mut session, stmt, &params) {
@@ -515,10 +534,11 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn handle_terminate(&mut self, session: &mut Session) {
         self.clear_transaction(session).await;
 
-        self.drop_temp_items(&session).await;
+        self.drop_temp_items(session).await;
         self.catalog
             .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");
+        self.metrics.active_sessions.dec();
         self.active_conns.remove(&session.conn_id());
         self.cancel_pending_peeks(session.conn_id()).await;
     }

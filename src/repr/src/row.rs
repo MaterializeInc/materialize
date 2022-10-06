@@ -37,6 +37,7 @@ use crate::adt::date::Date;
 use crate::adt::interval::Interval;
 use crate::adt::numeric;
 use crate::adt::numeric::Numeric;
+use crate::adt::timestamp::CheckedTimestamp;
 use crate::scalar::arb_datum;
 use crate::{Datum, Timestamp};
 
@@ -442,12 +443,18 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::Timestamp => {
             let date = read_naive_date(data, offset);
             let time = read_time(data, offset);
-            Datum::Timestamp(date.and_time(time))
+            Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(date.and_time(time))
+                    .expect("unexpected timestamp"),
+            )
         }
         Tag::TimestampTz => {
             let date = read_naive_date(data, offset);
             let time = read_time(data, offset);
-            Datum::TimestampTz(DateTime::from_utc(date.and_time(time), Utc))
+            Datum::TimestampTz(
+                CheckedTimestamp::from_timestamplike(DateTime::from_utc(date.and_time(time), Utc))
+                    .expect("unexpected timestamptz"),
+            )
         }
         Tag::Interval => {
             let months = i32::from_le_bytes(read_byte_array(data, offset));
@@ -634,13 +641,15 @@ where
         }
         Datum::Timestamp(t) => {
             data.push(Tag::Timestamp.into());
-            push_naive_date(data, t.date());
-            push_time(data, t.time());
+            let datetime = t.to_naive();
+            push_naive_date(data, datetime.date());
+            push_time(data, datetime.time());
         }
         Datum::TimestampTz(t) => {
             data.push(Tag::TimestampTz.into());
-            push_naive_date(data, t.date().naive_utc());
-            push_time(data, t.time());
+            let datetime = t.to_naive();
+            push_naive_date(data, datetime.date());
+            push_time(data, datetime.time());
         }
         Datum::Interval(i) => {
             data.push(Tag::Interval.into());
@@ -678,15 +687,15 @@ where
             data.push(Tag::Array.into());
             data.push(array.dims.ndims());
             data.extend_from_slice(array.dims.data);
-            push_untagged_bytes(data, &array.elements.data);
+            push_untagged_bytes(data, array.elements.data);
         }
         Datum::List(list) => {
             data.push(Tag::List.into());
-            push_untagged_bytes(data, &list.data);
+            push_untagged_bytes(data, list.data);
         }
         Datum::Map(dict) => {
             data.push(Tag::Dict.into());
-            push_untagged_bytes(data, &dict.data);
+            push_untagged_bytes(data, dict.data);
         }
         Datum::JsonNull => data.push(Tag::JsonNull.into()),
         Datum::MzTimestamp(t) => {
@@ -726,7 +735,7 @@ where
                 );
                 // There should be no unaligned elements in the prefix or suffix.
                 soft_assert!(prefix.is_empty() && suffix.is_empty());
-                data.extend_from_slice(&lsu_bytes);
+                data.extend_from_slice(lsu_bytes);
             } else {
                 for u in lsu {
                     data.extend_from_slice(&u.to_le_bytes());
@@ -1332,7 +1341,7 @@ impl<'a> DatumList<'a> {
 
     /// For debugging only
     pub fn data(&self) -> &'a [u8] {
-        &self.data
+        self.data
     }
 }
 
@@ -1370,7 +1379,7 @@ impl<'a> DatumMap<'a> {
 
     /// For debugging only
     pub fn data(&self) -> &'a [u8] {
-        &self.data
+        self.data
     }
 }
 
@@ -1591,12 +1600,18 @@ mod tests {
             Datum::Float64(OrderedFloat::from(-2_147_483_648.0 - 42.12)),
             Datum::Date(Date::from_pg_epoch(365 * 45 + 21).unwrap()),
             Datum::Timestamp(
-                NaiveDate::from_isoywd(2019, 30, chrono::Weekday::Wed).and_hms(14, 32, 11),
+                CheckedTimestamp::from_timestamplike(
+                    NaiveDate::from_isoywd(2019, 30, chrono::Weekday::Wed).and_hms(14, 32, 11),
+                )
+                .unwrap(),
             ),
-            Datum::TimestampTz(DateTime::<Utc>::from_utc(
-                NaiveDateTime::from_timestamp(61, 0),
-                Utc,
-            )),
+            Datum::TimestampTz(
+                CheckedTimestamp::from_timestamplike(DateTime::<Utc>::from_utc(
+                    NaiveDateTime::from_timestamp(61, 0),
+                    Utc,
+                ))
+                .unwrap(),
+            ),
             Datum::Interval(Interval {
                 months: 312,
                 ..Default::default()
@@ -1808,8 +1823,16 @@ mod tests {
             Datum::from(numeric::Numeric::from(1000)),
             Datum::from(numeric::Numeric::from(9999)),
             Datum::Date(NaiveDate::from_ymd(1, 1, 1).try_into().unwrap()),
-            Datum::Timestamp(NaiveDateTime::from_timestamp(0, 0)),
-            Datum::TimestampTz(DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc)),
+            Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(NaiveDateTime::from_timestamp(0, 0)).unwrap(),
+            ),
+            Datum::TimestampTz(
+                CheckedTimestamp::from_timestamplike(DateTime::from_utc(
+                    NaiveDateTime::from_timestamp(0, 0),
+                    Utc,
+                ))
+                .unwrap(),
+            ),
             Datum::Interval(Interval::default()),
             Datum::Bytes(&[]),
             Datum::String(""),

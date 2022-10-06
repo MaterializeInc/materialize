@@ -21,27 +21,13 @@ place""",CA,92679
 > CREATE CONNECTION s3_conn FOR AWS
   ACCESS KEY ID = '${testdrive.aws-access-key-id}',
   SECRET ACCESS KEY = SECRET s3_conn_secret_access_key,
-  TOKEN = '${testdrive.aws-token}';
-
-# We should refuse to create a source with invalid LEGACYWITH options
-! CREATE SOURCE invalid_with_option
-  FROM S3 CONNECTION s3_conn
-  DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    badoption = true
-  )
-  FORMAT CSV WITH 3 COLUMNS
-contains:unexpected parameters for CREATE SOURCE: badoption
+  TOKEN = '${testdrive.aws-token}',
+  REGION = '${testdrive.aws-region}',
+  ENDPOINT = '${testdrive.aws-endpoint}';
 
 > CREATE SOURCE mismatched_column_count
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT CSV WITH 2 COLUMNS
 ! SELECT * FROM mismatched_column_count
 contains:CSV error at record number 1: expected 2 columns, got 3.
@@ -49,10 +35,6 @@ contains:CSV error at record number 1: expected 2 columns, got 3.
 > CREATE SOURCE matching_column_names
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT CSV WITH HEADER (city, state, zip)
 
 > SELECT * FROM matching_column_names where zip = '14618'
@@ -63,10 +45,6 @@ Rochester NY 14618
 > CREATE SOURCE matching_column_names_alias (a, b, c)
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT CSV WITH HEADER (city, state, zip)
 
 > SELECT * FROM matching_column_names_alias where c = '14618'
@@ -77,10 +55,6 @@ Rochester NY 14618
 > CREATE SOURCE mismatched_column_names
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT CSV WITH HEADER (cities, country, zip)
 ! SELECT * FROM mismatched_column_names
 contains:first mismatched column at index 1 expected=cities actual="city"
@@ -88,10 +62,6 @@ contains:first mismatched column at index 1 expected=cities actual="city"
 > CREATE SOURCE mismatched_column_names_count
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT CSV WITH HEADER (cities, state)
 ! SELECT * FROM mismatched_column_names_count
 contains:CSV error at record number 1: expected 2 columns, got 3
@@ -100,10 +70,6 @@ contains:CSV error at record number 1: expected 2 columns, got 3
 > CREATE SOURCE static_csv
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT CSV WITH 3 COLUMNS
 
 > SELECT * FROM static_csv
@@ -117,10 +83,6 @@ Rochester      NY        14618
 ! CREATE SOURCE static_csv_nothing_demanded_src
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT CSV WITH HEADER
 contains:Expected a list of columns in parentheses, found EOF
 
@@ -128,16 +90,12 @@ contains:Expected a list of columns in parentheses, found EOF
 # since the definition of "static" means "will never change again".
 $ set-regex match=(\d{13}|u\d{1,3}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
 > EXPLAIN TIMESTAMP FOR SELECT * FROM static_csv
-"          query timestamp: <> <>\n                    since:[<> <>]\n                    upper:[]\n         global timestamp: <> <>\n  can respond immediately: <>\n\nsource materialize.public.static_csv (<>, storage):\n read frontier:[<> <>]\nwrite frontier:[]\n"
+"          query timestamp: <> <>\n                    since:[<> <>]\n                    upper:[]\n         global timestamp: <> <>\n  can respond immediately: <>\n\nsource materialize.public.static_csv (<>, storage):\n            read frontier:[<> <>]\n           write frontier:[]\n"
 
 # Static CSV with manual headers.
 > CREATE SOURCE static_csv_manual_header (city_man, state_man, zip_man)
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT CSV WITH HEADER (city, state, zip)
 
 > SELECT * FROM static_csv_manual_header
@@ -188,10 +146,6 @@ badint,
 > CREATE SOURCE malformed_csv
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'malformed.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT CSV WITH HEADER (dollars, category)
 
 ! SELECT * FROM malformed_csv
@@ -205,10 +159,6 @@ dollars,category
 > CREATE SOURCE bad_text_csv
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'bad-text.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT CSV WITH HEADER (dollars, category)
 
 ! SELECT * FROM bad_text_csv
@@ -221,10 +171,6 @@ $ kafka-create-topic topic=static-csv-pkne-sink partitions=1
 > CREATE SOURCE static_csv_pkne (PRIMARY KEY (zip) NOT ENFORCED)
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT CSV WITH HEADER (city, state, zip)
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn

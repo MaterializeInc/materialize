@@ -17,13 +17,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context};
-use aws_arn::ResourceName as AmazonResourceName;
-use mz_secrets::SecretsReader;
-use mz_sql_parser::ast::{
-    CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, Envelope,
-    KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection,
-    PgConfigOption, PgConfigOptionName, ReaderSchemaSelectionStrategy,
-};
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
@@ -33,50 +26,61 @@ use uuid::Uuid;
 use mz_ccsr::Schema as CcsrSchema;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError};
 use mz_proto::RustType;
-use mz_repr::strconv;
+use mz_repr::{strconv, GlobalId};
+use mz_secrets::SecretsReader;
+use mz_sql_parser::ast::{
+    CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, Envelope,
+    KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection,
+    PgConfigOption, PgConfigOptionName, ReaderSchemaSelectionStrategy,
+};
 use mz_storage::types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
 use mz_storage::types::connections::{Connection, ConnectionContext};
 use mz_storage::types::sources::PostgresSourceDetails;
 
 use crate::ast::{
     AvroSchema, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,
-    CsrConnectionAvro, CsrConnectionProtobuf, CsvColumns, Format, ProtobufSchema, Value,
-    WithOptionValue,
+    CreateSourceSubsource, CreateSourceSubsources, CreateSubsourceStatement, CsrConnectionAvro,
+    CsrConnectionProtobuf, CsvColumns, Format, ProtobufSchema, Value, WithOptionValue,
 };
 use crate::catalog::SessionCatalog;
 use crate::kafka_util;
 use crate::kafka_util::KafkaConfigOptionExtracted;
 use crate::names::Aug;
-use crate::normalize;
 use crate::plan::StatementContext;
 
 /// Purifies a statement, removing any dependencies on external state.
 ///
 /// See the section on [purification](crate#purification) in the crate
 /// documentation for details.
-///
-/// Note that purification is asynchronous, and may take an unboundedly long
-/// time to complete. As a result purification does *not* have access to a
-/// [`SessionCatalog`](crate::catalog::SessionCatalog), as that would require
-/// locking access to the catalog for an unbounded amount of time.
 pub async fn purify_create_source(
     catalog: Box<dyn SessionCatalog>,
     now: u64,
     mut stmt: CreateSourceStatement<Aug>,
     connection_context: ConnectionContext,
-) -> Result<CreateSourceStatement<Aug>, anyhow::Error> {
+) -> Result<
+    (
+        Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
+        CreateSourceStatement<Aug>,
+    ),
+    anyhow::Error,
+> {
     let CreateSourceStatement {
         connection,
         format,
         envelope,
-        legacy_with_options: with_options,
         include_metadata: _,
+        subsources: requested_subsources,
         ..
     } = &mut stmt;
 
-    let _ = catalog;
-
-    let mut with_options_map = normalize::options(with_options)?;
+    // Disallow manually targetting subsources, this syntax is reserved for purification only
+    if let Some(CreateSourceSubsources::Subset(subsources)) = requested_subsources {
+        for subsource in subsources {
+            if matches!(subsource, CreateSourceSubsource::Resolved(_, _)) {
+                bail!("Cannot alias subsource using `INTO`, use `AS` instead");
+            }
+        }
+    }
 
     match connection {
         CreateSourceConnection::Kafka(KafkaSourceConnection {
@@ -89,7 +93,7 @@ pub async fn purify_create_source(
         }) => {
             let scx = StatementContext::new(None, &*catalog);
             let connection = {
-                let item = scx.get_item_by_resolved_name(&connection)?;
+                let item = scx.get_item_by_resolved_name(connection)?;
                 // Get Kafka connection
                 match item.connection()? {
                     Connection::Kafka(connection) => connection.clone(),
@@ -154,42 +158,31 @@ pub async fn purify_create_source(
         }
         CreateSourceConnection::S3 { connection, .. } => {
             let scx = StatementContext::new(None, &*catalog);
-            let connection = {
-                let item = scx.get_item_by_resolved_name(&connection)?;
+            let aws = {
+                let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
-                    Connection::Aws(connection) => connection.clone(),
+                    Connection::Aws(aws) => aws.clone(),
                     _ => bail!("{} is not an AWS connection", item.name()),
                 }
             };
-
-            let aws_config = normalize::aws_config(&mut with_options_map, None, connection)?;
             validate_aws_credentials(
-                &aws_config,
+                &aws,
                 connection_context.aws_external_id_prefix.as_ref(),
                 &*connection_context.secrets_reader,
             )
             .await?;
         }
-        CreateSourceConnection::Kinesis { connection, arn } => {
-            let region = arn
-                .parse::<AmazonResourceName>()
-                .context("Unable to parse provided ARN")?
-                .region
-                .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
-
+        CreateSourceConnection::Kinesis { connection, .. } => {
             let scx = StatementContext::new(None, &*catalog);
-            let connection = {
-                let item = scx.get_item_by_resolved_name(&connection)?;
+            let aws = {
+                let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
-                    Connection::Aws(connection) => connection.clone(),
+                    Connection::Aws(aws) => aws.clone(),
                     _ => bail!("{} is not an AWS connection", item.name()),
                 }
             };
-
-            let aws_config =
-                normalize::aws_config(&mut with_options_map, Some(region.into()), connection)?;
             validate_aws_credentials(
-                &aws_config,
+                &aws,
                 connection_context.aws_external_id_prefix.as_ref(),
                 &*connection_context.secrets_reader,
             )
@@ -201,7 +194,7 @@ pub async fn purify_create_source(
         } => {
             let scx = StatementContext::new(None, &*catalog);
             let connection = {
-                let item = scx.get_item_by_resolved_name(&connection)?;
+                let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
                     Connection::Postgres(connection) => connection.clone(),
                     _ => bail!("{} is not a postgres connection", item.name()),
@@ -237,16 +230,9 @@ pub async fn purify_create_source(
         CreateSourceConnection::LoadGenerator { .. } => (),
     }
 
-    purify_source_format(
-        &*catalog,
-        format,
-        connection,
-        &envelope,
-        &connection_context,
-    )
-    .await?;
+    purify_source_format(&*catalog, format, connection, envelope, &connection_context).await?;
 
-    Ok(stmt)
+    Ok((vec![], stmt))
 }
 
 async fn purify_source_format(
@@ -298,13 +284,7 @@ async fn purify_source_format_single(
                 )
                 .await?
             }
-            AvroSchema::InlineSchema { schema, .. } => {
-                if let mz_sql_parser::ast::Schema::File(_) = schema {
-                    // See comment below about this branch for the protobuf
-                    // format.
-                    bail_unsupported!("FORMAT AVRO USING SCHEMA FILE");
-                }
-            }
+            AvroSchema::InlineSchema { .. } => {}
         },
         Format::Protobuf(schema) => match schema {
             ProtobufSchema::Csr { csr_connection } => {
@@ -317,22 +297,7 @@ async fn purify_source_format_single(
                 )
                 .await?;
             }
-            ProtobufSchema::InlineSchema {
-                message_name: _,
-                schema,
-            } => {
-                if let mz_sql_parser::ast::Schema::File(path) = schema {
-                    // We want to remove this feature, as it doesn't work in
-                    // cloud, but there are many tests that rely on this
-                    // feature that need to be updated first.
-                    let scx = StatementContext::new(None, &*catalog);
-                    scx.require_unsafe_mode("FORMAT PROTOBUF USING SCHEMA FILE")?;
-                    let descriptors = tokio::fs::read(path).await?;
-                    let mut buf = String::new();
-                    strconv::format_bytes(&mut buf, &descriptors);
-                    *schema = mz_sql_parser::ast::Schema::Inline(buf);
-                }
-            }
+            ProtobufSchema::InlineSchema { .. } => {}
         },
         Format::Csv {
             delimiter: _,
@@ -386,7 +351,7 @@ async fn purify_csr_connection_proto(
         None => {
             let scx = StatementContext::new(None, &*catalog);
 
-            let ccsr_connection = match scx.get_item_by_resolved_name(&connection)?.connection()? {
+            let ccsr_connection = match scx.get_item_by_resolved_name(connection)?.connection()? {
                 Connection::Csr(connection) => connection.clone(),
                 _ => bail!("{} is not a schema registry connection", connection),
             };
@@ -441,7 +406,7 @@ async fn purify_csr_connection_avro(
     } = csr_connection;
     if seed.is_none() {
         let scx = StatementContext::new(None, &*catalog);
-        let csr_connection = match scx.get_item_by_resolved_name(&connection)?.connection()? {
+        let csr_connection = match scx.get_item_by_resolved_name(connection)?.connection()? {
             Connection::Csr(connection) => connection.clone(),
             _ => bail!("{} is not a schema registry connection", connection),
         };
@@ -543,7 +508,7 @@ async fn get_remote_csr_schema(
     topic: String,
 ) -> Result<Schema, anyhow::Error> {
     let value_schema_name = format!("{}-value", topic);
-    let value_schema = get_schema_with_strategy(&ccsr_client, value_strategy, &value_schema_name)
+    let value_schema = get_schema_with_strategy(ccsr_client, value_strategy, &value_schema_name)
         .await
         .with_context(|| {
             format!(
@@ -553,7 +518,7 @@ async fn get_remote_csr_schema(
         })?;
     let value_schema = value_schema.ok_or_else(|| anyhow!("No value schema found"))?;
     let subject = format!("{}-key", topic);
-    let key_schema = get_schema_with_strategy(&ccsr_client, key_strategy, &subject).await?;
+    let key_schema = get_schema_with_strategy(ccsr_client, key_strategy, &subject).await?;
     Ok(Schema {
         key_schema,
         value_schema,

@@ -70,7 +70,9 @@ $ kafka-verify format=avro sink=materialize.public.interval_data_sink sort-messa
 
 > CREATE MATERIALIZED VIEW datetime_data (date, ts, ts_tz) AS VALUES
   (DATE '2000-01-01', TIMESTAMP '2000-01-01 10:10:10.111', TIMESTAMPTZ '2000-01-01 10:10:10.111+02'),
-  (DATE '2000-02-01', TIMESTAMP '2000-02-01 10:10:10.111', TIMESTAMPTZ '2000-02-01 10:10:10.111+02')
+  (DATE '2000-02-01', TIMESTAMP '2000-02-01 10:10:10.111', TIMESTAMPTZ '2000-02-01 10:10:10.111+02'),
+  (('0001-01-01'::DATE - '1721389days'::INTERVAL)::DATE, ('0001-01-01'::DATE - '1721389days'::INTERVAL)::TIMESTAMP, ('0001-01-01'::DATE - '1721389days'::INTERVAL)::TIMESTAMPTZ),
+  (('0001-01-01'::DATE + '262142years 11months 30days'::INTERVAL)::DATE, ('0001-01-01'::DATE + '262142years 11months 30days'::INTERVAL)::TIMESTAMP, ('0001-01-01'::DATE + '262142years 11months 30days'::INTERVAL)::TIMESTAMPTZ)
 
 > CREATE SINK datetime_data_sink FROM datetime_data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-datetime-data-sink-${testdrive.seed}')
@@ -78,8 +80,10 @@ $ kafka-verify format=avro sink=materialize.public.interval_data_sink sort-messa
   ENVELOPE DEBEZIUM
 
 $ kafka-verify format=avro sink=materialize.public.datetime_data_sink sort-messages=true
+{"before": null, "after": {"row": {"date": -2440551, "ts": -210863606400000000, "ts_tz": -210863606400000000}}}
 {"before": null, "after": {"row": {"date": 10957, "ts": 946721410111000, "ts_tz": 946714210111000}}}
 {"before": null, "after": {"row": {"date": 10988, "ts": 949399810111000, "ts_tz": 949392610111000}}}
+{"before": null, "after": {"row": {"date": 95026601, "ts": 8210298326400000000, "ts_tz": 8210298326400000000}}}
 
 > CREATE MATERIALIZED VIEW time_data (time) AS VALUES (TIME '01:02:03'), (TIME '01:02:04'), (TIME '00:00:00'), (TIME '23:59:59')
 

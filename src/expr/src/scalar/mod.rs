@@ -9,6 +9,7 @@
 
 use itertools::Itertools;
 use mz_repr::adt::date::DateError;
+use mz_repr::adt::timestamp::TimestampError;
 use std::collections::HashSet;
 use std::fmt;
 use std::mem;
@@ -576,7 +577,7 @@ impl MirScalarExpr {
                             if expr2.is_literal() {
                                 // We can at least precompile the regex.
                                 let pattern = expr2.as_literal_str().unwrap();
-                                *e = match like_pattern::compile(&pattern, *case_insensitive) {
+                                *e = match like_pattern::compile(pattern, *case_insensitive) {
                                     Ok(matcher) => expr1.take().call_unary(UnaryFunc::IsLikeMatch(
                                         func::IsLikeMatch(matcher),
                                     )),
@@ -2137,6 +2138,14 @@ impl From<DateError> for EvalError {
     fn from(e: DateError) -> EvalError {
         match e {
             DateError::OutOfRange => EvalError::DateOutOfRange,
+        }
+    }
+}
+
+impl From<TimestampError> for EvalError {
+    fn from(e: TimestampError) -> EvalError {
+        match e {
+            TimestampError::OutOfRange => EvalError::TimestampOutOfRange,
         }
     }
 }

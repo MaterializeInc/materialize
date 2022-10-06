@@ -365,6 +365,8 @@ pub struct ExplainConfig {
     pub join_impls: bool,
     /// Show the sets of unique keys.
     pub keys: bool,
+    /// Restrict output trees to linear chains. Ignored if `raw_plans` is set.
+    pub linear_chains: bool,
     /// Show the `non_negative` in the explanation if it is supported by the backing IR.
     pub non_negative: bool,
     /// Show the slow path plan even if a fast path plan was created. Useful for debugging.
@@ -389,29 +391,30 @@ impl ExplainConfig {
 
 impl TryFrom<HashSet<String>> for ExplainConfig {
     type Error = anyhow::Error;
-    fn try_from(mut config_flags: HashSet<String>) -> Result<Self, anyhow::Error> {
+    fn try_from(mut flags: HashSet<String>) -> Result<Self, anyhow::Error> {
         // If `WITH(raw)` is specified, ensure that the config will be as
         // representative for the original plan as possible.
-        if config_flags.remove("raw") {
-            config_flags.insert("raw_plans".into());
-            config_flags.insert("raw_syntax".into());
+        if flags.remove("raw") {
+            flags.insert("raw_plans".into());
+            flags.insert("raw_syntax".into());
         }
         let result = ExplainConfig {
-            arity: config_flags.remove("arity"),
-            join_impls: config_flags.remove("join_impls"),
-            keys: config_flags.remove("keys"),
-            non_negative: config_flags.remove("non_negative"),
-            no_fast_path: config_flags.remove("no_fast_path"),
-            raw_plans: config_flags.remove("raw_plans"),
-            raw_syntax: config_flags.remove("raw_syntax"),
-            subtree_size: config_flags.remove("subtree_size"),
-            timing: config_flags.remove("timing"),
-            types: config_flags.remove("types"),
+            arity: flags.remove("arity"),
+            join_impls: flags.remove("join_impls"),
+            keys: flags.remove("keys"),
+            linear_chains: flags.remove("linear_chains") && !flags.contains("raw_plans"),
+            non_negative: flags.remove("non_negative"),
+            no_fast_path: flags.remove("no_fast_path"),
+            raw_plans: flags.remove("raw_plans"),
+            raw_syntax: flags.remove("raw_syntax"),
+            subtree_size: flags.remove("subtree_size"),
+            timing: flags.remove("timing"),
+            types: flags.remove("types"),
         };
-        if config_flags.is_empty() {
+        if flags.is_empty() {
             Ok(result)
         } else {
-            anyhow::bail!("unsupported 'EXPLAIN ... WITH' flags: {:?}", config_flags)
+            anyhow::bail!("unsupported 'EXPLAIN ... WITH' flags: {:?}", flags)
         }
     }
 }
@@ -672,6 +675,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::adt::timestamp::CheckedTimestamp;
+
     use super::*;
 
     struct Environment {
@@ -763,6 +768,7 @@ mod tests {
             arity: false,
             join_impls: false,
             keys: false,
+            linear_chains: false,
             non_negative: false,
             no_fast_path: false,
             raw_plans: false,
@@ -854,14 +860,22 @@ mod tests {
                 r#""12:10:22""#,
             ),
             (
-                Datum::Timestamp(chrono::NaiveDateTime::from_timestamp(1023123, 234)),
+                Datum::Timestamp(
+                    CheckedTimestamp::from_timestamplike(chrono::NaiveDateTime::from_timestamp(
+                        1023123, 234,
+                    ))
+                    .unwrap(),
+                ),
                 r#""1970-01-12T20:12:03.000000234""#,
             ),
             (
-                Datum::TimestampTz(chrono::DateTime::from_utc(
-                    chrono::NaiveDateTime::from_timestamp(90234242, 234),
-                    chrono::Utc,
-                )),
+                Datum::TimestampTz(
+                    CheckedTimestamp::from_timestamplike(chrono::DateTime::from_utc(
+                        chrono::NaiveDateTime::from_timestamp(90234242, 234),
+                        chrono::Utc,
+                    ))
+                    .unwrap(),
+                ),
                 r#""1972-11-10T09:04:02.000000234Z""#,
             ),
             (

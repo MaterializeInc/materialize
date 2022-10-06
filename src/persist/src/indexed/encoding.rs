@@ -103,7 +103,7 @@ impl TraceBatchMeta {
         // TODO: It's unclear if the equal case (an empty desc) is
         // useful/harmful. Feel free to make this a less_than if empty descs end
         // up making sense.
-        if PartialOrder::less_equal(self.desc.upper(), &self.desc.lower()) {
+        if PartialOrder::less_equal(self.desc.upper(), self.desc.lower()) {
             return Err(format!("invalid desc: {:?}", &self.desc).into());
         }
 
@@ -169,7 +169,7 @@ impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
         // TODO: It's unclear if the equal case (an empty desc) is
         // useful/harmful. Feel free to make this a less_than if empty descs end
         // up making sense.
-        if PartialOrder::less_equal(self.desc.upper(), &self.desc.lower()) {
+        if PartialOrder::less_equal(self.desc.upper(), self.desc.lower()) {
             return Err(format!("invalid desc: {:?}", &self.desc).into());
         }
 
@@ -263,7 +263,7 @@ where
         let ((k, v), ts, diff) = &self.0;
         fmt::Debug::fmt(
             &(
-                (PrettyBytes(&k), PrettyBytes(&v)),
+                (PrettyBytes(k), PrettyBytes(v)),
                 T::decode(*ts),
                 D::decode(*diff),
             ),
@@ -520,7 +520,7 @@ mod tests {
         batch.encode(&mut val);
         let val = Bytes::from(val);
         let val_len = u64::cast_from(val.len());
-        blob.set(&key, val, Atomicity::AllowNonAtomic)
+        blob.set(key, val, Atomicity::AllowNonAtomic)
             .await
             .expect("failed to set trace batch");
         val_len

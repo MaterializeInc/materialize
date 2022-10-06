@@ -290,7 +290,7 @@ impl<W: Write> Writer<W> {
 
     /// Append a raw Avro Value to the payload avoiding to encode it again.
     fn append_raw(&mut self, value: &Value, schema: &Schema) -> Result<usize, Error> {
-        self.append_bytes(encode_to_vec(&value, schema).as_ref())
+        self.append_bytes(encode_to_vec(value, schema).as_ref())
     }
 
     /// Append pure bytes to the payload.

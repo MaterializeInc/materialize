@@ -15,6 +15,7 @@ use std::str;
 use bytes::{Buf, BufMut, BytesMut};
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use mz_repr::adt::date::Date;
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 use uuid::Uuid;
 
@@ -82,9 +83,9 @@ pub enum Value {
     /// A time.
     Time(NaiveTime),
     /// A date and time, without a timezone.
-    Timestamp(NaiveDateTime),
+    Timestamp(CheckedTimestamp<NaiveDateTime>),
     /// A date and time, with a timezone.
-    TimestampTz(DateTime<Utc>),
+    TimestampTz(CheckedTimestamp<DateTime<Utc>>),
     /// A variable-length string.
     Text(String),
     /// A fixed-length string.
@@ -152,8 +153,8 @@ impl Value {
                 Some(Value::Array { dims, elements })
             }
             (Datum::Array(array), ScalarType::Int2Vector) => {
-                let dims: Vec<_> = array.dims().into_iter().collect();
-                assert!(dims.len() == 1, "int2vector must be 1 dimensional");
+                let dims = array.dims().into_iter();
+                assert!(dims.count() == 1, "int2vector must be 1 dimensional");
                 let elements = array
                     .elements()
                     .iter()
@@ -221,7 +222,7 @@ impl Value {
                 };
                 buf.make_datum(|packer| {
                     packer.push_list(elems.into_iter().map(|elem| match elem {
-                        Some(elem) => elem.into_datum(buf, &elem_pg_type),
+                        Some(elem) => elem.into_datum(buf, elem_pg_type),
                         None => Datum::Null,
                     }));
                 })
@@ -236,7 +237,7 @@ impl Value {
                         for (k, v) in map {
                             row.push(Datum::String(&k));
                             row.push(match v {
-                                Some(elem) => elem.into_datum(buf, &elem_pg_type),
+                                Some(elem) => elem.into_datum(buf, elem_pg_type),
                                 None => Datum::Null,
                             });
                         }
@@ -329,8 +330,8 @@ impl Value {
             .expect("provided closure never fails"),
             Value::Text(s) | Value::VarChar(s) | Value::BpChar(s) => strconv::format_string(buf, s),
             Value::Time(t) => strconv::format_time(buf, *t),
-            Value::Timestamp(ts) => strconv::format_timestamp(buf, *ts),
-            Value::TimestampTz(ts) => strconv::format_timestamptz(buf, *ts),
+            Value::Timestamp(ts) => strconv::format_timestamp(buf, ts),
+            Value::TimestampTz(ts) => strconv::format_timestamptz(buf, ts),
             Value::Uuid(u) => strconv::format_uuid(buf, *u),
             Value::Numeric(d) => strconv::format_numeric(buf, &d.0),
             Value::MzTimestamp(t) => strconv::format_mz_timestamp(buf, *t),
@@ -534,8 +535,10 @@ impl Value {
             Type::Bytea => Vec::<u8>::from_sql(ty.inner(), raw).map(Value::Bytea),
             Type::Char => i8::from_sql(ty.inner(), raw)
                 .map(|c| Value::Char(u8::from_ne_bytes(c.to_ne_bytes()))),
-            Type::Date => i32::from_sql(ty.inner(), raw)
-                .map(|days| Value::Date(Date::from_pg_epoch(days).unwrap())),
+            Type::Date => {
+                let days = i32::from_sql(ty.inner(), raw)?;
+                Ok(Value::Date(Date::from_pg_epoch(days)?))
+            }
             Type::Float4 => f32::from_sql(ty.inner(), raw).map(Value::Float4),
             Type::Float8 => f64::from_sql(ty.inner(), raw).map(Value::Float8),
             Type::Int2 => i16::from_sql(ty.inner(), raw).map(Value::Int2),
@@ -563,7 +566,7 @@ impl Value {
                 Ok(Value::UInt8(v))
             }
             Type::Interval { .. } => Interval::from_sql(ty.inner(), raw).map(Value::Interval),
-            Type::Json => return Err("input of json types is not implemented".into()),
+            Type::Json => Err("input of json types is not implemented".into()),
             Type::Jsonb => Jsonb::from_sql(ty.inner(), raw).map(Value::Jsonb),
             Type::List(_) => Err("binary decoding of list types is not implemented".into()),
             Type::Map { .. } => Err("binary decoding of map types is not implemented".into()),
@@ -576,12 +579,16 @@ impl Value {
             Type::BpChar { .. } => String::from_sql(ty.inner(), raw).map(Value::BpChar),
             Type::VarChar { .. } => String::from_sql(ty.inner(), raw).map(Value::VarChar),
             Type::Time { .. } => NaiveTime::from_sql(ty.inner(), raw).map(Value::Time),
-            Type::TimeTz { .. } => return Err("input of timetz types is not implemented".into()),
+            Type::TimeTz { .. } => Err("input of timetz types is not implemented".into()),
             Type::Timestamp { .. } => {
-                NaiveDateTime::from_sql(ty.inner(), raw).map(Value::Timestamp)
+                let ts = NaiveDateTime::from_sql(ty.inner(), raw)?;
+                Ok(Value::Timestamp(CheckedTimestamp::from_timestamplike(ts)?))
             }
             Type::TimestampTz { .. } => {
-                DateTime::<Utc>::from_sql(ty.inner(), raw).map(Value::TimestampTz)
+                let ts = DateTime::<Utc>::from_sql(ty.inner(), raw)?;
+                Ok(Value::TimestampTz(CheckedTimestamp::from_timestamplike(
+                    ts,
+                )?))
             }
             Type::Uuid => Uuid::from_sql(ty.inner(), raw).map(Value::Uuid),
             Type::MzTimestamp => {

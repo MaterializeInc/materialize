@@ -397,7 +397,7 @@ impl KafkaSourceReader {
 
         // Since librdkafka v1.6.0, we need to recreate all partition queues
         // after every call to `self.consumer.assign`.
-        let context = Arc::clone(&self.consumer.context());
+        let context = Arc::clone(self.consumer.context());
         for pc in &mut self.partition_consumers {
             pc.partition_queue = self
                 .consumer
@@ -670,6 +670,7 @@ fn construct_source_message(
         _ => None,
     };
     Ok(SourceMessage {
+        output: 0,
         partition: PartitionId::Kafka(msg.partition()),
         offset: u64::try_from(msg.offset())
             .map_err(|_| {

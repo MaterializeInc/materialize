@@ -12,6 +12,7 @@ async-trait = "0.1.57"
 clap = { version = "3.2.20", features = ["env", "derive"] }
 futures-core = "0.3.21"
 http = "0.2.8"
+humantime = "2.1.0"
 mz-orchestrator = { path = "../orchestrator" }
 mz-ore = { path = "../ore", features = ["tracing_"] }
 mz-repr = { path = "../repr", optional = true }

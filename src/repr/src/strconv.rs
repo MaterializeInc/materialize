@@ -55,6 +55,7 @@ use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::numeric::{self, Numeric, NUMERIC_DATUM_MAX_PRECISION};
+use crate::adt::timestamp::CheckedTimestamp;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.strconv.rs"));
 
@@ -383,7 +384,7 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, datetime::Ti
 
     let (ts_string, tz_string) = datetime::split_timestamp_string(s);
 
-    let pdt = ParsedDateTime::build_parsed_datetime_timestamp(&ts_string)?;
+    let pdt = ParsedDateTime::build_parsed_datetime_timestamp(ts_string)?;
     let d: NaiveDate = pdt.compute_date()?;
     let t: NaiveTime = pdt.compute_time()?;
 
@@ -426,7 +427,7 @@ where
 ///     [ <period> [ <seconds fraction> ] ]
 /// ```
 pub fn parse_time(s: &str) -> Result<NaiveTime, ParseError> {
-    ParsedDateTime::build_parsed_datetime_time(&s)
+    ParsedDateTime::build_parsed_datetime_time(s)
         .and_then(|pdt| pdt.compute_time())
         .map_err(|e| ParseError::invalid_input_syntax("time", s).with_details(e))
 }
@@ -442,15 +443,16 @@ where
 }
 
 /// Parses a `NaiveDateTime` from `s`.
-pub fn parse_timestamp(s: &str) -> Result<NaiveDateTime, ParseError> {
+pub fn parse_timestamp(s: &str) -> Result<CheckedTimestamp<NaiveDateTime>, ParseError> {
     match parse_timestamp_string(s) {
-        Ok((date, time, _)) => Ok(date.and_time(time)),
+        Ok((date, time, _)) => CheckedTimestamp::from_timestamplike(date.and_time(time))
+            .map_err(|_| ParseError::out_of_range("timestamp", s)),
         Err(e) => Err(ParseError::invalid_input_syntax("timestamp", s).with_details(e)),
     }
 }
 
 /// Writes a [`NaiveDateTime`] timestamp to `buf`.
-pub fn format_timestamp<F>(buf: &mut F, ts: NaiveDateTime) -> Nestable
+pub fn format_timestamp<F>(buf: &mut F, ts: &NaiveDateTime) -> Nestable
 where
     F: FormatBuffer,
 {
@@ -465,7 +467,7 @@ where
 }
 
 /// Parses a `DateTime<Utc>` from `s`. See `mz_expr::scalar::func::timezone_timestamp` for timezone anomaly considerations.
-pub fn parse_timestamptz(s: &str) -> Result<DateTime<Utc>, ParseError> {
+pub fn parse_timestamptz(s: &str) -> Result<CheckedTimestamp<DateTime<Utc>>, ParseError> {
     parse_timestamp_string(s)
         .and_then(|(date, time, timezone)| {
             use datetime::Timezone::*;
@@ -488,10 +490,14 @@ pub fn parse_timestamptz(s: &str) -> Result<DateTime<Utc>, ParseError> {
         .map_err(|e| {
             ParseError::invalid_input_syntax("timestamp with time zone", s).with_details(e)
         })
+        .and_then(|ts| {
+            CheckedTimestamp::from_timestamplike(ts)
+                .map_err(|_| ParseError::out_of_range("timestamp with time zone", s))
+        })
 }
 
 /// Writes a [`DateTime<Utc>`] timestamp to `buf`.
-pub fn format_timestamptz<F>(buf: &mut F, ts: DateTime<Utc>) -> Nestable
+pub fn format_timestamptz<F>(buf: &mut F, ts: &DateTime<Utc>) -> Nestable
 where
     F: FormatBuffer,
 {
@@ -538,7 +544,7 @@ pub fn parse_interval_w_disambiguator(
     leading_time_precision: Option<DateTimeField>,
     d: DateTimeField,
 ) -> Result<Interval, ParseError> {
-    ParsedDateTime::build_parsed_datetime_interval(&s, leading_time_precision, d)
+    ParsedDateTime::build_parsed_datetime_interval(s, leading_time_precision, d)
         .and_then(|pdt| pdt.compute_interval())
         .map_err(|e| ParseError::invalid_input_syntax("interval", s).with_details(e))
 }

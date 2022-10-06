@@ -65,9 +65,9 @@ pub struct Args {
     #[clap(arg_enum, long, default_value_t = BenchmarkType::RawWriter)]
     benchmark_type: BenchmarkType,
 
-    /// Runtime in seconds
-    #[clap(long, value_name = "S", default_value_t = 60)]
-    runtime_seconds: usize,
+    /// Runtime in a whole number of seconds
+    #[clap(long, parse(try_from_str = humantime::parse_duration), value_name = "S", default_value = "60s")]
+    runtime: Duration,
 
     /// How many records writers should emit per second.
     #[clap(long, value_name = "R", default_value_t = 100)]
@@ -81,9 +81,9 @@ pub struct Args {
     #[clap(long, env = "", value_name = "R", default_value_t = 100)]
     batch_size: usize,
 
-    /// Duration in seconds between subsequent informational log outputs.
-    #[clap(long, value_name = "L", default_value_t = 1)]
-    logging_granularity_seconds: u64,
+    /// Duration between subsequent informational log outputs.
+    #[clap(long, parse(try_from_str = humantime::parse_duration), value_name = "L", default_value = "1s")]
+    logging_granularity: Duration,
 
     /// Id of the persist shard (for use in multi-process runs).
     #[clap(short, long, value_name = "I")]
@@ -167,13 +167,13 @@ where
     W: BenchmarkWriter + Send + Sync + 'static,
     R: BenchmarkReader + Send + Sync + 'static,
 {
-    let num_records_total = args.records_per_second * args.runtime_seconds;
+    let num_records_total = args.records_per_second * usize::cast_from(args.runtime.as_secs());
     let data_generator =
         DataGenerator::new(num_records_total, args.record_size_bytes, args.batch_size);
 
     let benchmark_description = format!(
-        "num-readers={} num-writers={} runtime-seconds={} num_records_total={} records-per-second={} record-size-bytes={} batch-size={}",
-        args.num_readers, args.num_writers, args.runtime_seconds, num_records_total, args.records_per_second,
+        "num-readers={} num-writers={} runtime={:?} num_records_total={} records-per-second={} record-size-bytes={} batch-size={}",
+        args.num_readers, args.num_writers, args.runtime, num_records_total, args.records_per_second,
         args.record_size_bytes, args.batch_size);
 
     info!("starting benchmark: {}", benchmark_description);
@@ -197,8 +197,6 @@ where
         let batches_per_second = records_per_second_f64 / batch_size_f64;
         Duration::from_secs(1).div_f64(batches_per_second)
     };
-
-    let logging_granularity = Duration::from_secs(args.logging_granularity_seconds);
 
     for (idx, mut writer) in writers.into_iter().enumerate() {
         let b = Arc::clone(&barrier);
@@ -274,7 +272,7 @@ where
                     }
                     trace!("data generator {} wrote a batch", idx);
 
-                    if elapsed - prev_log > logging_granularity {
+                    if elapsed - prev_log > args.logging_granularity {
                         let records_sent = usize::cast_from(batch_idx) * args.batch_size;
                         debug!(
                             "After {} ms data generator {} has sent {} records.",
@@ -325,7 +323,7 @@ where
 
                 let elapsed = start.elapsed();
 
-                if elapsed - prev_log > logging_granularity {
+                if elapsed - prev_log > args.logging_granularity {
                     info!("After {} ms writer {} has written {} records. Max write latency {} ms most recent write latency {} ms.",
                           elapsed.as_millis(), idx, records_written, max_write_latency.as_millis(), write_latency.as_millis());
                     prev_log = elapsed;
@@ -392,7 +390,7 @@ where
                     max_read_latency = read_latency;
                 }
 
-                if elapsed - prev_log > logging_granularity {
+                if elapsed - prev_log > args.logging_granularity {
                     let elapsed_seconds = elapsed.as_secs();
                     let mb_read = (num_records_read * args.record_size_bytes) as f64 / MIB as f64;
                     let throughput = mb_read / elapsed_seconds as f64;

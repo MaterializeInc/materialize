@@ -135,11 +135,11 @@ impl ToJson for TypedDatum<'_> {
                 ScalarType::Time => serde_json::Value::String(format!("{:?}", datum.unwrap_time())),
                 ScalarType::Timestamp => serde_json::Value::String(format!(
                     "{:?}",
-                    datum.unwrap_timestamp().timestamp_millis()
+                    datum.unwrap_timestamp().to_naive().timestamp_millis()
                 )),
                 ScalarType::TimestampTz => serde_json::Value::String(format!(
                     "{:?}",
-                    datum.unwrap_timestamptz().timestamp_millis()
+                    datum.unwrap_timestamptz().to_naive().timestamp_millis()
                 )),
                 ScalarType::Interval => {
                     serde_json::Value::String(format!("{}", datum.unwrap_interval()))

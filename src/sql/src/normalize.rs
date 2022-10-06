@@ -14,7 +14,6 @@
 //!
 //! [`ast`]: crate::ast
 
-use std::collections::BTreeMap;
 use std::fmt;
 
 use itertools::Itertools;
@@ -24,16 +23,14 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
-    CreateTypeAs, CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident,
+    CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
+    CreateTableStatement, CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident,
     IfExistsBehavior, Op, Query, Statement, TableFactor, TableFunction, UnresolvedObjectName,
-    UnresolvedSchemaName, Value, ViewDefinition, WithOption, WithOptionValue,
+    UnresolvedSchemaName, Value, ViewDefinition,
 };
-use mz_storage::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
 
 use crate::names::{
     Aug, FullObjectName, PartialObjectName, PartialSchemaName, RawDatabaseSpecifier,
-    ResolvedObjectName,
 };
 use crate::plan::error::PlanError;
 use crate::plan::statement::StatementContext;
@@ -130,70 +127,6 @@ impl From<SqlValueOrSecret> for Option<Value> {
             SqlValueOrSecret::Secret(_id) => None,
         }
     }
-}
-
-/// Normalizes a list of `WITH` options.
-///
-/// # Errors
-/// - If any `WithOption`'s `value` is `None`. You can prevent generating these
-///   values during parsing.
-/// - If any `WithOption` has a value of type `WithOptionValue::Secret`.
-pub fn options(
-    options: &[WithOption<Aug>],
-) -> Result<BTreeMap<String, SqlValueOrSecret>, PlanError> {
-    let mut out = BTreeMap::new();
-    for option in options {
-        let value = match &option.value {
-            Some(WithOptionValue::Value(value)) => SqlValueOrSecret::Value(value.clone()),
-            Some(WithOptionValue::Ident(id)) => {
-                SqlValueOrSecret::Value(Value::String(ident(id.clone())))
-            }
-            Some(WithOptionValue::DataType(data_type)) => {
-                SqlValueOrSecret::Value(Value::String(data_type.to_ast_string()))
-            }
-            Some(WithOptionValue::Secret(ResolvedObjectName::Object { id, .. })) => {
-                SqlValueOrSecret::Secret(*id)
-            }
-            Some(WithOptionValue::Secret(_)) => {
-                panic!("SECRET option {} must be Object", option.key)
-            }
-            Some(WithOptionValue::Object(ResolvedObjectName::Object { id, .. })) => {
-                SqlValueOrSecret::Secret(*id)
-            }
-            Some(WithOptionValue::Object(_)) => {
-                panic!("Object option {} must be Object", option.key)
-            }
-            None => {
-                sql_bail!("option {} requires a value", option.key);
-            }
-        };
-        out.insert(option.key.to_string(), value);
-    }
-    Ok(out)
-}
-
-/// Normalizes `WITH` option keys without normalizing their corresponding
-/// values.
-///
-/// # Panics
-/// - If any `WithOption`'s `value` is `None`. You can prevent generating these
-///   values during parsing.
-pub fn option_objects(options: &[WithOption<Aug>]) -> BTreeMap<String, WithOptionValue<Aug>> {
-    options
-        .iter()
-        .map(|o| {
-            (
-                ident(o.key.clone()),
-                o.value
-                    .as_ref()
-                    .clone()
-                    // The only places that generate options that do not require
-                    // keys and values do not currently use this code path.
-                    .expect("check that all entries have values before calling `option_objects`")
-                    .clone(),
-            )
-        })
-        .collect()
 }
 
 /// Unnormalizes an object name.
@@ -357,15 +290,32 @@ pub fn create_statement(
             name,
             col_names: _,
             connection: _,
-            legacy_with_options: _,
             format: _,
             include_metadata: _,
             envelope: _,
             if_not_exists,
             key_constraint: _,
             with_options: _,
+            subsources: _,
         }) => {
             *name = allocate_name(name)?;
+            *if_not_exists = false;
+        }
+
+        Statement::CreateSubsource(CreateSubsourceStatement {
+            name,
+            columns,
+            constraints: _,
+            if_not_exists,
+        }) => {
+            *name = allocate_name(name)?;
+            let mut normalizer = QueryNormalizer::new(scx);
+            for c in columns {
+                normalizer.visit_column_def_mut(c);
+            }
+            if let Some(err) = normalizer.err {
+                return Err(err);
+            }
             *if_not_exists = false;
         }
 
@@ -373,7 +323,6 @@ pub fn create_statement(
             name,
             columns,
             constraints: _,
-            with_options: _,
             if_not_exists,
             temporary,
         }) => {
@@ -467,32 +416,14 @@ pub fn create_statement(
             *if_not_exists = false;
         }
 
-        Statement::CreateType(CreateTypeStatement { name, as_type, .. }) => match as_type {
-            CreateTypeAs::List { with_options } | CreateTypeAs::Map { with_options } => {
-                *name = allocate_name(name)?;
-                let mut normalizer = QueryNormalizer::new(scx);
-                for option in with_options {
-                    match &mut option.value {
-                        Some(WithOptionValue::DataType(ref mut data_type)) => {
-                            normalizer.visit_data_type_mut(data_type);
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-                if let Some(err) = normalizer.err {
-                    return Err(err);
-                }
+        Statement::CreateType(CreateTypeStatement { name, as_type }) => {
+            *name = allocate_name(name)?;
+            let mut normalizer = QueryNormalizer::new(scx);
+            normalizer.visit_create_type_as_mut(as_type);
+            if let Some(err) = normalizer.err {
+                return Err(err);
             }
-            CreateTypeAs::Record { column_defs } => {
-                let mut normalizer = QueryNormalizer::new(scx);
-                for c in column_defs {
-                    normalizer.visit_column_def_mut(c);
-                }
-                if let Some(err) = normalizer.err {
-                    return Err(err);
-                }
-            }
-        },
+        }
         Statement::CreateSecret(CreateSecretStatement {
             name,
             if_not_exists,
@@ -607,62 +538,6 @@ macro_rules! generate_extracted_config {
 }
 
 pub(crate) use generate_extracted_config;
-
-/// Ensures that the given set of options are empty, useful for validating that
-/// `WITH` options are all real, used options
-pub(crate) fn ensure_empty_options<V>(
-    with_options: &BTreeMap<String, V>,
-    context: &str,
-) -> Result<(), PlanError> {
-    if !with_options.is_empty() {
-        sql_bail!(
-            "unexpected parameters for {}: {}",
-            context,
-            with_options.keys().join(",")
-        )
-    }
-    Ok(())
-}
-
-/// Normalizes option values that contain AWS connection parameters.
-pub fn aws_config(
-    options: &mut BTreeMap<String, SqlValueOrSecret>,
-    region: Option<String>,
-    credentials: AwsCredentials,
-) -> Result<AwsConfig, PlanError> {
-    let mut extract = |key| match options.remove(key) {
-        // TODO: support secrets in S3
-        Some(SqlValueOrSecret::Value(Value::String(key))) => {
-            if !key.is_empty() {
-                Ok(Some(key))
-            } else {
-                Ok(None)
-            }
-        }
-        Some(_) => sql_bail!("{} must be a string", key),
-        _ => Ok(None),
-    };
-
-    let region = match region {
-        Some(region) => Some(region),
-        None => extract("region")?,
-    };
-    let endpoint = match extract("endpoint")? {
-        None => None,
-        Some(endpoint) => Some(SerdeUri(
-            endpoint
-                .parse()
-                .map_err(|e| sql_err!("parsing AWS endpoint: {e}"))?,
-        )),
-    };
-    let arn = extract("role_arn")?;
-    Ok(AwsConfig {
-        credentials,
-        region,
-        endpoint,
-        role: arn.map(|arn| AwsAssumeRole { arn }),
-    })
-}
 
 #[cfg(test)]
 mod tests {

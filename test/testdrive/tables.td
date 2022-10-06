@@ -51,8 +51,8 @@ name
 t
 
 > SHOW SOURCES;
-name    type
-------------
+name    type  size
+------------------
 
 > SHOW INDEXES FROM t;
 
@@ -231,8 +231,8 @@ v
 v
 
 > SHOW SOURCES;
-name    type
-------------
+name    type   size
+-------------------
 
 > CREATE TABLE t (a int, b text NOT NULL)
 
@@ -330,7 +330,7 @@ contains:column "a" specified more than once
 # Test pg_table_is_visible.
 > CREATE SCHEMA non_default
 > CREATE TABLE non_default.hidden (dummy int)
-> SELECT name, pg_table_is_visible(oid) AS visible FROM mz_tables WHERE schema_id != 1
+> SELECT name, pg_table_is_visible(oid) AS visible FROM mz_tables WHERE schema_id != 1 AND id LIKE 'u%'
 name    visible
 ---------------
 hidden  false

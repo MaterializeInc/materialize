@@ -314,7 +314,7 @@ pub trait CatalogItem {
     ///
     /// If the catalog item is not of a type that contains a `SourceDesc`
     /// (i.e., anything other than sources), it returns an error.
-    fn source_desc(&self) -> Result<&SourceDesc, CatalogError>;
+    fn source_desc(&self) -> Result<Option<&SourceDesc>, CatalogError>;
 
     /// Returns the resolved connection.
     ///
@@ -334,6 +334,9 @@ pub trait CatalogItem {
 
     /// Returns the IDs of the catalog items that depend upon this catalog item.
     fn used_by(&self) -> &[GlobalId];
+
+    /// If this catalog item is a source, it return the IDs of its subsources
+    fn subsources(&self) -> Vec<GlobalId>;
 
     /// Returns the index details associated with the catalog item, if the
     /// catalog item is an index.
@@ -550,8 +553,8 @@ pub enum CatalogError {
     UnknownRole(String),
     /// Unknown compute instance.
     UnknownComputeInstance(String),
-    /// Unknown compute instance replica.
-    UnknownComputeInstanceReplica(String),
+    /// Unknown compute replica.
+    UnknownComputeReplica(String),
     /// Unknown item.
     UnknownItem(String),
     /// Unknown function.
@@ -578,7 +581,7 @@ impl fmt::Display for CatalogError {
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
             Self::UnknownComputeInstance(name) => write!(f, "unknown cluster '{}'", name),
-            Self::UnknownComputeInstanceReplica(name) => {
+            Self::UnknownComputeReplica(name) => {
                 write!(f, "unknown cluster replica '{}'", name)
             }
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),

@@ -207,8 +207,8 @@ async fn download_objects_task(
 
                 let download_result = download_object(
                     tx,
-                    &activator,
-                    &client,
+                    activator,
+                    client,
                     &msg_ref.bucket,
                     &msg_ref.key,
                     compression,
@@ -568,7 +568,7 @@ async fn process_message(
                             } else {
                                 let m = ScanBucketMetrics::new(
                                     &base_metrics,
-                                    &source_id,
+                                    source_id,
                                     &record.s3.bucket.name,
                                 );
                                 m.objects_discovered.inc();
@@ -591,7 +591,7 @@ async fn process_message(
                 }
             }
             Err(_) => {
-                let test: Result<TestEvent, _> = serde_json::from_str(&body);
+                let test: Result<TestEvent, _> = serde_json::from_str(body);
                 match test {
                     Ok(_) => {
                         trace!("got test event for new queue");
@@ -802,10 +802,10 @@ where
         chunks,
         bytes_read
     );
-    return Ok(DownloadMetricUpdate {
+    Ok(DownloadMetricUpdate {
         bytes: bytes_read.try_into().expect("usize <= u64"),
         messages: chunks,
-    });
+    })
 }
 
 impl SourceReader for S3SourceReader {
@@ -941,6 +941,7 @@ impl SourceReader for S3SourceReader {
                 self.offset += 1;
                 Ok(NextMessage::Ready(SourceMessageType::Finalized(
                     SourceMessage {
+                        output: 0,
                         partition: PartitionId::None,
                         offset: self.offset.into(),
                         upstream_time_millis: None,

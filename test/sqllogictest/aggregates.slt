@@ -102,18 +102,18 @@ SELECT a, count(b), min(b), sum(b), max(b) FROM t GROUP BY a
 
 # Test that hinting the group size works
 query II rowsort
-SELECT a, sum(b) AS a FROM t GROUP BY a OPTION(expected_group_size = 100)
+SELECT a, sum(b) AS a FROM t GROUP BY a OPTIONS (EXPECTED GROUP SIZE 100)
 ----
 1 3
 2 3
 3 1
 
 # unless hint is bad
-query error expected_group_size must be a number
-SELECT a, sum(b) AS a FROM t GROUP BY a OPTION(expected_group_size = 'foo')
+query error invalid EXPECTED GROUP SIZE: cannot use value as number
+SELECT a, sum(b) AS a FROM t GROUP BY a OPTIONS (EXPECTED GROUP SIZE = 'foo')
 
 query error
-SELECT a, sum(b) AS a FROM t GROUP BY a OPTION(expected_group_size = 0.1)
+SELECT a, sum(b) AS a FROM t GROUP BY a OPTIONS (EXPECTED GROUP SIZE = 0.1)
 
 # Test that an ordinal in a GROUP BY that refers to a column that is an
 # expression, rather than a simple column reference, works.

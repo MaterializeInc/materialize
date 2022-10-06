@@ -220,7 +220,7 @@ $ file-append path=importee.proto
 $ file-append path=importer.proto
 \${importer-schema}
 
-$ protobuf-compile-descriptors inputs=empty.proto,importee.proto,importer.proto output=import.pb
+$ protobuf-compile-descriptors inputs=empty.proto,importee.proto,importer.proto output=import.pb set-var=import-schema
 
 $ kafka-create-topic topic=import-csr partitions=1
 

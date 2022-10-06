@@ -115,7 +115,7 @@ impl Sqlite {
         let mut update_stmt =
             tx.prepare("UPDATE uppers SET upper = $upper WHERE collection_id = $collection_id")?;
         for (collection_id, new_upper) in seals {
-            let upper = Self::upper_tx(&tx, collection_id)?;
+            let upper = Self::upper_tx(tx, collection_id)?;
             if PartialOrder::less_than(new_upper, &upper) {
                 return Err(StashError::from(format!(
                     "seal request {} is less than the current upper frontier {}",
@@ -135,7 +135,7 @@ impl Sqlite {
     where
         I: Iterator<Item = ((Value, Value), Timestamp, Diff)>,
     {
-        let upper = Self::upper_tx(&tx, collection_id)?;
+        let upper = Self::upper_tx(tx, collection_id)?;
         let mut insert_stmt = tx.prepare(
             "INSERT INTO data (collection_id, key, value, time, diff)
              VALUES ($collection_id, $key, $value, $time, $diff)",
@@ -169,8 +169,8 @@ impl Sqlite {
         let mut compact_stmt =
             tx.prepare("UPDATE sinces SET since = $since WHERE collection_id = $collection_id")?;
         for (collection_id, new_since) in compactions {
-            let since = Self::since_tx(&tx, collection_id)?;
-            let upper = Self::upper_tx(&tx, collection_id)?;
+            let since = Self::since_tx(tx, collection_id)?;
+            let upper = Self::upper_tx(tx, collection_id)?;
             if PartialOrder::less_than(&upper, new_since) {
                 return Err(StashError::from(format!(
                     "compact request {} is greater than the current upper frontier {}",
@@ -206,7 +206,7 @@ impl Sqlite {
         let mut drop_stmt = tx.prepare("DELETE FROM data WHERE collection_id = $collection_id")?;
 
         for collection_id in collections {
-            let since = Self::since_tx(&tx, *collection_id)?.into_option();
+            let since = Self::since_tx(tx, *collection_id)?.into_option();
             match since {
                 Some(since) => {
                     let mut updates = consolidation_stmt

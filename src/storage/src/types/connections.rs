@@ -28,9 +28,7 @@ use mz_repr::url::any_url;
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 
-use crate::types::connections::aws::AwsExternalIdPrefix;
-
-use self::aws::AwsCredentials;
+use crate::types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
 
 pub mod aws;
 
@@ -148,7 +146,7 @@ pub enum Connection {
     Csr(CsrConnection),
     Postgres(PostgresConnection),
     Ssh(SshConnection),
-    Aws(AwsCredentials),
+    Aws(AwsConfig),
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -371,7 +369,7 @@ impl CsrConnection {
         let mut client_config = mz_ccsr::ClientConfig::new(self.url.clone());
         if let Some(root_cert) = &self.tls_root_cert {
             let root_cert = root_cert.get_string(secrets_reader).await?;
-            let root_cert = Certificate::from_pem(&root_cert.as_bytes())?;
+            let root_cert = Certificate::from_pem(root_cert.as_bytes())?;
             client_config = client_config.add_root_certificate(root_cert);
         }
 

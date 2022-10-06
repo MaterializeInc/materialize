@@ -88,21 +88,23 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                     CatalogItem::Source(source) => {
                         sources_to_drop.push(*id);
-                        match &source.source_desc.connection {
-                            SourceConnection::Postgres(PostgresSourceConnection {
-                                connection,
-                                details,
-                                ..
-                            }) => {
-                                let config = connection
-                                    .config(&*self.connection_context.secrets_reader)
-                                    .await
-                                    .unwrap_or_else(|e| {
-                                        panic!("Postgres source {id} missing secrets: {e}")
-                                    });
-                                replication_slots_to_drop.push((config, details.slot.clone()));
+                        if let Some(ingestion) = &source.ingestion {
+                            match &ingestion.desc.connection {
+                                SourceConnection::Postgres(PostgresSourceConnection {
+                                    connection,
+                                    details,
+                                    ..
+                                }) => {
+                                    let config = connection
+                                        .config(&*self.connection_context.secrets_reader)
+                                        .await
+                                        .unwrap_or_else(|e| {
+                                            panic!("Postgres source {id} missing secrets: {e}")
+                                        });
+                                    replication_slots_to_drop.push((config, details.slot.clone()));
+                                }
+                                _ => {}
                             }
-                            _ => {}
                         }
                     }
                     CatalogItem::Sink(catalog::Sink { connection, .. }) => match connection {
@@ -142,18 +144,18 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 // Drop the introspection sources
                 for replica in instance.replicas_by_id.values() {
-                    sources_to_drop.extend(replica.config.persisted_logs.get_source_ids());
+                    sources_to_drop.extend(replica.config.logging.source_ids());
                 }
 
                 // Drop timelines
                 timelines_to_drop.extend(self.remove_compute_instance_from_timeline(id));
-            } else if let catalog::Op::DropComputeInstanceReplica { name, compute_name } = op {
+            } else if let catalog::Op::DropComputeReplica { name, compute_name } = op {
                 let compute_instance = self.catalog.resolve_compute_instance(compute_name)?;
                 let replica_id = &compute_instance.replica_id_by_name[name];
-                let replica = &compute_instance.replicas_by_id[&replica_id];
+                let replica = &compute_instance.replicas_by_id[replica_id];
 
                 // Drop the introspection sources
-                sources_to_drop.extend(replica.config.persisted_logs.get_source_ids());
+                sources_to_drop.extend(replica.config.logging.source_ids());
             }
         }
 
@@ -438,7 +440,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 id,
                 ExportDescription {
                     sink: storage_sink_desc,
-                    remote_addr: None,
+                    host_config: sink.host_config.clone(),
                 },
             )])
             .await?)
@@ -527,7 +529,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 Op::CreateComputeInstance { .. } => {
                     new_clusters += 1;
                 }
-                Op::CreateComputeInstanceReplica {
+                Op::CreateComputeReplica {
                     on_cluster_name, ..
                 } => {
                     *new_replicas_per_cluster.entry(on_cluster_name).or_insert(0) += 1;
@@ -559,7 +561,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
                         | CatalogItem::Connection(_)
-                        | CatalogItem::StorageCollection(_) => {}
+                        | CatalogItem::StorageManagedTable(_) => {}
                     }
                 }
                 Op::DropDatabase { .. } => {
@@ -574,7 +576,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 Op::DropComputeInstance { .. } => {
                     new_clusters -= 1;
                 }
-                Op::DropComputeInstanceReplica { compute_name, .. } => {
+                Op::DropComputeReplica { compute_name, .. } => {
                     *new_replicas_per_cluster.entry(compute_name).or_insert(0) -= 1;
                 }
                 Op::DropItem(id) => {
@@ -605,7 +607,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
                         | CatalogItem::Connection(_)
-                        | CatalogItem::StorageCollection(_) => {}
+                        | CatalogItem::StorageManagedTable(_) => {}
                     }
                 }
                 Op::AlterSource { .. }

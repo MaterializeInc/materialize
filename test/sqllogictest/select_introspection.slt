@@ -18,10 +18,9 @@ INSERT INTO test VALUES('a', 'b')
 statement ok
 CREATE CLUSTER test
   REPLICAS (
-    replica_a (SIZE '1'),
-    replica_b (SIZE '2')
-  ),
-  INTROSPECTION INTERVAL '50 milliseconds'
+    replica_a (SIZE '1', INTROSPECTION INTERVAL '50 milliseconds'),
+    replica_b (SIZE '2', INTROSPECTION INTERVAL '50 milliseconds')
+  )
 
 statement ok
 SET cluster = test
@@ -47,7 +46,7 @@ statement ok
 SET cluster_replica = replica_b
 
 query I
-SELECT sum(count) FROM mz_internal.mz_peek_durations
+SELECT sum(count) FROM mz_internal.mz_raw_peek_durations
 ----
 NULL
 
@@ -70,7 +69,7 @@ SELECT * FROM mz_internal.mz_compute_exports
 # Verify that the logic does not apply to persisted logs
 
 statement ok
-SELECT * FROM mz_internal.mz_peek_active_1
+SELECT * FROM mz_internal.mz_active_peeks_1
 
 # Verify that untargeted introspection queries on unreplicated clusters are
 # allowed.
@@ -81,18 +80,30 @@ DROP CLUSTER REPLICA test.replica_b;
 statement ok
 SELECT * FROM mz_internal.mz_compute_exports
 
-# Verify that querying introspection data is disallowed on clusters with
-# introspection disabled.
+# Verify that querying introspection data is disallowed on replicas with
+# introspection disabled, but allowed on introspection-enabled replicas
+# in the same cluster.
 
 statement ok
 DROP CLUSTER test CASCADE
 
 statement ok
 CREATE CLUSTER test
-  REPLICAS (replica_a (SIZE '1')),
-  INTROSPECTION INTERVAL 0
+  REPLICAS (
+    replica_a (SIZE '1', INTROSPECTION INTERVAL 0),
+    replica_b (SIZE '1', INTROSPECTION INTERVAL 1)
+  )
 
-query error cannot read log sources on cluster with disabled introspection
+statement ok
+SET cluster_replica = replica_a
+
+query error cannot read log sources of replica with disabled introspection
+SELECT * FROM mz_internal.mz_compute_exports
+
+statement ok
+SET cluster_replica = replica_b
+
+statement ok
 SELECT * FROM mz_internal.mz_compute_exports
 
 # Clean up.

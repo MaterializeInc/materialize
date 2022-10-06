@@ -139,7 +139,7 @@ impl<'a> PromLabelsExt<'a> for HashMap<&'a str, &'a str> {
         &self,
         vec: &MetricVec<P>,
     ) -> Result<(), prometheus::Error> {
-        vec.remove(&self)
+        vec.remove(self)
     }
 }
 

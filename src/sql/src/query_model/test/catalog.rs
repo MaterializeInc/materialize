@@ -69,7 +69,7 @@ pub enum TestCatalogItem {
 impl CatalogItem for TestCatalogItem {
     fn name(&self) -> &QualifiedObjectName {
         match &self {
-            TestCatalogItem::BaseTable { name, .. } => &name,
+            TestCatalogItem::BaseTable { name, .. } => name,
             _ => unimplemented!(),
         }
     }
@@ -105,7 +105,7 @@ impl CatalogItem for TestCatalogItem {
         }
     }
 
-    fn source_desc(&self) -> Result<&SourceDesc, CatalogError> {
+    fn source_desc(&self) -> Result<Option<&SourceDesc>, CatalogError> {
         unimplemented!()
     }
 
@@ -125,6 +125,10 @@ impl CatalogItem for TestCatalogItem {
     }
 
     fn used_by(&self) -> &[GlobalId] {
+        unimplemented!()
+    }
+
+    fn subsources(&self) -> Vec<GlobalId> {
         unimplemented!()
     }
 

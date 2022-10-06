@@ -19,7 +19,7 @@ mod test {
     use serde::{Deserialize, Serialize};
 
     fn reduce(s: &str) -> Result<MirScalarExpr, String> {
-        let mut input_stream = tokenize(&s)?.into_iter();
+        let mut input_stream = tokenize(s)?.into_iter();
         let mut ctx = MirScalarExprDeserializeContext::default();
         let mut scalar: MirScalarExpr = deserialize(&mut input_stream, "MirScalarExpr", &mut ctx)?;
         let typ: Vec<ColumnType> = deserialize(&mut input_stream, "Vec<ColumnType> ", &mut ctx)?;
@@ -37,7 +37,7 @@ mod test {
     }
 
     fn test_canonicalize_pred(s: &str) -> Result<Vec<MirScalarExpr>, String> {
-        let mut input_stream = tokenize(&s)?.into_iter();
+        let mut input_stream = tokenize(s)?.into_iter();
         let mut ctx = MirScalarExprDeserializeContext::default();
         let input_predicates: Vec<MirScalarExpr> =
             deserialize(&mut input_stream, "Vec<MirScalarExpr>", &mut ctx)?;
@@ -77,7 +77,7 @@ mod test {
     /// The test syntax is `<input_arity> [<commands>]`
     /// The syntax for a command is `<name_of_command> [<args>]`
     fn test_mfp(s: &str) -> Result<MapFilterProject, String> {
-        let mut input_stream = tokenize(&s)?.into_iter();
+        let mut input_stream = tokenize(s)?.into_iter();
         let mut ctx = MirScalarExprDeserializeContext::default();
         let input_arity = input_stream
             .next()
@@ -102,7 +102,7 @@ mod test {
     }
 
     fn test_canonicalize_equiv(s: &str) -> Result<Vec<Vec<MirScalarExpr>>, String> {
-        let mut input_stream = tokenize(&s)?.into_iter();
+        let mut input_stream = tokenize(s)?.into_iter();
         let mut ctx = MirScalarExprDeserializeContext::default();
         let mut equivalences: Vec<Vec<MirScalarExpr>> =
             deserialize(&mut input_stream, "Vec<Vec<MirScalarExpr>>", &mut ctx)?;
