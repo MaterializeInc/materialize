@@ -18,136 +18,46 @@
 import time
 from typing import TYPE_CHECKING, List, Optional, Type
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import Computed, Materialized
+from materialize.checks.executors import Executor
 
 if TYPE_CHECKING:
     from materialize.checks.checks import Check
 
 
 class Action:
-    def execute(self, c: Composition) -> None:
+    def execute(self, e: Executor) -> None:
         assert False
+
+
+class Testdrive(Action):
+    # Instruct pytest this class does not contain actual tests
+    __test__ = False
+
+    def __init__(self, input: str) -> None:
+        self.input = input
+
+    def execute(self, e: Executor) -> None:
+        """Pass testdrive actions to be run by an Executor-specific implementation."""
+        e.testdrive(self.input)
 
 
 class Sleep(Action):
     def __init__(self, interval: float) -> None:
         self.interval = interval
 
-    def execute(self, c: Composition) -> None:
+    def execute(self, e: Executor) -> None:
         print(f"Sleeping for {self.interval} seconds")
         time.sleep(self.interval)
-
-
-class StartMz(Action):
-    DEFAULT_MZ_OPTIONS = " ".join(
-        [
-            "--persist-consensus-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=consensus",
-            "--storage-stash-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=storage",
-            "--adapter-stash-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=adapter",
-        ]
-    )
-
-    def __init__(self, tag: Optional[str] = None) -> None:
-        self.tag = tag
-
-    def execute(self, c: Composition) -> None:
-        image = f"materialize/materialized:{self.tag}" if self.tag is not None else None
-        print(f"Starting Mz using image {image}")
-        mz = Materialized(image=image, options=StartMz.DEFAULT_MZ_OPTIONS)
-
-        with c.override(mz):
-            c.up("materialized")
-
-        c.wait_for_materialized()
-
-        for config_param in ["max_tables", "max_sources"]:
-            c.sql(
-                f"ALTER SYSTEM SET {config_param} TO 1000",
-                user="mz_system",
-                port=6877,
-            )
-
-
-class KillMz(Action):
-    def execute(self, c: Composition) -> None:
-        c.kill("materialized")
-
-
-class UseComputed(Action):
-    def execute(self, c: Composition) -> None:
-        c.sql(
-            """
-            DROP CLUSTER REPLICA default.default_replica;
-            CREATE CLUSTER REPLICA default.default_replica
-                REMOTE ['computed_1:2100'],
-                COMPUTE ['computed_1:2102'],
-                WORKERS 1;
-        """
-        )
-
-
-class KillComputed(Action):
-    def execute(self, c: Composition) -> None:
-        with c.override(Computed(name="computed_1")):
-            c.kill("computed_1")
-
-
-class StartComputed(Action):
-    def __init__(self, tag: Optional[str] = None) -> None:
-        self.tag = tag
-
-    def execute(self, c: Composition) -> None:
-        image = f"materialize/computed:{self.tag}" if self.tag is not None else None
-        print(f"Starting Computed using image {image}")
-
-        computed = Computed(
-            name="computed_1",
-            image=image,
-        )
-
-        with c.override(computed):
-            c.up("computed_1")
-
-
-class RestartPostgresBackend(Action):
-    def execute(self, c: Composition) -> None:
-        c.kill("postgres-backend")
-        c.up("postgres-backend")
-        c.wait_for_postgres(service="postgres-backend")
-
-
-class RestartSourcePostgres(Action):
-    def execute(self, c: Composition) -> None:
-        c.kill("postgres-source")
-        c.up("postgres-source")
-        c.wait_for_postgres(service="postgres-source")
-
-
-class KillStoraged(Action):
-    def execute(self, c: Composition) -> None:
-        # Depending on the workload, storaged may not be running, hence the || true
-        c.exec("materialized", "bash", "-c", "kill -9 `pidof storaged` || true")
-
-
-class DropCreateDefaultReplica(Action):
-    def execute(self, c: Composition) -> None:
-        c.sql(
-            """
-           DROP CLUSTER REPLICA default.default_replica;
-           CREATE CLUSTER REPLICA default.default_replica SIZE '1';
-        """
-        )
 
 
 class Initialize(Action):
     def __init__(self, checks: List[Type["Check"]]) -> None:
         self.checks = [check_class() for check_class in checks]
 
-    def execute(self, c: Composition) -> None:
+    def execute(self, e: Executor) -> None:
         for check in self.checks:
             print(f"Running initialize() from {check}")
-            check.run_initialize(c)
+            check.run_initialize(e)
 
 
 class Manipulate(Action):
@@ -160,26 +70,18 @@ class Manipulate(Action):
         self.checks = [check_class() for check_class in checks]
         assert len(self.checks) >= self.phase
 
-    def execute(self, c: Composition) -> None:
+    def execute(self, e: Executor) -> None:
         assert self.phase is not None
         for check in self.checks:
             print(f"Running manipulate() from {check}")
-            check.run_manipulate(c, self.phase)
+            check.run_manipulate(e, self.phase)
 
 
 class Validate(Action):
     def __init__(self, checks: List[Type["Check"]]) -> None:
         self.checks = [check_class() for check_class in checks]
 
-    def execute(self, c: Composition) -> None:
+    def execute(self, e: Executor) -> None:
         for check in self.checks:
             print(f"Running validate() from {check}")
-            check.run_validate(c)
-
-
-class Testdrive(Action):
-    def __init__(self, td_str: str) -> None:
-        self.td_str = td_str
-
-    def execute(self, c: Composition) -> None:
-        c.testdrive(input=self.td_str)
+            check.run_validate(e)

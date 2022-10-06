@@ -18,7 +18,7 @@
 from typing import List
 
 from materialize.checks.actions import Testdrive
-from materialize.mzcompose import Composition
+from materialize.checks.executors import Executor
 
 
 class Check:
@@ -36,14 +36,14 @@ class Check:
     def validate(self) -> Testdrive:
         assert False
 
-    def run_initialize(self, c: Composition) -> None:
-        self._initialize.execute(c)
+    def run_initialize(self, e: Executor) -> None:
+        self._initialize.execute(e)
 
-    def run_manipulate(self, c: Composition, phase: int) -> None:
-        self._manipulate[phase].execute(c)
+    def run_manipulate(self, e: Executor, phase: int) -> None:
+        self._manipulate[phase].execute(e)
 
-    def run_validate(self, c: Composition) -> None:
-        self._validate.execute(c)
+    def run_validate(self, e: Executor) -> None:
+        self._validate.execute(e)
 
 
 class CheckDisabled(Check):

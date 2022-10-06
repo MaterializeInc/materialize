@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import urllib.parse
+from typing import Optional
 
 from kubernetes.client import (
     V1Container,
@@ -50,7 +51,12 @@ class EnvironmentdService(K8sService):
 
 
 class EnvironmentdStatefulSet(K8sStatefulSet):
-    def __init__(self, release_mode: bool) -> None:
+    def __init__(self, tag: Optional[str] = None, release_mode: bool = True) -> None:
+        self.tag = tag
+        self.release_mode = release_mode
+        super().__init__()
+
+    def generate_stateful_set(self) -> V1StatefulSet:
         metadata = V1ObjectMeta(name="environmentd", labels={"app": "environmentd"})
         label_selector = V1LabelSelector(match_labels={"app": "environmentd"})
 
@@ -75,16 +81,20 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
 
         container = V1Container(
             name="environmentd",
-            image=self.image("environmentd", release_mode),
+            image=self.image(
+                "environmentd", tag=self.tag, release_mode=self.release_mode
+            ),
             args=[
-                "--storaged-image=" + self.image("storaged", release_mode),
-                "--computed-image=" + self.image("computed", release_mode),
+                "--storaged-image="
+                + self.image("storaged", tag=self.tag, release_mode=self.release_mode),
+                "--computed-image="
+                + self.image("computed", tag=self.tag, release_mode=self.release_mode),
                 "--availability-zone=kind-worker",
                 "--availability-zone=kind-worker2",
                 "--availability-zone=kind-worker3",
                 f"--persist-blob-url=s3://minio:minio123@persist/persist?endpoint={s3_endpoint}&region=minio",
                 "--orchestrator=kubernetes",
-                "--orchestrator-kubernetes-image-pull-policy=never",
+                "--orchestrator-kubernetes-image-pull-policy=always",
                 "--persist-consensus-url=postgres://postgres@postgres.default?options=--search_path=consensus",
                 "--adapter-stash-url=postgres://postgres@postgres.default?options=--search_path=catalog",
                 "--storage-stash-url=postgres://postgres@postgres.default?options=--search_path=storage",
@@ -108,7 +118,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             )
         ]
 
-        self.stateful_set = V1StatefulSet(
+        return V1StatefulSet(
             api_version="apps/v1",
             kind="StatefulSet",
             metadata=metadata,

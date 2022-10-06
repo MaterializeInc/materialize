@@ -72,7 +72,7 @@ class PostgresService(K8sService):
 
 
 class PostgresStatefulSet(K8sStatefulSet):
-    def __init__(self) -> None:
+    def generate_stateful_set(self) -> V1StatefulSet:
         metadata = V1ObjectMeta(name="postgres", labels={"app": "postgres"})
         label_selector = V1LabelSelector(match_labels={"app": "postgres"})
         env = [V1EnvVar(name="POSTGRES_HOST_AUTH_METHOD", value="trust")]
@@ -110,7 +110,7 @@ class PostgresStatefulSet(K8sStatefulSet):
             )
         ]
 
-        self.stateful_set = V1StatefulSet(
+        return V1StatefulSet(
             api_version="apps/v1",
             kind="StatefulSet",
             metadata=metadata,
