@@ -514,6 +514,12 @@ impl CatalogState {
                     });
                 }
             }
+            let size = match &sink.host_config {
+                mz_storage::types::hosts::StorageHostConfig::Remote { .. } => Datum::Null,
+                mz_storage::types::hosts::StorageHostConfig::Managed { size, .. } => {
+                    Datum::String(size)
+                }
+            };
             updates.push(BuiltinTableUpdate {
                 id: self.resolve_builtin_table(&MZ_SINKS),
                 row: Row::pack_slice(&[
@@ -523,6 +529,7 @@ impl CatalogState {
                     Datum::String(name),
                     Datum::String(connection.name()),
                     Datum::from(sink.connection_id.map(|id| id.to_string()).as_deref()),
+                    size,
                 ]),
                 diff,
             });
