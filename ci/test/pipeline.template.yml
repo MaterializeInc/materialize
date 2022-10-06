@@ -539,7 +539,7 @@ steps:
     inputs: [test/cloudtest]
     plugins:
       - ./ci/plugins/cloudtest:
-          args: [test/cloudtest/]
+          args: [-m, "not long", test/cloudtest/]
 
   - id: lang-csharp
     label: ":csharp: tests"
