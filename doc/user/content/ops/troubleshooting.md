@@ -150,14 +150,14 @@ ORDER BY mrcod.duration_ns DESC;
 
 ```sql
 -- Extract raw scheduling histogram information, summed across workers.
-select mdo.id, mdo.name, mrcod.duration_ns, sum(mrcod.count) count
-from mz_internal.mz_raw_compute_operator_durations as mrcod,
-     mz_internal.mz_dataflow_operators as mdo
-where
-    mrcod.id = mdo.id and
+SELECT mdo.id, mdo.name, mrcod.duration_ns, sum(mrcod.count) count
+FROM mz_internal.mz_raw_compute_operator_durations AS mrcod,
+     mz_internal.mz_dataflow_operators AS mdo
+WHERE
+    mrcod.id = mdo.id AND
     mrcod.worker_id = mdo.worker_id
-group by mdo.id, mdo.name, mrcod.duration_ns
-order by mrcod.duration_ns desc;
+GROUP BY mdo.id, mdo.name, mrcod.duration_ns
+ORDER BY mrcod.duration_ns DESC;
 ```
 
 ### Why is Materialize using so much memory?
