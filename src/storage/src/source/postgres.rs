@@ -71,7 +71,10 @@ impl ErrorExt for tokio_postgres::Error {
         match self.source() {
             Some(err) => match err.downcast_ref::<DbError>() {
                 Some(db_err) => {
-                    let class = &db_err.code().code()[0..2];
+                    let class = match db_err.code().code().get(0..2) {
+                        None => return false,
+                        Some(class) => class,
+                    };
                     match class {
                         // See https://www.postgresql.org/docs/current/errcodes-appendix.html
                         // for the class definitions.
