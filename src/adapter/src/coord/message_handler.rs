@@ -295,12 +295,11 @@ impl<S: Append + 'static> Coordinator<S> {
         tx.send(result, session);
     }
 
-    #[tracing::instrument(level = "debug", skip(self, tx, session))]
+    #[tracing::instrument(level = "debug", skip(self, session_and_tx))]
     async fn message_sink_connection_ready(
         &mut self,
         SinkConnectionReady {
-            session,
-            tx,
+            session_and_tx,
             id,
             oid,
             create_export_token,
@@ -323,7 +322,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         oid,
                         connection,
                         create_export_token,
-                        Some(&session),
+                        session_and_tx.as_ref().map(|(ref session, _tx)| session),
                     )
                     .await
                     // XXX(chae): I really don't like this -- especially as we're now doing cross
@@ -336,14 +335,18 @@ impl<S: Append + 'static> Coordinator<S> {
                     // perspective we did, as there is state (e.g. a
                     // Kafka topic) they need to clean up.
                 }
-                tx.send(Ok(ExecuteResponse::CreatedSink { existed: false }), session);
+                if let Some((session, tx)) = session_and_tx {
+                    tx.send(Ok(ExecuteResponse::CreatedSink { existed: false }), session);
+                }
             }
             Err(e) => {
                 // Drop the placeholder sink if still present.
                 if self.catalog.try_get_entry(&id).is_some() {
-                    self.catalog_transact(Some(&session), vec![catalog::Op::DropItem(id)], |_| {
-                        Ok(())
-                    })
+                    self.catalog_transact(
+                        session_and_tx.as_ref().map(|(ref session, _tx)| session),
+                        vec![catalog::Op::DropItem(id)],
+                        |_| Ok(()),
+                    )
                     .await
                     .expect("deleting placeholder sink cannot fail");
                 } else {
@@ -357,7 +360,9 @@ impl<S: Append + 'static> Coordinator<S> {
                     .storage
                     .cancel_prepare_export(create_export_token)
                     .await;
-                tx.send(Err(e), session);
+                if let Some((session, tx)) = session_and_tx {
+                    tx.send(Err(e), session);
+                }
             }
         }
     }

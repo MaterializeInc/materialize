@@ -15,7 +15,6 @@ use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, Top
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::collections::CollectionExt;
 
-use crate::controller::StorageError;
 use crate::types::connections::{ConnectionContext, PopulateClientConfig};
 use crate::types::sinks::{
     KafkaConsistencyConfig, KafkaSinkConnection, KafkaSinkConnectionBuilder,
@@ -24,10 +23,12 @@ use crate::types::sinks::{
 };
 
 /// Build a sink connection.
+// N.B.: We don't want to use a `StorageError` here because some of those variants should not be
+// infinitely retried -- and we don't one to unintentionally be introduced in this function.
 pub async fn build_sink_connection(
     builder: StorageSinkConnectionBuilder,
     connection_context: ConnectionContext,
-) -> Result<StorageSinkConnection, StorageError> {
+) -> Result<StorageSinkConnection, anyhow::Error> {
     match builder {
         StorageSinkConnectionBuilder::Kafka(k) => build_kafka(k, connection_context).await,
     }
@@ -188,7 +189,7 @@ async fn publish_kafka_schemas(
 async fn build_kafka(
     builder: KafkaSinkConnectionBuilder,
     connection_context: ConnectionContext,
-) -> Result<StorageSinkConnection, StorageError> {
+) -> Result<StorageSinkConnection, anyhow::Error> {
     // Create Kafka topic
     let mut config = create_new_client_config(connection_context.librdkafka_log_level);
     builder
