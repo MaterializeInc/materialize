@@ -136,7 +136,6 @@ pub enum DataEncodingInner {
     Protobuf(ProtobufEncoding),
     Csv(CsvEncoding),
     Regex(RegexEncoding),
-    Postgres,
     Bytes,
     Text,
     RowCodec(RelationDesc),
@@ -151,7 +150,6 @@ impl RustType<ProtoDataEncodingInner> for DataEncodingInner {
                 DataEncodingInner::Protobuf(e) => Kind::Protobuf(e.into_proto()),
                 DataEncodingInner::Csv(e) => Kind::Csv(e.into_proto()),
                 DataEncodingInner::Regex(e) => Kind::Regex(e.into_proto()),
-                DataEncodingInner::Postgres => Kind::Postgres(()),
                 DataEncodingInner::Bytes => Kind::Bytes(()),
                 DataEncodingInner::Text => Kind::Text(()),
                 DataEncodingInner::RowCodec(e) => Kind::RowCodec(e.into_proto()),
@@ -169,7 +167,6 @@ impl RustType<ProtoDataEncodingInner> for DataEncodingInner {
             Kind::Protobuf(e) => DataEncodingInner::Protobuf(e.into_rust()?),
             Kind::Csv(e) => DataEncodingInner::Csv(e.into_rust()?),
             Kind::Regex(e) => DataEncodingInner::Regex(e.into_rust()?),
-            Kind::Postgres(()) => DataEncodingInner::Postgres,
             Kind::Bytes(()) => DataEncodingInner::Bytes,
             Kind::Text(()) => DataEncodingInner::Text,
             Kind::RowCodec(e) => DataEncodingInner::RowCodec(e.into_rust()?),
@@ -273,7 +270,6 @@ impl DataEncoding {
             DataEncodingInner::Text => {
                 RelationDesc::empty().with_column("text", ScalarType::String.nullable(false))
             }
-            DataEncodingInner::Postgres => RelationDesc::empty(),
             DataEncodingInner::RowCodec(desc) => desc.clone(),
         };
 
@@ -295,7 +291,6 @@ impl DataEncoding {
             DataEncodingInner::Regex { .. } => "Regex",
             DataEncodingInner::Csv(_) => "Csv",
             DataEncodingInner::Text => "Text",
-            DataEncodingInner::Postgres => "Postgres",
             DataEncodingInner::RowCodec(_) => "RowCodec",
         }
     }

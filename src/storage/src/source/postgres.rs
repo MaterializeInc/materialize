@@ -29,7 +29,7 @@ use tracing::{error, info, warn};
 use mz_expr::{MirScalarExpr, PartitionId};
 use mz_ore::task;
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_repr::{Datum, Diff, GlobalId, Row};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 
 use self::metrics::PgSourceMetrics;
 use super::metrics::SourceBaseMetrics;
@@ -168,6 +168,17 @@ pub struct PgOffsetCommitter {
     tx: Sender<HashMap<PartitionId, MzOffset>>,
 }
 
+/// Information about an ingested upstream table
+struct SourceTable {
+    /// The source output index of this table
+    output_index: usize,
+    /// The relational description of this table
+    desc: PostgresTableDesc,
+    /// The scalar expressions required to cast the text encoded columns received from postgres
+    /// into the target relational types
+    casts: Vec<MirScalarExpr>,
+}
+
 /// An internal struct held by the spawned tokio task
 struct PostgresTaskInfo {
     source_id: GlobalId,
@@ -177,8 +188,8 @@ struct PostgresTaskInfo {
     /// Our cursor into the WAL
     lsn: PgLsn,
     metrics: PgSourceMetrics,
-    /// A map of the table oid to its corresponding output, its description, and cast expression
-    source_tables: HashMap<u32, (usize, PostgresTableDesc, Vec<MirScalarExpr>)>,
+    /// A map of the table oid to its information
+    source_tables: HashMap<u32, SourceTable>,
     row_sender: RowSender,
     sender: Sender<InternalMessage>,
     /// Channel to receive lsn's from the PgOffsetCommitter
@@ -240,12 +251,17 @@ impl SourceReader for PostgresSourceReader {
         if active_read_worker {
             let mut source_tables = HashMap::new();
             let tables_iter = connection.details.tables.iter();
-            for (i, (table, table_cast)) in tables_iter.zip(connection.table_casts).enumerate() {
-                source_tables.insert(table.oid, (i + 1, table.clone(), table_cast));
+            for (i, (desc, casts)) in tables_iter.zip(connection.table_casts).enumerate() {
+                let source_table = SourceTable {
+                    output_index: i + 1,
+                    desc: desc.clone(),
+                    casts,
+                };
+                source_tables.insert(desc.oid, source_table);
             }
 
             let task_info = PostgresTaskInfo {
-                source_id: source_id.clone(),
+                source_id,
                 connection_config,
                 publication: connection.publication,
                 slot: connection.details.slot,
@@ -541,22 +557,25 @@ impl PostgresTaskInfo {
     fn validate_tables(&self, tables: Vec<PostgresTableDesc>) -> Result<(), anyhow::Error> {
         let pub_tables: HashMap<u32, PostgresTableDesc> =
             tables.into_iter().map(|t| (t.oid, t)).collect();
-        for (id, (_, schema, _)) in self.source_tables.iter() {
+        for (id, info) in self.source_tables.iter() {
             match pub_tables.get(id) {
                 Some(pub_schema) => {
-                    if pub_schema != schema {
+                    if pub_schema != &info.desc {
                         error!(
                             "Error validating table in publication. Expected: {:?} Actual: {:?}",
-                            schema, pub_schema
+                            &info.desc, pub_schema
                         );
-                        bail!("Schema for table {} differs, recreate Materialize source to use new schema", schema.name)
+                        bail!("Schema for table {} differs, recreate Materialize source to use new schema", info.desc.name)
                     }
                 }
                 None => {
-                    error!("publication missing table: {} with id {}", schema.name, id);
+                    error!(
+                        "publication missing table: {} with id {}",
+                        info.desc.name, id
+                    );
                     bail!(
                         "Publication missing expected table {} with oid {}",
-                        schema.name,
+                        info.desc.name,
                         id
                     )
                 }
@@ -619,12 +638,16 @@ impl PostgresTaskInfo {
         self.lsn = try_fatal!(consistent_point
             .parse()
             .or_else(|_| Err(anyhow!("invalid lsn"))));
-        for (output, info, table_cast) in self.source_tables.values() {
+
+        // Scratch space to use while evaluating casts
+        let mut datum_vec = DatumVec::new();
+
+        for info in self.source_tables.values() {
             let reader = client
                 .copy_out_simple(
                     format!(
                         "COPY {:?}.{:?} TO STDOUT (FORMAT TEXT, DELIMITER '\t')",
-                        info.namespace, info.name
+                        info.desc.namespace, info.desc.name
                     )
                     .as_str(),
                 )
@@ -643,7 +666,7 @@ impl PostgresTaskInfo {
                 // and list of string-encoded values, e.g. Row{ 16391 , ["1", "2"] }
                 let parser = mz_pgcopy::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
 
-                let mut raw_values = parser.iter_raw(info.columns.len() as i32);
+                let mut raw_values = parser.iter_raw(info.desc.columns.len() as i32);
                 while let Some(raw_value) = raw_values.next() {
                     match try_fatal!(raw_value) {
                         Some(value) => {
@@ -653,11 +676,14 @@ impl PostgresTaskInfo {
                     }
                 }
 
-                let datums: Vec<_> = text_row.iter().collect();
+                let mut datums = datum_vec.borrow();
+                datums.extend(text_row.iter());
 
-                let row = try_fatal!(PostgresTaskInfo::cast_row(table_cast, &datums));
+                let row = try_fatal!(PostgresTaskInfo::cast_row(&info.casts, &datums));
 
-                self.row_sender.insert(*output, row, self.lsn).await;
+                self.row_sender
+                    .insert(info.output_index, row, self.lsn)
+                    .await;
                 // Failure scenario after we have produced at least one row, but before a
                 // successful `COMMIT`
                 fail::fail_point!("pg_snapshot_failure", |_| {
@@ -679,11 +705,14 @@ impl PostgresTaskInfo {
     }
 
     /// Packs a Tuple received in the replication stream into a Row packer.
-    fn datums_from_tuple<'a, T>(rel_id: u32, tuple_data: T) -> Result<Vec<Datum<'a>>, anyhow::Error>
+    fn datums_from_tuple<'a, T>(
+        rel_id: u32,
+        tuple_data: T,
+        datums: &mut Vec<Datum<'a>>,
+    ) -> Result<(), anyhow::Error>
     where
         T: IntoIterator<Item = &'a TupleData>,
     {
-        let mut datums = vec![];
         for val in tuple_data.into_iter() {
             let datum = match val {
                 TupleData::Null => Datum::Null,
@@ -696,7 +725,7 @@ impl PostgresTaskInfo {
             };
             datums.push(datum);
         }
-        Ok(datums)
+        Ok(())
     }
 
     /// Casts a text row into the target types
@@ -796,6 +825,9 @@ impl PostgresTaskInfo {
 
         let mut last_feedback = Instant::now();
 
+        // Scratch space to use while evaluating casts
+        let mut datum_vec = DatumVec::new();
+
         loop {
             let data_next = stream.next();
             tokio::pin!(data_next);
@@ -850,18 +882,22 @@ impl PostgresTaskInfo {
                         last_data_message = Instant::now();
                         self.metrics.inserts.inc();
                         let rel_id = insert.rel_id();
-                        let &(output, _, ref table_cast) = self.source_tables.get(&rel_id).unwrap();
+                        let info = self.source_tables.get(&rel_id).unwrap();
                         let new_tuple = insert.tuple().tuple_data();
-                        let datums =
-                            try_fatal!(PostgresTaskInfo::datums_from_tuple(rel_id, new_tuple));
-                        let row = try_fatal!(PostgresTaskInfo::cast_row(table_cast, &datums));
-                        inserts.push((output, row));
+                        let mut datums = datum_vec.borrow();
+                        try_fatal!(PostgresTaskInfo::datums_from_tuple(
+                            rel_id,
+                            new_tuple,
+                            &mut *datums
+                        ));
+                        let row = try_fatal!(PostgresTaskInfo::cast_row(&info.casts, &datums));
+                        inserts.push((info.output_index, row));
                     }
                     Update(update) if self.source_tables.contains_key(&update.rel_id()) => {
                         last_data_message = Instant::now();
                         self.metrics.updates.inc();
                         let rel_id = update.rel_id();
-                        let &(output, _, ref table_cast) = self.source_tables.get(&rel_id).unwrap();
+                        let info = self.source_tables.get(&rel_id).unwrap();
                         let err = || {
                             anyhow!(
                                 "Old row missing from replication stream for table with OID = {}.
@@ -870,11 +906,16 @@ impl PostgresTaskInfo {
                             )
                         };
                         let old_tuple = try_fatal!(update.old_tuple().ok_or_else(err)).tuple_data();
-                        let old_datums =
-                            try_fatal!(PostgresTaskInfo::datums_from_tuple(rel_id, old_tuple));
+                        let mut old_datums = datum_vec.borrow();
+                        try_fatal!(PostgresTaskInfo::datums_from_tuple(
+                            rel_id,
+                            old_tuple,
+                            &mut *old_datums
+                        ));
                         let old_row =
-                            try_fatal!(PostgresTaskInfo::cast_row(table_cast, &old_datums));
-                        deletes.push((output, old_row));
+                            try_fatal!(PostgresTaskInfo::cast_row(&info.casts, &old_datums));
+                        deletes.push((info.output_index, old_row));
+                        drop(old_datums);
 
                         // If the new tuple contains unchanged toast values, reuse the ones
                         // from the old tuple
@@ -887,17 +928,21 @@ impl PostgresTaskInfo {
                                 TupleData::UnchangedToast => old,
                                 _ => new,
                             });
-                        let new_datums =
-                            try_fatal!(PostgresTaskInfo::datums_from_tuple(rel_id, new_tuple));
+                        let mut new_datums = datum_vec.borrow();
+                        try_fatal!(PostgresTaskInfo::datums_from_tuple(
+                            rel_id,
+                            new_tuple,
+                            &mut *new_datums
+                        ));
                         let new_row =
-                            try_fatal!(PostgresTaskInfo::cast_row(table_cast, &new_datums));
-                        inserts.push((output, new_row));
+                            try_fatal!(PostgresTaskInfo::cast_row(&info.casts, &new_datums));
+                        inserts.push((info.output_index, new_row));
                     }
                     Delete(delete) if self.source_tables.contains_key(&delete.rel_id()) => {
                         last_data_message = Instant::now();
                         self.metrics.deletes.inc();
                         let rel_id = delete.rel_id();
-                        let &(output, _, ref table_cast) = self.source_tables.get(&rel_id).unwrap();
+                        let info = self.source_tables.get(&rel_id).unwrap();
                         let err = || {
                             anyhow!(
                                 "Old row missing from replication stream for table with OID = {}.
@@ -906,10 +951,14 @@ impl PostgresTaskInfo {
                             )
                         };
                         let old_tuple = try_fatal!(delete.old_tuple().ok_or_else(err)).tuple_data();
-                        let datums =
-                            try_fatal!(PostgresTaskInfo::datums_from_tuple(rel_id, old_tuple));
-                        let row = try_fatal!(PostgresTaskInfo::cast_row(table_cast, &datums));
-                        deletes.push((output, row));
+                        let mut datums = datum_vec.borrow();
+                        try_fatal!(PostgresTaskInfo::datums_from_tuple(
+                            rel_id,
+                            old_tuple,
+                            &mut *datums
+                        ));
+                        let row = try_fatal!(PostgresTaskInfo::cast_row(&info.casts, &datums));
+                        deletes.push((info.output_index, row));
                     }
                     Commit(commit) => {
                         last_data_message = Instant::now();
@@ -929,41 +978,41 @@ impl PostgresTaskInfo {
                     Relation(relation) => {
                         last_data_message = Instant::now();
                         let rel_id = relation.rel_id();
-                        if let Some((_, source_table, _)) = self.source_tables.get(&rel_id) {
+                        if let Some(info) = self.source_tables.get(&rel_id) {
                             // Start with the cheapest check first, this will catch the majority of alters
-                            if source_table.columns.len() != relation.columns().len() {
+                            if info.desc.columns.len() != relation.columns().len() {
                                 error!(
                                     "alter table detected on {} with id {}",
-                                    source_table.name, source_table.oid
+                                    info.desc.name, info.desc.oid
                                 );
                                 return Err(Fatal(anyhow!(
                                     "source table {} with oid {} has been altered",
-                                    source_table.name,
-                                    source_table.oid
+                                    info.desc.name,
+                                    info.desc.oid
                                 )));
                             }
-                            let same_name = source_table.name == relation.name().unwrap();
+                            let same_name = info.desc.name == relation.name().unwrap();
                             let same_namespace =
-                                source_table.namespace == relation.namespace().unwrap();
+                                info.desc.namespace == relation.namespace().unwrap();
                             if !same_name || !same_namespace {
                                 error!(
                                     "table name changed on {}.{} with id {} to {}.{}",
-                                    source_table.namespace,
-                                    source_table.name,
-                                    source_table.oid,
+                                    info.desc.namespace,
+                                    info.desc.name,
+                                    info.desc.oid,
                                     relation.namespace().unwrap(),
                                     relation.name().unwrap()
                                 );
                                 return Err(Fatal(anyhow!(
                                     "source table {} with oid {} has been altered",
-                                    source_table.name,
-                                    source_table.oid
+                                    info.desc.name,
+                                    info.desc.oid
                                 )));
                             }
                             // Relation messages do not include nullability/primary_key data so we
                             // check the name, type_oid, and type_mod explicitly and error if any
                             // of them differ
-                            for (src, rel) in source_table.columns.iter().zip(relation.columns()) {
+                            for (src, rel) in info.desc.columns.iter().zip(relation.columns()) {
                                 let same_name = src.name == rel.name().unwrap();
                                 let rel_typoid = u32::try_from(rel.type_id()).unwrap();
                                 let same_typoid = src.type_oid == rel_typoid;
@@ -972,15 +1021,15 @@ impl PostgresTaskInfo {
                                 if !same_name || !same_typoid || !same_typmod {
                                     error!(
                                         "alter table error: name {}, oid {}, old_schema {:?}, new_schema {:?}",
-                                        source_table.name,
-                                        source_table.oid,
-                                        source_table.columns,
+                                        info.desc.name,
+                                        info.desc.oid,
+                                        info.desc.columns,
                                         relation.columns()
                                     );
                                     return Err(Fatal(anyhow!(
                                         "source table {} with oid {} has been altered",
-                                        source_table.name,
-                                        source_table.oid
+                                        info.desc.name,
+                                        info.desc.oid
                                     )));
                                 }
                             }
@@ -996,7 +1045,7 @@ impl PostgresTaskInfo {
                             .iter()
                             // Filter here makes option handling in map "safe"
                             .filter_map(|id| self.source_tables.get(id))
-                            .map(|(_, table, _)| format!("name: {} id: {}", table.name, table.oid))
+                            .map(|info| format!("name: {} id: {}", info.desc.name, info.desc.oid))
                             .collect::<Vec<String>>();
                         return Err(Fatal(anyhow!(
                             "source table(s) {} got truncated",

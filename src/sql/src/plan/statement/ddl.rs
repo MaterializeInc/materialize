@@ -601,7 +601,7 @@ pub fn plan_create_source(
 
             for (i, table) in details.tables.iter().enumerate() {
                 let name = FullObjectName {
-                    database: RawDatabaseSpecifier::Ambient,
+                    database: RawDatabaseSpecifier::Name(connection.database.clone()),
                     schema: table.namespace.clone(),
                     item: table.name.clone(),
                 };
@@ -640,7 +640,7 @@ pub fn plan_create_source(
                         keys: vec![],
                     },
                     allow_aggregates: false,
-                    allow_subqueries: true,
+                    allow_subqueries: false,
                     allow_windows: false,
                 };
 
@@ -682,8 +682,9 @@ pub fn plan_create_source(
                     .map_err(|e| sql_err!("{}", e))?,
             });
 
-            let encoding =
-                SourceDataEncoding::Single(DataEncoding::new(DataEncodingInner::Postgres));
+            let encoding = SourceDataEncoding::Single(DataEncoding::new(
+                DataEncodingInner::RowCodec(RelationDesc::empty()),
+            ));
             (
                 connection,
                 Some(item.id()),
@@ -1320,7 +1321,7 @@ fn get_unnamed_key_envelope(key: &DataEncoding) -> Result<KeyEnvelope, PlanError
     //
     // Otherwise it gets the names of the columns in the type
     let is_composite = match key.inner {
-        DataEncodingInner::Postgres | DataEncodingInner::RowCodec(_) => {
+        DataEncodingInner::RowCodec(_) => {
             sql_bail!("{} sources cannot use INCLUDE KEY", key.op_name())
         }
         DataEncodingInner::Bytes | DataEncodingInner::Text => false,

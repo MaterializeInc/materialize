@@ -224,74 +224,87 @@ pub async fn purify_create_source(
             match requested_subsources {
                 Some(CreateSourceSubsources::All) => {
                     for table in &tables {
-                        let name =
-                            UnresolvedObjectName::qualified(&[&table.namespace, &table.name]);
-                        validated_requested_subsources.push((name.clone(), name, table));
+                        let upstream_name = UnresolvedObjectName::qualified(&[
+                            &connection.database,
+                            &table.namespace,
+                            &table.name,
+                        ]);
+                        let subsource_name = UnresolvedObjectName::unqualified(&table.name);
+                        validated_requested_subsources.push((upstream_name, subsource_name, table));
                     }
                 }
                 Some(CreateSourceSubsources::Subset(subsources)) => {
                     // The user manually selected a subset of upstream tables so we need to
                     // validate that the names actually exist and are not ambiguous
 
-                    // An index from table_name -> schema_name -> PostgresTableDesc
+                    // An index from table name -> schema name -> database name -> PostgresTableDesc
                     let mut tables_by_name = HashMap::new();
                     for table in &tables {
                         tables_by_name
                             .entry(table.name.clone())
                             .or_insert_with(HashMap::new)
                             .entry(table.namespace.clone())
+                            .or_insert_with(HashMap::new)
+                            .entry(connection.database.clone())
                             .or_insert(table);
                     }
 
                     for subsource in subsources {
                         let (upstream_name, subsource_name) = match subsource.clone() {
-                            CreateSourceSubsource::Bare(name) => (name.clone(), name),
-                            CreateSourceSubsource::Aliased(name, alias) => (name, alias),
+                            CreateSourceSubsource::Bare(name) => {
+                                let upstream_name = normalize::unresolved_object_name(name)?;
+                                let subsource_name =
+                                    UnresolvedObjectName::unqualified(&upstream_name.item);
+                                (upstream_name, subsource_name)
+                            }
+                            CreateSourceSubsource::Aliased(name, alias) => {
+                                (normalize::unresolved_object_name(name)?, alias)
+                            }
                             CreateSourceSubsource::Resolved(_, _) => {
                                 bail!("Cannot alias subsource using `INTO`, use `AS` instead")
                             }
                         };
 
-                        let partial_upstream_name =
-                            normalize::unresolved_object_name(upstream_name.clone())?;
-                        let schemas =
-                            tables_by_name
-                                .get(&partial_upstream_name.item)
-                                .ok_or_else(|| {
-                                    sql_err!(
-                                        "table {} not found in upstream database",
-                                        partial_upstream_name
-                                    )
-                                })?;
+                        let schemas = match tables_by_name.get(&upstream_name.item) {
+                            Some(schemas) => schemas,
+                            None => bail!("table {upstream_name} not found in source"),
+                        };
 
-                        let (schema, table) = match &partial_upstream_name.schema {
-                            Some(schema) => match schemas.get(schema) {
-                                Some(table) => (schema, table),
-                                None => {
-                                    return Err(sql_err!(
-                                        "schema {} does not exist in upstream database",
-                                        schema
-                                    )
-                                    .into())
-                                }
-                            },
-                            None => match schemas.iter().exactly_one() {
-                                Ok((schema, table)) => (schema, table),
-                                Err(_) => {
-                                    return Err(sql_err!(
-                                        "table {} is ambiguous, consider specifying the schema",
-                                        upstream_name
-                                    )
-                                    .into())
-                                }
+                        let schema = match &upstream_name.schema {
+                            Some(schema) => schema,
+                            None => match schemas.keys().exactly_one() {
+                                Ok(schema) => schema,
+                                Err(_) => bail!("table {upstream_name} is ambiguous, consider specifying the schema"),
                             },
                         };
-                        let qualified_upstream_name =
-                            UnresolvedObjectName::qualified(&[schema, &partial_upstream_name.item]);
+
+                        let databases = match schemas.get(schema) {
+                            Some(databases) => databases,
+                            None => bail!("schema {schema} not found in source"),
+                        };
+
+                        let database = match &upstream_name.database {
+                            Some(database) => database,
+                            None => match databases.keys().exactly_one() {
+                                Ok(database) => database,
+                                Err(_) => bail!("table {upstream_name} is ambiguous, consider specifying the database"),
+                            },
+                        };
+
+                        let table_desc = match databases.get(database) {
+                            Some(table_desc) => table_desc,
+                            None => bail!("database {database} not found source"),
+                        };
+
+                        let qualified_upstream_name = UnresolvedObjectName::qualified(&[
+                            database,
+                            schema,
+                            &upstream_name.item,
+                        ]);
                         validated_requested_subsources.push((
                             qualified_upstream_name,
                             subsource_name,
-                            table,
+                            table_desc,
                         ));
                     }
                 }
@@ -323,14 +336,15 @@ pub async fn purify_create_source(
                 let transient_id = GlobalId::Transient(u64::cast_from(i));
                 let partial_subsource_name =
                     normalize::unresolved_object_name(subsource_name.clone())?;
-                let qualified_name = scx.allocate_qualified_name(partial_subsource_name.clone())?;
-                let full_name = scx.allocate_full_name(partial_subsource_name)?;
+                let qualified_subsource_name =
+                    scx.allocate_qualified_name(partial_subsource_name.clone())?;
+                let full_subsource_name = scx.allocate_full_name(partial_subsource_name)?;
                 targeted_subsources.push(CreateSourceSubsource::Resolved(
                     upstream_name,
                     ResolvedObjectName::Object {
                         id: transient_id,
-                        qualifiers: qualified_name.qualifiers,
-                        full_name,
+                        qualifiers: qualified_subsource_name.qualifiers,
+                        full_name: full_subsource_name,
                         print_id: false,
                     },
                 ));

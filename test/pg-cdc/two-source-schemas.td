@@ -46,40 +46,32 @@ INSERT INTO schema2.t1 SELECT * FROM schema2.t1;
 ! CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR ALL TABLES;
-contains:unknown schema 'schema1'
+contains:item 't1' already exists
 
 ! CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (t1);
 contains:table t1 is ambiguous, consider specifying the schema
 
-> DROP SCHEMA IF EXISTS schema1;
-
-> CREATE SCHEMA schema1;
-
 > CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (schema1.t1);
 
-> SELECT * FROM schema1.t1;
+> SELECT * FROM t1;
 1
 1
 
 > DROP SOURCE mz_source;
 
-> DROP SCHEMA IF EXISTS schema2;
-
-> CREATE SCHEMA schema2;
-
 > CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR ALL TABLES;
+  FOR TABLES (schema1.t1 AS t1_1, schema2.t1 AS t1_2);
 
-> SELECT * FROM schema1.t1;
+> SELECT * FROM t1_1;
 1
 1
 
-> SELECT * FROM schema2.t1;
+> SELECT * FROM t1_2;
 2
 2
 
@@ -87,6 +79,4 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP SCHEMA schema1 CASCADE;
 DROP SCHEMA schema2 CASCADE;
 
-> DROP SCHEMA schema1 CASCADE;
-
-> DROP SCHEMA schema2 CASCADE;
+> DROP SOURCE mz_source;
