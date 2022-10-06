@@ -35,7 +35,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_stash::Append;
 
-use crate::catalog::{CatalogItem, CatalogState, MaterializedView, Source, View};
+use crate::catalog::{CatalogItem, CatalogState, DataSourceDesc, MaterializedView, Source, View};
 use crate::coord::ddl::CatalogTxn;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::{Coordinator, DEFAULT_LOGICAL_COMPACTION_WINDOW_MS};
@@ -416,9 +416,9 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
     fn monotonic_source(&self, source: &Source) -> bool {
         // TODO(petrosagg): store an inverse mapping of subsource -> source in the catalog so that
         // we can retrieve monotonicity information from the parent source.
-        match &source.ingestion {
-            Some(ingestion) => ingestion.desc.monotonic(),
-            None => false,
+        match &source.data_source {
+            DataSourceDesc::Ingest(ingest) => ingest.desc.monotonic(),
+            DataSourceDesc::Introspection(_) | DataSourceDesc::Source => false,
         }
     }
 

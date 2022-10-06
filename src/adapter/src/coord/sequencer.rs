@@ -63,8 +63,8 @@ use mz_storage::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage::types::sources::{IngestionDescription, SourceExport};
 
 use crate::catalog::{
-    self, Catalog, CatalogItem, ComputeInstance, Connection, SerializedComputeReplicaLocation,
-    StorageSinkConnectionState, SYSTEM_USER,
+    self, Catalog, CatalogItem, ComputeInstance, Connection, DataSourceDesc,
+    SerializedComputeReplicaLocation, StorageSinkConnectionState, SYSTEM_USER,
 };
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, DeferredPlan, PendingWriteTxn};
@@ -468,11 +468,14 @@ impl<S: Append + 'static> Coordinator<S> {
                 .resolve_storage_host_config(plan.host_config, allow_undefined_size)?;
             let source = catalog::Source {
                 create_sql: plan.source.create_sql,
-                ingestion: plan.source.ingestion.map(|ingestion| catalog::Ingestion {
-                    desc: ingestion.desc,
-                    source_imports: ingestion.source_imports,
-                    subsource_exports: ingestion.subsource_exports,
-                }),
+                data_source: match plan.source.ingestion {
+                    Some(ingestion) => DataSourceDesc::Ingest(catalog::Ingestion {
+                        desc: ingestion.desc,
+                        source_imports: ingestion.source_imports,
+                        subsource_exports: ingestion.subsource_exports,
+                    }),
+                    None => DataSourceDesc::Source,
+                },
                 desc: plan.source.desc,
                 timeline: plan.timeline,
                 depends_on,
@@ -503,34 +506,40 @@ impl<S: Append + 'static> Coordinator<S> {
                         None
                     };
 
-                    let data_source = source.ingestion.map(|ingestion| {
-                        let mut source_imports = BTreeMap::new();
-                        for source_import in ingestion.source_imports {
-                            source_imports.insert(source_import, ());
-                        }
+                    let data_source = match source.data_source {
+                        DataSourceDesc::Ingest(ingestion) => {
+                            let mut source_imports = BTreeMap::new();
+                            for source_import in ingestion.source_imports {
+                                source_imports.insert(source_import, ());
+                            }
 
-                        let mut source_exports = BTreeMap::new();
-                        // By convention the first output corresponds to the main source object
-                        let main_export = SourceExport {
-                            output_index: 0,
-                            storage_metadata: (),
-                        };
-                        source_exports.insert(source_id, main_export);
-                        for (subsource, output_index) in ingestion.subsource_exports {
-                            let export = SourceExport {
-                                output_index,
+                            let mut source_exports = BTreeMap::new();
+                            // By convention the first output corresponds to the main source object
+                            let main_export = SourceExport {
+                                output_index: 0,
                                 storage_metadata: (),
                             };
-                            source_exports.insert(subsource, export);
-                        }
+                            source_exports.insert(source_id, main_export);
+                            for (subsource, output_index) in ingestion.subsource_exports {
+                                let export = SourceExport {
+                                    output_index,
+                                    storage_metadata: (),
+                                };
+                                source_exports.insert(subsource, export);
+                            }
 
-                        DataSource::Ingestion(IngestionDescription {
-                            desc: ingestion.desc,
-                            ingestion_metadata: (),
-                            source_imports,
-                            source_exports,
-                        })
-                    });
+                            DataSource::Ingestion(IngestionDescription {
+                                desc: ingestion.desc,
+                                ingestion_metadata: (),
+                                source_imports,
+                                source_exports,
+                            })
+                        }
+                        DataSourceDesc::Source => DataSource::Source,
+                        DataSourceDesc::Introspection(_) => {
+                            unreachable!("cannot create sources with introspection data sources")
+                        }
+                    };
 
                     self.controller
                         .storage
@@ -1484,7 +1493,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         id,
                         CollectionDescription {
                             desc,
-                            data_source: None,
+                            data_source: DataSource::Dataflow,
                             since: Some(as_of),
                             status_collection_id: None,
                             host_config: None,

@@ -41,6 +41,8 @@ use crate::catalog::{
 };
 use crate::coord::ReplicaMetadata;
 
+use super::DataSourceDesc;
+
 /// An update to a built-in table.
 #[derive(Debug)]
 pub struct BuiltinTableUpdate {
@@ -200,14 +202,14 @@ impl CatalogState {
             CatalogItem::Index(index) => self.pack_index_update(id, oid, name, index, diff),
             CatalogItem::Table(_) => self.pack_table_update(id, oid, schema_id, name, diff),
             CatalogItem::Source(source) => {
-                let source_type = match &source.ingestion {
-                    Some(ingestion) => ingestion.desc.name(),
-                    None => "subsource",
+                let (source_type, connection_id) = match &source.data_source {
+                    DataSourceDesc::Ingest(ingest) => {
+                        (ingest.desc.name(), ingest.desc.connection.connection_id())
+                    }
+                    DataSourceDesc::Source => ("subsource", None),
+                    DataSourceDesc::Introspection(_) => ("source", None),
                 };
-                let connection_id = source
-                    .ingestion
-                    .as_ref()
-                    .and_then(|ingestion| ingestion.desc.connection.connection_id());
+
                 self.pack_source_update(
                     id,
                     oid,
