@@ -256,3 +256,11 @@ snk_unsigned
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
   WITH (SIZE = '2', SNAPSHOT = false)
+
+# Check that the size is properly filled in the `mz_sinks` table
+> SELECT size FROM mz_sinks WHERE name = 'sink_with_size'
+2
+
+# Including for sinks with default size
+> SELECT size FROM mz_sinks WHERE name = 'snk13'
+1

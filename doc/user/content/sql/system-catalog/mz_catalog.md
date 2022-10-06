@@ -234,6 +234,7 @@ Field            | Type        | Meaning
 `name`           | [`text`]    | The name of the sink.
 `type`           | [`text`]    | The type of the sink: `kafka`.
 `connection_id`  | [`text`]    | The ID of the connection associated with the sink, if any.
+`size`           | [`text`]    | The size of the sink.
 
 ### `mz_sources`
 
