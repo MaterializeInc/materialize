@@ -92,7 +92,7 @@ impl ErrorExt for tokio_postgres::Error {
             // it might not. Unexpected errors can happen if the upstream crashes for
             // example in which case we should retry.
             //
-            // Therefore, we adopt a "recoverable unless proven otherwise" policy and
+            // Therefore, we adopt a "indefinite unless proven otherwise" policy and
             // keep retrying in the event of unexpected errors.
             None => false,
         }
@@ -118,7 +118,7 @@ impl<E: ErrorExt + Into<anyhow::Error>> From<E> for ReplicationError {
     }
 }
 
-macro_rules! try_fatal {
+macro_rules! try_definite {
     ($expr:expr $(,)?) => {
         match $expr {
             Ok(val) => val,
@@ -126,7 +126,7 @@ macro_rules! try_fatal {
         }
     };
 }
-macro_rules! try_recoverable {
+macro_rules! try_indefinite {
     ($expr:expr $(,)?) => {
         match $expr {
             Ok(val) => val,
@@ -539,11 +539,11 @@ impl PostgresTaskInfo {
     /// the LSN at which we should start the replication stream at.
     async fn produce_snapshot(&mut self) -> Result<(), ReplicationError> {
         // Get all the relevant tables for this publication
-        let publication_tables = try_recoverable!(
+        let publication_tables = try_indefinite!(
             mz_postgres_util::publication_info(&self.connection_config, &self.publication).await
         );
 
-        let client = try_recoverable!(self.connection_config.clone().connect_replication().await);
+        let client = try_indefinite!(self.connection_config.clone().connect_replication().await);
 
         // We're initializing this source so any previously existing slot must be removed and
         // re-created. Once we have data persistence we will be able to reuse slots across restarts
@@ -552,7 +552,7 @@ impl PostgresTaskInfo {
             .await;
 
         // Validate publication tables against the state snapshot
-        try_fatal!(self.validate_tables(publication_tables));
+        try_definite!(self.validate_tables(publication_tables));
 
         // Start a transaction and immediately create a replication slot with the USE SNAPSHOT
         // directive. This makes the starting point of the slot and the snapshot of the transaction
@@ -581,10 +581,10 @@ impl PostgresTaskInfo {
             })?;
 
         // Store the lsn at which we will need to start the replication stream from
-        let consistent_point = try_recoverable!(slot_row
+        let consistent_point = try_indefinite!(slot_row
             .get("consistent_point")
             .ok_or_else(|| anyhow!("missing expected column: `consistent_point`")));
-        self.lsn = try_fatal!(consistent_point
+        self.lsn = try_definite!(consistent_point
             .parse()
             .or_else(|_| Err(anyhow!("invalid lsn"))));
         for info in self.source_tables.values() {
@@ -614,7 +614,7 @@ impl PostgresTaskInfo {
                 let parser = mz_pgcopy::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
 
                 let mut raw_values = parser.iter_raw(info.columns.len() as i32);
-                try_fatal!(packer.push_list_with(|rp| -> Result<(), anyhow::Error> {
+                try_definite!(packer.push_list_with(|rp| -> Result<(), anyhow::Error> {
                     while let Some(raw_value) = raw_values.next() {
                         match raw_value? {
                             Some(value) => rp.push(Datum::String(std::str::from_utf8(value)?)),
@@ -690,7 +690,7 @@ impl PostgresTaskInfo {
         //   all updates >= this lsn.
         let mut committed_lsn: PgLsn = self.lsn;
 
-        let client = try_recoverable!(self.connection_config.clone().connect_replication().await);
+        let client = try_indefinite!(self.connection_config.clone().connect_replication().await);
 
         // Before consuming the replication stream we will peek into the replication slot using a
         // normal SQL query and the `pg_logical_slot_peek_binary_changes` administrative function.
@@ -700,7 +700,7 @@ impl PostgresTaskInfo {
         // there are no message then it is safe to fast forward to the end WAL LSN and start the
         // replication stream from there.
         let cur_lsn = {
-            let rows = try_recoverable!(
+            let rows = try_indefinite!(
                 client
                     .simple_query("SELECT pg_current_wal_flush_lsn()")
                     .await
@@ -726,7 +726,7 @@ impl PostgresTaskInfo {
                 lsn = cur_lsn,
                 publication = self.publication
             );
-            let rows = try_recoverable!(client.simple_query(&query).await);
+            let rows = try_indefinite!(client.simple_query(&query).await);
 
             match rows.first().expect("query returns exactly one row") {
                 SimpleQueryMessage::Row(row) => {
@@ -753,7 +753,7 @@ impl PostgresTaskInfo {
             lsn = self.lsn,
             publication = self.publication
         );
-        let copy_stream = try_recoverable!(client.copy_both_simple(&query).await);
+        let copy_stream = try_indefinite!(client.copy_both_simple(&query).await);
 
         let stream = LogicalReplicationStream::new(copy_stream).take_until(self.sender.closed());
         tokio::pin!(stream);
@@ -819,7 +819,8 @@ impl PostgresTaskInfo {
                         self.metrics.inserts.inc();
                         let rel_id = insert.rel_id();
                         let new_tuple = insert.tuple().tuple_data();
-                        let row = try_fatal!(PostgresTaskInfo::row_from_tuple(rel_id, new_tuple));
+                        let row =
+                            try_definite!(PostgresTaskInfo::row_from_tuple(rel_id, new_tuple));
                         inserts.push(row);
                     }
                     Update(update) if self.source_tables.contains_key(&update.rel_id()) => {
@@ -833,9 +834,10 @@ impl PostgresTaskInfo {
                                 rel_id
                             )
                         };
-                        let old_tuple = try_fatal!(update.old_tuple().ok_or_else(err)).tuple_data();
+                        let old_tuple =
+                            try_definite!(update.old_tuple().ok_or_else(err)).tuple_data();
                         let old_row =
-                            try_fatal!(PostgresTaskInfo::row_from_tuple(rel_id, old_tuple));
+                            try_definite!(PostgresTaskInfo::row_from_tuple(rel_id, old_tuple));
                         deletes.push(old_row);
 
                         // If the new tuple contains unchanged toast values, reuse the ones
@@ -850,7 +852,7 @@ impl PostgresTaskInfo {
                                 _ => new,
                             });
                         let new_row =
-                            try_fatal!(PostgresTaskInfo::row_from_tuple(rel_id, new_tuple));
+                            try_definite!(PostgresTaskInfo::row_from_tuple(rel_id, new_tuple));
                         inserts.push(new_row);
                     }
                     Delete(delete) if self.source_tables.contains_key(&delete.rel_id()) => {
@@ -864,8 +866,10 @@ impl PostgresTaskInfo {
                                 rel_id
                             )
                         };
-                        let old_tuple = try_fatal!(delete.old_tuple().ok_or_else(err)).tuple_data();
-                        let row = try_fatal!(PostgresTaskInfo::row_from_tuple(rel_id, old_tuple));
+                        let old_tuple =
+                            try_definite!(delete.old_tuple().ok_or_else(err)).tuple_data();
+                        let row =
+                            try_definite!(PostgresTaskInfo::row_from_tuple(rel_id, old_tuple));
                         deletes.push(row);
                     }
                     Commit(commit) => {
@@ -983,7 +987,7 @@ impl PostgresTaskInfo {
                     .try_into()
                     .expect("software more than 200k years old, consider updating");
 
-                try_recoverable!(
+                try_indefinite!(
                     stream
                         .as_mut()
                         .get_pin_mut()
