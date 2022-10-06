@@ -143,6 +143,15 @@ pub struct ExportDescription<T = mz_repr::Timestamp> {
     pub host_config: StorageHostConfig,
 }
 
+/// Opaque token to ensure `pending_export` is called before `create_exports`.  This token proves
+/// that compaction is being held back on `from_id` at least until `id` is created.  It should be
+/// held while the AS OF is determined.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreateExportToken {
+    id: GlobalId,
+    from_id: GlobalId,
+}
+
 #[async_trait(?Send)]
 pub trait StorageController: Debug + Send {
     type Timestamp;
@@ -194,8 +203,18 @@ pub trait StorageController: Debug + Send {
     /// Create the sinks described by the `ExportDescription`.
     async fn create_exports(
         &mut self,
-        exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
+        exports: Vec<(CreateExportToken, ExportDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError>;
+
+    /// Notify the storage controller to prepare for an export to be created
+    async fn pending_export(
+        &mut self,
+        id: GlobalId,
+        from_id: GlobalId,
+    ) -> Result<CreateExportToken, StorageError>;
+
+    /// Cancel the pending export
+    async fn pending_export_cancel(&mut self, token: CreateExportToken);
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
     async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
@@ -960,13 +979,43 @@ where
             .ok_or(StorageError::IdentifierMissing(id))
     }
 
+    async fn pending_export(
+        &mut self,
+        id: GlobalId,
+        from_id: GlobalId,
+    ) -> Result<CreateExportToken, StorageError> {
+        if let Ok(_export) = self.export(id) {
+            return Err(StorageError::SourceIdReused(id));
+        }
+
+        self.state
+            .exported_collections
+            .entry(from_id)
+            .or_default()
+            .push(id);
+
+        Ok(CreateExportToken { id, from_id })
+    }
+
+    async fn pending_export_cancel(
+        &mut self,
+        CreateExportToken { id, from_id }: CreateExportToken,
+    ) {
+        self.state
+            .exported_collections
+            .get_mut(&from_id)
+            // Internal logic error NOT due to export not existing
+            .expect("Dangling exported collection")
+            .retain(|from_export_id| *from_export_id != id);
+    }
+
     async fn create_exports(
         &mut self,
-        exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
+        exports: Vec<(CreateExportToken, ExportDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError> {
         // Validate first, to avoid corrupting state.
         let mut dedup_hashmap = HashMap::<&_, &_>::new();
-        for (id, desc) in exports.iter() {
+        for (CreateExportToken { id, from_id }, desc) in exports.iter() {
             if dedup_hashmap.insert(id, desc).is_some() {
                 return Err(StorageError::SourceIdReused(*id));
             }
@@ -975,22 +1024,29 @@ where
                     return Err(StorageError::SourceIdReused(*id));
                 }
             }
+            if desc.sink.from != *from_id {
+                return Err(StorageError::SourceIdReused(*id));
+            }
+            if self
+                .state
+                .exported_collections
+                .get(from_id)
+                // Internal logic error NOT due to export not existing
+                .expect("Dangling exported collection")
+                .iter()
+                .find(|from_export_id| *from_export_id == id)
+                .is_none()
+            {
+                return Err(StorageError::SourceIdReused(*id));
+            }
         }
 
-        for (id, description) in exports {
-            let from = description.sink.from;
-
+        for (CreateExportToken { id, from_id }, description) in exports {
             self.state
                 .exports
                 .insert(id, ExportState::new(description.clone()));
 
-            self.state
-                .exported_collections
-                .entry(from)
-                .or_default()
-                .push(id);
-
-            let from_collection = self.collection(from)?;
+            let from_collection = self.collection(from_id)?;
             let from_storage_metadata = from_collection.collection_metadata.clone();
             // We've added the dependency above in `exported_collections` so this guaranteed not to change at least
             // until the sink is started up.
@@ -1011,7 +1067,7 @@ where
             let cmd = CreateSinkCommand {
                 id,
                 description: StorageSinkDesc {
-                    from,
+                    from: from_id,
                     from_desc: description.sink.from_desc,
                     connection: description.sink.connection,
                     envelope: description.sink.envelope,
@@ -1382,8 +1438,8 @@ where
                     .state
                     .exports
                     .get(&export_id)
-                    .expect("Dangling export reference")
-                    .write_frontier,
+                    .map(|state| state.write_frontier.clone())
+                    .unwrap_or_else(|| Antichain::from_elem(Timestamp::minimum())),
             );
         }
 

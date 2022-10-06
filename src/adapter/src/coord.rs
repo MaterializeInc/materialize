@@ -103,7 +103,7 @@ use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statemen
 use mz_sql::names::Aug;
 use mz_sql::plan::{MutationKind, Params};
 use mz_stash::Append;
-use mz_storage::controller::{CollectionDescription, DataSource};
+use mz_storage::controller::{CollectionDescription, CreateExportToken, DataSource};
 use mz_storage::types::connections::ConnectionContext;
 use mz_storage::types::sinks::StorageSinkConnection;
 use mz_storage::types::sources::{IngestionDescription, SourceExport, Timeline};
@@ -220,6 +220,7 @@ pub struct SinkConnectionReady {
     pub tx: ClientTransmitter<ExecuteResponse>,
     pub id: GlobalId,
     pub oid: u32,
+    pub create_export_token: CreateExportToken,
     pub result: Result<StorageSinkConnection, AdapterError>,
 }
 
@@ -591,6 +592,14 @@ impl<S: Append + 'static> Coordinator<S> {
                             panic!("sink already initialized during catalog boot")
                         }
                     };
+
+                    let create_export_token = self
+                        .controller
+                        .storage
+                        .pending_export(entry.id(), sink.from)
+                        .await
+                        .unwrap();
+
                     let connection = mz_storage::sink::build_sink_connection(
                         builder.clone(),
                         self.connection_context.clone(),
@@ -609,6 +618,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         entry.id(),
                         entry.oid(),
                         connection,
+                        create_export_token,
                         // The sink should be established on a specific compute instance.
                         None,
                     )
