@@ -355,7 +355,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let () = self
                     .controller
                     .storage
-                    .pending_export_cancel(create_export_token)
+                    .cancel_prepare_export(create_export_token)
                     .await;
                 tx.send(Err(e), session);
             }

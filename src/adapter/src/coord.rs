@@ -596,7 +596,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     let create_export_token = self
                         .controller
                         .storage
-                        .pending_export(entry.id(), sink.from)
+                        .prepare_export(entry.id(), sink.from)
                         .await
                         .unwrap();
 

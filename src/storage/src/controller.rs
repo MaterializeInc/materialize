@@ -143,7 +143,7 @@ pub struct ExportDescription<T = mz_repr::Timestamp> {
     pub host_config: StorageHostConfig,
 }
 
-/// Opaque token to ensure `pending_export` is called before `create_exports`.  This token proves
+/// Opaque token to ensure `prepare_export` is called before `create_exports`.  This token proves
 /// that compaction is being held back on `from_id` at least until `id` is created.  It should be
 /// held while the AS OF is determined.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -207,14 +207,14 @@ pub trait StorageController: Debug + Send {
     ) -> Result<(), StorageError>;
 
     /// Notify the storage controller to prepare for an export to be created
-    async fn pending_export(
+    async fn prepare_export(
         &mut self,
         id: GlobalId,
         from_id: GlobalId,
     ) -> Result<CreateExportToken, StorageError>;
 
     /// Cancel the pending export
-    async fn pending_export_cancel(&mut self, token: CreateExportToken);
+    async fn cancel_prepare_export(&mut self, token: CreateExportToken);
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
     async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
@@ -979,7 +979,7 @@ where
             .ok_or(StorageError::IdentifierMissing(id))
     }
 
-    async fn pending_export(
+    async fn prepare_export(
         &mut self,
         id: GlobalId,
         from_id: GlobalId,
@@ -997,7 +997,7 @@ where
         Ok(CreateExportToken { id, from_id })
     }
 
-    async fn pending_export_cancel(
+    async fn cancel_prepare_export(
         &mut self,
         CreateExportToken { id, from_id }: CreateExportToken,
     ) {

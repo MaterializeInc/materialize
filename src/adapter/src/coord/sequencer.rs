@@ -1230,7 +1230,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let create_export_token = match self
             .controller
             .storage
-            .pending_export(id, catalog_sink.from)
+            .prepare_export(id, catalog_sink.from)
             .await
         {
             Ok(t) => t,
