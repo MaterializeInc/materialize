@@ -516,13 +516,13 @@ CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', REMOTE ['host1']
 statement ok
 CREATE CLUSTER foo REPLICAS (size_1 (SIZE '1'), size_32 (SIZE '32'), size_2_2 (SIZE '2-2'))
 
-query TTT
-SELECT name, size, status FROM mz_cluster_replicas ORDER BY name
+query TT
+SELECT name, size FROM mz_cluster_replicas ORDER BY name
 ----
-default_replica  1        unknown
-size_1           1        unknown
-size_2_2         2-2      unknown
-size_32          32       unknown
+default_replica  1
+size_1           1
+size_2_2         2-2
+size_32          32
 
 statement ok
 DROP CLUSTER foo CASCADE

@@ -459,9 +459,7 @@ mz_array_types
 mz_audit_events
 mz_base_types
 mz_clusters
-mz_cluster_replicas_base
-mz_cluster_replica_statuses
-mz_cluster_replica_heartbeats
+mz_cluster_replicas
 mz_columns
 mz_connections
 mz_databases
@@ -487,7 +485,6 @@ mz_views
 > SHOW VIEWS FROM mz_catalog
 name
 -----------------------------------
-mz_cluster_replicas
 mz_objects
 mz_relations
 mz_storage_usage
@@ -544,6 +541,8 @@ mz_worker_compute_import_frontiers_1            log   <null>
 > SHOW TABLES FROM mz_internal
 name
 ----
+mz_cluster_replica_heartbeats
+mz_cluster_replica_statuses
 mz_storage_usage_by_shard
 mz_view_foreign_keys
 mz_view_keys
