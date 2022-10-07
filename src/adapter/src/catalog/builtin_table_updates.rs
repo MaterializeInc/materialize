@@ -141,9 +141,9 @@ impl CatalogState {
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS),
             row: Row::pack_slice(&[
-                Datum::UInt64(compute_instance_id),
                 Datum::UInt64(id),
                 Datum::String(name),
+                Datum::UInt64(compute_instance_id),
                 Datum::from(size),
                 Datum::from(az),
             ]),

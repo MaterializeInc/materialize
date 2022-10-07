@@ -73,9 +73,9 @@ The `mz_cluster_replicas` table contains a row for each cluster replica in the s
 
 Field               | Type       | Meaning
 --------------------|------------|--------
-`cluster_id`        | [`bigint`] | The ID of the cluster to which the replica belongs.
 `id`                | [`bigint`] | Materialize's unique ID for the cluster replica.
 `name`              | [`text`]   | The name of the cluster replica.
+`cluster_id`        | [`bigint`] | The ID of the cluster to which the replica belongs.
 `size`              | [`text`]   | The cluster replica's size, selected during creation.
 `availability_zone` | [`text`]   | The cluster replica's target availability zone, selected during creation. This value is `NULL` if no availability zone was specified when the replica was created.
 
