@@ -96,7 +96,6 @@ pub enum Plan {
     CreateSink(CreateSinkPlan),
     CreateTable(CreateTablePlan),
     CreateView(CreateViewPlan),
-    CreateViews(CreateViewsPlan),
     CreateMaterializedView(CreateMaterializedViewPlan),
     CreateIndex(CreateIndexPlan),
     CreateType(CreateTypePlan),
@@ -190,7 +189,6 @@ impl Plan {
             StatementKind::CreateTable => vec![PlanKind::CreateTable],
             StatementKind::CreateType => vec![PlanKind::CreateType],
             StatementKind::CreateView => vec![PlanKind::CreateView],
-            StatementKind::CreateViews => vec![PlanKind::CreateViews],
             StatementKind::Deallocate => vec![PlanKind::Deallocate],
             StatementKind::Declare => vec![PlanKind::Declare],
             StatementKind::Delete => vec![PlanKind::ReadThenWrite],
@@ -370,12 +368,6 @@ pub struct CreateViewPlan {
     pub view: View,
     /// The ID of the object that this view is replacing, if any.
     pub replace: Option<GlobalId>,
-    pub if_not_exists: bool,
-}
-
-#[derive(Debug)]
-pub struct CreateViewsPlan {
-    pub views: Vec<(QualifiedObjectName, View)>,
     pub if_not_exists: bool,
 }
 

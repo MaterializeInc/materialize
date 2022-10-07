@@ -333,34 +333,6 @@ CREATE VIEW IF NOT EXISTS myschema.myview AS SELECT foo FROM bar
 CreateView(CreateViewStatement { if_exists: Skip, temporary: false, definition: ViewDefinition { name: UnresolvedObjectName([Ident("myschema"), Ident("myview")]), columns: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
 
 parse-statement
-CREATE VIEWS FROM SOURCE "foobar"
-----
-CREATE VIEWS FROM SOURCE foobar
-=>
-CreateViews(CreateViewsStatement { if_exists: Error, temporary: false, source: Name(UnresolvedObjectName([Ident("foobar")])), targets: None })
-
-parse-statement
-CREATE OR REPLACE VIEWS FROM SOURCE "foobar"
-----
-CREATE OR REPLACE VIEWS FROM SOURCE foobar
-=>
-CreateViews(CreateViewsStatement { if_exists: Replace, temporary: false, source: Name(UnresolvedObjectName([Ident("foobar")])), targets: None })
-
-parse-statement
-CREATE VIEWS FROM SOURCE "foobar" ();
-----
-error: Expected identifier, found right parenthesis
-CREATE VIEWS FROM SOURCE "foobar" ();
-                                   ^
-
-parse-statement
-CREATE VIEWS FROM SOURCE "foobar" (t1, "t2" AS t3);
-----
-CREATE VIEWS FROM SOURCE foobar (t1, t2 AS t3)
-=>
-CreateViews(CreateViewsStatement { if_exists: Error, temporary: false, source: Name(UnresolvedObjectName([Ident("foobar")])), targets: Some([CreateViewsSourceTarget { name: UnresolvedObjectName([Ident("t1")]), alias: None }, CreateViewsSourceTarget { name: UnresolvedObjectName([Ident("t2")]), alias: Some(UnresolvedObjectName([Ident("t3")])) }]) })
-
-parse-statement
 CREATE MATERIALIZED VIEW myschema.myview AS SELECT foo FROM bar
 ----
 CREATE MATERIALIZED VIEW myschema.myview AS SELECT foo FROM bar

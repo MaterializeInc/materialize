@@ -37,10 +37,11 @@ pub fn as_generator(g: &LoadGenerator) -> Box<dyn Generator> {
 }
 
 pub struct LoadGeneratorSourceReader {
-    rows: Box<dyn Iterator<Item = Vec<Row>>>,
+    rows: Box<dyn Iterator<Item = (usize, Vec<Row>)>>,
     last: Instant,
     tick: Duration,
     offset: MzOffset,
+    pending_output: usize,
     pending: Vec<Row>,
     // Load-generator sources support single-threaded ingestion only, so only
     // one of the `LoadGeneratorSourceReader`s will actually produce data.
@@ -100,6 +101,7 @@ impl SourceReader for LoadGeneratorSourceReader {
                 last: Instant::now(),
                 tick: Duration::from_micros(connection.tick_micros.unwrap_or(1_000_000)),
                 offset,
+                pending_output: 0,
                 pending: Vec::new(),
                 active_read_worker,
                 reported_unconsumed_partitions: false,
@@ -134,8 +136,9 @@ impl SourceReader for LoadGeneratorSourceReader {
             // Tick has passed, so we can refill.
             self.last += self.tick;
             match self.rows.next() {
-                Some(value) => {
+                Some((output, value)) => {
                     self.offset += 1;
+                    self.pending_output = output;
                     self.pending = value;
                 }
                 None => return Ok(NextMessage::Finished),
@@ -144,7 +147,7 @@ impl SourceReader for LoadGeneratorSourceReader {
         // There should be data, but possibly not if a source returned an empty Vec.
         if let Some(value) = self.pending.pop() {
             let message = SourceMessage {
-                output: 0,
+                output: self.pending_output,
                 partition: PartitionId::None,
                 offset: self.offset,
                 upstream_time_millis: None,

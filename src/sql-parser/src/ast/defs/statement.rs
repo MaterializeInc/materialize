@@ -51,7 +51,6 @@ pub enum Statement<T: AstInfo> {
     CreateSubsource(CreateSubsourceStatement<T>),
     CreateSink(CreateSinkStatement<T>),
     CreateView(CreateViewStatement<T>),
-    CreateViews(CreateViewsStatement<T>),
     CreateMaterializedView(CreateMaterializedViewStatement<T>),
     CreateTable(CreateTableStatement<T>),
     CreateIndex(CreateIndexStatement<T>),
@@ -108,7 +107,6 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateSubsource(stmt) => f.write_node(stmt),
             Statement::CreateSink(stmt) => f.write_node(stmt),
             Statement::CreateView(stmt) => f.write_node(stmt),
-            Statement::CreateViews(stmt) => f.write_node(stmt),
             Statement::CreateMaterializedView(stmt) => f.write_node(stmt),
             Statement::CreateTable(stmt) => f.write_node(stmt),
             Statement::CreateIndex(stmt) => f.write_node(stmt),
@@ -722,59 +720,6 @@ impl<T: AstInfo> AstDisplay for CreateViewStatement<T> {
     }
 }
 impl_display_t!(CreateViewStatement);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CreateViewsSourceTarget {
-    pub name: UnresolvedObjectName,
-    pub alias: Option<UnresolvedObjectName>,
-}
-
-impl AstDisplay for CreateViewsSourceTarget {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(alias) = &self.alias {
-            f.write_str(" AS ");
-            f.write_node(alias);
-        }
-    }
-}
-impl_display!(CreateViewsSourceTarget);
-
-/// `CREATE VIEWS`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CreateViewsStatement<T: AstInfo> {
-    pub if_exists: IfExistsBehavior,
-    pub temporary: bool,
-    pub source: T::ObjectName,
-    pub targets: Option<Vec<CreateViewsSourceTarget>>,
-}
-
-impl<T: AstInfo> AstDisplay for CreateViewsStatement<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("CREATE");
-        if self.if_exists == IfExistsBehavior::Replace {
-            f.write_str(" OR REPLACE");
-        }
-        if self.temporary {
-            f.write_str(" TEMPORARY");
-        }
-
-        f.write_str(" VIEWS");
-
-        if self.if_exists == IfExistsBehavior::Skip {
-            f.write_str(" IF NOT EXISTS");
-        }
-
-        f.write_str(" FROM SOURCE ");
-        f.write_node(&self.source);
-        if let Some(targets) = &self.targets {
-            f.write_str(" (");
-            f.write_node(&display::comma_separated(targets));
-            f.write_str(")");
-        }
-    }
-}
-impl_display_t!(CreateViewsStatement);
 
 /// `CREATE MATERIALIZED VIEW`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

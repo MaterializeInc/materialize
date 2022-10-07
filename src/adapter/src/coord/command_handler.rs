@@ -369,7 +369,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     | Statement::CreateTable(_)
                     | Statement::CreateType(_)
                     | Statement::CreateView(_)
-                    | Statement::CreateViews(_)
                     | Statement::CreateMaterializedView(_)
                     | Statement::Delete(_)
                     | Statement::DropDatabase(_)
