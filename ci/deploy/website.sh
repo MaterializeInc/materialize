@@ -17,8 +17,7 @@ set -euo pipefail
 
 cd doc/user
 hugo --gc --baseURL /docs/lts --destination public/docs/lts
-cp -R ../../ci/deploy/website/. public/
-hugo deploy
+hugo deploy --maxDeletes -1
 
 touch empty
 
