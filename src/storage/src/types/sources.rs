@@ -1133,6 +1133,7 @@ impl UnplannedSourceEnvelope {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSourceConnection {
     pub connection: KafkaConnection,
+    pub connection_id: GlobalId,
     pub options: BTreeMap<String, StringOrSecret>,
     pub topic: String,
     // Map from partition -> starting offset
@@ -1163,6 +1164,7 @@ impl Arbitrary for KafkaSourceConnection {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
             any::<KafkaConnection>(),
+            any::<GlobalId>(),
             proptest::collection::btree_map(any::<String>(), any::<StringOrSecret>(), 1..4),
             any::<String>(),
             proptest::collection::hash_map(any::<i32>(), any::<i64>(), 1..4),
@@ -1177,6 +1179,7 @@ impl Arbitrary for KafkaSourceConnection {
             .prop_map(
                 |(
                     connection,
+                    connection_id,
                     options,
                     topic,
                     start_offsets,
@@ -1189,6 +1192,7 @@ impl Arbitrary for KafkaSourceConnection {
                     include_headers,
                 )| KafkaSourceConnection {
                     connection,
+                    connection_id,
                     options,
                     topic,
                     start_offsets,
@@ -1209,6 +1213,7 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
     fn into_proto(&self) -> ProtoKafkaSourceConnection {
         ProtoKafkaSourceConnection {
             connection: Some(self.connection.into_proto()),
+            connection_id: Some(self.connection_id.into_proto()),
             options: self
                 .options
                 .iter()
@@ -1237,6 +1242,9 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
             connection: proto
                 .connection
                 .into_rust_if_some("ProtoKafkaSourceConnection::connection")?,
+            connection_id: proto
+                .connection_id
+                .into_rust_if_some("ProtoKafkaSourceConnection::connection_id")?,
             options: options?,
             topic: proto.topic,
             start_offsets: proto.start_offsets,
@@ -1419,6 +1427,19 @@ pub enum SourceConnection {
     LoadGenerator(LoadGeneratorSourceConnection),
 }
 
+impl SourceConnection {
+    pub fn connection_id(&self) -> Option<GlobalId> {
+        use SourceConnection::*;
+        match self {
+            Kafka(KafkaSourceConnection { connection_id, .. })
+            | Kinesis(KinesisSourceConnection { connection_id, .. })
+            | S3(S3SourceConnection { connection_id, .. })
+            | Postgres(PostgresSourceConnection { connection_id, .. }) => Some(*connection_id),
+            LoadGenerator(_) => None,
+        }
+    }
+}
+
 impl RustType<ProtoSourceConnection> for SourceConnection {
     fn into_proto(&self) -> ProtoSourceConnection {
         use proto_source_connection::Kind;
@@ -1580,6 +1601,7 @@ impl SourceConnection {
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KinesisSourceConnection {
+    pub connection_id: GlobalId,
     pub stream_name: String,
     pub aws: AwsConfig,
 }
@@ -1595,6 +1617,7 @@ impl RustType<ProtoKinesisSourceConnection> for KinesisSourceConnection {
         ProtoKinesisSourceConnection {
             stream_name: self.stream_name.clone(),
             aws: Some(self.aws.into_proto()),
+            connection_id: Some(self.connection_id.into_proto()),
         }
     }
 
@@ -1604,12 +1627,16 @@ impl RustType<ProtoKinesisSourceConnection> for KinesisSourceConnection {
             aws: proto
                 .aws
                 .into_rust_if_some("ProtoKinesisSourceConnection::aws")?,
+            connection_id: proto
+                .connection_id
+                .into_rust_if_some("ProtoKinesisSourceConnection::connection_id")?,
         })
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PostgresSourceConnection {
+    pub connection_id: GlobalId,
     pub connection: PostgresConnection,
     /// The cast expressions to convert the incoming string encoded rows to their target types
     pub table_casts: Vec<Vec<MirScalarExpr>>,
@@ -1624,6 +1651,7 @@ impl Arbitrary for PostgresSourceConnection {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
             any::<PostgresConnection>(),
+            any::<GlobalId>(),
             proptest::collection::vec(
                 proptest::collection::vec(any::<MirScalarExpr>(), 1..4),
                 1..4,
@@ -1631,12 +1659,15 @@ impl Arbitrary for PostgresSourceConnection {
             any::<String>(),
             any::<PostgresSourceDetails>(),
         )
-            .prop_map(|(connection, table_casts, publication, details)| Self {
-                connection,
-                table_casts,
-                publication,
-                details,
-            })
+            .prop_map(
+                |(connection, connection_id, table_casts, publication, details)| Self {
+                    connection,
+                    connection_id,
+                    table_casts,
+                    publication,
+                    details,
+                },
+            )
             .boxed()
     }
 }
@@ -1662,6 +1693,7 @@ impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
         }
         ProtoPostgresSourceConnection {
             connection: Some(self.connection.into_proto()),
+            connection_id: Some(self.connection_id.into_proto()),
             publication: self.publication.clone(),
             details: Some(self.details.into_proto()),
             table_casts,
@@ -1681,6 +1713,9 @@ impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
             connection: proto
                 .connection
                 .into_rust_if_some("ProtoPostgresSourceConnection::connection")?,
+            connection_id: proto
+                .connection_id
+                .into_rust_if_some("ProtoPostgresSourceConnection::connection_id")?,
             publication: proto.publication,
             details: proto
                 .details
@@ -1776,6 +1811,7 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct S3SourceConnection {
+    pub connection_id: GlobalId,
     pub key_sources: Vec<S3KeySource>,
     pub pattern: Option<Glob>,
     pub aws: AwsConfig,
@@ -1804,19 +1840,21 @@ impl Arbitrary for S3SourceConnection {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
+            any::<GlobalId>(),
             any::<Vec<S3KeySource>>(),
             proptest::option::of(any_glob()),
             any::<AwsConfig>(),
             any::<Compression>(),
         )
-            .prop_map(
-                |(key_sources, pattern, aws, compression)| S3SourceConnection {
+            .prop_map(|(connection_id, key_sources, pattern, aws, compression)| {
+                S3SourceConnection {
+                    connection_id,
                     key_sources,
                     pattern,
                     aws,
                     compression,
-                },
-            )
+                }
+            })
             .boxed()
     }
 }
@@ -1824,6 +1862,7 @@ impl Arbitrary for S3SourceConnection {
 impl RustType<ProtoS3SourceConnection> for S3SourceConnection {
     fn into_proto(&self) -> ProtoS3SourceConnection {
         ProtoS3SourceConnection {
+            connection_id: Some(self.connection_id.into_proto()),
             key_sources: self.key_sources.into_proto(),
             pattern: self.pattern.as_ref().map(|g| g.glob().into()),
             aws: Some(self.aws.into_proto()),
@@ -1833,6 +1872,9 @@ impl RustType<ProtoS3SourceConnection> for S3SourceConnection {
 
     fn from_proto(proto: ProtoS3SourceConnection) -> Result<Self, TryFromProtoError> {
         Ok(S3SourceConnection {
+            connection_id: proto
+                .connection_id
+                .into_rust_if_some("ProtoS3SourceConnection::connection_id")?,
             key_sources: proto.key_sources.into_rust()?,
             pattern: proto
                 .pattern

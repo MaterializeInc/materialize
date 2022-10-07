@@ -1374,7 +1374,6 @@ pub struct Source {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Ingestion {
-    pub connection_id: Option<GlobalId>,
     // TODO(benesch): this field contains connection information that could be
     // derived from the connection ID. Too hard to fix at the moment.
     pub desc: SourceDesc,
@@ -4417,7 +4416,6 @@ impl<S: Append> Catalog<S> {
             }) => CatalogItem::Source(Source {
                 create_sql: source.create_sql,
                 ingestion: source.ingestion.map(|ingestion| Ingestion {
-                    connection_id: ingestion.connection_id,
                     desc: ingestion.desc,
                     source_imports: ingestion.source_imports,
                     subsource_exports: ingestion.subsource_exports,
