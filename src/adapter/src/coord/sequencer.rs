@@ -1227,6 +1227,19 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
+        let create_export_token = match self
+            .controller
+            .storage
+            .prepare_export(id, catalog_sink.from)
+            .await
+        {
+            Ok(t) => t,
+            Err(e) => {
+                tx.send(Err(e.into()), session);
+                return;
+            }
+        };
+
         // Now we're ready to create the sink connection. Arrange to notify the
         // main coordinator thread when the future completes.
         let connection_builder = sink.connection_builder;
@@ -1242,6 +1255,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         tx,
                         id,
                         oid,
+                        create_export_token,
                         result: mz_storage::sink::build_sink_connection(
                             connection_builder,
                             connection_context,
