@@ -57,7 +57,6 @@ where
         StatementKind::CreateSubsource => "create_subsource",
         StatementKind::CreateSink => "create_sink",
         StatementKind::CreateView => "create_view",
-        StatementKind::CreateViews => "create_views",
         StatementKind::CreateMaterializedView => "create_materialized_view",
         StatementKind::CreateTable => "create_table",
         StatementKind::CreateIndex => "create_index",

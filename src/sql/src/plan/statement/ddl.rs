@@ -73,7 +73,7 @@ use crate::ast::{
     CreateSinkStatement, CreateSourceConnection, CreateSourceFormat, CreateSourceOption,
     CreateSourceOptionName, CreateSourceStatement, CreateSourceSubsource, CreateSourceSubsources,
     CreateSubsourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
-    CreateViewStatement, CreateViewsStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
+    CreateViewStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
     CsrConnectionAvro, CsrConnectionOption, CsrConnectionOptionName, CsrConnectionProtobuf,
     CsrSeedProtobuf, CsvColumns, DbzMode, DropClusterReplicasStatement, DropClustersStatement,
     DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
@@ -1459,32 +1459,6 @@ pub fn plan_create_view(
         replace,
         if_not_exists: *if_exists == IfExistsBehavior::Skip,
     }))
-}
-
-pub fn describe_create_views(
-    _: &StatementContext,
-    _: CreateViewsStatement<Aug>,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn plan_create_views(
-    scx: &StatementContext,
-    CreateViewsStatement {
-        if_exists: _,
-        temporary: _,
-        source: source_name,
-        targets: _,
-    }: CreateViewsStatement<Aug>,
-) -> Result<Plan, PlanError> {
-    let source_desc = match scx.get_item_by_resolved_name(&source_name)?.source_desc()? {
-        Some(source_desc) => source_desc,
-        None => sql_bail!("cannot generate views from subsources"),
-    };
-    sql_bail!(
-        "cannot generate views from {} sources",
-        source_desc.connection.name()
-    );
 }
 
 pub fn describe_create_materialized_view(

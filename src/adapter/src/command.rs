@@ -640,7 +640,6 @@ impl ExecuteResponse {
             CreateSink => vec![CreatedSink],
             CreateTable => vec![CreatedTable],
             CreateView => vec![CreatedView],
-            CreateViews => vec![CreatedViews],
             CreateMaterializedView => vec![CreatedMaterializedView],
             CreateIndex => vec![CreatedIndex],
             CreateType => vec![CreatedType],
