@@ -49,12 +49,12 @@ use mz_sql::plan::{
     CreateComputeInstancePlan, CreateComputeReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
     CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DropComputeInstancesPlan, DropComputeReplicasPlan,
-    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
-    ExplainPlanNew, ExplainPlanOld, FetchPlan, HirRelationExpr, IndexOption, InsertPlan,
-    MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen,
-    RaisePlan, ReadThenWritePlan, ResetVariablePlan, RotateKeysPlan, SendDiffsPlan,
-    SetVariablePlan, ShowVariablePlan, SubscribeFrom, SubscribePlan, View,
+    CreateViewPlan, DropComputeInstancesPlan, DropComputeReplicasPlan, DropDatabasePlan,
+    DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew,
+    ExplainPlanOld, FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView,
+    MutationKind, OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen, RaisePlan,
+    ReadThenWritePlan, ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan,
+    ShowVariablePlan, SubscribeFrom, SubscribePlan, View,
 };
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};

@@ -22,17 +22,17 @@ organizations subsource      1
 users         subsource      1
 
 > SHOW COLUMNS FROM auctions
-end_time true "timestamp with time zone"
-id true bigint
-item true text
-seller true bigint
+end_time false "timestamp with time zone"
+id false bigint
+item false text
+seller false bigint
 
 > SHOW COLUMNS FROM bids
-amount true integer
-auction_id true bigint
-bid_time true "timestamp with time zone"
-buyer true bigint
-id true bigint
+amount false integer
+auction_id false bigint
+bid_time false "timestamp with time zone"
+buyer false bigint
+id false bigint
 
 > CREATE VIEW on_time_bids AS
   SELECT
@@ -82,4 +82,4 @@ id true bigint
 5 54 "Signed Memorabilia" 95
 
 # Shut down the source so it doesn't keep running until next testdrive reset.
-> DROP SOURCE demo
+> DROP SOURCE demo CASCADE

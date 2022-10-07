@@ -533,7 +533,9 @@ pub async fn purify_create_source(
                 };
                 subsources.push((transient_id, subsource));
             }
-            *requested_subsources = Some(CreateSourceSubsources::Subset(targeted_subsources));
+            if available_subsources.is_some() {
+                *requested_subsources = Some(CreateSourceSubsources::Subset(targeted_subsources));
+            }
         }
     }
 
