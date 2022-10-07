@@ -23,9 +23,22 @@ process by the release notes team.
 
 {{< note >}}
 v0.26 is a **long-term support (LTS)** release of Materialize. We will support
-the v0.26.x series through at least October 31, 2022, issuing **patch releases** as
-necessary to address severe bugs and security vulnerabilities.
+the v0.26.x series through at least October 31, 2022, issuing **patch releases**
+as necessary to address severe bugs and security vulnerabilities.
 {{</ note >}}
+
+{{% version-header v0.26.5 %}}
+
+- In Avro-formatted sinks, avoid emitting schemas with types that reference the
+  null namespace (e.g., `.foo`) whenever possible {{% gh 14333 %}}.
+
+  The Avro specification is ambiguous as to whether such references to the null
+  namespace are allowed. Avro libraries in other languages do not always handle
+  them properly.
+
+- Avoid crashing when a PostgreSQL or PubNub source produces a retraction and
+  a query that depends on that source uses certain types of `DISTINCT` or
+  `GROUP BY` clauses {{% gh 12783 %}}.
 
 {{% version-header v0.26.4 %}}
 
