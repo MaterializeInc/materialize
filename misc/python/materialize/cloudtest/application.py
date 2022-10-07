@@ -12,6 +12,7 @@ from typing import List, Optional
 
 from materialize import ROOT, mzbuild
 from materialize.cloudtest.k8s import K8sResource
+from materialize.cloudtest.k8s.debezium import DEBEZIUM_RESOURCES
 from materialize.cloudtest.k8s.environmentd import (
     EnvironmentdService,
     EnvironmentdStatefulSet,
@@ -73,6 +74,7 @@ class MaterializeApplication(Application):
             *POSTGRES_RESOURCES,
             *POSTGRES_SOURCE_RESOURCES,
             *REDPANDA_RESOURCES,
+            *DEBEZIUM_RESOURCES,
             *SSH_RESOURCES,
             Minio(),
             AdminRoleBinding(),
