@@ -11,7 +11,7 @@
 # The raw source that brings in data as a single text column containing JSON
 > CREATE SOURCE market_orders_raw
   FROM PUBNUB
-  SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe'
+  SUBSCRIBE KEY 'sub-c-99084bc5-1844-4e1c-82ca-a01b18166ca8'
   CHANNEL 'pubnub-market-orders';
 
 # Extract a couple JSON fields

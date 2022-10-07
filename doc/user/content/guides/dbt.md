@@ -137,7 +137,7 @@ When you use dbt with Materialize, **your models stay up-to-date** without manua
 
     CREATE SOURCE {{ source_name }}
     FROM PUBNUB
-    SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe'
+    SUBSCRIBE KEY 'sub-c-99084bc5-1844-4e1c-82ca-a01b18166ca8'
     CHANNEL 'pubnub-market-orders'
     ```
 
