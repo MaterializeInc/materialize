@@ -21,6 +21,7 @@ use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use futures_util::TryFutureExt;
 use mz_ore::cast::CastFrom;
 use mz_persist::indexed::columnar::{
     ColumnarRecordsBuilder, ColumnarRecordsVecBuilder, KEY_VAL_DATA_MAX_LEN,
@@ -143,29 +144,35 @@ where
 
                     // Compaction is cpu intensive, so be polite and spawn it on the CPU heavy runtime.
                     let compact_span = debug_span!("compact::consolidate");
-                    let res = cpu_heavy_runtime
-                        .spawn_named(
-                            || "persist::compact::consolidate",
-                            Self::compact(
-                                cfg.clone(),
-                                Arc::clone(&blob),
-                                Arc::clone(&metrics),
-                                Arc::clone(&cpu_heavy_runtime),
-                                req,
-                                writer_id,
+                    let res = tokio::time::timeout(
+                        Duration::from_secs(60 * 10),
+                        cpu_heavy_runtime
+                            .spawn_named(
+                                || "persist::compact::consolidate",
+                                Self::compact(
+                                    cfg.clone(),
+                                    Arc::clone(&blob),
+                                    Arc::clone(&metrics),
+                                    Arc::clone(&cpu_heavy_runtime),
+                                    req,
+                                    writer_id,
+                                )
+                                .instrument(compact_span),
                             )
-                            .instrument(compact_span),
-                        )
-                        .await
-                        .map_err(|err| anyhow!(err));
+                            .map_err(|e| anyhow!(e)),
+                    )
+                    .await
+                    .map_err(|e| anyhow!(e));
 
-                    metrics
-                        .compaction
-                        .seconds
-                        .inc_by(start.elapsed().as_secs_f64());
+                    let elapsed = start.elapsed().as_secs_f64();
+                    metrics.compaction.seconds.inc_by(elapsed);
+                    if elapsed > 180.0 {
+                        debug!("compaction request took {}s", elapsed);
+                        metrics.compaction.very_slow_requests.inc();
+                    }
 
                     match res {
-                        Ok(Ok(res)) => {
+                        Ok(Ok(Ok(res))) => {
                             let res = FueledMergeRes { output: res.output };
                             match machine.merge_res(&res).await {
                                 ApplyMergeResult::AppliedExact => {
@@ -191,7 +198,7 @@ where
                                 }
                             }
                         }
-                        Ok(Err(err)) | Err(err) => {
+                        Ok(Ok(Err(err))) | Ok(Err(err)) | Err(err) => {
                             metrics.compaction.failed.inc();
                             debug!("compaction for {} failed: {:#}", machine.shard_id(), err);
                         }

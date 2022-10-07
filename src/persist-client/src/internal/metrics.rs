@@ -600,6 +600,7 @@ pub struct CompactionMetrics {
     pub(crate) noop: IntCounter,
     pub(crate) seconds: Counter,
     pub(crate) concurrency_waits: IntCounter,
+    pub(crate) very_slow_requests: IntCounter,
     pub(crate) memory_violations: IntCounter,
     pub(crate) runs_compacted: IntCounter,
     pub(crate) chunks_compacted: IntCounter,
@@ -653,6 +654,10 @@ impl CompactionMetrics {
             concurrency_waits: registry.register(metric!(
                 name: "mz_persist_compaction_concurrency_waits",
                 help: "count of compaction requests that ever blocked due to concurrency limit",
+            )),
+            very_slow_requests: registry.register(metric!(
+                name: "mz_persist_compaction_very_slow_requests",
+                help: "count of very slow compaction requests",
             )),
             memory_violations: registry.register(metric!(
                 name: "mz_persist_compaction_memory_violations",
