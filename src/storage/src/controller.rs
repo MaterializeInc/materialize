@@ -1439,6 +1439,8 @@ where
                     .exports
                     .get(&export_id)
                     .map(|state| state.write_frontier.clone())
+                    // If sink has not been fully initialized (only `prepare_export` but not
+                    // `create_export` has been called), hold back compaction completely.
                     .unwrap_or_else(|| Antichain::from_elem(Timestamp::minimum())),
             );
         }
