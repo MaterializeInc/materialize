@@ -30,6 +30,11 @@ name = "Tools and integrations"
 weight= 25
 
 [[menu.main]]
+identifier = "ops"
+name = "Operating Materialize"
+weight= 25
+
+[[menu.main]]
 identifier = "cs_redpanda"
 name = "Redpanda"
 parent = "create-source"
