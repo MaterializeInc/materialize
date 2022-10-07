@@ -34,5 +34,5 @@ one          0
 two          1
 three        2
 
-$ kafka-verify-commit source=topic topic=topic partition=0
+$ kafka-verify-commit source=topic conn=conn topic=topic partition=0
 3
