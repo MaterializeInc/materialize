@@ -28,11 +28,15 @@ impl Generator for Counter {
         Vec::new()
     }
 
-    fn by_seed(&self, _now: NowFn, _seed: Option<u64>) -> Box<dyn Iterator<Item = Vec<Row>>> {
+    fn by_seed(
+        &self,
+        _now: NowFn,
+        _seed: Option<u64>,
+    ) -> Box<dyn Iterator<Item = (usize, Vec<Row>)>> {
         let mut counter = 0;
         Box::new(iter::repeat_with(move || {
             counter += 1;
-            vec![Row::pack_slice(&[Datum::Int64(counter)])]
+            (0, vec![Row::pack_slice(&[Datum::Int64(counter)])])
         }))
     }
 }

@@ -9,16 +9,17 @@
 
 # This test verifies the get started page works.
 
-> CREATE SOURCE demo FROM LOAD GENERATOR AUCTION (TICK INTERVAL '50ms')
+> CREATE SOURCE demo FROM LOAD GENERATOR AUCTION (TICK INTERVAL '50ms') FOR ALL TABLES
 
-> CREATE VIEWS FROM SOURCE demo
-
-> SHOW VIEWS
- accounts
- auctions
- bids
- organizations
- users
+> SHOW SOURCES
+name          type           size
+----------------------------------
+demo          load-generator 1
+accounts      subsource      1
+auctions      subsource      1
+bids          subsource      1
+organizations subsource      1
+users         subsource      1
 
 > SHOW COLUMNS FROM auctions
 end_time true "timestamp with time zone"
@@ -81,4 +82,4 @@ id true bigint
 5 54 "Signed Memorabilia" 95
 
 # Shut down the source so it doesn't keep running until next testdrive reset.
-> DROP SOURCE demo CASCADE
+> DROP SOURCE demo

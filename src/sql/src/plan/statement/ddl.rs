@@ -37,8 +37,8 @@ use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
     AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
-    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, LoadGenerator,
-    SetVariableValue, SshConnectionOption,
+    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, SetVariableValue,
+    SshConnectionOption,
 };
 use mz_storage::source::generator::as_generator;
 use mz_storage::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
@@ -79,12 +79,11 @@ use crate::ast::{
     DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
     Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConfigOptionName,
     KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint, LoadGeneratorOption,
-    LoadGeneratorOptionName, ObjectType, Op, PgConfigOption, PgConfigOptionName,
+    LoadGeneratorOptionName, ObjectType, PgConfigOption, PgConfigOptionName,
     PostgresConnectionOption, PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica,
-    Query, ReplicaDefinition, ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr,
-    SourceIncludeMetadata, SourceIncludeMetadataType, SshConnectionOptionName, Statement,
-    SubscriptPosition, TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName,
-    UnresolvedObjectName, Value, ViewDefinition,
+    ReplicaDefinition, ReplicaOption, ReplicaOptionName, SourceIncludeMetadata,
+    SourceIncludeMetadataType, SshConnectionOptionName, Statement, TableConstraint,
+    UnresolvedDatabaseName, Value, ViewDefinition,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
@@ -107,7 +106,7 @@ use crate::plan::{
     ComputeReplicaIntrospectionConfig, CreateComputeInstancePlan, CreateComputeReplicaPlan,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, DropComputeInstancesPlan,
     DropComputeReplicasPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
     FullObjectName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan, QueryContext,
     RotateKeysPlan, Secret, Sink, Source, StorageHostConfig, Table, Type, View,
@@ -695,10 +694,29 @@ pub fn plan_create_source(
             )
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
-            let load_generator = match generator {
-                LoadGenerator::Auction => mz_storage::types::sources::LoadGenerator::Auction,
-                LoadGenerator::Counter => mz_storage::types::sources::LoadGenerator::Counter,
+            use mz_storage::types::sources::LoadGenerator;
+
+            let (load_generator, available_subsources) = match generator {
+                mz_sql_parser::ast::LoadGenerator::Auction => {
+                    let load_generator = LoadGenerator::Auction;
+                    let generator = as_generator(&load_generator);
+                    let mut available_subsources = HashMap::new();
+                    for (i, (name, _)) in generator.views().iter().enumerate() {
+                        let name = FullObjectName {
+                            database: RawDatabaseSpecifier::Name("loadgenerator".to_owned()),
+                            schema: "public".to_owned(),
+                            item: name.to_string(),
+                        };
+                        // The zero-th output is the main output
+                        // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
+                        // to handle the main source and the subsources uniformly
+                        available_subsources.insert(name, i + 1);
+                    }
+                    (load_generator, Some(available_subsources))
+                }
+                mz_sql_parser::ast::LoadGenerator::Counter => (LoadGenerator::Counter, None),
             };
+
             let generator = as_generator(&load_generator);
             let LoadGeneratorOptionExtracted { tick_interval, .. } = options.clone().try_into()?;
             let tick_micros = match tick_interval {
@@ -712,7 +730,12 @@ pub fn plan_create_source(
                 load_generator,
                 tick_micros,
             });
-            (connection, None, generator.data_encoding(), None)
+            (
+                connection,
+                None,
+                generator.data_encoding(),
+                available_subsources,
+            )
         }
     };
     let (key_desc, value_desc) = encoding.desc()?;
@@ -1448,8 +1471,8 @@ pub fn describe_create_views(
 pub fn plan_create_views(
     scx: &StatementContext,
     CreateViewsStatement {
-        if_exists,
-        temporary,
+        if_exists: _,
+        temporary: _,
         source: source_name,
         targets: _,
     }: CreateViewsStatement<Aug>,
@@ -1458,88 +1481,10 @@ pub fn plan_create_views(
         Some(source_desc) => source_desc,
         None => sql_bail!("cannot generate views from subsources"),
     };
-    match &source_desc.connection {
-        SourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
-            load_generator, ..
-        }) => {
-            let generator = as_generator(load_generator);
-            let names = generator.views();
-            if names.is_empty() {
-                sql_bail!(
-                    "cannot generate views from {:?} load generator sources",
-                    load_generator
-                );
-            }
-            let views = names
-                .into_iter()
-                .map(|(table, columns)| {
-                    let mut projection = vec![];
-                    for (i, (column_name, column_type)) in columns.iter().enumerate() {
-                        let column_type = mz_pgrepr::Type::from(&column_type.scalar_type);
-                        let data_type = scx.resolve_type(column_type)?;
-                        projection.push(SelectItem::Expr {
-                            expr: Expr::Cast {
-                                expr: Box::new(Expr::Subscript {
-                                    expr: Box::new(Expr::Identifier(vec![Ident::new("row_data")])),
-                                    positions: vec![SubscriptPosition {
-                                        start: Some(Expr::Value(Value::Number(
-                                            // LIST is one based
-                                            (i + 1).to_string(),
-                                        ))),
-                                        end: None,
-                                        explicit_slice: false,
-                                    }],
-                                }),
-                                data_type,
-                            },
-                            alias: Some(Ident::new(column_name.as_str())),
-                        });
-                    }
-                    let query = Query {
-                        ctes: vec![],
-                        body: SetExpr::Select(Box::new(Select {
-                            distinct: None,
-                            projection,
-                            from: vec![TableWithJoins {
-                                relation: TableFactor::Table {
-                                    name: source_name.clone(),
-                                    alias: None,
-                                },
-                                joins: vec![],
-                            }],
-                            selection: Some(Expr::Op {
-                                op: Op::bare("="),
-                                expr1: Box::new(Expr::Identifier(vec![Ident::new("table")])),
-                                expr2: Some(Box::new(Expr::Value(Value::String(
-                                    table.to_string(),
-                                )))),
-                            }),
-                            group_by: vec![],
-                            having: None,
-                            options: vec![],
-                        })),
-                        order_by: vec![],
-                        limit: None,
-                        offset: None,
-                    };
-                    let mut viewdef = ViewDefinition {
-                        name: UnresolvedObjectName::unqualified(table),
-                        columns: columns
-                            .iter_names()
-                            .map(|name| Ident::from(name.as_str()))
-                            .collect(),
-                        query,
-                    };
-                    plan_view(scx, &mut viewdef, &Params::empty(), temporary)
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(Plan::CreateViews(CreateViewsPlan {
-                views,
-                if_not_exists: if_exists == IfExistsBehavior::Skip,
-            }))
-        }
-        connection => sql_bail!("cannot generate views from {} sources", connection.name()),
-    }
+    sql_bail!(
+        "cannot generate views from {} sources",
+        source_desc.connection.name()
+    );
 }
 
 pub fn describe_create_materialized_view(
