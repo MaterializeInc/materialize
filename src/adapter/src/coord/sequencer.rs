@@ -1244,8 +1244,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // It is not an error for sink connections to become ready after `internal_cmd_rx` is dropped.
                 let result =
                     internal_cmd_tx.send(Message::SinkConnectionReady(SinkConnectionReady {
-                        session,
-                        tx,
+                        session_and_tx: Some((session, tx)),
                         id,
                         oid,
                         create_export_token,
