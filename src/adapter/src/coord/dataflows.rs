@@ -35,7 +35,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_stash::Append;
 
-use crate::catalog::{CatalogItem, CatalogState, MaterializedView, View};
+use crate::catalog::{CatalogItem, CatalogState, MaterializedView, Source, View};
 use crate::coord::ddl::CatalogTxn;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::{Coordinator, DEFAULT_LOGICAL_COMPACTION_WINDOW_MS};
@@ -247,7 +247,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                         dataflow.import_source(
                             *id,
                             source.desc.typ().clone(),
-                            source.source_desc.monotonic(),
+                            self.monotonic_source(source),
                         );
                     }
                     CatalogItem::View(view) => {
@@ -261,7 +261,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                     CatalogItem::Log(log) => {
                         dataflow.import_source(*id, log.variant.desc().typ().clone(), false);
                     }
-                    CatalogItem::StorageCollection(coll) => {
+                    CatalogItem::StorageManagedTable(coll) => {
                         dataflow.import_source(*id, coll.desc.typ().clone(), false);
                     }
                     _ => unreachable!(),
@@ -412,6 +412,16 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         Ok(dataflow)
     }
 
+    /// Determine the given source's monotonicity.
+    fn monotonic_source(&self, source: &Source) -> bool {
+        // TODO(petrosagg): store an inverse mapping of subsource -> source in the catalog so that
+        // we can retrieve monotonicity information from the parent source.
+        match &source.ingestion {
+            Some(ingestion) => ingestion.desc.monotonic(),
+            None => false,
+        }
+    }
+
     /// Determine the given view's monotonicity.
     ///
     /// This recursively traverses the expressions of all (materialized) views involved in the
@@ -432,7 +442,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
     ) -> Result<bool, RecursionLimitError> {
         self.checked_recur(|_| {
             match self.catalog.get_entry(&id).item() {
-                CatalogItem::Source(source) => Ok(source.source_desc.monotonic()),
+                CatalogItem::Source(source) => Ok(self.monotonic_source(source)),
                 CatalogItem::View(View { optimized_expr, .. })
                 | CatalogItem::MaterializedView(MaterializedView { optimized_expr, .. }) => {
                     let mut view_expr = optimized_expr.clone().into_inner();
@@ -479,7 +489,15 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                         &mut HashSet::new(),
                     )
                 }
-                _ => Ok(false),
+                CatalogItem::Secret(_)
+                | CatalogItem::Type(_)
+                | CatalogItem::Connection(_)
+                | CatalogItem::Table(_)
+                | CatalogItem::Log(_)
+                | CatalogItem::Index(_)
+                | CatalogItem::Sink(_)
+                | CatalogItem::Func(_)
+                | CatalogItem::StorageManagedTable(_) => Ok(false),
             }
         })
     }
@@ -508,7 +526,12 @@ pub fn prep_relation_expr(
                         MapFilterProject::new(input.arity()).filter(predicates.iter().cloned());
                     match mfp.into_plan() {
                         Err(e) => coord_bail!("{:?}", e),
-                        Ok(_) => Ok(()),
+                        Ok(mut mfp) => {
+                            for s in mfp.iter_nontemporal_exprs() {
+                                prep_scalar_expr(catalog, s, style)?;
+                            }
+                            Ok(())
+                        }
                     }
                 } else {
                     e.try_visit_scalars_mut1(&mut |s| prep_scalar_expr(catalog, s, style))

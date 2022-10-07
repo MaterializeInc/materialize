@@ -72,12 +72,11 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
 
         > CREATE SOURCE mz_source
           FROM POSTGRES CONNECTION pg
-          (PUBLICATION 'mz_source');
+          (PUBLICATION 'mz_source')
+          FOR ALL TABLES;
 
-        > SELECT COUNT(*) = 1 FROM mz_source;
+        > SELECT COUNT(*) = 1 FROM t1;
         true
-
-        > CREATE VIEWS FROM SOURCE mz_source;
 
         > SELECT f1 FROM t1;
         1

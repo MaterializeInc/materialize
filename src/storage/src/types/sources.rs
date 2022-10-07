@@ -15,26 +15,33 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
+use async_trait::async_trait;
 use bytes::BufMut;
+use differential_dataflow::lattice::Lattice;
 use globset::{Glob, GlobBuilder};
-use mz_ore::now::NowFn;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
+use timely::progress::Antichain;
 use uuid::Uuid;
 
-use mz_persist_types::Codec;
-use mz_proto::TryFromProtoError;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType};
-use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
+use mz_expr::{MirScalarExpr, PartitionId};
+use mz_ore::now::NowFn;
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::write::WriteHandle;
+use mz_persist_types::{Codec, Codec64};
+use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
+use mz_repr::{ColumnType, Diff, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
-use crate::controller::CollectionMetadata;
+use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
+use crate::source::generator::as_generator;
 use crate::types::connections::aws::AwsConfig;
 use crate::types::connections::{KafkaConnection, PostgresConnection, StringOrSecret};
 use crate::types::errors::DataflowError;
 
 use self::encoding::{DataEncoding, DataEncodingInner, SourceDataEncoding};
+use proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
 use proto_load_generator_source_connection::Generator as ProtoGenerator;
 
 pub mod encoding;
@@ -49,9 +56,105 @@ pub struct IngestionDescription<S = ()> {
     /// Source collections made available to this ingestion.
     pub source_imports: BTreeMap<GlobalId, S>,
     /// Additional storage controller metadata needed to ingest this source
+    pub ingestion_metadata: S,
+    /// Collections to be exported by this ingestion.
+    pub source_exports: BTreeMap<GlobalId, SourceExport<S>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct SourceExport<S = ()> {
+    /// The index of the exported output stream
+    pub output_index: usize,
+    /// The collection metadata needed to write the exported data
     pub storage_metadata: S,
-    /// The relation type this ingestion should produce
-    pub typ: RelationType,
+}
+
+#[async_trait]
+impl<T: timely::progress::Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
+    for IngestionDescription<CollectionMetadata>
+{
+    // A `WriteHandle` per output data shard and one for the remap shard. Once we have
+    // source envelopes that keep additional shards we have to specialize this
+    // some more.
+    type State = (
+        Vec<WriteHandle<SourceData, (), T, Diff>>,
+        WriteHandle<(), PartitionId, T, MzOffset>,
+    );
+
+    async fn initialize_state(&self, client_cache: &mut PersistClientCache) -> Self::State {
+        let mut data_handles = vec![];
+        for export in self.source_exports.values() {
+            // Explicit destructuring to force a compile error when the metadata change
+            let CollectionMetadata {
+                persist_location,
+                remap_shard: _,
+                data_shard,
+                // The status shard only contains non-definite status updates
+                status_shard: _,
+            } = &export.storage_metadata;
+            let handle = client_cache
+                .open(persist_location.clone())
+                .await
+                .expect("error creating persist client")
+                .open_writer::<SourceData, (), T, Diff>(*data_shard)
+                .await
+                .unwrap();
+            data_handles.push(handle);
+        }
+
+        let CollectionMetadata {
+            persist_location,
+            remap_shard,
+            data_shard: _,
+            // The status shard only contains non-definite status updates
+            status_shard: _,
+        } = &self.ingestion_metadata;
+        let remap_handle = client_cache
+            .open(persist_location.clone())
+            .await
+            .expect("error creating persist client")
+            .open_writer::<(), PartitionId, T, MzOffset>(*remap_shard)
+            .await
+            .unwrap();
+
+        (data_handles, remap_handle)
+    }
+
+    async fn calculate_resumption_frontier(&self, state: &mut Self::State) -> Antichain<T> {
+        let (data_handles, remap_handle) = state;
+        // An ingestion can resume at the minimum of..
+        let mut resume_upper = Antichain::new();
+
+        // ..the upper frontier of each source export
+        for handle in data_handles {
+            handle.fetch_recent_upper().await;
+            for t in handle.upper().elements() {
+                resume_upper.insert(t.clone());
+            }
+        }
+
+        // ..the upper frontier of ingestion state
+        remap_handle.fetch_recent_upper().await;
+        for t in remap_handle.upper().elements() {
+            resume_upper.insert(t.clone());
+        }
+
+        // ..the upper of an implied envelope state shard. Eventually this could become actual
+        // state shards and this section will be removed.
+        let envelope_upper = match self.desc.envelope {
+            // We can only resume with the None envelope, which is stateless,
+            // or with the [Debezium] Upsert envelope, which is easy
+            //   (re-ingest the last emitted state)
+            SourceEnvelope::None(_) | SourceEnvelope::Upsert(_) => Antichain::new(),
+            // Otherwise re-ingest everything
+            _ => Antichain::from_elem(T::minimum()),
+        };
+        for t in envelope_upper {
+            resume_upper.insert(t);
+        }
+
+        resume_upper
+    }
 }
 
 impl<S> Arbitrary for IngestionDescription<S>
@@ -63,68 +166,101 @@ where
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
-            any::<SourceDesc>(),
-            any::<BTreeMap<GlobalId, S>>(),
-            any::<S>(),
-            any::<RelationType>(),
+            any::<SourceDesc>().boxed(),
+            proptest::collection::btree_map(any::<GlobalId>(), any::<S>(), 1..4).boxed(),
+            proptest::collection::btree_map(any::<GlobalId>(), any::<SourceExport<S>>(), 1..4)
+                .boxed(),
+            any::<S>().boxed(),
         )
-            .prop_map(|(desc, source_imports, storage_metadata, typ)| Self {
-                desc,
-                source_imports,
-                storage_metadata,
-                typ,
-            })
+            .prop_map(
+                |(desc, source_imports, source_exports, ingestion_metadata)| Self {
+                    desc,
+                    source_imports,
+                    source_exports,
+                    ingestion_metadata,
+                },
+            )
             .boxed()
     }
 }
 
 impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMetadata> {
     fn into_proto(&self) -> ProtoIngestionDescription {
-        // we have to turn a BTreeMap into a vec here
-        let source_imports: Vec<_> = self
-            .source_imports
-            .iter()
-            .map(
-                |(id, meta)| proto_ingestion_description::ProtoSourceMetadataImport {
-                    id: Some(id.into_proto()),
-                    storage_metadata: Some(meta.into_proto()),
-                },
-            )
-            .collect();
         ProtoIngestionDescription {
-            source_imports,
+            source_imports: self.source_imports.into_proto(),
+            source_exports: self.source_exports.into_proto(),
+            ingestion_metadata: Some(self.ingestion_metadata.into_proto()),
             desc: Some(self.desc.into_proto()),
-            storage_metadata: Some(self.storage_metadata.into_proto()),
-            typ: Some(self.typ.into_proto()),
         }
     }
 
     fn from_proto(proto: ProtoIngestionDescription) -> Result<Self, TryFromProtoError> {
         Ok(IngestionDescription {
-            // we have to turn a vec into a BTreeMap here
-            source_imports: proto
-                .source_imports
-                .into_iter()
-                .map(
-                    |psmi| -> Result<(GlobalId, CollectionMetadata), TryFromProtoError> {
-                        let id = psmi.id.into_rust_if_some("ProtoSourceMetadataImport::id")?;
-                        let meta = psmi
-                            .storage_metadata
-                            .into_rust_if_some("ProtoSourceMetadataImport::storage_metadata")?;
-                        Ok((id, meta))
-                    },
-                )
-                .collect::<Result<_, TryFromProtoError>>()?,
+            source_imports: proto.source_imports.into_rust()?,
+            source_exports: proto.source_exports.into_rust()?,
             desc: proto
                 .desc
                 .into_rust_if_some("ProtoIngestionDescription::desc")?,
-            storage_metadata: proto
-                .storage_metadata
-                .into_rust_if_some("ProtoIngestionDescription::storage_metadata")?,
-            typ: proto
-                .typ
-                .into_rust_if_some("ProtoIngestionDescription::typ")?,
+            ingestion_metadata: proto
+                .ingestion_metadata
+                .into_rust_if_some("ProtoIngestionDescription::ingestion_metadata")?,
         })
+    }
+}
+
+impl ProtoMapEntry<GlobalId, CollectionMetadata> for ProtoSourceImport {
+    fn from_rust<'a>(entry: (&'a GlobalId, &'a CollectionMetadata)) -> Self {
+        ProtoSourceImport {
+            id: Some(entry.0.into_proto()),
+            storage_metadata: Some(entry.1.into_proto()),
+        }
+    }
+
+    fn into_rust(self) -> Result<(GlobalId, CollectionMetadata), TryFromProtoError> {
+        Ok((
+            self.id.into_rust_if_some("ProtoSourceImport::id")?,
+            self.storage_metadata
+                .into_rust_if_some("ProtoSourceImport::storage_metadata")?,
+        ))
+    }
+}
+
+impl ProtoMapEntry<GlobalId, SourceExport<CollectionMetadata>> for ProtoSourceExport {
+    fn from_rust<'a>(entry: (&'a GlobalId, &'a SourceExport<CollectionMetadata>)) -> Self {
+        ProtoSourceExport {
+            id: Some(entry.0.into_proto()),
+            output_index: entry.1.output_index.into_proto(),
+            storage_metadata: Some(entry.1.storage_metadata.into_proto()),
+        }
+    }
+
+    fn into_rust(self) -> Result<(GlobalId, SourceExport<CollectionMetadata>), TryFromProtoError> {
+        Ok((
+            self.id.into_rust_if_some("ProtoSourceExport::id")?,
+            SourceExport {
+                output_index: self.output_index.into_rust()?,
+                storage_metadata: self
+                    .storage_metadata
+                    .into_rust_if_some("ProtoSourceExport::storage_metadata")?,
+            },
+        ))
+    }
+}
+
+impl<S> Arbitrary for SourceExport<S>
+where
+    S: Arbitrary + 'static,
+{
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (any::<usize>(), any::<S>())
+            .prop_map(|(output_index, storage_metadata)| Self {
+                output_index,
+                storage_metadata,
+            })
+            .boxed()
     }
 }
 
@@ -538,8 +674,10 @@ impl RustType<ProtoNoneEnvelope> for NoneEnvelope {
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct UpsertEnvelope {
+    /// Full arity, including the key columns
+    pub source_arity: usize,
     /// What style of Upsert we are using
     pub style: UpsertStyle,
     /// The indices of the keys in the full value row, used
@@ -547,9 +685,29 @@ pub struct UpsertEnvelope {
     pub key_indices: Vec<usize>,
 }
 
+impl Arbitrary for UpsertEnvelope {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<usize>(),
+            any::<UpsertStyle>(),
+            proptest::collection::vec(any::<usize>(), 1..4),
+        )
+            .prop_map(|(source_arity, style, key_indices)| Self {
+                source_arity,
+                style,
+                key_indices,
+            })
+            .boxed()
+    }
+}
+
 impl RustType<ProtoUpsertEnvelope> for UpsertEnvelope {
     fn into_proto(&self) -> ProtoUpsertEnvelope {
         ProtoUpsertEnvelope {
+            source_arity: self.source_arity.into_proto(),
             style: Some(self.style.into_proto()),
             key_indices: self.key_indices.into_proto(),
         }
@@ -557,6 +715,7 @@ impl RustType<ProtoUpsertEnvelope> for UpsertEnvelope {
 
     fn from_proto(proto: ProtoUpsertEnvelope) -> Result<Self, TryFromProtoError> {
         Ok(UpsertEnvelope {
+            source_arity: proto.source_arity.into_rust()?,
             style: proto
                 .style
                 .into_rust_if_some("ProtoUpsertEnvelope::style")?,
@@ -830,16 +989,19 @@ impl UnplannedSourceEnvelope {
     ///
     /// Panics if the input envelope is `UnplannedSourceEnvelope::Upsert` and
     /// key is not passed as `Some`
+    // TODO(petrosagg): This API looks very error prone. Can we statically enforce it somehow?
     fn into_source_envelope(
         self,
         key: Option<Vec<usize>>,
         key_arity: Option<usize>,
+        source_arity: Option<usize>,
     ) -> SourceEnvelope {
         match self {
             UnplannedSourceEnvelope::Upsert(upsert_style) => {
                 SourceEnvelope::Upsert(UpsertEnvelope {
                     style: upsert_style,
                     key_indices: key.expect("into_source_envelope to be passed correct parameters for UnplannedSourceEnvelope::Upsert"),
+                    source_arity: source_arity.expect("into_source_envelope to be passed correct parameters for UnplannedSourceEnvelope::Upsert"),
                 })
             },
             UnplannedSourceEnvelope::Debezium(inner) => {
@@ -868,7 +1030,7 @@ impl UnplannedSourceEnvelope {
                     Some(desc) => desc,
                     None => {
                         return Ok((
-                            self.into_source_envelope(None, None),
+                            self.into_source_envelope(None, None, None),
                             value_desc.concat(metadata_desc),
                         ))
                     }
@@ -909,9 +1071,10 @@ impl UnplannedSourceEnvelope {
                         (key_desc.with_key(vec![0]).concat(value_desc), Some(vec![0]))
                     }
                 };
+                let desc = keyed.concat(metadata_desc);
                 (
-                    self.into_source_envelope(key, Some(key_arity)),
-                    keyed.concat(metadata_desc),
+                    self.into_source_envelope(key, Some(key_arity), Some(desc.arity())),
+                    desc,
                 )
             }
             UnplannedSourceEnvelope::Debezium(DebeziumEnvelope { after_idx, .. })
@@ -929,7 +1092,10 @@ impl UnplannedSourceEnvelope {
                             _ => desc,
                         };
 
-                        (self.into_source_envelope(key, None), desc)
+                        (
+                            self.into_source_envelope(key, None, Some(desc.arity())),
+                            desc,
+                        )
                     }
                     ty => bail!(
                         "Incorrect type for Debezium value, expected Record, got {:?}",
@@ -947,7 +1113,7 @@ impl UnplannedSourceEnvelope {
                             // TODO maybe check this by name
                             match &fields[0].1.scalar_type {
                                 ScalarType::Record { fields, .. } => (
-                                    self.into_source_envelope(None, None),
+                                    self.into_source_envelope(None, None, None),
                                     RelationDesc::from_names_and_types(fields.clone()),
                                 ),
                                 ty => {
@@ -997,9 +1163,9 @@ impl Arbitrary for KafkaSourceConnection {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
             any::<KafkaConnection>(),
-            any::<BTreeMap<String, StringOrSecret>>(),
+            proptest::collection::btree_map(any::<String>(), any::<StringOrSecret>(), 1..4),
             any::<String>(),
-            any::<HashMap<i32, i64>>(),
+            proptest::collection::hash_map(any::<i32>(), any::<i64>(), 1..4),
             any::<Option<String>>(),
             any::<String>(),
             any::<Option<IncludedColumnPos>>(),
@@ -1223,6 +1389,22 @@ impl SourceDesc {
         }
     }
 
+    /// The number of outputs this source will produce
+    pub fn num_outputs(&self) -> usize {
+        let subsources = match &self.connection {
+            SourceConnection::Kafka(_) | SourceConnection::Kinesis(_) | SourceConnection::S3(_) => {
+                0
+            }
+            SourceConnection::LoadGenerator(connection) => match &connection.load_generator {
+                generator @ LoadGenerator::Auction => as_generator(generator).views().len(),
+                LoadGenerator::Counter => 0,
+            },
+            SourceConnection::Postgres(connection) => connection.details.tables.len(),
+        };
+        // Every ingestion produces a main stream plus subsource streams
+        subsources + 1
+    }
+
     pub fn name(&self) -> &'static str {
         self.connection.name()
     }
@@ -1426,11 +1608,37 @@ impl RustType<ProtoKinesisSourceConnection> for KinesisSourceConnection {
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PostgresSourceConnection {
     pub connection: PostgresConnection,
+    /// The cast expressions to convert the incoming string encoded rows to their target types
+    pub table_casts: Vec<Vec<MirScalarExpr>>,
     pub publication: String,
     pub details: PostgresSourceDetails,
+}
+
+impl Arbitrary for PostgresSourceConnection {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<PostgresConnection>(),
+            proptest::collection::vec(
+                proptest::collection::vec(any::<MirScalarExpr>(), 1..4),
+                1..4,
+            ),
+            any::<String>(),
+            any::<PostgresSourceDetails>(),
+        )
+            .prop_map(|(connection, table_casts, publication, details)| Self {
+                connection,
+                table_casts,
+                publication,
+                details,
+            })
+            .boxed()
+    }
 }
 
 impl crate::source::types::SourceConnection for PostgresSourceConnection {
@@ -1441,14 +1649,34 @@ impl crate::source::types::SourceConnection for PostgresSourceConnection {
 
 impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
     fn into_proto(&self) -> ProtoPostgresSourceConnection {
+        use proto_postgres_source_connection::ProtoPostgresTableCast;
+        let mut table_casts = vec![];
+        for table_cast in self.table_casts.iter() {
+            table_casts.push(ProtoPostgresTableCast {
+                column_casts: table_cast
+                    .iter()
+                    .cloned()
+                    .map(|cast| cast.into_proto())
+                    .collect(),
+            });
+        }
         ProtoPostgresSourceConnection {
             connection: Some(self.connection.into_proto()),
             publication: self.publication.clone(),
             details: Some(self.details.into_proto()),
+            table_casts,
         }
     }
 
     fn from_proto(proto: ProtoPostgresSourceConnection) -> Result<Self, TryFromProtoError> {
+        let mut table_casts = vec![];
+        for table_cast in proto.table_casts {
+            let mut column_casts = vec![];
+            for cast in table_cast.column_casts {
+                column_casts.push(cast.into_rust()?);
+            }
+            table_casts.push(column_casts);
+        }
         Ok(PostgresSourceConnection {
             connection: proto
                 .connection
@@ -1457,6 +1685,7 @@ impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
             details: proto
                 .details
                 .into_rust_if_some("ProtoPostgresSourceConnection::details")?,
+            table_casts,
         })
     }
 }
@@ -1510,14 +1739,14 @@ pub trait Generator {
     fn data_encoding(&self) -> SourceDataEncoding {
         SourceDataEncoding::Single(DataEncoding::new(self.data_encoding_inner()))
     }
-    /// Returns the list of table names and their column types for use with `CREATE
-    /// VIEWS`. Returns empty if `CREATE VIEWS` should error.
+    /// Returns the list of table names and their column types that this generator generates
     fn views(&self) -> Vec<(&str, RelationDesc)>;
 
     /// Returns a batch of rows generated by the source. All rows in the same
     /// batch are produced at the same logical offset to allow demonstrating strict
     /// serializability within the system.
-    fn by_seed(&self, now: NowFn, seed: Option<u64>) -> Box<dyn Iterator<Item = Vec<Row>>>;
+    fn by_seed(&self, now: NowFn, seed: Option<u64>)
+        -> Box<dyn Iterator<Item = (usize, Vec<Row>)>>;
 }
 
 impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnection {

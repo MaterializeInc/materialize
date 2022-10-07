@@ -136,7 +136,6 @@ async fn execute_request(
             matches!(
                 execute_response,
                 ExecuteResponseKind::Fetch
-                    | ExecuteResponseKind::SetVariable
                     | ExecuteResponseKind::Subscribing
                     | ExecuteResponseKind::CopyTo
                     | ExecuteResponseKind::CopyFrom
@@ -351,6 +350,7 @@ async fn execute_stmt(
         | ExecuteResponse::DroppedConnection
         | ExecuteResponse::EmptyQuery
         | ExecuteResponse::Inserted(_)
+        | ExecuteResponse::SetVariable { .. }
         | ExecuteResponse::StartedTransaction { .. }
         | ExecuteResponse::TransactionExited {
             ..
@@ -390,7 +390,6 @@ async fn execute_stmt(
             }
         }
         res @ (ExecuteResponse::Fetch { .. }
-        | ExecuteResponse::SetVariable { .. }
         | ExecuteResponse::Subscribing { .. }
         | ExecuteResponse::CopyTo { .. }
         | ExecuteResponse::CopyFrom { .. }

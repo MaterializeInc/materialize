@@ -697,6 +697,15 @@ where
 }
 
 /// Accumulates values for the various types of accumulable aggregations.
+///
+/// We assume that there are not more than 2^32 elements for the aggregation.
+/// Thus we can perform a summation over i32 in an i64 accumulator
+/// and not worry about exceeding its bounds.
+///
+/// The float accumulator performs accumulation in fixed point arithmetic. The fixed
+/// point representation has less precision than a double. It is entirely possible
+/// that the values of the accumulator overflow, thus we have to use wrapping arithmetic
+/// to preserve group guarantees.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 enum AccumInner {
     /// Accumulates boolean values.
@@ -814,7 +823,10 @@ impl Semigroup for AccumInner {
                     non_nulls: other_non_nulls,
                 },
             ) => {
-                *accum += other_accum;
+                *accum = accum.checked_add(*other_accum).unwrap_or_else(|| {
+                    tracing::warn!("Float accumulator overflow. Incorrect results possible");
+                    accum.wrapping_add(*other_accum)
+                });
                 *pos_infs += other_pos_infs;
                 *neg_infs += other_neg_infs;
                 *nans += other_nans;
@@ -897,7 +909,10 @@ impl Multiply<Diff> for AccumInner {
                 nans,
                 non_nulls,
             } => AccumInner::Float {
-                accum: accum * i128::from(factor),
+                accum: accum.checked_mul(i128::from(factor)).unwrap_or_else(|| {
+                    tracing::warn!("Float accumulator overflow. Incorrect results possible");
+                    accum.wrapping_mul(i128::from(factor))
+                }),
                 pos_infs: pos_infs * factor,
                 neg_infs: neg_infs * factor,
                 nans: nans * factor,
@@ -1088,6 +1103,7 @@ where
                 let accum = if nans > 0 || pos_infs > 0 || neg_infs > 0 {
                     0
                 } else {
+                    // This operation will truncate to i128::MAX if out of range.
                     (n * float_scale) as i128
                 };
 
@@ -1291,6 +1307,8 @@ where
                             // If any non-nulls, just report the aggregate.
                             (AggregateFunc::SumInt16, AccumInner::SimpleNumber { accum, .. })
                             | (AggregateFunc::SumInt32, AccumInner::SimpleNumber { accum, .. }) => {
+                                // This conversion is safe, as long as we have less than 2^32
+                                // summands.
                                 Datum::Int64(*accum as i64)
                             }
                             (AggregateFunc::SumInt64, AccumInner::SimpleNumber { accum, .. }) => {

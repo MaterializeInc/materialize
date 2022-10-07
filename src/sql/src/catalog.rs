@@ -314,7 +314,7 @@ pub trait CatalogItem {
     ///
     /// If the catalog item is not of a type that contains a `SourceDesc`
     /// (i.e., anything other than sources), it returns an error.
-    fn source_desc(&self) -> Result<&SourceDesc, CatalogError>;
+    fn source_desc(&self) -> Result<Option<&SourceDesc>, CatalogError>;
 
     /// Returns the resolved connection.
     ///
@@ -334,6 +334,9 @@ pub trait CatalogItem {
 
     /// Returns the IDs of the catalog items that depend upon this catalog item.
     fn used_by(&self) -> &[GlobalId];
+
+    /// If this catalog item is a source, it return the IDs of its subsources
+    fn subsources(&self) -> Vec<GlobalId>;
 
     /// Returns the index details associated with the catalog item, if the
     /// catalog item is an index.

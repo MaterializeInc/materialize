@@ -1595,6 +1595,8 @@ impl<'a> Parser<'a> {
             self.parse_create_index()
         } else if self.peek_keyword(SOURCE) {
             self.parse_create_source()
+        } else if self.peek_keyword(SUBSOURCE) {
+            self.parse_create_subsource()
         } else if self.peek_keyword(TABLE)
             || self.peek_keywords(&[TEMP, TABLE])
             || self.peek_keywords(&[TEMPORARY, TABLE])
@@ -1618,9 +1620,6 @@ impl<'a> Parser<'a> {
             if self.parse_keyword(VIEW) {
                 self.index = index;
                 self.parse_create_view()
-            } else if self.parse_keyword(VIEWS) {
-                self.index = index;
-                self.parse_create_views()
             } else {
                 self.expected(
                     self.peek_pos(),
@@ -2189,6 +2188,21 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_create_subsource(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(SUBSOURCE)?;
+        let if_not_exists = self.parse_if_not_exists()?;
+        let name = self.parse_object_name()?;
+
+        let (columns, constraints) = self.parse_columns(Mandatory)?;
+
+        Ok(Statement::CreateSubsource(CreateSubsourceStatement {
+            name,
+            if_not_exists,
+            columns,
+            constraints,
+        }))
+    }
+
     fn parse_create_source(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(SOURCE)?;
         let if_not_exists = self.parse_if_not_exists()?;
@@ -2226,6 +2240,27 @@ impl<'a> Parser<'a> {
             vec![]
         };
 
+        let subsources = if self.parse_keywords(&[FOR, TABLES]) {
+            self.expect_token(&Token::LParen)?;
+            let subsources = self.parse_comma_separated(|parser| {
+                let name = parser.parse_object_name()?;
+                let subsource = if parser.parse_keyword(INTO) {
+                    CreateSourceSubsource::Resolved(name, parser.parse_raw_name()?)
+                } else if parser.parse_keyword(AS) {
+                    CreateSourceSubsource::Aliased(name, parser.parse_object_name()?)
+                } else {
+                    CreateSourceSubsource::Bare(name)
+                };
+                Ok(subsource)
+            })?;
+            self.expect_token(&Token::RParen)?;
+            Some(CreateSourceSubsources::Subset(subsources))
+        } else if self.parse_keywords(&[FOR, ALL, TABLES]) {
+            Some(CreateSourceSubsources::All)
+        } else {
+            None
+        };
+
         Ok(Statement::CreateSource(CreateSourceStatement {
             name,
             col_names,
@@ -2236,6 +2271,7 @@ impl<'a> Parser<'a> {
             if_not_exists,
             key_constraint,
             with_options,
+            subsources,
         }))
     }
 
@@ -2349,7 +2385,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_sink_option(&mut self) -> Result<CreateSinkOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[SNAPSHOT])? {
+        let name = match self.expect_one_of_keywords(&[SIZE, SNAPSHOT])? {
+            SIZE => CreateSinkOptionName::Size,
             SNAPSHOT => CreateSinkOptionName::Snapshot,
             _ => unreachable!(),
         };
@@ -2569,45 +2606,6 @@ impl<'a> Parser<'a> {
             columns,
             query,
         })
-    }
-
-    fn parse_create_views(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let mut if_exists = if self.parse_keyword(OR) {
-            self.expect_keyword(REPLACE)?;
-            IfExistsBehavior::Replace
-        } else {
-            IfExistsBehavior::Error
-        };
-        let temporary = self.parse_keyword(TEMPORARY) | self.parse_keyword(TEMP);
-        self.expect_keyword(VIEWS)?;
-        if if_exists == IfExistsBehavior::Error && self.parse_if_not_exists()? {
-            if_exists = IfExistsBehavior::Skip;
-        }
-
-        self.expect_keywords(&[FROM, SOURCE])?;
-        let source = self.parse_raw_name()?;
-        let targets = if self.consume_token(&Token::LParen) {
-            let targets = self.parse_comma_separated(|parser| {
-                let name = parser.parse_object_name()?;
-                let alias = if parser.parse_keyword(AS) {
-                    Some(parser.parse_object_name()?)
-                } else {
-                    None
-                };
-                Ok(CreateViewsSourceTarget { name, alias })
-            })?;
-            self.expect_token(&Token::RParen)?;
-            Some(targets)
-        } else {
-            None
-        };
-
-        Ok(Statement::CreateViews(CreateViewsStatement {
-            temporary,
-            if_exists,
-            source,
-            targets,
-        }))
     }
 
     fn parse_create_materialized_view(&mut self) -> Result<Statement<Raw>, ParserError> {

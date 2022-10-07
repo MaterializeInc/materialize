@@ -50,7 +50,7 @@ where
         id: source_id,
         worker_count,
         worker_id,
-        storage_metadata,
+        storage_metadata: _,
         persist_clients,
         ..
     } = config;
@@ -97,15 +97,11 @@ where
             // TODO: determine what interval we want here.
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
 
-            // The lock MUST be dropped before we enter the main loop.
-            let persist_client = persist_clients
-                .lock()
-                .await
-                .open(storage_metadata.persist_location)
-                .await
-                .expect("error creating persist client");
-
-            let mut calc_state = calc.initialize_state(&persist_client).await;
+            let mut calc_state = {
+                // The lock MUST be dropped before we enter the main loop.
+                let mut persist_clients = persist_clients.lock().await;
+                calc.initialize_state(&mut persist_clients).await
+            };
 
             while scheduler.notified().await {
                 // If the downstream source has finished, we exit early.

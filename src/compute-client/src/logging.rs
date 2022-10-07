@@ -289,18 +289,21 @@ pub static DEFAULT_LOG_VARIANTS: Lazy<Vec<LogVariant>> = Lazy::new(|| {
 pub enum LogView {
     MzArrangementSharing,
     MzArrangementSizes,
+    MzComputeOperatorDurations,
     MzDataflowNames,
     MzDataflowOperatorDataflows,
     MzDataflowOperatorReachability,
-    MzMaterializationFrontiers,
-    MzMaterializationSourceFrontiers,
+    MzComputeFrontiers,
+    MzComputeImportFrontiers,
     MzMessageCounts,
+    MzPeekDurations,
+    MzRawComputeOperatorDurations,
     MzRecordsPerDataflowOperator,
     MzRecordsPerDataflow,
     MzRecordsPerDataflowGlobal,
     MzSchedulingElapsed,
-    MzSchedulingHistogram,
     MzSchedulingParks,
+    MzWorkerComputeDelays,
 }
 
 pub static DEFAULT_LOG_VIEWS: Lazy<Vec<LogView>> = Lazy::new(|| {
@@ -311,15 +314,18 @@ pub static DEFAULT_LOG_VIEWS: Lazy<Vec<LogView>> = Lazy::new(|| {
         LogView::MzDataflowNames,
         LogView::MzDataflowOperatorDataflows,
         LogView::MzDataflowOperatorReachability,
-        LogView::MzMaterializationFrontiers,
-        LogView::MzMaterializationSourceFrontiers,
+        LogView::MzComputeFrontiers,
+        LogView::MzComputeImportFrontiers,
         LogView::MzMessageCounts,
+        LogView::MzPeekDurations,
         LogView::MzRecordsPerDataflowOperator,
         LogView::MzRecordsPerDataflow,
         LogView::MzRecordsPerDataflowGlobal,
         LogView::MzSchedulingElapsed,
-        LogView::MzSchedulingHistogram,
+        LogView::MzRawComputeOperatorDurations,
+        LogView::MzComputeOperatorDurations,
         LogView::MzSchedulingParks,
+        LogView::MzWorkerComputeDelays,
     ]
 });
 
@@ -414,7 +420,7 @@ impl LogView {
                 "mz_dataflow_operator_reachability_{}",
             ),
 
-            LogView::MzMaterializationFrontiers => (
+            LogView::MzComputeFrontiers => (
                 "SELECT
                     export_id, pg_catalog.min(time) AS time
                 FROM mz_internal.mz_worker_compute_frontiers_{}
@@ -422,7 +428,7 @@ impl LogView {
                 "mz_compute_frontiers_{}",
             ),
 
-            LogView::MzMaterializationSourceFrontiers => (
+            LogView::MzComputeImportFrontiers => (
                 "SELECT
                     export_id, import_id, pg_catalog.min(time) AS time
                 FROM mz_internal.mz_worker_compute_import_frontiers_{}
@@ -461,6 +467,16 @@ impl LogView {
                     received_cte.received
                 FROM sent_cte JOIN received_cte USING (channel_id, from_worker_id, to_worker_id)",
                 "mz_message_counts_{}",
+            ),
+
+            LogView::MzPeekDurations => (
+                "SELECT
+                    worker_id,
+                    duration_ns/1000 * '1 microsecond'::interval AS duration,
+                    count
+                FROM
+                    mz_internal.mz_raw_peek_durations_{}",
+                "mz_peek_durations_{}",
             ),
 
             LogView::MzRecordsPerDataflowOperator => (
@@ -531,14 +547,25 @@ impl LogView {
                 "mz_scheduling_elapsed_{}",
             ),
 
-            LogView::MzSchedulingHistogram => (
+            LogView::MzRawComputeOperatorDurations => (
                 "SELECT
                     id, worker_id, duration_ns, pg_catalog.count(*) AS count
                 FROM
-                    mz_internal.mz_scheduling_histogram_internal_{}
+                    mz_internal.mz_raw_compute_operator_durations_internal_{}
                 GROUP BY
                     id, worker_id, duration_ns",
-                "mz_scheduling_histogram_{}",
+                "mz_raw_compute_operator_durations_{}",
+            ),
+
+            LogView::MzComputeOperatorDurations => (
+                "SELECT
+                    id,
+                    worker_id,
+                    duration_ns/1000 * '1 microsecond'::interval AS duration,
+                    count
+                FROM
+                    mz_internal.mz_raw_compute_operator_durations_{}",
+                "mz_compute_operator_durations_{}",
             ),
 
             LogView::MzSchedulingParks => (
@@ -549,6 +576,18 @@ impl LogView {
                 GROUP BY
                     worker_id, slept_for, requested",
                 "mz_scheduling_parks_{}",
+            ),
+
+            LogView::MzWorkerComputeDelays => (
+                "SELECT
+                    export_id,
+                    import_id,
+                    worker_id,
+                    delay_ns/1000 * '1 microsecond'::interval AS delay,
+                    count
+                FROM
+                    mz_internal.mz_raw_worker_compute_delays_{}",
+                "mz_worker_compute_delays_{}",
             ),
         }
     }

@@ -80,3 +80,29 @@ SELECT 1::float(0);
 
 query error precision for type float must be within \(\[1-53\]\)
 SELECT 1::float(55);
+
+
+# Test SUM() with floats
+
+statement ok
+create table t1 (f1 double, f2 double)
+
+statement ok
+insert into t1 values (1e31, 1e31), (1e31, 1e31)
+
+query T
+SELECT f1+f2 FROM t1
+----
+19999999999999999271792589930496.000
+19999999999999999271792589930496.000
+
+query T
+SELECT SUM(f1) FROM t1
+----
+-282409603651671152154661355520.000
+
+# This *should* be zero, known issue https://github.com/MaterializeInc/materialize/issues/15186
+query T
+SELECT MIN(f1+f2)-SUM(f1) FROM t1
+----
+20282409603651670423947251286016.000

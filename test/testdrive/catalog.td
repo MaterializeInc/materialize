@@ -459,9 +459,7 @@ mz_array_types
 mz_audit_events
 mz_base_types
 mz_clusters
-mz_cluster_replicas_base
-mz_cluster_replica_statuses
-mz_cluster_replica_heartbeats
+mz_cluster_replicas
 mz_columns
 mz_connections
 mz_databases
@@ -480,19 +478,16 @@ mz_secrets
 mz_sinks
 mz_sources
 mz_ssh_tunnel_connections
-mz_storage_usage
 mz_tables
 mz_types
-mz_view_foreign_keys
-mz_view_keys
 mz_views
 
 > SHOW VIEWS FROM mz_catalog
 name
 -----------------------------------
-mz_cluster_replicas
 mz_objects
 mz_relations
+mz_storage_usage
 
 # Check default sources, tables, and views in mz_internal.
 
@@ -525,18 +520,19 @@ mz_message_counts_received_internal             log   <null>
 mz_message_counts_received_internal_1           log   <null>
 mz_message_counts_sent_internal                 log   <null>
 mz_message_counts_sent_internal_1               log   <null>
+mz_raw_peek_durations                           log   <null>
+mz_raw_peek_durations_1                         log   <null>
+mz_raw_worker_compute_delays                    log   <null>
+mz_raw_worker_compute_delays_1                  log   <null>
 mz_active_peeks                                 log   <null>
-mz_active_peeks_1                                log   <null>
-mz_peek_durations                               log   <null>
-mz_peek_durations_1                             log   <null>
+mz_active_peeks_1                               log   <null>
 mz_scheduling_elapsed_internal                  log   <null>
 mz_scheduling_elapsed_internal_1                log   <null>
-mz_scheduling_histogram_internal                log   <null>
-mz_scheduling_histogram_internal_1              log   <null>
+mz_raw_compute_operator_durations_internal      log   <null>
+mz_raw_compute_operator_durations_internal_1    log   <null>
 mz_scheduling_parks_internal                    log   <null>
 mz_scheduling_parks_internal_1                  log   <null>
-mz_worker_compute_delays                        log   <null>
-mz_worker_compute_delays_1                      log   <null>
+mz_storage_shards                               source <null>
 mz_worker_compute_frontiers                     log   <null>
 mz_worker_compute_frontiers_1                   log   <null>
 mz_worker_compute_import_frontiers              log   <null>
@@ -545,6 +541,11 @@ mz_worker_compute_import_frontiers_1            log   <null>
 > SHOW TABLES FROM mz_internal
 name
 ----
+mz_cluster_replica_heartbeats
+mz_cluster_replica_statuses
+mz_storage_usage_by_shard
+mz_view_foreign_keys
+mz_view_keys
 
 > SHOW VIEWS FROM mz_internal
 name
@@ -563,8 +564,14 @@ mz_compute_frontiers
 mz_compute_frontiers_1
 mz_compute_import_frontiers
 mz_compute_import_frontiers_1
+mz_compute_operator_durations
+mz_compute_operator_durations_1
 mz_message_counts
 mz_message_counts_1
+mz_peek_durations
+mz_peek_durations_1
+mz_raw_compute_operator_durations
+mz_raw_compute_operator_durations_1
 mz_records_per_dataflow
 mz_records_per_dataflow_1
 mz_records_per_dataflow_global
@@ -573,10 +580,10 @@ mz_records_per_dataflow_operator
 mz_records_per_dataflow_operator_1
 mz_scheduling_elapsed
 mz_scheduling_elapsed_1
-mz_scheduling_histogram
-mz_scheduling_histogram_1
 mz_scheduling_parks
 mz_scheduling_parks_1
+mz_worker_compute_delays
+mz_worker_compute_delays_1
 
 > CREATE SCHEMA tester
 

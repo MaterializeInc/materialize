@@ -670,6 +670,7 @@ fn construct_source_message(
         _ => None,
     };
     Ok(SourceMessage {
+        output: 0,
         partition: PartitionId::Kafka(msg.partition()),
         offset: u64::try_from(msg.offset())
             .map_err(|_| {

@@ -37,7 +37,7 @@ use crate::command::proto_dataflow_description::{
 };
 use crate::logging::LoggingConfig;
 use crate::plan::Plan;
-use crate::sinks::ComputeSinkDesc;
+use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_client.command.rs"));
 
@@ -642,6 +642,16 @@ where
             .keys()
             .chain(self.sink_exports.keys())
             .cloned()
+    }
+
+    /// Identifiers of exported subscribe sinks.
+    pub fn subscribe_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.sink_exports
+            .iter()
+            .filter_map(|(id, desc)| match desc.connection {
+                ComputeSinkConnection::Subscribe(_) => Some(*id),
+                _ => None,
+            })
     }
 
     /// Returns the description of the object to build with the specified

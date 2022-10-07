@@ -29,12 +29,12 @@ use mz_storage::types::hosts::StorageHostConfig;
 use mz_storage::types::sinks::{KafkaSinkConnection, StorageSinkConnection};
 
 use crate::catalog::builtin::{
-    MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS_BASE,
+    MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS,
     MZ_CLUSTER_REPLICA_HEARTBEATS, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS,
     MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS,
     MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS,
-    MZ_SECRETS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE, MZ_TABLES,
-    MZ_TYPES, MZ_VIEWS,
+    MZ_SECRETS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connection, Error, ErrorKind, Func, Index, MaterializedView, Sink,
@@ -139,11 +139,11 @@ impl CatalogState {
         };
 
         BuiltinTableUpdate {
-            id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS_BASE),
+            id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS),
             row: Row::pack_slice(&[
-                Datum::UInt64(compute_instance_id),
                 Datum::UInt64(id),
                 Datum::String(name),
+                Datum::UInt64(compute_instance_id),
                 Datum::from(size),
                 Datum::from(az),
             ]),
@@ -198,19 +198,29 @@ impl CatalogState {
             }
             CatalogItem::Index(index) => self.pack_index_update(id, oid, name, index, diff),
             CatalogItem::Table(_) => self.pack_table_update(id, oid, schema_id, name, diff),
-            CatalogItem::Source(source) => self.pack_source_update(
-                id,
-                oid,
-                schema_id,
-                name,
-                source.source_desc.name(),
-                source.connection_id,
-                match &source.host_config {
-                    StorageHostConfig::Remote { .. } => None,
-                    StorageHostConfig::Managed { size, .. } => Some(size),
-                },
-                diff,
-            ),
+            CatalogItem::Source(source) => {
+                let source_type = match &source.ingestion {
+                    Some(ingestion) => ingestion.desc.name(),
+                    None => "subsource",
+                };
+                let connection_id = source
+                    .ingestion
+                    .as_ref()
+                    .and_then(|ingestion| ingestion.connection_id);
+                self.pack_source_update(
+                    id,
+                    oid,
+                    schema_id,
+                    name,
+                    source_type,
+                    connection_id,
+                    match &source.host_config {
+                        StorageHostConfig::Remote { .. } => None,
+                        StorageHostConfig::Managed { size, .. } => Some(size),
+                    },
+                    diff,
+                )
+            }
             CatalogItem::View(view) => self.pack_view_update(id, oid, schema_id, name, view, diff),
             CatalogItem::MaterializedView(mview) => {
                 self.pack_materialized_view_update(id, oid, schema_id, name, mview, diff)
@@ -222,16 +232,9 @@ impl CatalogState {
             CatalogItem::Connection(connection) => {
                 self.pack_connection_update(id, oid, schema_id, name, connection, diff)
             }
-            CatalogItem::StorageCollection(_) => self.pack_source_update(
-                id,
-                oid,
-                schema_id,
-                name,
-                "storage collection",
-                None,
-                None,
-                diff,
-            ),
+            CatalogItem::StorageManagedTable(_) => {
+                self.pack_source_update(id, oid, schema_id, name, "source", None, None, diff)
+            }
         };
 
         if let Ok(desc) = entry.desc(&self.resolve_full_name(entry.name(), entry.conn_id())) {
@@ -511,6 +514,12 @@ impl CatalogState {
                     });
                 }
             }
+            let size = match &sink.host_config {
+                mz_storage::types::hosts::StorageHostConfig::Remote { .. } => Datum::Null,
+                mz_storage::types::hosts::StorageHostConfig::Managed { size, .. } => {
+                    Datum::String(size)
+                }
+            };
             updates.push(BuiltinTableUpdate {
                 id: self.resolve_builtin_table(&MZ_SINKS),
                 row: Row::pack_slice(&[
@@ -520,6 +529,7 @@ impl CatalogState {
                     Datum::String(name),
                     Datum::String(connection.name()),
                     Datum::from(sink.connection_id.map(|id| id.to_string()).as_deref()),
+                    size,
                 ]),
                 diff,
             });
@@ -796,33 +806,19 @@ impl CatalogState {
 
     pub fn pack_storage_usage_update(
         &self,
-        event: &VersionedStorageUsage,
+        VersionedStorageUsage::V1(event): &VersionedStorageUsage,
     ) -> Result<BuiltinTableUpdate, Error> {
-        let (id, object_id, size_bytes, collection_timestamp): (u64, &Option<String>, u64, u64) =
-            match event {
-                VersionedStorageUsage::V1(ev) => {
-                    (ev.id, &ev.object_id, ev.size_bytes, ev.collection_timestamp)
-                }
-            };
-
-        let table = self.resolve_builtin_table(&MZ_STORAGE_USAGE);
-        let object_id_val = match object_id {
-            Some(s) => Datum::String(s),
-            None => Datum::Null,
-        };
-        let dt = mz_ore::now::to_datetime(collection_timestamp).naive_utc();
-
+        let id = self.resolve_builtin_table(&MZ_STORAGE_USAGE_BY_SHARD);
         let row = Row::pack_slice(&[
-            Datum::UInt64(id),
-            object_id_val,
-            Datum::UInt64(size_bytes),
-            Datum::TimestampTz(DateTime::from_utc(dt, Utc).try_into().expect("must fit")),
+            Datum::UInt64(event.id),
+            Datum::from(event.shard_id.as_deref()),
+            Datum::UInt64(event.size_bytes),
+            Datum::TimestampTz(
+                mz_ore::now::to_datetime(event.collection_timestamp)
+                    .try_into()
+                    .expect("must fit"),
+            ),
         ]);
-        let diff = 1;
-        Ok(BuiltinTableUpdate {
-            id: table,
-            row,
-            diff,
-        })
+        Ok(BuiltinTableUpdate { id, row, diff: 1 })
     }
 }

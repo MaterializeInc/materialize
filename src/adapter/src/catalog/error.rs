@@ -10,6 +10,7 @@
 use std::fmt;
 
 use mz_ore::str::StrExt;
+use mz_repr::GlobalId;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 
 #[derive(Debug, thiserror::Error)]
@@ -39,8 +40,8 @@ pub enum ErrorKind {
     ClusterAlreadyExists(String),
     #[error("cannot create multiple replicas named '{0}' on cluster '{1}'")]
     DuplicateReplica(String, String),
-    #[error("catalog item '{0}' already exists")]
-    ItemAlreadyExists(String),
+    #[error("catalog item '{1}' already exists")]
+    ItemAlreadyExists(GlobalId, String),
     #[error("unacceptable schema name '{0}'")]
     ReservedSchemaName(String),
     #[error("role name {} is reserved", .0.quoted())]

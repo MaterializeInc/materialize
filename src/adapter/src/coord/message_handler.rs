@@ -109,31 +109,15 @@ impl<S: Append + 'static> Coordinator<S> {
 
     #[tracing::instrument(level = "debug", skip_all)]
     async fn storage_usage_update(&mut self, shard_sizes: HashMap<Option<ShardId>, u64>) {
-        let object_id = None;
+        let mut ops = vec![];
+        for (shard_id, size_bytes) in shard_sizes {
+            ops.push(catalog::Op::UpdateStorageUsage {
+                shard_id: shard_id.map(|shard_id| shard_id.to_string()),
+                size_bytes,
+            });
+        }
 
-        let mut unk_storage = 0;
-        let mut known_storage = 0;
-        for (key, val) in shard_sizes {
-            match key {
-                Some(_) => known_storage += val,
-                None => unk_storage += val,
-            }
-        }
-        // TODO(jpepin): What, if anything, do we want to do with orphaned storage?
-        if unk_storage > 0 {
-            tracing::debug!("Found {} bytes of orphaned storage", unk_storage);
-        }
-        if let Err(err) = self
-            .catalog_transact(
-                None,
-                vec![catalog::Op::UpdateStorageUsage {
-                    object_id,
-                    size_bytes: known_storage,
-                }],
-                |_| Ok(()),
-            )
-            .await
-        {
+        if let Err(err) = self.catalog_transact(None, ops, |_| Ok(())).await {
             tracing::warn!("Failed to update storage metrics: {:?}", err);
         }
         self.schedule_storage_usage_collection().await;
@@ -239,11 +223,6 @@ impl<S: Append + 'static> Coordinator<S> {
     ) {
         otel_ctx.attach_as_parent();
 
-        let stmt = match result {
-            Ok(stmt) => stmt,
-            Err(e) => return tx.send(Err(e), session),
-        };
-
         // Ensure that all dependencies still exist after purification, as a
         // `DROP CONNECTION` may have sneaked in. If any have gone missing, we
         // repurify the original statement. This will either produce a nice
@@ -261,26 +240,69 @@ impl<S: Append + 'static> Coordinator<S> {
             return;
         }
 
-        let plan = match self.plan_statement(&mut session, Statement::CreateSource(stmt), &params) {
-            Ok(Plan::CreateSource(plan)) => plan,
-            Ok(_) => unreachable!("planning CREATE SOURCE must result in a Plan::CreateSource"),
+        let (subsource_stmts, stmt) = match result {
+            Ok(ok) => ok,
             Err(e) => return tx.send(Err(e), session),
         };
 
-        let result = self
-            .sequence_create_source(&mut session, plan, depends_on)
-            .await;
+        let mut plans = vec![];
+        let mut id_allocation = HashMap::new();
+
+        // First we'll allocate global ids for each subsource and plan them
+        for (transient_id, subsource_stmt) in subsource_stmts {
+            let depends_on = Vec::from_iter(mz_sql::names::visit_dependencies(&subsource_stmt));
+            let source_id = match self.catalog.allocate_user_id().await {
+                Ok(id) => id,
+                Err(e) => return tx.send(Err(e.into()), session),
+            };
+            let plan = match self.plan_statement(
+                &mut session,
+                Statement::CreateSubsource(subsource_stmt),
+                &params,
+            ) {
+                Ok(Plan::CreateSource(plan)) => plan,
+                Ok(_) => {
+                    unreachable!("planning CREATE SUBSOURCE must result in a Plan::CreateSource")
+                }
+                Err(e) => return tx.send(Err(e), session),
+            };
+            id_allocation.insert(transient_id, source_id);
+            plans.push((source_id, plan, depends_on));
+        }
+
+        // Then, we'll rewrite the source statement to point to the newly minted global ids and
+        // plan it too
+        let stmt = match mz_sql::names::resolve_transient_ids(&id_allocation, stmt) {
+            Ok(ok) => ok,
+            Err(e) => return tx.send(Err(e.into()), session),
+        };
+        let depends_on = Vec::from_iter(mz_sql::names::visit_dependencies(&stmt));
+        let source_id = match self.catalog.allocate_user_id().await {
+            Ok(id) => id,
+            Err(e) => return tx.send(Err(e.into()), session),
+        };
+        let plan = match self.plan_statement(&mut session, Statement::CreateSource(stmt), &params) {
+            Ok(Plan::CreateSource(plan)) => plan,
+            Ok(_) => {
+                unreachable!("planning CREATE SOURCE must result in a Plan::CreateSource")
+            }
+            Err(e) => return tx.send(Err(e), session),
+        };
+        plans.push((source_id, plan, depends_on));
+
+        // Finally, sequence all plans in one go
+        let result = self.sequence_create_source(&mut session, plans).await;
         tx.send(result, session);
     }
 
-    #[tracing::instrument(level = "debug", skip(self, tx, session))]
+    #[tracing::instrument(level = "debug", skip(self, session_and_tx))]
     async fn message_sink_connection_ready(
         &mut self,
         SinkConnectionReady {
-            session,
-            tx,
+            session_and_tx,
             id,
             oid,
+            create_export_token,
             result,
         }: SinkConnectionReady,
     ) {
@@ -295,11 +317,17 @@ impl<S: Append + 'static> Coordinator<S> {
                     // no better solution presents itself. Possibly sinks should
                     // have an error bit, and an error here would set the error
                     // bit on the sink.
-                    self.handle_sink_connection_ready(id, oid, connection, Some(&session))
-                        .await
-                        // XXX(chae): I really don't like this -- especially as we're now doing cross
-                        // process calls to start a sink.
-                        .expect("sinks should be validated by sequence_create_sink");
+                    self.handle_sink_connection_ready(
+                        id,
+                        oid,
+                        connection,
+                        create_export_token,
+                        session_and_tx.as_ref().map(|(ref session, _tx)| session),
+                    )
+                    .await
+                    // XXX(chae): I really don't like this -- especially as we're now doing cross
+                    // process calls to start a sink.
+                    .expect("sinks should be validated by sequence_create_sink");
                 } else {
                     // Another session dropped the sink while we were
                     // creating the connection. Report to the client that
@@ -307,14 +335,18 @@ impl<S: Append + 'static> Coordinator<S> {
                     // perspective we did, as there is state (e.g. a
                     // Kafka topic) they need to clean up.
                 }
-                tx.send(Ok(ExecuteResponse::CreatedSink { existed: false }), session);
+                if let Some((session, tx)) = session_and_tx {
+                    tx.send(Ok(ExecuteResponse::CreatedSink { existed: false }), session);
+                }
             }
             Err(e) => {
                 // Drop the placeholder sink if still present.
                 if self.catalog.try_get_entry(&id).is_some() {
-                    self.catalog_transact(Some(&session), vec![catalog::Op::DropItem(id)], |_| {
-                        Ok(())
-                    })
+                    self.catalog_transact(
+                        session_and_tx.as_ref().map(|(ref session, _tx)| session),
+                        vec![catalog::Op::DropItem(id)],
+                        |_| Ok(()),
+                    )
                     .await
                     .expect("deleting placeholder sink cannot fail");
                 } else {
@@ -322,7 +354,15 @@ impl<S: Append + 'static> Coordinator<S> {
                     // attempting to create the connection, in which case we don't need to do
                     // anything.
                 }
-                tx.send(Err(e), session);
+                // Drop the placeholder sink in the storage controller
+                let () = self
+                    .controller
+                    .storage
+                    .cancel_prepare_export(create_export_token)
+                    .await;
+                if let Some((session, tx)) = session_and_tx {
+                    tx.send(Err(e), session);
+                }
             }
         }
     }

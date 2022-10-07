@@ -356,11 +356,13 @@ where
         match command {
             StorageCommand::CreateSources(ingestions) => {
                 for ingestion in ingestions {
-                    let mut frontier = MutableAntichain::new();
-                    frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
-                    let part_frontiers = vec![Antichain::from_elem(T::minimum()); self.parts];
-                    let previous = self.uppers.insert(ingestion.id, (frontier, part_frontiers));
-                    assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", ingestion.id, command);
+                    for &export_id in ingestion.description.source_exports.keys() {
+                        let mut frontier = MutableAntichain::new();
+                        frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
+                        let part_frontiers = vec![Antichain::from_elem(T::minimum()); self.parts];
+                        let previous = self.uppers.insert(export_id, (frontier, part_frontiers));
+                        assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", export_id, command);
+                    }
                 }
             }
             StorageCommand::CreateSinks(exports) => {
@@ -432,6 +434,14 @@ pub struct Update<T = mz_repr::Timestamp> {
     pub diff: Diff,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+/// A batch of updates to be fed to a local input; however, the input must
+/// determine the most appropriate timestamps to use.
+pub struct TimestamplessUpdate {
+    pub row: Row,
+    pub diff: Diff,
+}
+
 impl RustType<ProtoTrace> for (GlobalId, Antichain<mz_repr::Timestamp>) {
     fn into_proto(&self) -> ProtoTrace {
         ProtoTrace {
@@ -490,6 +500,7 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(32))]
 
         #[test]
+        #[ignore]
         fn storage_command_protobuf_roundtrip(expect in any::<StorageCommand<mz_repr::Timestamp>>() ) {
             let actual = protobuf_roundtrip::<_, ProtoStorageCommand>(&expect);
             assert!(actual.is_ok());

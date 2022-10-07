@@ -289,7 +289,7 @@ pub enum VersionedStorageUsage {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct StorageUsageV1 {
     pub id: u64,
-    pub object_id: Option<String>,
+    pub shard_id: Option<String>,
     pub size_bytes: u64,
     pub collection_timestamp: EpochMillis,
 }
@@ -297,13 +297,13 @@ pub struct StorageUsageV1 {
 impl StorageUsageV1 {
     pub fn new(
         id: u64,
-        object_id: Option<String>,
+        shard_id: Option<String>,
         size_bytes: u64,
         collection_timestamp: EpochMillis,
     ) -> StorageUsageV1 {
         StorageUsageV1 {
             id,
-            object_id,
+            shard_id,
             size_bytes,
             collection_timestamp,
         }

@@ -96,7 +96,6 @@ pub enum Plan {
     CreateSink(CreateSinkPlan),
     CreateTable(CreateTablePlan),
     CreateView(CreateViewPlan),
-    CreateViews(CreateViewsPlan),
     CreateMaterializedView(CreateMaterializedViewPlan),
     CreateIndex(CreateIndexPlan),
     CreateType(CreateTypePlan),
@@ -184,11 +183,12 @@ impl Plan {
             StatementKind::CreateSchema => vec![PlanKind::CreateSchema],
             StatementKind::CreateSecret => vec![PlanKind::CreateSecret],
             StatementKind::CreateSink => vec![PlanKind::CreateSink],
-            StatementKind::CreateSource => vec![PlanKind::CreateSource],
+            StatementKind::CreateSource | StatementKind::CreateSubsource => {
+                vec![PlanKind::CreateSource]
+            }
             StatementKind::CreateTable => vec![PlanKind::CreateTable],
             StatementKind::CreateType => vec![PlanKind::CreateType],
             StatementKind::CreateView => vec![PlanKind::CreateView],
-            StatementKind::CreateViews => vec![PlanKind::CreateViews],
             StatementKind::Deallocate => vec![PlanKind::Deallocate],
             StatementKind::Declare => vec![PlanKind::Declare],
             StatementKind::Delete => vec![PlanKind::ReadThenWrite],
@@ -352,6 +352,7 @@ pub struct CreateSinkPlan {
     pub sink: Sink,
     pub with_snapshot: bool,
     pub if_not_exists: bool,
+    pub host_config: StorageHostConfig,
 }
 
 #[derive(Debug)]
@@ -367,12 +368,6 @@ pub struct CreateViewPlan {
     pub view: View,
     /// The ID of the object that this view is replacing, if any.
     pub replace: Option<GlobalId>,
-    pub if_not_exists: bool,
-}
-
-#[derive(Debug)]
-pub struct CreateViewsPlan {
-    pub views: Vec<(QualifiedObjectName, View)>,
     pub if_not_exists: bool,
 }
 
@@ -652,9 +647,16 @@ pub struct Table {
 #[derive(Clone, Debug)]
 pub struct Source {
     pub create_sql: String,
-    pub connection_id: Option<GlobalId>,
-    pub source_desc: SourceDesc,
+    pub ingestion: Option<Ingestion>,
     pub desc: RelationDesc,
+}
+
+#[derive(Clone, Debug)]
+pub struct Ingestion {
+    pub connection_id: Option<GlobalId>,
+    pub desc: SourceDesc,
+    pub source_imports: HashSet<GlobalId>,
+    pub subsource_exports: HashMap<GlobalId, usize>,
 }
 
 #[derive(Clone, Debug)]

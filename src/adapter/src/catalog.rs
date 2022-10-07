@@ -68,9 +68,9 @@ use mz_storage::types::sources::{SourceDesc, Timeline};
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{
-    Builtin, BuiltinLog, BuiltinStorageCollection, BuiltinTable, BuiltinType, Fingerprint,
+    Builtin, BuiltinLog, BuiltinStorageManagedTable, BuiltinTable, BuiltinType, Fingerprint,
     BUILTINS, BUILTIN_ROLE_PREFIXES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
-    MZ_TEMP_SCHEMA, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS, PG_CATALOG_SCHEMA,
+    MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::{ClusterReplicaSizeMap, Config, StorageHostSizeMap};
@@ -233,7 +233,7 @@ impl CatalogState {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::StorageCollection(_) => (),
+            | CatalogItem::StorageManagedTable(_) => (),
         }
     }
 
@@ -251,24 +251,18 @@ impl CatalogState {
             | CatalogItem::Type(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::StorageCollection(_) => false,
+            | CatalogItem::StorageManagedTable(_) => false,
         }
     }
 
     /// Indicates whether the indicated item is considered stable or not.
     ///
     /// Only stable items can be used as dependencies of other catalog items.
-    pub fn is_stable(&self, id: GlobalId) -> bool {
-        let item = self.get_entry(&id).item();
-
-        match item {
-            CatalogItem::Table(_) => {
-                !(id == self.resolve_builtin_table(&MZ_VIEW_KEYS)
-                    || id == self.resolve_builtin_table(&MZ_VIEW_FOREIGN_KEYS))
-            }
-            CatalogItem::Log(_) => false,
-            // In general, an item is stable iff all its dependencies are stable.
-            item => item.uses().iter().all(|id| self.is_stable(*id)),
+    fn is_stable(&self, id: GlobalId) -> bool {
+        let mz_internal_id = self.ambient_schemas_by_name[MZ_INTERNAL_SCHEMA];
+        match &self.get_entry(&id).name().qualifiers.schema_spec {
+            SchemaSpecifier::Temporary => true,
+            SchemaSpecifier::Id(id) => *id != mz_internal_id,
         }
     }
 
@@ -906,9 +900,9 @@ impl CatalogState {
     /// Panics if the builtin storage collection doesn't exist in the catalog
     pub fn resolve_builtin_storage_collection(
         &self,
-        builtin: &'static BuiltinStorageCollection,
+        builtin: &'static BuiltinStorageManagedTable,
     ) -> GlobalId {
-        self.resolve_builtin_object(&Builtin::<IdReference>::StorageCollection(builtin))
+        self.resolve_builtin_object(&Builtin::<IdReference>::StorageManagedTable(builtin))
     }
 
     /// Optimized lookup for a builtin object
@@ -1187,14 +1181,14 @@ impl CatalogState {
         &self,
         tx: &mut storage::Transaction<S>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
-        object_id: Option<String>,
+        shard_id: Option<String>,
         size_bytes: u64,
     ) -> Result<(), Error> {
         let collection_timestamp = (self.config.now)();
         let id = tx.get_and_increment_id(storage::STORAGE_USAGE_ID_ALLOC_KEY.to_string())?;
 
         let event_details =
-            VersionedStorageUsage::new(id, object_id, size_bytes, collection_timestamp);
+            VersionedStorageUsage::new(id, shard_id, size_bytes, collection_timestamp);
         builtin_table_updates.push(self.pack_storage_usage_update(&event_details)?);
         tx.insert_storage_usage_event(event_details);
         Ok(())
@@ -1340,7 +1334,7 @@ pub enum CatalogItem {
     Func(Func),
     Secret(Secret),
     Connection(Connection),
-    StorageCollection(&'static BuiltinStorageCollection),
+    StorageManagedTable(&'static BuiltinStorageManagedTable),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1364,14 +1358,33 @@ impl Table {
 #[derive(Debug, Clone, Serialize)]
 pub struct Source {
     pub create_sql: String,
-    pub connection_id: Option<GlobalId>,
-    // TODO(benesch): this field contains connection information that could be
-    // derived from the connection ID. Too hard to fix at the moment.
-    pub source_desc: SourceDesc,
+    /// The ingestion description of this source.
+    ///
+    /// If Some, it will correspond to an ingestion that will insert data in this source and maybe
+    /// other, dependent subsources.
+    ///
+    /// If None, it represents a source that is being written to by the ingestion associated with
+    /// some other, parent source.
+    pub ingestion: Option<Ingestion>,
     pub desc: RelationDesc,
     pub timeline: Timeline,
     pub depends_on: Vec<GlobalId>,
     pub host_config: StorageHostConfig,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Ingestion {
+    pub connection_id: Option<GlobalId>,
+    // TODO(benesch): this field contains connection information that could be
+    // derived from the connection ID. Too hard to fix at the moment.
+    pub desc: SourceDesc,
+    pub source_imports: HashSet<GlobalId>,
+    /// The *additional* subsource exports of this ingestion. Each collection identified by its
+    /// GlobalId will contain the contents of this ingestion's output stream that is identified by
+    /// the index.
+    ///
+    /// This map does *not* include the export of the source associated with the ingestion itself
+    pub subsource_exports: HashMap<GlobalId, usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1385,6 +1398,7 @@ pub struct Sink {
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
     pub depends_on: Vec<GlobalId>,
+    pub host_config: StorageHostConfig,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1469,7 +1483,7 @@ impl CatalogItem {
             CatalogItem::Func(_) => mz_sql::catalog::CatalogItemType::Func,
             CatalogItem::Secret(_) => mz_sql::catalog::CatalogItemType::Secret,
             CatalogItem::Connection(_) => mz_sql::catalog::CatalogItemType::Connection,
-            CatalogItem::StorageCollection(_) => mz_sql::catalog::CatalogItemType::Source,
+            CatalogItem::StorageManagedTable(_) => mz_sql::catalog::CatalogItemType::Source,
         }
     }
 
@@ -1480,7 +1494,7 @@ impl CatalogItem {
             CatalogItem::Table(tbl) => Ok(Cow::Borrowed(&tbl.desc)),
             CatalogItem::View(view) => Ok(Cow::Borrowed(&view.desc)),
             CatalogItem::MaterializedView(mview) => Ok(Cow::Borrowed(&mview.desc)),
-            CatalogItem::StorageCollection(coll) => Ok(Cow::Borrowed(&coll.desc)),
+            CatalogItem::StorageManagedTable(coll) => Ok(Cow::Borrowed(&coll.desc)),
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
@@ -1506,9 +1520,15 @@ impl CatalogItem {
         }
     }
 
-    pub fn source_desc(&self, name: &QualifiedObjectName) -> Result<&SourceDesc, SqlCatalogError> {
+    pub fn source_desc(
+        &self,
+        name: &QualifiedObjectName,
+    ) -> Result<Option<&SourceDesc>, SqlCatalogError> {
         match &self {
-            CatalogItem::Source(source) => Ok(&source.source_desc),
+            CatalogItem::Source(source) => match &source.ingestion {
+                Some(ingestion) => Ok(Some(&ingestion.desc)),
+                None => Ok(None),
+            },
             _ => Err(SqlCatalogError::UnexpectedType(
                 name.item.clone(),
                 CatalogItemType::Source,
@@ -1531,7 +1551,7 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mview) => &mview.depends_on,
             CatalogItem::Secret(_) => &[],
             CatalogItem::Connection(connection) => &connection.depends_on,
-            CatalogItem::StorageCollection(_) => &[],
+            CatalogItem::StorageManagedTable(_) => &[],
         }
     }
 
@@ -1549,7 +1569,7 @@ impl CatalogItem {
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::StorageCollection(_) => false,
+            | CatalogItem::StorageManagedTable(_) => false,
             CatalogItem::Sink(s) => match s.connection {
                 StorageSinkConnectionState::Pending(_) => true,
                 StorageSinkConnectionState::Ready(_) => false,
@@ -1572,7 +1592,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::StorageCollection(_) => None,
+            | CatalogItem::StorageManagedTable(_) => None,
         }
     }
 
@@ -1645,7 +1665,7 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Connection(i))
             }
-            CatalogItem::StorageCollection(i) => Ok(CatalogItem::StorageCollection(i)),
+            CatalogItem::StorageManagedTable(i) => Ok(CatalogItem::StorageManagedTable(i)),
         }
     }
 }
@@ -1701,8 +1721,8 @@ impl CatalogEntry {
     }
 
     /// Returns the [`mz_storage::types::sources::SourceDesc`] associated with
-    /// this `CatalogEntry`.
-    pub fn source_desc(&self) -> Result<&SourceDesc, SqlCatalogError> {
+    /// this `CatalogEntry`, if any.
+    pub fn source_desc(&self) -> Result<Option<&SourceDesc>, SqlCatalogError> {
         self.item.source_desc(self.name())
     }
 
@@ -1733,7 +1753,7 @@ impl CatalogEntry {
 
     /// Reports whether this catalog entry is a storage collection.
     pub fn is_storage_collection(&self) -> bool {
-        matches!(self.item(), CatalogItem::StorageCollection(_))
+        matches!(self.item(), CatalogItem::StorageManagedTable(_))
     }
 
     /// Collects the identifiers of the dataflows that this dataflow depends
@@ -2093,13 +2113,13 @@ impl<S: Append> Catalog<S> {
                     );
                 }
 
-                Builtin::StorageCollection(coll) => {
+                Builtin::StorageManagedTable(coll) => {
                     let oid = catalog.allocate_oid()?;
                     catalog.state.insert_item(
                         id,
                         oid,
                         name.clone(),
-                        CatalogItem::StorageCollection(coll),
+                        CatalogItem::StorageManagedTable(coll),
                     );
                 }
             }
@@ -2554,7 +2574,7 @@ impl<S: Append> Catalog<S> {
                     panic!("Log migration is unimplemented")
                 }
                 // TODO(jkosh44) Implement storage collection migration
-                CatalogItem::StorageCollection(_) => {
+                CatalogItem::StorageManagedTable(_) => {
                     panic!("Storage collection migration is unimplemented")
                 }
                 CatalogItem::View(_) | CatalogItem::Index(_) => {
@@ -2939,10 +2959,10 @@ impl<S: Append> Catalog<S> {
         self.state.resolve_builtin_log(builtin)
     }
 
-    /// Resolves a `BuiltinStorageCollection`.
+    /// Resolves a `BuiltinStorageManagedTable`.
     pub fn resolve_builtin_storage_collection(
         &self,
-        builtin: &'static BuiltinStorageCollection,
+        builtin: &'static BuiltinStorageManagedTable,
     ) -> GlobalId {
         self.state.resolve_builtin_storage_collection(builtin)
     }
@@ -3134,6 +3154,9 @@ impl<S: Append> Catalog<S> {
             for &u in &by_id[&id].used_by {
                 Self::drop_item_cascade(u, by_id, ops, seen)
             }
+            for subsource in by_id[&id].subsources() {
+                Self::drop_item_cascade(subsource, by_id, ops, seen)
+            }
             ops.push(Op::DropItem(id));
         }
     }
@@ -3160,7 +3183,10 @@ impl<S: Append> Catalog<S> {
                         && !temporary_drops.contains(&(conn_id, name.item.clone()))
                         || creating.contains(&(conn_id, &name.item))
                     {
-                        return Err(Error::new(ErrorKind::ItemAlreadyExists(name.item.clone())));
+                        return Err(Error::new(ErrorKind::ItemAlreadyExists(
+                            *id,
+                            name.item.clone(),
+                        )));
                     } else {
                         creating.insert((conn_id, &name.item));
                         temporary_ids.push(id.clone());
@@ -3993,10 +4019,10 @@ impl<S: Append> Catalog<S> {
                     )?;
                 }
                 Op::UpdateStorageUsage {
-                    object_id,
+                    shard_id,
                     size_bytes,
                 } => {
-                    state.add_to_storage_usage(tx, builtin_table_updates, object_id, size_bytes)?;
+                    state.add_to_storage_usage(tx, builtin_table_updates, shard_id, size_bytes)?;
                 }
                 Op::UpdateSystemConfiguration { name, value } => {
                     tx.upsert_system_config(&name, &value)?;
@@ -4351,7 +4377,7 @@ impl<S: Append> Catalog<S> {
                 create_sql: connection.create_sql.clone(),
             },
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
-            CatalogItem::StorageCollection(_) => {
+            CatalogItem::StorageManagedTable(_) => {
                 unreachable!("builtin storage collections cannot be serialized")
             }
         }
@@ -4390,8 +4416,12 @@ impl<S: Append> Catalog<S> {
                 ..
             }) => CatalogItem::Source(Source {
                 create_sql: source.create_sql,
-                connection_id: source.connection_id,
-                source_desc: source.source_desc,
+                ingestion: source.ingestion.map(|ingestion| Ingestion {
+                    connection_id: ingestion.connection_id,
+                    desc: ingestion.desc,
+                    source_imports: ingestion.source_imports,
+                    subsource_exports: ingestion.subsource_exports,
+                }),
                 desc: source.desc,
                 timeline,
                 depends_on,
@@ -4434,6 +4464,7 @@ impl<S: Append> Catalog<S> {
             Plan::CreateSink(CreateSinkPlan {
                 sink,
                 with_snapshot,
+                host_config,
                 ..
             }) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
@@ -4443,6 +4474,7 @@ impl<S: Append> Catalog<S> {
                 envelope: sink.envelope,
                 with_snapshot,
                 depends_on,
+                host_config: self.resolve_storage_host_config(host_config)?,
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,
@@ -4687,7 +4719,7 @@ pub enum Op {
         to_item: CatalogItem,
     },
     UpdateStorageUsage {
-        object_id: Option<String>,
+        shard_id: Option<String>,
         size_bytes: u64,
     },
     UpdateSystemConfiguration {
@@ -5169,7 +5201,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.func()
     }
 
-    fn source_desc(&self) -> Result<&SourceDesc, SqlCatalogError> {
+    fn source_desc(&self) -> Result<Option<&SourceDesc>, SqlCatalogError> {
         self.source_desc()
     }
 
@@ -5190,7 +5222,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Connection(Connection { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "<builtin>",
             CatalogItem::Log(_) => "<builtin>",
-            CatalogItem::StorageCollection(_) => "<builtin>",
+            CatalogItem::StorageManagedTable(_) => "<builtin>",
         }
     }
 
@@ -5228,6 +5260,26 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn used_by(&self) -> &[GlobalId] {
         self.used_by()
+    }
+
+    fn subsources(&self) -> Vec<GlobalId> {
+        match &self.item {
+            CatalogItem::Source(source) => match &source.ingestion {
+                Some(ingestion) => ingestion.subsource_exports.keys().copied().collect(),
+                None => vec![],
+            },
+            CatalogItem::Table(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_)
+            | CatalogItem::StorageManagedTable(_) => vec![],
+        }
     }
 }
 

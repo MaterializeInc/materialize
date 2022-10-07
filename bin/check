@@ -147,7 +147,6 @@ extra_lints=(
 
     # Legit performance impact
     clippy::mut_mutex_lock
-    clippy::needless_collect
     clippy::print_literal
     clippy::same_item_push
     clippy::useless_format

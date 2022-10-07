@@ -222,6 +222,9 @@ impl AdapterError {
                 "The object depends on the following log sources:\n    {}",
                 log_names.join("\n    "),
             )),
+            AdapterError::UnmaterializableFunction(UnmaterializableFunc::CurrentTimestamp) => {
+                Some("See: https://materialize.com/docs/sql/functions/now_and_mz_now/".into())
+            }
             AdapterError::UnstableDependency { unstable_dependencies, .. } => Some(format!(
                 "The object depends on the following unstable objects:\n    {}",
                 unstable_dependencies.join("\n    "),
@@ -266,6 +269,9 @@ impl AdapterError {
             }
             AdapterError::NoClusterReplicasAvailable(_) => {
                 Some("You can create cluster replicas using CREATE CLUSTER REPLICA".into())
+            }
+            AdapterError::UnmaterializableFunction(UnmaterializableFunc::CurrentTimestamp) => {
+                Some("Try using `mz_now()` here instead.".into())
             }
             AdapterError::UntargetedLogRead { .. } => Some(
                 "Use `SET cluster_replica = <replica-name>` to target a specific replica in the \

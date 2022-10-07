@@ -17,17 +17,13 @@
 
 from typing import List
 
-from materialize.checks.actions import (
-    Action,
-    Initialize,
+from materialize.checks.actions import Action, Initialize, Manipulate, Sleep, Validate
+from materialize.checks.mzcompose_actions import (
     KillComputed,
     KillMz,
-    Manipulate,
-    Sleep,
     StartComputed,
     StartMz,
     UseComputed,
-    Validate,
 )
 from materialize.checks.scenarios import Scenario
 

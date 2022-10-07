@@ -26,7 +26,7 @@ use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::ResolvedDatabaseSpecifier;
 use mz_stash::Append;
-use mz_storage::controller::ExportDescription;
+use mz_storage::controller::{CreateExportToken, ExportDescription};
 use mz_storage::types::sinks::{SinkAsOf, StorageSinkConnection};
 use mz_storage::types::sources::{PostgresSourceConnection, SourceConnection, Timeline};
 
@@ -88,21 +88,23 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                     CatalogItem::Source(source) => {
                         sources_to_drop.push(*id);
-                        match &source.source_desc.connection {
-                            SourceConnection::Postgres(PostgresSourceConnection {
-                                connection,
-                                details,
-                                ..
-                            }) => {
-                                let config = connection
-                                    .config(&*self.connection_context.secrets_reader)
-                                    .await
-                                    .unwrap_or_else(|e| {
-                                        panic!("Postgres source {id} missing secrets: {e}")
-                                    });
-                                replication_slots_to_drop.push((config, details.slot.clone()));
+                        if let Some(ingestion) = &source.ingestion {
+                            match &ingestion.desc.connection {
+                                SourceConnection::Postgres(PostgresSourceConnection {
+                                    connection,
+                                    details,
+                                    ..
+                                }) => {
+                                    let config = connection
+                                        .config(&*self.connection_context.secrets_reader)
+                                        .await
+                                        .unwrap_or_else(|e| {
+                                            panic!("Postgres source {id} missing secrets: {e}")
+                                        });
+                                    replication_slots_to_drop.push((config, details.slot.clone()));
+                                }
+                                _ => {}
                             }
-                            _ => {}
                         }
                     }
                     CatalogItem::Sink(catalog::Sink { connection, .. }) => match connection {
@@ -395,7 +397,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn create_storage_export(
         &mut self,
-        id: GlobalId,
+        create_export_token: CreateExportToken,
         sink: &Sink,
         connection: StorageSinkConnection,
     ) -> Result<(), AdapterError> {
@@ -435,10 +437,10 @@ impl<S: Append + 'static> Coordinator<S> {
             .controller
             .storage
             .create_exports(vec![(
-                id,
+                create_export_token,
                 ExportDescription {
                     sink: storage_sink_desc,
-                    remote_addr: None,
+                    host_config: sink.host_config.clone(),
                 },
             )])
             .await?)
@@ -449,6 +451,7 @@ impl<S: Append + 'static> Coordinator<S> {
         id: GlobalId,
         oid: u32,
         connection: StorageSinkConnection,
+        create_export_token: CreateExportToken,
         session: Option<&Session>,
     ) -> Result<(), AdapterError> {
         // Update catalog entry with sink connection.
@@ -476,7 +479,10 @@ impl<S: Append + 'static> Coordinator<S> {
         let () = self.catalog_transact(session, ops, move |_| Ok(())).await?;
         // TODO(#14220): should this happen in the same task where we build the connection?  Or should it need to happen
         // after we update the catalog?
-        match self.create_storage_export(id, &sink, connection).await {
+        match self
+            .create_storage_export(create_export_token, &sink, connection)
+            .await
+        {
             Ok(()) => Ok(()),
             Err(storage_error) =>
             // TODO: catalog_transact that can take async function to actually make the `CreateItem` above transactional.
@@ -559,7 +565,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
                         | CatalogItem::Connection(_)
-                        | CatalogItem::StorageCollection(_) => {}
+                        | CatalogItem::StorageManagedTable(_) => {}
                     }
                 }
                 Op::DropDatabase { .. } => {
@@ -605,7 +611,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
                         | CatalogItem::Connection(_)
-                        | CatalogItem::StorageCollection(_) => {}
+                        | CatalogItem::StorageManagedTable(_) => {}
                     }
                 }
                 Op::AlterSource { .. }

@@ -8,10 +8,11 @@
 # by the Apache License, Version 2.0.
 
 import subprocess
-from typing import List
+from typing import List, Optional
 
 from materialize import ROOT, mzbuild
 from materialize.cloudtest.k8s import K8sResource
+from materialize.cloudtest.k8s.debezium import DEBEZIUM_RESOURCES
 from materialize.cloudtest.k8s.environmentd import (
     EnvironmentdService,
     EnvironmentdStatefulSet,
@@ -64,7 +65,7 @@ class Application:
 
 
 class MaterializeApplication(Application):
-    def __init__(self, release_mode: bool) -> None:
+    def __init__(self, release_mode: bool = True, tag: Optional[str] = None) -> None:
         self.environmentd = EnvironmentdService()
         self.testdrive = Testdrive(release_mode=release_mode)
         self.release_mode = release_mode
@@ -73,10 +74,11 @@ class MaterializeApplication(Application):
             *POSTGRES_RESOURCES,
             *POSTGRES_SOURCE_RESOURCES,
             *REDPANDA_RESOURCES,
+            *DEBEZIUM_RESOURCES,
             *SSH_RESOURCES,
             Minio(),
             AdminRoleBinding(),
-            EnvironmentdStatefulSet(release_mode=release_mode),
+            EnvironmentdStatefulSet(release_mode=release_mode, tag=tag),
             self.environmentd,
             self.testdrive,
         ]

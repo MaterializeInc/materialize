@@ -58,6 +58,27 @@ Field            | Type        | Meaning
 `default`        | [`text`]    | The default expression of the column.
 `type_oid`       | [`oid`]     | The OID of the type of the column (references `mz_types`).
 
+### `mz_clusters`
+
+The `mz_clusters` table contains a row for each cluster in the system.
+
+Field          | Type       | Meaning
+---------------|------------|--------
+`id`           | [`bigint`] | Materialize's unique ID for the cluster.
+`name`         | [`text`]   | The name of the cluster.
+
+### `mz_cluster_replicas`
+
+The `mz_cluster_replicas` table contains a row for each cluster replica in the system.
+
+Field               | Type       | Meaning
+--------------------|------------|--------
+`id`                | [`bigint`] | Materialize's unique ID for the cluster replica.
+`name`              | [`text`]   | The name of the cluster replica.
+`cluster_id`        | [`bigint`] | The ID of the cluster to which the replica belongs.
+`size`              | [`text`]   | The cluster replica's size, selected during creation.
+`availability_zone` | [`text`]   | The cluster replica's target availability zone, selected during creation. This value is `NULL` if no availability zone was specified when the replica was created.
+
 ### `mz_databases`
 
 The `mz_databases` table contains a row for each database in the system.
@@ -234,6 +255,7 @@ Field            | Type        | Meaning
 `name`           | [`text`]    | The name of the sink.
 `type`           | [`text`]    | The type of the sink: `kafka`.
 `connection_id`  | [`text`]    | The ID of the connection associated with the sink, if any.
+`size`           | [`text`]    | The size of the sink.
 
 ### `mz_sources`
 
@@ -251,14 +273,15 @@ Field            | Type       | Meaning
 
 ### `mz_storage_usage`
 
-The `mz_storage_usage` table contains a row for each daily storage utilization
-snapshot collected by the system.
+The `mz_storage_usage` table describes the storage utilization of each
+table, source, and materialized view in the system. Storage utilization is
+assessed approximately every hour.
 
-| Field                  | Type                         | Meaning                                               |
-| ---------------------- | ---------------------------- | ----------------------------------------------------- |
-| `object_id`            | [`text`]                     | Materialize's unique ID for the storage object.       |
-| `size_bytes`           | [`bigint`]                   | The size in bytes of the storage object.              |
-| `collection_timestamp` | [`timestamp with time zone`] | The time at which the storage snapshot was collected. |
+Field                  | Type                         | Meaning
+---------------------- | ---------------------------- | -----------------------------------------------------------
+`object_id`            | [`text`]                     | The ID of the table, source, or materialized view.
+`size_bytes`           | [`bigint`]                   | The number of storage bytes used by the object.
+`collection_timestamp` | [`timestamp with time zone`] | The time at which storage usage of the object was assessed.
 
 ### `mz_tables`
 

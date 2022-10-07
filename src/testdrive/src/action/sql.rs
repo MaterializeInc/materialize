@@ -76,7 +76,6 @@ impl SqlAction {
             | CreateSink(_)
             | CreateMaterializedView(_)
             | CreateView(_)
-            | CreateViews(_)
             | CreateTable(_)
             | CreateIndex(_)
             | CreateType(_)

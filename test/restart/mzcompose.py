@@ -59,10 +59,10 @@ def workflow_audit_log(c: Composition) -> None:
 
     # Verify the audit log entries are still present and have not changed.
     restart_log = c.sql_query("SELECT * FROM mz_audit_events ORDER BY id")
-    if log != restart_log:
+    if log != restart_log or not log:
         print("initial audit log:", log)
         print("audit log after restart:", restart_log)
-        raise Exception("audit logs not equal after restart")
+        raise Exception("audit logs emtpy or not equal after restart")
 
 
 # Test for GitHub issue #13726
@@ -131,6 +131,40 @@ def workflow_stash(c: Composition) -> None:
                 e
             ) and "network error" not in str(e):
                 raise e
+
+
+def workflow_storage_managed_collections(c: Composition) -> None:
+    c.up("materialized")
+    c.wait_for_materialized(service="materialized")
+
+    # Create some storage shard entries.
+    c.sql("CREATE TABLE t (i INT)")
+
+    # Storage collections are eventually consistent, so loop to be sure updates
+    # have made it.
+
+    user_shards = None
+    while user_shards == None:
+        user_shards = c.sql_query(
+            "SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id LIKE 'u%';"
+        )
+
+    # Restart mz.
+    c.kill("materialized")
+    c.up("materialized")
+    c.wait_for_materialized()
+
+    # Verify the shard mappings are still present and have not changed.
+    restart_user_shards = None
+    while restart_user_shards == None:
+        restart_user_shards = c.sql_query(
+            "SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id LIKE 'u%';"
+        )
+
+    if user_shards != restart_user_shards or not user_shards:
+        print("initial user shards:", user_shards)
+        print("user shards after restart:", restart_user_shards)
+        raise Exception("user shards empty or not equal after restart")
 
 
 def workflow_default(c: Composition) -> None:

@@ -31,6 +31,7 @@ steps:
           - { value: testdrive-partitions-5 }
           - { value: testdrive-replicas-4}
           - { value: testdrive-replica-size-4}
+          - { value: testdrive-in-cloudtest}
 #          - { value: feature-benchmark-single-node }
 #          - { value: feature-benchmark-cluster }
           - { value: zippy-kafka-sources }
@@ -47,6 +48,7 @@ steps:
           - { value: checks-upgrade-entire-mz }
           - { value: checks-upgrade-computed-first }
           - { value: checks-upgrade-computed-last }
+          - { value: cloudtest-upgrade }
           - { value: persist-maelstrom-single-node }
           - { value: persist-maelstrom-multi-node }
           - { value: unused-deps }
@@ -248,6 +250,16 @@ steps:
           composition: testdrive
           args: [--aws-region=us-east-2, --replica-size=4]
 
+  - id: testdrive-in-cloudtest
+    label: Full Testdrive in Cloudtest (K8s)
+    timeout_in_minutes: 300
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/scratch-aws-access: ~
+      - ./ci/plugins/cloudtest:
+          args: [-m=long, test/cloudtest/test_full_testdrive.py]
+
   - id: persistence-testdrive
     label: ":racing_car: testdrive with --persistent-user-tables"
     timeout_in_minutes: 30
@@ -398,6 +410,20 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=UpgradeComputedLast]
+
+  - id: cloudtest-upgrade
+    label: "Cloudtest upgrade from main to main"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=UpgradeComputedLast]
+    artifact_paths: junit_cloudtest_*.xml
+    plugins:
+      - ./ci/plugins/cloudtest:
+          args: [-m=long, test/cloudtest/test_upgrade.py]
 
   - id: persist-maelstrom-single-node
     label: Long single-node Maelstrom coverage of persist

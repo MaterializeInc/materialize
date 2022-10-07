@@ -47,7 +47,7 @@ class RedpandaDeployment(K8sDeployment):
                 "--set",
                 "redpanda.enable_idempotence=true",
                 "--set",
-                "redpanda.auto_create_topics_enabled=false",
+                "redpanda.auto_create_topics_enabled=true",
                 "--advertise-kafka-addr",
                 "redpanda:9092",
             ],

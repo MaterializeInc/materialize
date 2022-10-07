@@ -15,11 +15,11 @@ CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER;
 statement ok
 CREATE SOURCE s2 FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
 
-query TTTTTTT
-SELECT * FROM mz_sources WHERE id LIKE 'u%'
+query TTTTTT
+SELECT id, schema_id, name, type, connection_id, size FROM mz_sources WHERE id LIKE 'u%'
 ----
-u1  20327  3  s1  load-generator  NULL  1
-u2  20328  3  s2  load-generator  NULL  1
+u1  3  s1  load-generator  NULL  1
+u2  3  s2  load-generator  NULL  1
 
 query TTT
 SHOW SOURCES
