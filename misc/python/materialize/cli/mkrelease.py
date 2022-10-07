@@ -80,6 +80,7 @@ def new_rc(
                               you need to create a second or greater release candidate
     """
     tag = get_latest_tag(fetch=True)
+    tag = Version.parse("0.26.4")
     new_version = None
     if level == "rc":
         if tag.prerelease is None or not tag.prerelease.startswith("rc"):
@@ -258,9 +259,6 @@ def release(
     Arguments:
         version: The version to release. The `v` prefix is optional
     """
-    if git.is_dirty():
-        raise UIError("working directory is not clean, stash or commit your changes")
-
     the_tag = f"v{version}"
     confirm_version_is_next(version, affect_remote)
 
