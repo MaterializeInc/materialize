@@ -1407,6 +1407,12 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
     // equal timestamp in strict serializable mode.
     assert!(join_ts >= view_ts);
 
+    mz_client.batch_execute("SET transaction_isolation = serializable")?;
+    let view_ts = get_explain_timestamp(view_name, &mut mz_client);
+    let join_ts = get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
+    // If we go back to serializable, then timestamps can revert again.
+    assert!(join_ts < view_ts);
+
     cleanup_fn(&mut mz_client, &mut pg_client, &server.runtime)?;
 
     Ok(())
@@ -1734,22 +1740,30 @@ fn wait_for_view_population(
     view_name: &str,
     source_rows: i64,
 ) -> Result<(), Box<dyn Error>> {
-    let mut rows = 0;
-    while rows != source_rows {
-        thread::sleep(Duration::from_millis(1));
-        // This is a bit hacky. We have no way of getting the freshest data in the view, without
-        // also advancing every other object in the time domain, which we usually want to avoid in
-        // these tests. Instead we query the view using AS OF a value close to the current system
-        // clock and hope it gives us fresh enough data.
-        let now = ((SYSTEM_TIME.as_secs() as EpochMillis) * 1_000) - 100;
-        rows = mz_client
-            .query_one(
-                &format!("SELECT COUNT(*) FROM {view_name} AS OF {now};"),
-                &[],
-            )
-            .map(|row| row.get::<_, i64>(0))
-            .unwrap_or(0);
-    }
+    let current_isolation = mz_client
+        .query_one("SHOW transaction_isolation", &[])?
+        .get::<_, String>(0);
+    let _ = mz_client.query_one("SET transaction_isolation = SERIALIZABLE", &[]);
+    Retry::default()
+        .max_duration(Duration::from_secs(10))
+        .retry(|_| {
+            let rows = mz_client
+                .query_one(&format!("SELECT COUNT(*) FROM {view_name};"), &[])
+                .unwrap()
+                .get::<_, i64>(0);
+            if rows == source_rows {
+                Ok(())
+            } else {
+                Err(format!(
+                    "Waiting for {source_rows} row to be ingested. Currently at {rows}."
+                ))
+            }
+        })
+        .unwrap();
+    let _ = mz_client.query_one(
+        &format!("SET transaction_isolation = '{current_isolation}'"),
+        &[],
+    );
     Ok(())
 }
 

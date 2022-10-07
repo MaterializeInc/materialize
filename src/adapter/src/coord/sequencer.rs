@@ -2011,13 +2011,15 @@ impl<S: Append + 'static> Coordinator<S> {
         // Queries are independent of the logical timestamp iff there are no referenced
         // sources or indexes and there is no reference to `mz_now()`.
         let timestamp_independent = source_ids.is_empty() && !source.contains_temporal();
-        // For queries that do not use AS OF, get the
+        // For transactions that do not use AS OF, get the
         // timestamp of the in-progress transaction or create one. If this is an AS OF
-        // query, we don't care about any possible transaction timestamp. We do
-        // not do any optimization of the so-called single-statement transactions
-        // (TransactionStatus::Started) because multiple statements can actually be
-        // executed there in the extended protocol.
-        let timestamp = if when == QueryWhen::Immediately {
+        // query, we don't care about any possible transaction timestamp. If this is a
+        // single-statement transaction (TransactionStatus::Started), we don't need to
+        // worry about preventing compaction or choosing a valid timestamp for future
+        // queries.
+        let timestamp = if session.transaction().is_in_multi_statement_transaction()
+            && when == QueryWhen::Immediately
+        {
             // If all previous statements were timestamp-independent and the current one is
             // not, clear the transaction ops so it can get a new timestamp and timedomain.
             if let Some(read_txn) = self.txn_reads.get(&conn_id) {
@@ -2630,23 +2632,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
                 let timeline = self.validate_timeline(optimized_plan.depends_on())?;
                 let source_ids = optimized_plan.depends_on();
-                let id_bundle = if session.vars().transaction_isolation()
-                    == &IsolationLevel::StrictSerializable
-                    && timeline.is_some()
-                {
-                    self.index_oracle(compute_instance)
-                        .sufficient_collections(&source_ids)
-                } else {
-                    // Determine a timestamp that will be valid for anything in any schema
-                    // referenced by the query.
-                    self.timedomain_for(
-                        &source_ids,
-                        &timeline,
-                        session.conn_id(),
-                        compute_instance,
-                    )?
-                };
-                // TODO: determine_timestamp takes a mut self to track table linearizability,
+                let id_bundle = self
+                    .index_oracle(compute_instance)
+                    .sufficient_collections(&source_ids);
+                // TODO: determine_timestamp takes a mut self to track linearizability,
                 // so explaining a plan involving tables has side effects. Removing those side
                 // effects would be good.
                 let timestamp = self.determine_timestamp(

@@ -603,11 +603,14 @@ pub type RowBatchStream = UnboundedReceiver<PeekResponseUnary>;
 pub enum TransactionStatus<T> {
     /// Idle. Matches `TBLOCK_DEFAULT`.
     Default,
-    /// Running a possibly single-query transaction. Matches
-    /// `TBLOCK_STARTED`. WARNING: This might not actually be
-    /// a single statement due to the extended protocol. Thus,
-    /// we should not perform optimizations based on this.
-    /// See: <https://git.postgresql.org/gitweb/?p=postgresql.git&a=commitdiff&h=f92944137>.
+    /// Running a single-query transaction. Matches
+    /// `TBLOCK_STARTED`. In PostgreSQL, when using the extended query protocol, this
+    /// may be upgraded into multi-statement implicit query (see [`Self::InTransactionImplicit`]).
+    /// Aidditionally, some statements may trigger an eager commit of the implicit transaction,
+    /// see: <https://git.postgresql.org/gitweb/?p=postgresql.git&a=commitdiff&h=f92944137>. In
+    /// Materialize however, we eagerly commit all statements outside of an explicit transaction
+    /// when using the extended query protocol. Therefore, we can guarantee that this state will
+    /// always be a single-query transaction.
     Started(Transaction<T>),
     /// Currently in a transaction issued from a `BEGIN`. Matches `TBLOCK_INPROGRESS`.
     InTransaction(Transaction<T>),
@@ -662,6 +665,18 @@ impl<T> TransactionStatus<T> {
             TransactionStatus::Started(_) | TransactionStatus::InTransactionImplicit(_) => true,
             TransactionStatus::Default
             | TransactionStatus::InTransaction(_)
+            | TransactionStatus::Failed(_) => false,
+        }
+    }
+
+    /// Expresses whether or not the transaction contains multiple statements.
+    pub fn is_in_multi_statement_transaction(&self) -> bool {
+        match self {
+            TransactionStatus::InTransaction(_) | TransactionStatus::InTransactionImplicit(_) => {
+                true
+            }
+            TransactionStatus::Default
+            | TransactionStatus::Started(_)
             | TransactionStatus::Failed(_) => false,
         }
     }
