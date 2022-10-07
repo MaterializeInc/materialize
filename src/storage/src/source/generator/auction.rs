@@ -79,21 +79,24 @@ impl Generator for Auction {
                 "organizations",
                 RelationDesc::empty()
                     .with_column("id", ScalarType::Int64.nullable(false))
-                    .with_column("name", ScalarType::String.nullable(false)),
+                    .with_column("name", ScalarType::String.nullable(false))
+                    .with_key(vec![0]),
             ),
             (
                 "users",
                 RelationDesc::empty()
                     .with_column("id", ScalarType::Int64.nullable(false))
                     .with_column("org_id", ScalarType::Int64.nullable(false))
-                    .with_column("name", ScalarType::String.nullable(false)),
+                    .with_column("name", ScalarType::String.nullable(false))
+                    .with_key(vec![0]),
             ),
             (
                 "accounts",
                 RelationDesc::empty()
                     .with_column("id", ScalarType::Int64.nullable(false))
                     .with_column("org_id", ScalarType::Int64.nullable(false))
-                    .with_column("balance", ScalarType::Int64.nullable(false)),
+                    .with_column("balance", ScalarType::Int64.nullable(false))
+                    .with_key(vec![0]),
             ),
             (
                 "auctions",
@@ -101,7 +104,8 @@ impl Generator for Auction {
                     .with_column("id", ScalarType::Int64.nullable(false))
                     .with_column("seller", ScalarType::Int64.nullable(false))
                     .with_column("item", ScalarType::String.nullable(false))
-                    .with_column("end_time", ScalarType::TimestampTz.nullable(false)),
+                    .with_column("end_time", ScalarType::TimestampTz.nullable(false))
+                    .with_key(vec![0]),
             ),
             (
                 "bids",
@@ -110,7 +114,8 @@ impl Generator for Auction {
                     .with_column("buyer", ScalarType::Int64.nullable(false))
                     .with_column("auction_id", ScalarType::Int64.nullable(false))
                     .with_column("amount", ScalarType::Int32.nullable(false))
-                    .with_column("bid_time", ScalarType::TimestampTz.nullable(false)),
+                    .with_column("bid_time", ScalarType::TimestampTz.nullable(false))
+                    .with_key(vec![0]),
             ),
         ]
     }
