@@ -441,7 +441,6 @@ impl<S: Append + 'static> Coordinator<S> {
             let source = catalog::Source {
                 create_sql: plan.source.create_sql,
                 ingestion: plan.source.ingestion.map(|ingestion| catalog::Ingestion {
-                    connection_id: ingestion.connection_id,
                     desc: ingestion.desc,
                     source_imports: ingestion.source_imports,
                     subsource_exports: ingestion.subsource_exports,

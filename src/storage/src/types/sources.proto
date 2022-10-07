@@ -145,6 +145,7 @@ message ProtoDebeziumSourceProjection {
 
 message ProtoKafkaSourceConnection {
     mz_storage.types.connections.ProtoKafkaConnection connection = 1;
+    mz_repr.global_id.ProtoGlobalId connection_id = 13;
     string topic = 2;
     map<int32, int64> start_offsets = 3;
     optional string group_id_prefix = 4;
@@ -185,6 +186,7 @@ message ProtoSourceData {
 }
 
 message ProtoKinesisSourceConnection {
+    mz_repr.global_id.ProtoGlobalId connection_id = 3;
     string stream_name = 1;
     mz_storage.types.connections.aws.ProtoAwsConfig aws = 2;
 }
@@ -194,6 +196,7 @@ message ProtoPostgresSourceConnection {
         repeated mz_expr.scalar.ProtoMirScalarExpr column_casts = 1;
     }
 
+    mz_repr.global_id.ProtoGlobalId connection_id = 6;
     mz_storage.types.connections.ProtoPostgresConnection connection = 1;
     string publication = 2;
     ProtoPostgresSourceDetails details = 4;
@@ -214,6 +217,7 @@ message ProtoLoadGeneratorSourceConnection {
 }
 
 message ProtoS3SourceConnection {
+    mz_repr.global_id.ProtoGlobalId connection_id = 5;
     repeated ProtoS3KeySource key_sources = 1;
     optional string pattern = 2;
     mz_storage.types.connections.aws.ProtoAwsConfig aws = 3;

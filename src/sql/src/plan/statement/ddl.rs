@@ -367,7 +367,7 @@ pub fn plan_create_source(
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
-    let (external_connection, connection_id, encoding, available_subsources) = match connection {
+    let (external_connection, encoding, available_subsources) = match connection {
         CreateSourceConnection::Kafka(mz_sql_parser::ast::KafkaSourceConnection {
             connection:
                 mz_sql_parser::ast::KafkaConnection {
@@ -376,10 +376,10 @@ pub fn plan_create_source(
                 },
             key: _,
         }) => {
-            let item = scx.get_item_by_resolved_name(connection_name)?;
-            let kafka_connection = match item.connection()? {
+            let connection_item = scx.get_item_by_resolved_name(connection_name)?;
+            let kafka_connection = match connection_item.connection()? {
                 Connection::Kafka(connection) => connection.clone(),
-                _ => sql_bail!("{} is not a kafka connection", item.name()),
+                _ => sql_bail!("{} is not a kafka connection", connection_item.name()),
             };
 
             // Starting offsets are allowed out unsafe mode, as they are a simple,
@@ -432,6 +432,7 @@ pub fn plan_create_source(
 
             let mut connection = KafkaSourceConnection {
                 connection: kafka_connection,
+                connection_id: connection_item.id(),
                 options,
                 topic,
                 start_offsets,
@@ -490,7 +491,7 @@ pub fn plan_create_source(
 
             let connection = SourceConnection::Kafka(connection);
 
-            (connection, Some(item.id()), encoding, None)
+            (connection, encoding, None)
         }
         CreateSourceConnection::Kinesis {
             connection: aws_connection,
@@ -508,16 +509,19 @@ pub fn plan_create_source(
                 ),
             };
 
-            let item = scx.get_item_by_resolved_name(aws_connection)?;
-            let aws = match item.connection()? {
+            let connection_item = scx.get_item_by_resolved_name(aws_connection)?;
+            let aws = match connection_item.connection()? {
                 Connection::Aws(aws) => aws.clone(),
-                _ => sql_bail!("{} is not an AWS connection", item.name()),
+                _ => sql_bail!("{} is not an AWS connection", connection_item.name()),
             };
 
             let encoding = get_encoding(scx, format, &envelope, connection)?;
-            let connection =
-                SourceConnection::Kinesis(KinesisSourceConnection { stream_name, aws });
-            (connection, Some(item.id()), encoding, None)
+            let connection = SourceConnection::Kinesis(KinesisSourceConnection {
+                connection_id: connection_item.id(),
+                stream_name,
+                aws,
+            });
+            (connection, encoding, None)
         }
         CreateSourceConnection::S3 {
             connection: aws_connection,
@@ -527,10 +531,10 @@ pub fn plan_create_source(
         } => {
             scx.require_unsafe_mode("CREATE SOURCE ... FROM S3")?;
 
-            let item = scx.get_item_by_resolved_name(aws_connection)?;
-            let aws = match item.connection()? {
+            let connection_item = scx.get_item_by_resolved_name(aws_connection)?;
+            let aws = match connection_item.connection()? {
                 Connection::Aws(aws) => aws.clone(),
-                _ => sql_bail!("{} is not an AWS connection", item.name()),
+                _ => sql_bail!("{} is not an AWS connection", connection_item.name()),
             };
 
             let mut converted_sources = Vec::new();
@@ -554,6 +558,7 @@ pub fn plan_create_source(
                 sql_bail!("S3 sources do not support key decoding");
             }
             let connection = SourceConnection::S3(S3SourceConnection {
+                connection_id: connection_item.id(),
                 key_sources: converted_sources,
                 pattern: pattern
                     .as_ref()
@@ -571,16 +576,16 @@ pub fn plan_create_source(
                     Compression::None => mz_storage::types::sources::Compression::None,
                 },
             });
-            (connection, Some(item.id()), encoding, None)
+            (connection, encoding, None)
         }
         CreateSourceConnection::Postgres {
             connection,
             options,
         } => {
-            let item = scx.get_item_by_resolved_name(connection)?;
-            let connection = match item.connection()? {
+            let connection_item = scx.get_item_by_resolved_name(connection)?;
+            let connection = match connection_item.connection()? {
                 Connection::Postgres(connection) => connection.clone(),
-                _ => sql_bail!("{} is not a postgres connection", item.name()),
+                _ => sql_bail!("{} is not a postgres connection", connection_item.name()),
             };
             let PgConfigOptionExtracted {
                 details,
@@ -675,6 +680,7 @@ pub fn plan_create_source(
 
             let connection = SourceConnection::Postgres(PostgresSourceConnection {
                 connection,
+                connection_id: connection_item.id(),
                 table_casts,
                 publication: publication.expect("validated exists during purification"),
                 details: PostgresSourceDetails::from_proto(details)
@@ -686,12 +692,7 @@ pub fn plan_create_source(
             let encoding = SourceDataEncoding::Single(DataEncoding::new(
                 DataEncodingInner::RowCodec(RelationDesc::empty()),
             ));
-            (
-                connection,
-                Some(item.id()),
-                encoding,
-                Some(available_subsources),
-            )
+            (connection, encoding, Some(available_subsources))
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
             use mz_storage::types::sources::LoadGenerator;
@@ -730,12 +731,7 @@ pub fn plan_create_source(
                 load_generator,
                 tick_micros,
             });
-            (
-                connection,
-                None,
-                generator.data_encoding(),
-                available_subsources,
-            )
+            (connection, generator.data_encoding(), available_subsources)
         }
     };
     let (key_desc, value_desc) = encoding.desc()?;
@@ -943,7 +939,6 @@ pub fn plan_create_source(
     let source = Source {
         create_sql,
         ingestion: Some(Ingestion {
-            connection_id,
             desc: source_desc,
             // Currently no source reads from another source
             source_imports: HashSet::new(),

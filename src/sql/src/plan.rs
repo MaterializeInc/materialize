@@ -653,7 +653,6 @@ pub struct Source {
 
 #[derive(Clone, Debug)]
 pub struct Ingestion {
-    pub connection_id: Option<GlobalId>,
     pub desc: SourceDesc,
     pub source_imports: HashSet<GlobalId>,
     pub subsource_exports: HashMap<GlobalId, usize>,

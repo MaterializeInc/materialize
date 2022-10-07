@@ -206,7 +206,7 @@ impl CatalogState {
                 let connection_id = source
                     .ingestion
                     .as_ref()
-                    .and_then(|ingestion| ingestion.connection_id);
+                    .and_then(|ingestion| ingestion.desc.connection.connection_id());
                 self.pack_source_update(
                     id,
                     oid,
