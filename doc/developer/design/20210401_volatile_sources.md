@@ -144,7 +144,7 @@ the following:
 
 ```sql
 CREATE SOURCE market_orders_raw FROM PUBNUB
-SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe'
+SUBSCRIBE KEY 'sub-c-99084bc5-1844-4e1c-82ca-a01b18166ca8'
 CHANNEL 'pubnub-market-orders';
 
 CREATE MATERIALIZED VIEW market_orders_1 AS
@@ -293,7 +293,7 @@ expect to be very common in demos is to only materialize the last _n_ seconds
 of data, which requires both an unmaterialized source and a materialized view:
 
 ```sql
-CREATE SOURCE market_orders_raw FROM PUBNUB SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe' CHANNEL 'pubnub-market-orders';
+CREATE SOURCE market_orders_raw FROM PUBNUB SUBSCRIBE KEY 'sub-c-99084bc5-1844-4e1c-82ca-a01b18166ca8' CHANNEL 'pubnub-market-orders';
 
 CREATE MATERIALIZED VIEW market_orders AS
   SELECT *
@@ -317,7 +317,7 @@ could be used in exactly one materialized view:
 ```
 CREATE MATERIALIZED VIEW market_orders AS
  WITH market_orders_raw AS SOURCE (
-     PUBNUB SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe' CHANNEL 'pubnub-market-orders';
+     PUBNUB SUBSCRIBE KEY 'sub-c-99084bc5-1844-4e1c-82ca-a01b18166ca8' CHANNEL 'pubnub-market-orders';
   )
   SELECT *
   FROM (
