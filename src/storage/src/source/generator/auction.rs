@@ -13,7 +13,6 @@ use rand::prelude::{Rng, SmallRng};
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
 
-use mz_expr::func::cast_timestamp_tz_to_string;
 use mz_ore::now::{to_datetime, NowFn};
 use mz_repr::{Datum, RelationDesc, Row, ScalarType};
 
@@ -63,20 +62,15 @@ use crate::types::sources::Generator;
 ///   );
 pub struct Auction {}
 
+const ORGANIZATION_OUTPUT: usize = 1;
+const USERS_OUTPUT: usize = 2;
+const ACCOUNTS_OUTPUT: usize = 3;
+const AUCTIONS_OUTPUT: usize = 4;
+const BIDS_OUTPUT: usize = 5;
+
 impl Generator for Auction {
     fn data_encoding_inner(&self) -> DataEncodingInner {
-        DataEncodingInner::RowCodec(
-            RelationDesc::empty()
-                .with_column("table", ScalarType::String.nullable(false))
-                .with_column(
-                    "row_data",
-                    ScalarType::List {
-                        element_type: Box::new(ScalarType::String),
-                        custom_id: None,
-                    }
-                    .nullable(false),
-                ),
-        )
+        DataEncodingInner::RowCodec(RelationDesc::empty())
     }
 
     fn views(&self) -> Vec<(&str, RelationDesc)> {
@@ -121,96 +115,89 @@ impl Generator for Auction {
         ]
     }
 
-    fn by_seed(&self, now: NowFn, seed: Option<u64>) -> Box<dyn Iterator<Item = Vec<Row>>> {
+    fn by_seed(
+        &self,
+        now: NowFn,
+        seed: Option<u64>,
+    ) -> Box<dyn Iterator<Item = (usize, Vec<Row>)>> {
         let mut pending = VecDeque::new();
         let mut rng = SmallRng::seed_from_u64(seed.unwrap_or_default());
-        let mut counter = 0;
 
         let organizations = COMPANIES.iter().enumerate().map(|(offset, name)| {
             let mut company = Row::with_capacity(2);
             let mut packer = company.packer();
-            packer.push(Datum::String("organizations"));
-            packer.push_list(&[
-                // Start ids at 1, not 0
-                Datum::String(&(offset + 1).to_string()), // org id
-                Datum::String(*name),
-            ]);
-
+            // Start ids at 1, not 0
+            let id = i64::try_from(offset + 1).expect("demo entries less than i64::MAX");
+            packer.push(Datum::Int64(id));
+            packer.push(Datum::String(*name));
             company
         });
 
         let users = CELEBRETIES.iter().enumerate().map(|(offset, name)| {
-            let mut user = Row::with_capacity(2);
+            let mut user = Row::with_capacity(3);
             let mut packer = user.packer();
-            packer.push(Datum::String("users"));
-            packer.push_list(&[
-                // Start ids at 1, not 0.
-                Datum::String(&(offset + 1).to_string()), // user id
-                Datum::String(&((offset % COMPANIES.len()) + 1).to_string()), // org id
-                Datum::String(*name),
-            ]);
-
+            // Start ids at 1, not 0.
+            let id = i64::try_from(offset + 1).expect("demo entries less than i64::MAX");
+            packer.push(Datum::Int64(id));
+            let org_id = i64::try_from((offset % COMPANIES.len()) + 1)
+                .expect("demo entries less than i64::MAX");
+            packer.push(Datum::Int64(org_id));
+            packer.push(Datum::String(name));
             user
         });
 
         let accounts = (1..=COMPANIES.len()).map(|org_id| {
-            let mut org = Row::with_capacity(2);
+            let mut org = Row::with_capacity(3);
             let mut packer = org.packer();
-            packer.push(Datum::String("accounts"));
-            packer.push_list(&[
-                Datum::String(&(org_id + 42).to_string()), // account id
-                Datum::String(&(org_id).to_string()),      // org id
-                Datum::String("10000"),                    // balance
-            ]);
-
+            let org_id = i64::try_from(org_id).expect("demo entries less than i64::MAX");
+            let id = org_id + 42;
+            packer.push(Datum::Int64(id));
+            packer.push(Datum::Int64(org_id));
+            packer.push(Datum::Int64(10000)); // balance
             org
         });
 
-        let bootstrap = organizations.chain(users).chain(accounts).collect();
+        pending.push_back((ORGANIZATION_OUTPUT, organizations.collect()));
+        pending.push_back((USERS_OUTPUT, users.collect()));
+        pending.push_back((ACCOUNTS_OUTPUT, accounts.collect()));
 
-        pending.push_back(bootstrap);
-
+        let mut counter = 0;
         Box::new(iter::from_fn(move || {
             {
                 if pending.is_empty() {
                     counter += 1;
                     let now = to_datetime(now());
-                    let mut auction = Row::with_capacity(2);
+                    let mut auction = Row::with_capacity(4);
                     let mut packer = auction.packer();
-                    packer.push(Datum::String("auctions"));
-                    packer.push_list(&[
-                        Datum::String(&counter.to_string()), // auction id
-                        Datum::String(&rng.gen_range(1..=CELEBRETIES.len()).to_string()), // seller
-                        Datum::String(AUCTIONS.choose(&mut rng).unwrap()), // item
-                        Datum::String(&cast_timestamp_tz_to_string(
-                            (now + chrono::Duration::seconds(10))
-                                .try_into()
-                                .expect("timestamp must fit"),
-                        )), // end time
-                    ]);
-                    pending.push_back(vec![auction]);
+                    packer.push(Datum::Int64(counter)); // auction id
+                    let max_seller_id =
+                        i64::try_from(CELEBRETIES.len()).expect("demo entries less than i64::MAX");
+                    packer.push(Datum::Int64(rng.gen_range(1..=max_seller_id))); // seller
+                    packer.push(Datum::String(AUCTIONS.choose(&mut rng).unwrap())); // item
+                    packer.push(Datum::TimestampTz(
+                        (now + chrono::Duration::seconds(10))
+                            .try_into()
+                            .expect("timestamp must fit"),
+                    )); // end time
+                    pending.push_back((AUCTIONS_OUTPUT, vec![auction]));
                     const MAX_BIDS: i64 = 10;
                     for i in 0..rng.gen_range(2..MAX_BIDS) {
-                        let bid_id = (counter * MAX_BIDS + i).to_string();
-                        let bid_id = Datum::String(&bid_id);
+                        let bid_id = Datum::Int64(counter * MAX_BIDS + i);
                         let bid = {
-                            let mut bid = Row::with_capacity(2);
+                            let mut bid = Row::with_capacity(5);
                             let mut packer = bid.packer();
-                            packer.push(Datum::String("bids"));
-                            packer.push_list(&[
-                                bid_id,
-                                Datum::String(&rng.gen_range(1..=CELEBRETIES.len()).to_string()), // buyer
-                                Datum::String(&counter.to_string()), // auction id
-                                Datum::String(&rng.gen_range(1..100).to_string()), // amount
-                                Datum::String(&cast_timestamp_tz_to_string(
-                                    (now + chrono::Duration::seconds(i))
-                                        .try_into()
-                                        .expect("timestamp must fit"),
-                                )), // bid time
-                            ]);
+                            packer.push(bid_id);
+                            packer.push(Datum::Int64(rng.gen_range(1..=max_seller_id))); // buyer
+                            packer.push(Datum::Int64(counter)); // auction id
+                            packer.push(Datum::Int32(rng.gen_range(1..100))); // amount
+                            packer.push(Datum::TimestampTz(
+                                (now + chrono::Duration::seconds(i))
+                                    .try_into()
+                                    .expect("timestamp must fit"),
+                            )); // bid time
                             bid
                         };
-                        pending.push_back(vec![bid]);
+                        pending.push_back((BIDS_OUTPUT, vec![bid]));
                     }
                 }
                 pending.pop_front()

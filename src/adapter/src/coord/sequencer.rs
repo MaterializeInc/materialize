@@ -49,12 +49,12 @@ use mz_sql::plan::{
     CreateComputeInstancePlan, CreateComputeReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
     CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan, DropComputeReplicasPlan,
-    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
-    ExplainPlanNew, ExplainPlanOld, FetchPlan, HirRelationExpr, IndexOption, InsertPlan,
-    MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen,
-    RaisePlan, ReadThenWritePlan, ResetVariablePlan, RotateKeysPlan, SendDiffsPlan,
-    SetVariablePlan, ShowVariablePlan, SubscribeFrom, SubscribePlan, View,
+    CreateViewPlan, DropComputeInstancesPlan, DropComputeReplicasPlan, DropDatabasePlan,
+    DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew,
+    ExplainPlanOld, FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView,
+    MutationKind, OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen, RaisePlan,
+    ReadThenWritePlan, ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan,
+    ShowVariablePlan, SubscribeFrom, SubscribePlan, View,
 };
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
@@ -152,13 +152,6 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::CreateView(plan) => {
                 tx.send(
                     self.sequence_create_view(&session, plan, depends_on).await,
-                    session,
-                );
-            }
-            Plan::CreateViews(plan) => {
-                tx.send(
-                    self.sequence_create_views(&mut session, plan, depends_on)
-                        .await,
                     session,
                 );
             }
@@ -1227,6 +1220,19 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
+        let create_export_token = match self
+            .controller
+            .storage
+            .prepare_export(id, catalog_sink.from)
+            .await
+        {
+            Ok(t) => t,
+            Err(e) => {
+                tx.send(Err(e.into()), session);
+                return;
+            }
+        };
+
         // Now we're ready to create the sink connection. Arrange to notify the
         // main coordinator thread when the future completes.
         let connection_builder = sink.connection_builder;
@@ -1242,6 +1248,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         tx,
                         id,
                         oid,
+                        create_export_token,
                         result: mz_storage::sink::build_sink_connection(
                             connection_builder,
                             connection_context,
@@ -1278,27 +1285,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
                 ..
             })) if if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
-            Err(err) => Err(err),
-        }
-    }
-
-    async fn sequence_create_views(
-        &mut self,
-        session: &mut Session,
-        plan: CreateViewsPlan,
-        depends_on: Vec<GlobalId>,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let mut ops = vec![];
-
-        for (name, view) in plan.views {
-            let mut view_ops = self
-                .generate_view_ops(session, name, view, None, depends_on.clone())
-                .await?;
-            ops.append(&mut view_ops);
-        }
-        match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
-            Ok(()) => Ok(ExecuteResponse::CreatedViews { existed: false }),
-            Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedViews { existed: true }),
             Err(err) => Err(err),
         }
     }

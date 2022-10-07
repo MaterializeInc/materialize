@@ -303,6 +303,7 @@ impl<S: Append + 'static> Coordinator<S> {
             tx,
             id,
             oid,
+            create_export_token,
             result,
         }: SinkConnectionReady,
     ) {
@@ -317,11 +318,17 @@ impl<S: Append + 'static> Coordinator<S> {
                     // no better solution presents itself. Possibly sinks should
                     // have an error bit, and an error here would set the error
                     // bit on the sink.
-                    self.handle_sink_connection_ready(id, oid, connection, Some(&session))
-                        .await
-                        // XXX(chae): I really don't like this -- especially as we're now doing cross
-                        // process calls to start a sink.
-                        .expect("sinks should be validated by sequence_create_sink");
+                    self.handle_sink_connection_ready(
+                        id,
+                        oid,
+                        connection,
+                        create_export_token,
+                        Some(&session),
+                    )
+                    .await
+                    // XXX(chae): I really don't like this -- especially as we're now doing cross
+                    // process calls to start a sink.
+                    .expect("sinks should be validated by sequence_create_sink");
                 } else {
                     // Another session dropped the sink while we were
                     // creating the connection. Report to the client that
@@ -344,6 +351,12 @@ impl<S: Append + 'static> Coordinator<S> {
                     // attempting to create the connection, in which case we don't need to do
                     // anything.
                 }
+                // Drop the placeholder sink in the storage controller
+                let () = self
+                    .controller
+                    .storage
+                    .cancel_prepare_export(create_export_token)
+                    .await;
                 tx.send(Err(e), session);
             }
         }

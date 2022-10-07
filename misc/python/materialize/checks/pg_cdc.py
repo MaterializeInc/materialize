@@ -50,13 +50,13 @@ class PgCdc(Check):
                 """
                 > CREATE SOURCE postgres_source1
                   FROM POSTGRES CONNECTION pg1
-                  (PUBLICATION 'postgres_source');
+                  (PUBLICATION 'postgres_source')
+                  FOR TABLES (postgres_source_table AS postgres_source_tableA);
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres-source
                 INSERT INTO postgres_source_table SELECT 'B', 1, REPEAT('X', 1024) FROM generate_series(1,100);
                 UPDATE postgres_source_table SET f2 = f2 + 1;
 
-                > CREATE VIEWS FROM SOURCE postgres_source1 (postgres_source_table AS postgres_source_tableA);
 
                 > CREATE SECRET pgpass2 AS 'postgres';
 
@@ -72,21 +72,18 @@ class PgCdc(Check):
                 """,
                 """
 
-                > CREATE VIEWS FROM SOURCE postgres_source1 (postgres_source_table AS postgres_source_tableB);
-
                 $ postgres-execute connection=postgres://postgres:postgres@postgres-source
                 INSERT INTO postgres_source_table SELECT 'D', 1, REPEAT('X', 1024) FROM generate_series(1,100);
                 UPDATE postgres_source_table SET f2 = f2 + 1;
 
                 > CREATE SOURCE postgres_source2
                   FROM POSTGRES CONNECTION pg2
-                  (PUBLICATION 'postgres_source');
+                  (PUBLICATION 'postgres_source')
+                  FOR TABLES (postgres_source_table AS postgres_source_tableB);
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres-source
                 INSERT INTO postgres_source_table SELECT 'E', 1, REPEAT('X', 1024) FROM generate_series(1,100);
                 UPDATE postgres_source_table SET f2 = f2 + 1;
-
-                > CREATE VIEWS FROM SOURCE postgres_source2 (postgres_source_table AS postgres_source_tableC);
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres-source
                 INSERT INTO postgres_source_table SELECT 'F', 1, REPEAT('X', 1024) FROM generate_series(1,100);
@@ -102,13 +99,13 @@ class PgCdc(Check):
 
                 > CREATE SOURCE postgres_source3
                   FROM POSTGRES CONNECTION pg3
-                  (PUBLICATION 'postgres_source');
+                  (PUBLICATION 'postgres_source')
+                  FOR TABLES (postgres_source_table AS postgres_source_tableC);
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres-source
                 INSERT INTO postgres_source_table SELECT 'G', 1, REPEAT('X', 1024) FROM generate_series(1,100);
                 UPDATE postgres_source_table SET f2 = f2 + 1;
 
-                > CREATE VIEWS FROM SOURCE postgres_source3 (postgres_source_table AS postgres_source_tableD);
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres-source
                 INSERT INTO postgres_source_table SELECT 'H', 1, REPEAT('X', 1024) FROM generate_series(1,100);
@@ -142,16 +139,6 @@ class PgCdc(Check):
                 H 2 102400
 
                 > SELECT f1, f2, SUM(LENGTH(f3)) FROM postgres_source_tableC GROUP BY f1, f2;
-                A 8 102400
-                B 8 102400
-                C 7 102400
-                D 6 102400
-                E 5 102400
-                F 4 102400
-                G 3 102400
-                H 2 102400
-
-                > SELECT f1, f2, SUM(LENGTH(f3)) FROM postgres_source_tableD GROUP BY f1, f2;
                 A 8 102400
                 B 8 102400
                 C 7 102400

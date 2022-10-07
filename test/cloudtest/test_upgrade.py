@@ -25,9 +25,6 @@ from materialize.cloudtest.wait import wait
 # Once a stable release is out, we need to get its DockerHub tag in here
 LAST_RELEASED_VERSION = None
 
-# Debezium is not available in cloudtest yet
-DISABLED_CHECKS = [DebeziumPostgres]  # noqa: F405
-
 
 class ReplaceEnvironmentdStatefulSet(Action):
     """Change the image tag of the environmentd stateful set, re-create the definition and replace the existing one."""
@@ -85,11 +82,10 @@ class CloudtestUpgrade(Scenario):
 @pytest.mark.long
 def test_upgrade() -> None:
     """Test upgrade from LAST_RELEASED_VERSION to the current source by running all the Platform Checks"""
-    checks = [check for check in Check.__subclasses__() if check not in DISABLED_CHECKS]
 
     mz = MaterializeApplication(tag=LAST_RELEASED_VERSION)
     wait(condition="condition=Ready", resource="pod/compute-cluster-1-replica-1-0")
 
     executor = CloudtestExecutor(application=mz)
-    scenario = CloudtestUpgrade(checks=checks, executor=executor)
+    scenario = CloudtestUpgrade(checks=Check.__subclasses__(), executor=executor)
     scenario.run()

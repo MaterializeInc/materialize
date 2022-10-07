@@ -145,3 +145,4 @@ unsafe = true
 name = "production"
 url = "s3://materialize-website?region=us-east-1"
 cloudFrontDistributionID = "E1F8Q2NUUC41QE"
+exclude = "lts/**"

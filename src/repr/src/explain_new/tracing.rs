@@ -288,26 +288,20 @@ mod test {
             assert_eq!(trace.len(), 5);
             for (i, entry) in trace.into_iter().enumerate() {
                 let path = entry.path;
-                let time = entry.duration.as_nanos();
                 match i {
                     0 => {
-                        assert!(time <= 1_000_000);
                         assert_eq!(path, "optimize");
                     }
                     1 => {
-                        assert!(time <= 3_000_000);
                         assert_eq!(path, "optimize/logical/my_optimization");
                     }
                     2 => {
-                        assert!(time <= 5_000_000);
                         assert_eq!(path, "optimize/logical");
                     }
                     3 => {
-                        assert!(time <= 5_000_000);
                         assert_eq!(path, "optimize/physical");
                     }
                     4 => {
-                        assert!(time <= 10_000_000);
                         assert_eq!(path, "optimize");
                     }
                     _ => (),
@@ -328,16 +322,12 @@ mod test {
     #[instrument(level = "info", name = "logical", skip_all)]
     fn logical_optimizer(plan: &mut String) {
         some_optimization(plan);
-        let sleep_time = std::time::Duration::from_millis(1);
-        std::thread::sleep(sleep_time);
         let _ = plan.replace("RawPlan", "LogicalPlan");
         trace_plan(plan);
     }
 
     #[instrument(level = "info", name = "physical", skip_all)]
     fn physical_optimizer(plan: &mut String) {
-        let sleep_time = std::time::Duration::from_millis(3);
-        std::thread::sleep(sleep_time);
         let _ = plan.replace("LogicalPlan", "PhysicalPlan");
         trace_plan(plan);
     }
@@ -345,8 +335,6 @@ mod test {
     #[tracing::instrument(level = "debug", skip_all, fields(path.segment ="my_optimization"))]
     fn some_optimization(plan: &mut String) {
         let _ = plan.replace("42", "47");
-        let sleep_time = std::time::Duration::from_millis(2);
-        std::thread::sleep(sleep_time);
         trace_plan(plan);
     }
 

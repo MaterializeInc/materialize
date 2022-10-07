@@ -6,58 +6,126 @@ aliases:
 ---
 
 You can use the queries below for spot debugging, but it may also be
-helpful to make them more permanent tools by creating them as views for `SUBSCRIBE`ing or materialized views to read more efficiently. Note that the
-existence of these additional views may itself affect performance.
+helpful to monitor their output by [`SUBSCRIBE`ing](/sql/subscribe) to their change stream, e.g.,
+by issuing a command `COPY (SUBSCRIBE (<query>)) TO stdout`.
+Note that this additional monitoring may, however, itself affect performance.
+
+### Limitations on Introspection Sources and Views for Troubleshooting
+
+Importantly, the introspection sources and views used in the queries below
+should be considered subject to changes in the future without further notice.
+This is why these sources and views are all created in the `mz_internal`
+schema, and it is not possible to create higher-level views depending on them.
+
+Introspection sources are maintained by independently collecting internal logging
+information within each of the replicas of a cluster. Thus, in a multi-replica
+cluster, the queries below need to be directed to a specific replica by issuing
+the command `SET cluster_replica = <replica_name>`. Note that once this command
+is issued, all subsequent `SELECT` queries, for introspection sources or not, will
+be directed to the targeted replica. The latter selection can be cancelled by
+issuing the command `RESET cluster_replica`.
+
+Materialize also directly exposes replica-specific introspection sources by
+suffixing the respective catalog relation names with a replica ID that is unique
+across clusters. For example, `mz_internal.mz_compute_frontiers_1` corresponds to
+the introspection source `mz_internal.mz_compute_frontiers` in the replica with
+the unique ID of `1`. A mapping of replica IDs to clusters and replica names is
+provided by the [`mz_cluster_replicas`] system table.
+
+As a consequence of the above, you should expect the answers to the queries below
+to vary dependending on which cluster you are working in. In particular, indexes
+and dataflows are local to a cluster, so their introspection information will
+vary across clusters.
 
 ### How fast are my sources loading data?
 
-You can count the number of records accepted in a source or materialized view.
-Note that this makes less sense for a non-materialized view,
-as invoking it will create a new dataflow and run it to the point that
-it is caught up with its sources; that elapsed time may be informative,
-but it tells you something other than how fast a collection is populated.
+You can count the number of records accepted in a source, materialized view,
+or indexed view. Note that this makes less sense for a non-materialized,
+non-indexed view, as invoking it will create a new dataflow and run it to
+the point that it is caught up with its sources; that elapsed time may be
+informative, but it tells you something other than how fast a collection
+is populated.
 
 ```sql
 -- Report the number of records available from the materialization.
-select count(*) from my_source_or_materialized_view;
+SELECT count(*) FROM my_source_or_materialization;
 ```
 
-This logging source indicates the upper frontier of materializations.
+The following introspection source indicates the upper frontier of materializations.
 
 This source provides timestamp-based progress, which reveals not the
 volume of data, but how closely the contents track source timestamps.
 ```sql
 -- For each materialization, the next timestamp to be added.
-select * from mz_internal.mz_compute_frontiers;
+SELECT * FROM mz_internal.mz_compute_frontiers;
+```
+
+You can also contrast the materialization's upper frontier with the
+corresponding source object frontiers known by Materialize's compute
+layer.
+```sql
+-- For each materialization, the next timestamps of the materialization and
+-- its source objects.
+SELECT *
+FROM (
+  SELECT mcd.export_id, mcd.import_id, mcd.worker_id,
+         mfe.time AS export_time, mfi.time AS import_time
+  FROM mz_internal.mz_worker_compute_dependencies AS mcd
+       JOIN mz_internal.mz_worker_compute_frontiers AS mfe
+           ON (mfe.export_id = mcd.export_id AND mfe.worker_id = mcd.worker_id)
+       JOIN mz_internal.mz_worker_compute_frontiers AS mfi
+           ON (mfi.export_id = mcd.import_id AND mfi.worker_id = mcd.worker_id)
+  UNION
+  SELECT mcd.export_id, mcd.import_id, mcd.worker_id,
+         mfe.time AS export_time, mfi.time AS import_time
+  FROM mz_internal.mz_worker_compute_dependencies AS mcd
+       JOIN mz_internal.mz_worker_compute_frontiers AS mfe
+           ON (mfe.export_id = mcd.export_id AND mfe.worker_id = mcd.worker_id)
+       JOIN mz_internal.mz_worker_compute_import_frontiers AS mfi
+           ON (mfi.import_id = mcd.import_id AND mfi.worker_id = mcd.worker_id
+               AND mfi.export_id = mcd.export_id)
+)
+ORDER BY export_id, import_id;
+```
+
+The above query shows the currently known frontiers, but not the wall-clock
+delays of propagating information within Materialize's compute layer once it
+it read out from storage. For the latter, the following introspection source
+is useful:
+```sql
+-- Histogram of wall-clock delays in propagating data obtained from storage
+-- through materializations
+SELECT * FROM mz_internal.mz_worker_compute_delays;
 ```
 
 ### Why is Materialize running so slowly?
 
 Materialize spends time in various dataflow operators maintaining
-materialized views. If Materialize is taking more time to update results than you expect, you can identify which operators
+materialized views or indexes. If Materialize is taking more time to update
+results than you expect, you can identify which operators
 take the largest total amount of time.
 
 ```sql
 -- Extract raw elapsed time information, by worker
-select mdo.id, mdo.name, mdo.worker_id, mse.elapsed_ns
-from mz_internal.mz_scheduling_elapsed as mse,
-     mz_internal.mz_dataflow_operators as mdo
-where
-    mse.id = mdo.id and
+SELECT mdo.id, mdo.name, mdo.worker_id, mse.elapsed_ns
+FROM mz_internal.mz_scheduling_elapsed AS mse,
+     mz_internal.mz_dataflow_operators AS mdo
+WHERE
+    mse.id = mdo.id AND
     mse.worker_id = mdo.worker_id
-order by elapsed_ns desc;
+ORDER BY elapsed_ns DESC;
 ```
 
 ```sql
 -- Extract raw elapsed time information, summed across workers
-select mdo.id, mdo.name, sum(mse.elapsed_ns) as elapsed_ns
-from mz_internal.mz_scheduling_elapsed as mse,
-     mz_internal.mz_dataflow_operators as mdo
-where
-    mse.id = mdo.id and
+SELECT mdo.id, mdo.name, sum(mse.elapsed_ns) AS elapsed_ns
+FROM mz_internal.mz_scheduling_elapsed AS mse,
+     mz_internal.mz_dataflow_operators AS mdo
+WHERE
+    mse.id = mdo.id AND
     mse.worker_id = mdo.worker_id
-group by mdo.id, mdo.name
-order by elapsed_ns desc;
+GROUP BY mdo.id, mdo.name
+ORDER BY elapsed_ns DESC;
 ```
 
 ### Why is Materialize unresponsive for seconds at a time?
@@ -72,25 +140,25 @@ and incriminate the subject.
 
 ```sql
 -- Extract raw scheduling histogram information, by worker.
-select mdo.id, mdo.name, mdo.worker_id, mrcod.duration_ns, count
-from mz_internal.mz_raw_compute_operator_durations as mrcod,
-     mz_internal.mz_dataflow_operators as mdo
-where
-    mrcod.id = mdo.id and
+SELECT mdo.id, mdo.name, mdo.worker_id, mrcod.duration_ns, count
+FROM mz_internal.mz_raw_compute_operator_durations AS mrcod,
+     mz_internal.mz_dataflow_operators AS mdo
+WHERE
+    mrcod.id = mdo.id AND
     mrcod.worker_id = mdo.worker_id
-order by mrcod.duration_ns desc;
+ORDER BY mrcod.duration_ns DESC;
 ```
 
 ```sql
 -- Extract raw scheduling histogram information, summed across workers.
-select mdo.id, mdo.name, mrcod.duration_ns, sum(mrcod.count) count
-from mz_internal.mz_raw_compute_operator_durations as mrcod,
-     mz_internal.mz_dataflow_operators as mdo
-where
-    mrcod.id = mdo.id and
+SELECT mdo.id, mdo.name, mrcod.duration_ns, sum(mrcod.count) count
+FROM mz_internal.mz_raw_compute_operator_durations AS mrcod,
+     mz_internal.mz_dataflow_operators AS mdo
+WHERE
+    mrcod.id = mdo.id AND
     mrcod.worker_id = mdo.worker_id
-group by mdo.id, mdo.name, mrcod.duration_ns
-order by mrcod.duration_ns desc;
+GROUP BY mdo.id, mdo.name, mrcod.duration_ns
+ORDER BY mrcod.duration_ns DESC;
 ```
 
 ### Why is Materialize using so much memory?
@@ -105,31 +173,30 @@ number, and anything significantly larger is probably a bug.
 
 ```sql
 -- Extract arrangement records and batches, by worker.
-select mdo.id, mdo.name, mdo.worker_id, mas.records, mas.batches
-from mz_internal.mz_arrangement_sizes as mas,
-     mz_internal.mz_dataflow_operators as mdo
-where
-    mas.operator_id = mdo.id and
+SELECT mdo.id, mdo.name, mdo.worker_id, mas.records, mas.batches
+FROM mz_internal.mz_arrangement_sizes AS mas,
+     mz_internal.mz_dataflow_operators AS mdo
+WHERE
+    mas.operator_id = mdo.id AND
     mas.worker_id = mdo.worker_id
-order by mas.records desc;
+ORDER BY mas.records DESC;
 ```
 
 ```sql
 -- Extract arrangement records and batches, summed across workers.
-select mdo.id, mdo.name, sum(mas.records) as records, sum(mas.batches) as batches
-from mz_internal.mz_arrangement_sizes as mas,
-     mz_internal.mz_dataflow_operators as mdo
-where
-    mas.operator_id = mdo.id and
+SELECT mdo.id, mdo.name, sum(mas.records) AS records, sum(mas.batches) AS batches
+FROM mz_internal.mz_arrangement_sizes AS mas,
+     mz_internal.mz_dataflow_operators AS mdo
+WHERE
+    mas.operator_id = mdo.id AND
     mas.worker_id = mdo.worker_id
-group by mdo.id, mdo.name
-order by sum(mas.records) desc;
+GROUP BY mdo.id, mdo.name
+ORDER BY sum(mas.records) DESC;
 ```
 
 We've also bundled an interactive, web-based memory usage visualization tool to
-aid in debugging. The SQL queries above show all arrangements in Materialize
-(including system arrangements), whereas the memory visualization tool shows
-only user-created arrangements, grouped by dataflow. The amount of memory used
+aid in debugging. The memory visualization tool shows all user-created arrangements,
+grouped by dataflow. The amount of memory used
 by Materialize should correlate with the number of arrangement records that are
 displayed by either the visual interface or the SQL queries.
 
@@ -152,36 +219,34 @@ example, Kafka topic ingestion work can become skewed if most of the data is in
 only one out of multiple partitions.
 
 ```sql
--- Average the total time spent by each operator across all workers.
-create view avg_elapsed_by_id as
-select
-    id,
-    avg(elapsed_ns) as avg_ns
-from
-    mz_internal.mz_scheduling_elapsed
-group by
-    id;
-
 -- Get operators where one worker has spent more than 2 times the average
 -- amount of time spent. The number 2 can be changed according to the threshold
 -- for the amount of skew deemed problematic.
-select
+SELECT
     mse.id,
     dod.name,
     mse.worker_id,
     elapsed_ns,
     avg_ns,
-    elapsed_ns/avg_ns as ratio
-from
+    elapsed_ns/avg_ns AS ratio
+FROM
     mz_internal.mz_scheduling_elapsed mse,
-    avg_elapsed_by_id aebi,
+    (
+        SELECT
+            id,
+            avg(elapsed_ns) AS avg_ns
+        FROM
+            mz_internal.mz_scheduling_elapsed
+        GROUP BY
+            id
+    ) aebi,
     mz_internal.mz_dataflow_operator_dataflows dod
-where
-    mse.id = aebi.id and
-    mse.elapsed_ns > 2 * aebi.avg_ns and
-    mse.id = dod.id and
+WHERE
+    mse.id = aebi.id AND
+    mse.elapsed_ns > 2 * aebi.avg_ns AND
+    mse.id = dod.id AND
     mse.worker_id = dod.worker_id
-order by ratio desc;
+ORDER BY ratio DESC;
 ```
 
 ### I found a problematic operator. Where did it come from?
@@ -192,7 +257,7 @@ defined by positions `0..n-1`. The example SQL query and result below shows an
 operator whose `id` is 515 that belongs to "subregion 5 of region 1 of dataflow
 21".
 ```sql
-select * from mz_internal.mz_dataflow_addresses where id=515 and worker_id=0;
+SELECT * FROM mz_internal.mz_dataflow_addresses WHERE id=515 AND worker_id=0;
 ```
 ```
  id  | worker_id | address
@@ -202,7 +267,7 @@ select * from mz_internal.mz_dataflow_addresses where id=515 and worker_id=0;
 
 Usually, it is only important to know the name of the dataflow a problematic
 operator comes from. Once the name is known, the dataflow can be correlated to
-an index or view in Materialize.
+an index or materialized view in Materialize.
 
 Each dataflow has an operator representing the entire dataflow. The address of
 said operator has only a single entry. For the example operator 515 above, you
@@ -213,16 +278,16 @@ address is just "dataflow 21."
 -- get id and name of the operator representing the entirety of the dataflow
 -- that a problematic operator comes from
 SELECT
-    mdo.id as id,
-    mdo.name as name
+    mdo.id AS id,
+    mdo.name AS name
 FROM
     mz_internal.mz_dataflow_addresses mda,
     -- source of operator names
     mz_internal.mz_dataflow_operators mdo,
     -- view containing operators representing entire dataflows
     (SELECT
-      mda.id as dataflow_operator,
-      mda.address[1] as dataflow_address
+      mda.id AS dataflow_operator,
+      mda.address[1] AS dataflow_address
     FROM
       mz_internal.mz_dataflow_addresses mda
     WHERE
@@ -236,24 +301,6 @@ WHERE
     AND mdo.worker_id = 0;
 ```
 
-### How much disk space is Materialize using?
-
-To see how much disk space a Materialize installation is using, open a terminal and enter:
-
-```nofmt
-$ du -h -d 1 /path/to/materialize/mzdata
-```
-`materialize` is the directory for the Materialize installation, and  `materialize/mzdata` is the directory where Materialize stores its log file and the [system catalog](/sql/system-catalog).
-
-The response lists the disk space for the data directory and any subdirectories:
-
-```nofmt
-2.8M	mzdata/persist
-2.9M	mzdata
-```
-
-The `mzdata` directory is typically less than 10MB in size.
-
 ### How many `SUBSCRIBE` processes are running?
 
 You can get the number of active `SUBSCRIBE` processes in Materialize using the statement below, or another `SUBSCRIBE` statement.
@@ -264,7 +311,9 @@ Every time `SUBSCRIBE` is invoked, a dataflow using the `Dataflow: subscribe` pr
 SELECT count(1) FROM (
     SELECT id
     FROM mz_internal.mz_dataflows
-    WHERE substring(name, 0, 15) = 'Dataflow: subscribe'
+    WHERE substring(name, 0, 20) = 'Dataflow: subscribe'
     GROUP BY id
 );
 ```
+
+[`mz_cluster_replicas`]: /sql/system-catalog/mz_catalog/#mz_cluster_replicas

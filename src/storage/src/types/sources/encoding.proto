@@ -35,10 +35,9 @@ message ProtoDataEncodingInner {
         ProtoProtobufEncoding protobuf = 2;
         ProtoCsvEncoding csv = 3;
         ProtoRegexEncoding regex = 4;
-        google.protobuf.Empty postgres = 5;
-        google.protobuf.Empty bytes = 6;
-        google.protobuf.Empty text = 7;
-        mz_repr.relation_and_scalar.ProtoRelationDesc row_codec = 8;
+        google.protobuf.Empty bytes = 5;
+        google.protobuf.Empty text = 6;
+        mz_repr.relation_and_scalar.ProtoRelationDesc row_codec = 7;
     }
 }
 

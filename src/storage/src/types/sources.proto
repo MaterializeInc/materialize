@@ -22,6 +22,7 @@ import "storage/src/types/connections.proto";
 import "storage/src/types/connections/aws.proto";
 import "storage/src/types/errors.proto";
 import "storage/src/types/sources/encoding.proto";
+import "expr/src/scalar.proto";
 
 package mz_storage.types.sources;
 
@@ -189,9 +190,14 @@ message ProtoKinesisSourceConnection {
 }
 
 message ProtoPostgresSourceConnection {
+    message ProtoPostgresTableCast {
+        repeated mz_expr.scalar.ProtoMirScalarExpr column_casts = 1;
+    }
+
     mz_storage.types.connections.ProtoPostgresConnection connection = 1;
     string publication = 2;
     ProtoPostgresSourceDetails details = 4;
+    repeated ProtoPostgresTableCast table_casts = 5;
 }
 
 message ProtoPostgresSourceDetails {

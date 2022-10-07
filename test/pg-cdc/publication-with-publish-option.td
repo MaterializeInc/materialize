@@ -34,13 +34,16 @@ CREATE PUBLICATION mz_source_update FOR TABLE t1 WITH ( publish = 'update') ;
 CREATE PUBLICATION mz_source_delete FOR TABLE t1 WITH ( publish = 'delete') ;
 
 > CREATE SOURCE mz_source_insert
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_insert');
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_insert')
+  FOR TABLES (t1 AS t1_insert);
 
 > CREATE SOURCE mz_source_update
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_update');
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_update')
+  FOR TABLES (t1 AS t1_update);
 
 > CREATE SOURCE mz_source_delete
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_delete');
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_delete')
+  FOR TABLES (t1 AS t1_delete);
 
 # Make sure that the above sources are fully instantiated
 # (that is, we have finished absorbing their snapshots),
@@ -62,12 +65,6 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO t1 VALUES (1);
 UPDATE t1 SET f1 = 2 WHERE f1 = 1;
 DELETE FROM t1;
-
-> CREATE VIEWS FROM SOURCE mz_source_insert (t1 AS t1_insert);
-
-> CREATE VIEWS FROM SOURCE mz_source_update (t1 AS t1_update);
-
-> CREATE VIEWS FROM SOURCE mz_source_delete (t1 AS t1_delete);
 
 > SELECT * FROM t1_insert;
 1
