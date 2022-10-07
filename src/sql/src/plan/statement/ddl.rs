@@ -703,7 +703,7 @@ pub fn plan_create_source(
                     let mut available_subsources = HashMap::new();
                     for (i, (name, _)) in generator.views().iter().enumerate() {
                         let name = FullObjectName {
-                            database: RawDatabaseSpecifier::Name("loadgenerator".to_owned()),
+                            database: RawDatabaseSpecifier::Name("mz_loadgenerator".to_owned()),
                             schema: "public".to_owned(),
                             item: name.to_string(),
                         };
