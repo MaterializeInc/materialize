@@ -1390,7 +1390,6 @@ pub struct Ingestion {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connection_id: Option<GlobalId>,
     // TODO(benesch): this field duplicates information that could be derived
     // from the connection ID. Too hard to fix at the moment.
     pub connection: StorageSinkConnectionState,
@@ -1398,6 +1397,15 @@ pub struct Sink {
     pub with_snapshot: bool,
     pub depends_on: Vec<GlobalId>,
     pub host_config: StorageHostConfig,
+}
+
+impl Sink {
+    pub fn connection_id(&self) -> Option<GlobalId> {
+        match &self.connection {
+            StorageSinkConnectionState::Pending(pending) => pending.connection_id(),
+            StorageSinkConnectionState::Ready(ready) => ready.connection_id(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4467,7 +4475,6 @@ impl<S: Append> Catalog<S> {
             }) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
                 from: sink.from,
-                connection_id: sink.connection_id,
                 connection: StorageSinkConnectionState::Pending(sink.connection_builder),
                 envelope: sink.envelope,
                 with_snapshot,

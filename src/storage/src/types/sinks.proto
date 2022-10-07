@@ -68,6 +68,7 @@ message ProtoKafkaSinkConnection {
     //  - repeated mz_repr.global_id.ProtoGlobalId transitive_source_dependencies = 10;
     reserved 3, 10;
 
+    mz_repr.global_id.ProtoGlobalId connection_id = 13;
     mz_storage.types.connections.ProtoKafkaConnection connection = 1;
     string topic = 2;
     optional ProtoKeyDescAndIndices key_desc_and_indices = 4;

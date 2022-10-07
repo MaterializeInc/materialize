@@ -1168,7 +1168,6 @@ impl<S: Append + 'static> Coordinator<S> {
         let catalog_sink = catalog::Sink {
             create_sql: sink.create_sql,
             from: sink.from,
-            connection_id: sink.connection_id,
             connection: StorageSinkConnectionState::Pending(StorageSinkConnectionBuilder::Kafka(
                 connection_builder,
             )),

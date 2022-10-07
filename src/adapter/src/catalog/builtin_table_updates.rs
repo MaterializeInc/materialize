@@ -528,7 +528,7 @@ impl CatalogState {
                     Datum::UInt64(schema_id.into()),
                     Datum::String(name),
                     Datum::String(connection.name()),
-                    Datum::from(sink.connection_id.map(|id| id.to_string()).as_deref()),
+                    Datum::from(sink.connection_id().map(|id| id.to_string()).as_deref()),
                     size,
                 ]),
                 diff,
