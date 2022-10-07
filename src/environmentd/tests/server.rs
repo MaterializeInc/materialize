@@ -659,7 +659,7 @@ fn test_storage_usage_collection_interval() -> Result<(), Box<dyn Error>> {
     let initial_storage: i64 = Retry::default().retry(|_| {
         client
             .query_one(
-                "SELECT SUM(size_bytes)::int8 FROM mz_internal.mz_storage_usage_by_shard;",
+                "SELECT SUM(size_bytes)::int8 FROM mz_catalog.mz_storage_usage;",
                 &[],
             )
             .map_err(|e| e.to_string())?
@@ -673,7 +673,7 @@ fn test_storage_usage_collection_interval() -> Result<(), Box<dyn Error>> {
     // Retry until storage usage is updated.
     Retry::default().max_duration(Duration::from_secs(5)).retry(|_| {
         let updated_storage = client
-            .query_one("SELECT SUM(size_bytes)::int8 FROM mz_internal.mz_storage_usage_by_shard;", &[])
+            .query_one("SELECT SUM(size_bytes)::int8 FROM mz_catalog.mz_storage_usage;", &[])
             .map_err(|e| e.to_string())?
             .try_get::<_, i64>(0)
             .map_err(|e| e.to_string())?;
@@ -706,7 +706,7 @@ fn test_storage_usage_updates_between_restarts() -> Result<(), Box<dyn Error>> {
         Retry::default().max_duration(Duration::from_secs(60)).retry(|_| {
             client
                     .query_one(
-                        "SELECT EXTRACT(EPOCH FROM MAX(collection_timestamp))::float8 FROM mz_internal.mz_storage_usage_by_shard;",
+                        "SELECT EXTRACT(EPOCH FROM MAX(collection_timestamp))::float8 FROM mz_catalog.mz_storage_usage;",
                         &[],
                     )
                     .map_err(|e| e.to_string())?
@@ -725,7 +725,7 @@ fn test_storage_usage_updates_between_restarts() -> Result<(), Box<dyn Error>> {
         // Retry until storage usage is updated.
         Retry::default().max_duration(Duration::from_secs(60)).retry(|_| {
             let updated_timestamp = client
-                .query_one("SELECT EXTRACT(EPOCH FROM MAX(collection_timestamp))::float8 FROM mz_internal.mz_storage_usage_by_shard;", &[])
+                .query_one("SELECT EXTRACT(EPOCH FROM MAX(collection_timestamp))::float8 FROM mz_catalog.mz_storage_usage;", &[])
                 .map_err(|e| e.to_string())?
                 .try_get::<_, f64>(0)
                 .map_err(|e| e.to_string())?;
@@ -759,7 +759,7 @@ fn test_storage_usage_doesnt_update_between_restarts() -> Result<(), Box<dyn Err
         Retry::default().max_duration(Duration::from_secs(60)).retry(|_| {
             client
                     .query_one(
-                        "SELECT EXTRACT(EPOCH FROM MAX(collection_timestamp))::float8 FROM mz_internal.mz_storage_usage_by_shard;",
+                        "SELECT EXTRACT(EPOCH FROM MAX(collection_timestamp))::float8 FROM mz_catalog.mz_storage_usage;",
                         &[],
                     )
                     .map_err(|e| e.to_string())?
@@ -777,7 +777,7 @@ fn test_storage_usage_doesnt_update_between_restarts() -> Result<(), Box<dyn Err
 
         let updated_timestamp = client
             .query_one(
-                "SELECT EXTRACT(EPOCH FROM MAX(collection_timestamp))::float8 FROM mz_internal.mz_storage_usage_by_shard;",
+                "SELECT EXTRACT(EPOCH FROM MAX(collection_timestamp))::float8 FROM mz_catalog.mz_storage_usage;",
                 &[],
             )?.get::<_, f64>(0);
 
