@@ -1641,7 +1641,7 @@ pub fn plan_create_sink(
         return Err(PlanError::UpsertSinkWithoutKey);
     }
 
-    let (connection_id, connection_builder) = match connection {
+    let connection_builder = match connection {
         CreateSinkConnection::Kafka { connection, .. } => kafka_sink_builder(
             scx,
             connection,
@@ -1669,7 +1669,6 @@ pub fn plan_create_sink(
         sink: Sink {
             create_sql,
             from: from.id(),
-            connection_id: Some(connection_id),
             connection_builder,
             envelope,
         },
@@ -1744,7 +1743,7 @@ fn kafka_sink_builder(
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
-) -> Result<(GlobalId, StorageSinkConnectionBuilder), PlanError> {
+) -> Result<StorageSinkConnectionBuilder, PlanError> {
     let item = scx.get_item_by_resolved_name(&connection)?;
     // Get Kafka connection
     let connection = match item.connection()? {
@@ -1885,9 +1884,8 @@ fn kafka_sink_builder(
         bytes: retention_bytes,
     };
 
-    Ok((
-        connection_id,
-        StorageSinkConnectionBuilder::Kafka(KafkaSinkConnectionBuilder {
+    Ok(StorageSinkConnectionBuilder::Kafka(
+        KafkaSinkConnectionBuilder {
             connection_id,
             connection,
             options: config_options,
@@ -1901,7 +1899,7 @@ fn kafka_sink_builder(
             key_desc_and_indices,
             value_desc,
             retention,
-        }),
+        },
     ))
 }
 

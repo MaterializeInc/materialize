@@ -256,6 +256,7 @@ async fn build_kafka(
 
     Ok(StorageSinkConnection::Kafka(KafkaSinkConnection {
         connection: builder.connection,
+        connection_id: builder.connection_id,
         options: builder.options,
         topic: builder.topic_name,
         relation_key_indices: builder.relation_key_indices,

@@ -674,7 +674,6 @@ pub struct Secret {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connection_id: Option<GlobalId>,
     pub connection_builder: StorageSinkConnectionBuilder,
     pub envelope: SinkEnvelope,
 }
