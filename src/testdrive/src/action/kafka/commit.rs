@@ -27,11 +27,11 @@ async fn get_env_id(state: &mut State) -> Result<String, anyhow::Error> {
     Ok(result)
 }
 
-async fn get_src_id(source: &str, state: &mut State) -> Result<String, anyhow::Error> {
-    let query = "select id from mz_sources where name = $1".to_string();
+async fn get_id(table: &str, name: &str, state: &mut State) -> Result<String, anyhow::Error> {
+    let query = format!("select id from {table} where name = $1");
     let result = state
         .pgclient
-        .query_one(query.as_str(), &[&source])
+        .query_one(query.as_str(), &[&name])
         .await
         .context("retrieving source id")?
         .get(0);
@@ -43,18 +43,20 @@ pub async fn run_verify_commit(
     state: &mut State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let source = cmd.args.string("source")?;
+    let conn = cmd.args.string("conn")?;
     let topic = cmd.args.string("topic")?;
     let partition = cmd.args.parse("partition")?;
     let expected_offset = Offset::Offset(cmd.input[0].parse()?);
 
     let env_id = get_env_id(state).await?;
-    let source_id = get_src_id(&source, state).await?;
+    let source_id = get_id("mz_sources", &source, state).await?;
+    let conn_id = get_id("mz_connections", &conn, state).await?;
     let topic = format!("testdrive-{}-{}", topic, state.seed);
 
     let mut config = state.kafka_config.clone();
     config.set(
         "group.id",
-        format!("materialize-{}-kafka-{}", env_id, source_id),
+        format!("materialize-{}-{}-{}", env_id, conn_id, source_id),
     );
     println!(
         "Verifying committed kafka offset for topic ({}) and consumer group ({})",
