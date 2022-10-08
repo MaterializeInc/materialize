@@ -25,18 +25,18 @@ use crate::format::avro::{self, DebugValue};
 use crate::format::json;
 use crate::parser::BuiltinCommand;
 
-pub enum SinkFormat {
+enum Format {
     Avro,
     Json { key: bool },
 }
 
-pub enum Topic {
+enum Topic {
     FromSink(String),
     Named(String),
 }
 
 #[derive(Debug)]
-pub struct Record<A> {
+struct Record<A> {
     headers: Vec<String>,
     key: Option<A>,
     value: Option<A>,
@@ -75,8 +75,8 @@ pub async fn run_verify(
     state: &mut State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let format = match cmd.args.string("format")?.as_str() {
-        "avro" => SinkFormat::Avro,
-        "json" => SinkFormat::Json {
+        "avro" => Format::Avro,
+        "json" => Format::Json {
             key: cmd.args.parse("key")?,
         },
         f => bail!("unknown format: {}", f),
@@ -180,7 +180,7 @@ pub async fn run_verify(
     }
 
     match &format {
-        SinkFormat::Avro => {
+        Format::Avro => {
             let value_schema = state
                 .ccsr_client
                 .get_schema_by_subject(&format!("{}-value", topic))
@@ -275,7 +275,7 @@ pub async fn run_verify(
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
-            validate_sink_with_partial_search(
+            verify_with_partial_search(
                 &expected,
                 &actual_messages,
                 &state.regex,
@@ -283,7 +283,7 @@ pub async fn run_verify(
                 partial_search.is_some(),
             )?
         }
-        SinkFormat::Json { key: has_key } => {
+        Format::Json { key: has_key } => {
             let mut actual_messages = vec![];
             for record in actual_bytes {
                 let key = match record.key {
@@ -342,7 +342,7 @@ pub async fn run_verify(
                 })
                 .collect::<Result<Vec<_>, anyhow::Error>>()?;
 
-            validate_sink_with_partial_search(
+            verify_with_partial_search(
                 &expected,
                 &actual_messages,
                 &state.regex,
@@ -379,13 +379,16 @@ fn split_headers(input: &str, n_headers: usize) -> anyhow::Result<(Vec<String>, 
     Ok((headers, rest))
 }
 
-pub fn validate_sink_with_partial_search<A: Debug>(
+fn verify_with_partial_search<A>(
     expected: &[Record<A>],
     actual: &[Record<A>],
     regex: &Option<Regex>,
     regex_replacement: &String,
     partial_search: bool,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), anyhow::Error>
+where
+    A: Debug,
+{
     let mut expected = expected.iter();
     let mut actual = actual.iter();
     let mut index = 0..;
