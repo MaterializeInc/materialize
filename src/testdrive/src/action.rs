@@ -740,6 +740,7 @@ impl Run for PosCommand {
                         sleep::run_sleep(builtin)
                     }
                     "set" => set::set_vars(builtin, state),
+                    "set-from-sql" => set::run_set_from_sql(builtin, state).await,
                     // "verify-timestamp-compaction" => Box::new(
                     //     verify_timestamp_compaction::run_verify_timestamp_compaction_action(
                     //         builtin,

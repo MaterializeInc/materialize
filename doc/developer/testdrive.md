@@ -414,6 +414,16 @@ $ set schema={
     }
 ```
 
+#### `$ set-from-sql var=NAME`
+
+Sets the variable to the result of a SQL query that returns one row containing
+one string column:
+
+```
+$ set-from-sql var=environment-id
+SELECT mz_environment_id()
+```
+
 ## Referencing variables
 
 #### `${variable_name}`
