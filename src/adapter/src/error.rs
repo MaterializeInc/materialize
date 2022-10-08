@@ -173,6 +173,10 @@ pub enum AdapterError {
     UntargetedLogRead {
         log_names: Vec<String>,
     },
+    /// Attempted to subscribe to a log source.
+    TargetedSubscribe {
+        log_names: Vec<String>,
+    },
     /// The transaction is in write-only mode.
     WriteOnlyTransaction,
     /// The transaction only supports single table writes
@@ -214,7 +218,8 @@ impl AdapterError {
                     .into(),
             ),
             AdapterError::IntrospectionDisabled { log_names }
-            | AdapterError::UntargetedLogRead { log_names } => Some(format!(
+            | AdapterError::UntargetedLogRead { log_names }
+            | AdapterError::TargetedSubscribe { log_names } => Some(format!(
                 "The query references the following log sources:\n    {}",
                 log_names.join("\n    "),
             )),
@@ -443,6 +448,9 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::UntargetedLogRead { .. } => {
                 f.write_str("log source reads must target a replica")
+            }
+            AdapterError::TargetedSubscribe { .. } => {
+                f.write_str("SUBSCRIBE cannot reference a log source")
             }
             AdapterError::MultiTableWriteTransaction => {
                 f.write_str("write transactions only support writes to a single table")

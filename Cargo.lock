@@ -3027,6 +3027,7 @@ dependencies = [
  "fail",
  "futures",
  "itertools",
+ "maplit",
  "mz-audit-log",
  "mz-build-info",
  "mz-ccsr",

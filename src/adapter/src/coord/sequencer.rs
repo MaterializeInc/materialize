@@ -15,6 +15,7 @@ use std::num::{NonZeroI64, NonZeroUsize};
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
+use maplit::btreeset;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, OwnedMutexGuard};
 use tracing::{event, warn, Level};
@@ -1909,44 +1910,6 @@ impl<S: Append + 'static> Coordinator<S> {
         plan: PeekPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         event!(Level::TRACE, plan = format!("{:?}", plan));
-        fn check_no_invalid_log_reads<S: Append>(
-            catalog: &Catalog<S>,
-            compute_instance: &ComputeInstance,
-            source_ids: &BTreeSet<GlobalId>,
-            target_replica: &mut Option<ReplicaId>,
-        ) -> Result<(), AdapterError> {
-            let log_names = source_ids
-                .iter()
-                .flat_map(|id| catalog.arranged_introspection_dependencies(*id))
-                .map(|id| catalog.get_entry(&id).name().item.clone())
-                .collect::<Vec<_>>();
-
-            if log_names.is_empty() {
-                return Ok(());
-            }
-
-            // Reading from log sources on replicated compute instances is only
-            // allowed if a target replica is selected. Otherwise, we have no
-            // way of knowing which replica we read the introspection data from.
-            let num_replicas = compute_instance.replicas_by_id.len();
-            if target_replica.is_none() {
-                if num_replicas == 1 {
-                    *target_replica = compute_instance.replicas_by_id.keys().next().copied();
-                } else {
-                    return Err(AdapterError::UntargetedLogRead { log_names });
-                }
-            }
-
-            // Ensure that logging is initialized for the target replica, lest
-            // we try to peek a non-existing arrangement.
-            let replica_id = target_replica.unwrap();
-            let replica = &compute_instance.replicas_by_id[&replica_id];
-            if !replica.config.logging.enabled() {
-                return Err(AdapterError::IntrospectionDisabled { log_names });
-            }
-
-            Ok(())
-        }
 
         let PeekPlan {
             mut source,
@@ -1984,7 +1947,7 @@ impl<S: Append + 'static> Coordinator<S> {
             &self.catalog,
             compute_instance,
             &source_ids,
-            &mut target_replica,
+            LogReadStyle::Peek(&mut target_replica),
         )?;
 
         let compute_instance = compute_instance.id;
@@ -2209,8 +2172,8 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let compute_instance = self
             .catalog
-            .resolve_compute_instance(session.vars().cluster())?
-            .id;
+            .resolve_compute_instance(session.vars().cluster())?;
+        let compute_instance_id = compute_instance.id;
 
         // SUBSCRIBE AS OF, similar to peeks, doesn't need to worry about transaction
         // timestamp semantics.
@@ -2224,11 +2187,11 @@ impl<S: Append + 'static> Coordinator<S> {
             // Determine the frontier of updates to subscribe *from*.
             // Updates greater or equal to this frontier will be produced.
             let id_bundle = coord
-                .index_oracle(compute_instance)
+                .index_oracle(compute_instance_id)
                 .sufficient_collections(uses);
             // If a timestamp was explicitly requested, use that.
             let timestamp =
-                coord.determine_timestamp(session, &id_bundle, &when, compute_instance)?;
+                coord.determine_timestamp(session, &id_bundle, &when, compute_instance_id)?;
 
             Ok::<_, AdapterError>(ComputeSinkDesc {
                 from,
@@ -2243,6 +2206,12 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let dataflow = match from {
             SubscribeFrom::Id(from_id) => {
+                check_no_invalid_log_reads(
+                    &self.catalog,
+                    compute_instance,
+                    &btreeset!(from_id),
+                    LogReadStyle::Subscribe,
+                )?;
                 let from = self.catalog.get_entry(&from_id);
                 let from_desc = from
                     .desc(
@@ -2255,16 +2224,22 @@ impl<S: Append + 'static> Coordinator<S> {
                 let sink_id = self.catalog.allocate_user_id().await?;
                 let sink_desc = make_sink_desc(self, from_id, from_desc, &[from_id][..])?;
                 let sink_name = format!("subscribe-{}", sink_id);
-                self.dataflow_builder(compute_instance)
+                self.dataflow_builder(compute_instance_id)
                     .build_sink_dataflow(sink_name, sink_id, sink_desc)?
             }
             SubscribeFrom::Query { expr, desc } => {
+                check_no_invalid_log_reads(
+                    &self.catalog,
+                    compute_instance,
+                    &expr.depends_on(),
+                    LogReadStyle::Subscribe,
+                )?;
                 let id = self.allocate_transient_id()?;
                 let expr = self.view_optimizer.optimize(expr)?;
                 let desc = RelationDesc::new(expr.typ(), desc.iter_names());
                 let sink_desc = make_sink_desc(self, id, desc, &depends_on)?;
                 let mut dataflow = DataflowDesc::new(format!("subscribe-{}", id));
-                let mut dataflow_builder = self.dataflow_builder(compute_instance);
+                let mut dataflow_builder = self.dataflow_builder(compute_instance_id);
                 dataflow_builder.import_view_into_dataflow(&id, &expr, &mut dataflow)?;
                 dataflow_builder.build_sink_dataflow_into(&mut dataflow, id, sink_desc)?;
                 dataflow
@@ -2273,7 +2248,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let (sink_id, sink_desc) = dataflow.sink_exports.iter().next().unwrap();
         session.add_drop_sink(ComputeSinkId {
-            compute_instance,
+            compute_instance: compute_instance_id,
             global_id: *sink_id,
         });
         let arity = sink_desc.from_desc.arity();
@@ -2281,7 +2256,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.metrics.active_subscribes.inc();
         self.pending_subscribes
             .insert(*sink_id, PendingSubscribe::new(tx, emit_progress, arity));
-        self.ship_dataflow(dataflow, compute_instance).await;
+        self.ship_dataflow(dataflow, compute_instance_id).await;
 
         let resp = ExecuteResponse::Subscribing { rx };
         match copy_to {
@@ -3457,4 +3432,63 @@ impl<S: Append + 'static> Coordinator<S> {
         self.transient_id_counter += 1;
         Ok(GlobalId::Transient(id))
     }
+}
+
+enum LogReadStyle<'a> {
+    Peek(&'a mut Option<ReplicaId>),
+    Subscribe,
+}
+
+fn check_no_invalid_log_reads<'a, S>(
+    catalog: &Catalog<S>,
+    compute_instance: &ComputeInstance,
+    source_ids: &BTreeSet<GlobalId>,
+    log_read_style: LogReadStyle<'a>,
+) -> Result<(), AdapterError>
+where
+    S: Append,
+{
+    let log_names = source_ids
+        .iter()
+        .flat_map(|id| catalog.arranged_introspection_dependencies(*id))
+        .map(|id| catalog.get_entry(&id).name().item.clone())
+        .collect::<Vec<_>>();
+
+    if log_names.is_empty() {
+        return Ok(());
+    }
+
+
+    // Peeking from log sources on replicated compute instances is only
+    // allowed if a target replica is selected. Otherwise, we have no
+    // way of knowing which replica we read the introspection data from.
+    //
+    // Subscribing from log sources on replicated compute instances is not
+    // supported, but in theory could support replica targeting in the same way
+    // as peeks.
+    let target_replica = match log_read_style {
+        LogReadStyle::Peek(target_replica) => target_replica,
+        LogReadStyle::Subscribe => {
+            return Err(AdapterError::TargetedSubscribe { log_names });
+        }
+    };
+
+    let num_replicas = compute_instance.replicas_by_id.len();
+    if target_replica.is_none() {
+        if num_replicas == 1 {
+            *target_replica = compute_instance.replicas_by_id.keys().next().copied();
+        } else {
+            return Err(AdapterError::UntargetedLogRead { log_names });
+        }
+    }
+
+    // Ensure that logging is initialized for the target replica, lest
+    // we try to peek a non-existing arrangement.
+    let replica_id = target_replica.unwrap();
+    let replica = &compute_instance.replicas_by_id[&replica_id];
+    if !replica.config.logging.enabled() {
+        return Err(AdapterError::IntrospectionDisabled { log_names });
+    }
+
+    Ok(())
 }
