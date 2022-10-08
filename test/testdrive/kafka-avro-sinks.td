@@ -140,7 +140,7 @@ $ kafka-verify format=avro sink=materialize.public.list_sink sort-messages=true
     CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO VALUE FULLNAME = 'abc.def.ghi')
   ENVELOPE DEBEZIUM
 
-$ kafka-verify-schema format=avro sink=materialize.public.namespace_value_sink
+$ schema-registry-verify schema-type=avro subject=testdrive-namespace-value-sink-${testdrive.seed}-value
 {"type":"record","name":"ghi","namespace":"abc.def","fields":[{"name":"before","type":["null",{"type":"record","name":"row","fields":[{"name":"namespace","type":"int"}]}]},{"name":"after","type":["null","row"]}]}
 
 $ kafka-verify format=avro sink=materialize.public.namespace_value_sink sort-messages=true
@@ -155,8 +155,10 @@ $ kafka-verify format=avro sink=materialize.public.namespace_value_sink sort-mes
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO KEY FULLNAME = 'some.neat.class.foo', AVRO VALUE FULLNAME = 'some.neat.class.bar')
   ENVELOPE DEBEZIUM
 
-$ kafka-verify-schema format=avro sink=materialize.public.namespace_key_value_sink
+$ schema-registry-verify schema-type=avro subject=testdrive-namespace-key-value-sink-${testdrive.seed}-key
 {"type":"record","name":"foo","namespace":"some.neat.class","fields":[{"name":"b","type":"int"}]}
+
+$ schema-registry-verify schema-type=avro subject=testdrive-namespace-key-value-sink-${testdrive.seed}-value
 {"type":"record","name":"bar","namespace":"some.neat.class","fields":[{"name":"before","type":["null",{"type":"record","name":"row","fields":[{"name":"a","type":"int"},{"name":"b","type":"int"}]}]},{"name":"after","type":["null","row"]}]}
 
 $ kafka-verify format=avro sink=materialize.public.namespace_key_value_sink sort-messages=true

@@ -16,7 +16,7 @@ CREATE TABLE alter_allow_nullability (f1 INTEGER NOT NULL, f2 INTEGER PRIMARY KE
 ALTER TABLE alter_allow_nullability REPLICA IDENTITY FULL;
 INSERT INTO alter_allow_nullability VALUES (123, 0),(234, 1);
 
-$ schema-registry-wait-schema schema=postgres.public.alter_allow_nullability-value
+$ schema-registry-wait subject=postgres.public.alter_allow_nullability-value
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY

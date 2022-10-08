@@ -18,4 +18,3 @@ pub use commit::run_verify_commit;
 pub use create_topic::run_create_topic;
 pub use ingest::run_ingest;
 pub use verify::run_verify;
-pub use verify::run_verify_schema;

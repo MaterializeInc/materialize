@@ -705,7 +705,6 @@ impl Run for PosCommand {
                     "kafka-create-topic" => kafka::run_create_topic(builtin, state).await,
                     "kafka-ingest" => kafka::run_ingest(builtin, state).await,
                     "kafka-verify" => kafka::run_verify(builtin, state).await,
-                    "kafka-verify-schema" => kafka::run_verify_schema(builtin, state).await,
                     "kafka-verify-commit" => kafka::run_verify_commit(builtin, state).await,
                     "kinesis-create-stream" => kinesis::run_create_stream(builtin, state).await,
                     "kinesis-update-shards" => kinesis::run_update_shards(builtin, state).await,
@@ -721,9 +720,8 @@ impl Run for PosCommand {
                     }
                     "psql-execute" => psql::run_execute(builtin, state).await,
                     "schema-registry-publish" => schema_registry::run_publish(builtin, state).await,
-                    "schema-registry-wait-schema" => {
-                        schema_registry::run_wait(builtin, state).await
-                    }
+                    "schema-registry-verify" => schema_registry::run_verify(builtin, state).await,
+                    "schema-registry-wait" => schema_registry::run_wait(builtin, state).await,
                     "skip-if" => skip_if::run_skip_if(builtin, state).await,
                     "sql-server-connect" => sql_server::run_connect(builtin, state).await,
                     "sql-server-execute" => sql_server::run_execute(builtin, state).await,
