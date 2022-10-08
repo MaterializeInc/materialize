@@ -13,8 +13,6 @@ use std::str;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, ensure, Context};
-use byteorder::{BigEndian, ByteOrder};
-use chrono::NaiveDate;
 use itertools::Itertools;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::{Headers, Message};
@@ -22,10 +20,9 @@ use regex::Regex;
 use tokio::pin;
 use tokio_stream::StreamExt;
 
-use mz_avro::types::Value;
-
 use crate::action::{ControlFlow, State};
-use crate::format::{avro, json};
+use crate::format::avro::{self, DebugValue};
+use crate::format::json;
 use crate::parser::BuiltinCommand;
 
 pub enum SinkFormat {
@@ -43,31 +40,6 @@ pub struct Record<A> {
     headers: Vec<String>,
     key: Option<A>,
     value: Option<A>,
-}
-
-fn avro_from_bytes(
-    schema: &mz_avro::Schema,
-    mut bytes: &[u8],
-) -> Result<mz_avro::types::Value, anyhow::Error> {
-    if bytes.len() < 5 {
-        bail!(
-            "avro datum is too few bytes: expected at least 5 bytes, got {}",
-            bytes.len()
-        );
-    }
-    let magic = bytes[0];
-    let _schema_id = BigEndian::read_i32(&bytes[1..5]);
-    bytes = &bytes[5..];
-
-    if magic != 0 {
-        bail!(
-            "wrong avro serialization magic: expected 0, got {}",
-            bytes[0]
-        );
-    }
-
-    let datum = avro::from_avro_datum(schema, &mut bytes).context("decoding avro datum")?;
-    Ok(datum)
 }
 
 async fn get_topic(
@@ -226,8 +198,7 @@ pub async fn run_verify(
                 })
                 .transpose()?;
 
-            let value_schema = avro::parse_schema(&value_schema).context("parsing avro schema")?;
-            let value_schema = &value_schema;
+            let value_schema = &avro::parse_schema(&value_schema).context("parsing avro schema")?;
 
             let mut actual_messages = vec![];
             for record in actual_bytes {
@@ -238,13 +209,13 @@ pub async fn run_verify(
                             Some(key) => key,
                             None => bail!("empty message key"),
                         };
-                        avro_from_bytes(key_schema, &bytes)
+                        avro::from_confluent_bytes(key_schema, &bytes)
                     })
                     .transpose()?
                     .map(DebugValue);
                 let value = match record.value {
                     None => None,
-                    Some(bytes) => Some(avro_from_bytes(value_schema, &bytes)?),
+                    Some(bytes) => Some(avro::from_confluent_bytes(value_schema, &bytes)?),
                 }
                 .map(DebugValue);
                 actual_messages.push(Record {
@@ -469,57 +440,5 @@ pub fn validate_sink_with_partial_search<A: Debug>(
         bail!("extra records:\n{}", actual.join("\n"))
     } else {
         Ok(())
-    }
-}
-
-/// A struct to enhance the debug output of various avro types.
-///
-/// Testdrive files, for example, specify timestamps in micros, but debug output
-/// happens in Y-M-D format, which can be very difficult to map back to the
-/// correct input number. Similarly, dates are represented in Avro as i32s, but
-/// we would like to see the Y-M-D format as well.
-struct DebugValue(Value);
-
-impl Debug for DebugValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.0 {
-            Value::Timestamp(t) => write!(
-                f,
-                "Timestamp(\"{:?}\", {} micros, {} millis)",
-                t,
-                t.timestamp_micros(),
-                t.timestamp_millis()
-            ),
-            Value::Date(d) => write!(
-                f,
-                "Date({:?}, \"{}\")",
-                d,
-                NaiveDate::from_num_days_from_ce(*d)
-            ),
-
-            // Re-wrap types that contain a Value.
-            Value::Record(r) => f
-                .debug_set()
-                .entries(r.iter().map(|(s, v)| (s, DebugValue(v.clone()))))
-                .finish(),
-            Value::Array(a) => f
-                .debug_set()
-                .entries(a.iter().map(|v| DebugValue(v.clone())))
-                .finish(),
-            Value::Union {
-                index,
-                inner,
-                n_variants,
-                null_variant,
-            } => f
-                .debug_struct("Union")
-                .field("index", index)
-                .field("inner", &DebugValue(*inner.clone()))
-                .field("n_variants", n_variants)
-                .field("null_variant", null_variant)
-                .finish(),
-
-            _ => write!(f, "{:?}", self.0),
-        }
     }
 }
