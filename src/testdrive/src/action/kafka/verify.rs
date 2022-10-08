@@ -45,69 +45,6 @@ pub struct Record<A> {
     value: Option<A>,
 }
 
-pub struct VerifyAction {
-    source: Topic,
-    format: SinkFormat,
-    sort_messages: bool,
-    header_keys: Vec<String>,
-    expected_messages: Vec<String>,
-    partial_search: Option<usize>,
-    // If true, print partial_search.unwrap_or(expected_messages.len()) number of messages in sink topic
-    debug_print_only: bool,
-}
-
-pub async fn run_verify(
-    cmd: BuiltinCommand,
-    state: &mut State,
-) -> Result<ControlFlow, anyhow::Error> {
-    let verify_action = build_verify(cmd)?;
-    run_verify_action(verify_action, state).await
-}
-
-pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, anyhow::Error> {
-    let format = match cmd.args.string("format")?.as_str() {
-        "avro" => SinkFormat::Avro,
-        "json" => SinkFormat::Json {
-            key: cmd.args.parse("key")?,
-        },
-        f => bail!("unknown format: {}", f),
-    };
-
-    let source = match (cmd.args.opt_string("sink"), cmd.args.opt_string("topic")) {
-        (Some(sink), None) => Topic::FromSink(sink),
-        (None, Some(topic)) => Topic::Named(topic),
-        (Some(_), Some(_)) => bail!("Can't provide both `source` and `topic` to kafka-verify"),
-        (None, None) => bail!("kafka-verify expects either `source` or `topic`"),
-    };
-
-    let sort_messages = cmd.args.opt_bool("sort-messages")?.unwrap_or(false);
-
-    let header_keys = cmd
-        .args
-        .opt_string("headers")
-        .map(|s| s.split(',').map(str::to_owned).collect())
-        .unwrap_or_default();
-
-    let expected_messages = cmd.input;
-    if expected_messages.len() == 0 {
-        // verify with 0 messages doesn't check that no messages have been written -
-        // it 'verifies' 0 messages and trivially returns true
-        bail!("kafka-verify requires a non-empty list of expected messages");
-    }
-    let partial_search = cmd.args.opt_parse("partial-search")?;
-    let debug_print_only = cmd.args.opt_bool("debug-print-only")?.unwrap_or(false);
-    cmd.args.done()?;
-    Ok(VerifyAction {
-        source,
-        format,
-        sort_messages,
-        header_keys,
-        expected_messages,
-        partial_search,
-        debug_print_only,
-    })
-}
-
 fn avro_from_bytes(
     schema: &mz_avro::Schema,
     mut bytes: &[u8],
@@ -161,11 +98,44 @@ async fn get_topic(
     Ok(result)
 }
 
-pub async fn run_verify_action(
-    verify_action: VerifyAction,
+pub async fn run_verify(
+    mut cmd: BuiltinCommand,
     state: &mut State,
 ) -> Result<ControlFlow, anyhow::Error> {
-    let topic: String = match &verify_action.source {
+    let format = match cmd.args.string("format")?.as_str() {
+        "avro" => SinkFormat::Avro,
+        "json" => SinkFormat::Json {
+            key: cmd.args.parse("key")?,
+        },
+        f => bail!("unknown format: {}", f),
+    };
+
+    let source = match (cmd.args.opt_string("sink"), cmd.args.opt_string("topic")) {
+        (Some(sink), None) => Topic::FromSink(sink),
+        (None, Some(topic)) => Topic::Named(topic),
+        (Some(_), Some(_)) => bail!("Can't provide both `source` and `topic` to kafka-verify"),
+        (None, None) => bail!("kafka-verify expects either `source` or `topic`"),
+    };
+
+    let sort_messages = cmd.args.opt_bool("sort-messages")?.unwrap_or(false);
+
+    let header_keys: Vec<_> = cmd
+        .args
+        .opt_string("headers")
+        .map(|s| s.split(',').map(str::to_owned).collect())
+        .unwrap_or_default();
+
+    let expected_messages = cmd.input;
+    if expected_messages.len() == 0 {
+        // verify with 0 messages doesn't check that no messages have been written -
+        // it 'verifies' 0 messages and trivially returns true
+        bail!("kafka-verify requires a non-empty list of expected messages");
+    }
+    let partial_search = cmd.args.opt_parse("partial-search")?;
+    let debug_print_only = cmd.args.opt_bool("debug-print-only")?.unwrap_or(false);
+    cmd.args.done()?;
+
+    let topic: String = match &source {
         Topic::FromSink(sink) => get_topic(sink, "topic", state).await?,
         Topic::Named(name) => name.clone(),
     };
@@ -180,12 +150,9 @@ pub async fn run_verify_action(
         .subscribe(&[&topic])
         .context("subscribing to kafka topic")?;
 
-    let (stream_size, stream_timeout) = match verify_action.partial_search {
+    let (stream_size, stream_timeout) = match partial_search {
         Some(size) => (size, state.default_timeout),
-        None => (
-            verify_action.expected_messages.len(),
-            Duration::from_secs(15),
-        ),
+        None => (expected_messages.len(), Duration::from_secs(15)),
     };
 
     let message_stream = consumer
@@ -207,8 +174,7 @@ pub async fn run_verify_action(
                 consumer
                     .store_offset_from_message(&message)
                     .context("storing message offset")?;
-                let headers = verify_action
-                    .header_keys
+                let headers = header_keys
                     .iter()
                     .map(|k| {
                         // Expect a unique header with the given key and a UTF8-formatted body.
@@ -241,7 +207,7 @@ pub async fn run_verify_action(
         }
     }
 
-    match &verify_action.format {
+    match &format {
         SinkFormat::Avro => {
             let value_schema = state
                 .ccsr_client
@@ -288,11 +254,11 @@ pub async fn run_verify_action(
                 });
             }
 
-            if verify_action.sort_messages {
+            if sort_messages {
                 actual_messages.sort_by_key(|r| format!("{:?}", r.value));
             }
 
-            if verify_action.debug_print_only {
+            if debug_print_only {
                 bail!(
                     "records in sink:\n{}",
                     actual_messages
@@ -303,11 +269,10 @@ pub async fn run_verify_action(
                 );
             }
 
-            let expected = verify_action
-                .expected_messages
+            let expected = expected_messages
                 .iter()
                 .map(|v| {
-                    let (headers, v) = split_headers(v, verify_action.header_keys.len())?;
+                    let (headers, v) = split_headers(v, header_keys.len())?;
                     let mut deserializer = serde_json::Deserializer::from_str(v).into_iter();
                     let key = if let Some(key_schema) = &key_schema {
                         let key: serde_json::Value = match deserializer.next() {
@@ -344,7 +309,7 @@ pub async fn run_verify_action(
                 &actual_messages,
                 &state.regex,
                 &state.regex_replacement,
-                verify_action.partial_search.is_some(),
+                partial_search.is_some(),
             )?
         }
         SinkFormat::Json { key: has_key } => {
@@ -372,11 +337,11 @@ pub async fn run_verify_action(
                 });
             }
 
-            if verify_action.sort_messages {
+            if sort_messages {
                 actual_messages.sort_by_key(|r| format!("{:?}", r.value));
             }
 
-            if verify_action.debug_print_only {
+            if debug_print_only {
                 bail!(
                     "records in sink:\n{}",
                     actual_messages
@@ -387,11 +352,10 @@ pub async fn run_verify_action(
                 );
             }
 
-            let expected = verify_action
-                .expected_messages
+            let expected = expected_messages
                 .iter()
                 .map(|v| {
-                    let (headers, v) = split_headers(v, verify_action.header_keys.len())?;
+                    let (headers, v) = split_headers(v, header_keys.len())?;
                     let mut deserializer = json::parse_many(v)?.into_iter();
                     let key = if *has_key { deserializer.next() } else { None };
                     let value = deserializer.next();
@@ -412,7 +376,7 @@ pub async fn run_verify_action(
                 &actual_messages,
                 &state.regex,
                 &state.regex_replacement,
-                verify_action.partial_search.is_some(),
+                partial_search.is_some(),
             )?;
         }
     }
@@ -508,13 +472,6 @@ pub fn validate_sink_with_partial_search<A: Debug>(
     }
 }
 
-pub struct VerifySchemaAction {
-    sink: String,
-    format: SinkFormat,
-    expected_key_schema: Option<String>,
-    expected_value_schema: String,
-}
-
 pub async fn run_verify_schema(
     mut cmd: BuiltinCommand,
     state: &mut State,
@@ -528,84 +485,72 @@ pub async fn run_verify_schema(
     };
     let sink = cmd.args.string("sink")?;
 
-    let (key, value) = match &cmd.input[..] {
+    let (expected_key_schema, expected_value_schema) = match &cmd.input[..] {
         [value] => (None, value.clone()),
         [key, value] => (Some(key.clone()), value.clone()),
         _ => bail!("unable to read key/value schema inputs"),
     };
 
     cmd.args.done()?;
-    VerifySchemaAction {
-        sink,
-        format,
-        expected_key_schema: key,
-        expected_value_schema: value,
-    }
-    .run(state)
-    .await
-}
 
-impl VerifySchemaAction {
-    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
-        let topic = get_topic(&self.sink, "topic", state).await?;
+    let topic = get_topic(&sink, "topic", state).await?;
 
-        match &self.format {
-            SinkFormat::Avro => {
-                let generated_value_schema = state
-                    .ccsr_client
-                    .get_schema_by_subject(&format!("{}-value", topic))
-                    .await
-                    .context("fetching schema")?
-                    .raw;
+    match &format {
+        SinkFormat::Avro => {
+            let generated_value_schema = state
+                .ccsr_client
+                .get_schema_by_subject(&format!("{}-value", topic))
+                .await
+                .context("fetching schema")?
+                .raw;
 
-                let generated_key_schema = state
-                    .ccsr_client
-                    .get_schema_by_subject(&format!("{}-key", topic))
-                    .await
-                    .ok()
-                    .map(|key_schema| {
-                        avro::parse_schema(&key_schema.raw).context("parsing avro schema")
-                    })
-                    .transpose()?;
+            let generated_key_schema = state
+                .ccsr_client
+                .get_schema_by_subject(&format!("{}-key", topic))
+                .await
+                .ok()
+                .map(|key_schema| {
+                    avro::parse_schema(&key_schema.raw).context("parsing avro schema")
+                })
+                .transpose()?;
 
-                let generated_value_schema = avro::parse_schema(&generated_value_schema)
-                    .context("parsing generated avro schema")?;
-                let expected_value_schema = avro::parse_schema(&self.expected_value_schema)
+            let generated_value_schema = avro::parse_schema(&generated_value_schema)
+                .context("parsing generated avro schema")?;
+            let expected_value_schema = avro::parse_schema(&expected_value_schema)
+                .context("parsing expected avro schema")?;
+
+            if expected_value_schema.ne(&generated_value_schema) {
+                bail!(
+                    "value schema did not match\nexpected:\n{:?}\n\nactual:\n{:?}",
+                    expected_value_schema,
+                    generated_value_schema
+                );
+            }
+
+            if let Some(expected_key_schema) = &expected_key_schema {
+                let expected_key_schema = avro::parse_schema(expected_key_schema)
                     .context("parsing expected avro schema")?;
 
-                if expected_value_schema.ne(&generated_value_schema) {
+                if generated_key_schema.is_none() {
+                    bail!("empty generated key schema");
+                }
+
+                let generated_key_schema = generated_key_schema.unwrap();
+                if expected_key_schema.ne(&generated_key_schema) {
                     bail!(
-                        "value schema did not match\nexpected:\n{:?}\n\nactual:\n{:?}",
-                        expected_value_schema,
-                        generated_value_schema
+                        "key schema did not match\nexpected:\n{:?}\n\nactual:\n{:?}",
+                        expected_key_schema,
+                        generated_key_schema
                     );
                 }
-
-                if let Some(expected_key_schema) = &self.expected_key_schema {
-                    let expected_key_schema = avro::parse_schema(expected_key_schema)
-                        .context("parsing expected avro schema")?;
-
-                    if generated_key_schema.is_none() {
-                        bail!("empty generated key schema");
-                    }
-
-                    let generated_key_schema = generated_key_schema.unwrap();
-                    if expected_key_schema.ne(&generated_key_schema) {
-                        bail!(
-                            "key schema did not match\nexpected:\n{:?}\n\nactual:\n{:?}",
-                            expected_key_schema,
-                            generated_key_schema
-                        );
-                    }
-                }
-            }
-            _ => {
-                bail!("kafka-verify-schema is only supported for Avro sinks")
             }
         }
-
-        Ok(ControlFlow::Continue)
+        _ => {
+            bail!("kafka-verify-schema is only supported for Avro sinks")
+        }
     }
+
+    Ok(ControlFlow::Continue)
 }
 
 /// A struct to enhance the debug output of various avro types.
