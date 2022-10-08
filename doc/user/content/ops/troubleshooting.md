@@ -5,17 +5,18 @@ aliases:
   - /ops/diagnosing-using-sql
 ---
 
-You can use the queries below for spot debugging, but it may also be
-helpful to monitor their output by [`SUBSCRIBE`ing](/sql/subscribe) to their change stream, e.g.,
-by issuing a command `COPY (SUBSCRIBE (<query>)) TO stdout`.
-Note that this additional monitoring may, however, itself affect performance.
+This page describes several SQL queries you can run to diagnose performance
+issues with Materialize.
 
-### Limitations on Introspection Sources and Views for Troubleshooting
+{{< warning >}}
+The introspection sources and views used in the queries below are subject to
+future changes without notice.
 
-Importantly, the introspection sources and views used in the queries below
-should be considered subject to changes in the future without further notice.
-This is why these sources and views are all created in the `mz_internal`
-schema, and it is not possible to create higher-level views depending on them.
+This is why these sources and views are all created in the `mz_internal` schema,
+and why it is not possible to create higher-level views depending on them.
+{{< /warning >}}
+
+## Limitations
 
 Introspection sources are maintained by independently collecting internal logging
 information within each of the replicas of a cluster. Thus, in a multi-replica
@@ -37,7 +38,17 @@ to vary dependending on which cluster you are working in. In particular, indexes
 and dataflows are local to a cluster, so their introspection information will
 vary across clusters.
 
-### How fast are my sources loading data?
+It is often useful to monitor changes in the output to the below queries
+via [`SUBSCRIBE`](/sql/subscribe), e.g. via
+`COPY (SUBSCRIBE (<query>)) TO stdout`. Be mindful of the following two caveats:
+
+  * The `SUBSCRIBE` query itself may affect performance.
+  * `SUBSCRIBE` can only be used with replica-specific introspection sources
+    (i.e., the relations that are suffixed with replica IDs). You'll need to
+    rewrite the queries below to use the suffixed relations for the particular
+    replica you wish to target.
+
+## How fast are my sources loading data?
 
 You can count the number of records accepted in a source, materialized view,
 or indexed view. Note that this makes less sense for a non-materialized,
@@ -98,7 +109,7 @@ is useful:
 SELECT * FROM mz_internal.mz_worker_compute_delays;
 ```
 
-### Why is Materialize running so slowly?
+## Why is Materialize running so slowly?
 
 Materialize spends time in various dataflow operators maintaining
 materialized views or indexes. If Materialize is taking more time to update
@@ -128,7 +139,7 @@ GROUP BY mdo.id, mdo.name
 ORDER BY elapsed_ns DESC;
 ```
 
-### Why is Materialize unresponsive for seconds at a time?
+## Why is Materialize unresponsive for seconds at a time?
 
 Materialize operators get scheduled and try to
 behave themselves by returning control promptly, but
@@ -161,7 +172,7 @@ GROUP BY mdo.id, mdo.name, mrcod.duration_ns
 ORDER BY mrcod.duration_ns DESC;
 ```
 
-### Why is Materialize using so much memory?
+## Why is Materialize using so much memory?
 
 The majority of Materialize's memory use is taken up by "arrangements", which
 are differential dataflow structures that maintain indexes for data
@@ -203,7 +214,7 @@ displayed by either the visual interface or the SQL queries.
 The memory usage visualization is available at `http://<materialized
 host>:6876/memory`.
 
-### Is work distributed equally across workers?
+## Is work distributed equally across workers?
 
 Work is distributed across workers by the hash of their keys. Thus, work can
 become skewed if situations arise where Materialize needs to use arrangements
@@ -249,7 +260,7 @@ WHERE
 ORDER BY ratio DESC;
 ```
 
-### I found a problematic operator. Where did it come from?
+## I found a problematic operator. Where did it come from?
 
 Look up the operator in `mz_dataflow_addresses`. If an operator has
 value `x` at position `n`, then it is part of the `x` subregion of the region
@@ -301,7 +312,7 @@ WHERE
     AND mdo.worker_id = 0;
 ```
 
-### How many `SUBSCRIBE` processes are running?
+## How many `SUBSCRIBE` processes are running?
 
 You can get the number of active `SUBSCRIBE` processes in Materialize using the statement below, or another `SUBSCRIBE` statement.
 Every time `SUBSCRIBE` is invoked, a dataflow using the `Dataflow: subscribe` prefix is created.
