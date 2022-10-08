@@ -393,7 +393,6 @@ struct KafkaSinkState {
     metrics: Arc<SinkMetrics>,
     producer: KafkaTxProducer,
     activator: timely::scheduling::Activator,
-    transactional: bool,
     pending_rows: HashMap<Timestamp, Vec<EncodedRow>>,
     ready_rows: VecDeque<(Timestamp, Vec<EncodedRow>)>,
     retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
@@ -425,11 +424,7 @@ impl KafkaSinkState {
         metrics: &KafkaBaseMetrics,
         connection_context: &ConnectionContext,
     ) -> Self {
-        let transactional_id = if connection.exactly_once {
-            Some(format!("mz-producer-{sink_id}-{worker_id}"))
-        } else {
-            None
-        };
+        let transactional_id = format!("mz-producer-{sink_id}-{worker_id}");
         let config =
             Self::create_producer_config(&connection, connection_context, transactional_id);
         let progress_client_config =
@@ -465,12 +460,11 @@ impl KafkaSinkState {
 
         KafkaSinkState {
             name: sink_name,
-            topic: connection.topic.clone(),
+            topic: connection.topic,
             shutdown_flag,
             metrics,
             producer,
             activator,
-            transactional: connection.exactly_once,
             pending_rows: HashMap::new(),
             ready_rows: VecDeque::new(),
             retry_manager,
@@ -483,7 +477,7 @@ impl KafkaSinkState {
     fn create_producer_config(
         connection: &KafkaSinkConnection,
         connection_context: &ConnectionContext,
-        transactional_id: Option<String>,
+        transactional_id: String,
     ) -> ClientConfig {
         let mut config = create_new_client_config(connection_context.librdkafka_log_level);
         TokioHandle::current().block_on(
@@ -514,9 +508,8 @@ impl KafkaSinkState {
         // if it makes a big difference
         config.set("queue.buffering.max.ms", &format!("{}", 10));
 
-        if let Some(id) = transactional_id {
-            config.set("transactional.id", id);
-        }
+        config.set("transactional.id", transactional_id);
+
         config
     }
 
@@ -937,9 +930,7 @@ impl KafkaSinkState {
             if min_frontier > self.latest_progress_ts {
                 // record the write frontier in the progress topic.
                 if let Some(progress_state) = self.sink_state.unwrap_running() {
-                    if self.transactional {
-                        self.retry_on_txn_error(|p| p.begin_transaction()).await?;
-                    }
+                    self.retry_on_txn_error(|p| p.begin_transaction()).await?;
 
                     info!(
                         "{}: sending progress for gate ts: {:?}",
@@ -949,9 +940,7 @@ impl KafkaSinkState {
                         .await
                         .map_err(|_| anyhow::anyhow!("Error sending write frontier update."))?;
 
-                    if self.transactional {
-                        self.retry_on_txn_error(|p| p.commit_transaction()).await?;
-                    }
+                    self.retry_on_txn_error(|p| p.commit_transaction()).await?;
                     progress_emitted = true;
                 }
                 self.latest_progress_ts = min_frontier;
@@ -1149,11 +1138,9 @@ where
 
             if is_active_worker {
                 if let KafkaSinkStateEnum::Init(ref init) = s.sink_state {
-                    if s.transactional {
-                        s.retry_on_txn_error(|p| p.init_transactions())
-                            .await
-                            .expect("init_transactions");
-                    }
+                    s.retry_on_txn_error(|p| p.init_transactions())
+                        .await
+                        .expect("init_transactions");
 
                     let latest_ts = s
                         .determine_latest_progress_record()
@@ -1237,16 +1224,14 @@ where
             while let Some((ts, rows)) = s.ready_rows.front() {
                 assert!(is_active_worker);
 
-                if s.transactional {
-                    info!(
-                        "Beginning transaction for {:?} with {:?} rows",
-                        ts,
-                        rows.len()
-                    );
-                    s.retry_on_txn_error(|p| p.begin_transaction())
-                        .await
-                        .expect("begin transaction");
-                }
+                info!(
+                    "Beginning transaction for {:?} with {:?} rows",
+                    ts,
+                    rows.len()
+                );
+                s.retry_on_txn_error(|p| p.begin_transaction())
+                    .await
+                    .expect("begin transaction");
 
                 let mut repeat_counter = 0;
                 for encoded_row in rows {
@@ -1288,12 +1273,10 @@ where
                         .expect("send progress record");
                 }
 
-                if s.transactional {
-                    info!("Committing transaction for {:?}", ts,);
-                    s.retry_on_txn_error(|p| p.commit_transaction())
-                        .await
-                        .expect("commit transaction");
-                };
+                info!("Committing transaction for {:?}", ts,);
+                s.retry_on_txn_error(|p| p.commit_transaction())
+                    .await
+                    .expect("commit transaction");
 
                 s.flush().await.expect("post-commit flush");
 

@@ -264,7 +264,6 @@ async fn build_kafka(
         value_desc: builder.value_desc,
         published_schema_info,
         progress,
-        exactly_once: true,
         fuel: builder.fuel,
     }))
 }

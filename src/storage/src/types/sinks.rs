@@ -247,7 +247,6 @@ pub struct KafkaSinkConnection {
     pub value_desc: RelationDesc,
     pub published_schema_info: Option<PublishedSchemaInfo>,
     pub progress: KafkaSinkProgressConnection,
-    pub exactly_once: bool,
     // Maximum number of records the sink will attempt to send each time it is
     // invoked
     pub fuel: usize,
@@ -276,7 +275,6 @@ proptest::prop_compose! {
         value_desc in any::<RelationDesc>(),
         published_schema_info in any::<Option<PublishedSchemaInfo>>(),
         progress in any::<KafkaSinkProgressConnection>(),
-        exactly_once in any::<bool>(),
         fuel in any::<usize>(),
     ) -> KafkaSinkConnection {
         KafkaSinkConnection {
@@ -289,7 +287,6 @@ proptest::prop_compose! {
             value_desc,
             published_schema_info,
             progress,
-            exactly_once,
             fuel,
         }
     }
@@ -354,7 +351,6 @@ impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
             value_desc: Some(self.value_desc.into_proto()),
             published_schema_info: self.published_schema_info.into_proto(),
             progress: Some(self.progress.into_proto()),
-            exactly_once: self.exactly_once,
             fuel: self.fuel.into_proto(),
         }
     }
@@ -384,7 +380,6 @@ impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
             progress: proto
                 .progress
                 .into_rust_if_some("ProtoKafkaSinkConnection::progress")?,
-            exactly_once: proto.exactly_once,
             fuel: proto.fuel.into_rust()?,
         })
     }
