@@ -15,7 +15,7 @@ use mz_repr::{GlobalId, TimestampManipulation};
 use mz_stash::Append;
 use mz_transform::IndexOracle;
 
-use crate::catalog::{CatalogItem, CatalogState, Index};
+use crate::catalog::{CatalogItem, CatalogState, Index, Log};
 use crate::coord::dataflows::DataflowBuilder;
 use crate::coord::{CollectionIdBundle, Coordinator};
 
@@ -81,11 +81,22 @@ impl<T: TimestampManipulation> ComputeInstanceIndexOracle<'_, T> {
                     }
                     CatalogItem::Source(_)
                     | CatalogItem::Table(_)
-                    | CatalogItem::Log(_)
                     | CatalogItem::MaterializedView(_)
-                    | CatalogItem::StorageManagedTable(_) => {
+                    | CatalogItem::StorageManagedTable(_)
+                    | CatalogItem::Log(Log {
+                        has_storage_collection: true,
+                        ..
+                    }) => {
                         // Record that we are missing at least one index.
                         id_bundle.storage_ids.insert(id);
+                    }
+                    CatalogItem::Log(Log {
+                        has_storage_collection: false,
+                        ..
+                    }) => {
+                        // Log sources without storage collections should always
+                        // be protected by an index.
+                        panic!("log source without storage collection {id} is missing index");
                     }
                     _ => {
                         // Non-indexable thing; no work to do.

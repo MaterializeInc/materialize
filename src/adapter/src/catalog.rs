@@ -403,7 +403,15 @@ impl CatalogState {
                 },
                 item: format!("{}_{}", log.name, replica_id),
             };
-            self.insert_item(*source_id, oid, source_name, CatalogItem::Log(log));
+            self.insert_item(
+                *source_id,
+                oid,
+                source_name,
+                CatalogItem::Log(Log {
+                    variant: variant.clone(),
+                    has_storage_collection: true,
+                }),
+            );
         }
 
         for (logview, id) in &logging.views {
@@ -1325,7 +1333,7 @@ pub struct CatalogEntry {
 pub enum CatalogItem {
     Table(Table),
     Source(Source),
-    Log(&'static BuiltinLog),
+    Log(Log),
     View(View),
     MaterializedView(MaterializedView),
     Sink(Sink),
@@ -1370,6 +1378,13 @@ pub struct Source {
     pub timeline: Timeline,
     pub depends_on: Vec<GlobalId>,
     pub host_config: StorageHostConfig,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Log {
+    pub variant: LogVariant,
+    /// Whether the log is backed by a storage collection.
+    pub has_storage_collection: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1633,7 +1648,7 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Table(i))
             }
-            CatalogItem::Log(i) => Ok(CatalogItem::Log(i)),
+            CatalogItem::Log(i) => Ok(CatalogItem::Log(i.clone())),
             CatalogItem::Source(i) => {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql)?;
@@ -2067,9 +2082,15 @@ impl<S: Append> Catalog<S> {
             match builtin {
                 Builtin::Log(log) => {
                     let oid = catalog.allocate_oid()?;
-                    catalog
-                        .state
-                        .insert_item(id, oid, name.clone(), CatalogItem::Log(log));
+                    catalog.state.insert_item(
+                        id,
+                        oid,
+                        name.clone(),
+                        CatalogItem::Log(Log {
+                            variant: log.variant.clone(),
+                            has_storage_collection: false,
+                        }),
+                    );
                 }
 
                 Builtin::Table(table) => {

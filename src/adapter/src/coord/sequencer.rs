@@ -3458,7 +3458,6 @@ where
         return Ok(());
     }
 
-
     // Peeking from log sources on replicated compute instances is only
     // allowed if a target replica is selected. Otherwise, we have no
     // way of knowing which replica we read the introspection data from.
