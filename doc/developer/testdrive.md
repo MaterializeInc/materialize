@@ -735,10 +735,10 @@ Obtains the data from the specified `sink` or `topic` and compares it to the exp
 
 If `partial-search=usize` is specified, up to `partial-search` records will be read from the given topic and compared to the provided records. The records do not have to match starting at the beginning of the sink but once one record matches, the following must all match.  There are permitted to be records remaining in the topic after the matching is complete.  Note that if the topic is not required to have `partial-search` elements in it but there will be an attempt to read up to this number with a blocking read.
 
-#### `kafka-verify-commit source=... topic=... partition=...
+#### `kafka-verify-commit consumer-group-id=... topic=... partition=...
 
-Verifies that the provided offset (the input data) matches the committed offset for
-_the sources consumer id_
+Verifies that the provided offset (the input data) matches the committed offset
+for the specified consumer group, topic, and partition.
 
 
 #### `headers=<list or object>`
