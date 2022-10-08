@@ -13,8 +13,6 @@ use std::str;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, ensure, Context};
-use byteorder::{BigEndian, ByteOrder};
-use chrono::NaiveDate;
 use itertools::Itertools;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::{Headers, Message};
@@ -22,52 +20,26 @@ use regex::Regex;
 use tokio::pin;
 use tokio_stream::StreamExt;
 
-use mz_avro::types::Value;
-
 use crate::action::{ControlFlow, State};
-use crate::format::{avro, json};
+use crate::format::avro::{self, DebugValue};
+use crate::format::json;
 use crate::parser::BuiltinCommand;
 
-pub enum SinkFormat {
+enum Format {
     Avro,
     Json { key: bool },
 }
 
-pub enum Topic {
+enum Topic {
     FromSink(String),
     Named(String),
 }
 
 #[derive(Debug)]
-pub struct Record<A> {
+struct Record<A> {
     headers: Vec<String>,
     key: Option<A>,
     value: Option<A>,
-}
-
-fn avro_from_bytes(
-    schema: &mz_avro::Schema,
-    mut bytes: &[u8],
-) -> Result<mz_avro::types::Value, anyhow::Error> {
-    if bytes.len() < 5 {
-        bail!(
-            "avro datum is too few bytes: expected at least 5 bytes, got {}",
-            bytes.len()
-        );
-    }
-    let magic = bytes[0];
-    let _schema_id = BigEndian::read_i32(&bytes[1..5]);
-    bytes = &bytes[5..];
-
-    if magic != 0 {
-        bail!(
-            "wrong avro serialization magic: expected 0, got {}",
-            bytes[0]
-        );
-    }
-
-    let datum = avro::from_avro_datum(schema, &mut bytes).context("decoding avro datum")?;
-    Ok(datum)
 }
 
 async fn get_topic(
@@ -98,13 +70,13 @@ async fn get_topic(
     Ok(result)
 }
 
-pub async fn run_verify(
+pub async fn run_verify_data(
     mut cmd: BuiltinCommand,
     state: &mut State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let format = match cmd.args.string("format")?.as_str() {
-        "avro" => SinkFormat::Avro,
-        "json" => SinkFormat::Json {
+        "avro" => Format::Avro,
+        "json" => Format::Json {
             key: cmd.args.parse("key")?,
         },
         f => bail!("unknown format: {}", f),
@@ -113,8 +85,8 @@ pub async fn run_verify(
     let source = match (cmd.args.opt_string("sink"), cmd.args.opt_string("topic")) {
         (Some(sink), None) => Topic::FromSink(sink),
         (None, Some(topic)) => Topic::Named(topic),
-        (Some(_), Some(_)) => bail!("Can't provide both `source` and `topic` to kafka-verify"),
-        (None, None) => bail!("kafka-verify expects either `source` or `topic`"),
+        (Some(_), Some(_)) => bail!("Can't provide both `source` and `topic` to kafka-verify-data"),
+        (None, None) => bail!("kafka-verify-data expects either `source` or `topic`"),
     };
 
     let sort_messages = cmd.args.opt_bool("sort-messages")?.unwrap_or(false);
@@ -129,7 +101,7 @@ pub async fn run_verify(
     if expected_messages.len() == 0 {
         // verify with 0 messages doesn't check that no messages have been written -
         // it 'verifies' 0 messages and trivially returns true
-        bail!("kafka-verify requires a non-empty list of expected messages");
+        bail!("kafka-verify-data requires a non-empty list of expected messages");
     }
     let partial_search = cmd.args.opt_parse("partial-search")?;
     let debug_print_only = cmd.args.opt_bool("debug-print-only")?.unwrap_or(false);
@@ -208,7 +180,7 @@ pub async fn run_verify(
     }
 
     match &format {
-        SinkFormat::Avro => {
+        Format::Avro => {
             let value_schema = state
                 .ccsr_client
                 .get_schema_by_subject(&format!("{}-value", topic))
@@ -226,8 +198,7 @@ pub async fn run_verify(
                 })
                 .transpose()?;
 
-            let value_schema = avro::parse_schema(&value_schema).context("parsing avro schema")?;
-            let value_schema = &value_schema;
+            let value_schema = &avro::parse_schema(&value_schema).context("parsing avro schema")?;
 
             let mut actual_messages = vec![];
             for record in actual_bytes {
@@ -238,13 +209,13 @@ pub async fn run_verify(
                             Some(key) => key,
                             None => bail!("empty message key"),
                         };
-                        avro_from_bytes(key_schema, &bytes)
+                        avro::from_confluent_bytes(key_schema, &bytes)
                     })
                     .transpose()?
                     .map(DebugValue);
                 let value = match record.value {
                     None => None,
-                    Some(bytes) => Some(avro_from_bytes(value_schema, &bytes)?),
+                    Some(bytes) => Some(avro::from_confluent_bytes(value_schema, &bytes)?),
                 }
                 .map(DebugValue);
                 actual_messages.push(Record {
@@ -304,7 +275,7 @@ pub async fn run_verify(
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
-            validate_sink_with_partial_search(
+            verify_with_partial_search(
                 &expected,
                 &actual_messages,
                 &state.regex,
@@ -312,7 +283,7 @@ pub async fn run_verify(
                 partial_search.is_some(),
             )?
         }
-        SinkFormat::Json { key: has_key } => {
+        Format::Json { key: has_key } => {
             let mut actual_messages = vec![];
             for record in actual_bytes {
                 let key = match record.key {
@@ -371,7 +342,7 @@ pub async fn run_verify(
                 })
                 .collect::<Result<Vec<_>, anyhow::Error>>()?;
 
-            validate_sink_with_partial_search(
+            verify_with_partial_search(
                 &expected,
                 &actual_messages,
                 &state.regex,
@@ -408,13 +379,16 @@ fn split_headers(input: &str, n_headers: usize) -> anyhow::Result<(Vec<String>, 
     Ok((headers, rest))
 }
 
-pub fn validate_sink_with_partial_search<A: Debug>(
+fn verify_with_partial_search<A>(
     expected: &[Record<A>],
     actual: &[Record<A>],
     regex: &Option<Regex>,
     regex_replacement: &String,
     partial_search: bool,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), anyhow::Error>
+where
+    A: Debug,
+{
     let mut expected = expected.iter();
     let mut actual = actual.iter();
     let mut index = 0..;
@@ -469,138 +443,5 @@ pub fn validate_sink_with_partial_search<A: Debug>(
         bail!("extra records:\n{}", actual.join("\n"))
     } else {
         Ok(())
-    }
-}
-
-pub async fn run_verify_schema(
-    mut cmd: BuiltinCommand,
-    state: &mut State,
-) -> Result<ControlFlow, anyhow::Error> {
-    let format = match cmd.args.string("format")?.as_str() {
-        "avro" => SinkFormat::Avro,
-        "json" => SinkFormat::Json {
-            key: cmd.args.parse("key")?,
-        },
-        f => bail!("unknown format: {}", f),
-    };
-    let sink = cmd.args.string("sink")?;
-
-    let (expected_key_schema, expected_value_schema) = match &cmd.input[..] {
-        [value] => (None, value.clone()),
-        [key, value] => (Some(key.clone()), value.clone()),
-        _ => bail!("unable to read key/value schema inputs"),
-    };
-
-    cmd.args.done()?;
-
-    let topic = get_topic(&sink, "topic", state).await?;
-
-    match &format {
-        SinkFormat::Avro => {
-            let generated_value_schema = state
-                .ccsr_client
-                .get_schema_by_subject(&format!("{}-value", topic))
-                .await
-                .context("fetching schema")?
-                .raw;
-
-            let generated_key_schema = state
-                .ccsr_client
-                .get_schema_by_subject(&format!("{}-key", topic))
-                .await
-                .ok()
-                .map(|key_schema| {
-                    avro::parse_schema(&key_schema.raw).context("parsing avro schema")
-                })
-                .transpose()?;
-
-            let generated_value_schema = avro::parse_schema(&generated_value_schema)
-                .context("parsing generated avro schema")?;
-            let expected_value_schema = avro::parse_schema(&expected_value_schema)
-                .context("parsing expected avro schema")?;
-
-            if expected_value_schema.ne(&generated_value_schema) {
-                bail!(
-                    "value schema did not match\nexpected:\n{:?}\n\nactual:\n{:?}",
-                    expected_value_schema,
-                    generated_value_schema
-                );
-            }
-
-            if let Some(expected_key_schema) = &expected_key_schema {
-                let expected_key_schema = avro::parse_schema(expected_key_schema)
-                    .context("parsing expected avro schema")?;
-
-                if generated_key_schema.is_none() {
-                    bail!("empty generated key schema");
-                }
-
-                let generated_key_schema = generated_key_schema.unwrap();
-                if expected_key_schema.ne(&generated_key_schema) {
-                    bail!(
-                        "key schema did not match\nexpected:\n{:?}\n\nactual:\n{:?}",
-                        expected_key_schema,
-                        generated_key_schema
-                    );
-                }
-            }
-        }
-        _ => {
-            bail!("kafka-verify-schema is only supported for Avro sinks")
-        }
-    }
-
-    Ok(ControlFlow::Continue)
-}
-
-/// A struct to enhance the debug output of various avro types.
-///
-/// Testdrive files, for example, specify timestamps in micros, but debug output
-/// happens in Y-M-D format, which can be very difficult to map back to the
-/// correct input number. Similarly, dates are represented in Avro as i32s, but
-/// we would like to see the Y-M-D format as well.
-struct DebugValue(Value);
-
-impl Debug for DebugValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.0 {
-            Value::Timestamp(t) => write!(
-                f,
-                "Timestamp(\"{:?}\", {} micros, {} millis)",
-                t,
-                t.timestamp_micros(),
-                t.timestamp_millis()
-            ),
-            Value::Date(d) => write!(
-                f,
-                "Date({:?}, \"{}\")",
-                d,
-                NaiveDate::from_num_days_from_ce(*d)
-            ),
-
-            // Re-wrap types that contain a Value.
-            Value::Record(r) => f
-                .debug_set()
-                .entries(r.iter().map(|(s, v)| (s, DebugValue(v.clone()))))
-                .finish(),
-            Value::Array(a) => f
-                .debug_set()
-                .entries(a.iter().map(|v| DebugValue(v.clone())))
-                .finish(),
-            Value::Union {
-                index,
-                inner,
-                n_variants,
-                null_variant,
-            } => f
-                .debug_struct("Union")
-                .field("index", index)
-                .field("inner", &DebugValue(*inner.clone()))
-                .field("n_variants", n_variants)
-                .field("null_variant", null_variant)
-                .finish(),
-
-            _ => write!(f, "{:?}", self.0),
-        }
     }
 }

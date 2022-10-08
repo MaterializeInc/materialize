@@ -16,7 +16,7 @@ CREATE TABLE decimal_type (f1 DECIMAL(5,3), f2 INTEGER PRIMARY KEY);
 ALTER TABLE decimal_type REPLICA IDENTITY FULL;
 INSERT INTO decimal_type VALUES (NULL, 0), (NULL, 1), (12.345, 2), ('NaN', 3);
 
-$ schema-registry-wait-schema schema=postgres.public.decimal_type-value
+$ schema-registry-wait subject=postgres.public.decimal_type-value
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY

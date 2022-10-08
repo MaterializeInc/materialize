@@ -729,7 +729,7 @@ Sets the variable named VAR to the ID of the key schema with which data was
 written. The variable is only set if the format of the key was Confluent Avro
 or Protobuf.
 
-#### `kafka-verify format=avro [sink=... | topic=...] [sort-messages=true] [partial-search=usize]`
+#### `kafka-verify-data format=avro [sink=... | topic=...] [sort-messages=true] [partial-search=usize]`
 
 Obtains the data from the specified `sink` or `topic` and compares it to the expected data recorded in the test. The comparison algorithm is sensitive to the order in which data arrives, so `sort-messages=true` can be used along with manually pre-sorting the expected data in the test.
 
@@ -739,7 +739,6 @@ If `partial-search=usize` is specified, up to `partial-search` records will be r
 
 Verifies that the provided offset (the input data) matches the committed offset
 for the specified consumer group, topic, and partition.
-
 
 #### `headers=<list or object>`
 
@@ -783,6 +782,52 @@ Add an SQS notification to the specified bucket and then validates that SQS work
 
 > :warning: `$ s3-add-notifications` uploads a single key in your bucket that remains there , so it will show up in your S3 sources unless you use a `DISCOVER OBJECTS MATCHING` clause to filter it out.
 
+## Actions on Confluent Schema Registry
+
+#### `$ schema-registry-publish subject=... schema-type=<avro|json|protobuf> [references=subject[,subject...]]`
+
+Publish a schema to the schema registry.
+
+The command's input is used as the body of the schema.
+
+The required `subject` argument specifies the name under which to register the
+schema. If registering a schema for a Kafka topic using the topic name strategy
+(the usual case), use the subject `$TOPIC-key` or `$TOPIC-value`, depending on
+whether the schema is for the key type or the value type.
+
+The required `schema-type` argument indicates the type of the schema.
+
+The optional `references` argument specifies a comma-separated list of existing
+schema subjects upon which the schema depends. The action always declares the
+reference on the *latest* version of the referenced subject. If this is
+limiting, feel free to adjust the action to permit specifying the desired
+version, instead of assuming the latest version.
+
+#### `$ schema-registry-verify subject=... schema-type=avro`
+
+Verify the contents of the latest version of a schema in the schema registry.
+
+The command's input is used as the expected schema.
+
+The required `subject` argument specifies the name of the schema in the registry
+to validate. The latest version of the subject is always used. If this is
+limiting, feel free to adjust the action to specify the desired version. If
+verifying a schema for a Kafka topic using the topic name strategy (the usual
+case), use the subject `$TOPIC-key` or `$TOPIC-value`, depending on whether
+you wish to verify the key or the value schema.
+
+The required `schema-type` argument indicates the type of the schema. At
+present, only Avro schemas are supported. Feel free to adjust the action to
+support additional schema types.
+
+#### `$ schema-registry-wait subject=...`
+
+Block the test until schema with the specified subject has been defined at the
+schema registry.
+
+This action is useful to fortify tests that expect an external party, e.g.
+Debezium, to upload a particular schema.
+
 ## Actions on REST services
 
 #### `$ http-request method=(GET|POST|PUT) url=... content-type=...`
@@ -797,10 +842,6 @@ $ http-request method=POST url=http://example/com content-type=application/json
 ```
 
 The test will fail unless the HTTP status code of the response is in the 200 range.
-
-#### `$ schema-registry-wait-schema schema=...`
-
-Block the test until the specified schema has been defined at the schema registry. This is used to fortify tests that expect an external party, e.g. Debezium to  upload a particular schema.
 
 ## Actions with `psql`
 

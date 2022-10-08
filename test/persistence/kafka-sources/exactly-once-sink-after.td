@@ -32,7 +32,7 @@ $ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keysc
 
 # We expect just the 6 new messages, having consumed the older ones in xactly-once-sink-before.td
 
-$ kafka-verify format=avro sink=materialize.public.exactly_once_sink sort-messages=true
+$ kafka-verify-data format=avro sink=materialize.public.exactly_once_sink sort-messages=true
 {"before":null,"after":{"row":{"f1":20,"f2":20}}}
 {"before":null,"after":{"row":{"f1":21,"f2":21}}}
 {"before":null,"after":{"row":{"f1":30,"f2":30}}}

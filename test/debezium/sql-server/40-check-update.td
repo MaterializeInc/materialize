@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ schema-registry-wait-schema schema=sql-server.dbo.update_table_pk-value
+$ schema-registry-wait subject=sql-server.dbo.update_table_pk-value
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
@@ -17,7 +17,7 @@ $ schema-registry-wait-schema schema=sql-server.dbo.update_table_pk-value
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-# $ schema-registry-wait-schema schema=sql-server.dbo.update_table_nopk-value
+# $ schema-registry-wait subject=sql-server.dbo.update_table_nopk-value
 
 # > CREATE CONNECTION IF NOT EXISTS csr_conn
 #   FOR CONFLUENT SCHEMA REGISTRY

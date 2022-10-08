@@ -290,11 +290,11 @@ $ kafka-ingest format=avro topic=progress-test-input schema=${cdcv2-schema}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[2],"counts":[{"time":1,"count":2}]}}
 {"array":[{"data":{"a":2,"b":2},"time":3,"diff":1}]}
 
-$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.compaction_test_sink sort-messages=true
+$ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.public.compaction_test_sink sort-messages=true
 1	{"before": null, "after": {"row": {"a": 1, "b": 1}}}
 1	{"before": null, "after": {"row": {"a": 2, "b": 2}}}
 
-$ kafka-verify format=json key=false topic=testdrive-progress-fixed-${testdrive.seed}
+$ kafka-verify-data format=json key=false topic=testdrive-progress-fixed-${testdrive.seed}
 {"timestamp": 1}
 
 # verify output with real-time timestamps
@@ -313,5 +313,5 @@ $ kafka-ingest format=avro topic=rt-binding-progress-test-input key-format=avro 
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE DEBEZIUM
 
-$ kafka-verify format=avro sink=materialize.public.rt_binding_progress_test_sink
+$ kafka-verify-data format=avro sink=materialize.public.rt_binding_progress_test_sink
 {"before": null, "after": {"row": {"a": 1, "b": 1}}}
