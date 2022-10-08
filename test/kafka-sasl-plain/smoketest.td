@@ -62,7 +62,7 @@ a
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_sasl
   ENVELOPE DEBEZIUM
 
-$ kafka-verify format=avro sink=materialize.public.data_snk sort-messages=true
+$ kafka-verify-data format=avro sink=materialize.public.data_snk sort-messages=true
 {"before": null, "after": {"row": {"a": 1}}}
 {"before": null, "after": {"row": {"a": 2}}}
 

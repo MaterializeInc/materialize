@@ -70,7 +70,7 @@ async fn get_topic(
     Ok(result)
 }
 
-pub async fn run_verify(
+pub async fn run_verify_data(
     mut cmd: BuiltinCommand,
     state: &mut State,
 ) -> Result<ControlFlow, anyhow::Error> {
@@ -85,8 +85,8 @@ pub async fn run_verify(
     let source = match (cmd.args.opt_string("sink"), cmd.args.opt_string("topic")) {
         (Some(sink), None) => Topic::FromSink(sink),
         (None, Some(topic)) => Topic::Named(topic),
-        (Some(_), Some(_)) => bail!("Can't provide both `source` and `topic` to kafka-verify"),
-        (None, None) => bail!("kafka-verify expects either `source` or `topic`"),
+        (Some(_), Some(_)) => bail!("Can't provide both `source` and `topic` to kafka-verify-data"),
+        (None, None) => bail!("kafka-verify-data expects either `source` or `topic`"),
     };
 
     let sort_messages = cmd.args.opt_bool("sort-messages")?.unwrap_or(false);
@@ -101,7 +101,7 @@ pub async fn run_verify(
     if expected_messages.len() == 0 {
         // verify with 0 messages doesn't check that no messages have been written -
         // it 'verifies' 0 messages and trivially returns true
-        bail!("kafka-verify requires a non-empty list of expected messages");
+        bail!("kafka-verify-data requires a non-empty list of expected messages");
     }
     let partial_search = cmd.args.opt_parse("partial-search")?;
     let debug_print_only = cmd.args.opt_bool("debug-print-only")?.unwrap_or(false);

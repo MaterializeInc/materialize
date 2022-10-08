@@ -704,7 +704,7 @@ impl Run for PosCommand {
                     "kafka-add-partitions" => kafka::run_add_partitions(builtin, state).await,
                     "kafka-create-topic" => kafka::run_create_topic(builtin, state).await,
                     "kafka-ingest" => kafka::run_ingest(builtin, state).await,
-                    "kafka-verify" => kafka::run_verify(builtin, state).await,
+                    "kafka-verify-data" => kafka::run_verify_data(builtin, state).await,
                     "kafka-verify-commit" => kafka::run_verify_commit(builtin, state).await,
                     "kinesis-create-stream" => kinesis::run_create_stream(builtin, state).await,
                     "kinesis-update-shards" => kinesis::run_update_shards(builtin, state).await,
