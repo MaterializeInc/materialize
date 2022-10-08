@@ -75,6 +75,7 @@ use crate::coord::{
 };
 use crate::error::AdapterError;
 use crate::explain_new::optimizer_trace::OptimizerTrace;
+use crate::notice::AdapterNotice;
 use crate::session::vars::IsolationLevel;
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, Var,
@@ -111,16 +112,22 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             Plan::CreateConnection(plan) => {
                 tx.send(
-                    self.sequence_create_connection(&session, plan, depends_on)
+                    self.sequence_create_connection(&mut session, plan, depends_on)
                         .await,
                     session,
                 );
             }
             Plan::CreateDatabase(plan) => {
-                tx.send(self.sequence_create_database(&session, plan).await, session);
+                tx.send(
+                    self.sequence_create_database(&mut session, plan).await,
+                    session,
+                );
             }
             Plan::CreateSchema(plan) => {
-                tx.send(self.sequence_create_schema(&session, plan).await, session);
+                tx.send(
+                    self.sequence_create_schema(&mut session, plan).await,
+                    session,
+                );
             }
             Plan::CreateRole(plan) => {
                 tx.send(self.sequence_create_role(&session, plan).await, session);
@@ -139,12 +146,16 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             Plan::CreateTable(plan) => {
                 tx.send(
-                    self.sequence_create_table(&session, plan, depends_on).await,
+                    self.sequence_create_table(&mut session, plan, depends_on)
+                        .await,
                     session,
                 );
             }
             Plan::CreateSecret(plan) => {
-                tx.send(self.sequence_create_secret(&session, plan).await, session);
+                tx.send(
+                    self.sequence_create_secret(&mut session, plan).await,
+                    session,
+                );
             }
             Plan::CreateSink(plan) => {
                 self.sequence_create_sink(session, plan, depends_on, tx)
@@ -152,20 +163,22 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             Plan::CreateView(plan) => {
                 tx.send(
-                    self.sequence_create_view(&session, plan, depends_on).await,
+                    self.sequence_create_view(&mut session, plan, depends_on)
+                        .await,
                     session,
                 );
             }
             Plan::CreateMaterializedView(plan) => {
                 tx.send(
-                    self.sequence_create_materialized_view(&session, plan, depends_on)
+                    self.sequence_create_materialized_view(&mut session, plan, depends_on)
                         .await,
                     session,
                 );
             }
             Plan::CreateIndex(plan) => {
                 tx.send(
-                    self.sequence_create_index(&session, plan, depends_on).await,
+                    self.sequence_create_index(&mut session, plan, depends_on)
+                        .await,
                     session,
                 );
             }
@@ -215,17 +228,15 @@ impl<S: Append + 'static> Coordinator<S> {
                 tx.send(self.sequence_reset_variable(&mut session, plan), session);
             }
             Plan::StartTransaction(plan) => {
-                let duplicated =
-                    matches!(session.transaction(), TransactionStatus::InTransaction(_));
+                if matches!(session.transaction(), TransactionStatus::InTransaction(_)) {
+                    session.add_notice(AdapterNotice::ExistingTransactionInProgress);
+                }
                 let (session, result) = session.start_transaction(
                     self.now_datetime(),
                     plan.access,
                     plan.isolation_level,
                 );
-                tx.send(
-                    result.map(|_| ExecuteResponse::StartedTransaction { duplicated }),
-                    session,
-                )
+                tx.send(result.map(|_| ExecuteResponse::StartedTransaction), session)
             }
             Plan::CommitTransaction | Plan::AbortTransaction => {
                 let action = match plan {
@@ -233,6 +244,14 @@ impl<S: Append + 'static> Coordinator<S> {
                     Plan::AbortTransaction => EndTransactionAction::Rollback,
                     _ => unreachable!(),
                 };
+                if session.transaction().is_implicit() {
+                    // In Postgres, if a user sends a COMMIT or ROLLBACK in an
+                    // implicit transaction, a warning is sent warning them.
+                    // (The transaction is still closed and a new implicit
+                    // transaction started, though.)
+                    session
+                        .add_notice(AdapterNotice::ExplicitTransactionControlInImplicitTransaction);
+                }
                 self.sequence_end_transaction(tx, session, action).await;
             }
             Plan::Peek(plan) => {
@@ -407,7 +426,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
             },
             Plan::Raise(RaisePlan { severity }) => {
-                tx.send(Ok(ExecuteResponse::Raise { severity }), session);
+                session.add_notice(AdapterNotice::UserRequested { severity });
+                tx.send(Ok(ExecuteResponse::Raised), session);
             }
             Plan::RotateKeys(RotateKeysPlan { id }) => {
                 tx.send(self.sequence_rotate_keys(&session, id).await, session);
@@ -425,16 +445,14 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let if_not_exists_ids = plans
             .iter()
-            .filter_map(
-                |(id, plan, _)| {
-                    if plan.if_not_exists {
-                        Some(*id)
-                    } else {
-                        None
-                    }
-                },
-            )
-            .collect::<Vec<_>>();
+            .filter_map(|(id, plan, _)| {
+                if plan.if_not_exists {
+                    Some((*id, plan.name.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect::<HashMap<_, _>>();
 
         for (source_id, plan, depends_on) in plans {
             let source_oid = self.catalog.allocate_oid()?;
@@ -526,13 +544,17 @@ impl<S: Append + 'static> Coordinator<S> {
                     )
                     .await;
                 }
-                Ok(ExecuteResponse::CreatedSource { existed: false })
+                Ok(ExecuteResponse::CreatedSource)
             }
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(id, _),
                 ..
-            })) if if_not_exists_ids.contains(&id) => {
-                Ok(ExecuteResponse::CreatedConnection { existed: true })
+            })) if if_not_exists_ids.contains_key(&id) => {
+                session.add_notice(AdapterNotice::ObjectAlreadyExists {
+                    name: if_not_exists_ids[&id].item.clone(),
+                    ty: "source",
+                });
+                Ok(ExecuteResponse::CreatedSource)
             }
             Err(err) => Err(err),
         }
@@ -540,7 +562,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_create_connection(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         plan: CreateConnectionPlan,
         depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -569,11 +591,11 @@ impl<S: Append + 'static> Coordinator<S> {
         }];
 
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
-            Ok(_) => Ok(ExecuteResponse::CreatedConnection { existed: false }),
+            Ok(_) => Ok(ExecuteResponse::CreatedConnection),
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
                 ..
-            })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedConnection { existed: true }),
+            })) => Ok(ExecuteResponse::CreatedConnection),
             Err(err) => Err(err),
         }
     }
@@ -604,7 +626,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_create_database(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         plan: CreateDatabasePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let db_oid = self.catalog.allocate_oid()?;
@@ -615,35 +637,43 @@ impl<S: Append + 'static> Coordinator<S> {
             public_schema_oid: schema_oid,
         }];
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
-            Ok(_) => Ok(ExecuteResponse::CreatedDatabase { existed: false }),
+            Ok(_) => Ok(ExecuteResponse::CreatedDatabase),
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::DatabaseAlreadyExists(_),
                 ..
-            })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedDatabase { existed: true }),
+            })) if plan.if_not_exists => {
+                session.add_notice(AdapterNotice::DatabaseAlreadyExists { name: plan.name });
+                Ok(ExecuteResponse::CreatedDatabase)
+            }
             Err(err) => Err(err),
         }
     }
 
     async fn sequence_create_schema(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         plan: CreateSchemaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateSchema {
             database_id: plan.database_spec,
-            schema_name: plan.schema_name,
+            schema_name: plan.schema_name.clone(),
             oid,
         };
         match self
             .catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await
         {
-            Ok(_) => Ok(ExecuteResponse::CreatedSchema { existed: false }),
+            Ok(_) => Ok(ExecuteResponse::CreatedSchema),
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::SchemaAlreadyExists(_),
                 ..
-            })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedSchema { existed: true }),
+            })) if plan.if_not_exists => {
+                session.add_notice(AdapterNotice::SchemaAlreadyExists {
+                    name: plan.schema_name,
+                });
+                Ok(ExecuteResponse::CreatedSchema)
+            }
             Err(err) => Err(err),
         }
     }
@@ -849,7 +879,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .await;
         }
 
-        Ok(ExecuteResponse::CreatedComputeInstance { existed: false })
+        Ok(ExecuteResponse::CreatedComputeInstance)
     }
 
     async fn sequence_create_compute_replica(
@@ -986,13 +1016,13 @@ impl<S: Append + 'static> Coordinator<S> {
             .await
             .unwrap();
 
-        Ok(ExecuteResponse::CreatedComputeReplica { existed: false })
+        Ok(ExecuteResponse::CreatedComputeReplica)
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn sequence_create_table(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         plan: CreateTablePlan,
         depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -1019,7 +1049,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let ops = vec![catalog::Op::CreateItem {
             id: table_id,
             oid: table_oid,
-            name,
+            name: name.clone(),
             item: CatalogItem::Table(table.clone()),
         }];
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
@@ -1058,19 +1088,25 @@ impl<S: Append + 'static> Coordinator<S> {
                     DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
                 )
                 .await;
-                Ok(ExecuteResponse::CreatedTable { existed: false })
+                Ok(ExecuteResponse::CreatedTable)
             }
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
                 ..
-            })) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
+            })) if if_not_exists => {
+                session.add_notice(AdapterNotice::ObjectAlreadyExists {
+                    name: name.item,
+                    ty: "table",
+                });
+                Ok(ExecuteResponse::CreatedTable)
+            }
             Err(err) => Err(err),
         }
     }
 
     async fn sequence_create_secret(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         plan: CreateSecretPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let CreateSecretPlan {
@@ -1093,16 +1129,22 @@ impl<S: Append + 'static> Coordinator<S> {
         let ops = vec![catalog::Op::CreateItem {
             id,
             oid,
-            name,
+            name: name.clone(),
             item: CatalogItem::Secret(secret.clone()),
         }];
 
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
-            Ok(()) => Ok(ExecuteResponse::CreatedSecret { existed: false }),
+            Ok(()) => Ok(ExecuteResponse::CreatedSecret),
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
                 ..
-            })) if if_not_exists => Ok(ExecuteResponse::CreatedSecret { existed: true }),
+            })) if if_not_exists => {
+                session.add_notice(AdapterNotice::ObjectAlreadyExists {
+                    name: name.item,
+                    ty: "secret",
+                });
+                Ok(ExecuteResponse::CreatedSecret)
+            }
             Err(err) => {
                 if let Err(e) = self.secrets_controller.delete(id).await {
                     warn!(
@@ -1117,7 +1159,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_create_sink(
         &mut self,
-        session: Session,
+        mut session: Session,
         plan: CreateSinkPlan,
         depends_on: Vec<GlobalId>,
         tx: ClientTransmitter<ExecuteResponse>,
@@ -1181,7 +1223,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let ops = vec![catalog::Op::CreateItem {
             id,
             oid,
-            name,
+            name: name.clone(),
             item: CatalogItem::Sink(catalog_sink.clone()),
         }];
 
@@ -1210,7 +1252,11 @@ impl<S: Append + 'static> Coordinator<S> {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
                 ..
             })) if if_not_exists => {
-                tx.send(Ok(ExecuteResponse::CreatedSink { existed: true }), session);
+                session.add_notice(AdapterNotice::ObjectAlreadyExists {
+                    name: name.item,
+                    ty: "sink",
+                });
+                tx.send(Ok(ExecuteResponse::CreatedSink), session);
                 return;
             }
             Err(e) => {
@@ -1263,7 +1309,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_create_view(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         plan: CreateViewPlan,
         depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -1271,18 +1317,24 @@ impl<S: Append + 'static> Coordinator<S> {
         let ops = self
             .generate_view_ops(
                 session,
-                plan.name,
+                plan.name.clone(),
                 plan.view.clone(),
                 plan.replace,
                 depends_on,
             )
             .await?;
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
-            Ok(()) => Ok(ExecuteResponse::CreatedView { existed: false }),
+            Ok(()) => Ok(ExecuteResponse::CreatedView),
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
                 ..
-            })) if if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
+            })) if if_not_exists => {
+                session.add_notice(AdapterNotice::ObjectAlreadyExists {
+                    name: plan.name.item,
+                    ty: "view",
+                });
+                Ok(ExecuteResponse::CreatedView)
+            }
             Err(err) => Err(err),
         }
     }
@@ -1329,7 +1381,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_create_materialized_view(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         plan: CreateMaterializedViewPlan,
         depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -1389,7 +1441,7 @@ impl<S: Append + 'static> Coordinator<S> {
         ops.push(catalog::Op::CreateItem {
             id,
             oid,
-            name,
+            name: name.clone(),
             item: CatalogItem::MaterializedView(catalog::MaterializedView {
                 create_sql,
                 optimized_expr,
@@ -1435,19 +1487,25 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 self.ship_dataflow(df, compute_instance).await;
 
-                Ok(ExecuteResponse::CreatedMaterializedView { existed: false })
+                Ok(ExecuteResponse::CreatedMaterializedView)
             }
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
                 ..
-            })) if if_not_exists => Ok(ExecuteResponse::CreatedMaterializedView { existed: true }),
+            })) if if_not_exists => {
+                session.add_notice(AdapterNotice::ObjectAlreadyExists {
+                    name: name.item,
+                    ty: "materialized view",
+                });
+                Ok(ExecuteResponse::CreatedMaterializedView)
+            }
             Err(err) => Err(err),
         }
     }
 
     async fn sequence_create_index(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         plan: CreateIndexPlan,
         depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -1474,7 +1532,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let op = catalog::Op::CreateItem {
             id,
             oid,
-            name,
+            name: name.clone(),
             item: CatalogItem::Index(index),
         };
         match self
@@ -1490,12 +1548,18 @@ impl<S: Append + 'static> Coordinator<S> {
                 self.set_index_options(id, options)
                     .await
                     .expect("index enabled");
-                Ok(ExecuteResponse::CreatedIndex { existed: false })
+                Ok(ExecuteResponse::CreatedIndex)
             }
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
                 ..
-            })) if if_not_exists => Ok(ExecuteResponse::CreatedIndex { existed: true }),
+            })) if if_not_exists => {
+                session.add_notice(AdapterNotice::ObjectAlreadyExists {
+                    name: name.item,
+                    ty: "index",
+                });
+                Ok(ExecuteResponse::CreatedIndex)
+            }
             Err(err) => Err(err),
         }
     }
@@ -1790,7 +1854,7 @@ impl<S: Append + 'static> Coordinator<S> {
             SetVariableValue::Default => vars.reset(&name, local)?,
         }
 
-        Ok(ExecuteResponse::SetVariable { name, tag: "SET" })
+        Ok(ExecuteResponse::SetVariable { name, reset: false })
     }
 
     fn sequence_reset_variable(
@@ -1801,7 +1865,7 @@ impl<S: Append + 'static> Coordinator<S> {
         session.vars_mut().reset(&plan.name, false)?;
         Ok(ExecuteResponse::SetVariable {
             name: plan.name,
-            tag: "RESET",
+            reset: true,
         })
     }
 
@@ -1817,10 +1881,10 @@ impl<S: Append + 'static> Coordinator<S> {
         {
             action = EndTransactionAction::Rollback;
         }
-        let response = Ok(ExecuteResponse::TransactionExited {
-            tag: action.tag(),
-            was_implicit: session.transaction().is_implicit(),
-        });
+        let response = match action {
+            EndTransactionAction::Commit => Ok(ExecuteResponse::TransactionCommitted),
+            EndTransactionAction::Rollback => Ok(ExecuteResponse::TransactionRolledBack),
+        };
 
         let result = self
             .sequence_end_transaction_inner(&mut session, action)

@@ -27,5 +27,6 @@ mod message;
 mod protocol;
 mod server;
 
+pub use message::Severity;
 pub use protocol::match_handshake;
 pub use server::{Config, Server, TlsConfig, TlsMode};
