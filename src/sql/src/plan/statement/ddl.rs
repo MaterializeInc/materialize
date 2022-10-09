@@ -814,6 +814,8 @@ pub fn plan_create_source(
 
     // Apply user-specified key constraint
     if let Some(KeyConstraint::PrimaryKeyNotEnforced { columns }) = key_constraint.clone() {
+        // Don't remove this without addressing
+        // https://github.com/MaterializeInc/materialize/issues/15272.
         scx.require_unsafe_mode("PRIMARY KEY NOT ENFORCED")?;
 
         let key_columns = columns
