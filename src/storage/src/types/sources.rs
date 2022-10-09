@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 use uuid::Uuid;
 
-use mz_expr::{MirScalarExpr, PartitionId};
+use mz_expr::MirScalarExpr;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriteHandle;
@@ -73,16 +73,12 @@ pub struct SourceExport<S = ()> {
 impl<T: timely::progress::Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
     for IngestionDescription<CollectionMetadata>
 {
-    // A `WriteHandle` per output data shard and one for the remap shard. Once we have
-    // source envelopes that keep additional shards we have to specialize this
-    // some more.
-    type State = (
-        Vec<WriteHandle<SourceData, (), T, Diff>>,
-        WriteHandle<(), PartitionId, T, MzOffset>,
-    );
+    // A `WriteHandle` per used shard. Once we have source envelopes that keep additional shards we
+    // have to specialize this some more.
+    type State = Vec<WriteHandle<SourceData, (), T, Diff>>;
 
     async fn initialize_state(&self, client_cache: &mut PersistClientCache) -> Self::State {
-        let mut data_handles = vec![];
+        let mut handles = vec![];
         for export in self.source_exports.values() {
             // Explicit destructuring to force a compile error when the metadata change
             let CollectionMetadata {
@@ -99,7 +95,7 @@ impl<T: timely::progress::Timestamp + Lattice + Codec64> ResumptionFrontierCalcu
                 .open_writer::<SourceData, (), T, Diff>(*data_shard)
                 .await
                 .unwrap();
-            data_handles.push(handle);
+            handles.push(handle);
         }
 
         let CollectionMetadata {
@@ -113,30 +109,24 @@ impl<T: timely::progress::Timestamp + Lattice + Codec64> ResumptionFrontierCalcu
             .open(persist_location.clone())
             .await
             .expect("error creating persist client")
-            .open_writer::<(), PartitionId, T, MzOffset>(*remap_shard)
+            .open_writer::<SourceData, (), T, Diff>(*remap_shard)
             .await
             .unwrap();
+        handles.push(remap_handle);
 
-        (data_handles, remap_handle)
+        handles
     }
 
-    async fn calculate_resumption_frontier(&self, state: &mut Self::State) -> Antichain<T> {
-        let (data_handles, remap_handle) = state;
+    async fn calculate_resumption_frontier(&self, handles: &mut Self::State) -> Antichain<T> {
         // An ingestion can resume at the minimum of..
         let mut resume_upper = Antichain::new();
 
-        // ..the upper frontier of each source export
-        for handle in data_handles {
+        // ..the upper frontier of each shard
+        for handle in handles {
             handle.fetch_recent_upper().await;
             for t in handle.upper().elements() {
                 resume_upper.insert(t.clone());
             }
-        }
-
-        // ..the upper frontier of ingestion state
-        remap_handle.fetch_recent_upper().await;
-        for t in remap_handle.upper().elements() {
-            resume_upper.insert(t.clone());
         }
 
         // ..the upper of an implied envelope state shard. Eventually this could become actual
