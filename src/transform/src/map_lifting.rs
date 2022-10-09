@@ -25,6 +25,7 @@ use std::collections::HashMap;
 use itertools::Itertools;
 
 use mz_expr::visit::Visit;
+use mz_expr::JoinImplementation::IndexedFilter;
 use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::{Row, RowPacker};
@@ -413,85 +414,90 @@ impl LiteralLifting {
                     equivalences,
                     implementation,
                 } => {
-                    // before lifting, save the original shape of the inputs
-                    let old_input_mapper = JoinInputMapper::new(inputs);
+                    if !matches!(implementation, IndexedFilter(..)) {
+                        // before lifting, save the original shape of the inputs
+                        let old_input_mapper = JoinInputMapper::new(inputs);
 
-                    // lift literals from each input
-                    let mut input_literals = Vec::new();
-                    for mut input in inputs.iter_mut() {
-                        let literals = self.action(input, gets)?;
+                        // lift literals from each input
+                        let mut input_literals = Vec::new();
+                        for mut input in inputs.iter_mut() {
+                            let literals = self.action(input, gets)?;
 
-                        // Do not propagate error literals beyond join inputs, since that may result
-                        // in them being propagated to other inputs of the join and evaluated when
-                        // they should not.
-                        if literals.iter().any(|l| l.is_literal_err()) {
-                            // Push the literal errors beyond any arrangement since otherwise JoinImplementation
-                            // would add another arrangement on top leading to an infinite loop/stack overflow.
-                            if let MirRelationExpr::ArrangeBy { input, .. } = &mut input {
-                                **input = input.take_dangerous().map(literals);
-                            } else {
-                                *input = input.take_dangerous().map(literals);
-                            }
-                            input_literals.push(Vec::new());
-                        } else {
-                            input_literals.push(literals);
-                        }
-                    }
-
-                    if input_literals.iter().any(|l| !l.is_empty()) {
-                        *implementation = mz_expr::JoinImplementation::Unimplemented;
-
-                        // We should be able to install any literals in the
-                        // equivalence relations, and then lift all literals
-                        // around the join using a project to re-order columns.
-
-                        // Visit each expression in each equivalence class to either
-                        // inline literals or update column references.
-                        let new_input_mapper = JoinInputMapper::new(inputs);
-                        for equivalence in equivalences.iter_mut() {
-                            for expr in equivalence.iter_mut() {
-                                expr.visit_mut_post(&mut |e| {
-                                    if let MirScalarExpr::Column(c) = e {
-                                        let (col, input) = old_input_mapper.map_column_to_local(*c);
-                                        if col >= new_input_mapper.input_arity(input) {
-                                            // the column refers to a literal that
-                                            // has been promoted. inline it
-                                            *e = input_literals[input]
-                                                [col - new_input_mapper.input_arity(input)]
-                                            .clone()
-                                        } else {
-                                            // localize to the new join
-                                            *c = new_input_mapper.map_column_to_global(col, input);
-                                        }
-                                    }
-                                })?;
-                            }
-                        }
-
-                        // We now determine a projection to shovel around all of
-                        // the columns that puts the literals last. Where this is optional
-                        // for other operators, it is mandatory here if we want to lift the
-                        // literals through the join.
-
-                        // The first literal column number starts at the last column
-                        // of the new join. Increment the column number as literals
-                        // get added.
-                        let mut literal_column_number = new_input_mapper.total_columns();
-                        let mut projection = Vec::new();
-                        for input in 0..old_input_mapper.total_inputs() {
-                            for column in old_input_mapper.local_columns(input) {
-                                if column >= new_input_mapper.input_arity(input) {
-                                    projection.push(literal_column_number);
-                                    literal_column_number += 1;
+                            // Do not propagate error literals beyond join inputs, since that may result
+                            // in them being propagated to other inputs of the join and evaluated when
+                            // they should not.
+                            if literals.iter().any(|l| l.is_literal_err()) {
+                                // Push the literal errors beyond any arrangement since otherwise JoinImplementation
+                                // would add another arrangement on top leading to an infinite loop/stack overflow.
+                                if let MirRelationExpr::ArrangeBy { input, .. } = &mut input {
+                                    **input = input.take_dangerous().map(literals);
                                 } else {
-                                    projection
-                                        .push(new_input_mapper.map_column_to_global(column, input));
+                                    *input = input.take_dangerous().map(literals);
+                                }
+                                input_literals.push(Vec::new());
+                            } else {
+                                input_literals.push(literals);
+                            }
+                        }
+
+                        if input_literals.iter().any(|l| !l.is_empty()) {
+                            *implementation = mz_expr::JoinImplementation::Unimplemented;
+
+                            // We should be able to install any literals in the
+                            // equivalence relations, and then lift all literals
+                            // around the join using a project to re-order columns.
+
+                            // Visit each expression in each equivalence class to either
+                            // inline literals or update column references.
+                            let new_input_mapper = JoinInputMapper::new(inputs);
+                            for equivalence in equivalences.iter_mut() {
+                                for expr in equivalence.iter_mut() {
+                                    expr.visit_mut_post(&mut |e| {
+                                        if let MirScalarExpr::Column(c) = e {
+                                            let (col, input) =
+                                                old_input_mapper.map_column_to_local(*c);
+                                            if col >= new_input_mapper.input_arity(input) {
+                                                // the column refers to a literal that
+                                                // has been promoted. inline it
+                                                *e = input_literals[input]
+                                                    [col - new_input_mapper.input_arity(input)]
+                                                .clone()
+                                            } else {
+                                                // localize to the new join
+                                                *c = new_input_mapper
+                                                    .map_column_to_global(col, input);
+                                            }
+                                        }
+                                    })?;
                                 }
                             }
-                        }
 
-                        let literals = input_literals.into_iter().flatten().collect::<Vec<_>>();
-                        *relation = relation.take_dangerous().map(literals).project(projection)
+                            // We now determine a projection to shovel around all of
+                            // the columns that puts the literals last. Where this is optional
+                            // for other operators, it is mandatory here if we want to lift the
+                            // literals through the join.
+
+                            // The first literal column number starts at the last column
+                            // of the new join. Increment the column number as literals
+                            // get added.
+                            let mut literal_column_number = new_input_mapper.total_columns();
+                            let mut projection = Vec::new();
+                            for input in 0..old_input_mapper.total_inputs() {
+                                for column in old_input_mapper.local_columns(input) {
+                                    if column >= new_input_mapper.input_arity(input) {
+                                        projection.push(literal_column_number);
+                                        literal_column_number += 1;
+                                    } else {
+                                        projection.push(
+                                            new_input_mapper.map_column_to_global(column, input),
+                                        );
+                                    }
+                                }
+                            }
+
+                            let literals = input_literals.into_iter().flatten().collect::<Vec<_>>();
+                            *relation = relation.take_dangerous().map(literals).project(projection)
+                        }
                     }
                     Ok(Vec::new())
                 }

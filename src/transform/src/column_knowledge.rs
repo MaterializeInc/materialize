@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use itertools::Itertools;
 
 use mz_expr::visit::Visit;
+use mz_expr::JoinImplementation::IndexedFilter;
 use mz_expr::{func, EvalError, MirRelationExpr, MirScalarExpr, UnaryFunc, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::{ColumnType, RelationType, ScalarType};
@@ -204,6 +205,7 @@ impl ColumnKnowledge {
                 MirRelationExpr::Join {
                     inputs,
                     equivalences,
+                    implementation,
                     ..
                 } => {
                     // Aggregate column knowledge from each input into one `Vec`.
@@ -235,12 +237,14 @@ impl ColumnKnowledge {
 
                         // We can produce composite knowledge for everything in the equivalence class.
                         for expr in equivalence.iter_mut() {
-                            optimize(
-                                expr,
-                                &folded_inputs_typ.column_types,
-                                &knowledges,
-                                knowledge_stack,
-                            )?;
+                            if !matches!(implementation, IndexedFilter(..)) {
+                                optimize(
+                                    expr,
+                                    &folded_inputs_typ.column_types,
+                                    &knowledges,
+                                    knowledge_stack,
+                                )?;
+                            }
                             if let MirScalarExpr::Column(c) = expr {
                                 knowledge.absorb(&knowledges[*c]);
                             }

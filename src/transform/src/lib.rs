@@ -384,6 +384,9 @@ impl Optimizer {
     pub fn physical_optimizer() -> Self {
         // Implementation transformations
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
+            // It's important that there is a run of CanonicalizeMfp before JoinImplementation lifts
+            // away the Filters from the Gets.
+            Box::new(crate::canonicalize_mfp::CanonicalizeMfp),
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![
