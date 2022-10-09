@@ -74,7 +74,7 @@ tower-http = { version = "0.3.4", features = ["cors"] }
 tracing = "0.1.36"
 tracing-subscriber = "0.3.15"
 url = "2.3.1"
-uuid = "1.1.2"
+uuid = "1.2.1"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 # According to jemalloc developers, `background_threads` should always be
