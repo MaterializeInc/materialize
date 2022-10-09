@@ -1198,7 +1198,6 @@ pub static MZ_SSH_TUNNEL_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinT
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false))
         .with_column("public_key_1", ScalarType::String.nullable(false))
         .with_column("public_key_2", ScalarType::String.nullable(false)),
 });
@@ -1261,26 +1260,26 @@ pub static MZ_ARRAY_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_array_types",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("type_id", ScalarType::String.nullable(false))
+        .with_column("id", ScalarType::String.nullable(false))
         .with_column("element_id", ScalarType::String.nullable(false)),
 });
 pub static MZ_BASE_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_base_types",
     schema: MZ_CATALOG_SCHEMA,
-    desc: RelationDesc::empty().with_column("type_id", ScalarType::String.nullable(false)),
+    desc: RelationDesc::empty().with_column("id", ScalarType::String.nullable(false)),
 });
 pub static MZ_LIST_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_list_types",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("type_id", ScalarType::String.nullable(false))
+        .with_column("id", ScalarType::String.nullable(false))
         .with_column("element_id", ScalarType::String.nullable(false)),
 });
 pub static MZ_MAP_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_map_types",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("type_id", ScalarType::String.nullable(false))
+        .with_column("id", ScalarType::String.nullable(false))
         .with_column("key_id", ScalarType::String.nullable(false))
         .with_column("value_id", ScalarType::String.nullable(false)),
 });
@@ -1295,7 +1294,7 @@ pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_PSEUDO_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_pseudo_types",
     schema: MZ_CATALOG_SCHEMA,
-    desc: RelationDesc::empty().with_column("type_id", ScalarType::String.nullable(false)),
+    desc: RelationDesc::empty().with_column("id", ScalarType::String.nullable(false)),
 });
 pub static MZ_FUNCTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_functions",
@@ -1306,12 +1305,15 @@ pub static MZ_FUNCTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column(
-            "arg_ids",
+            "argument_type_ids",
             ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
         )
-        .with_column("variadic_id", ScalarType::String.nullable(true))
-        .with_column("ret_id", ScalarType::String.nullable(true))
-        .with_column("ret_set", ScalarType::Bool.nullable(false)),
+        .with_column(
+            "variadic_argument_type_id",
+            ScalarType::String.nullable(true),
+        )
+        .with_column("return_type_id", ScalarType::String.nullable(true))
+        .with_column("returns_set", ScalarType::Bool.nullable(false)),
 });
 pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_clusters",
@@ -1416,7 +1418,7 @@ pub static MZ_STORAGE_USAGE: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     sql: "CREATE VIEW mz_catalog.mz_storage_usage (object_id, size_bytes, collection_timestamp) AS
 SELECT
     object_id,
-    sum(size_bytes),
+    sum(size_bytes)::uint8,
     collection_timestamp
 FROM
     mz_internal.mz_storage_shards
@@ -1733,7 +1735,7 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
             SELECT t.oid
             FROM mz_catalog.mz_array_types a
             JOIN mz_catalog.mz_types t ON a.element_id = t.id
-            WHERE a.type_id = mz_types.id
+            WHERE a.id = mz_types.id
         ),
         0
     ) AS typelem,
@@ -1743,7 +1745,7 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
                 t.oid
             FROM
                 mz_catalog.mz_array_types AS a
-                JOIN mz_catalog.mz_types AS t ON a.type_id = t.id
+                JOIN mz_catalog.mz_types AS t ON a.id = t.id
             WHERE
                 a.element_id = mz_types.id
         ),
@@ -1764,13 +1766,13 @@ FROM
     JOIN (
             -- 'a' is not a supported typtype, but we use it to denote an array. It is
             -- converted to the correct value above.
-            SELECT type_id, 'a' AS mztype FROM mz_catalog.mz_array_types
-            UNION ALL SELECT type_id, 'b' FROM mz_catalog.mz_base_types
-            UNION ALL SELECT type_id, 'l' FROM mz_catalog.mz_list_types
-            UNION ALL SELECT type_id, 'm' FROM mz_catalog.mz_map_types
-            UNION ALL SELECT type_id, 'p' FROM mz_catalog.mz_pseudo_types
+            SELECT id, 'a' AS mztype FROM mz_catalog.mz_array_types
+            UNION ALL SELECT id, 'b' FROM mz_catalog.mz_base_types
+            UNION ALL SELECT id, 'l' FROM mz_catalog.mz_list_types
+            UNION ALL SELECT id, 'm' FROM mz_catalog.mz_map_types
+            UNION ALL SELECT id, 'p' FROM mz_catalog.mz_pseudo_types
         )
-            AS t ON mz_types.id = t.type_id
+            AS t ON mz_types.id = t.id
     JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
 };
 

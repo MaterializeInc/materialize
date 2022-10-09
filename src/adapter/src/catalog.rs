@@ -4082,18 +4082,15 @@ impl<S: Append> Catalog<S> {
                     new_public_keypair,
                 } => {
                     let entry = state.get_entry(&id);
-                    let name = &entry.name().item;
                     // Retract old keys
                     builtin_table_updates.extend(state.pack_ssh_tunnel_connection_update(
                         id,
-                        name,
                         &previous_public_keypair,
                         -1,
                     ));
-                    // Assert the new rotated keys
+                    // Insert the new rotated keys
                     builtin_table_updates.extend(state.pack_ssh_tunnel_connection_update(
                         id,
-                        name,
                         &new_public_keypair,
                         1,
                     ));

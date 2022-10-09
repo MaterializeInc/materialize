@@ -270,7 +270,9 @@ importee1  importee2
     USER 'user',
     PORT 1
 
-> SELECT name, public_key_1 LIKE 'ssh-ed25519%' public_key_1 from mz_ssh_tunnel_connections
+> SELECT name, public_key_1 LIKE 'ssh-ed25519%' public_key_1
+  FROM mz_ssh_tunnel_connections
+  JOIN mz_connections USING (id)
 name public_key_1
 -----------
 ssh_conn true

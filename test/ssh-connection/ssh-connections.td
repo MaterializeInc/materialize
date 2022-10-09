@@ -10,8 +10,8 @@
 # Test SSH key generation and management for SSH connections
 
 > SELECT * FROM mz_ssh_tunnel_connections;
-id name public_key_1 public_key_2
----------------------------------
+id public_key_1 public_key_2
+----------------------------
 
 > CREATE CONNECTION louisoix
   FOR SSH TUNNEL
@@ -20,7 +20,9 @@ id name public_key_1 public_key_2
     PORT 22;
 
 # mz_ssh_tunnel_connections is properly populated, and SSH public keys look like keys
-> SELECT name, public_key_1 LIKE 'ssh-ed25519%' pkey1, public_key_2 LIKE 'ssh-ed25519%' pkey2 FROM mz_ssh_tunnel_connections;
+> SELECT name, public_key_1 LIKE 'ssh-ed25519%' pkey1, public_key_2 LIKE 'ssh-ed25519%' pkey2
+  FROM mz_ssh_tunnel_connections
+  JOIN mz_connections USING (id);
 name     pkey1 pkey2
 --------------------
 louisoix true  true
@@ -31,7 +33,9 @@ louisoix true  true
     USER 'omega',
     PORT 22;
 
-> SELECT name, public_key_1 LIKE 'ssh-ed25519%' pkey1, public_key_2 LIKE 'ssh-ed25519%' pkey2 FROM mz_ssh_tunnel_connections;
+> SELECT name, public_key_1 LIKE 'ssh-ed25519%' pkey1, public_key_2 LIKE 'ssh-ed25519%' pkey2
+  FROM mz_ssh_tunnel_connections
+  JOIN mz_connections USING (id);
 name     pkey1 pkey2
 --------------------
 louisoix true  true
@@ -40,7 +44,9 @@ omega    true  true
 > DROP CONNECTION louisoix;
 
 # SSH connections can be normally dropped
-> SELECT name, public_key_1 LIKE 'ssh-ed25519%' pkey1, public_key_2 LIKE 'ssh-ed25519%' pkey2 FROM mz_ssh_tunnel_connections;
+> SELECT name, public_key_1 LIKE 'ssh-ed25519%' pkey1, public_key_2 LIKE 'ssh-ed25519%' pkey2
+  FROM mz_ssh_tunnel_connections
+  JOIN mz_connections USING (id);
 name     pkey1 pkey2
 --------------------
 omega    true  true
@@ -48,7 +54,9 @@ omega    true  true
 # Key rotation doesn't fail
 > ALTER CONNECTION omega ROTATE KEYS;
 
-> SELECT name, public_key_1 LIKE 'ssh-ed25519%' pkey1, public_key_2 LIKE 'ssh-ed25519%' pkey2 FROM mz_ssh_tunnel_connections;
+> SELECT name, public_key_1 LIKE 'ssh-ed25519%' pkey1, public_key_2 LIKE 'ssh-ed25519%' pkey2
+  FROM mz_ssh_tunnel_connections
+  JOIN mz_connections USING (id);
 name     pkey1 pkey2
 --------------------
 omega    true  true
@@ -56,7 +64,9 @@ omega    true  true
 > DROP CONNECTION omega;
 
 # Connections can still be dropped after rotating keys
-> SELECT name, public_key_1 LIKE 'ssh-ed25519%' pkey1, public_key_2 LIKE 'ssh-ed25519%' pkey2 FROM mz_ssh_tunnel_connections;
+> SELECT name, public_key_1 LIKE 'ssh-ed25519%' pkey1, public_key_2 LIKE 'ssh-ed25519%' pkey2
+  FROM mz_ssh_tunnel_connections
+  JOIN mz_connections USING (id);
 name     pkey1 pkey2
 --------------------
 
