@@ -697,28 +697,31 @@ pub fn plan_create_source(
         CreateSourceConnection::LoadGenerator { generator, options } => {
             use mz_storage::types::sources::LoadGenerator;
 
-            let (load_generator, available_subsources) = match generator {
-                mz_sql_parser::ast::LoadGenerator::Auction => {
-                    let load_generator = LoadGenerator::Auction;
-                    let generator = as_generator(&load_generator);
-                    let mut available_subsources = HashMap::new();
-                    for (i, (name, _)) in generator.views().iter().enumerate() {
-                        let name = FullObjectName {
-                            database: RawDatabaseSpecifier::Name("mz_loadgenerator".to_owned()),
-                            schema: "public".to_owned(),
-                            item: name.to_string(),
-                        };
-                        // The zero-th output is the main output
-                        // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
-                        // to handle the main source and the subsources uniformly
-                        available_subsources.insert(name, i + 1);
-                    }
-                    (load_generator, Some(available_subsources))
-                }
-                mz_sql_parser::ast::LoadGenerator::Counter => (LoadGenerator::Counter, None),
+            let load_generator = match generator {
+                mz_sql_parser::ast::LoadGenerator::Auction => LoadGenerator::Auction,
+                mz_sql_parser::ast::LoadGenerator::Counter => LoadGenerator::Counter,
+            };
+            let generator = as_generator(&load_generator);
+
+            let mut available_subsources = HashMap::new();
+            for (i, (name, _)) in generator.views().iter().enumerate() {
+                let name = FullObjectName {
+                    database: RawDatabaseSpecifier::Name("mz_loadgenerator".to_owned()),
+                    schema: "public".to_owned(),
+                    item: name.to_string(),
+                };
+                // The zero-th output is the main output
+                // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
+                // to handle the main source and the subsources uniformly
+                available_subsources.insert(name, i + 1);
+            }
+
+            let available_subsources = if available_subsources.is_empty() {
+                None
+            } else {
+                Some(available_subsources)
             };
 
-            let generator = as_generator(&load_generator);
             let LoadGeneratorOptionExtracted { tick_interval, .. } = options.clone().try_into()?;
             let tick_micros = match tick_interval {
                 Some(interval) => {
