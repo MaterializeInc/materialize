@@ -479,7 +479,7 @@ pub fn optimize(
                 } => {
                     let knowledge2 = knowledge_stack.pop().unwrap();
                     let knowledge1 = knowledge_stack.pop().unwrap();
-                    if knowledge1.value.is_some() && knowledge2.value.is_some() {
+                    if knowledge1.value.is_some() || knowledge2.value.is_some() {
                         e.reduce(column_types);
                     }
                     DatumKnowledge::from(&*e)
@@ -490,9 +490,9 @@ pub fn optimize(
                     for _ in exprs {
                         knows.push(knowledge_stack.pop().unwrap());
                     }
-                    // Note that `all` is short-circuiting, so it has to be done separately from the
+                    // Note that `any` is short-circuiting, so it has to be done separately from the
                     // above popping.
-                    if knows.iter().all(|k| k.value.is_some()) {
+                    if knows.iter().any(|k| k.value.is_some()) {
                         e.reduce(column_types);
                     }
                     DatumKnowledge::from(&*e)
