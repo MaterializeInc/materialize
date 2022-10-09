@@ -1,0 +1,11 @@
+<div class="alpha">
+  <strong class="gutter">ALPHA!</strong>
+  {{ with .Inner}}{{.|$.Page.RenderString}}{{else}}This feature{{ end }}
+  is in alpha. It has known performance or stability issues and is under
+  active development. It is not subject to our backwards compatibility
+  guarantees.
+  <br><br>
+  You must
+  <a href="https://materialize.com/contact/">contact us</a>
+  to enable this feature in your Materialize Cloud region.
+</div>

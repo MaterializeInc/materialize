@@ -268,7 +268,7 @@ a {
     width: 80%;
   }
 
-  .warning {
+  .warning, .alpha {
     background: rgba(238, 134, 96, 0.05);
     border: 1px solid rgba(238, 134, 96, 0.2);
 
@@ -310,7 +310,7 @@ a {
     }
   }
 
-  .warning, .note, .beta {
+  .warning, .note, .alpha, .beta {
     box-sizing: border-box;
     margin: 1rem 0;
     padding: 1rem 1rem 1rem 6rem;

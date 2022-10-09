@@ -15,12 +15,6 @@ deployed.
 
 ## Release notes
 
-{{< warning >}}
-The v0.27.0 release notes describe the coalesced changes between v0.26 LTS
-and the currently released version of Materialize. We will begin publishing
-weekly release notes after general availability.
-{{< /warning >}}
-
 {{< version-list >}}
 
 For versions that predate cloud-native Materialize, see our
@@ -57,13 +51,13 @@ SELECT mz_version();
 ```
 
 Scheduled weekly releases increase the middle component of the version number
-(e.g., v0.27.0). Unscheduled releases increase the final component of the
-version number (e.g., v0.27.1).
+and reset the final component to zero (e.g., v0.26.2 -> v0.27.0). Unscheduled
+releases increase the final component of the version number (e.g., v0.27.0 -> v0.27.1).
 
 ## Backwards compatibility
 
-Materialize maintains backwards compatibility whenever possible. Applications
-that work with the current version of Materialize can expect to work with all
+Materialize maintains backwards compatibility whenever possible. You can expect
+applications that work with the current version of Materialize to work with all
 future versions of Materialize with only minor changes to the application's
 code.
 
@@ -76,8 +70,9 @@ notes](#release-notes).
 There are several aspects of the product that are not considered part of
 Materialize's stable interface:
 
-  * Features that are in beta (labeled as such in the documentation)
-  * Objects in the [system catalog](/sql/system-catalog)
+  * Features that are in alpha (labeled as such in the documentation)
+  * The [`EXPLAIN`](/sql/explain) statement
+  * Objects in the [`mz_internal` schema](/sql/system-catalog/mz_internal)
   * Any undocumented features or behavior
 
 These unstable interfaces are not subject to the backwards-compatibility policy.
