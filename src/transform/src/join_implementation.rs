@@ -19,6 +19,7 @@
 use std::collections::HashMap;
 
 use mz_expr::visit::{Visit, VisitChildren};
+use mz_expr::JoinImplementation::IndexedFilter;
 use mz_expr::{JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
@@ -106,111 +107,115 @@ impl JoinImplementation {
         if let MirRelationExpr::Join {
             inputs,
             equivalences,
+            implementation,
             ..
         } = relation
         {
-            let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
+            if !matches!(implementation, IndexedFilter(..)) {
+                let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
 
-            // Canonicalize the equivalence classes
-            mz_expr::canonicalize::canonicalize_equivalences(
-                equivalences,
-                input_types.iter().map(|t| &t.column_types),
-            );
+                // Canonicalize the equivalence classes
+                mz_expr::canonicalize::canonicalize_equivalences(
+                    equivalences,
+                    input_types.iter().map(|t| &t.column_types),
+                );
 
-            // Common information of broad utility.
-            let input_mapper = JoinInputMapper::new_from_input_types(&input_types);
+                // Common information of broad utility.
+                let input_mapper = JoinInputMapper::new_from_input_types(&input_types);
 
-            // The first fundamental question is whether we should employ a delta query or not.
-            //
-            // Here we conservatively use the rule that if sufficient arrangements exist we will
-            // use a delta query. An arrangement is considered available if it is a global get
-            // with columns present in `indexes`, if it is an `ArrangeBy` with the columns present,
-            // or a filter wrapped around either of these.
+                // The first fundamental question is whether we should employ a delta query or not.
+                //
+                // Here we conservatively use the rule that if sufficient arrangements exist we will
+                // use a delta query. An arrangement is considered available if it is a global get
+                // with columns present in `indexes`, if it is an `ArrangeBy` with the columns present,
+                // or a filter wrapped around either of these.
 
-            let unique_keys = input_types
-                .into_iter()
-                .map(|typ| typ.keys)
-                .collect::<Vec<_>>();
-            let mut available_arrangements = vec![Vec::new(); inputs.len()];
-            for index in 0..inputs.len() {
-                // We can work around mfps, as we can lift the mfps into the join execution.
-                let (mfp, input) = MapFilterProject::extract_non_errors_from_expr(&inputs[index]);
-                let (_, _, project) = mfp.as_map_filter_project();
-                // Get and ArrangeBy expressions contribute arrangements.
-                match input {
-                    MirRelationExpr::Get { id, typ: _ } => {
-                        available_arrangements[index]
-                            .extend(indexes.get(*id).map(|key| key.to_vec()));
-                    }
-                    MirRelationExpr::ArrangeBy { input, keys } => {
-                        // We may use any presented arrangement keys.
-                        available_arrangements[index].extend(keys.clone());
-                        if let MirRelationExpr::Get { id, typ: _ } = &**input {
+                let unique_keys = input_types
+                    .into_iter()
+                    .map(|typ| typ.keys)
+                    .collect::<Vec<_>>();
+                let mut available_arrangements = vec![Vec::new(); inputs.len()];
+                for index in 0..inputs.len() {
+                    // We can work around mfps, as we can lift the mfps into the join execution.
+                    let (mfp, input) =
+                        MapFilterProject::extract_non_errors_from_expr(&inputs[index]);
+                    let (_, _, project) = mfp.as_map_filter_project();
+                    // Get and ArrangeBy expressions contribute arrangements.
+                    match input {
+                        MirRelationExpr::Get { id, typ: _ } => {
                             available_arrangements[index]
                                 .extend(indexes.get(*id).map(|key| key.to_vec()));
                         }
+                        MirRelationExpr::ArrangeBy { input, keys } => {
+                            // We may use any presented arrangement keys.
+                            available_arrangements[index].extend(keys.clone());
+                            if let MirRelationExpr::Get { id, typ: _ } = &**input {
+                                available_arrangements[index]
+                                    .extend(indexes.get(*id).map(|key| key.to_vec()));
+                            }
+                        }
+                        MirRelationExpr::Reduce { group_key, .. } => {
+                            // The first `keys.len()` columns form an arrangement key.
+                            available_arrangements[index]
+                                .push((0..group_key.len()).map(MirScalarExpr::Column).collect());
+                        }
+                        _ => {}
                     }
-                    MirRelationExpr::Reduce { group_key, .. } => {
-                        // The first `keys.len()` columns form an arrangement key.
-                        available_arrangements[index]
-                            .push((0..group_key.len()).map(MirScalarExpr::Column).collect());
+                    available_arrangements[index].sort();
+                    available_arrangements[index].dedup();
+                    let reverse_project = project
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, c)| (c, i))
+                        .collect::<HashMap<_, _>>();
+                    // Eliminate arrangements referring to columns that have been
+                    // projected away by surrounding MFPs.
+                    available_arrangements[index].retain(|key| {
+                        key.iter()
+                            .all(|k| k.support().iter().all(|c| reverse_project.contains_key(c)))
+                    });
+                    // Permute arrangements so columns reference what is after the MFP.
+                    for key_set in available_arrangements[index].iter_mut() {
+                        for key in key_set.iter_mut() {
+                            key.permute_map(&reverse_project);
+                        }
                     }
-                    _ => {}
+                    // Currently we only support using arrangements all of whose
+                    // keys can be found in some equivalence.
+                    // Note: because `order_input` currently only finds arrangements
+                    // with exact key matches, the code below can be removed with no
+                    // change in behavior, but this is being kept for a future
+                    // TODO: expand `order_input`
+                    available_arrangements[index].retain(|key| {
+                        key.iter().all(|k| {
+                            let k = input_mapper.map_expr_to_global(k.clone(), index);
+                            equivalences
+                                .iter()
+                                .any(|equivalence| equivalence.contains(&k))
+                        })
+                    });
                 }
-                available_arrangements[index].sort();
-                available_arrangements[index].dedup();
-                let reverse_project = project
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, c)| (c, i))
-                    .collect::<HashMap<_, _>>();
-                // Eliminate arrangements referring to columns that have been
-                // projected away by surrounding MFPs.
-                available_arrangements[index].retain(|key| {
-                    key.iter()
-                        .all(|k| k.support().iter().all(|c| reverse_project.contains_key(c)))
-                });
-                // Permute arrangements so columns reference what is after the MFP.
-                for key_set in available_arrangements[index].iter_mut() {
-                    for key in key_set.iter_mut() {
-                        key.permute_map(&reverse_project);
-                    }
-                }
-                // Currently we only support using arrangements all of whose
-                // keys can be found in some equivalence.
-                // Note: because `order_input` currently only finds arrangements
-                // with exact key matches, the code below can be removed with no
-                // change in behavior, but this is being kept for a future
-                // TODO: expand `order_input`
-                available_arrangements[index].retain(|key| {
-                    key.iter().all(|k| {
-                        let k = input_mapper.map_expr_to_global(k.clone(), index);
-                        equivalences
-                            .iter()
-                            .any(|equivalence| equivalence.contains(&k))
-                    })
-                });
+
+                // Determine if we can perform delta queries with the existing arrangements.
+                // We could defer the execution if we are sure we know we want one input,
+                // but we could imagine wanting the best from each and then comparing the two.
+                let delta_query_plan = delta_queries::plan(
+                    relation,
+                    &input_mapper,
+                    &available_arrangements,
+                    &unique_keys,
+                );
+                let differential_plan = differential::plan(
+                    relation,
+                    &input_mapper,
+                    &available_arrangements,
+                    &unique_keys,
+                );
+
+                *relation = delta_query_plan
+                    .or(differential_plan)
+                    .expect("Failed to produce a join plan");
             }
-
-            // Determine if we can perform delta queries with the existing arrangements.
-            // We could defer the execution if we are sure we know we want one input,
-            // but we could imagine wanting the best from each and then comparing the two.
-            let delta_query_plan = delta_queries::plan(
-                relation,
-                &input_mapper,
-                &available_arrangements,
-                &unique_keys,
-            );
-            let differential_plan = differential::plan(
-                relation,
-                &input_mapper,
-                &available_arrangements,
-                &unique_keys,
-            );
-
-            *relation = delta_query_plan
-                .or(differential_plan)
-                .expect("Failed to produce a join plan");
         }
     }
 }

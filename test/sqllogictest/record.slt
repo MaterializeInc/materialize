@@ -23,8 +23,7 @@ Source materialize.public.t1 (u1):
 Query:
 %0 =
 | Get materialize.public.t1 (u1)
-| Map #0
-| Project (#2)
+| Project (#0)
 
 EOF
 
@@ -53,8 +52,7 @@ Source materialize.public.t1 (u1):
 Query:
 %0 =
 | Get materialize.public.t1 (u1)
-| Map #0
-| Project (#2)
+| Project (#0)
 
 EOF
 
