@@ -439,7 +439,7 @@ pub fn optimize(
     // Post-order traversal means that if a node has `n` children, the top `n`
     // `DatumKnowledge` in the stack are the `DatumKnowledge` corresponding to
     // the children.
-
+    assert!(knowledge_stack.is_empty());
     #[allow(deprecated)]
     expr.visit_mut_pre_post(
         &mut |e| {
@@ -485,7 +485,14 @@ pub fn optimize(
                     DatumKnowledge::from(&*e)
                 }
                 MirScalarExpr::CallVariadic { func: _, exprs } => {
-                    if (0..exprs.len()).all(|_| knowledge_stack.pop().unwrap().value.is_some()) {
+                    let mut knows = Vec::new();
+                    // We pop as many elements as the number of arguments of the CallVariadic.
+                    for _ in exprs {
+                        knows.push(knowledge_stack.pop().unwrap());
+                    }
+                    // Note that `all` is short-circuiting, so it has to be done separately from the
+                    // above popping.
+                    if knows.iter().all(|k| k.value.is_some()) {
                         e.reduce(column_types);
                     }
                     DatumKnowledge::from(&*e)
@@ -512,6 +519,7 @@ pub fn optimize(
         },
     )?;
     let knowledge_datum = knowledge_stack.pop();
+    assert!(knowledge_stack.is_empty());
     knowledge_datum.ok_or_else(|| {
         TransformError::Internal(String::from("unexpectedly empty stack in optimize"))
     })
