@@ -19,7 +19,7 @@ junit-xml==1.9
 kubernetes==22.6.0
 kubernetes-stubs==22.6.0.post1
 # 0.971 has a regression: https://github.com/python/mypy/pull/13223.
-mypy==0.981
+mypy==0.982
 numpy==1.22.4
 pandas==1.5.0
 parameterized==0.8.1
