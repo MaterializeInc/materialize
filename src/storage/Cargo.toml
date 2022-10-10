@@ -71,7 +71,7 @@ tokio-util = { version = "0.7.3", features = ["io"] }
 tonic = "0.8.2"
 tracing = "0.1.36"
 tracing-subscriber = "0.3.16"
-thiserror = { version = "1.0.35" }
+thiserror = { version = "1.0.37" }
 url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.2.1", features = ["serde", "v4"] }
 

@@ -46,7 +46,7 @@ url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.2.1", features = ["serde"] }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
-thiserror = "1.0.32"
+thiserror = "1.0.37"
 
 # for the tracing_ feature
 tracing = { version = "0.1.36", optional = true }

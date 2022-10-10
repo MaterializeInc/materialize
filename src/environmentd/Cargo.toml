@@ -65,7 +65,7 @@ shell-words = "1.1.0"
 sysctl = "0.5.2"
 sysinfo = "0.26.2"
 tempfile = "3.2.0"
-thiserror = "1.0.35"
+thiserror = "1.0.37"
 tokio = { version = "1.20.2", features = ["sync"] }
 tokio-openssl = "0.6.3"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
