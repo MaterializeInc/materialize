@@ -18,7 +18,7 @@ anyhow = { version = "1.0.65", optional = true }
 async-trait = { version = "0.1.57", optional = true }
 bytes = { version = "1.2.1", optional = true }
 chrono = { version = "0.4.22", default-features = false, features = ["std"], optional = true }
-clap = { version = "3.2.20", features = ["env"], optional = true }
+clap = { version = "4.0.11", features = ["env"], optional = true }
 ctor = { version = "0.1.23", optional = true }
 either = "1.8.0"
 futures = { version = "0.3.24", optional = true }
