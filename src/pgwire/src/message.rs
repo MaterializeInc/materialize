@@ -360,6 +360,7 @@ impl ErrorResponse {
             AdapterError::InvalidClusterReplicaAz { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidClusterReplicaSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidStorageHostSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::StorageHostSizeRequired { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidTableMutationSelection => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::ConstraintViolation(NotNullViolation(_)) => SqlState::NOT_NULL_VIOLATION,
             AdapterError::NoClusterReplicasAvailable(_) => SqlState::FEATURE_NOT_SUPPORTED,

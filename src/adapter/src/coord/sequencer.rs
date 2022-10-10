@@ -456,7 +456,13 @@ impl<S: Append + 'static> Coordinator<S> {
 
         for (source_id, plan, depends_on) in plans {
             let source_oid = self.catalog.allocate_oid()?;
-            let host_config = self.catalog.resolve_storage_host_config(plan.host_config)?;
+            // Only subsources can have an undefined size outside of unsafe
+            // mode.
+            let allow_undefined_size =
+                self.catalog.config().unsafe_mode || plan.source.ingestion.is_none();
+            let host_config = self
+                .catalog
+                .resolve_storage_host_config(plan.host_config, allow_undefined_size)?;
             let source = catalog::Source {
                 create_sql: plan.source.create_sql,
                 ingestion: plan.source.ingestion.map(|ingestion| catalog::Ingestion {
@@ -1188,8 +1194,13 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         };
 
-        // Validate the storage host config
-        let host_config = match self.catalog.resolve_storage_host_config(host_config) {
+        // Validate the storage host config. The size can only be undefined
+        // in unsafe mode.
+        let allow_undefined_size = self.catalog.config().unsafe_mode;
+        let host_config = match self
+            .catalog
+            .resolve_storage_host_config(host_config, allow_undefined_size)
+        {
             Ok(host_config) => host_config,
             Err(e) => {
                 tx.send(Err(e), session);

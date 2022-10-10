@@ -63,7 +63,7 @@ Field                                | Value     | Description
 
 Field                                | Value     | Description
 -------------------------------------|-----------|-------------------------------------
-`SIZE`                               | `text`    | Default: `3xsmall`. The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`.
+`SIZE`                               | `text`    | **Required.** The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`.
 
 ## Supported formats
 
