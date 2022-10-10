@@ -616,8 +616,8 @@ impl KafkaSinkState {
         }
     }
 
-    async fn flush(&self) -> KafkaResult<()> {
-        self.flush_inner().await?;
+    async fn flush(&self) {
+        self.flush_inner().await;
         while !{
             let mut guard = self.retry_manager.lock().await;
             guard.sends_flushed()
@@ -637,16 +637,17 @@ impl KafkaSinkState {
                 };
                 self.send(transformed_msg).await;
             }
-            self.flush_inner().await?;
+            self.flush_inner().await;
         }
-        Ok(())
     }
 
-    async fn flush_inner(&self) -> KafkaResult<()> {
+    async fn flush_inner(&self) {
         Retry::default()
+            .max_tries(usize::MAX)
             .clamp_backoff(BACKOFF_CLAMP)
             .retry_async(|_| self.producer.flush())
             .await
+            .expect("Infinite retry cannot fail");
     }
 
     async fn determine_latest_progress_record(&self) -> Result<Option<Timestamp>, anyhow::Error> {
@@ -815,7 +816,7 @@ impl KafkaSinkState {
         let record = BaseRecord::to(&progress.topic)
             .payload(&encoded)
             .key(&progress.key);
-        self.send(record).await;
+        self.send(record).await
     }
 
     /// Asserts that the write frontier has not yet advanced beyond `t`.
@@ -1225,7 +1226,7 @@ where
 
                 // Flush to make sure that errored messages have been properly retried before
                 // sending progress records and commit transactions.
-                s.flush().await.expect("post-records flush");
+                s.flush().await;
 
                 if let Some(progress_state) = s.sink_state.unwrap_running() {
                     s.send_progress_record(*ts, progress_state).await;
@@ -1234,7 +1235,7 @@ where
                 info!("Committing transaction for {:?}", ts,);
                 s.retry_on_txn_error(|p| p.commit_transaction()).await;
 
-                s.flush().await.expect("post-commit flush");
+                s.flush().await;
 
                 // sanity check for the continuous updating
                 // of the write frontier below
@@ -1263,7 +1264,7 @@ where
                 if progress_emitted {
                     // Don't flush if we know there were no records emitted.
                     // It has a noticeable negative performance impact.
-                    s.flush().await.expect("progress emitted flush");
+                    s.flush().await;
                 }
             }
 
