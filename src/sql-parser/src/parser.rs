@@ -4592,7 +4592,7 @@ impl<'a> Parser<'a> {
                 return parser_err!(
                     self,
                     self.peek_prev_pos(),
-                    "Cannot specify both FROM SCHEMA and FROM or ON"
+                    "Cannot specify both FROM and ON"
                 );
             }
             let in_cluster = self.parse_optional_in_cluster()?;

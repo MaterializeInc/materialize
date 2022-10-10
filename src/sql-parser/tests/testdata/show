@@ -238,7 +238,7 @@ Show(ShowIndexes(ShowIndexesStatement { on_object: None, from_schema: None, in_c
 parse-statement
 SHOW INDEXES ON SCHEMA s ON t
 ----
-error: Cannot specify both FROM SCHEMA and FROM or ON
+error: Cannot specify both FROM and ON
 SHOW INDEXES ON SCHEMA s ON t
                             ^
 

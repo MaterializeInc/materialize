@@ -195,7 +195,7 @@ foo_primary_idx1    foo clstr   {a,b,z}
 foo_primary_idx1    foo clstr   {a,b,z}
 
 ! SHOW INDEXES FROM public FROM foo
-contains:Cannot specify both FROM SCHEMA and FROM or ON
+contains:Cannot specify both FROM and ON
 
 ! SHOW INDEXES FROM nonexistent
 contains:unknown schema 'nonexistent'
