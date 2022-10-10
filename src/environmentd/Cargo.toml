@@ -52,7 +52,7 @@ mz-stash = { path = "../stash" }
 mz-storage = { path = "../storage" }
 nix = "0.25.0"
 num_cpus = "1.13.1"
-openssl = { version = "0.10.41", features = ["vendored"] }
+openssl = { version = "0.10.42", features = ["vendored"] }
 openssl-sys = { version = "0.9.76", features = ["vendored"] }
 os_info = "3.5.0"
 rdkafka-sys = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
