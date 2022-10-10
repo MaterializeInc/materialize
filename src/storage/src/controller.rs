@@ -123,9 +123,6 @@ pub struct CollectionDescription<T> {
     /// A GlobalId to use for this collection to use for the status collection.
     /// Used to keep track of source status/error information.
     pub status_collection_id: Option<GlobalId>,
-    /// The address of a `storaged` process on which to install the source or the
-    /// settings for spinning up a controller-managed process.
-    pub host_config: Option<StorageHostConfig>,
 }
 
 impl<T> From<RelationDesc> for CollectionDescription<T> {
@@ -135,7 +132,6 @@ impl<T> From<RelationDesc> for CollectionDescription<T> {
             data_source: DataSource::Dataflow,
             since: None,
             status_collection_id: None,
-            host_config: None,
         }
     }
 }
@@ -919,27 +915,20 @@ where
                         ingestion_metadata,
                         // The rest of the fields are identical
                         desc: ingestion.desc,
+                        host_config: ingestion.host_config,
                     };
                     let mut persist_clients = self.persist.lock().await;
                     let mut state = desc.initialize_state(&mut persist_clients).await;
                     let resume_upper = desc.calculate_resumption_frontier(&mut state).await;
 
+                    // Provision a storage host for the ingestion.
+                    let client = self.hosts.provision(id, desc.host_config.clone()).await?;
                     let augmented_ingestion = CreateSourceCommand {
                         id,
                         description: desc,
                         resume_upper,
                     };
 
-                    // Provision a storage host for the ingestion.
-                    let client = self
-                        .hosts
-                        .provision(
-                            id,
-                            description.host_config.clone().expect(
-                                "CollectionDescription with ingestion should have host_config set",
-                            ),
-                        )
-                        .await?;
                     client.send(StorageCommand::CreateSources(vec![augmented_ingestion]));
                 }
                 DataSource::Introspection(i) => {

@@ -504,6 +504,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 ingestion_metadata: (),
                                 source_imports,
                                 source_exports,
+                                host_config: ingestion.host_config.clone(),
                             })
                         }
                         DataSourceDesc::Source => DataSource::Source,
@@ -521,7 +522,6 @@ impl<S: Append + 'static> Coordinator<S> {
                                 data_source,
                                 since: None,
                                 status_collection_id,
-                                host_config: source.host_config.clone(),
                             },
                         )])
                         .await

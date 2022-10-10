@@ -1374,8 +1374,15 @@ pub struct Source {
     pub desc: RelationDesc,
     pub timeline: Timeline,
     pub depends_on: Vec<GlobalId>,
-    // If None, indicates that source runs on the `environmentd` machine.
-    pub host_config: Option<StorageHostConfig>,
+}
+
+impl Source {
+    pub fn size(&self) -> Option<&str> {
+        match &self.data_source {
+            DataSourceDesc::Ingestion(Ingestion { host_config, .. }) => host_config.size(),
+            DataSourceDesc::Introspection(_) | DataSourceDesc::Source => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1397,6 +1404,7 @@ pub struct Ingestion {
     ///
     /// This map does *not* include the export of the source associated with the ingestion itself
     pub subsource_exports: HashMap<GlobalId, usize>,
+    pub host_config: StorageHostConfig,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2161,7 +2169,6 @@ impl<S: Append> Catalog<S> {
                             desc: coll.desc.clone(),
                             timeline: Timeline::EpochMilliseconds,
                             depends_on: vec![],
-                            host_config: None,
                         }),
                     );
                 }
@@ -3609,14 +3616,12 @@ impl<S: Append> Catalog<S> {
                         ),
                     };
 
-                    let new_config = alter_host_config(
-                        &old_source
-                            .host_config
-                            .as_ref()
-                            .expect("cannot alter introspection sources"),
-                        size,
-                        remote,
-                    )?;
+                    let new_config = match &old_source.data_source {
+                        DataSourceDesc::Ingestion(ingestion) => {
+                            alter_host_config(&ingestion.host_config, size, remote)?
+                        }
+                        DataSourceDesc::Introspection(_) | DataSourceDesc::Source => None,
+                    };
 
                     if let Some(config) = new_config {
                         create_stmt
@@ -3645,12 +3650,25 @@ impl<S: Append> Catalog<S> {
                                 DataSourceDesc::Introspection(_) | DataSourceDesc::Source => true,
                                 DataSourceDesc::Ingestion(_) => false,
                             };
+
+                        let old_size = old_source.size().map(|s| s.to_string());
                         let host_config =
                             state.resolve_storage_host_config(config, allow_undefined_size)?;
+                        let new_size = host_config.size().map(|s| s.to_string());
+                        let data_source = match old_source.data_source {
+                            DataSourceDesc::Ingestion(ingestion) => {
+                                    DataSourceDesc::Ingestion(Ingestion {
+                                    host_config,
+                                    ..ingestion
+                                })
+                            }
+                            _ => unreachable!("already guaranteed that we do not permit modifying either SIZE or REMOTE of subsource or introspection source"),
+                        };
+
                         let create_sql = stmt.to_ast_string_stable();
                         let source = CatalogItem::Source(Source {
                             create_sql,
-                            host_config: Some(host_config.clone()),
+                            data_source,
                             ..old_source
                         });
 
@@ -3673,13 +3691,8 @@ impl<S: Append> Catalog<S> {
                                     &name,
                                     session.map(|session| session.conn_id()),
                                 )),
-                                old_size: old_source
-                                    .host_config
-                                    .as_ref()
-                                    .map(|config| config.size())
-                                    .flatten()
-                                    .map(|x| x.to_string()),
-                                new_size: host_config.size().map(|x| x.to_string()),
+                                old_size,
+                                new_size,
                             }),
                         )?;
 
@@ -3954,12 +3967,7 @@ impl<S: Append> Catalog<S> {
                                 EventDetails::CreateSourceSinkV1(mz_audit_log::CreateSourceSinkV1 {
                                     id,
                                     name,
-                                    size: s
-                                        .host_config
-                                        .as_ref()
-                                        .map(|config| config.size())
-                                        .flatten()
-                                        .map(|x| x.to_string()),
+                                    size: s.size().map(|s| s.to_string()),
                                 })
                             }
                             CatalogItem::Sink(s) => {
@@ -4736,15 +4744,14 @@ impl<S: Append> Catalog<S> {
                             desc: ingestion.desc,
                             source_imports: ingestion.source_imports,
                             subsource_exports: ingestion.subsource_exports,
+                            host_config: self
+                                .resolve_storage_host_config(host_config, allow_undefined_size)?,
                         }),
                         None => DataSourceDesc::Source,
                     },
                     desc: source.desc,
                     timeline,
                     depends_on,
-                    host_config: Some(
-                        self.resolve_storage_host_config(host_config, allow_undefined_size)?,
-                    ),
                 })
             }
             Plan::CreateView(CreateViewPlan { view, .. }) => {
