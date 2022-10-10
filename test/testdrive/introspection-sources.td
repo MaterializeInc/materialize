@@ -128,3 +128,8 @@ true
         FROM
             mz_internal.mz_worker_compute_import_frontiers AS import_frontiers)
 0
+
+# Test that frontiers of introspection sources advance at all.
+
+! SELECT * FROM mz_internal.mz_active_peeks AS OF 0
+contains: Timestamp (0) is not valid for all inputs
