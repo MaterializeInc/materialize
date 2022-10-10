@@ -14,7 +14,7 @@ clap = { version = "3.2.20", features = ["env", "derive"] }
 crossbeam-channel = "0.5.6"
 futures = "0.3.24"
 http = "0.2.8"
-itertools = "0.10.4"
+itertools = "0.10.5"
 mz-proto = { path = "../proto" }
 mz-secrets = { path = "../secrets" }
 mz-orchestrator-process = { path = "../orchestrator-process" }
@@ -24,6 +24,6 @@ semver = "1.0.14"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = "1.20.2"
 tokio-stream = "0.1.10"
-tonic = "0.8.1"
+tonic = "0.8.2"
 tower = "0.4.13"
 tracing = "0.1.36"
