@@ -1027,7 +1027,8 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     Err(e) => {
                         self.status = Err(e.into());
                         ResolvedClusterName {
-                            id: 0,
+                            // The id is arbitrary here, we just need some dummy value to return.
+                            id: ComputeInstanceId::System(0),
                             print_name: None,
                         }
                     }
@@ -1041,7 +1042,8 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 Err(e) => {
                     self.status = Err(e.into());
                     ResolvedClusterName {
-                        id: 0,
+                        // The id is arbitrary here, we just need some dummy value to return.
+                        id: ComputeInstanceId::System(0),
                         print_name: None,
                     }
                 }

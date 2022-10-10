@@ -355,6 +355,13 @@ pub struct Args {
         default_value = "1"
     )]
     bootstrap_default_cluster_replica_size: String,
+    /// The size of the builtin cluster replicas if bootstrapping.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_BUILTIN_CLUSTER_REPLICA_SIZE",
+        default_value = "1"
+    )]
+    bootstrap_builtin_cluster_replica_size: String,
     /// A map from size name to resource allocations for storage hosts.
     #[clap(long, env = "STORAGE_HOST_SIZES")]
     storage_host_sizes: Option<String>,
@@ -694,6 +701,7 @@ max log level: {max_log_level}",
         environment_id: args.environment_id,
         cluster_replica_sizes,
         bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
+        bootstrap_builtin_cluster_replica_size: args.bootstrap_builtin_cluster_replica_size,
         storage_host_sizes,
         default_storage_host_size: args.default_storage_host_size,
         availability_zones: args.availability_zone,

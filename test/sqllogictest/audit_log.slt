@@ -50,10 +50,10 @@ DROP CLUSTER foo;
 query ITTTT
 SELECT id, event_type, object_type, event_details, user FROM mz_audit_events ORDER BY id
 ----
-1  create  cluster  {"id":1,"name":"default"}  NULL
-2  create  cluster-replica  {"cluster_id":1,"cluster_name":"default","logical_size":"1","replica_name":"default_replica"}  NULL
-3  create  cluster  {"id":2,"name":"foo"}  materialize
-4  create  cluster-replica  {"cluster_id":2,"cluster_name":"foo","logical_size":"1","replica_name":"r"}  materialize
+1  create  cluster  {"id":"u1","name":"default"}  NULL
+2  create  cluster-replica  {"cluster_id":"u1","cluster_name":"default","logical_size":"1","replica_name":"r1"}  NULL
+3  create  cluster  {"id":"u2","name":"foo"}  materialize
+4  create  cluster-replica  {"cluster_id":"u2","cluster_name":"foo","logical_size":"1","replica_name":"r"}  materialize
 5  create  materialized-view  {"database":"materialize","item":"v2","schema":"public"}  materialize
 6  create  view  {"database":"materialize","item":"unmat","schema":"public"}  materialize
 7  create  table  {"database":"materialize","item":"t","schema":"public"}  materialize
@@ -65,5 +65,5 @@ SELECT id, event_type, object_type, event_details, user FROM mz_audit_events ORD
 13  drop  index  {"database":"materialize","item":"renamed_primary_idx","schema":"public"}  materialize
 14  drop  view  {"database":"materialize","item":"renamed","schema":"public"}  materialize
 15  create  source  {"database":"materialize","item":"s","schema":"public"}  materialize
-16  drop  cluster-replica  {"cluster_id":2,"cluster_name":"foo","replica_name":"r"}  materialize
-17  drop  cluster  {"id":2,"name":"foo"}  materialize
+16  drop  cluster-replica  {"cluster_id":"u2","cluster_name":"foo","replica_name":"r"}  materialize
+17  drop  cluster  {"id":"u2","name":"foo"}  materialize

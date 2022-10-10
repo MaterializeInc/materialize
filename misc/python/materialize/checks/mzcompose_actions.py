@@ -70,8 +70,8 @@ class UseComputed(MzcomposeAction):
 
         c.sql(
             """
-            DROP CLUSTER REPLICA default.default_replica;
-            CREATE CLUSTER REPLICA default.default_replica
+            DROP CLUSTER REPLICA default.r1;
+            CREATE CLUSTER REPLICA default.r1
                 REMOTE ['computed_1:2100'],
                 COMPUTE ['computed_1:2102'],
                 WORKERS 1;
@@ -137,7 +137,7 @@ class DropCreateDefaultReplica(MzcomposeAction):
 
         c.sql(
             """
-           DROP CLUSTER REPLICA default.default_replica;
-           CREATE CLUSTER REPLICA default.default_replica SIZE '1';
+           DROP CLUSTER REPLICA default.r1;
+           CREATE CLUSTER REPLICA default.r1 SIZE '1';
         """
         )

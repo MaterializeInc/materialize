@@ -1982,9 +1982,7 @@ impl<S: Append + 'static> Coordinator<S> {
             copy_to,
         } = plan;
 
-        let compute_instance = self
-            .catalog
-            .resolve_compute_instance(session.vars().cluster())?;
+        let compute_instance = self.catalog.active_compute_instance(session)?;
 
         let target_replica_name = session.vars().cluster_replica();
         let mut target_replica = target_replica_name
@@ -2234,9 +2232,7 @@ impl<S: Append + 'static> Coordinator<S> {
             emit_progress,
         } = plan;
 
-        let compute_instance = self
-            .catalog
-            .resolve_compute_instance(session.vars().cluster())?;
+        let compute_instance = self.catalog.active_compute_instance(session)?;
         let compute_instance_id = compute_instance.id;
 
         // SUBSCRIBE AS OF, similar to peeks, doesn't need to worry about transaction
@@ -2352,10 +2348,7 @@ impl<S: Append + 'static> Coordinator<S> {
         use mz_repr::explain_new::trace_plan;
         use ExplainStageNew::*;
 
-        let compute_instance = self
-            .catalog
-            .resolve_compute_instance(session.vars().cluster())?
-            .id;
+        let compute_instance = self.catalog.active_compute_instance(session)?.id;
 
         let ExplainPlanNew {
             raw_plan,
@@ -2520,10 +2513,7 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         plan: ExplainPlanOld,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let compute_instance = self
-            .catalog
-            .resolve_compute_instance(session.vars().cluster())?
-            .id;
+        let compute_instance = self.catalog.active_compute_instance(session)?.id;
 
         let ExplainPlanOld {
             raw_plan,

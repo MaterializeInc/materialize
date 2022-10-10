@@ -84,7 +84,7 @@ def test_upgrade() -> None:
     """Test upgrade from LAST_RELEASED_VERSION to the current source by running all the Platform Checks"""
 
     mz = MaterializeApplication(tag=LAST_RELEASED_VERSION)
-    wait(condition="condition=Ready", resource="pod/compute-cluster-1-replica-1-0")
+    wait(condition="condition=Ready", resource="pod/compute-cluster-u1-replica-1-0")
 
     executor = CloudtestExecutor(application=mz)
     scenario = CloudtestUpgrade(checks=Check.__subclasses__(), executor=executor)
