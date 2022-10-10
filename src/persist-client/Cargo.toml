@@ -49,7 +49,7 @@ prost = { version = "0.11.0", features = ["no-recursion-limit"] }
 semver = "1.0.14"
 serde = { version = "1.0.144", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.19.2", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
+tokio = { version = "1.20.2", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
 tracing = "0.1.36"
 uuid = { version = "1.2.1", features = ["v4"] }
 
