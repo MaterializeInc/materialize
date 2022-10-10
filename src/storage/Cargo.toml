@@ -24,7 +24,7 @@ crossbeam-channel = { version = "0.5.6" }
 csv-core = { version = "0.1.10" }
 derivative = "2.2.0"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-fail = { version = "0.5.0", features = ["failpoints"] }
+fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.24"
 globset = { version = "0.4.9", features = ["serde1"] }
 http = "0.2.8"
