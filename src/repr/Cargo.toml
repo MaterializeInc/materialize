@@ -50,7 +50,7 @@ thiserror = "1.0.32"
 
 # for the tracing_ feature
 tracing = { version = "0.1.36", optional = true }
-tracing-subscriber = { version = "0.3.15", default-features = false, optional = true }
+tracing-subscriber = { version = "0.3.16", default-features = false, optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.4.0" }
