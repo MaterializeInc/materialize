@@ -50,7 +50,7 @@ regex = "1.6.0"
 rusqlite = { version = "0.28.0", features = ["bundled", "unlock_notify"] }
 semver = "1.0.14"
 serde = "1.0.144"
-serde_json = "1.0.85"
+serde_json = "1.0.86"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.20.2", features = ["rt", "time"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
