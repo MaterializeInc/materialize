@@ -898,9 +898,23 @@ ALTER MATERIALIZED VIEW name SET (property = true)
 parse-statement
 ALTER SINK name SET (property = true)
 ----
-error: Expected RENAME, found SET
+error: Expected one of REMOTE or SIZE or SNAPSHOT, found identifier "property"
 ALTER SINK name SET (property = true)
-                ^
+                     ^
+
+parse-statement
+ALTER SINK name SET (SIZE LARGE)
+----
+ALTER SINK name SET (SIZE = large)
+=>
+AlterSink(AlterSinkStatement { sink_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: SetOptions([CreateSinkOption { name: Size, value: Some(Object(Name(UnresolvedObjectName([Ident("large")])))) }]) })
+
+parse-statement
+ALTER SINK name RESET (SIZE)
+----
+ALTER SINK name RESET (SIZE)
+=>
+AlterSink(AlterSinkStatement { sink_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: ResetOptions([Size]) })
 
 parse-statement
 ALTER INDEX name RENAME TO name2

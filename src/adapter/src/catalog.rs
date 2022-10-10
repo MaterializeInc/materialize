@@ -54,13 +54,13 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_sql::plan::{
-    AlterSourceItem, CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    AlterOptionParameter, CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
     CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
     StorageHostConfig as PlanStorageHostConfig,
 };
 use mz_sql::{plan, DEFAULT_SCHEMA};
-use mz_sql_parser::ast::{CreateSourceOption, Statement, WithOptionValue};
+use mz_sql_parser::ast::{CreateSinkOption, CreateSourceOption, Statement, WithOptionValue};
 use mz_stash::{Append, Postgres, Sqlite};
 use mz_storage::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 use mz_storage::types::sinks::{SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder};
@@ -3501,10 +3501,86 @@ impl<S: Append> Catalog<S> {
 
         for op in ops {
             match op {
+                Op::AlterSink { id, size, remote } => {
+                    use mz_sql::ast::Value;
+                    use mz_sql_parser::ast::CreateSinkOptionName::*;
+
+                    let entry = state.get_entry(&id);
+                    let name = entry.name().clone();
+                    let old_sink = match entry.item() {
+                        CatalogItem::Sink(sink) => sink.clone(),
+                        other => {
+                            coord_bail!("ALTER SINK entry was not a sink: {}", other.typ())
+                        }
+                    };
+
+                    // Since the catalog serializes the items using only their creation statement
+                    // and context, we need to parse and rewrite the with options in that statement.
+                    // (And then make any other changes to the source definition to match.)
+                    let mut stmt = mz_sql::parse::parse(&old_sink.create_sql)
+                        .unwrap()
+                        .into_element();
+
+                    let create_stmt = match &mut stmt {
+                        Statement::CreateSink(s) => s,
+                        _ => coord_bail!("sink {id} was not created with a CREATE SINK statement"),
+                    };
+
+                    let new_config = alter_host_config(&old_sink.host_config, size, remote)?;
+
+                    if let Some(config) = new_config {
+                        create_stmt
+                            .with_options
+                            .retain(|x| ![Remote, Size].contains(&x.name));
+
+                        let new_host_option = match &config {
+                            plan::StorageHostConfig::Managed { size } => Some((Size, size.clone())),
+                            plan::StorageHostConfig::Remote { addr } => {
+                                Some((Remote, addr.clone()))
+                            }
+                            plan::StorageHostConfig::Undefined => None,
+                        };
+
+                        if let Some((name, value)) = new_host_option {
+                            create_stmt.with_options.push(CreateSinkOption {
+                                name,
+                                value: Some(WithOptionValue::Value(Value::String(value))),
+                            });
+                        }
+
+                        // Undefined size sinks only allowed in unsafe mode.
+                        let allow_undefined_size = state.config().unsafe_mode;
+
+                        let host_config =
+                            state.resolve_storage_host_config(config, allow_undefined_size)?;
+                        let create_sql = stmt.to_ast_string_stable();
+                        let sink = CatalogItem::Sink(Sink {
+                            create_sql,
+                            host_config: host_config.clone(),
+                            ..old_sink
+                        });
+
+                        let ser = Self::serialize_item(&sink);
+                        tx.update_item(id, &name.item, &ser)?;
+
+                        // NB: this will be re-incremented by the action below.
+                        builtin_table_updates.extend(state.pack_item_update(id, -1));
+
+                        let to_name = entry.name().clone();
+                        catalog_action(
+                            state,
+                            builtin_table_updates,
+                            Action::UpdateItem {
+                                id,
+                                to_name,
+                                to_item: sink,
+                            },
+                        )?;
+                    }
+                }
                 Op::AlterSource { id, size, remote } => {
                     use mz_sql::ast::Value;
                     use mz_sql_parser::ast::CreateSourceOptionName::*;
-                    use AlterSourceItem::*;
 
                     let entry = state.get_entry(&id);
                     let name = entry.name().clone();
@@ -3529,18 +3605,7 @@ impl<S: Append> Catalog<S> {
                         ),
                     };
 
-                    let new_config = match (&old_source.host_config, size, remote) {
-                        (_, Set(_), Set(_)) => {
-                            coord_bail!("Can't set both SIZE and REMOTE on source")
-                        }
-                        (_, Set(size), _) => Some(plan::StorageHostConfig::Managed { size }),
-                        (_, _, Set(addr)) => Some(plan::StorageHostConfig::Remote { addr }),
-                        (StorageHostConfig::Remote { .. }, _, Reset)
-                        | (StorageHostConfig::Managed { .. }, Reset, _) => {
-                            Some(plan::StorageHostConfig::Undefined)
-                        }
-                        (_, _, _) => None,
-                    };
+                    let new_config = alter_host_config(&old_source.host_config, size, remote)?;
 
                     if let Some(config) = new_config {
                         create_stmt
@@ -4747,12 +4812,42 @@ pub fn is_reserved_name(name: &str) -> bool {
         .any(|prefix| name.starts_with(prefix))
 }
 
+/// Return a [`plan::StorageHostConfig`] based on an existing [`StorageHostConfig`] and a set of potentially altered parameters.
+///
+/// If a [`None`] is returned, it means the existing config does not need to be updated.
+fn alter_host_config(
+    old_config: &StorageHostConfig,
+    size: AlterOptionParameter,
+    remote: AlterOptionParameter,
+) -> Result<Option<plan::StorageHostConfig>, AdapterError> {
+    use plan::AlterOptionParameter::*;
+
+    match (old_config, size, remote) {
+        // Should be caught during planning, but it is better to be safe
+        (_, Set(_), Set(_)) => {
+            coord_bail!("only one of REMOTE and SIZE can be set")
+        }
+        (_, Set(size), _) => Ok(Some(plan::StorageHostConfig::Managed { size })),
+        (_, _, Set(addr)) => Ok(Some(plan::StorageHostConfig::Remote { addr })),
+        (StorageHostConfig::Remote { .. }, _, Reset)
+        | (StorageHostConfig::Managed { .. }, Reset, _) => {
+            Ok(Some(plan::StorageHostConfig::Undefined))
+        }
+        (_, _, _) => Ok(None),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Op {
+    AlterSink {
+        id: GlobalId,
+        size: AlterOptionParameter,
+        remote: AlterOptionParameter,
+    },
     AlterSource {
         id: GlobalId,
-        size: AlterSourceItem,
-        remote: AlterSourceItem,
+        size: AlterOptionParameter,
+        remote: AlterOptionParameter,
     },
     CreateDatabase {
         name: String,
