@@ -695,27 +695,11 @@ pub fn plan_create_source(
             (connection, encoding, Some(available_subsources))
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
-            let load_generator = load_generator_ast_to_generator(generator, options)?;
+            let (load_generator, available_subsources) =
+                load_generator_ast_to_generator(generator, options)?;
+            let available_subsources = available_subsources
+                .map(|a| HashMap::from_iter(a.into_iter().map(|(k, v)| (k, v.0))));
             let generator = as_generator(&load_generator);
-
-            let mut available_subsources = HashMap::new();
-            for (i, (name, _)) in generator.views().iter().enumerate() {
-                let name = FullObjectName {
-                    database: RawDatabaseSpecifier::Name("mz_loadgenerator".to_owned()),
-                    schema: "auction".to_owned(),
-                    item: name.to_string(),
-                };
-                // The zero-th output is the main output
-                // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
-                // to handle the main source and the subsources uniformly
-                available_subsources.insert(name, i + 1);
-            }
-
-            let available_subsources = if available_subsources.is_empty() {
-                None
-            } else {
-                Some(available_subsources)
-            };
 
             let LoadGeneratorOptionExtracted { tick_interval, .. } = options.clone().try_into()?;
             let tick_micros = match tick_interval {
@@ -1059,10 +1043,16 @@ pub fn plan_create_subsource(
 generate_extracted_config!(LoadGeneratorOption, (TickInterval, Interval));
 
 pub(crate) fn load_generator_ast_to_generator(
-    generator: &mz_sql_parser::ast::LoadGenerator,
+    loadgen: &mz_sql_parser::ast::LoadGenerator,
     _options: &[LoadGeneratorOption<Aug>],
-) -> Result<mz_storage::types::sources::LoadGenerator, PlanError> {
-    let load_generator = match generator {
+) -> Result<
+    (
+        mz_storage::types::sources::LoadGenerator,
+        Option<HashMap<FullObjectName, (usize, RelationDesc)>>,
+    ),
+    PlanError,
+> {
+    let load_generator = match loadgen {
         mz_sql_parser::ast::LoadGenerator::Auction => {
             mz_storage::types::sources::LoadGenerator::Auction
         }
@@ -1070,7 +1060,32 @@ pub(crate) fn load_generator_ast_to_generator(
             mz_storage::types::sources::LoadGenerator::Counter
         }
     };
-    Ok(load_generator)
+
+    let mut available_subsources = HashMap::new();
+    let generator = as_generator(&load_generator);
+    for (i, (name, desc)) in generator.views().iter().enumerate() {
+        let name = FullObjectName {
+            database: RawDatabaseSpecifier::Name("mz_load_generators".to_owned()),
+            schema: match loadgen {
+                mz_sql_parser::ast::LoadGenerator::Counter => "counter".into(),
+                mz_sql_parser::ast::LoadGenerator::Auction => "auction".into(),
+                // Please use `snake_case` for any multi-word load generators
+                // that you add.
+            },
+            item: name.to_string(),
+        };
+        // The zero-th output is the main output
+        // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
+        // to handle the main source and the subsources uniformly
+        available_subsources.insert(name, (i + 1, desc.clone()));
+    }
+    let available_subsources = if available_subsources.is_empty() {
+        None
+    } else {
+        Some(available_subsources)
+    };
+
+    Ok((load_generator, available_subsources))
 }
 
 fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(usize, usize), PlanError> {
