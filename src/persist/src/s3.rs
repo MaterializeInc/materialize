@@ -23,7 +23,7 @@ use aws_sdk_s3::model::{CompletedMultipartUpload, CompletedPart};
 use aws_sdk_s3::types::{ByteStream, SdkError};
 use aws_sdk_s3::Client as S3Client;
 use aws_smithy_http::endpoint::Endpoint;
-use aws_smithy_types::{timeout, tristate::TriState};
+use aws_smithy_types::tristate::TriState;
 use aws_types::credentials::SharedCredentialsProvider;
 use aws_types::region::Region;
 use aws_types::Credentials;
@@ -97,7 +97,7 @@ impl S3BlobConfig {
         // TODO: our timeouts will all be redone when https://github.com/awslabs/smithy-rs/pull/1740
         // is released. it contains a much more straightforward and robust way of thinking about
         // AWS client timeouts.
-        loader.timeout_config(
+        loader = loader.timeout_config(
             timeout::Config::new().with_api_timeouts(
                 timeout::Api::new()
                     // maximum time allowed for a top-level S3 API call (including internal retries)
