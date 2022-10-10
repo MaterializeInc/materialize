@@ -6029,9 +6029,9 @@ checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 
 [[package]]
 name = "ssh-key"
-version = "0.4.2"
+version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e09d8b0ff2fca365c89ad535055c17adbd9fb0a5daf338299049882e95b6931"
+checksum = "f02d3730e8785e797a4552137d1acc0d7f7146dad3b5fe65ed83637711dfc6c5"
 dependencies = [
  "base64ct",
  "pem-rfc7468",
