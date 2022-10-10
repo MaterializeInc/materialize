@@ -24,4 +24,4 @@ tracing = "0.1.36"
 
 [build-dependencies]
 protobuf-src = "1.1.0"
-tonic-build = "0.8.0"
+tonic-build = "0.8.2"
