@@ -46,16 +46,16 @@ use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, Cat
 use mz_sql::names::QualifiedObjectName;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
-    AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
-    CreateComputeInstancePlan, CreateComputeReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
-    CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DropComputeInstancesPlan, DropComputeReplicasPlan, DropDatabasePlan,
-    DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew,
-    ExplainPlanOld, FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView,
-    MutationKind, OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen, RaisePlan,
-    ReadThenWritePlan, ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan,
-    ShowVariablePlan, SubscribeFrom, SubscribePlan, View,
+    AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
+    AlterSystemSetPlan, CreateComputeInstancePlan, CreateComputeReplicaPlan, CreateConnectionPlan,
+    CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan,
+    CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, DropComputeInstancesPlan, DropComputeReplicasPlan,
+    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
+    ExplainPlanNew, ExplainPlanOld, FetchPlan, HirRelationExpr, IndexOption, InsertPlan,
+    MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen,
+    RaisePlan, ReadThenWritePlan, ResetVariablePlan, RotateKeysPlan, SendDiffsPlan,
+    SetVariablePlan, ShowVariablePlan, SubscribeFrom, SubscribePlan, View,
 };
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
@@ -309,6 +309,9 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             Plan::AlterSecret(plan) => {
                 tx.send(self.sequence_alter_secret(&session, plan).await, session);
+            }
+            Plan::AlterSink(plan) => {
+                tx.send(self.sequence_alter_sink(&session, plan).await, session);
             }
             Plan::AlterSource(plan) => {
                 tx.send(self.sequence_alter_source(&session, plan).await, session);
@@ -3315,6 +3318,29 @@ impl<S: Append + 'static> Coordinator<S> {
         self.secrets_controller.ensure(id, &payload).await?;
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Secret))
+    }
+
+    async fn sequence_alter_sink(
+        &mut self,
+        session: &Session,
+        AlterSinkPlan { id, size, remote }: AlterSinkPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let op = catalog::Op::AlterSink { id, size, remote };
+        self.catalog_transact(Some(session), vec![op], |_| Ok(()))
+            .await?;
+
+        // Re-fetch the updated item from the catalog
+        let entry = self.catalog.get_entry(&id);
+        let updated_sink = entry.sink().ok_or_else(|| {
+            CatalogError::UnexpectedType(entry.name().to_string(), CatalogItemType::Sink)
+        })?;
+
+        self.controller
+            .storage
+            .alter_collections(vec![(id, updated_sink.host_config.clone())])
+            .await?;
+
+        Ok(ExecuteResponse::AlteredObject(ObjectType::Sink))
     }
 
     async fn sequence_alter_source(

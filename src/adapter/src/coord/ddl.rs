@@ -620,7 +620,8 @@ impl<S: Append + 'static> Coordinator<S> {
                         | CatalogItem::StorageManagedTable(_) => {}
                     }
                 }
-                Op::AlterSource { .. }
+                Op::AlterSink { .. }
+                | Op::AlterSource { .. }
                 | Op::DropTimeline(_)
                 | Op::RenameItem { .. }
                 | Op::UpdateComputeInstanceStatus { .. }

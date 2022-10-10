@@ -35,10 +35,10 @@ use mz_repr::strconv;
 use mz_repr::{ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
-    AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
-    AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
-    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, SetVariableValue,
-    SshConnectionOption,
+    AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceStatement,
+    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
+    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
+    SetVariableValue, SshConnectionOption,
 };
 use mz_storage::source::generator::as_generator;
 use mz_storage::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
@@ -101,8 +101,8 @@ use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
-    AlterNoopPlan, AlterSecretPlan, AlterSourceItem, AlterSourcePlan, AlterSystemResetAllPlan,
-    AlterSystemResetPlan, AlterSystemSetPlan, ComputeReplicaConfig,
+    AlterNoopPlan, AlterOptionParameter, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan,
+    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, ComputeReplicaConfig,
     ComputeReplicaIntrospectionConfig, CreateComputeInstancePlan, CreateComputeReplicaPlan,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
@@ -1584,7 +1584,7 @@ generate_extracted_config!(
     CreateSinkOption,
     (Remote, String),
     (Size, String),
-    (Snapshot, bool, Default(true))
+    (Snapshot, bool)
 );
 
 pub fn plan_create_sink(
@@ -1713,6 +1713,9 @@ pub fn plan_create_sink(
 
     let host_config = host_config(remote, size)?;
 
+    // WITH SNAPSHOT defaults to true
+    let with_snapshot = snapshot.unwrap_or(true);
+
     Ok(Plan::CreateSink(CreateSinkPlan {
         name,
         sink: Sink {
@@ -1721,7 +1724,7 @@ pub fn plan_create_sink(
             connection_builder,
             envelope,
         },
-        with_snapshot: snapshot,
+        with_snapshot,
         if_not_exists,
         host_config,
     }))
@@ -3331,6 +3334,83 @@ pub fn plan_alter_secret(
     Ok(Plan::AlterSecret(AlterSecretPlan { id, secret_as }))
 }
 
+pub fn describe_alter_sink(
+    _: &StatementContext,
+    _: AlterSinkStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_sink(
+    scx: &StatementContext,
+    stmt: AlterSinkStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let AlterSinkStatement {
+        sink_name,
+        if_exists,
+        action,
+    } = stmt;
+
+    let sink_name = normalize::unresolved_object_name(sink_name)?;
+    let entry = match scx.catalog.resolve_item(&sink_name) {
+        Ok(sink) => sink,
+        Err(_) if if_exists => {
+            return Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::Sink,
+            }));
+        }
+        Err(e) => return Err(e.into()),
+    };
+    if entry.item_type() != CatalogItemType::Sink {
+        sql_bail!(
+            "{} is a {} not a sink",
+            scx.catalog.resolve_full_name(entry.name()),
+            entry.item_type()
+        )
+    }
+    let id = entry.id();
+
+    let mut size = AlterOptionParameter::Unchanged;
+    let mut remote = AlterOptionParameter::Unchanged;
+    match action {
+        AlterSinkAction::SetOptions(options) => {
+            let CreateSinkOptionExtracted {
+                remote: remote_opt,
+                size: size_opt,
+                snapshot,
+                seen: _,
+            } = options.try_into()?;
+
+            if let Some(value) = remote_opt {
+                remote = AlterOptionParameter::Set(value);
+            }
+            if let Some(value) = size_opt {
+                size = AlterOptionParameter::Set(value);
+            }
+            if let Some(_) = snapshot {
+                sql_bail!("Cannot modify the SNAPSHOT of a SINK.");
+            }
+        }
+        AlterSinkAction::ResetOptions(reset) => {
+            for name in reset {
+                match name {
+                    CreateSinkOptionName::Remote => {
+                        remote = AlterOptionParameter::Reset;
+                    }
+                    CreateSinkOptionName::Size => {
+                        size = AlterOptionParameter::Reset;
+                    }
+                    CreateSinkOptionName::Snapshot => {
+                        sql_bail!("Cannot modify the SNAPSHOT of a SINK.");
+                    }
+                }
+            }
+        }
+    };
+
+    Ok(Plan::AlterSink(AlterSinkPlan { id, size, remote }))
+}
+
 pub fn describe_alter_source(
     _: &StatementContext,
     _: AlterSourceStatement<Aug>,
@@ -3374,8 +3454,8 @@ pub fn plan_alter_source(
     }
     let id = entry.id();
 
-    let mut size = AlterSourceItem::Unchanged;
-    let mut remote = AlterSourceItem::Unchanged;
+    let mut size = AlterOptionParameter::Unchanged;
+    let mut remote = AlterOptionParameter::Unchanged;
     match action {
         AlterSourceAction::SetOptions(options) => {
             let CreateSourceOptionExtracted {
@@ -3388,10 +3468,10 @@ pub fn plan_alter_source(
             } = CreateSourceOptionExtracted::try_from(options)?;
 
             if let Some(value) = remote_opt {
-                remote = AlterSourceItem::Set(value);
+                remote = AlterOptionParameter::Set(value);
             }
             if let Some(value) = size_opt {
-                size = AlterSourceItem::Set(value);
+                size = AlterOptionParameter::Set(value);
             }
             if let Some(_) = timeline_opt {
                 sql_bail!("Cannot modify the TIMELINE of a SOURCE.");
@@ -3407,10 +3487,10 @@ pub fn plan_alter_source(
             for name in reset {
                 match name {
                     CreateSourceOptionName::Remote => {
-                        remote = AlterSourceItem::Reset;
+                        remote = AlterOptionParameter::Reset;
                     }
                     CreateSourceOptionName::Size => {
-                        size = AlterSourceItem::Reset;
+                        size = AlterOptionParameter::Reset;
                     }
                     CreateSourceOptionName::Timeline => {
                         sql_bail!("Cannot modify the TIMELINE of a SOURCE.");

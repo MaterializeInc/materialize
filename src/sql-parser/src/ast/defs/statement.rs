@@ -62,6 +62,7 @@ pub enum Statement<T: AstInfo> {
     AlterObjectRename(AlterObjectRenameStatement),
     AlterIndex(AlterIndexStatement<T>),
     AlterSecret(AlterSecretStatement<T>),
+    AlterSink(AlterSinkStatement<T>),
     AlterSource(AlterSourceStatement<T>),
     AlterSystemSet(AlterSystemSetStatement),
     AlterSystemReset(AlterSystemResetStatement),
@@ -118,6 +119,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndex(stmt) => f.write_node(stmt),
             Statement::AlterSecret(stmt) => f.write_node(stmt),
+            Statement::AlterSink(stmt) => f.write_node(stmt),
             Statement::AlterSource(stmt) => f.write_node(stmt),
             Statement::AlterSystemSet(stmt) => f.write_node(stmt),
             Statement::AlterSystemReset(stmt) => f.write_node(stmt),
@@ -1280,6 +1282,43 @@ impl<T: AstInfo> AstDisplay for AlterIndexStatement<T> {
 }
 
 impl_display_t!(AlterIndexStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AlterSinkAction<T: AstInfo> {
+    SetOptions(Vec<CreateSinkOption<T>>),
+    ResetOptions(Vec<CreateSinkOptionName>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterSinkStatement<T: AstInfo> {
+    pub sink_name: UnresolvedObjectName,
+    pub if_exists: bool,
+    pub action: AlterSinkAction<T>,
+}
+
+impl<T: AstInfo> AstDisplay for AlterSinkStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER SINK ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&self.sink_name);
+        f.write_str(" ");
+
+        match &self.action {
+            AlterSinkAction::SetOptions(options) => {
+                f.write_str("SET (");
+                f.write_node(&display::comma_separated(options));
+                f.write_str(")");
+            }
+            AlterSinkAction::ResetOptions(options) => {
+                f.write_str("RESET (");
+                f.write_node(&display::comma_separated(options));
+                f.write_str(")");
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AlterSourceAction<T: AstInfo> {

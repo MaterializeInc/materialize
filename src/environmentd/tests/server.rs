@@ -151,12 +151,11 @@ fn test_source_sink_size_required() -> Result<(), Box<dyn Error>> {
     // Sinks work with an explicit size.
     client.batch_execute("CREATE SINK snk FROM mz_sources INTO KAFKA CONNECTION conn (TOPIC 'foo') FORMAT JSON ENVELOPE DEBEZIUM WITH (SIZE '1')").unwrap();
 
-    // `ALTER SINK ... RESET SIZE` does not yet exist. Testing here to make
-    // sure we don't actually enable it in the future.
+    // `ALTER SINK ... RESET SIZE` is banned.
     let result = client.batch_execute("ALTER SINK snk RESET (SIZE)");
     assert_eq!(
         result.unwrap_err().unwrap_db_error().message(),
-        "Expected RENAME, found RESET"
+        "size option is required"
     );
 
     Ok(())
