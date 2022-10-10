@@ -544,8 +544,8 @@ impl KafkaSinkState {
                     Ok(result) => Ok(result),
                     Err(KafkaError::Transaction(e)) if e.txn_requires_abort() => {
                         info!("error requiring txn abort in kafka sink: {:?}", e);
-                        self.abort_active_txn().await;
-                        Err(KafkaError::Transaction(e))
+                        let () = self.abort_active_txn().await;
+                        panic!("shutting down due error requiring txn abort in kafka sink: {e:?}");
                     }
                     Err(KafkaError::Transaction(e)) if e.is_retriable() => {
                         info!("retriable error in kafka sink: {e:?}; will retry");
