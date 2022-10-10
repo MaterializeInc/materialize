@@ -64,7 +64,7 @@ regex = { version = "1.6.0" }
 serde = { version = "1.0.144", features = ["derive"] }
 serde_json = { version = "1.0.85" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.19.2", features = ["fs", "rt", "sync", "test-util"] }
+tokio = { version = "1.20.2", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde"] }
 tokio-stream = "0.1.10"
 tokio-util = { version = "0.7.3", features = ["io"] }
@@ -81,7 +81,7 @@ tonic-build = "0.8.0"
 
 [dev-dependencies]
 itertools = "0.10.4"
-tokio = { version = "1.19.2", features = ["test-util"] }
+tokio = { version = "1.20.2", features = ["test-util"] }
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux
