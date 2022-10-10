@@ -143,6 +143,17 @@ pub trait Visit {
     where
         F: FnMut(&Self);
 
+    fn visit_pre_fold_top_down<Acc, Folder, Visitor>(
+        &self,
+        init: Acc,
+        folder: &mut Folder,
+        visitor: &mut Visitor,
+    ) -> Result<(), RecursionLimitError>
+    where
+        Acc: Clone,
+        Folder: FnMut(Acc, &Self) -> Acc,
+        Visitor: FnMut(&Acc, &Self);
+
     /// Pre-order immutable infallible visitor for `self`.
     /// Does not enforce a recursion limit.
     #[deprecated = "Use `visit_pre` instead."]
@@ -328,6 +339,20 @@ impl<T: VisitChildren<T>> Visit for T {
         F: FnMut(&Self),
     {
         StackSafeVisit::new().visit_pre(self, f)
+    }
+
+    fn visit_pre_fold_top_down<Acc, Folder, Visitor>(
+        &self,
+        init: Acc,
+        folder: &mut Folder,
+        visitor: &mut Visitor,
+    ) -> Result<(), RecursionLimitError>
+    where
+        Acc: Clone,
+        Folder: FnMut(Acc, &Self) -> Acc,
+        Visitor: FnMut(&Acc, &Self),
+    {
+        StackSafeVisit::new().visit_pre_fold_top_down(self, init, folder, visitor)
     }
 
     fn visit_pre_nolimit<F>(&self, f: &mut F)
@@ -528,6 +553,28 @@ impl<T: VisitChildren<T>> StackSafeVisit<T> {
         self.checked_recur(move |_| {
             f(value);
             value.try_visit_children(|child| self.visit_pre(child, f))
+        })
+    }
+
+    /// TODO: doc comment
+    fn visit_pre_fold_top_down<Acc, Folder, Visitor>(
+        &self,
+        node: &T,
+        init: Acc,
+        folder: &mut Folder,
+        visitor: &mut Visitor,
+    ) -> Result<(), RecursionLimitError>
+    where
+        Acc: Clone,
+        Folder: FnMut(Acc, &T) -> Acc,
+        Visitor: FnMut(&Acc, &T),
+    {
+        self.checked_recur(move |_| {
+            visitor(&init, node);
+            let acc = folder(init, node);
+            node.try_visit_children(|child| {
+                self.visit_pre_fold_top_down(child, acc.clone(), folder, visitor)
+            })
         })
     }
 

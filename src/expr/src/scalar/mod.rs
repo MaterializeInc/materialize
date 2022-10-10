@@ -1614,6 +1614,40 @@ impl MirScalarExpr {
         })?;
         Ok(size)
     }
+
+    pub fn filter_characteristics(&self) -> Result<(bool, bool), RecursionLimitError> {
+        let mut like = false;
+        let mut not_like = false;
+        self.visit_pre_fold_top_down(
+            false,
+            &mut |not_in_parent_chain, expr| {
+                not_in_parent_chain
+                    || matches!(
+                        expr,
+                        MirScalarExpr::CallUnary {
+                            func: UnaryFunc::Not(func::Not),
+                            ..
+                        }
+                    )
+            },
+            &mut |not_in_parent_chain, expr| {
+                if matches!(
+                    expr,
+                    MirScalarExpr::CallUnary {
+                        func: UnaryFunc::IsLikeMatch(_),
+                        ..
+                    }
+                ) {
+                    if *not_in_parent_chain {
+                        not_like = true;
+                    } else {
+                        like = true;
+                    }
+                }
+            },
+        )?;
+        Ok((like, not_like))
+    }
 }
 
 impl MirScalarExpr {
