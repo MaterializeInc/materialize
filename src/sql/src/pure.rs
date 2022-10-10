@@ -37,7 +37,6 @@ use mz_sql_parser::ast::{
     KafkaConnection, KafkaSourceConnection, PgConfigOption, PgConfigOptionName,
     ReaderSchemaSelectionStrategy, TableConstraint, UnresolvedObjectName,
 };
-use mz_storage::source::generator::as_generator;
 use mz_storage::types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
 use mz_storage::types::connections::{Connection, ConnectionContext};
 use mz_storage::types::sources::PostgresSourceDetails;
@@ -50,7 +49,7 @@ use crate::ast::{
 use crate::catalog::SessionCatalog;
 use crate::kafka_util;
 use crate::kafka_util::KafkaConfigOptionExtracted;
-use crate::names::{Aug, FullObjectName, RawDatabaseSpecifier, ResolvedObjectName};
+use crate::names::{Aug, RawDatabaseSpecifier, ResolvedObjectName};
 use crate::normalize;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
 use crate::plan::StatementContext;
@@ -397,25 +396,8 @@ pub async fn purify_create_source(
         CreateSourceConnection::LoadGenerator { generator, options } => {
             let scx = StatementContext::new(None, &*catalog);
 
-            let mut available_subsources = HashMap::new();
-            let load_generator = load_generator_ast_to_generator(generator, options)?;
-            let load_generator = as_generator(&load_generator);
-            for (i, (name, desc)) in load_generator.views().iter().enumerate() {
-                let name = FullObjectName {
-                    database: RawDatabaseSpecifier::Name("mz_loadgenerator".to_owned()),
-                    schema: generator.to_string().to_lowercase(),
-                    item: name.to_string(),
-                };
-                // The zero-th output is the main output
-                // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
-                // to handle the main source and the subsources uniformly
-                available_subsources.insert(name, (i + 1, desc.clone()));
-            }
-            let available_subsources = if available_subsources.is_empty() {
-                None
-            } else {
-                Some(available_subsources)
-            };
+            let (_load_generator, available_subsources) =
+                load_generator_ast_to_generator(generator, options)?;
 
             let mut targeted_subsources = vec![];
 
