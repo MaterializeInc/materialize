@@ -102,7 +102,7 @@ CREATE SECRET csr_password AS '<CSR_PASSWORD>';
 
 CREATE CONNECTION csr_ssl
   FOR CONFLUENT SCHEMA REGISTRY
-    URL 'rp-f00000bar.data.vectorized.cloud:30993',
+    URL 'https://rp-f00000bar.data.vectorized.cloud:30993',
     SSL KEY = SECRET csr_ssl_key,
     SSL CERTIFICATE = SECRET csr_ssl_crt,
     USERNAME = 'foo',
