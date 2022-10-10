@@ -56,7 +56,7 @@ rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = "1.6.0"
 reqwest = { version = "0.11.12", features = ["native-tls-vendored"] }
-serde = "1.0.144"
+serde = "1.0.145"
 serde_json = { version = "1.0.86", features = ["raw_value"] }
 similar = "2.2.0"
 tempfile = "3.2.0"

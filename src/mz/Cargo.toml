@@ -8,7 +8,7 @@ publish = false
 
 
 [dependencies]
-serde = { version = "1.0.144", features = ["derive"] }
+serde = { version = "1.0.145", features = ["derive"] }
 clap = { version = "3.2.20", features = [ "derive" ] }
 tokio = { version = "1.20.2", features = ["full"] }
 open = "3.0.3"

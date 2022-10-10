@@ -47,7 +47,7 @@ proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-fea
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
 prost = { version = "0.11.0", features = ["no-recursion-limit"] }
 semver = "1.0.14"
-serde = { version = "1.0.144", features = ["derive"] }
+serde = { version = "1.0.145", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.20.2", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
 tracing = "0.1.36"
@@ -74,4 +74,4 @@ tempfile = "3.2.0"
 [build-dependencies]
 prost-build = "0.11.1"
 protobuf-src = "1.1.0"
-serde = { version = "1.0.144", features = ["derive"] }
+serde = { version = "1.0.145", features = ["derive"] }
