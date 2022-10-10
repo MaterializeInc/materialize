@@ -54,11 +54,11 @@ t
 name    type  size
 ------------------
 
-> SHOW INDEXES FROM t;
+> SHOW INDEXES ON t;
 
 > CREATE DEFAULT INDEX on t
 
-> SHOW INDEXES FROM t
+> SHOW INDEXES ON t
 name            on          cluster         key
 -----------------------------------------------------------------------------------
 t_primary_idx   t           <CLUSTER_NAME>  {a,b}
@@ -216,7 +216,7 @@ contains:cannot materialize call to mz_version
 ! SELECT * from t;
 contains:unknown catalog item 't'
 
-! SHOW INDEXES FROM t;
+! SHOW INDEXES ON t;
 contains:unknown catalog item 't'
 
 > SHOW TABLES;

@@ -4578,12 +4578,12 @@ impl<'a> Parser<'a> {
                 filter: self.parse_show_statement_filter()?,
             }))
         } else if self.parse_keyword(INDEXES) {
-            let from_schema = if self.parse_keywords(&[FROM, SCHEMA]) {
+            let from_schema = if self.parse_keywords(&[FROM]) {
                 Some(self.parse_schema_name()?)
             } else {
                 None
             };
-            let on_object = if self.parse_one_of_keywords(&[FROM, ON]).is_some() {
+            let on_object = if self.parse_one_of_keywords(&[ON]).is_some() {
                 Some(self.parse_raw_name()?)
             } else {
                 None

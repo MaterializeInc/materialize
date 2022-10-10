@@ -1706,11 +1706,11 @@ impl<T: AstInfo> AstDisplay for ShowIndexesStatement<T> {
         f.write_str("SHOW ");
         f.write_str("INDEXES");
         if let Some(on_object) = &self.on_object {
-            f.write_str(" FROM ");
+            f.write_str(" ON ");
             f.write_node(on_object);
         }
         if let Some(from_schema) = &self.from_schema {
-            f.write_str(" FROM SCHEMA ");
+            f.write_str(" FROM ");
             f.write_node(from_schema);
         }
         if let Some(in_cluster) = &self.in_cluster {

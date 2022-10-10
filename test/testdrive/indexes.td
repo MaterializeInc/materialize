@@ -30,14 +30,14 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${writer-schema}'
 
-> SHOW INDEXES FROM data
+> SHOW INDEXES ON data
 name    on  cluster key
 --------------------------------------------------------------------------
 
 # Sources can have default indexes added
 > CREATE DEFAULT INDEX ON data
 
-> SHOW INDEXES FROM data
+> SHOW INDEXES ON data
 name                on      cluster             key
 -------------------------------------------------------------------------------------------
 data_primary_idx    data    <VARIABLE_OUTPUT>   {a,b}
@@ -57,14 +57,14 @@ position         name
 # Views do not have indexes automatically created
 > CREATE VIEW data_view as SELECT * from data
 
-> SHOW INDEXES FROM data_view
+> SHOW INDEXES ON data_view
 name    on  cluster key
 --------------------------------------------------------------------------
 
 # Views can have default indexes added
 > CREATE DEFAULT INDEX ON data_view
 
-> SHOW INDEXES FROM data_view
+> SHOW INDEXES ON data_view
 name                    on          cluster             key
 ---------------------------------------------------------------------------------------------------
 data_view_primary_idx   data_view   <VARIABLE_OUTPUT>   {a,b}
@@ -73,14 +73,14 @@ data_view_primary_idx   data_view   <VARIABLE_OUTPUT>   {a,b}
 > CREATE MATERIALIZED VIEW matv AS
   SELECT b, sum(a) FROM data GROUP BY b
 
-> SHOW INDEXES FROM matv
+> SHOW INDEXES ON matv
 name    on  cluster key
 --------------------------------------------------------------------------
 
 # Materialized views can have default indexes added
 > CREATE DEFAULT INDEX ON matv
 
-> SHOW INDEXES FROM matv
+> SHOW INDEXES ON matv
 name                on      cluster             key
 --------------------------------------------------------------------------------------------
 matv_primary_idx    matv    <VARIABLE_OUTPUT>   {b}
@@ -88,7 +88,7 @@ matv_primary_idx    matv    <VARIABLE_OUTPUT>   {b}
 # IF NOT EXISTS prevents adding multiple default indexes
 > CREATE DEFAULT INDEX IF NOT EXISTS ON data_view
 
-> SHOW INDEXES FROM data_view
+> SHOW INDEXES ON data_view
 name                    on          cluster             key
 -------------------------------------------------------------------------------------------------
 data_view_primary_idx   data_view   <VARIABLE_OUTPUT>   {a,b}
@@ -96,7 +96,7 @@ data_view_primary_idx   data_view   <VARIABLE_OUTPUT>   {a,b}
 # Additional default indexes have the same structure as the first
 > CREATE DEFAULT INDEX ON matv
 
-> SHOW INDEXES FROM matv
+> SHOW INDEXES ON matv
 name                on      cluster             key
 ------------------------------------------------------------------------------------------------
 matv_primary_idx    matv    <VARIABLE_OUTPUT>   {b}
@@ -105,7 +105,7 @@ matv_primary_idx1   matv    <VARIABLE_OUTPUT>   {b}
 # Default indexes can be named
 > CREATE DEFAULT INDEX named_idx ON data_view
 
-> SHOW INDEXES FROM data_view
+> SHOW INDEXES ON data_view
 name                    on          cluster             key
 -----------------------------------------------------------------------------------------------
 data_view_primary_idx   data_view   <VARIABLE_OUTPUT>   {a,b}
@@ -117,7 +117,7 @@ named_idx               data_view   <VARIABLE_OUTPUT>   {a,b}
 # Indexes with specified columns can be automatically named
 > CREATE INDEX ON data_view(a)
 
-> SHOW INDEXES FROM data_view
+> SHOW INDEXES ON data_view
 name            on          cluster             key
 -------------------------------------------------------------------------------------------
 data_view_a_idx data_view   <VARIABLE_OUTPUT>   {a}
@@ -128,7 +128,7 @@ data_view_a_idx data_view   <VARIABLE_OUTPUT>   {a}
 > CREATE INDEX ON data_view(b, a)
 > CREATE INDEX ON data_view(b - a, a)
 
-> SHOW INDEXES FROM data_view
+> SHOW INDEXES ON data_view
 name                    on          cluster             key
 -----------------------------------------------------------------------------------------------
 data_view_b_a_idx       data_view   <VARIABLE_OUTPUT>   {b,a}
@@ -140,7 +140,7 @@ data_view_expr_a_idx    data_view   <VARIABLE_OUTPUT>   "{b - a,a}"
 # Indexes can be both explicitly named and explicitly structured
 > CREATE INDEX named_idx ON data_view (b - a, a)
 
-> SHOW INDEXES FROM data_view
+> SHOW INDEXES ON data_view
 name        on          cluster             key
 ---------------------------------------------------------------------------------------------
 named_idx   data_view   <VARIABLE_OUTPUT>   "{b - a,a}"
@@ -151,7 +151,7 @@ named_idx   data_view   <VARIABLE_OUTPUT>   "{b - a,a}"
 > CREATE INDEX data_view_primary_idx ON data_view (b - a, a)
 > CREATE DEFAULT INDEX IF NOT EXISTS ON data_view
 
-> SHOW INDEXES FROM data_view
+> SHOW INDEXES ON data_view
 name                    on          cluster             key
 ------------------------------------------------------------------------------------------------------
 data_view_primary_idx   data_view   <VARIABLE_OUTPUT>   "{b - a,a}"
@@ -169,21 +169,21 @@ materialize.public.data_view_primary_idx "CREATE INDEX \"data_view_primary_idx\"
 > CREATE DEFAULT INDEX ON foo
 > CREATE INDEX ON foo (a + b)
 > CREATE INDEX ON foo (substr(z, 3))
-> SHOW INDEXES FROM foo
+> SHOW INDEXES ON foo
 foo_primary_idx foo <VARIABLE_OUTPUT>   {a,b,z}
 foo_expr_idx    foo <VARIABLE_OUTPUT>   "{a + b}"
 foo_expr_idx1   foo <VARIABLE_OUTPUT>   "{pg_catalog.substr(z, 3)}"
-> SHOW INDEXES FROM foo WHERE name = 'noexist'
-> SHOW INDEXES FROM foo WHERE name = 'foo_expr_idx'
+> SHOW INDEXES ON foo WHERE name = 'noexist'
+> SHOW INDEXES ON foo WHERE name = 'foo_expr_idx'
 foo_expr_idx    foo <VARIABLE_OUTPUT>   "{a + b}"
 
-> SHOW INDEXES FROM foo LIKE 'foo_primary%'
+> SHOW INDEXES ON foo LIKE 'foo_primary%'
 foo_primary_idx foo <VARIABLE_OUTPUT>   {a,b,z}
 
-! SHOW INDEXES FROM nonexistent
+! SHOW INDEXES ON nonexistent
 contains:unknown catalog item 'nonexistent'
 
-! SHOW INDEXES FROM foo_primary_idx
+! SHOW INDEXES ON foo_primary_idx
 contains:cannot show indexes on materialize.public.foo_primary_idx because it is a index
 
 > CREATE CLUSTER clstr REPLICAS (r1 (REMOTE ['localhost:1234']))
@@ -191,11 +191,11 @@ contains:cannot show indexes on materialize.public.foo_primary_idx because it is
 > SHOW INDEXES IN CLUSTER clstr WHERE on = 'foo'
 foo_primary_idx1    foo clstr   {a,b,z}
 
-> SHOW INDEXES FROM SCHEMA public WHERE name = 'foo_primary_idx1'
+> SHOW INDEXES FROM public WHERE name = 'foo_primary_idx1'
 foo_primary_idx1    foo clstr   {a,b,z}
 
-! SHOW INDEXES FROM SCHEMA public FROM foo
+! SHOW INDEXES FROM public FROM foo
 contains:Cannot specify both FROM SCHEMA and FROM or ON
 
-! SHOW INDEXES FROM SCHEMA nonexistent
+! SHOW INDEXES FROM nonexistent
 contains:unknown schema 'nonexistent'
