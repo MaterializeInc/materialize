@@ -40,13 +40,13 @@ CREATE SOURCE source_1
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'topic-1')
   FORMAT AVRO USING SCHEMA 'schema-1'
   ENVELOPE MATERIALIZE
-  LEGACYWITH (TIMELINE 'my_user_timeline');
+  WITH (TIMELINE 'my_user_timeline');
 
 CREATE SOURCE source_2
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'topic-2')
   FORMAT AVRO USING SCHEMA 'schema-2'
   ENVELOPE MATERIALIZE
-  LEGACYWITH (TIMELINE 'my_user_timeline');
+  WITH (TIMELINE 'my_user_timeline');
 ```
 
 ## CDC Sources
@@ -63,7 +63,7 @@ CREATE SOURCE source_3
   FROM KAFKA CONDITION kafka_conn (TOPIC 'topic-3')
   FORMAT AVRO USING SCHEMA 'schema'
   ENVELOPE MATERIALIZE
-  LEGACYWITH (TIMELINE 'mz_epoch_ms')
+  WITH (TIMELINE 'mz_epoch_ms')
 ```
 
 [cdc-sources]: /connect/materialize-cdc

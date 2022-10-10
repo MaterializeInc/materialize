@@ -19,10 +19,10 @@ class NestedTypes(Check):
             dedent(
                 """
             > CREATE TYPE record_type AS (f1 INT, f2 STRING);
-            > CREATE TYPE map_type AS MAP (key_type=text, value_type=integer);
+            > CREATE TYPE map_type AS MAP (KEY TYPE = text, VALUE TYPE = integer);
 
-            > CREATE TYPE int4_list AS LIST (element_type = int4);
-            > CREATE TYPE int4_list_list AS LIST (element_type = int4_list);
+            > CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4);
+            > CREATE TYPE int4_list_list AS LIST (ELEMENT TYPE = int4_list);
 
             > CREATE TABLE nested_types_table(map_col map_type, list_col int4_list_list, record_col record_type, array_col STRING);
 

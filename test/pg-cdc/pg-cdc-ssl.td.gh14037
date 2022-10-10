@@ -59,8 +59,8 @@ $ set-regex match=(\d{1,3}\.){3}\d{1,3} replacement=(HOST)
   SSL MODE disable,
   DATABASE postgres;
 > CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-> CREATE VIEWS FROM SOURCE "mz_source" ("numbers")
+  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
+  FOR TABLES ("numbers");
 > SELECT * FROM "numbers";
 1 true one
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -68,7 +68,6 @@ INSERT INTO numbers VALUES (2, true, 'two');
 > SELECT * FROM "numbers";
 1 true one
 2 true two
-> DROP VIEW "numbers";
 > DROP SOURCE "mz_source";
 > DROP CONNECTION pgconn;
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -89,8 +88,8 @@ contains: invalid CONNECTION: unknown SSL MODE "prefer"
   SSL MODE require,
   DATABASE postgres;
 > CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-> CREATE VIEWS FROM SOURCE "mz_source" ("numbers")
+  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
+  FOR TABLES ("numbers");
 > SELECT * FROM "numbers";
 1 true one
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -98,7 +97,6 @@ INSERT INTO numbers VALUES (2, true, 'two');
 > SELECT * FROM "numbers";
 1 true one
 2 true two
-> DROP VIEW "numbers";
 > DROP SOURCE "mz_source";
 > DROP CONNECTION pgconn;
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -122,8 +120,8 @@ contains:db error: FATAL: no pg_hba.conf entry for host "(HOST)", user "hostssl"
   SSL MODE require,
   DATABASE postgres;
 > CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-> CREATE VIEWS FROM SOURCE "mz_source" ("numbers")
+  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
+  FOR TABLES ("numbers");
 > SELECT * FROM "numbers";
 1 true one
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -131,7 +129,6 @@ INSERT INTO numbers VALUES (2, true, 'two');
 > SELECT * FROM "numbers";
 1 true one
 2 true two
-> DROP VIEW "numbers";
 > DROP SOURCE "mz_source";
 > DROP CONNECTION pgconn;
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -156,8 +153,8 @@ contains:self signed certificate in certificate chain
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca,
   DATABASE postgres;
 > CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-> CREATE VIEWS FROM SOURCE "mz_source" ("numbers")
+  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
+  FOR TABLES ("numbers");
 > SELECT * FROM "numbers";
 1 true one
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -165,7 +162,6 @@ INSERT INTO numbers VALUES (2, true, 'two');
 > SELECT * FROM "numbers";
 1 true one
 2 true two
-> DROP VIEW "numbers";
 > DROP SOURCE "mz_source";
 > DROP CONNECTION pgconn;
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -190,8 +186,8 @@ contains:self signed certificate in certificate chain
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca,
   DATABASE postgres;
 > CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-> CREATE VIEWS FROM SOURCE "mz_source" ("numbers")
+  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
+  FOR TABLES ("numbers");
 > SELECT * FROM "numbers";
 1 true one
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -199,7 +195,6 @@ INSERT INTO numbers VALUES (2, true, 'two');
 > SELECT * FROM "numbers";
 1 true one
 2 true two
-> DROP VIEW "numbers";
 > DROP SOURCE "mz_source";
 > DROP CONNECTION pgconn;
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -212,8 +207,8 @@ DELETE FROM numbers WHERE number = 2;
   SSL MODE disable,
   DATABASE postgres;
 > CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-> CREATE VIEWS FROM SOURCE "mz_source" ("numbers")
+  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
+  FOR TABLES ("numbers");
 > SELECT * FROM "numbers";
 1 true one
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -221,7 +216,6 @@ INSERT INTO numbers VALUES (2, true, 'two');
 > SELECT * FROM "numbers";
 1 true one
 2 true two
-> DROP VIEW "numbers";
 > DROP SOURCE "mz_source";
 > DROP CONNECTION pgconn;
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -271,7 +265,7 @@ contains:self signed certificate in certificate chain
   DATABASE postgres;
 > CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
-> CREATE VIEWS FROM SOURCE "mz_source" ("numbers")
+  FOR TABLES ("numbers");
 > SELECT * FROM "numbers";
 1 true one
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -279,7 +273,6 @@ INSERT INTO numbers VALUES (2, true, 'two');
 > SELECT * FROM "numbers";
 1 true one
 2 true two
-> DROP VIEW "numbers";
 > DROP SOURCE "mz_source";
 > DROP CONNECTION pgconn;
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -322,7 +315,7 @@ contains:db error: FATAL: certificate authentication failed for user "certuser"
   DATABASE postgres;
 > CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
-> CREATE VIEWS FROM SOURCE "mz_source" ("numbers")
+  FOR TABLES ("numbers");
 > SELECT * FROM "numbers";
 1 true one
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -330,7 +323,6 @@ INSERT INTO numbers VALUES (2, true, 'two');
 > SELECT * FROM "numbers";
 1 true one
 2 true two
-> DROP VIEW "numbers";
 > DROP SOURCE "mz_source";
 > DROP CONNECTION pgconn;
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -347,7 +339,7 @@ DELETE FROM numbers WHERE number = 2;
   DATABASE postgres;
 > CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
-> CREATE VIEWS FROM SOURCE "mz_source" ("numbers")
+  FOR TABLES ("numbers");
 > SELECT * FROM "numbers";
 1 true one
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -355,7 +347,6 @@ INSERT INTO numbers VALUES (2, true, 'two');
 > SELECT * FROM "numbers";
 1 true one
 2 true two
-> DROP VIEW "numbers";
 > DROP SOURCE "mz_source";
 > DROP CONNECTION pgconn;
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432

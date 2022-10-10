@@ -26,7 +26,7 @@ use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::ResolvedDatabaseSpecifier;
 use mz_stash::Append;
-use mz_storage::controller::ExportDescription;
+use mz_storage::controller::{CreateExportToken, ExportDescription};
 use mz_storage::types::sinks::{SinkAsOf, StorageSinkConnection};
 use mz_storage::types::sources::{PostgresSourceConnection, SourceConnection, Timeline};
 
@@ -88,21 +88,23 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                     CatalogItem::Source(source) => {
                         sources_to_drop.push(*id);
-                        match &source.source_desc.connection {
-                            SourceConnection::Postgres(PostgresSourceConnection {
-                                connection,
-                                details,
-                                ..
-                            }) => {
-                                let config = connection
-                                    .config(&*self.connection_context.secrets_reader)
-                                    .await
-                                    .unwrap_or_else(|e| {
-                                        panic!("Postgres source {id} missing secrets: {e}")
-                                    });
-                                replication_slots_to_drop.push((config, details.slot.clone()));
+                        if let Some(ingestion) = &source.ingestion {
+                            match &ingestion.desc.connection {
+                                SourceConnection::Postgres(PostgresSourceConnection {
+                                    connection,
+                                    details,
+                                    ..
+                                }) => {
+                                    let config = connection
+                                        .config(&*self.connection_context.secrets_reader)
+                                        .await
+                                        .unwrap_or_else(|e| {
+                                            panic!("Postgres source {id} missing secrets: {e}")
+                                        });
+                                    replication_slots_to_drop.push((config, details.slot.clone()));
+                                }
+                                _ => {}
                             }
-                            _ => {}
                         }
                     }
                     CatalogItem::Sink(catalog::Sink { connection, .. }) => match connection {
@@ -142,18 +144,18 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 // Drop the introspection sources
                 for replica in instance.replicas_by_id.values() {
-                    sources_to_drop.extend(replica.config.persisted_logs.get_source_ids());
+                    sources_to_drop.extend(replica.config.logging.source_ids());
                 }
 
                 // Drop timelines
                 timelines_to_drop.extend(self.remove_compute_instance_from_timeline(id));
-            } else if let catalog::Op::DropComputeInstanceReplica { name, compute_name } = op {
+            } else if let catalog::Op::DropComputeReplica { name, compute_name } = op {
                 let compute_instance = self.catalog.resolve_compute_instance(compute_name)?;
                 let replica_id = &compute_instance.replica_id_by_name[name];
                 let replica = &compute_instance.replicas_by_id[replica_id];
 
                 // Drop the introspection sources
-                sources_to_drop.extend(replica.config.persisted_logs.get_source_ids());
+                sources_to_drop.extend(replica.config.logging.source_ids());
             }
         }
 
@@ -395,7 +397,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn create_storage_export(
         &mut self,
-        id: GlobalId,
+        create_export_token: CreateExportToken,
         sink: &Sink,
         connection: StorageSinkConnection,
     ) -> Result<(), AdapterError> {
@@ -435,10 +437,10 @@ impl<S: Append + 'static> Coordinator<S> {
             .controller
             .storage
             .create_exports(vec![(
-                id,
+                create_export_token,
                 ExportDescription {
                     sink: storage_sink_desc,
-                    remote_addr: None,
+                    host_config: sink.host_config.clone(),
                 },
             )])
             .await?)
@@ -449,6 +451,7 @@ impl<S: Append + 'static> Coordinator<S> {
         id: GlobalId,
         oid: u32,
         connection: StorageSinkConnection,
+        create_export_token: CreateExportToken,
         session: Option<&Session>,
     ) -> Result<(), AdapterError> {
         // Update catalog entry with sink connection.
@@ -463,33 +466,42 @@ impl<S: Append + 'static> Coordinator<S> {
             ..sink.clone()
         };
 
-        let ops = vec![
-            catalog::Op::DropItem(id),
-            catalog::Op::CreateItem {
-                id,
-                oid,
-                name,
-                item: CatalogItem::Sink(sink.clone()),
-            },
-        ];
+        // We always need to drop the already existing item: either because we fail to create it or we're replacing it.
+        let mut ops = vec![catalog::Op::DropItem(id)];
 
-        let () = self.catalog_transact(session, ops, move |_| Ok(())).await?;
-        // TODO(#14220): should this happen in the same task where we build the connection?  Or should it need to happen
-        // after we update the catalog?
-        match self.create_storage_export(id, &sink, connection).await {
-            Ok(()) => Ok(()),
-            Err(storage_error) =>
-            // TODO: catalog_transact that can take async function to actually make the `CreateItem` above transactional.
-            {
-                match self
-                    .catalog_transact(session, vec![catalog::Op::DropItem(id)], move |_| Ok(()))
-                    .await
-                {
-                    Ok(()) => Err(storage_error),
-                    Err(e) => Err(e),
+        // Speculatively create the storage export before confirming in the catalog.  We chose this order of operations
+        // for the following reasons:
+        // - We want to avoid ever putting into the catalog a sink in `StorageSinkConnectionState::Ready`
+        //   if we're not able to actually create the sink for some reason
+        // - Dropping the sink will either succeed (or panic) so it's easier to reason about rolling that change back
+        //   than it is rolling back a catalog change.
+        match self
+            .create_storage_export(create_export_token, &sink, connection)
+            .await
+        {
+            Ok(()) => {
+                ops.push(catalog::Op::CreateItem {
+                    id,
+                    oid,
+                    name,
+                    item: CatalogItem::Sink(sink.clone()),
+                });
+                match self.catalog_transact(session, ops, move |_| Ok(())).await {
+                    Ok(()) => (),
+                    catalog_err @ Err(_) => {
+                        let () = self.drop_storage_sinks(vec![id]).await;
+                        catalog_err?
+                    }
                 }
             }
-        }
+            storage_err @ Err(_) => {
+                match self.catalog_transact(session, ops, move |_| Ok(())).await {
+                    Ok(()) => storage_err?,
+                    catalog_err @ Err(_) => catalog_err?,
+                }
+            }
+        };
+        Ok(())
     }
 
     /// Validate all resource limits in a catalog transaction and return an error if that limit is
@@ -527,7 +539,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 Op::CreateComputeInstance { .. } => {
                     new_clusters += 1;
                 }
-                Op::CreateComputeInstanceReplica {
+                Op::CreateComputeReplica {
                     on_cluster_name, ..
                 } => {
                     *new_replicas_per_cluster.entry(on_cluster_name).or_insert(0) += 1;
@@ -559,7 +571,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
                         | CatalogItem::Connection(_)
-                        | CatalogItem::StorageCollection(_) => {}
+                        | CatalogItem::StorageManagedTable(_) => {}
                     }
                 }
                 Op::DropDatabase { .. } => {
@@ -574,7 +586,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 Op::DropComputeInstance { .. } => {
                     new_clusters -= 1;
                 }
-                Op::DropComputeInstanceReplica { compute_name, .. } => {
+                Op::DropComputeReplica { compute_name, .. } => {
                     *new_replicas_per_cluster.entry(compute_name).or_insert(0) -= 1;
                 }
                 Op::DropItem(id) => {
@@ -605,7 +617,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
                         | CatalogItem::Connection(_)
-                        | CatalogItem::StorageCollection(_) => {}
+                        | CatalogItem::StorageManagedTable(_) => {}
                     }
                 }
                 Op::AlterSource { .. }

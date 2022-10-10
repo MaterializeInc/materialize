@@ -36,15 +36,16 @@ INSERT INTO timestamp_table VALUES ('2011-11-11 11:11:11.123456-09');
 INSERT INTO timestamp_table VALUES ('2011-11-11 11:11:11.123456+09');
 ALTER TABLE timestamp_table REPLICA IDENTITY FULL;
 
-CREATE PUBLICATION mz_source FOR ALL TABLES;
+CREATE PUBLICATION mz_source_time FOR TABLE time_table;
 
-> CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+CREATE PUBLICATION mz_source_timestamp FOR TABLE timestamp_table;
 
-> SELECT COUNT(*) > 0 FROM mz_source;
+> CREATE SOURCE mz_source_timestamp
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_timestamp')
+  FOR ALL TABLES;
+
+> SELECT COUNT(*) > 0 FROM timestamp_table;
 true
-
-> CREATE VIEWS FROM SOURCE mz_source (timestamp_table);
 
 # Insert the same data post-snapshot
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -60,6 +61,10 @@ INSERT INTO timestamp_table SELECT * FROM timestamp_table;
 "2011-11-11 20:11:11.123456 UTC"
 "2011-11-11 20:11:11.123456 UTC"
 
+> DROP SOURCE mz_source_timestamp;
+
 # Mz does not support TIME WITH TIME ZOINE
-! CREATE VIEWS FROM SOURCE mz_source (time_table);
+! CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_time')
+  FOR ALL TABLES;
 contains:unknown catalog item 'pg_catalog.timetz'

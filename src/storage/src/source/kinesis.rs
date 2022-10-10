@@ -283,6 +283,7 @@ impl SourceReader for KinesisSourceReader {
                             .unwrap_or_else(Vec::new);
                         self.processed_message_count += 1;
                         let source_message = SourceMessage {
+                            output: 0,
                             partition: PartitionId::None,
                             offset: MzOffset {
                                 //TODO: should MzOffset be modified to be a string?

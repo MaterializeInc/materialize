@@ -35,7 +35,7 @@
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-$ kafka-verify format=avro sink=materialize.public.interval_data_sink sort-messages=true
+$ kafka-verify-data format=avro sink=materialize.public.interval_data_sink sort-messages=true
 {"before": null, "after": {"row": {"interval": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}}}
 {"before": null, "after": {"row": {"interval": [0, 198, 80, 127, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}}}
 {"before": null, "after": {"row": {"interval": [0, 58, 175, 128, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}}}
@@ -49,7 +49,7 @@ $ kafka-verify format=avro sink=materialize.public.interval_data_sink sort-messa
 #  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-unnamed-cols-sink-${testdrive.seed}')
 #  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 #
-#$ kafka-verify format=avro sink=materialize.public.unnamed_cols_sink
+#$ kafka-verify-data format=avro sink=materialize.public.unnamed_cols_sink
 #{"before": null, "after": {"row": {"column1": 1, "b": 2, "column3": 3}}}
 
 # Test that invented field names do not clash with named columns.
@@ -61,7 +61,7 @@ $ kafka-verify format=avro sink=materialize.public.interval_data_sink sort-messa
 #  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-clashing-cols-sink-${testdrive.seed}')
 #  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 #
-#$ kafka-verify format=avro sink=materialize.public.clashing_cols_sink
+#$ kafka-verify-data format=avro sink=materialize.public.clashing_cols_sink
 #{"before": null, "after": {"row": {"column1": 1, "column1_1": 2, "b": 3, "b2": 4, "b3": 5}}}
 
 # Test date/time types.
@@ -70,16 +70,20 @@ $ kafka-verify format=avro sink=materialize.public.interval_data_sink sort-messa
 
 > CREATE MATERIALIZED VIEW datetime_data (date, ts, ts_tz) AS VALUES
   (DATE '2000-01-01', TIMESTAMP '2000-01-01 10:10:10.111', TIMESTAMPTZ '2000-01-01 10:10:10.111+02'),
-  (DATE '2000-02-01', TIMESTAMP '2000-02-01 10:10:10.111', TIMESTAMPTZ '2000-02-01 10:10:10.111+02')
+  (DATE '2000-02-01', TIMESTAMP '2000-02-01 10:10:10.111', TIMESTAMPTZ '2000-02-01 10:10:10.111+02'),
+  (('0001-01-01'::DATE - '1721389days'::INTERVAL)::DATE, ('0001-01-01'::DATE - '1721389days'::INTERVAL)::TIMESTAMP, ('0001-01-01'::DATE - '1721389days'::INTERVAL)::TIMESTAMPTZ),
+  (('0001-01-01'::DATE + '262142years 11months 30days'::INTERVAL)::DATE, ('0001-01-01'::DATE + '262142years 11months 30days'::INTERVAL)::TIMESTAMP, ('0001-01-01'::DATE + '262142years 11months 30days'::INTERVAL)::TIMESTAMPTZ)
 
 > CREATE SINK datetime_data_sink FROM datetime_data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-datetime-data-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-$ kafka-verify format=avro sink=materialize.public.datetime_data_sink sort-messages=true
+$ kafka-verify-data format=avro sink=materialize.public.datetime_data_sink sort-messages=true
+{"before": null, "after": {"row": {"date": -2440551, "ts": -210863606400000000, "ts_tz": -210863606400000000}}}
 {"before": null, "after": {"row": {"date": 10957, "ts": 946721410111000, "ts_tz": 946714210111000}}}
 {"before": null, "after": {"row": {"date": 10988, "ts": 949399810111000, "ts_tz": 949392610111000}}}
+{"before": null, "after": {"row": {"date": 95026601, "ts": 8210298326400000000, "ts_tz": 8210298326400000000}}}
 
 > CREATE MATERIALIZED VIEW time_data (time) AS VALUES (TIME '01:02:03'), (TIME '01:02:04'), (TIME '00:00:00'), (TIME '23:59:59')
 
@@ -88,7 +92,7 @@ $ kafka-verify format=avro sink=materialize.public.datetime_data_sink sort-messa
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-$ kafka-verify format=avro sink=materialize.public.time_data_sink sort-messages=true
+$ kafka-verify-data format=avro sink=materialize.public.time_data_sink sort-messages=true
 {"before": null, "after": {"row": {"time": 0}}}
 {"before": null, "after": {"row": {"time": 3723000000}}}
 {"before": null, "after": {"row": {"time": 3724000000}}}
@@ -114,7 +118,7 @@ $ kafka-verify format=avro sink=materialize.public.time_data_sink sort-messages=
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-$ kafka-verify format=avro sink=materialize.public.map_sink sort-messages=true
+$ kafka-verify-data format=avro sink=materialize.public.map_sink sort-messages=true
 {"before": null, "after": {"row": {"map": {"a": {"int": 1}, "b": {"int": 2}}}}}
 
 > CREATE MATERIALIZED VIEW list_data (list) AS SELECT LIST[1, 2];
@@ -124,7 +128,7 @@ $ kafka-verify format=avro sink=materialize.public.map_sink sort-messages=true
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-$ kafka-verify format=avro sink=materialize.public.list_sink sort-messages=true
+$ kafka-verify-data format=avro sink=materialize.public.list_sink sort-messages=true
 {"before": null, "after": {"row": {"list": [{"int": 1}, {"int": 2}]}}}
 
 # Test optional namespace for auto-generated value schema
@@ -136,10 +140,10 @@ $ kafka-verify format=avro sink=materialize.public.list_sink sort-messages=true
     CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO VALUE FULLNAME = 'abc.def.ghi')
   ENVELOPE DEBEZIUM
 
-$ kafka-verify-schema format=avro sink=materialize.public.namespace_value_sink
+$ schema-registry-verify schema-type=avro subject=testdrive-namespace-value-sink-${testdrive.seed}-value
 {"type":"record","name":"ghi","namespace":"abc.def","fields":[{"name":"before","type":["null",{"type":"record","name":"row","fields":[{"name":"namespace","type":"int"}]}]},{"name":"after","type":["null","row"]}]}
 
-$ kafka-verify format=avro sink=materialize.public.namespace_value_sink sort-messages=true
+$ kafka-verify-data format=avro sink=materialize.public.namespace_value_sink sort-messages=true
 {"before": null, "after": {"row": {"namespace": 1}}}
 
 # Test optional namespaces for autogenerated key and value schemas
@@ -151,11 +155,13 @@ $ kafka-verify format=avro sink=materialize.public.namespace_value_sink sort-mes
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO KEY FULLNAME = 'some.neat.class.foo', AVRO VALUE FULLNAME = 'some.neat.class.bar')
   ENVELOPE DEBEZIUM
 
-$ kafka-verify-schema format=avro sink=materialize.public.namespace_key_value_sink
+$ schema-registry-verify schema-type=avro subject=testdrive-namespace-key-value-sink-${testdrive.seed}-key
 {"type":"record","name":"foo","namespace":"some.neat.class","fields":[{"name":"b","type":"int"}]}
+
+$ schema-registry-verify schema-type=avro subject=testdrive-namespace-key-value-sink-${testdrive.seed}-value
 {"type":"record","name":"bar","namespace":"some.neat.class","fields":[{"name":"before","type":["null",{"type":"record","name":"row","fields":[{"name":"a","type":"int"},{"name":"b","type":"int"}]}]},{"name":"after","type":["null","row"]}]}
 
-$ kafka-verify format=avro sink=materialize.public.namespace_key_value_sink sort-messages=true
+$ kafka-verify-data format=avro sink=materialize.public.namespace_key_value_sink sort-messages=true
 {"b": 2} {"before": null, "after": {"row": {"a": 1, "b": 2}}}
 
 # Bad Sinks

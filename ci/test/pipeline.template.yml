@@ -197,7 +197,7 @@ steps:
   - id: replica-isolation
     label: Replica isolation
     depends_on: build-x86_64
-    timeout_in_minutes: 10
+    timeout_in_minutes: 20
     inputs: [test/replica-isolation]
     plugins:
       - ./ci/plugins/mzcompose:
@@ -539,7 +539,7 @@ steps:
     inputs: [test/cloudtest]
     plugins:
       - ./ci/plugins/cloudtest:
-          args: [test/cloudtest/]
+          args: [-m, "not long", test/cloudtest/]
 
   - id: lang-csharp
     label: ":csharp: tests"

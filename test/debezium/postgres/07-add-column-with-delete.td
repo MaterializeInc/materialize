@@ -18,7 +18,7 @@ CREATE TABLE alter_add_column_with_delete (f1 INTEGER, f2 INTEGER PRIMARY KEY);
 ALTER TABLE alter_add_column_with_delete REPLICA IDENTITY FULL;
 INSERT INTO alter_add_column_with_delete VALUES (123, 0),(123, 1),(123, 2),(123, 3);
 
-$ schema-registry-wait-schema schema=postgres.public.alter_add_column_with_delete-value
+$ schema-registry-wait subject=postgres.public.alter_add_column_with_delete-value
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY

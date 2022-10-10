@@ -7,9 +7,21 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from _pytest.config import Config
+
 import pytest
 
 from materialize.cloudtest.application import MaterializeApplication
+
+
+def pytest_configure(config: "Config") -> None:
+    config.addinivalue_line(
+        "markers",
+        "long: A long running test. Select with -m=long, deselect with -m 'not long'",
+    )
 
 
 @pytest.fixture(scope="session")

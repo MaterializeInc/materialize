@@ -17,11 +17,12 @@ use mz_repr::GlobalId;
 use mz_storage::types::connections::StringOrSecret;
 
 use crate::ast::{AstInfo, IntervalValue, Value, WithOptionValue};
-use crate::names::ResolvedObjectName;
+use crate::names::{ResolvedDataType, ResolvedObjectName};
 use crate::plan::{Aug, PlanError};
 
 pub trait TryFromValue<T>: Sized {
     fn try_from_value(v: T) -> Result<Self, PlanError>;
+    fn name() -> String;
 }
 
 pub trait ImpliedValue: Sized {
@@ -43,6 +44,9 @@ impl TryFromValue<WithOptionValue<Aug>> for Secret {
             StringOrSecret::Secret(id) => Ok(Secret(id)),
             _ => sql_bail!("must provide a secret value"),
         }
+    }
+    fn name() -> String {
+        "secret".to_string()
     }
 }
 
@@ -74,11 +78,32 @@ impl TryFromValue<WithOptionValue<Aug>> for Object {
             _ => sql_bail!("must provide an object"),
         })
     }
+    fn name() -> String {
+        "object reference".to_string()
+    }
 }
 
 impl ImpliedValue for Object {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide an object")
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for ResolvedDataType {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        Ok(match v {
+            WithOptionValue::DataType(ty) => ty,
+            _ => sql_bail!("must provide a data type"),
+        })
+    }
+    fn name() -> String {
+        "data type".to_string()
+    }
+}
+
+impl ImpliedValue for ResolvedDataType {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a data type")
     }
 }
 
@@ -90,6 +115,9 @@ impl TryFromValue<WithOptionValue<Aug>> for StringOrSecret {
             }
             v => StringOrSecret::String(String::try_from_value(v)?),
         })
+    }
+    fn name() -> String {
+        "string or secret".to_string()
     }
 }
 
@@ -107,6 +135,9 @@ impl TryFromValue<Value> for Interval {
             | Value::String(value) => strconv::parse_interval(&value)?,
             _ => sql_bail!("cannot use value as interval"),
         })
+    }
+    fn name() -> String {
+        "interval".to_string()
     }
 }
 
@@ -138,6 +169,9 @@ impl TryFromValue<Value> for OptionalInterval {
             v => Interval::try_from_value(v)?.into(),
         })
     }
+    fn name() -> String {
+        "optional interval".to_string()
+    }
 }
 
 impl ImpliedValue for OptionalInterval {
@@ -153,6 +187,9 @@ impl TryFromValue<Value> for String {
             _ => sql_bail!("cannot use value as string"),
         }
     }
+    fn name() -> String {
+        "text".to_string()
+    }
 }
 
 impl ImpliedValue for String {
@@ -167,6 +204,9 @@ impl TryFromValue<Value> for bool {
             Value::Boolean(v) => Ok(v),
             _ => sql_bail!("cannot use value as boolean"),
         }
+    }
+    fn name() -> String {
+        "bool".to_string()
     }
 }
 
@@ -185,6 +225,9 @@ impl TryFromValue<Value> for i32 {
             _ => sql_bail!("cannot use value as number"),
         }
     }
+    fn name() -> String {
+        "int".to_string()
+    }
 }
 
 impl ImpliedValue for i32 {
@@ -201,6 +244,9 @@ impl TryFromValue<Value> for i64 {
                 .map_err(|e| sql_err!("invalid numeric value: {e}")),
             _ => sql_bail!("cannot use value as number"),
         }
+    }
+    fn name() -> String {
+        "int8".to_string()
     }
 }
 
@@ -219,11 +265,34 @@ impl TryFromValue<Value> for u16 {
             _ => sql_bail!("cannot use value as number"),
         }
     }
+    fn name() -> String {
+        "uint2".to_string()
+    }
 }
 
 impl ImpliedValue for u16 {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide an integer value")
+    }
+}
+
+impl TryFromValue<Value> for u64 {
+    fn try_from_value(v: Value) -> Result<Self, PlanError> {
+        match v {
+            Value::Number(v) => v
+                .parse::<u64>()
+                .map_err(|e| sql_err!("invalid unsigned numeric value: {e}")),
+            _ => sql_bail!("cannot use value as number"),
+        }
+    }
+    fn name() -> String {
+        "uint8".to_string()
+    }
+}
+
+impl ImpliedValue for u64 {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an unsigned integer value")
     }
 }
 
@@ -243,6 +312,9 @@ impl<V: TryFromValue<Value>> TryFromValue<Value> for Vec<V> {
             _ => sql_bail!("cannot use value as array"),
         }
     }
+    fn name() -> String {
+        format!("array of {}", V::name())
+    }
 }
 
 impl<V: TryFromValue<Value>> ImpliedValue for Vec<V> {
@@ -256,6 +328,10 @@ impl<T: AstInfo, V: TryFromValue<WithOptionValue<T>>> TryFromValue<WithOptionVal
 {
     fn try_from_value(v: WithOptionValue<T>) -> Result<Self, PlanError> {
         Ok(Some(V::try_from_value(v)?))
+    }
+
+    fn name() -> String {
+        format!("optional {}", V::name())
     }
 }
 
@@ -272,8 +348,20 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
             WithOptionValue::Ident(i) => V::try_from_value(Value::String(i.to_string())),
             WithOptionValue::Object(_)
             | WithOptionValue::Secret(_)
-            | WithOptionValue::DataType(_) => sql_bail!("incompatible value types"),
+            | WithOptionValue::DataType(_) => sql_bail!(
+                "incompatible value types: cannot convert {} to {}",
+                match v {
+                    WithOptionValue::Object(_) => "object references",
+                    WithOptionValue::Secret(_) => "secrets",
+                    WithOptionValue::DataType(_) => "data types",
+                    _ => unreachable!(),
+                },
+                V::name()
+            ),
         }
+    }
+    fn name() -> String {
+        V::name()
     }
 }
 
@@ -283,5 +371,8 @@ impl<T, V: TryFromValue<T> + ImpliedValue> TryFromValue<Option<T>> for V {
             Some(v) => V::try_from_value(v),
             None => V::implied_value(),
         }
+    }
+    fn name() -> String {
+        V::name()
     }
 }

@@ -9,6 +9,7 @@
 
 use anyhow::Context;
 use mz_repr::adt::date::Date;
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -347,7 +348,10 @@ impl<'a, 'row> AvroDecode for AvroFlatDecoder<'a, 'row> {
             mz_avro::types::Scalar::Date(val) => self.packer.push(Datum::Date(
                 Date::from_unix_epoch(val).map_err(|_| DecodeError::DateOutOfRange(val))?,
             )),
-            mz_avro::types::Scalar::Timestamp(val) => self.packer.push(Datum::Timestamp(val)),
+            mz_avro::types::Scalar::Timestamp(val) => self.packer.push(Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(val)
+                    .map_err(|_| DecodeError::TimestampOutOfRange(val))?,
+            )),
         }
         Ok(())
     }

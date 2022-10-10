@@ -28,8 +28,7 @@ INSERT INTO upgrade_pg_cdc_table VALUES (1),(2),(3),(4),(5);
   FROM POSTGRES
   CONNECTION pgconn
   (PUBLICATION 'upgrade_pg_cdc_publication')
-
-> CREATE VIEWS FROM SOURCE upgrade_pg_cdc_source;
+  FOR ALL TABLES;
 
 > SELECT * FROM upgrade_pg_cdc_table;
 1

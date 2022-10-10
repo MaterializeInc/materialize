@@ -1052,8 +1052,8 @@ fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
   can respond immediately: <BOOL>
 
 source materialize.public.t1 (u1, storage):
- read frontier:[<TIMESTAMP>]
-write frontier:[<TIMESTAMP>]\n";
+            read frontier:[<TIMESTAMP>]
+           write frontier:[<TIMESTAMP>]\n";
 
     let row = client
         .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
@@ -1705,10 +1705,8 @@ fn create_postgres_source_with_table(
         "CREATE SOURCE {source_name}
             FROM POSTGRES
             CONNECTION pgconn
-            (PUBLICATION '{source_name}');"
-    ))?;
-    mz_client.batch_execute(&format!(
-        "CREATE VIEWS FROM SOURCE {source_name} ({table_name});"
+            (PUBLICATION '{source_name}')
+            FOR TABLES ({table_name});"
     ))?;
 
     let table_name = table_name.to_string();
@@ -1716,7 +1714,6 @@ fn create_postgres_source_with_table(
     Ok((
         pg_client,
         move |mz_client: &mut postgres::Client, pg_client: &mut Client, runtime: &Arc<Runtime>| {
-            mz_client.batch_execute(&format!("DROP VIEW {table_name};"))?;
             mz_client.batch_execute(&format!("DROP SOURCE {source_name};"))?;
             mz_client.batch_execute("DROP CONNECTION pgconn;")?;
 
@@ -1761,7 +1758,7 @@ fn test_load_generator() -> Result<(), Box<dyn Error>> {
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     client
-        .batch_execute("CREATE SOURCE counter FROM LOAD GENERATOR COUNTER TICK INTERVAL '1ms'")
+        .batch_execute("CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1ms')")
         .unwrap();
 
     let row = client

@@ -32,9 +32,8 @@ INSERT INTO add_columns VALUES (1);
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
-
-> CREATE VIEWS FROM SOURCE mz_source;
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR ALL TABLES;
 
 > SELECT * FROM add_columns;
 1
@@ -46,7 +45,6 @@ INSERT INTO add_columns VALUES (2, 'ab');
 ! SELECT * from add_columns;
 contains:altered
 
-> DROP VIEW add_columns;
 > DROP SOURCE mz_source;
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -63,9 +61,8 @@ INSERT INTO remove_column VALUES (2, 'ab');
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
-
-> CREATE VIEWS FROM SOURCE mz_source;
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR ALL TABLES;
 
 > SELECT * from remove_column;
 2 ab
@@ -77,7 +74,6 @@ INSERT INTO remove_column VALUES (3);
 ! SELECT * from remove_column;
 contains:altered
 
-> DROP VIEW remove_column;
 > DROP SOURCE mz_source;
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -94,9 +90,8 @@ INSERT INTO alter_column VALUES (2, 'ab');
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
-
-> CREATE VIEWS FROM SOURCE mz_source;
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR ALL TABLES;
 
 > SELECT * from alter_column;
 2 ab
@@ -107,7 +102,6 @@ INSERT INTO alter_column VALUES (3, 'bc');
 
 ! SELECT * from alter_column;
 contains:altered
-> DROP VIEW alter_column;
 > DROP SOURCE mz_source;
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -124,9 +118,8 @@ INSERT INTO alter_nullability VALUES (1);
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
-
-> CREATE VIEWS FROM SOURCE mz_source;
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR ALL TABLES;
 
 > SELECT * from alter_nullability
 1
@@ -141,7 +134,6 @@ INSERT INTO alter_nullability VALUES (NULL);
 > SELECT * FROM alter_nullability WHERE f1 IS NULL;
 <null>
 
-> DROP VIEW alter_nullability;
 > DROP SOURCE mz_source;
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -158,9 +150,8 @@ INSERT INTO alter_drop_pk VALUES (1);
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
-
-> CREATE VIEWS FROM SOURCE mz_source;
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR ALL TABLES;
 
 > SELECT * from alter_drop_pk
 1
@@ -173,7 +164,6 @@ INSERT INTO alter_drop_pk VALUES (1);
 > SELECT DISTINCT f1 FROM alter_drop_pk;
 1
 
-> DROP VIEW alter_drop_pk;
 > DROP SOURCE mz_source;
 
 
@@ -199,9 +189,8 @@ INSERT INTO alter_extend_column VALUES ('ab');
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
-
-> CREATE VIEWS FROM SOURCE mz_source;
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR ALL TABLES;
 
 > SELECT * from alter_extend_column
 ab
@@ -213,7 +202,6 @@ INSERT INTO alter_extend_column VALUES ('abcd');
 ! SELECT * FROM alter_extend_column;
 contains:altered
 
-> DROP VIEW alter_extend_column;
 > DROP SOURCE mz_source;
 
 
@@ -232,9 +220,8 @@ INSERT INTO alter_decimal VALUES (123.45);
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
-
-> CREATE VIEWS FROM SOURCE mz_source;
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR ALL TABLES;
 
 > SELECT * from alter_decimal
 123.45
@@ -246,7 +233,6 @@ INSERT INTO alter_decimal VALUES (12345.6);
 ! SELECT * FROM alter_decimal;
 contains:altered
 
-> DROP VIEW alter_decimal;
 > DROP SOURCE mz_source;
 
 
@@ -265,9 +251,8 @@ INSERT INTO alter_set_with_oids VALUES (1);
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
-
-> CREATE VIEWS FROM SOURCE mz_source;
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR ALL TABLES;
 
 > SELECT * from alter_set_with_oids
 1
@@ -280,7 +265,6 @@ INSERT INTO alter_set_with_oids VALUES (2);
 1
 2
 
-> DROP VIEW alter_set_with_oids;
 > DROP SOURCE mz_source;
 
 
@@ -300,9 +284,8 @@ INSERT INTO alter_set_without_oids VALUES (1);
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
-
-> CREATE VIEWS FROM SOURCE mz_source;
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR ALL TABLES;
 
 > SELECT * from alter_set_without_oids
 1
@@ -315,7 +298,6 @@ INSERT INTO alter_set_without_oids VALUES (2);
 1
 2
 
-> DROP VIEW alter_set_without_oids;
 > DROP SOURCE mz_source;
 
 
@@ -334,9 +316,8 @@ INSERT INTO alter_table_rename VALUES (1);
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
-
-> CREATE VIEWS FROM SOURCE mz_source;
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR ALL TABLES;
 
 > SELECT * from alter_table_rename;
 1
@@ -348,15 +329,10 @@ INSERT INTO alter_table_renamed VALUES (2);
 ! SELECT * FROM alter_table_rename;
 contains:altered
 
-! CREATE VIEWS FROM SOURCE mz_source (alter_table_renamed);
-contains:alter_table_renamed not found
-
-> DROP VIEW alter_table_rename;
 > DROP SOURCE mz_source;
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
-
-> CREATE VIEWS FROM SOURCE mz_source (alter_table_renamed);
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES (alter_table_renamed);
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO alter_table_renamed VALUES (3);
@@ -366,7 +342,6 @@ INSERT INTO alter_table_renamed VALUES (3);
 2
 3
 
-> DROP VIEW alter_table_renamed;
 > DROP SOURCE mz_source;
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -383,9 +358,8 @@ INSERT INTO alter_table_rename_column (f1, f2) VALUES ('f1_orig','f2_orig');
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
-
-> CREATE VIEWS FROM SOURCE mz_source;
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR ALL TABLES;
 
 > SELECT * from alter_table_rename_column;
 f1_orig f2_orig
@@ -399,5 +373,4 @@ INSERT INTO alter_table_rename_column (f1, f2) VALUES ('f1_renamed', 'f2_renamed
 ! SELECT * FROM alter_table_rename_column;
 contains:altered
 
-> DROP VIEW alter_table_rename_column;
 > DROP SOURCE mz_source;

@@ -13,14 +13,17 @@ use anyhow::{bail, Context};
 
 use mz_ccsr::{SchemaReference, SchemaType};
 use mz_ore::retry::Retry;
+use mz_ore::str::StrExt;
 
 use crate::action::{ControlFlow, State};
+use crate::format::avro;
 use crate::parser::BuiltinCommand;
 
 pub async fn run_publish(
     mut cmd: BuiltinCommand,
     state: &mut State,
 ) -> Result<ControlFlow, anyhow::Error> {
+    // Parse arguments.
     let subject = cmd.args.string("subject")?;
     let schema_type = match cmd.args.string("schema-type")?.as_str() {
         "avro" => SchemaType::Avro,
@@ -28,15 +31,20 @@ pub async fn run_publish(
         "protobuf" => SchemaType::Protobuf,
         s => bail!("unknown schema type: {}", s),
     };
-    let references_outer = match cmd.args.opt_string("references") {
+    let references_in = match cmd.args.opt_string("references") {
         None => vec![],
         Some(s) => s.split(',').map(|s| s.to_string()).collect(),
     };
-
+    cmd.args.done()?;
     let schema = cmd.input.join("\n");
 
+    // Run action.
+    println!(
+        "Publishing schema for subject {} to the schema registry...",
+        subject.quoted(),
+    );
     let mut references = vec![];
-    for reference in references_outer {
+    for reference in references_in {
         let subject = state
             .ccsr_client
             .get_subject(&reference)
@@ -56,13 +64,60 @@ pub async fn run_publish(
     Ok(ControlFlow::Continue)
 }
 
+pub async fn run_verify(
+    mut cmd: BuiltinCommand,
+    state: &mut State,
+) -> Result<ControlFlow, anyhow::Error> {
+    // Parse arguments.
+    let subject = cmd.args.string("subject")?;
+    match cmd.args.string("schema-type")?.as_str() {
+        "avro" => (),
+        f => bail!("unknown format: {}", f),
+    };
+    cmd.args.done()?;
+    let expected_schema = match &cmd.input[..] {
+        [expected_schema] => {
+            avro::parse_schema(expected_schema).context("parsing expected avro schema")?
+        }
+        _ => bail!("unable to read expected schema input"),
+    };
+
+    // Run action.
+    println!(
+        "Verifying contents of latest schema for subject {} in the schema registry...",
+        subject.quoted(),
+    );
+    let actual_schema = state
+        .ccsr_client
+        .get_schema_by_subject(&subject)
+        .await
+        .context("fetching schema")?
+        .raw;
+    let actual_schema = avro::parse_schema(&actual_schema).context("parsing actual avro schema")?;
+    if expected_schema != actual_schema {
+        bail!(
+            "schema did not match\nexpected:\n{:?}\n\nactual:\n{:?}",
+            expected_schema,
+            actual_schema,
+        );
+    }
+    Ok(ControlFlow::Continue)
+}
+
 pub async fn run_wait(
     mut cmd: BuiltinCommand,
     state: &mut State,
 ) -> Result<ControlFlow, anyhow::Error> {
-    let schema = cmd.args.string("schema")?;
+    // Parse arguments.
+    let subject = cmd.args.string("subject")?;
     cmd.args.done()?;
+    cmd.assert_no_input()?;
 
+    // Run action.
+    println!(
+        "Waiting for schema for subject {} to become available in the schema registry...",
+        subject.quoted(),
+    );
     Retry::default()
         .initial_backoff(Duration::from_millis(50))
         .factor(1.5)
@@ -70,7 +125,7 @@ pub async fn run_wait(
         .retry_async_canceling(|_| async {
             state
                 .ccsr_client
-                .get_schema_by_subject(&schema)
+                .get_schema_by_subject(&subject)
                 .await
                 .context("fetching schema")
                 .and(Ok(()))

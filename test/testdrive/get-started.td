@@ -9,29 +9,30 @@
 
 # This test verifies the get started page works.
 
-> CREATE SOURCE demo FROM LOAD GENERATOR AUCTION TICK INTERVAL '50ms'
+> CREATE SOURCE demo FROM LOAD GENERATOR AUCTION (TICK INTERVAL '50ms') FOR ALL TABLES
 
-> CREATE VIEWS FROM SOURCE demo
-
-> SHOW VIEWS
- accounts
- auctions
- bids
- organizations
- users
+> SHOW SOURCES
+name          type           size
+----------------------------------
+demo          load-generator 1
+accounts      subsource      1
+auctions      subsource      1
+bids          subsource      1
+organizations subsource      1
+users         subsource      1
 
 > SHOW COLUMNS FROM auctions
-end_time true "timestamp with time zone"
-id true bigint
-item true text
-seller true bigint
+end_time false "timestamp with time zone"
+id false bigint
+item false text
+seller false bigint
 
 > SHOW COLUMNS FROM bids
-amount true integer
-auction_id true bigint
-bid_time true "timestamp with time zone"
-buyer true bigint
-id true bigint
+amount false integer
+auction_id false bigint
+bid_time false "timestamp with time zone"
+buyer false bigint
+id false bigint
 
 > CREATE VIEW on_time_bids AS
   SELECT

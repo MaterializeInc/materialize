@@ -226,6 +226,12 @@ pub trait IndentLike {
     fn indented<F>(&mut self, f: F) -> fmt::Result
     where
         F: FnMut(&mut Self) -> fmt::Result;
+
+    /// Same as [`IndentLike::indented`], but the `f` only going to be printed
+    /// in an indented context if `guard` is `true`.
+    fn indented_if<F>(&mut self, guard: bool, f: F) -> fmt::Result
+    where
+        F: FnMut(&mut Self) -> fmt::Result;
 }
 
 impl IndentLike for Indent {
@@ -238,6 +244,21 @@ impl IndentLike for Indent {
         *self -= 1;
         result
     }
+
+    fn indented_if<F>(&mut self, guard: bool, mut f: F) -> fmt::Result
+    where
+        F: FnMut(&mut Self) -> fmt::Result,
+    {
+        if guard {
+            *self += 1;
+        }
+        let result = f(self);
+
+        if guard {
+            *self -= 1;
+        }
+        result
+    }
 }
 
 impl<T: AsMut<Indent>> IndentLike for T {
@@ -248,6 +269,21 @@ impl<T: AsMut<Indent>> IndentLike for T {
         *self.as_mut() += 1;
         let result = f(self);
         *self.as_mut() -= 1;
+        result
+    }
+
+    fn indented_if<F>(&mut self, guard: bool, mut f: F) -> fmt::Result
+    where
+        F: FnMut(&mut Self) -> fmt::Result,
+    {
+        if guard {
+            *self.as_mut() += 1;
+        }
+        let result = f(self);
+
+        if guard {
+            *self.as_mut() -= 1;
+        }
         result
     }
 }

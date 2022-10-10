@@ -203,7 +203,7 @@ A
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-$ kafka-verify format=avro sink=materialize.public.sink1 sort-messages=true
+$ kafka-verify-data format=avro sink=materialize.public.sink1 sort-messages=true
 {"before": null, "after": {"row":{"c1": 3}}}
 """,
     )

@@ -223,6 +223,9 @@ pub enum SourceMessageType<Key, Value, Diff> {
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
 pub struct SourceMessage<Key, Value, Diff> {
+    /// The output stream this message belongs to. Later in the pipeline the stream is partitioned
+    /// based on this value and is fed to the appropriate source exports
+    pub output: usize,
     /// Partition from which this message originates
     pub partition: PartitionId,
     /// Materialize offset of the message (1-indexed)

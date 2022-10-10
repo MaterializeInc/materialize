@@ -345,7 +345,7 @@ fn show_sources<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let query = format!(
-        "SELECT name, type
+        "SELECT name, type, size
         FROM mz_catalog.mz_sources
         WHERE schema_id = {schema_spec}"
     );
@@ -407,7 +407,7 @@ fn show_sinks<'a>(
     let query_filters = itertools::join(query_filters.iter(), " AND ");
 
     let query = format!(
-        "SELECT sinks.name
+        "SELECT sinks.name, sinks.type, sinks.size
         FROM mz_catalog.mz_sinks AS sinks
         WHERE {query_filters}",
     );
@@ -650,13 +650,7 @@ impl<'a> ShowSelect<'a> {
 
     /// Converts this `ShowSelect` into a [`(HirRelationExpr, Scope)`].
     pub fn plan_hir(self, qcx: &QueryContext) -> Result<(HirRelationExpr, Scope), PlanError> {
-        let query::PlannedQuery {
-            expr,
-            desc,
-            finishing: _,
-        } = query::plan_root_query(self.scx, self.stmt.query, qcx.lifetime)?;
-        let scope = Scope::from_source(None, desc.iter_names());
-        Ok((expr, scope))
+        query::plan_nested_query(&mut qcx.clone(), &self.stmt.query)
     }
 }
 

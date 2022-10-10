@@ -9,7 +9,7 @@
 
 use std::cmp;
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use regex::Regex;
 
 use crate::action::{ControlFlow, State};
@@ -51,7 +51,7 @@ pub fn run_sql_timeout(
     let duration = if duration.to_lowercase() == "default" {
         None
     } else {
-        Some(mz_repr::util::parse_duration(&duration).context("parsing duration")?)
+        Some(humantime::parse_duration(&duration).context("parsing duration")?)
     };
     let force = cmd.args.opt_bool("force")?.unwrap_or(false);
     cmd.args.done()?;
@@ -82,6 +82,31 @@ pub fn set_vars(cmd: BuiltinCommand, state: &mut State) -> Result<ControlFlow, a
             state.cmd_vars.insert(key, val);
         }
     }
+
+    Ok(ControlFlow::Continue)
+}
+
+pub async fn run_set_from_sql(
+    mut cmd: BuiltinCommand,
+    state: &mut State,
+) -> Result<ControlFlow, anyhow::Error> {
+    let var = cmd.args.string("var")?;
+    cmd.args.done()?;
+
+    let row = state
+        .pgclient
+        .query_one(&cmd.input.join("\n"), &[])
+        .await
+        .context("running query")?;
+    if row.columns().len() != 1 {
+        bail!(
+            "set-from-sql query must return exactly one column, but it returned {}",
+            row.columns().len()
+        );
+    }
+    let value: String = row.try_get(0).context("deserializing value as string")?;
+
+    state.cmd_vars.insert(var, value);
 
     Ok(ControlFlow::Continue)
 }

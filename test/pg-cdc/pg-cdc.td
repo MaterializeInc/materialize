@@ -97,9 +97,8 @@ CREATE TABLE "space table" ("space column" INTEGER);
 $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
 
 > CREATE SOURCE "test_slot_source"
-  FROM POSTGRES
-    CONNECTION pg
-    (PUBLICATION 'mz_source');
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES ("pk_table");
 
 $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=true
 
@@ -166,49 +165,34 @@ contains:db error: FATAL: database "no_such_dbname" does not exist
   FROM POSTGRES CONNECTION pg (PUBLICATION 'no_such_publication');
 contains:publication "no_such_publication" does not exist
 
-> CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
-
-> CREATE VIEWS FROM SOURCE "mz_source" ("no_replica_identity")
-# TODO: This should produce an error
-
-#
-# This succeeds on the Mz side but updates are prevented on the Postgres side
-#
-
-> SELECT * FROM no_replica_identity;
-1
-2
 
 #
 # Establish direct replication
 #
+#
+# TODO: This should produce an error because we included the `no_replica_identity` table
+> CREATE SOURCE "mz_source"
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES (
+    "no_replica_identity",
+    "pk_table",
+    "nonpk_table",
+    "types_table",
+    "large_text",
+    "trailing_space_pk",
+    "trailing_space_nopk",
+    "multipart_pk",
+    "nulls_table",
+    "utf8_table",
+    "таблица",
+    "escaped_text_table",
+    conflict_schema.conflict_table AS public.conflict_table,
+    "space table"
+  );
 
-> CREATE VIEWS FROM SOURCE "mz_source" ("pk_table");
-
-> CREATE VIEWS FROM SOURCE "public"."mz_source" ("nonpk_table");
-
-> CREATE VIEWS FROM SOURCE "materialize"."public"."mz_source" ("types_table");
-
-> CREATE VIEWS FROM SOURCE mz_source ("large_text");
-
-> CREATE VIEWS FROM SOURCE public.mz_source ("trailing_space_pk");
-
-> CREATE VIEWS FROM SOURCE materialize.public.mz_source ("trailing_space_nopk");
-
-> CREATE VIEWS FROM SOURCE public."mz_source" ("multipart_pk");
-
-> CREATE VIEWS FROM SOURCE "materialize".public."mz_source" ("nulls_table");
-
-> CREATE VIEWS FROM SOURCE "materialize"."public".mz_source ("utf8_table");
-
-> CREATE VIEWS FROM SOURCE materialize."public".mz_source ("таблица");
-
-> CREATE VIEWS FROM SOURCE mz_source ("escaped_text_table");
-
-> CREATE VIEWS FROM SOURCE "mz_source" (conflict_schema.conflict_table AS public.conflict_table);
-
-> CREATE VIEWS FROM SOURCE "mz_source" ("space table");
+> SELECT * FROM no_replica_identity;
+1
+2
 
 #
 # Perform sanity checks of the initial snapshot

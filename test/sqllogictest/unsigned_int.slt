@@ -1327,6 +1327,11 @@ SELECT STDDEV(a) FROM t4
 ----
 1239831340.320
 
+# This query overflows, thus the result is wrong
+# known issue https://github.com/MaterializeInc/materialize/issues/15186
+query error cannot take square root
+SELECT STDDEV(a) FROM t8
+
 # Avoid overflow (known issue https://github.com/MaterializeInc/materialize/issues/14695)
 statement ok
 DROP TABLE t8

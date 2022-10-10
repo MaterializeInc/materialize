@@ -11,13 +11,12 @@ use std::collections::BTreeSet;
 
 use mz_compute_client::controller::{ComputeInstanceId, ComputeInstanceRef};
 use mz_expr::MirScalarExpr;
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, TimestampManipulation};
 use mz_stash::Append;
 use mz_transform::IndexOracle;
 
-use crate::catalog::{CatalogItem, CatalogState, Index};
+use crate::catalog::{CatalogItem, CatalogState, Index, Log};
 use crate::coord::dataflows::DataflowBuilder;
-use crate::coord::CoordTimestamp;
 use crate::coord::{CollectionIdBundle, Coordinator};
 
 /// Answers questions about the indexes available on a particular compute
@@ -52,7 +51,7 @@ impl<T: Copy> DataflowBuilder<'_, T> {
     }
 }
 
-impl<T: CoordTimestamp> ComputeInstanceIndexOracle<'_, T> {
+impl<T: TimestampManipulation> ComputeInstanceIndexOracle<'_, T> {
     /// Identifies a bundle of storage and compute collection ids sufficient for
     /// building a dataflow for the identifiers in `ids` out of the indexes
     /// available in this compute instance.
@@ -82,11 +81,22 @@ impl<T: CoordTimestamp> ComputeInstanceIndexOracle<'_, T> {
                     }
                     CatalogItem::Source(_)
                     | CatalogItem::Table(_)
-                    | CatalogItem::Log(_)
                     | CatalogItem::MaterializedView(_)
-                    | CatalogItem::StorageCollection(_) => {
+                    | CatalogItem::StorageManagedTable(_)
+                    | CatalogItem::Log(Log {
+                        has_storage_collection: true,
+                        ..
+                    }) => {
                         // Record that we are missing at least one index.
                         id_bundle.storage_ids.insert(id);
+                    }
+                    CatalogItem::Log(Log {
+                        has_storage_collection: false,
+                        ..
+                    }) => {
+                        // Log sources without storage collections should always
+                        // be protected by an index.
+                        panic!("log source without storage collection {id} is missing index");
                     }
                     _ => {
                         // Non-indexable thing; no work to do.
@@ -106,7 +116,7 @@ impl<T: CoordTimestamp> ComputeInstanceIndexOracle<'_, T> {
     }
 }
 
-impl<T: CoordTimestamp> IndexOracle for ComputeInstanceIndexOracle<'_, T> {
+impl<T: TimestampManipulation> IndexOracle for ComputeInstanceIndexOracle<'_, T> {
     fn indexes_on(&self, id: GlobalId) -> Box<dyn Iterator<Item = &[MirScalarExpr]> + '_> {
         Box::new(
             ComputeInstanceIndexOracle::indexes_on(self, id)

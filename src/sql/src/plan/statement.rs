@@ -126,10 +126,10 @@ pub fn describe(
         Statement::CreateSecret(stmt) => ddl::describe_create_secret(&scx, stmt)?,
         Statement::CreateSink(stmt) => ddl::describe_create_sink(&scx, stmt)?,
         Statement::CreateSource(stmt) => ddl::describe_create_source(&scx, stmt)?,
+        Statement::CreateSubsource(stmt) => ddl::describe_create_subsource(&scx, stmt)?,
         Statement::CreateTable(stmt) => ddl::describe_create_table(&scx, stmt)?,
         Statement::CreateType(stmt) => ddl::describe_create_type(&scx, stmt)?,
         Statement::CreateView(stmt) => ddl::describe_create_view(&scx, stmt)?,
-        Statement::CreateViews(stmt) => ddl::describe_create_views(&scx, stmt)?,
         Statement::CreateMaterializedView(stmt) => {
             ddl::describe_create_materialized_view(&scx, stmt)?
         }
@@ -266,10 +266,10 @@ pub fn plan(
         Statement::CreateSecret(stmt) => ddl::plan_create_secret(scx, stmt),
         Statement::CreateSink(stmt) => ddl::plan_create_sink(scx, stmt),
         Statement::CreateSource(stmt) => ddl::plan_create_source(scx, stmt),
+        Statement::CreateSubsource(stmt) => ddl::plan_create_subsource(scx, stmt),
         Statement::CreateTable(stmt) => ddl::plan_create_table(scx, stmt),
         Statement::CreateType(stmt) => ddl::plan_create_type(scx, stmt),
         Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt, params),
-        Statement::CreateViews(stmt) => ddl::plan_create_views(scx, stmt),
         Statement::CreateMaterializedView(stmt) => {
             ddl::plan_create_materialized_view(scx, stmt, params)
         }

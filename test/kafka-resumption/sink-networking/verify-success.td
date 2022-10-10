@@ -12,7 +12,7 @@ Hanover,PA,17331
 
 
 
-$ kafka-verify format=avro sink=materialize.public.output sort-messages=true
+$ kafka-verify-data format=avro sink=materialize.public.output sort-messages=true
 {"before": null, "after": {"row": {"city": "Brooklyn", "state": "NY", "zip": "11217", "offset":[0,0,0,0,0,0,0,3]}}}
 {"before": null, "after": {"row": {"city": "Hanover", "state": "PA", "zip": "17331", "offset":[0,0,0,0,0,0,0,4]}}}
 {"before": null, "after": {"row": {"city": "New York", "state": "NY", "zip": "10004", "offset":[0,0,0,0,0,0,0,1]}}}

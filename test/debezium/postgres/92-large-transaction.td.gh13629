@@ -49,9 +49,9 @@ INSERT INTO large_distinct_rows SELECT nextval('large_transaction_sequence') FRO
 INSERT INTO large_same_rows SELECT 1 FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4;
 COMMIT;
 
-$ schema-registry-wait-schema schema=postgres.public.large_distinct_rows-value
+$ schema-registry-wait subject=postgres.public.large_distinct_rows-value
 
-$ schema-registry-wait-schema schema=postgres.public.large_same_rows-value
+$ schema-registry-wait subject=postgres.public.large_same_rows-value
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY

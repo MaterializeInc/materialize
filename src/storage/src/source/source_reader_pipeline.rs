@@ -43,7 +43,7 @@ use timely::dataflow::operators::feedback::ConnectLoop;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::OperatorInfo;
 use timely::dataflow::operators::generic::OutputHandle;
-use timely::dataflow::operators::{Broadcast, CapabilitySet};
+use timely::dataflow::operators::{Broadcast, CapabilitySet, Partition};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::PartialOrder;
@@ -53,6 +53,7 @@ use tokio_stream::{Stream, StreamExt};
 use tracing::trace;
 
 use mz_expr::PartitionId;
+use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{GlobalId, Timestamp};
@@ -91,6 +92,8 @@ pub struct RawSourceCreationConfig {
     pub upstream_name: Option<String>,
     /// The ID of this instantiation of this source.
     pub id: GlobalId,
+    /// The number of expected outputs from this ingestion
+    pub num_outputs: usize,
     /// The ID of the worker on which this operator is executing
     pub worker_id: usize,
     /// The total count of workers
@@ -154,7 +157,7 @@ pub fn create_raw_source<G, S: 'static, R>(
     calc: R,
 ) -> (
     (
-        timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>,
+        Vec<timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>>,
         timely::dataflow::Stream<G, SourceError>,
     ),
     Option<Rc<dyn Any>>,
@@ -221,6 +224,10 @@ struct SourceReaderOperatorOutput<S: SourceReader> {
     unconsumed_partitions: Vec<PartitionId>,
     /// See `SourceMessageBatch`.
     source_upper: OffsetAntichain,
+    /// Marks whether or not this batch contains
+    /// a `Finalized` message, or if its empty.
+    /// Used to downgrade the `batch_counter` frontier.
+    is_final: bool,
 }
 
 fn build_source_reader_stream<G, S>(
@@ -241,6 +248,7 @@ where
         name,
         upstream_name,
         id,
+        num_outputs: _,
         worker_id,
         worker_count,
         timestamp_interval,
@@ -288,6 +296,7 @@ where
             non_definite_errors: Vec::new(),
             unconsumed_partitions: Vec::new(),
             source_upper: initial_source_upper,
+            is_final: true,
         });
 
         let source_stream = source_reader.into_stream(timestamp_interval).fuse();
@@ -303,6 +312,8 @@ where
         let mut untimestamped_messages = HashMap::<_, Vec<_>>::new();
         let mut unconsumed_partitions = Vec::new();
         let mut non_definite_errors = vec![];
+        // `None` is the default value, reset after we have sent a `Finalized` batch.
+        let mut is_final = None;
         loop {
             // TODO(guswyn): move lots of this out of the macro so rustfmt works better
             tokio::select! {
@@ -319,7 +330,12 @@ where
                             //    `InProgress` messages NEVER produces
                             //    messages at offsets below the most recent
                             //    `Finalized` message.
-                            let is_final = matches!(message, SourceMessageType::Finalized(_));
+                            if matches!(message, SourceMessageType::Finalized(_)) {
+                                is_final = Some(true);
+                            }
+                            if matches!(message, SourceMessageType::InProgress(_)) {
+                                is_final = Some(false);
+                            }
                             match message {
                                 SourceMessageType::DropPartitionCapabilities(mut pids) => {
                                     unconsumed_partitions.append(&mut pids);
@@ -328,7 +344,11 @@ where
                                     let pid = message.partition.clone();
                                     let offset = message.offset;
                                     // advance the _offset_ frontier if this the final message for that offset
-                                    if is_final {
+                                    //
+                                    // TODO(guswynn): when we remove this, we can simplify some of
+                                    // the code in the reclock operator (probably), but using
+                                    // subtraction/addition on the upper we pass through.
+                                    if let Some(true) = is_final {
                                         source_upper.insert_data_up_to(pid.clone(), offset);
                                     }
                                     untimestamped_messages.entry(pid).or_default().push((message, offset));
@@ -353,6 +373,7 @@ where
                                     non_definite_errors: non_definite_errors.drain(..).collect_vec(),
                                     unconsumed_partitions,
                                     source_upper: source_upper.clone(),
+                                    is_final: true
                                 }
                             );
 
@@ -385,9 +406,19 @@ where
                             messages: std::mem::take(&mut untimestamped_messages),
                             non_definite_errors: non_definite_errors.drain(..).collect_vec(),
                             unconsumed_partitions: unconsumed_partitions.clone(),
-                            source_upper: source_upper.clone()
+                            source_upper: source_upper.clone(),
+                            // Consider empty batches that do not fall in the middle of
+                            // InProgress and Finalized messages to be final.
+                            is_final: is_final.unwrap_or(true),
                         }
                     );
+                    if let Some(true) = is_final {
+                        // reset is_final so empty batches between sets of messages with
+                        // the same offset can be considered final.
+                        is_final = None;
+                    } else {
+                        is_final = Some(false);
+                    }
                 }
             }
         }
@@ -428,6 +459,7 @@ where
         name,
         upstream_name: _,
         id,
+        num_outputs: _,
         worker_id,
         worker_count,
         timestamp_interval: _,
@@ -577,6 +609,7 @@ where
                         non_definite_errors,
                         unconsumed_partitions,
                         source_upper,
+                        is_final,
                     } = match update {
                         Some(update) => update,
                         None => {
@@ -589,7 +622,7 @@ where
                     };
 
                     trace!(
-                        "create_source_raw({id}) {worker_id}/
+                        "create_source_raw({id}) {worker_id}/\
                         {worker_count}: message_batch.len(): {:?}",
                         messages.len()
                     );
@@ -639,6 +672,9 @@ where
                         let mut session = output.session(&cap);
 
                         session.give((message_batch, source_upper_summary));
+                    }
+                    if is_final {
+                        cap_set.downgrade(&[batch_counter]);
                     }
 
                     batch_counter = batch_counter.checked_add(1).expect("exhausted counter");
@@ -712,6 +748,7 @@ where
         name,
         upstream_name: _,
         id,
+        num_outputs: _,
         worker_id,
         worker_count,
         timestamp_interval,
@@ -866,6 +903,9 @@ where
                         for (pid, offset) in source_upper_summary.source_upper.iter() {
                             let previous_offset =
                                 global_source_upper.insert(pid.clone(), offset.clone());
+
+                            // TODO(guswynn&aljoscha&petrosagg): ensure this operator does not
+                            // require ordered input.
                             if let Some(previous_offset) = previous_offset {
                                 assert!(previous_offset <= *offset);
                             }
@@ -874,9 +914,6 @@ where
                 });
 
                 let remap_trace_updates = timestamper.mint(&global_source_upper).await;
-                let mut remap_output = remap_output.activate();
-                let cap = cap_set.delayed(cap_set.first().unwrap());
-                let mut session = remap_output.session(&cap);
 
                 timestamper.advance().await;
                 let new_ts_upper = timestamper
@@ -893,7 +930,14 @@ where
                     new_ts_upper
                 );
 
-                session.give(remap_trace_updates);
+                // Out of an abundance of caution, do not hold the output handle
+                // across an await, and drop it before we downgrade the capability.
+                {
+                    let mut remap_output = remap_output.activate();
+                    let cap = cap_set.delayed(cap_set.first().unwrap());
+                    let mut session = remap_output.session(&cap);
+                    session.give(remap_trace_updates);
+                }
 
                 cap_set.downgrade(new_ts_upper);
 
@@ -929,7 +973,7 @@ fn reclock_operator<G, S: 'static>(
     >,
 ) -> (
     (
-        timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>,
+        Vec<timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>>,
         timely::dataflow::Stream<G, SourceError>,
     ),
     Option<SourceToken>,
@@ -942,6 +986,7 @@ where
         name,
         upstream_name,
         id,
+        num_outputs,
         worker_id,
         worker_count,
         timestamp_interval: _,
@@ -990,10 +1035,15 @@ where
         // The global view of the source_upper, which we track by combining
         // summaries from the raw reader operators.
         let mut global_source_upper = OffsetAntichain::new();
+        // For each partition, track the batch time and offset of the most recent
+        // batch. When the `batch_input` frontier has advanced past this batch time
+        // the `global_source_upper` can be advanced.
+        let mut batch_times: HashMap<PartitionId, (Timestamp, MzOffset)> = HashMap::new();
+
         let mut untimestamped_batches = VecDeque::new();
 
         move |frontiers| {
-            batch_input.for_each(|_cap, data| {
+            batch_input.for_each(|cap, data| {
                 data.swap(&mut batch_buffer);
                 for batch in batch_buffer.drain(..) {
                     let batch = batch
@@ -1001,14 +1051,57 @@ where
                         .take()
                         .expect("batch already taken, but we should be the only consumer");
                     for (pid, offset) in batch.source_upper.iter() {
-                        let previous_offset = global_source_upper.insert(pid.clone(), *offset);
-                        if let Some(previous_offset) = previous_offset {
-                            assert!(previous_offset <= *offset);
+                        // If we have a time for the batch in `batch_times` already, we go onto
+                        // checking the frontier. Otherwise, place the time and offset in the map
+                        // and wait for the next empty batch to push us along.
+                        if let Some((batch_ts, advance_to)) = batch_times.get(pid) {
+                            trace!(
+                                "reclock({id}) {worker_id}/{worker_count}: batch frontier: {:?}, \
+                                processing batch at ts: {}, \
+                                wanting to advance to: {:?}",
+                                frontiers[0].frontier(),
+                                batch_ts,
+                                advance_to
+                            );
+                            // If the batch_input frontier has advanced past this batch time, then
+                            // we can advance the `global_source_upper`, which will later downgrade
+                            // `cap_set`, as we are sure we have seen all messages for this
+                            // `source_upper`.
+                            let should_advance =
+                                if let Some(frontier_ts) = frontiers[0].frontier().as_option() {
+                                    frontier_ts > batch_ts
+                                } else {
+                                    // The empty frontier is trivially past all times
+                                    true
+                                };
+
+                            if should_advance {
+                                global_source_upper.insert(pid.clone(), *advance_to);
+                                // We also replace the value in `batch_times` with the new
+                                // offset, associated with the frontier, to move it along
+                                batch_times.insert(pid.clone(), (cap.time().clone(), *offset));
+                                continue;
+                            } else if offset > advance_to {
+                                // Otherwise we advance to the higher offset, assuming
+                                // that eventually the batch frontier will eventually
+                                // go past this time.
+                                batch_times.insert(pid.clone(), (cap.time().clone(), *offset));
+                            }
+                        } else {
+                            batch_times.insert(pid.clone(), (cap.time().clone(), *offset));
                         }
                     }
                     untimestamped_batches.push_back(batch)
                 }
             });
+
+            // If this is the last set of updates, we finalize
+            // the frontier.
+            if frontiers[0].frontier().is_empty() {
+                batch_times.drain().for_each(|(pid, (_, offset))| {
+                    global_source_upper.insert(pid, offset);
+                });
+            }
 
             remap_input.for_each(|cap, data| {
                 data.swap(&mut remap_trace_buffer);
@@ -1099,7 +1192,7 @@ where
                         let errors = untimestamped_batch
                             .non_definite_errors
                             .iter()
-                            .map(|e| Err(e.clone()));
+                            .map(|e| (0, Err(e.clone())));
                         session.give_iterator(errors);
                     }
                 }
@@ -1130,6 +1223,10 @@ where
             // up to date with what the ReclockOperator thinks. We will
             // evantually learn about an up-to-date frontier in a future
             // invocation.
+            //
+            // Note that this even if the `global_source_upper` has advanced past
+            // the remap input, this holds back capability downgrades until
+            // they match.
             if let Ok(new_ts_upper) = timestamper.reclock_frontier(&global_source_upper) {
                 let ts = new_ts_upper.as_option().cloned().unwrap_or(Timestamp::MAX);
 
@@ -1153,9 +1250,17 @@ where
         }
     });
 
-    let (ok_stream, err_stream) = reclocked_stream.map_fallible("reclock-demux", |r| r);
+    let (ok_muxed_stream, err_stream) =
+        reclocked_stream.map_fallible("reclock-demux-ok-err", |(output, r)| match r {
+            Ok(ok) => Ok((output, ok)),
+            Err(err) => Err(err),
+        });
 
-    ((ok_stream, err_stream), None)
+    let ok_streams = ok_muxed_stream.partition(u64::cast_from(num_outputs), |(output, data)| {
+        (u64::cast_from(output), data)
+    });
+
+    ((ok_streams, err_stream), None)
 }
 
 /// Take `message` and assign it the appropriate timestamps and push it into the
@@ -1169,8 +1274,17 @@ fn handle_message<S: SourceReader>(
     cap_set: &CapabilitySet<Timestamp>,
     output: &mut OutputHandle<
         Timestamp,
-        Result<SourceOutput<S::Key, S::Value, S::Diff>, SourceError>,
-        Tee<Timestamp, Result<SourceOutput<S::Key, S::Value, S::Diff>, SourceError>>,
+        (
+            usize,
+            Result<SourceOutput<S::Key, S::Value, S::Diff>, SourceError>,
+        ),
+        Tee<
+            Timestamp,
+            (
+                usize,
+                Result<SourceOutput<S::Key, S::Value, S::Diff>, SourceError>,
+            ),
+        >,
     >,
     metric_updates: &mut HashMap<PartitionId, (MzOffset, Timestamp, i64)>,
     ts: Timestamp,
@@ -1192,15 +1306,18 @@ fn handle_message<S: SourceReader>(
         *bytes_read += len;
     }
     let ts_cap = cap_set.delayed(&ts);
-    output.session(&ts_cap).give(Ok(SourceOutput::new(
-        key,
-        out,
-        offset,
-        message.upstream_time_millis,
-        message.partition,
-        message.headers,
-        message.specific_diff,
-    )));
+    output.session(&ts_cap).give((
+        message.output,
+        Ok(SourceOutput::new(
+            key,
+            out,
+            offset,
+            message.upstream_time_millis,
+            message.partition,
+            message.headers,
+            message.specific_diff,
+        )),
+    ));
     match metric_updates.entry(partition) {
         Entry::Occupied(mut entry) => {
             entry.insert((offset, ts, entry.get().2 + 1));

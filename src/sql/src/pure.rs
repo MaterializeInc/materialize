@@ -11,19 +11,14 @@
 //!
 //! See the [crate-level documentation](crate) for details.
 
+use std::collections::HashMap;
 use std::error::Error as StdError;
 use std::iter;
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context};
-use aws_arn::ResourceName as AmazonResourceName;
-use mz_secrets::SecretsReader;
-use mz_sql_parser::ast::{
-    CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, Envelope,
-    KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection,
-    PgConfigOption, PgConfigOptionName, ReaderSchemaSelectionStrategy,
-};
+use itertools::Itertools;
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
@@ -32,51 +27,132 @@ use uuid::Uuid;
 
 use mz_ccsr::Schema as CcsrSchema;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError};
+use mz_ore::cast::CastFrom;
 use mz_proto::RustType;
-use mz_repr::strconv;
+use mz_repr::{strconv, GlobalId};
+use mz_secrets::SecretsReader;
+use mz_sql_parser::ast::{
+    ColumnDef, ColumnOption, ColumnOptionDef, CsrConnection, CsrSeedAvro, CsrSeedProtobuf,
+    CsrSeedProtobufSchema, DbzMode, Envelope, Ident, KafkaConfigOption, KafkaConfigOptionName,
+    KafkaConnection, KafkaSourceConnection, PgConfigOption, PgConfigOptionName,
+    ReaderSchemaSelectionStrategy, TableConstraint, UnresolvedObjectName,
+};
+use mz_storage::source::generator::as_generator;
 use mz_storage::types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
 use mz_storage::types::connections::{Connection, ConnectionContext};
 use mz_storage::types::sources::PostgresSourceDetails;
 
 use crate::ast::{
     AvroSchema, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,
-    CsrConnectionAvro, CsrConnectionProtobuf, CsvColumns, Format, ProtobufSchema, Value,
-    WithOptionValue,
+    CreateSourceSubsource, CreateSourceSubsources, CreateSubsourceStatement, CsrConnectionAvro,
+    CsrConnectionProtobuf, CsvColumns, Format, ProtobufSchema, Value, WithOptionValue,
 };
 use crate::catalog::SessionCatalog;
 use crate::kafka_util;
 use crate::kafka_util::KafkaConfigOptionExtracted;
-use crate::names::Aug;
+use crate::names::{Aug, FullObjectName, RawDatabaseSpecifier, ResolvedObjectName};
 use crate::normalize;
 use crate::plan::StatementContext;
+
+fn subsource_gen<'a, T>(
+    selected_subsources: &mut Vec<CreateSourceSubsource<Aug>>,
+    tables_by_name: HashMap<String, HashMap<String, HashMap<String, &'a T>>>,
+) -> Result<Vec<(UnresolvedObjectName, UnresolvedObjectName, &'a T)>, anyhow::Error> {
+    let mut validated_requested_subsources = vec![];
+
+    for subsource in selected_subsources {
+        let (upstream_name, subsource_name) = match subsource.clone() {
+            CreateSourceSubsource::Bare(name) => {
+                let upstream_name = normalize::unresolved_object_name(name)?;
+                let subsource_name = UnresolvedObjectName::unqualified(&upstream_name.item);
+                (upstream_name, subsource_name)
+            }
+            CreateSourceSubsource::Aliased(name, alias) => {
+                (normalize::unresolved_object_name(name)?, alias)
+            }
+            CreateSourceSubsource::Resolved(_, _) => {
+                bail!("Cannot alias subsource using `INTO`, use `AS` instead")
+            }
+        };
+
+        let schemas = match tables_by_name.get(&upstream_name.item) {
+            Some(schemas) => schemas,
+            None => bail!("table {upstream_name} not found in source"),
+        };
+
+        let schema = match &upstream_name.schema {
+            Some(schema) => schema,
+            None => match schemas.keys().exactly_one() {
+                Ok(schema) => schema,
+                Err(_) => {
+                    bail!("table {upstream_name} is ambiguous, consider specifying the schema")
+                }
+            },
+        };
+
+        let databases = match schemas.get(schema) {
+            Some(databases) => databases,
+            None => bail!("schema {schema} not found in source"),
+        };
+
+        let database = match &upstream_name.database {
+            Some(database) => database,
+            None => match databases.keys().exactly_one() {
+                Ok(database) => database,
+                Err(_) => {
+                    bail!("table {upstream_name} is ambiguous, consider specifying the database")
+                }
+            },
+        };
+
+        let desc = match databases.get(database) {
+            Some(desc) => *desc,
+            None => bail!("database {database} not found source"),
+        };
+
+        let qualified_upstream_name =
+            UnresolvedObjectName::qualified(&[database, schema, &upstream_name.item]);
+        validated_requested_subsources.push((qualified_upstream_name, subsource_name, desc));
+    }
+
+    Ok(validated_requested_subsources)
+}
 
 /// Purifies a statement, removing any dependencies on external state.
 ///
 /// See the section on [purification](crate#purification) in the crate
 /// documentation for details.
-///
-/// Note that purification is asynchronous, and may take an unboundedly long
-/// time to complete. As a result purification does *not* have access to a
-/// [`SessionCatalog`](crate::catalog::SessionCatalog), as that would require
-/// locking access to the catalog for an unbounded amount of time.
 pub async fn purify_create_source(
     catalog: Box<dyn SessionCatalog>,
     now: u64,
     mut stmt: CreateSourceStatement<Aug>,
     connection_context: ConnectionContext,
-) -> Result<CreateSourceStatement<Aug>, anyhow::Error> {
+) -> Result<
+    (
+        Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
+        CreateSourceStatement<Aug>,
+    ),
+    anyhow::Error,
+> {
     let CreateSourceStatement {
         connection,
         format,
         envelope,
-        legacy_with_options: with_options,
         include_metadata: _,
+        subsources: requested_subsources,
         ..
     } = &mut stmt;
 
-    let _ = catalog;
+    // Disallow manually targetting subsources, this syntax is reserved for purification only
+    if let Some(CreateSourceSubsources::Subset(subsources)) = requested_subsources {
+        for subsource in subsources {
+            if matches!(subsource, CreateSourceSubsource::Resolved(_, _)) {
+                bail!("Cannot alias subsource using `INTO`, use `AS` instead");
+            }
+        }
+    }
 
-    let mut with_options_map = normalize::options(with_options)?;
+    let mut subsources = vec![];
 
     match connection {
         CreateSourceConnection::Kafka(KafkaSourceConnection {
@@ -154,42 +230,31 @@ pub async fn purify_create_source(
         }
         CreateSourceConnection::S3 { connection, .. } => {
             let scx = StatementContext::new(None, &*catalog);
-            let connection = {
+            let aws = {
                 let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
-                    Connection::Aws(connection) => connection.clone(),
+                    Connection::Aws(aws) => aws.clone(),
                     _ => bail!("{} is not an AWS connection", item.name()),
                 }
             };
-
-            let aws_config = normalize::aws_config(&mut with_options_map, None, connection)?;
             validate_aws_credentials(
-                &aws_config,
+                &aws,
                 connection_context.aws_external_id_prefix.as_ref(),
                 &*connection_context.secrets_reader,
             )
             .await?;
         }
-        CreateSourceConnection::Kinesis { connection, arn } => {
-            let region = arn
-                .parse::<AmazonResourceName>()
-                .context("Unable to parse provided ARN")?
-                .region
-                .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
-
+        CreateSourceConnection::Kinesis { connection, .. } => {
             let scx = StatementContext::new(None, &*catalog);
-            let connection = {
+            let aws = {
                 let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
-                    Connection::Aws(connection) => connection.clone(),
+                    Connection::Aws(aws) => aws.clone(),
                     _ => bail!("{} is not an AWS connection", item.name()),
                 }
             };
-
-            let aws_config =
-                normalize::aws_config(&mut with_options_map, Some(region.into()), connection)?;
             validate_aws_credentials(
-                &aws_config,
+                &aws,
                 connection_context.aws_external_id_prefix.as_ref(),
                 &*connection_context.secrets_reader,
             )
@@ -218,6 +283,100 @@ pub async fn purify_create_source(
                 .await?;
             let tables = mz_postgres_util::publication_info(&config, &publication).await?;
 
+            let mut targeted_subsources = vec![];
+
+            let mut validated_requested_subsources = vec![];
+            match requested_subsources {
+                Some(CreateSourceSubsources::All) => {
+                    for table in &tables {
+                        let upstream_name = UnresolvedObjectName::qualified(&[
+                            &connection.database,
+                            &table.namespace,
+                            &table.name,
+                        ]);
+                        let subsource_name = UnresolvedObjectName::unqualified(&table.name);
+                        validated_requested_subsources.push((upstream_name, subsource_name, table));
+                    }
+                }
+                Some(CreateSourceSubsources::Subset(subsources)) => {
+                    // The user manually selected a subset of upstream tables so we need to
+                    // validate that the names actually exist and are not ambiguous
+
+                    // An index from table name -> schema name -> database name -> PostgresTableDesc
+                    let mut tables_by_name = HashMap::new();
+                    for table in &tables {
+                        tables_by_name
+                            .entry(table.name.clone())
+                            .or_insert_with(HashMap::new)
+                            .entry(table.namespace.clone())
+                            .or_insert_with(HashMap::new)
+                            .entry(connection.database.clone())
+                            .or_insert(table);
+                    }
+
+                    validated_requested_subsources
+                        .extend(subsource_gen(subsources, tables_by_name)?);
+                }
+                None => {}
+            };
+
+            // Now that we have an explicit list of validated requested subsources we can create them
+            for (i, (upstream_name, subsource_name, table)) in
+                validated_requested_subsources.into_iter().enumerate()
+            {
+                // Figure out the schema of the subsource
+                let mut columns = vec![];
+                for c in table.columns.iter() {
+                    let name = Ident::new(c.name.clone());
+
+                    let ty = mz_pgrepr::Type::from_oid_and_typmod(c.type_oid, c.type_mod)
+                        .map_err(|e| sql_err!("{}", e))?;
+                    let data_type = scx.resolve_type(ty)?;
+
+                    columns.push(ColumnDef {
+                        name,
+                        data_type,
+                        collation: None,
+                        options: vec![],
+                    });
+                }
+
+                // Create the targeted AST node for the original CREATE SOURCE statement
+                let transient_id = GlobalId::Transient(u64::cast_from(i));
+                let partial_subsource_name =
+                    normalize::unresolved_object_name(subsource_name.clone())?;
+                let qualified_subsource_name =
+                    scx.allocate_qualified_name(partial_subsource_name.clone())?;
+                let full_subsource_name = scx.allocate_full_name(partial_subsource_name)?;
+                targeted_subsources.push(CreateSourceSubsource::Resolved(
+                    upstream_name,
+                    ResolvedObjectName::Object {
+                        id: transient_id,
+                        qualifiers: qualified_subsource_name.qualifiers,
+                        full_name: full_subsource_name,
+                        print_id: false,
+                    },
+                ));
+
+                // Create the subsource statement
+                let subsource = CreateSubsourceStatement {
+                    name: subsource_name,
+                    columns,
+                    // TODO(petrosagg): nothing stops us from getting the constraints of the
+                    // upstream tables and mirroring them here which will lead to more optimization
+                    // opportunities if for example there is a primary key or an index.
+                    //
+                    // If we ever do that we must triple check that we will get notified *in the
+                    // replication stream*, if our assumptions change. Failure to do that could
+                    // mean that an upstream table that started with an index was then altered to
+                    // one without and now we're producing garbage data.
+                    constraints: vec![],
+                    if_not_exists: false,
+                };
+                subsources.push((transient_id, subsource));
+            }
+            *requested_subsources = Some(CreateSourceSubsources::Subset(targeted_subsources));
+
             // Remove any old detail references
             options.retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
             let details = PostgresSourceDetails {
@@ -234,12 +393,164 @@ pub async fn purify_create_source(
                 )))),
             })
         }
-        CreateSourceConnection::LoadGenerator { .. } => (),
+        CreateSourceConnection::LoadGenerator {
+            generator,
+            options: _,
+        } => {
+            use mz_storage::types::sources::LoadGenerator;
+
+            let scx = StatementContext::new(None, &*catalog);
+
+            let available_subsources = match generator {
+                mz_sql_parser::ast::LoadGenerator::Auction => {
+                    let mut available_subsources = HashMap::new();
+                    let generator = as_generator(&LoadGenerator::Auction);
+                    for (i, (name, desc)) in generator.views().iter().enumerate() {
+                        let name = FullObjectName {
+                            database: RawDatabaseSpecifier::Name("mz_loadgenerator".to_owned()),
+                            schema: "public".to_owned(),
+                            item: name.to_string(),
+                        };
+                        // The zero-th output is the main output
+                        // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
+                        // to handle the main source and the subsources uniformly
+                        available_subsources.insert(name, (i + 1, desc.clone()));
+                    }
+                    Some(available_subsources)
+                }
+                mz_sql_parser::ast::LoadGenerator::Counter => None,
+            };
+
+            let mut targeted_subsources = vec![];
+
+            let mut validated_requested_subsources = vec![];
+            match requested_subsources {
+                Some(CreateSourceSubsources::All) => {
+                    let available_subsources = match &available_subsources {
+                        Some(available_subsources) => available_subsources,
+                        None => bail!("FOR ALL TABLES is only valid for multi-output sources"),
+                    };
+                    for (name, (_, desc)) in available_subsources {
+                        let upstream_name = UnresolvedObjectName::from(name.clone());
+                        let subsource_name = UnresolvedObjectName::unqualified(&name.item);
+                        validated_requested_subsources.push((upstream_name, subsource_name, desc));
+                    }
+                }
+                Some(CreateSourceSubsources::Subset(selected_subsources)) => {
+                    let available_subsources = match &available_subsources {
+                        Some(available_subsources) => available_subsources,
+                        None => bail!("FOR TABLES (..) is only valid for multi-output sources"),
+                    };
+                    // The user manually selected a subset of upstream tables so we need to
+                    // validate that the names actually exist and are not ambiguous
+
+                    // An index from table name -> schema name -> database name -> PostgresTableDesc
+                    let mut tables_by_name = HashMap::new();
+                    for (subsource_name, (_, desc)) in available_subsources {
+                        let database = match &subsource_name.database {
+                            RawDatabaseSpecifier::Name(database) => database.clone(),
+                            RawDatabaseSpecifier::Ambient => unreachable!(),
+                        };
+                        tables_by_name
+                            .entry(subsource_name.item.clone())
+                            .or_insert_with(HashMap::new)
+                            .entry(subsource_name.schema.clone())
+                            .or_insert_with(HashMap::new)
+                            .entry(database)
+                            .or_insert(desc);
+                    }
+
+                    validated_requested_subsources
+                        .extend(subsource_gen(selected_subsources, tables_by_name)?);
+                }
+                None => {
+                    if available_subsources.is_some() {
+                        bail!("multi-output sources require a FOR TABLES (..) or FOR ALL TABLES statement");
+                    }
+                }
+            };
+
+            // Now that we have an explicit list of validated requested subsources we can create them
+            for (i, (upstream_name, subsource_name, desc)) in
+                validated_requested_subsources.into_iter().enumerate()
+            {
+                // Figure out the schema of the subsource
+                let mut columns = vec![];
+                for (column_name, column_type) in desc.iter() {
+                    let name = Ident::new(column_name.as_str().to_owned());
+
+                    let ty = mz_pgrepr::Type::from(&column_type.scalar_type);
+                    let data_type = scx.resolve_type(ty)?;
+
+                    let options = if !column_type.nullable {
+                        vec![ColumnOptionDef {
+                            name: None,
+                            option: ColumnOption::NotNull,
+                        }]
+                    } else {
+                        vec![]
+                    };
+
+                    columns.push(ColumnDef {
+                        name,
+                        data_type,
+                        collation: None,
+                        options,
+                    });
+                }
+
+                let mut table_constraints = vec![];
+                for key in desc.typ().keys.iter() {
+                    let mut col_names = vec![];
+                    for col_idx in key {
+                        col_names.push(columns[*col_idx].name.clone());
+                    }
+                    table_constraints.push(TableConstraint::Unique {
+                        name: None,
+                        columns: col_names,
+                        is_primary: false,
+                    });
+                }
+
+                // Create the targeted AST node for the original CREATE SOURCE statement
+                let transient_id = GlobalId::Transient(u64::cast_from(i));
+                let partial_subsource_name =
+                    normalize::unresolved_object_name(subsource_name.clone())?;
+                let qualified_subsource_name =
+                    scx.allocate_qualified_name(partial_subsource_name.clone())?;
+                let full_subsource_name = scx.allocate_full_name(partial_subsource_name)?;
+                targeted_subsources.push(CreateSourceSubsource::Resolved(
+                    upstream_name,
+                    ResolvedObjectName::Object {
+                        id: transient_id,
+                        qualifiers: qualified_subsource_name.qualifiers,
+                        full_name: full_subsource_name,
+                        print_id: false,
+                    },
+                ));
+
+                // Create the subsource statement
+                let subsource = CreateSubsourceStatement {
+                    name: subsource_name,
+                    columns,
+                    // unlike sources that come from an external upstream, we
+                    // have more leniency to introduce different constraints
+                    // every time the load generator is run; i.e. we are not as
+                    // worried about introducing junk data.
+                    constraints: table_constraints,
+                    if_not_exists: false,
+                };
+                subsources.push((transient_id, subsource));
+            }
+            if available_subsources.is_some() {
+                *requested_subsources = Some(CreateSourceSubsources::Subset(targeted_subsources));
+            }
+        }
     }
 
     purify_source_format(&*catalog, format, connection, envelope, &connection_context).await?;
 
-    Ok(stmt)
+    Ok((subsources, stmt))
 }
 
 async fn purify_source_format(

@@ -21,11 +21,14 @@
 ###     "mz_worker_compute_dependencies",
 ###     "mz_message_counts_received_internal",
 ###     "mz_message_counts_sent_internal",
-###     "mz_peek_active",
+###     "mz_active_peeks",
+###     "mz_raw_peek_durations",
 ###     "mz_peek_durations",
 ###     "mz_scheduling_elapsed_internal",
-###     "mz_scheduling_histogram_internal",
+###     "mz_raw_compute_operator_durations_internal",
+###     "mz_raw_compute_operator_durations_internal",
 ###     "mz_scheduling_parks_internal",
+###     "mz_raw_worker_compute_delays",
 ###     "mz_worker_compute_delays",
 ###     "mz_worker_compute_frontiers",
 ###     "mz_worker_compute_import_frontiers",
@@ -41,7 +44,7 @@
 ###     "mz_records_per_dataflow_global",
 ###     "mz_records_per_dataflow_operator",
 ###     "mz_scheduling_elapsed",
-###     "mz_scheduling_histogram",
+###     "mz_raw_compute_operator_durations",
 ###     "mz_scheduling_parks",
 ### ]
 ### STAR_OVERRIDE = {
@@ -69,7 +72,7 @@
 ### print("""
 ### # Check that no log source has been created initially
 ### query T
-### SELECT COUNT(*) FROM mz_sources WHERE name LIKE 'mz_peek_active_%';
+### SELECT COUNT(*) FROM mz_sources WHERE name LIKE 'mz_active_peeks_%';
 ### ----
 ### 1
 ### """)
@@ -77,7 +80,7 @@
 ### print(stmt_ok("CREATE CLUSTER c1 REPLICAS (r (SIZE '1'))"))
 ### print("""
 ### query T
-### SELECT COUNT(*) FROM mz_sources WHERE name LIKE 'mz_peek_active_%';
+### SELECT COUNT(*) FROM mz_sources WHERE name LIKE 'mz_active_peeks_%';
 ### ----
 ### 2
 ### """)
@@ -93,7 +96,7 @@
 ### print(stmt_ok("CREATE CLUSTER c2 REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'))"))
 ### print("""
 ### query T
-### SELECT COUNT(*) FROM mz_sources WHERE name LIKE 'mz_peek_active_%';
+### SELECT COUNT(*) FROM mz_sources WHERE name LIKE 'mz_active_peeks_%';
 ### ----
 ### 4
 ### """)
@@ -105,7 +108,7 @@
 
 # Check that no log source has been created initially
 query T
-SELECT COUNT(*) FROM mz_sources WHERE name LIKE 'mz_peek_active_%';
+SELECT COUNT(*) FROM mz_sources WHERE name LIKE 'mz_active_peeks_%';
 ----
 1
 
@@ -115,7 +118,7 @@ CREATE CLUSTER c1 REPLICAS (r (SIZE '1'));
 
 
 query T
-SELECT COUNT(*) FROM mz_sources WHERE name LIKE 'mz_peek_active_%';
+SELECT COUNT(*) FROM mz_sources WHERE name LIKE 'mz_active_peeks_%';
 ----
 2
 
@@ -188,19 +191,19 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_operators_1) EXCEPT (SELEC
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies_1));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies_1) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies));
-----
-
-query T
 SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports_1));
 ----
 
 query T
 SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports_1) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies_1));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies_1) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies));
 ----
 
 query T
@@ -220,11 +223,19 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_sent_internal_1) EXC
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_active) EXCEPT (SELECT * FROM mz_internal.mz_peek_active_1));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_active_peeks) EXCEPT (SELECT * FROM mz_internal.mz_active_peeks_1));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_active_1) EXCEPT (SELECT * FROM mz_internal.mz_peek_active));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_active_peeks_1) EXCEPT (SELECT * FROM mz_internal.mz_active_peeks));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_peek_durations) EXCEPT (SELECT * FROM mz_internal.mz_raw_peek_durations_1));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_peek_durations_1) EXCEPT (SELECT * FROM mz_internal.mz_raw_peek_durations));
 ----
 
 query T
@@ -244,11 +255,19 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_elapsed_internal_1) EXCE
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_histogram_internal) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_histogram_internal_1));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_1));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_histogram_internal_1) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_histogram_internal));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_1) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_1));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_1) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal));
 ----
 
 query T
@@ -257,6 +276,14 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks_internal) EXCEPT (
 
 query T
 SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks_internal_1) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_parks_internal));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_worker_compute_delays) EXCEPT (SELECT * FROM mz_internal.mz_raw_worker_compute_delays_1));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_worker_compute_delays_1) EXCEPT (SELECT * FROM mz_internal.mz_raw_worker_compute_delays));
 ----
 
 query T
@@ -380,11 +407,11 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_elapsed_1) EXCEPT (SELEC
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_histogram) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_histogram_1));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_1));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_histogram_1) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_histogram));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_1) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations));
 ----
 
 query T
@@ -461,19 +488,19 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_operators_2) EXCEPT (SELEC
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies_2));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies_2) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies));
-----
-
-query T
 SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports_2));
 ----
 
 query T
 SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports_2) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies_2));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies_2) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies));
 ----
 
 query T
@@ -493,11 +520,19 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_sent_internal_2) EXC
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_active) EXCEPT (SELECT * FROM mz_internal.mz_peek_active_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_active_peeks) EXCEPT (SELECT * FROM mz_internal.mz_active_peeks_2));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_active_2) EXCEPT (SELECT * FROM mz_internal.mz_peek_active));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_active_peeks_2) EXCEPT (SELECT * FROM mz_internal.mz_active_peeks));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_peek_durations) EXCEPT (SELECT * FROM mz_internal.mz_raw_peek_durations_2));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_peek_durations_2) EXCEPT (SELECT * FROM mz_internal.mz_raw_peek_durations));
 ----
 
 query T
@@ -517,11 +552,19 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_elapsed_internal_2) EXCE
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_histogram_internal) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_histogram_internal_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_2));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_histogram_internal_2) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_histogram_internal));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_2) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_2));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_2) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal));
 ----
 
 query T
@@ -530,6 +573,14 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks_internal) EXCEPT (
 
 query T
 SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks_internal_2) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_parks_internal));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_worker_compute_delays) EXCEPT (SELECT * FROM mz_internal.mz_raw_worker_compute_delays_2));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_worker_compute_delays_2) EXCEPT (SELECT * FROM mz_internal.mz_raw_worker_compute_delays));
 ----
 
 query T
@@ -553,7 +604,7 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_import_frontiers) EX
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_frontiers_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_import_frontiers_2) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_import_frontiers));
 ----
 
 query T
@@ -653,11 +704,11 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_elapsed_2) EXCEPT (SELEC
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_histogram) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_histogram_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_2));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_histogram_2) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_histogram));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_2) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations));
 ----
 
 query T
@@ -675,7 +726,7 @@ CREATE CLUSTER c2 REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'));
 
 
 query T
-SELECT COUNT(*) FROM mz_sources WHERE name LIKE 'mz_peek_active_%';
+SELECT COUNT(*) FROM mz_sources WHERE name LIKE 'mz_active_peeks_%';
 ----
 4
 
@@ -744,19 +795,19 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_operators_3) EXCEPT (SELEC
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies_3));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies_3) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies));
-----
-
-query T
 SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports_3));
 ----
 
 query T
 SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports_3) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies_3));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies_3) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies));
 ----
 
 query T
@@ -776,11 +827,19 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_sent_internal_3) EXC
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_active) EXCEPT (SELECT * FROM mz_internal.mz_peek_active_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_active_peeks) EXCEPT (SELECT * FROM mz_internal.mz_active_peeks_3));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_active_3) EXCEPT (SELECT * FROM mz_internal.mz_peek_active));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_active_peeks_3) EXCEPT (SELECT * FROM mz_internal.mz_active_peeks));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_peek_durations) EXCEPT (SELECT * FROM mz_internal.mz_raw_peek_durations_3));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_peek_durations_3) EXCEPT (SELECT * FROM mz_internal.mz_raw_peek_durations));
 ----
 
 query T
@@ -800,11 +859,19 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_elapsed_internal_3) EXCE
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_histogram_internal) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_histogram_internal_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_3));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_histogram_internal_3) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_histogram_internal));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_3) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_3));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_3) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal));
 ----
 
 query T
@@ -813,6 +880,14 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks_internal) EXCEPT (
 
 query T
 SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks_internal_3) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_parks_internal));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_worker_compute_delays) EXCEPT (SELECT * FROM mz_internal.mz_raw_worker_compute_delays_3));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_worker_compute_delays_3) EXCEPT (SELECT * FROM mz_internal.mz_raw_worker_compute_delays));
 ----
 
 query T
@@ -936,11 +1011,11 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_elapsed_3) EXCEPT (SELEC
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_histogram) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_histogram_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_3));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_histogram_3) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_histogram));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_3) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations));
 ----
 
 query T

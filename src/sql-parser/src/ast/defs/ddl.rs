@@ -688,6 +688,9 @@ impl_display_t!(PostgresConnectionOption);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AwsConnectionOptionName {
     AccessKeyId,
+    Endpoint,
+    Region,
+    RoleArn,
     SecretAccessKey,
     Token,
 }
@@ -696,6 +699,9 @@ impl AstDisplay for AwsConnectionOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
             AwsConnectionOptionName::AccessKeyId => "ACCESS KEY ID",
+            AwsConnectionOptionName::Endpoint => "ENDPOINT",
+            AwsConnectionOptionName::Region => "REGION",
+            AwsConnectionOptionName::RoleArn => "ROLE ARN",
             AwsConnectionOptionName::SecretAccessKey => "SECRET ACCESS KEY",
             AwsConnectionOptionName::Token => "TOKEN",
         })
@@ -1011,8 +1017,9 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
                 f.write_str("LOAD GENERATOR ");
                 f.write_node(generator);
                 if !options.is_empty() {
-                    f.write_str(" ");
+                    f.write_str(" (");
                     f.write_node(&display::comma_separated(options));
+                    f.write_str(")");
                 }
             }
         }

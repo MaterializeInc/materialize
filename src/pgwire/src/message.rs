@@ -10,15 +10,14 @@
 use std::collections::HashMap;
 
 use itertools::Itertools;
-use mz_adapter::session::ClientSeverity;
-use mz_adapter::ExecuteResponsePartialError;
 use postgres::error::SqlState;
 
 use mz_adapter::session::ClientSeverity as AdapterClientSeverity;
 use mz_adapter::session::TransactionStatus as AdapterTransactionStatus;
-use mz_adapter::{AdapterError, StartupMessage};
+use mz_adapter::{AdapterError, AdapterNotice, StartupMessage};
 use mz_expr::EvalError;
 use mz_repr::{ColumnName, NotNullViolation, RelationDesc};
+use mz_sql::ast::NoticeSeverity;
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the
@@ -316,34 +315,6 @@ impl ErrorResponse {
         ErrorResponse::new(Severity::Notice, code, message)
     }
 
-    pub fn warning<S>(code: SqlState, message: S) -> ErrorResponse
-    where
-        S: Into<String>,
-    {
-        ErrorResponse::new(Severity::Warning, code, message)
-    }
-
-    pub fn info<S>(code: SqlState, message: S) -> ErrorResponse
-    where
-        S: Into<String>,
-    {
-        ErrorResponse::new(Severity::Info, code, message)
-    }
-
-    pub fn log<S>(code: SqlState, message: S) -> ErrorResponse
-    where
-        S: Into<String>,
-    {
-        ErrorResponse::new(Severity::Log, code, message)
-    }
-
-    pub fn debug<S>(code: SqlState, message: S) -> ErrorResponse
-    where
-        S: Into<String>,
-    {
-        ErrorResponse::new(Severity::Debug, code, message)
-    }
-
     fn new<S>(severity: Severity, code: SqlState, message: S) -> ErrorResponse
     where
         S: Into<String>,
@@ -358,7 +329,7 @@ impl ErrorResponse {
         }
     }
 
-    pub fn from_adapter(severity: Severity, e: AdapterError) -> ErrorResponse {
+    pub fn from_adapter_error(severity: Severity, e: AdapterError) -> ErrorResponse {
         // TODO(benesch): we should only use `SqlState::INTERNAL_ERROR` for
         // those errors that are truly internal errors. At the moment we have
         // a various classes of uncategorized errors that use this error code
@@ -421,6 +392,7 @@ impl ErrorResponse {
             AdapterError::Unsupported(..) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Unstructured(_) => SqlState::INTERNAL_ERROR,
             AdapterError::UntargetedLogRead { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::TargetedSubscribe { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             // It's not immediately clear which error code to use here because a
             // "write-only transaction" and "single table write transaction" are
             // not things in Postgres. This error code is the generic "bad txn thing"
@@ -435,6 +407,28 @@ impl ErrorResponse {
             message: e.to_string(),
             detail: e.detail(),
             hint: e.hint(),
+            position: None,
+        }
+    }
+
+    pub fn from_adapter_notice(notice: AdapterNotice) -> ErrorResponse {
+        let code = match &notice {
+            AdapterNotice::DatabaseAlreadyExists { .. } => SqlState::DUPLICATE_DATABASE,
+            AdapterNotice::SchemaAlreadyExists { .. } => SqlState::DUPLICATE_SCHEMA,
+            AdapterNotice::TableAlreadyExists { .. } => SqlState::DUPLICATE_TABLE,
+            AdapterNotice::ObjectAlreadyExists { .. } => SqlState::DUPLICATE_OBJECT,
+            AdapterNotice::ExistingTransactionInProgress => SqlState::ACTIVE_SQL_TRANSACTION,
+            AdapterNotice::ExplicitTransactionControlInImplicitTransaction => {
+                SqlState::NO_ACTIVE_SQL_TRANSACTION
+            }
+            AdapterNotice::UserRequested { .. } => SqlState::WARNING,
+        };
+        ErrorResponse {
+            severity: Severity::for_adapter_notice(&notice),
+            code,
+            message: notice.to_string(),
+            detail: notice.detail(),
+            hint: notice.hint(),
             position: None,
         }
     }
@@ -456,31 +450,6 @@ impl ErrorResponse {
     }
 }
 
-impl From<ExecuteResponsePartialError> for ErrorResponse {
-    fn from(
-        ExecuteResponsePartialError {
-            severity,
-            code,
-            message,
-        }: ExecuteResponsePartialError,
-    ) -> Self {
-        let gen = match severity {
-            ClientSeverity::Debug1
-            | ClientSeverity::Debug2
-            | ClientSeverity::Debug3
-            | ClientSeverity::Debug4
-            | ClientSeverity::Debug5 => Self::debug,
-            ClientSeverity::Error => Self::error,
-            ClientSeverity::Info => Self::info,
-            ClientSeverity::Log => Self::log,
-            ClientSeverity::Notice => Self::notice,
-            ClientSeverity::Warning => Self::warning,
-        };
-        gen(code, &message)
-    }
-}
-
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Severity {
     Panic,
@@ -581,6 +550,24 @@ impl Severity {
             (AdapterClientSeverity::Notice, Severity::Log | Severity::Debug) => false,
             (AdapterClientSeverity::Info, Severity::Log | Severity::Debug) => false,
             (AdapterClientSeverity::Log, Severity::Debug) => false,
+        }
+    }
+
+    pub fn for_adapter_notice(notice: &AdapterNotice) -> Severity {
+        match notice {
+            AdapterNotice::DatabaseAlreadyExists { .. } => Severity::Notice,
+            AdapterNotice::SchemaAlreadyExists { .. } => Severity::Notice,
+            AdapterNotice::TableAlreadyExists { .. } => Severity::Notice,
+            AdapterNotice::ObjectAlreadyExists { .. } => Severity::Notice,
+            AdapterNotice::ExistingTransactionInProgress => Severity::Warning,
+            AdapterNotice::ExplicitTransactionControlInImplicitTransaction => Severity::Warning,
+            AdapterNotice::UserRequested { severity } => match severity {
+                NoticeSeverity::Debug => Severity::Debug,
+                NoticeSeverity::Info => Severity::Info,
+                NoticeSeverity::Log => Severity::Log,
+                NoticeSeverity::Notice => Severity::Notice,
+                NoticeSeverity::Warning => Severity::Warning,
+            },
         }
     }
 }

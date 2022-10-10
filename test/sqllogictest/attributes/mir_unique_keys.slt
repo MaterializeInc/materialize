@@ -25,7 +25,7 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(keys) AS TEXT FOR SELECT sum(a) FROM t
 ----
 Explained Query:
-  Let // { keys: "([])" }
+  Return // { keys: "([])" }
     Union // { keys: "([])" }
       Get l0 // { keys: "([])" }
       Map (null) // { keys: "()" }
@@ -35,11 +35,11 @@ Explained Query:
               Get l0 // { keys: "([])" }
           Constant // { keys: "([])" }
             - ()
-    Where
-      l0 =
-        Reduce aggregates=[sum(#0)] // { keys: "([])" }
-          Project (#0) // { keys: "()" }
-            Get materialize.public.t // { keys: "()" }
+  With
+    cte l0 =
+      Reduce aggregates=[sum(#0)] // { keys: "([])" }
+        Project (#0) // { keys: "()" }
+          Get materialize.public.t // { keys: "()" }
 
 Source materialize.public.t
   project=(#0, #2)
@@ -145,7 +145,7 @@ EXPLAIN OPTIMIZED PLAN WITH(keys) AS TEXT FOR
 SELECT 1 = (Select * FROM generate_series(1, 100000) limit 3)
 ----
 Explained Query:
-  Let // { keys: "()" }
+  Return // { keys: "()" }
     Project (#1) // { keys: "()" }
       Map ((#0 = 1)) // { keys: "()" }
         Union // { keys: "()" }
@@ -158,20 +158,20 @@ Explained Query:
                     Get l1 // { keys: "()" }
               Constant // { keys: "([])" }
                 - ()
-    Where
-      l1 =
-        Union // { keys: "()" }
-          Get l0 // { keys: "()" }
-          Map (error("more than one record produced in subquery")) // { keys: "([])" }
-            Project () // { keys: "([])" }
-              Filter (#0 > 1) // { keys: "([])" }
-                Reduce aggregates=[count(true)] // { keys: "([])" }
-                  Project () // { keys: "()" }
-                    Get l0 // { keys: "()" }
-      l0 =
-        TopK limit=3 monotonic=true // { keys: "()" }
-          FlatMap generate_series(1, 100000, 1) // { keys: "()" }
-            Constant // { keys: "([])" }
-              - ()
+  With
+    cte l1 =
+      Union // { keys: "()" }
+        Get l0 // { keys: "()" }
+        Map (error("more than one record produced in subquery")) // { keys: "([])" }
+          Project () // { keys: "([])" }
+            Filter (#0 > 1) // { keys: "([])" }
+              Reduce aggregates=[count(true)] // { keys: "([])" }
+                Project () // { keys: "()" }
+                  Get l0 // { keys: "()" }
+    cte l0 =
+      TopK limit=3 monotonic=true // { keys: "()" }
+        FlatMap generate_series(1, 100000, 1) // { keys: "()" }
+          Constant // { keys: "([])" }
+            - ()
 
 EOF

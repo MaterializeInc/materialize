@@ -351,8 +351,12 @@ impl<'a> FromSql<'a> for Slt {
                 Self(Value::Text(types::text_from_sql(raw)?.to_string()))
             }
             PgType::TIME => Self(Value::Time(NaiveTime::from_sql(ty, raw)?)),
-            PgType::TIMESTAMP => Self(Value::Timestamp(NaiveDateTime::from_sql(ty, raw)?)),
-            PgType::TIMESTAMPTZ => Self(Value::TimestampTz(DateTime::<Utc>::from_sql(ty, raw)?)),
+            PgType::TIMESTAMP => Self(Value::Timestamp(
+                NaiveDateTime::from_sql(ty, raw)?.try_into()?,
+            )),
+            PgType::TIMESTAMPTZ => Self(Value::TimestampTz(
+                DateTime::<Utc>::from_sql(ty, raw)?.try_into()?,
+            )),
             PgType::UUID => Self(Value::Uuid(Uuid::from_sql(ty, raw)?)),
             PgType::RECORD => {
                 let num_fields = read_be_i32(&mut raw)?;
@@ -666,6 +670,7 @@ impl Runner {
                 },
                 persist_clients,
                 storage_stash_url,
+                now: SYSTEM_TIME.clone(),
             },
             secrets_controller: Arc::clone(&orchestrator) as Arc<dyn SecretsController>,
             // Setting the port to 0 means that the OS will automatically

@@ -24,6 +24,7 @@
 use crate::types::ScalarKind;
 use crate::{util::TsUnit, ParseSchemaError, SchemaResolutionError};
 
+use chrono::NaiveDateTime;
 use fmt::{Debug, Display};
 use std::fmt;
 
@@ -94,6 +95,7 @@ pub enum DecodeError {
         actual: [u8; 16],
     },
     DateOutOfRange(i32),
+    TimestampOutOfRange(NaiveDateTime),
     Custom(String),
 }
 
@@ -175,6 +177,9 @@ impl DecodeError {
                 actual, expected
             ),
             DecodeError::DateOutOfRange(inner) => write!(f, "Date out of range: {}", inner),
+            DecodeError::TimestampOutOfRange(inner) => {
+                write!(f, "Timestamp out of range: {}", inner)
+            }
         }
     }
 }

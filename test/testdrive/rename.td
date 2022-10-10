@@ -164,15 +164,15 @@ renamed_sink
 
 # Source was successfully renamed
 > SHOW SOURCES;
-name               type
-------------------------
-renamed_mz_data    kafka
+name               type   size
+------------------------------
+renamed_mz_data    kafka  1
 
 # Sink was successfully renamed
 > SHOW SINKS
-name
-------------
-renamed_sink
+name               type   size
+------------------------------
+renamed_sink       kafka  1
 
 # View was successfully renamed
 > SHOW VIEWS

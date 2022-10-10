@@ -11,29 +11,29 @@
 
 > SHOW TYPES
 
-> CREATE TYPE bool AS MAP (key_type=text, value_type=int4)
+> CREATE TYPE bool AS MAP (KEY TYPE = text, VALUE TYPE = int4)
 
-> CREATE TYPE custom AS MAP (key_type=text, value_type=bool)
+> CREATE TYPE custom AS MAP (KEY TYPE = text, VALUE TYPE = bool)
 
 $ set-regex match=^s\d*$ replacement=<GID>
 # Without qualifiers, should default to builtin bool.
 > SELECT value_id
-  FROM mz_map_types JOIN mz_types ON mz_map_types.type_id = mz_types.id
+  FROM mz_map_types JOIN mz_types ON mz_map_types.id = mz_types.id
   WHERE name = 'custom'
 <GID>
 
-> CREATE TYPE another_custom AS MAP (key_type=text, value_type=public.bool)
+> CREATE TYPE another_custom AS MAP (KEY TYPE = text, VALUE TYPE = public.bool)
 
 $ set-regex match=^u\d*$ replacement=<GID>
 # Qualified name should point to user-defined bool.
 > SELECT value_id
-  FROM mz_map_types JOIN mz_types ON mz_map_types.type_id = mz_types.id
+  FROM mz_map_types JOIN mz_types ON mz_map_types.id = mz_types.id
   WHERE name = 'another_custom'
 <GID>
 
 > CREATE SCHEMA test_schema
 
-> CREATE TYPE test_schema.bool AS MAP (key_type=text, value_type=float4)
+> CREATE TYPE test_schema.bool AS MAP (KEY TYPE = text, VALUE TYPE = float4)
 
 > SHOW TYPES
 name

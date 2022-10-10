@@ -316,8 +316,8 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                     i64::from(time.num_seconds_from_midnight()) * 1_000_000
                         + i64::from(time.nanosecond()) / 1_000
                 }),
-                ScalarType::Timestamp => Value::Timestamp(datum.unwrap_timestamp()),
-                ScalarType::TimestampTz => Value::Timestamp(datum.unwrap_timestamptz().naive_utc()),
+                ScalarType::Timestamp => Value::Timestamp(datum.unwrap_timestamp().to_naive()),
+                ScalarType::TimestampTz => Value::Timestamp(datum.unwrap_timestamptz().to_naive()),
                 // SQL intervals and Avro durations differ quite a lot (signed
                 // vs unsigned, different int sizes), so SQL intervals are their
                 // own bespoke type.

@@ -106,6 +106,7 @@ impl SourceReader for KafkaSourceReader {
     ) -> Result<(Self, Self::OffsetCommitter), anyhow::Error> {
         let KafkaSourceConnection {
             connection,
+            connection_id,
             options,
             topic,
             group_id_prefix,
@@ -113,7 +114,8 @@ impl SourceReader for KafkaSourceReader {
             ..
         } = kc;
         let kafka_config = TokioHandle::current().block_on(create_kafka_config(
-            &source_name,
+            connection_id,
+            source_id,
             group_id_prefix,
             environment_id,
             &connection,
@@ -509,12 +511,12 @@ impl KafkaSourceReader {
                     .expect("partition known to be installed");
 
                 error!(
-                        "kafka error consuming from source: {} topic: {}: partition: {} last processed offset: {} : {}",
-                        self.source_name,
-                        self.topic_name,
-                        pid,
-                        last_offset,
-                        e
+                    "kafka error consuming from source: {} topic: {}: partition: {} last processed offset: {} : {}",
+                    self.source_name,
+                    self.topic_name,
+                    pid,
+                    last_offset,
+                    e
                     );
                 None
             }
@@ -591,7 +593,8 @@ impl KafkaSourceReader {
 /// look arbitrary, other layers of the system tightly control which
 /// configuration options are allowable.
 async fn create_kafka_config(
-    name: &str,
+    connection_id: GlobalId,
+    source_id: GlobalId,
     group_id_prefix: Option<String>,
     environment_id: String,
     kafka_connection: &KafkaConnection,
@@ -646,10 +649,11 @@ async fn create_kafka_config(
     kafka_config.set(
         "group.id",
         &format!(
-            "{}materialize-{}-{}",
+            "{}materialize-{}-{}-{}",
             group_id_prefix.unwrap_or_else(String::new),
             environment_id,
-            name
+            connection_id,
+            source_id,
         ),
     );
 
@@ -670,6 +674,7 @@ fn construct_source_message(
         _ => None,
     };
     Ok(SourceMessage {
+        output: 0,
         partition: PartitionId::Kafka(msg.partition()),
         offset: u64::try_from(msg.offset())
             .map_err(|_| {

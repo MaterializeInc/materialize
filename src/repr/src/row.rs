@@ -37,6 +37,7 @@ use crate::adt::date::Date;
 use crate::adt::interval::Interval;
 use crate::adt::numeric;
 use crate::adt::numeric::Numeric;
+use crate::adt::timestamp::CheckedTimestamp;
 use crate::scalar::arb_datum;
 use crate::{Datum, Timestamp};
 
@@ -506,12 +507,18 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::Timestamp => {
             let date = read_naive_date(data, offset);
             let time = read_time(data, offset);
-            Datum::Timestamp(date.and_time(time))
+            Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(date.and_time(time))
+                    .expect("unexpected timestamp"),
+            )
         }
         Tag::TimestampTz => {
             let date = read_naive_date(data, offset);
             let time = read_time(data, offset);
-            Datum::TimestampTz(DateTime::from_utc(date.and_time(time), Utc))
+            Datum::TimestampTz(
+                CheckedTimestamp::from_timestamplike(DateTime::from_utc(date.and_time(time), Utc))
+                    .expect("unexpected timestamptz"),
+            )
         }
         Tag::Interval => {
             let months = i32::from_le_bytes(read_byte_array(data, offset));
@@ -698,13 +705,15 @@ where
         }
         Datum::Timestamp(t) => {
             data.push(Tag::Timestamp.into());
-            push_naive_date(data, t.date());
-            push_time(data, t.time());
+            let datetime = t.to_naive();
+            push_naive_date(data, datetime.date());
+            push_time(data, datetime.time());
         }
         Datum::TimestampTz(t) => {
             data.push(Tag::TimestampTz.into());
-            push_naive_date(data, t.date().naive_utc());
-            push_time(data, t.time());
+            let datetime = t.to_naive();
+            push_naive_date(data, datetime.date());
+            push_time(data, datetime.time());
         }
         Datum::Interval(i) => {
             data.push(Tag::Interval.into());
@@ -1655,12 +1664,18 @@ mod tests {
             Datum::Float64(OrderedFloat::from(-2_147_483_648.0 - 42.12)),
             Datum::Date(Date::from_pg_epoch(365 * 45 + 21).unwrap()),
             Datum::Timestamp(
-                NaiveDate::from_isoywd(2019, 30, chrono::Weekday::Wed).and_hms(14, 32, 11),
+                CheckedTimestamp::from_timestamplike(
+                    NaiveDate::from_isoywd(2019, 30, chrono::Weekday::Wed).and_hms(14, 32, 11),
+                )
+                .unwrap(),
             ),
-            Datum::TimestampTz(DateTime::<Utc>::from_utc(
-                NaiveDateTime::from_timestamp(61, 0),
-                Utc,
-            )),
+            Datum::TimestampTz(
+                CheckedTimestamp::from_timestamplike(DateTime::<Utc>::from_utc(
+                    NaiveDateTime::from_timestamp(61, 0),
+                    Utc,
+                ))
+                .unwrap(),
+            ),
             Datum::Interval(Interval {
                 months: 312,
                 ..Default::default()
@@ -1872,8 +1887,16 @@ mod tests {
             Datum::from(numeric::Numeric::from(1000)),
             Datum::from(numeric::Numeric::from(9999)),
             Datum::Date(NaiveDate::from_ymd(1, 1, 1).try_into().unwrap()),
-            Datum::Timestamp(NaiveDateTime::from_timestamp(0, 0)),
-            Datum::TimestampTz(DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc)),
+            Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(NaiveDateTime::from_timestamp(0, 0)).unwrap(),
+            ),
+            Datum::TimestampTz(
+                CheckedTimestamp::from_timestamplike(DateTime::from_utc(
+                    NaiveDateTime::from_timestamp(0, 0),
+                    Utc,
+                ))
+                .unwrap(),
+            ),
             Datum::Interval(Interval::default()),
             Datum::Bytes(&[]),
             Datum::String(""),

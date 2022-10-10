@@ -36,12 +36,15 @@ INSERT INTO t2 VALUES (5);
 CREATE PUBLICATION mz_source FOR TABLE t1;
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
-
-> CREATE VIEWS FROM SOURCE mz_source (t1);
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES (t1);
 
 > SELECT * FROM t1;
 1
 
-! CREATE VIEWS FROM SOURCE mz_source (t2);
+> DROP SOURCE mz_source;
+
+! CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES (t2);
 contains:table t2 not found

@@ -44,6 +44,7 @@ use uuid::Uuid;
 
 use mz_expr::virtual_syntax::AlgExcept;
 use mz_expr::{func as expr_func, Id, LocalId, MirScalarExpr, RowSetFinishing};
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::str::StrExt;
@@ -54,21 +55,21 @@ use mz_repr::{
     strconv, ColumnName, ColumnType, Datum, GlobalId, RelationDesc, RelationType, Row, RowArena,
     ScalarType,
 };
-
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     AsOf, Assignment, AstInfo, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
     HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator,
-    Limit, OrderByExpr, Query, Select, SelectItem, SetExpr, SetOperator, ShowStatement,
-    SubscriptPosition, TableAlias, TableFactor, TableFunction, TableWithJoins,
-    UnresolvedObjectName, UpdateStatement, Value, Values, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, WindowSpec,
+    Limit, OrderByExpr, Query, Select, SelectItem, SelectOption, SelectOptionName, SetExpr,
+    SetOperator, ShowStatement, SubscriptPosition, TableAlias, TableFactor, TableFunction,
+    TableWithJoins, UnresolvedObjectName, UpdateStatement, Value, Values, WindowFrame,
+    WindowFrameBound, WindowFrameUnits, WindowSpec,
 };
 
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
 use crate::func::{self, Func, FuncSpec};
 use crate::names::{Aug, PartialObjectName, ResolvedDataType, ResolvedObjectName};
-use crate::normalize::{self, SqlValueOrSecret};
+use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AbstractColumnType, AbstractExpr, AggregateExpr, AggregateFunc, BinaryFunc,
@@ -80,6 +81,7 @@ use crate::plan::plan_utils::{self, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::typeconv::{self, CastContext};
+use crate::plan::with_options::TryFromValue;
 use crate::plan::{transform_ast, PlanContext, SendRowsPlan};
 use crate::plan::{Params, QueryWhen};
 
@@ -1500,6 +1502,8 @@ struct SelectPlan {
     project: Vec<usize>,
 }
 
+generate_extracted_config!(SelectOption, (ExpectedGroupSize, u64));
+
 /// Plans a SELECT query with an intrusive ORDER BY clause.
 ///
 /// Normally, the ORDER BY clause occurs after the columns specified in the
@@ -1530,16 +1534,11 @@ fn plan_view_select(
     // table function support (the UUID mapping). Attempt to change this so callers
     // don't need to clone the Select.
 
-    // Extract hints about group size if there are any
-    let mut options = crate::normalize::options(&s.options)?;
-
-    let option = options.remove("expected_group_size");
-
-    let expected_group_size = match option {
-        Some(SqlValueOrSecret::Value(Value::Number(n))) => Some(n.parse::<usize>()?),
-        Some(_) => sql_bail!("expected_group_size must be a number"),
-        None => None,
-    };
+    // Extract query options.
+    let SelectOptionExtracted {
+        expected_group_size,
+        seen: _,
+    } = SelectOptionExtracted::try_from(s.options.clone())?;
 
     // Step 1. Handle FROM clause, including joins.
     let (mut relation_expr, mut from_scope) =
@@ -1706,7 +1705,7 @@ fn plan_view_select(
             relation_expr = relation_expr.map(group_hir_exprs).reduce(
                 group_key,
                 agg_exprs,
-                expected_group_size,
+                expected_group_size.map(usize::cast_from),
             );
             (group_scope, select_all_mapping)
         } else {

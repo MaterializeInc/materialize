@@ -19,8 +19,11 @@
 
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
+use std::fmt::Debug;
 
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Context};
+use byteorder::{BigEndian, ByteOrder};
+use chrono::NaiveDate;
 
 use serde_json::Value as JsonValue;
 
@@ -53,14 +56,14 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
             let ts = n.as_i64().unwrap();
             Ok(Value::Timestamp(chrono::NaiveDateTime::from_timestamp(
                 ts / 1_000,
-                ((ts % 1_000) * 1_000_000) as u32,
+                ((ts % 1_000).abs() * 1_000_000) as u32,
             )))
         }
         (JsonValue::Number(ref n), SchemaPiece::TimestampMicro) => {
             let ts = n.as_i64().unwrap();
             Ok(Value::Timestamp(chrono::NaiveDateTime::from_timestamp(
                 ts / 1_000_000,
-                ((ts % 1_000_000) * 1_000) as u32,
+                ((ts % 1_000_000).abs() * 1_000) as u32,
             )))
         }
         (JsonValue::Array(items), SchemaPiece::Array(inner)) => Ok(Value::Array(
@@ -221,5 +224,84 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
             json,
             schema
         ),
+    }
+}
+
+/// Decodes an Avro datum from its Confluent-formatted byte representation.
+///
+/// The Confluent format includes a verbsion byte, followed by a 32-bit schema
+/// ID, followed by the encoded Avro value. This function validates the version
+/// byte but ignores the schema ID.
+pub fn from_confluent_bytes(schema: &Schema, mut bytes: &[u8]) -> Result<Value, anyhow::Error> {
+    if bytes.len() < 5 {
+        bail!(
+            "avro datum is too few bytes: expected at least 5 bytes, got {}",
+            bytes.len()
+        );
+    }
+    let magic = bytes[0];
+    let _schema_id = BigEndian::read_i32(&bytes[1..5]);
+    bytes = &bytes[5..];
+
+    if magic != 0 {
+        bail!(
+            "wrong avro serialization magic: expected 0, got {}",
+            bytes[0]
+        );
+    }
+
+    let datum = from_avro_datum(schema, &mut bytes).context("decoding avro datum")?;
+    Ok(datum)
+}
+
+/// A struct to enhance the debug output of various Avro types.
+///
+/// Testdrive scripts, for example, specify timestamps in micros, but debug
+/// output happens in Y-M-D format, which can be very difficult to map back to
+/// the correct input number. Similarly, dates are represented in Avro as
+/// `i32`s, but we would like to see the Y-M-D format as well.
+pub struct DebugValue(pub Value);
+
+impl Debug for DebugValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            Value::Timestamp(t) => write!(
+                f,
+                "Timestamp(\"{:?}\", {} micros, {} millis)",
+                t,
+                t.timestamp_micros(),
+                t.timestamp_millis()
+            ),
+            Value::Date(d) => write!(
+                f,
+                "Date({:?}, \"{}\")",
+                d,
+                NaiveDate::from_num_days_from_ce(*d)
+            ),
+
+            // Re-wrap types that contain a Value.
+            Value::Record(r) => f
+                .debug_set()
+                .entries(r.iter().map(|(s, v)| (s, DebugValue(v.clone()))))
+                .finish(),
+            Value::Array(a) => f
+                .debug_set()
+                .entries(a.iter().map(|v| DebugValue(v.clone())))
+                .finish(),
+            Value::Union {
+                index,
+                inner,
+                n_variants,
+                null_variant,
+            } => f
+                .debug_struct("Union")
+                .field("index", index)
+                .field("inner", &DebugValue(*inner.clone()))
+                .field("n_variants", n_variants)
+                .field("null_variant", null_variant)
+                .finish(),
+
+            _ => write!(f, "{:?}", self.0),
+        }
     }
 }

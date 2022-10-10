@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import subprocess
-from typing import Any
+from typing import Any, Optional
 
 import pg8000
 import sqlparse
@@ -61,11 +61,16 @@ class K8sResource:
     def create(self) -> None:
         assert False
 
-    def image(self, service: str, release_mode: bool) -> str:
-        repo = mzbuild.Repository(ROOT, release_mode=release_mode)
-        deps = repo.resolve_dependencies([repo.images[service]])
-        rimage = deps[service]
-        return rimage.spec()
+    def image(
+        self, service: str, tag: Optional[str] = None, release_mode: bool = True
+    ) -> str:
+        if tag is not None:
+            return f"materialize/{service}:{tag}"
+        else:
+            repo = mzbuild.Repository(ROOT, release_mode=release_mode)
+            deps = repo.resolve_dependencies([repo.images[service]])
+            rimage = deps[service]
+            return rimage.spec()
 
 
 class K8sPod(K8sResource):
@@ -157,13 +162,33 @@ class K8sDeployment(K8sResource):
 class K8sStatefulSet(K8sResource):
     stateful_set: V1StatefulSet
 
+    def __init__(self) -> None:
+        self.stateful_set = self.generate_stateful_set()
+
+    def generate_stateful_set(self) -> V1StatefulSet:
+        assert False
+
     def kind(self) -> str:
         return "statefulset"
+
+    def name(self) -> str:
+        assert self.stateful_set.metadata is not None
+        assert self.stateful_set.metadata.name is not None
+        return self.stateful_set.metadata.name
 
     def create(self) -> None:
         apps_v1_api = self.apps_api()
         apps_v1_api.create_namespaced_stateful_set(
             body=self.stateful_set, namespace=self.namespace()
+        )
+
+    def replace(self) -> None:
+        apps_v1_api = self.apps_api()
+        name = self.name()
+        print(f"Replacing stateful set {name}...")
+        self.stateful_set = self.generate_stateful_set()
+        apps_v1_api.replace_namespaced_stateful_set(
+            name=name, body=self.stateful_set, namespace=self.namespace()
         )
 
 

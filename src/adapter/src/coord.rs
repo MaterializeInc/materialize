@@ -73,17 +73,17 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use anyhow::Context;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::StreamExt;
 use itertools::Itertools;
+use mz_ore::retry::Retry;
 use rand::seq::SliceRandom;
 use timely::progress::Timestamp as _;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tracing::{span, Level};
+use tracing::{span, warn, Level};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
@@ -92,21 +92,21 @@ use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
-use mz_ore::stack;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::{stack, task};
 use mz_persist_client::usage::StorageUsageClient;
 use mz_persist_client::ShardId;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_secrets::SecretsController;
-use mz_sql::ast::{CreateSourceStatement, Raw, Statement};
+use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statement};
 use mz_sql::names::Aug;
 use mz_sql::plan::{MutationKind, Params};
 use mz_stash::Append;
-use mz_storage::controller::CollectionDescription;
+use mz_storage::controller::{CollectionDescription, CreateExportToken, DataSource, StorageError};
 use mz_storage::types::connections::ConnectionContext;
 use mz_storage::types::sinks::StorageSinkConnection;
-use mz_storage::types::sources::{IngestionDescription, Timeline};
+use mz_storage::types::sources::{IngestionDescription, SourceExport, Timeline};
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
@@ -118,12 +118,12 @@ use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
+use crate::coord::metrics::Metrics;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::{ReadCapability, ReadHolds};
 use crate::coord::timeline::{TimelineState, WriteTimestamp};
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, Session};
-use crate::sink_connection;
 use crate::subscribe::PendingSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter};
 
@@ -136,6 +136,7 @@ mod dataflows;
 mod ddl;
 mod indexes;
 mod message_handler;
+mod metrics;
 mod read_policy;
 mod sequencer;
 mod sql;
@@ -198,7 +199,13 @@ pub struct CreateSourceStatementReady {
     pub session: Session,
     #[derivative(Debug = "ignore")]
     pub tx: ClientTransmitter<ExecuteResponse>,
-    pub result: Result<CreateSourceStatement<Aug>, AdapterError>,
+    pub result: Result<
+        (
+            Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
+            CreateSourceStatement<Aug>,
+        ),
+        AdapterError,
+    >,
     pub params: Params,
     pub depends_on: Vec<GlobalId>,
     pub original_stmt: Statement<Raw>,
@@ -208,11 +215,11 @@ pub struct CreateSourceStatementReady {
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct SinkConnectionReady {
-    pub session: Session,
     #[derivative(Debug = "ignore")]
-    pub tx: ClientTransmitter<ExecuteResponse>,
+    pub session_and_tx: Option<(Session, ClientTransmitter<ExecuteResponse>)>,
     pub id: GlobalId,
     pub oid: u32,
+    pub create_export_token: CreateExportToken,
     pub result: Result<StorageSinkConnection, AdapterError>,
 }
 
@@ -361,6 +368,9 @@ pub struct Coordinator<S> {
 
     /// Segment analytics client.
     segment_client: Option<mz_segment::Client>,
+
+    /// Coordinator metrics.
+    metrics: Metrics,
 }
 
 impl<S: Append + 'static> Coordinator<S> {
@@ -377,14 +387,14 @@ impl<S: Append + 'static> Coordinator<S> {
         for instance in self.catalog.compute_instances() {
             self.controller.compute.create_instance(
                 instance.id,
-                instance.logging.clone(),
+                instance.log_indexes.clone(),
                 self.catalog.system_config().max_result_size(),
             )?;
             for (replica_id, replica) in instance.replicas_by_id.clone() {
                 let introspection_collections = replica
                     .config
-                    .persisted_logs
-                    .get_sources()
+                    .logging
+                    .sources
                     .iter()
                     .map(|(variant, id)| (*id, variant.desc().into()))
                     .collect();
@@ -397,7 +407,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
-                persisted_source_ids.extend(replica.config.persisted_logs.get_source_ids());
+                persisted_source_ids.extend(replica.config.logging.source_ids());
 
                 self.controller
                     .active_compute()
@@ -467,18 +477,34 @@ impl<S: Append + 'static> Coordinator<S> {
                 // the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
                     // Re-announce the source description.
-                    let mut ingestion = IngestionDescription {
-                        desc: source.source_desc.clone(),
-                        source_imports: BTreeMap::new(),
-                        storage_metadata: (),
-                        typ: source.desc.typ().clone(),
-                    };
-
-                    for id in entry.uses() {
-                        if self.catalog.state().get_entry(id).source().is_some() {
-                            ingestion.source_imports.insert(*id, ());
+                    let data_source = source.ingestion.clone().map(|ingestion| {
+                        let mut source_imports = BTreeMap::new();
+                        for source_import in ingestion.source_imports {
+                            source_imports.insert(source_import, ());
                         }
-                    }
+
+                        let mut source_exports = BTreeMap::new();
+                        // By convention the first output corresponds to the main source object
+                        let main_export = SourceExport {
+                            output_index: 0,
+                            storage_metadata: (),
+                        };
+                        source_exports.insert(entry.id(), main_export);
+                        for (subsource, output_index) in ingestion.subsource_exports {
+                            let export = SourceExport {
+                                output_index,
+                                storage_metadata: (),
+                            };
+                            source_exports.insert(subsource, export);
+                        }
+
+                        DataSource::Ingestion(IngestionDescription {
+                            desc: ingestion.desc,
+                            ingestion_metadata: (),
+                            source_imports,
+                            source_exports,
+                        })
+                    });
 
                     self.controller
                         .storage
@@ -486,7 +512,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             entry.id(),
                             CollectionDescription {
                                 desc: source.desc.clone(),
-                                ingestion: Some(ingestion),
+                                data_source,
                                 since: None,
                                 status_collection_id,
                                 host_config: Some(source.host_config.clone()),
@@ -558,37 +584,70 @@ impl<S: Append + 'static> Coordinator<S> {
                     self.ship_dataflow(df, mview.compute_instance).await;
                 }
                 CatalogItem::Sink(sink) => {
-                    // Re-create the sink on the compute instance.
+                    // Re-create the sink.
                     let builder = match &sink.connection {
-                        StorageSinkConnectionState::Pending(builder) => builder,
+                        StorageSinkConnectionState::Pending(builder) => builder.clone(),
                         StorageSinkConnectionState::Ready(_) => {
                             panic!("sink already initialized during catalog boot")
                         }
                     };
-                    let connection =
-                        sink_connection::build(builder.clone(), self.connection_context.clone())
-                            .await
-                            .with_context(|| format!("recreating sink {}", entry.name()))?;
-                    // `builtin_table_updates` is the desired state of the system tables. However,
-                    // it already contains a (cur_sink, +1) entry from [`Catalog::open`]. The line
-                    // below this will negate that entry with a (cur_sink, -1) entry. The
-                    // `handle_sink_connection_ready` call will delete the current sink, create a
-                    // new sink, and send the following appends to STORAGE: (cur_sink, -1),
-                    // (new_sink, +1). Then we add a (new_sink, +1) entry to
-                    // `builtin_table_updates`.
-                    builtin_table_updates.extend(self.catalog.pack_item_update(entry.id(), -1));
-                    self.handle_sink_connection_ready(
-                        entry.id(),
-                        entry.oid(),
-                        connection,
-                        // The sink should be established on a specific compute instance.
-                        None,
-                    )
-                    .await?;
-                    builtin_table_updates.extend(self.catalog.pack_item_update(entry.id(), 1));
+                    // Now we're ready to create the sink connection. Arrange to notify the
+                    // main coordinator thread when the future completes.
+                    let internal_cmd_tx = self.internal_cmd_tx.clone();
+                    let connection_context = self.connection_context.clone();
+                    let id = entry.id();
+                    let oid = entry.oid();
+
+                    let create_export_token = self
+                        .controller
+                        .storage
+                        .prepare_export(id, sink.from)
+                        .await
+                        .unwrap();
+
+                    task::spawn(
+                        || format!("sink_connection_ready:{}", sink.from),
+                        async move {
+                            let conn_result = Retry::default()
+                                .max_tries(usize::MAX)
+                                .clamp_backoff(Duration::from_secs(60 * 10))
+                                .retry_async(|_| async {
+                                    let builder = builder.clone();
+                                    let connection_context = connection_context.clone();
+                                    mz_storage::sink::build_sink_connection(
+                                        builder,
+                                        connection_context,
+                                    )
+                                    .await
+                                })
+                                .await
+                                .map_err(StorageError::from)
+                                .map_err(AdapterError::from);
+                            // It is not an error for sink connections to become ready after `internal_cmd_rx` is dropped.
+                            let result = internal_cmd_tx.send(Message::SinkConnectionReady(
+                                SinkConnectionReady {
+                                    session_and_tx: None,
+                                    id,
+                                    oid,
+                                    create_export_token,
+                                    result: conn_result,
+                                },
+                            ));
+                            if let Err(e) = result {
+                                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                            }
+                        },
+                    );
                 }
-                CatalogItem::StorageCollection(coll) => {
-                    let collection_desc = coll.desc.clone().into();
+                CatalogItem::StorageManagedTable(coll) => {
+                    let collection_desc = CollectionDescription {
+                        desc: coll.desc.clone(),
+                        data_source: coll.data_source.clone().map(DataSource::Introspection),
+                        since: None,
+                        status_collection_id,
+                        host_config: None,
+                    };
+
                     self.controller
                         .storage
                         .create_collections(vec![(entry.id(), collection_desc)])
@@ -841,7 +900,7 @@ pub async fn serve<S: Append + 'static>(
         availability_zones.push(DUMMY_AVAILABILITY_ZONE.into());
     }
     // Shuffle availability zones for unbiased selection in
-    // Coordinator::sequence_create_compute_instance_replica.
+    // Coordinator::sequence_create_compute_replica.
     availability_zones.shuffle(&mut rand::thread_rng());
 
     let (mut catalog, builtin_migration_metadata, builtin_table_updates) =
@@ -931,6 +990,7 @@ pub async fn serve<S: Append + 'static>(
                 storage_usage_client,
                 storage_usage_collection_interval,
                 segment_client,
+                metrics: Metrics::register_with(&metrics_registry),
             };
             let bootstrap =
                 handle.block_on(coord.bootstrap(builtin_migration_metadata, builtin_table_updates));
@@ -957,51 +1017,5 @@ pub async fn serve<S: Append + 'static>(
             Ok((handle, client))
         }
         Err(e) => Err(e),
-    }
-}
-
-pub trait CoordTimestamp:
-    timely::progress::Timestamp
-    + timely::order::TotalOrder
-    + differential_dataflow::lattice::Lattice
-    + std::fmt::Debug
-{
-    /// Advance a timestamp by the least amount possible such that
-    /// `ts.less_than(ts.step_forward())` is true. Panic if unable to do so.
-    fn step_forward(&self) -> Self;
-
-    /// Advance a timestamp forward by the given `amount`. Panic if unable to do so.
-    fn step_forward_by(&self, amount: &Self) -> Self;
-
-    /// Retreat a timestamp by the least amount possible such that
-    /// `ts.step_back().unwrap().less_than(ts)` is true. Return `None` if unable,
-    /// which must only happen if the timestamp is `Timestamp::minimum()`.
-    fn step_back(&self) -> Option<Self>;
-
-    /// Return the maximum value for this timestamp.
-    fn maximum() -> Self;
-}
-
-impl CoordTimestamp for mz_repr::Timestamp {
-    fn step_forward(&self) -> Self {
-        match self.checked_add(1) {
-            Some(ts) => ts,
-            None => panic!("could not step forward"),
-        }
-    }
-
-    fn step_forward_by(&self, amount: &Self) -> Self {
-        match self.checked_add(*amount) {
-            Some(ts) => ts,
-            None => panic!("could not step {self} forward by {amount}"),
-        }
-    }
-
-    fn step_back(&self) -> Option<Self> {
-        self.checked_sub(1)
-    }
-
-    fn maximum() -> Self {
-        Self::MAX
     }
 }

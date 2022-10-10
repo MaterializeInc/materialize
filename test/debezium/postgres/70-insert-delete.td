@@ -16,7 +16,7 @@ CREATE TABLE insert_delete (f1 INTEGER, PRIMARY KEY (f1));
 ALTER TABLE insert_delete REPLICA IDENTITY FULL;
 INSERT INTO insert_delete VALUES (1);
 
-$ schema-registry-wait-schema schema=postgres.public.insert_delete-value
+$ schema-registry-wait subject=postgres.public.insert_delete-value
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY

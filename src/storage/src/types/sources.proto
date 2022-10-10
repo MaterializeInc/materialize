@@ -22,6 +22,7 @@ import "storage/src/types/connections.proto";
 import "storage/src/types/connections/aws.proto";
 import "storage/src/types/errors.proto";
 import "storage/src/types/sources/encoding.proto";
+import "expr/src/scalar.proto";
 
 package mz_storage.types.sources;
 
@@ -73,6 +74,7 @@ message ProtoNoneEnvelope {
 message ProtoUpsertEnvelope {
     ProtoUpsertStyle style = 1;
     repeated uint64 key_indices = 2;
+    uint64 source_arity = 3;
 }
 
 message ProtoUpsertStyle {
@@ -143,6 +145,7 @@ message ProtoDebeziumSourceProjection {
 
 message ProtoKafkaSourceConnection {
     mz_storage.types.connections.ProtoKafkaConnection connection = 1;
+    mz_repr.global_id.ProtoGlobalId connection_id = 13;
     string topic = 2;
     map<int32, int64> start_offsets = 3;
     optional string group_id_prefix = 4;
@@ -183,14 +186,21 @@ message ProtoSourceData {
 }
 
 message ProtoKinesisSourceConnection {
+    mz_repr.global_id.ProtoGlobalId connection_id = 3;
     string stream_name = 1;
     mz_storage.types.connections.aws.ProtoAwsConfig aws = 2;
 }
 
 message ProtoPostgresSourceConnection {
+    message ProtoPostgresTableCast {
+        repeated mz_expr.scalar.ProtoMirScalarExpr column_casts = 1;
+    }
+
+    mz_repr.global_id.ProtoGlobalId connection_id = 6;
     mz_storage.types.connections.ProtoPostgresConnection connection = 1;
     string publication = 2;
     ProtoPostgresSourceDetails details = 4;
+    repeated ProtoPostgresTableCast table_casts = 5;
 }
 
 message ProtoPostgresSourceDetails {
@@ -207,6 +217,7 @@ message ProtoLoadGeneratorSourceConnection {
 }
 
 message ProtoS3SourceConnection {
+    mz_repr.global_id.ProtoGlobalId connection_id = 5;
     repeated ProtoS3KeySource key_sources = 1;
     optional string pattern = 2;
     mz_storage.types.connections.aws.ProtoAwsConfig aws = 3;
@@ -228,13 +239,17 @@ message ProtoCompression {
 }
 
 message ProtoIngestionDescription {
-    // ProtoSourceImport is taken by ProtoDataflowDescription
-    message ProtoSourceMetadataImport {
+    message ProtoSourceImport {
         mz_repr.global_id.ProtoGlobalId id = 1;
         mz_storage.controller.ProtoCollectionMetadata storage_metadata = 2;
     }
-    repeated ProtoSourceMetadataImport source_imports = 1;
-    ProtoSourceDesc desc = 2;
-    mz_storage.controller.ProtoCollectionMetadata storage_metadata = 3;
-    mz_repr.relation_and_scalar.ProtoRelationType typ = 4;
+    message ProtoSourceExport {
+        mz_repr.global_id.ProtoGlobalId id = 1;
+        uint64 output_index = 2;
+        mz_storage.controller.ProtoCollectionMetadata storage_metadata = 3;
+    }
+    repeated ProtoSourceImport source_imports = 1;
+    repeated ProtoSourceExport source_exports = 2;
+    mz_storage.controller.ProtoCollectionMetadata ingestion_metadata = 3;
+    ProtoSourceDesc desc = 4;
 }

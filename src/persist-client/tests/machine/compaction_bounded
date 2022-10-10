@@ -282,3 +282,69 @@ f 8 1
 <run 0>
 part 0
 part 1
+
+
+# try compacting two batches with many empty (frontier update) batches in-between. we want to
+# ensure we don't count the empty batches against the memory limit when calculating which chunks
+# of runs to compact together.
+
+write-batch output=e1 lower=3 upper=4
+----
+parts=0 len=0
+
+write-batch output=e2 lower=4 upper=5
+----
+parts=0 len=0
+
+write-batch output=e3 lower=5 upper=6
+----
+parts=0 len=0
+
+write-batch output=e4 lower=6 upper=7
+----
+parts=0 len=0
+
+write-batch output=e5 lower=7 upper=8
+----
+parts=0 len=0
+
+write-batch output=e6 lower=8 upper=9
+----
+parts=0 len=0
+
+write-batch output=e7 lower=9 upper=10
+----
+parts=0 len=0
+
+write-batch output=e8 lower=10 upper=11
+----
+parts=0 len=0
+
+write-batch output=e9 lower=11 upper=12
+----
+parts=0 len=0
+
+write-batch output=e10 lower=12 upper=13
+----
+parts=0 len=0
+
+write-batch output=b1 lower=13 upper=15 target_size=0 parts_size_override=25
+a 13 1
+b 13 1
+d 13 1
+----
+parts=3 len=3
+
+compact output=b0_1 inputs=(b0,e1,e2,e3,e4,e5,e6,e7,e8,e9,e10,b1) lower=0 upper=15 since=14 target_size=200 memory_bound=800
+----
+parts=1 len=4
+
+fetch-batch input=b0_1
+----
+<part 0>
+a 14 2
+b 14 2
+c 14 1
+d 14 1
+<run 0>
+part 0

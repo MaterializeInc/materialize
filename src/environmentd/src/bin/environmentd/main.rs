@@ -55,7 +55,6 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
-use mz_repr::util::parse_duration;
 use mz_secrets::SecretsController;
 use mz_storage::types::connections::ConnectionContext;
 
@@ -370,7 +369,7 @@ pub struct Args {
     #[clap(
         long,
         env = "STORAGE_USAGE_COLLECTION_INTERVAL",
-        parse(try_from_str = parse_duration),
+        parse(try_from_str = humantime::parse_duration),
         default_value = "3600s"
     )]
     storage_usage_collection_interval_sec: Duration,
@@ -589,6 +588,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         storage_stash_url: args.storage_stash_url,
         storaged_image: args.storaged_image.expect("clap enforced"),
         computed_image: args.computed_image.expect("clap enforced"),
+        now: SYSTEM_TIME.clone(),
     };
 
     // When inside a cgroup with a cpu limit,

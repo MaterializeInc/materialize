@@ -156,16 +156,16 @@ query T multiline
 EXPLAIN RAW PLAN AS TEXT FOR
 SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELECT * FROM mv WHERE t.b > mv.b)
 ----
-Let
+Return
   Filter (exists(Get l1) AND exists(Get l2))
     Get materialize.public.t
-  Where
-    l1 =
-      Filter (#^0 < #0)
-        Get materialize.public.mv
-    l2 =
-      Filter (#^1 > #1)
-        Get materialize.public.mv
+Where
+  cte l1 =
+    Filter (#^0 < #0)
+      Get materialize.public.mv
+  cte l2 =
+    Filter (#^1 > #1)
+      Get materialize.public.mv
 
 EOF
 
@@ -175,20 +175,20 @@ EXPLAIN RAW PLAN AS TEXT FOR
 SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE mv.b = t.b LIMIT 1) FROM t
 ----
 Project (#2, #3)
-  Let
+  Return
     Map (select(Get l1), select(Get l2))
       Get materialize.public.t
-    Where
-      l1 =
-        Project (#0)
-          TopK limit=1
-            Filter (#1 = #^1)
-              Get materialize.public.v
-      l2 =
-        Project (#0)
-          TopK limit=1
-            Filter (#1 = #^1)
-              Get materialize.public.mv
+  Where
+    cte l1 =
+      Project (#0)
+        TopK limit=1
+          Filter (#1 = #^1)
+            Get materialize.public.v
+    cte l2 =
+      Project (#0)
+        TopK limit=1
+          Filter (#1 = #^1)
+            Get materialize.public.mv
 
 EOF
 
@@ -276,14 +276,14 @@ EXPLAIN RAW PLAN AS TEXT FOR
 WITH x AS (SELECT t.a * t.b as v from t) SELECT x.v + 5 FROM x
 ----
 Project (#1)
-  Let
+  Return
     Map ((#0 + 5))
       Get l0
-    Where
-      l0 =
-        Project (#2)
-          Map ((#0 * #1))
-            Get materialize.public.t
+  Where
+    cte l0 =
+      Project (#2)
+        Map ((#0 * #1))
+          Get materialize.public.t
 
 EOF
 
@@ -292,18 +292,18 @@ query T multiline
 EXPLAIN RAW PLAN AS TEXT FOR
 WITH A AS (SELECT 1 AS a), B as (SELECT a as b FROM A WHERE a > 0) SELECT * FROM A, B;
 ----
-Let
+Return
   CrossJoin
     Get l0
     Get l1
-  Where
-    l1 =
-      Filter (#0 > 0)
-        Get l0
-    l0 =
-      Map (1)
-        Constant
-          - ()
+Where
+  cte l1 =
+    Filter (#0 > 0)
+      Get l0
+  cte l0 =
+    Map (1)
+      Constant
+        - ()
 
 EOF
 
@@ -333,20 +333,20 @@ FROM
 CrossJoin
   CrossJoin
     Get materialize.public.t
-    Let
+    Return
       Filter (#0 != #^0)
         Get l0
-      Where
-        l0 =
-          Reduce aggregates=[max((#^0 * #0))]
-            Get materialize.public.t
-  Let
-    Filter ((#0 != #^0) OR ((#0) IS NOT NULL AND (#^0) IS NULL))
-      Get l0
     Where
-      l0 =
+      cte l0 =
         Reduce aggregates=[max((#^0 * #0))]
           Get materialize.public.t
+  Return
+    Filter ((#0 != #^0) OR ((#0) IS NOT NULL AND (#^0) IS NULL))
+      Get l0
+  Where
+    cte l0 =
+      Reduce aggregates=[max((#^0 * #0))]
+        Get materialize.public.t
 
 EOF
 
@@ -379,20 +379,20 @@ FROM
 ----
 CrossJoin
   Get materialize.public.t
-  Let
+  Return
     Filter (#^0 != #^0)
       CrossJoin
         Get l0
-        Let
+        Return
           Filter ((#^^0 = #^0) AND (#0 > 5))
             Get l1
-          Where
-            l1 =
-              Reduce aggregates=[max((#^^0 * #0))]
-                Get materialize.public.t
-    Where
-      l0 =
-        Reduce aggregates=[max((#^0 * #0))]
-          Get materialize.public.t
+        Where
+          cte l1 =
+            Reduce aggregates=[max((#^^0 * #0))]
+              Get materialize.public.t
+  Where
+    cte l0 =
+      Reduce aggregates=[max((#^0 * #0))]
+        Get materialize.public.t
 
 EOF

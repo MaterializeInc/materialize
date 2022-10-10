@@ -79,7 +79,7 @@ pub struct AwsExternalIdPrefix(pub(super) String);
 ///
 /// This is a distinct type from any of the configuration types built into the
 /// AWS SDK so that we can implement `Serialize` and `Deserialize`.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct AwsConfig {
     /// AWS Credentials, or where to find them
     pub credentials: AwsCredentials,
@@ -146,7 +146,7 @@ impl RustType<ProtoAwsCredentials> for AwsCredentials {
 }
 
 /// A role for Materialize to assume when performing AWS API calls.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct AwsAssumeRole {
     /// The Amazon Resource Name of the role to assume.
     pub arn: String,

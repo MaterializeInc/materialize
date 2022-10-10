@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ schema-registry-wait-schema schema=sql-server.dbo.delete_table_pk-value
+$ schema-registry-wait subject=sql-server.dbo.delete_table_pk-value
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY
@@ -22,7 +22,7 @@ $ schema-registry-wait-schema schema=sql-server.dbo.delete_table_pk-value
   ENVELOPE DEBEZIUM;
 
 # [btv] uncomment if we bring back classic debezium mode
-# $ schema-registry-wait-schema schema=sql-server.dbo.delete_table_nopk-value
+# $ schema-registry-wait subject=sql-server.dbo.delete_table_nopk-value
 
 # > CREATE SOURCE delete_table_nopk
 #   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.dbo.delete_table_nopk')

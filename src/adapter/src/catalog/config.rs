@@ -14,7 +14,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 
 use mz_build_info::BuildInfo;
-use mz_compute_client::controller::ComputeInstanceReplicaAllocation;
+use mz_compute_client::controller::ComputeReplicaAllocation;
 use mz_ore::metrics::MetricsRegistry;
 use mz_secrets::SecretsReader;
 use mz_storage::types::hosts::StorageHostResourceAllocation;
@@ -51,7 +51,7 @@ pub struct Config<'a, S> {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct ClusterReplicaSizeMap(pub HashMap<String, ComputeInstanceReplicaAllocation>);
+pub struct ClusterReplicaSizeMap(pub HashMap<String, ComputeReplicaAllocation>);
 
 impl Default for ClusterReplicaSizeMap {
     fn default() -> Self {
@@ -75,7 +75,7 @@ impl Default for ClusterReplicaSizeMap {
                 let workers = 1 << i;
                 (
                     workers.to_string(),
-                    ComputeInstanceReplicaAllocation {
+                    ComputeReplicaAllocation {
                         memory_limit: None,
                         cpu_limit: None,
                         scale: NonZeroUsize::new(1).unwrap(),
@@ -89,7 +89,7 @@ impl Default for ClusterReplicaSizeMap {
             let scale = 1 << i;
             inner.insert(
                 format!("{scale}-1"),
-                ComputeInstanceReplicaAllocation {
+                ComputeReplicaAllocation {
                     memory_limit: None,
                     cpu_limit: None,
                     scale: NonZeroUsize::new(scale).unwrap(),
@@ -100,7 +100,7 @@ impl Default for ClusterReplicaSizeMap {
 
         inner.insert(
             "2-2".to_string(),
-            ComputeInstanceReplicaAllocation {
+            ComputeReplicaAllocation {
                 memory_limit: None,
                 cpu_limit: None,
                 scale: NonZeroUsize::new(2).unwrap(),
@@ -109,7 +109,7 @@ impl Default for ClusterReplicaSizeMap {
         );
         inner.insert(
             "2-4".to_string(),
-            ComputeInstanceReplicaAllocation {
+            ComputeReplicaAllocation {
                 memory_limit: None,
                 cpu_limit: None,
                 scale: NonZeroUsize::new(2).unwrap(),

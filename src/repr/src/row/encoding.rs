@@ -298,6 +298,7 @@ mod tests {
     use crate::adt::array::ArrayDimension;
     use crate::adt::interval::Interval;
     use crate::adt::numeric::Numeric;
+    use crate::adt::timestamp::CheckedTimestamp;
     use crate::{Datum, Row};
 
     // TODO: datadriven golden tests for various interesting Datums and Rows to
@@ -318,12 +319,18 @@ mod tests {
             Datum::Date(NaiveDate::from_ymd(6, 7, 8).try_into().unwrap()),
             Datum::Time(NaiveTime::from_hms(9, 10, 11)),
             Datum::Timestamp(
-                NaiveDate::from_ymd(12, 13 % 12, 14).and_time(NaiveTime::from_hms(15, 16, 17)),
+                CheckedTimestamp::from_timestamplike(
+                    NaiveDate::from_ymd(12, 13 % 12, 14).and_time(NaiveTime::from_hms(15, 16, 17)),
+                )
+                .unwrap(),
             ),
-            Datum::TimestampTz(DateTime::from_utc(
-                NaiveDate::from_ymd(18, 19 % 12, 20).and_time(NaiveTime::from_hms(21, 22, 23)),
-                Utc,
-            )),
+            Datum::TimestampTz(
+                CheckedTimestamp::from_timestamplike(DateTime::from_utc(
+                    NaiveDate::from_ymd(18, 19 % 12, 20).and_time(NaiveTime::from_hms(21, 22, 23)),
+                    Utc,
+                ))
+                .unwrap(),
+            ),
             Datum::Interval(Interval {
                 months: 24,
                 days: 42,

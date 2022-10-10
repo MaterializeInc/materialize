@@ -170,12 +170,18 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         .insert(ingestion.id, ingestion.description.clone());
 
                     // Initialize shared frontier tracking.
-                    self.storage_state.source_uppers.insert(
-                        ingestion.id,
-                        Rc::new(RefCell::new(Antichain::from_elem(
-                            mz_repr::Timestamp::minimum(),
-                        ))),
-                    );
+                    for export_id in ingestion.description.source_exports.keys() {
+                        self.storage_state.source_uppers.insert(
+                            *export_id,
+                            Rc::new(RefCell::new(Antichain::from_elem(
+                                mz_repr::Timestamp::minimum(),
+                            ))),
+                        );
+                        self.storage_state.reported_frontiers.insert(
+                            *export_id,
+                            Antichain::from_elem(mz_repr::Timestamp::minimum()),
+                        );
+                    }
 
                     crate::render::build_ingestion_dataflow(
                         self.timely_worker,
@@ -183,11 +189,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         ingestion.id,
                         ingestion.description,
                         ingestion.resume_upper,
-                    );
-
-                    self.storage_state.reported_frontiers.insert(
-                        ingestion.id,
-                        Antichain::from_elem(mz_repr::Timestamp::minimum()),
                     );
                 }
             }

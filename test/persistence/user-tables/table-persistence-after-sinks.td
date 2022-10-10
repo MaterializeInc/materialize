@@ -14,7 +14,7 @@
 
 
 
-$ kafka-verify format=avro sink=materialize.public.sink_sink sort-messages=true
+$ kafka-verify-data format=avro sink=materialize.public.sink_sink sort-messages=true
 {"before":null, "after":{"row":{"f1":{"int":1}}}}
 {"before":null, "after":{"row":{"f1":{"int":2}}}}
 {"before":null, "after":{"row":{"f1":{"int":3}}}}

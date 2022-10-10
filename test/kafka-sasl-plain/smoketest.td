@@ -62,18 +62,9 @@ a
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_sasl
   ENVELOPE DEBEZIUM
 
-$ kafka-verify format=avro sink=materialize.public.data_snk sort-messages=true
+$ kafka-verify-data format=avro sink=materialize.public.data_snk sort-messages=true
 {"before": null, "after": {"row": {"a": 1}}}
 {"before": null, "after": {"row": {"a": 2}}}
-
-# Old with options do not work
-! CREATE SOURCE connector_source
-  FROM KAFKA CONNECTION kafka_sasl (TOPIC 'testdrive-data-${testdrive.seed}')
-  LEGACYWITH (
-    security_protocol = 'sasl_ssl'
-  )
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_sasl
-contains:unexpected parameters for CREATE SOURCE: security_protocol
 
 # Ensure that connectors do not require the certificate authority
 > CREATE CONNECTION kafka_sasl_no_ca

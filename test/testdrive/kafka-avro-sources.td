@@ -116,18 +116,9 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 > CREATE CONNECTION kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
-# We should refuse to create a source with invalid WITH options
-! CREATE SOURCE invalid_with_option
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
-  LEGACYWITH (badoption = true)
-  KEY FORMAT AVRO USING SCHEMA '${key-schema}'
-  VALUE FORMAT AVRO USING SCHEMA '${schema}'
-  ENVELOPE DEBEZIUM
-contains:unexpected parameters for CREATE SOURCE: badoption
-
 > SHOW SOURCES
-name    type
-------------
+name    type   size
+-------------------
 
 # [btv] uncomment if we bring back classic debezium mode
 # ! CREATE SOURCE fast_forwarded

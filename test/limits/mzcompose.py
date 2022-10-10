@@ -439,7 +439,7 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
 
 
 class KafkaSinks(Generator):
-    COUNT = min(Generator.COUNT, 50)  # $ kafka-verify is slow
+    COUNT = min(Generator.COUNT, 50)  # $ kafka-verify-data is slow
 
     @classmethod
     def body(cls) -> None:
@@ -478,7 +478,7 @@ class KafkaSinks(Generator):
             print(
                 dedent(
                     f"""
-                    $ kafka-verify format=avro sink=materialize.public.s{i}
+                    $ kafka-verify-data format=avro sink=materialize.public.s{i}
                     {{"before": null, "after": {{"row": {{"f1": {i}}}}}}}
                     """
                 )
@@ -486,7 +486,7 @@ class KafkaSinks(Generator):
 
 
 class KafkaSinksSameSource(Generator):
-    COUNT = min(Generator.COUNT, 50)  # $ kafka-verify is slow
+    COUNT = min(Generator.COUNT, 50)  # $ kafka-verify-data is slow
 
     @classmethod
     def body(cls) -> None:
@@ -521,7 +521,7 @@ class KafkaSinksSameSource(Generator):
 
         for i in cls.all():
             print(
-                f'$ kafka-verify format=avro sink=materialize.public.s{i}\n{{"before": null, "after": {{"row": {{"f1": 123}}}}}}\n'
+                f'$ kafka-verify-data format=avro sink=materialize.public.s{i}\n{{"before": null, "after": {{"row": {{"f1": 123}}}}}}\n'
             )
 
 

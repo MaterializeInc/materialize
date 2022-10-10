@@ -33,7 +33,6 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::StreamExt;
 use itertools::Itertools;
-use mz_persist_client::PersistClient;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
@@ -46,13 +45,13 @@ use tokio_stream::StreamMap;
 use tracing::debug;
 
 use mz_build_info::BuildInfo;
-use mz_expr::PartitionId;
 use mz_orchestrator::NamespacedOrchestrator;
+use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::{write::WriteHandle, PersistLocation, ShardId};
+use mz_persist_client::{PersistLocation, ShardId};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Diff, GlobalId, RelationDesc, Row};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_stash::{self, StashError, TypedCollection};
 
 use crate::controller::hosts::{StorageHosts, StorageHostsConfig};
@@ -61,9 +60,9 @@ use crate::protocol::client::{
     StorageCommand, StorageResponse, Update,
 };
 use crate::types::errors::DataflowError;
-use crate::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
+use crate::types::hosts::StorageHostConfig;
 use crate::types::sinks::{ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc};
-use crate::types::sources::{IngestionDescription, MzOffset, SourceData, SourceEnvelope};
+use crate::types::sources::{IngestionDescription, SourceExport};
 
 mod hosts;
 mod rehydration;
@@ -93,13 +92,27 @@ impl MetadataExport<mz_repr::Timestamp> for MetadataExportFetcher {
     }
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
+pub enum IntrospectionType {
+    ShardMapping,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataSource {
+    /// Ingest data from some external source.
+    Ingestion(IngestionDescription),
+    /// Data comes from introspection sources, which the controller itself is
+    /// responisble for generating.
+    Introspection(IntrospectionType),
+}
+
 /// Describes a request to create a source.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CollectionDescription<T> {
     /// The schema of this collection
     pub desc: RelationDesc,
-    /// The description of the source to ingest into this collection, if any.
-    pub ingestion: Option<IngestionDescription<()>>,
+    /// The description of the source of data for this collection to ingest, if any.
+    pub data_source: Option<DataSource>,
     /// An optional frontier to which the collection's `since` should be advanced.
     pub since: Option<Antichain<T>>,
     /// A GlobalId to use for this collection to use for the status collection.
@@ -114,7 +127,7 @@ impl<T> From<RelationDesc> for CollectionDescription<T> {
     fn from(desc: RelationDesc) -> Self {
         Self {
             desc,
-            ingestion: None,
+            data_source: None,
             since: None,
             status_collection_id: None,
             host_config: None,
@@ -125,11 +138,18 @@ impl<T> From<RelationDesc> for CollectionDescription<T> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExportDescription<T = mz_repr::Timestamp> {
     pub sink: StorageSinkDesc<(), T>,
-    /// The address of a `storaged` process on which to install the source.
-    ///
-    /// If `None`, the controller manages the lifetime of the `storaged`
-    /// process.
-    pub remote_addr: Option<String>,
+    /// The address of a `storaged` process on which to install the sink or the
+    /// settings for spinning up a controller-managed process.
+    pub host_config: StorageHostConfig,
+}
+
+/// Opaque token to ensure `prepare_export` is called before `create_exports`.  This token proves
+/// that compaction is being held back on `from_id` at least until `id` is created.  It should be
+/// held while the AS OF is determined.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreateExportToken {
+    id: GlobalId,
+    from_id: GlobalId,
 }
 
 #[async_trait(?Send)]
@@ -183,8 +203,18 @@ pub trait StorageController: Debug + Send {
     /// Create the sinks described by the `ExportDescription`.
     async fn create_exports(
         &mut self,
-        exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
+        exports: Vec<(CreateExportToken, ExportDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError>;
+
+    /// Notify the storage controller to prepare for an export to be created
+    async fn prepare_export(
+        &mut self,
+        id: GlobalId,
+        from_id: GlobalId,
+    ) -> Result<CreateExportToken, StorageError>;
+
+    /// Cancel the pending export
+    async fn cancel_prepare_export(&mut self, token: CreateExportToken);
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
     async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
@@ -428,144 +458,10 @@ pub trait ResumptionFrontierCalculator<T> {
 
     /// Creates an opaque state type that can be used to efficiently calculate a
     /// new _resumption frontier_ when needed.
-    // TODO: This could also take an Arc<Mutex<PersistClientsCache>>. We know
-    // the persist location internally, most likely.
-    async fn initialize_state(&self, persist_clients: &PersistClient) -> Self::State;
+    async fn initialize_state(&self, client_cache: &mut PersistClientCache) -> Self::State;
 
     /// Calculates a new, safe _resumption frontier_.
     async fn calculate_resumption_frontier(&self, state: &mut Self::State) -> Antichain<T>;
-}
-
-/// A [`ResumptionFrontierCalculator`] that can calculate the resumption
-/// frontier for a source.
-pub struct SourceResumptionFrontierCalculator {
-    collection_metadata: CollectionMetadata,
-    source_envelope: SourceEnvelope,
-}
-
-impl SourceResumptionFrontierCalculator {
-    pub fn new(collection_metadata: CollectionMetadata, source_envelope: SourceEnvelope) -> Self {
-        Self {
-            collection_metadata,
-            source_envelope,
-        }
-    }
-}
-
-#[async_trait]
-impl<T: timely::progress::Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
-    for SourceResumptionFrontierCalculator
-{
-    // A `WriteHandle` each for the data shard and remap shard. Once we have
-    // source envelopes that keep additional shards we have to specialize this
-    // some more.
-    type State = (
-        WriteHandle<(), PartitionId, T, MzOffset>,
-        WriteHandle<SourceData, (), T, Diff>,
-    );
-
-    async fn initialize_state(&self, persist_client: &PersistClient) -> Self::State {
-        self.collection_metadata
-            .get_write_handles(persist_client)
-            .await
-    }
-
-    async fn calculate_resumption_frontier(&self, state: &mut Self::State) -> Antichain<T> {
-        let (remap_write, data_write) = state;
-
-        // Update to latest upper.
-        remap_write.fetch_recent_upper().await;
-        data_write.fetch_recent_upper().await;
-
-        self.collection_metadata.get_resume_upper_from_handles(
-            remap_write,
-            data_write,
-            &self.source_envelope,
-        )
-    }
-}
-
-impl CollectionMetadata {
-    /// Calculate the point at which we can resume ingestion computing the greatest
-    /// antichain that is less or equal to all state and output shard uppers,
-    /// using pre-existing `WriteHandle`s
-    pub fn get_resume_upper_from_handles<T>(
-        &self,
-        remap_write: &mut WriteHandle<(), PartitionId, T, MzOffset>,
-        data_write: &mut WriteHandle<SourceData, (), T, Diff>,
-        source_envelope: &SourceEnvelope,
-    ) -> Antichain<T>
-    where
-        T: timely::progress::Timestamp + Lattice + Codec64,
-    {
-        // Calculate the point at which we can resume ingestion computing the greatest
-        // antichain that is less or equal to all state and output shard uppers.
-        let mut resume_upper: Antichain<T> = Antichain::new();
-        for t in remap_write.upper().elements() {
-            resume_upper.insert(t.clone());
-        }
-        for t in data_write.upper().elements() {
-            resume_upper.insert(t.clone());
-        }
-
-        // Check if this ingestion is using any operators that are stateful AND are not
-        // storing their state in persist shards. This whole section should be eventually
-        // removed as we make each operator durably record its state in persist shards.
-        let resume_upper = match source_envelope {
-            // We can only resume with the None envelope, which is stateless,
-            // or with the [Debezium] Upsert envelope, which is easy
-            //   (re-ingest the last emitted state)
-            SourceEnvelope::None(_) => resume_upper,
-            SourceEnvelope::Upsert(_) => resume_upper,
-            // Otherwise re-ingest everything
-            _ => Antichain::from_elem(T::minimum()),
-        };
-
-        resume_upper
-    }
-
-    /// Returns the `WriteHandle` for the remap shard and the data shard
-    pub async fn get_write_handles<T>(
-        &self,
-        persist: &PersistClient,
-    ) -> (
-        WriteHandle<(), PartitionId, T, MzOffset>,
-        WriteHandle<SourceData, (), T, Diff>,
-    )
-    where
-        T: timely::progress::Timestamp + Lattice + Codec64,
-    {
-        // Calculate the point at which we can resume ingestion computing the greatest
-        // antichain that is less or equal to all state and output shard uppers.
-        let remap_write = persist
-            .open_writer::<(), PartitionId, T, MzOffset>(self.remap_shard)
-            .await
-            .unwrap();
-        let data_write = persist
-            .open_writer::<SourceData, (), T, Diff>(self.data_shard)
-            .await
-            .unwrap();
-
-        (remap_write, data_write)
-    }
-
-    /// Calculate the point at which we can resume ingestion computing the greatest
-    /// antichain that is less or equal to all state and output shard uppers.
-    ///
-    /// This is a convenience method that combines
-    /// [`CollectionMetadata::get_write_handles`] and
-    /// [`CollectionMetadata::get_resume_upper_from_handles`].
-    pub async fn get_resume_upper<T>(
-        &self,
-        persist: &PersistClient,
-        source_envelope: &SourceEnvelope,
-    ) -> Antichain<T>
-    where
-        T: timely::progress::Timestamp + Lattice + Codec64,
-    {
-        let (mut remap_write, mut data_write) = self.get_write_handles(persist).await;
-        self.get_resume_upper_from_handles(&mut remap_write, &mut data_write, source_envelope)
-    }
 }
 
 /// The subset of [`CollectionMetadata`] that must be durable stored.
@@ -683,7 +579,7 @@ impl Arbitrary for DurableExportMetadata<mz_repr::Timestamp> {
 /// Controller state maintained for each storage instance.
 #[derive(Debug)]
 pub struct StorageControllerState<
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + TimestampManipulation,
     S = mz_stash::Memory<mz_stash::Postgres>,
 > {
     /// Collections maintained by the storage controller.
@@ -702,11 +598,17 @@ pub struct StorageControllerState<
     /// without blocking the storage controller.
     persist_read_handles: persist_read_handles::PersistWorker<T>,
     stashed_response: Option<StorageResponse<T>>,
+
+    /// Interface for managed collections
+    pub(super) collection_manager: collection_mgmt::CollectionManager,
+    /// Tracks which collection is responsible for which [`IntrospectionType`].
+    pub(super) introspection_ids: HashMap<IntrospectionType, GlobalId>,
 }
 
 /// A storage controller for a storage instance.
 #[derive(Debug)]
-pub struct Controller<T: Timestamp + Lattice + Codec64> {
+pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation>
+{
     state: StorageControllerState<T>,
     /// Storage host provisioning and storage object assignment.
     hosts: StorageHosts<T>,
@@ -779,7 +681,7 @@ impl fmt::Display for StorageError {
                     id.iter().map(|id| id.to_string()).join(", ")
                 )
             }
-            Self::ClientError(err) => write!(f, "underlying client error: {err}"),
+            Self::ClientError(err) => write!(f, "underlying client error: {:#}", err),
             Self::IOError(err) => write!(f, "failed to read or write state: {err}"),
             Self::DataflowError(err) => write!(f, "dataflow failed to process request: {err}"),
         }
@@ -804,10 +706,13 @@ impl From<DataflowError> for StorageError {
     }
 }
 
-impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
+impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation>
+    StorageControllerState<T>
+{
     pub(super) async fn new(
         postgres_url: String,
         tx: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
+        now: NowFn,
     ) -> Self {
         let tls = mz_postgres_util::make_tls(
             &tokio_postgres::config::Config::from_str(&postgres_url)
@@ -818,14 +723,23 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
             .await
             .expect("could not connect to postgres storage stash");
         let stash = mz_stash::Memory::new(stash);
+
+        let persist_write_handles = persist_write_handles::PersistWorker::new(tx);
+        let collection_manager_write_handle = persist_write_handles.clone();
+
+        let collection_manager =
+            collection_mgmt::CollectionManager::new(collection_manager_write_handle, now);
+
         Self {
             collections: BTreeMap::default(),
             exports: BTreeMap::default(),
             exported_collections: BTreeMap::default(),
             stash,
-            persist_write_handles: persist_write_handles::PersistWorker::new(tx),
+            persist_write_handles,
             persist_read_handles: persist_read_handles::PersistWorker::new(),
             stashed_response: None,
+            collection_manager,
+            introspection_ids: HashMap::new(),
         }
     }
 }
@@ -833,7 +747,7 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
 #[async_trait(?Send)]
 impl<T> StorageController for Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + Codec64,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
@@ -890,24 +804,33 @@ where
         }
 
         // Install collection state for each bound description.
-        for (id, description) in collections {
-            let durable_metadata = METADATA_COLLECTION
-                .insert_without_overwrite(
-                    &mut self.state.stash,
-                    &id,
-                    DurableCollectionMetadata {
-                        remap_shard: ShardId::new(),
-                        data_shard: ShardId::new(),
-                    },
-                )
-                .await?;
 
+        // Perform all stash writes in a single transaction, to minimize transaction overhead and
+        // the time spent waiting for stash.
+        METADATA_COLLECTION
+            .insert_without_overwrite(
+                &mut self.state.stash,
+                collections.iter().map(|(id, _)| {
+                    (
+                        *id,
+                        DurableCollectionMetadata {
+                            remap_shard: ShardId::new(),
+                            data_shard: ShardId::new(),
+                        },
+                    )
+                }),
+            )
+            .await?;
+
+        let mut durable_metadata = METADATA_COLLECTION.peek_one(&mut self.state.stash).await?;
+
+        for (id, description) in collections {
+            let collection_shards = durable_metadata.remove(&id).expect("inserted above");
             let status_shard = if let Some(status_collection_id) = description.status_collection_id
             {
                 Some(
-                    METADATA_COLLECTION
-                        .peek_key_one(&mut self.state.stash, &status_collection_id)
-                        .await?
+                    durable_metadata
+                        .remove(&status_collection_id)
                         .ok_or(StorageError::IdentifierMissing(status_collection_id))?
                         .data_shard,
                 )
@@ -917,8 +840,8 @@ where
 
             let metadata = CollectionMetadata {
                 persist_location: self.persist_location.clone(),
-                remap_shard: durable_metadata.remap_shard,
-                data_shard: durable_metadata.data_shard,
+                remap_shard: collection_shards.remap_shard,
+                data_shard: collection_shards.data_shard,
                 status_shard,
             };
 
@@ -947,41 +870,64 @@ where
                 read.downgrade_since(since).await;
             }
 
-            let collection_state =
-                CollectionState::new(description.clone(), read.since().clone(), metadata);
+            let collection_state = CollectionState::new(
+                description.clone(),
+                read.since().clone(),
+                write.upper().clone(),
+                metadata,
+            );
 
             self.state.persist_write_handles.register(id, write);
             self.state.persist_read_handles.register(id, read);
 
             self.state.collections.insert(id, collection_state);
+            self.register_shard_mapping(id).await;
 
-            if let Some(ingestion) = description.ingestion {
-                // Each ingestion is augmented with the collection metadata.
-                let mut source_imports = BTreeMap::new();
-                for (id, _) in ingestion.source_imports {
-                    let metadata = self.collection(id)?.collection_metadata.clone();
-                    source_imports.insert(id, metadata);
-                }
+            if let Some(ingestion) = description.data_source {
+                match ingestion {
+                    DataSource::Ingestion(ingestion) => {
+                        // Each ingestion is augmented with the collection metadata.
+                        let mut source_imports = BTreeMap::new();
+                        for (id, _) in ingestion.source_imports {
+                            let metadata = self.collection(id)?.collection_metadata.clone();
+                            source_imports.insert(id, metadata);
+                        }
 
-                let desc = IngestionDescription {
-                    source_imports,
-                    storage_metadata: self.collection(id)?.collection_metadata.clone(),
-                    // The rest of the fields are identical
-                    desc: ingestion.desc,
-                    typ: description.desc.typ().clone(),
-                };
-                let resume_upper = desc
-                    .storage_metadata
-                    .get_resume_upper(&persist_client, &desc.desc.envelope)
-                    .await;
-                let augmented_ingestion = CreateSourceCommand {
-                    id,
-                    description: desc,
-                    resume_upper,
-                };
+                        // The ingestion metadata is simply the collection metadata of the collection with
+                        // the associated ingestion
+                        let ingestion_metadata = self.collection(id)?.collection_metadata.clone();
 
-                // Provision a storage host for the ingestion.
-                let client = self
+                        let mut source_exports = BTreeMap::new();
+                        for (id, export) in ingestion.source_exports {
+                            let storage_metadata = self.collection(id)?.collection_metadata.clone();
+                            source_exports.insert(
+                                id,
+                                SourceExport {
+                                    storage_metadata,
+                                    output_index: export.output_index,
+                                },
+                            );
+                        }
+
+                        let desc = IngestionDescription {
+                            source_imports,
+                            source_exports,
+                            ingestion_metadata,
+                            // The rest of the fields are identical
+                            desc: ingestion.desc,
+                        };
+                        let mut persist_clients = self.persist.lock().await;
+                        let mut state = desc.initialize_state(&mut persist_clients).await;
+                        let resume_upper = desc.calculate_resumption_frontier(&mut state).await;
+
+                        let augmented_ingestion = CreateSourceCommand {
+                            id,
+                            description: desc,
+                            resume_upper,
+                        };
+
+                        // Provision a storage host for the ingestion.
+                        let client = self
                     .hosts
                     .provision(
                         id,
@@ -990,7 +936,25 @@ where
                         ),
                     )
                     .await?;
-                client.send(StorageCommand::CreateSources(vec![augmented_ingestion]));
+                        client.send(StorageCommand::CreateSources(vec![augmented_ingestion]));
+                    }
+                    DataSource::Introspection(i) => {
+                        let prev = self.state.introspection_ids.insert(i, id);
+                        assert!(
+                            prev.is_none(),
+                            "cannot have multiple IDs for introspection type"
+                        );
+
+                        self.state.collection_manager.register_collection(id).await;
+
+                        match i {
+                            IntrospectionType::ShardMapping => {
+                                self.truncate_managed_collection(id).await;
+                                self.initialize_shard_mapping().await;
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -1024,13 +988,43 @@ where
             .ok_or(StorageError::IdentifierMissing(id))
     }
 
+    async fn prepare_export(
+        &mut self,
+        id: GlobalId,
+        from_id: GlobalId,
+    ) -> Result<CreateExportToken, StorageError> {
+        if let Ok(_export) = self.export(id) {
+            return Err(StorageError::SourceIdReused(id));
+        }
+
+        self.state
+            .exported_collections
+            .entry(from_id)
+            .or_default()
+            .push(id);
+
+        Ok(CreateExportToken { id, from_id })
+    }
+
+    async fn cancel_prepare_export(
+        &mut self,
+        CreateExportToken { id, from_id }: CreateExportToken,
+    ) {
+        self.state
+            .exported_collections
+            .get_mut(&from_id)
+            // Internal logic error NOT due to export not existing
+            .expect("Dangling exported collection")
+            .retain(|from_export_id| *from_export_id != id);
+    }
+
     async fn create_exports(
         &mut self,
-        exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
+        exports: Vec<(CreateExportToken, ExportDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError> {
         // Validate first, to avoid corrupting state.
         let mut dedup_hashmap = HashMap::<&_, &_>::new();
-        for (id, desc) in exports.iter() {
+        for (CreateExportToken { id, from_id }, desc) in exports.iter() {
             if dedup_hashmap.insert(id, desc).is_some() {
                 return Err(StorageError::SourceIdReused(*id));
             }
@@ -1039,29 +1033,36 @@ where
                     return Err(StorageError::SourceIdReused(*id));
                 }
             }
+            if desc.sink.from != *from_id {
+                return Err(StorageError::SourceIdReused(*id));
+            }
+            if self
+                .state
+                .exported_collections
+                .get(from_id)
+                // Internal logic error NOT due to export not existing
+                .expect("Dangling exported collection")
+                .iter()
+                .find(|from_export_id| *from_export_id == id)
+                .is_none()
+            {
+                return Err(StorageError::SourceIdReused(*id));
+            }
         }
 
-        for (id, description) in exports {
-            let from = description.sink.from;
-
+        for (CreateExportToken { id, from_id }, description) in exports {
             self.state
                 .exports
                 .insert(id, ExportState::new(description.clone()));
 
-            self.state
-                .exported_collections
-                .entry(from)
-                .or_default()
-                .push(id);
-
-            let from_collection = self.collection(from)?;
+            let from_collection = self.collection(from_id)?;
             let from_storage_metadata = from_collection.collection_metadata.clone();
             // We've added the dependency above in `exported_collections` so this guaranteed not to change at least
             // until the sink is started up.
             let from_since = from_collection.implied_capability.clone();
 
             let as_of = MetadataExportFetcher::get_stash_collection()
-                .insert_without_overwrite(
+                .insert_key_without_overwrite(
                     &mut self.state.stash,
                     &id,
                     DurableExportMetadata {
@@ -1075,7 +1076,7 @@ where
             let cmd = CreateSinkCommand {
                 id,
                 description: StorageSinkDesc {
-                    from,
+                    from: from_id,
                     from_desc: description.sink.from_desc,
                     connection: description.sink.connection,
                     envelope: description.sink.envelope,
@@ -1084,16 +1085,8 @@ where
                 },
             };
 
-            // TODO: allow specifying a size parameter for sinks, tracked in #13889
-            let host_config = match description.remote_addr {
-                Some(addr) => StorageHostConfig::Remote { addr },
-                None => StorageHostConfig::Managed {
-                    allocation: StorageHostResourceAllocation::temp_default_for_sinks(),
-                    size: "arbitrary".to_string(),
-                },
-            };
             // Provision a storage host for the ingestion.
-            let client = self.hosts.provision(id, host_config).await?;
+            let client = self.hosts.provision(id, description.host_config).await?;
 
             client.send(StorageCommand::CreateSinks(vec![cmd]));
         }
@@ -1346,7 +1339,7 @@ where
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + Codec64,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
@@ -1360,11 +1353,12 @@ where
         persist_clients: Arc<Mutex<PersistClientCache>>,
         orchestrator: Arc<dyn NamespacedOrchestrator>,
         storaged_image: String,
+        now: NowFn,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         Self {
-            state: StorageControllerState::new(postgres_url, tx).await,
+            state: StorageControllerState::new(postgres_url, tx, now).await,
             hosts: StorageHosts::new(
                 StorageHostsConfig {
                     build_info,
@@ -1382,7 +1376,7 @@ where
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + Codec64,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
@@ -1453,8 +1447,10 @@ where
                     .state
                     .exports
                     .get(&export_id)
-                    .expect("Dangling export reference")
-                    .write_frontier,
+                    .map(|state| state.write_frontier.clone())
+                    // If sink has not been fully initialized (only `prepare_export` but not
+                    // `create_export` has been called), hold back compaction completely.
+                    .unwrap_or_else(|| Antichain::from_elem(Timestamp::minimum())),
             );
         }
 
@@ -1496,6 +1492,7 @@ impl<T: Timestamp> CollectionState<T> {
     pub fn new(
         description: CollectionDescription<T>,
         since: Antichain<T>,
+        write_frontier: Antichain<T>,
         metadata: CollectionMetadata,
     ) -> Self {
         let mut read_capabilities = MutableAntichain::new();
@@ -1505,7 +1502,7 @@ impl<T: Timestamp> CollectionState<T> {
             read_capabilities,
             implied_capability: since.clone(),
             read_policy: ReadPolicy::ValidFrom(since),
-            write_frontier: Antichain::from_elem(Timestamp::minimum()),
+            write_frontier,
             collection_metadata: metadata,
         }
     }
@@ -1529,6 +1526,149 @@ impl<T: Timestamp> ExportState<T> {
     }
     fn from(&self) -> GlobalId {
         self.description.sink.from
+    }
+}
+
+#[async_trait(?Send)]
+pub trait CollectionManagement: Debug + Send + StorageController {
+    /// Appends `updates` to the collection correlated with `global_id` at a
+    /// timestamp decided on by the implementor.
+    async fn append_to_managed_collection(
+        &mut self,
+        global_id: GlobalId,
+        updates: Vec<(Row, Diff)>,
+    );
+
+    /// Truncates the collection associated with `global_id`.
+    async fn truncate_managed_collection(&mut self, global_id: GlobalId);
+
+    // ShardMapping functions
+
+    /// Initializes the data expressing which global IDs correlate to which
+    /// shards. Necessary because we cannot write any of these mappings that we
+    /// discover before the shard mapping collection exists.
+    async fn initialize_shard_mapping(&mut self);
+
+    /// Writes a new global ID, shard ID pair to the appropriate collection.
+    async fn register_shard_mapping(&mut self, global_id: GlobalId);
+}
+
+#[async_trait(?Send)]
+impl<T> CollectionManagement for Controller<T>
+where
+    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
+
+    // Required to setup grpc clients for new storaged instances.
+    StorageCommand<T>: RustType<ProtoStorageCommand>,
+    StorageResponse<T>: RustType<ProtoStorageResponse>,
+
+    MetadataExportFetcher: MetadataExport<T>,
+    DurableExportMetadata<T>: mz_stash::Data,
+{
+    /// Effectively truncates the `data_shard` associated with `global_id`
+    /// effective as of the system time.
+    ///
+    /// # Panics
+    /// - If `id` does not belong to a collection or is not registered as a
+    ///   managed collection.
+    async fn truncate_managed_collection(&mut self, id: GlobalId) {
+        let as_of = match self.state.collections[&id]
+            .write_frontier
+            .elements()
+            .iter()
+            .min()
+        {
+            Some(f) if f > &T::minimum() => f.step_back().unwrap(),
+            // If collection is closed or the frontier is the minimum, we cannot
+            // or don't need to truncate (respectively).
+            _ => return,
+        };
+
+        let mut negate = self.snapshot(id, as_of).await.unwrap();
+
+        for (_, diff) in negate.iter_mut() {
+            *diff = -*diff;
+        }
+
+        self.append_to_managed_collection(id, negate).await;
+    }
+
+    /// Append `updates` to the `data_shard` associated with `global_id`
+    /// effective as of the system time.
+    ///
+    /// # Panics
+    /// - If `id` is not registered as a managed collection.
+    async fn append_to_managed_collection(&mut self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+        self.state
+            .collection_manager
+            .append_to_collection(id, updates)
+            .await;
+    }
+
+    /// Append `updates` to the `data_shard` correlated with `global_id`
+    /// effective as of the system time.
+    ///
+    /// # Panics
+    /// - If `IntrospectionType::ShardMapping` is not correlated with a
+    ///   `GlobalId`.
+    /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
+    ///   a managed collection.
+    async fn initialize_shard_mapping(&mut self) {
+        let id = self.state.introspection_ids[&IntrospectionType::ShardMapping];
+
+        let mut row_buf = Row::default();
+        let mut updates = Vec::with_capacity(self.state.collections.len());
+        for (
+            global_id,
+            CollectionState {
+                collection_metadata: CollectionMetadata { data_shard, .. },
+                ..
+            },
+        ) in self.state.collections.iter()
+        {
+            let mut packer = row_buf.packer();
+            packer.push(Datum::from(global_id.to_string().as_str()));
+            packer.push(Datum::from(data_shard.to_string().as_str()));
+            updates.push((row_buf.clone(), 1));
+        }
+
+        self.append_to_managed_collection(id, updates).await;
+    }
+
+    /// Tracks the mapping of `GlobalId` to data shards in the collection at
+    /// `self.state.shard_collection_global_id`.
+    ///
+    /// However, data is written iff we know of the `GlobalId` of the
+    /// `IntrospectionType::ShardMapping` collection; in other cases, data is
+    /// dropped on the floor. In these cases, the data is later written by
+    /// [`Self::initialize_shard_mapping`].
+    ///
+    /// # Panics
+    /// - If `self.state.collections` does not have an entry for `global_id`.
+    /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
+    ///   a managed collection.
+    async fn register_shard_mapping(&mut self, global_id: GlobalId) {
+        let id = match self
+            .state
+            .introspection_ids
+            .get(&IntrospectionType::ShardMapping)
+        {
+            Some(id) => *id,
+            _ => return,
+        };
+
+        let shard_id = self.state.collections[&global_id]
+            .collection_metadata
+            .data_shard;
+
+        // Pack updates into rows
+        let mut row_buf = Row::default();
+        let mut packer = row_buf.packer();
+        packer.push(Datum::from(global_id.to_string().as_str()));
+        packer.push(Datum::from(shard_id.to_string().as_str()));
+        let updates = vec![(row_buf.clone(), 1)];
+
+        self.append_to_managed_collection(id, updates).await;
     }
 }
 
@@ -1772,7 +1912,7 @@ mod persist_read_handles {
 
 mod persist_write_handles {
 
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, VecDeque};
 
     use differential_dataflow::lattice::Lattice;
     use futures::stream::FuturesUnordered;
@@ -1782,22 +1922,22 @@ mod persist_write_handles {
 
     use mz_persist_client::write::WriteHandle;
     use mz_persist_types::Codec64;
-    use mz_repr::{Diff, GlobalId};
+    use mz_repr::{Diff, GlobalId, TimestampManipulation};
     use tracing::Instrument;
 
     use crate::controller::StorageError;
     use crate::protocol::client::StorageResponse;
-    use crate::protocol::client::Update;
+    use crate::protocol::client::{TimestamplessUpdate, Update};
     use crate::types::sources::SourceData;
 
-    #[derive(Debug)]
-    pub struct PersistWorker<T: Timestamp + Lattice + Codec64> {
+    #[derive(Debug, Clone)]
+    pub struct PersistWorker<T: Timestamp + Lattice + Codec64 + TimestampManipulation> {
         tx: UnboundedSender<(tracing::Span, PersistWorkerCmd<T>)>,
     }
 
     impl<T> Drop for PersistWorker<T>
     where
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + TimestampManipulation,
     {
         fn drop(&mut self) {
             self.send(PersistWorkerCmd::Shutdown);
@@ -1813,10 +1953,16 @@ mod persist_write_handles {
             Vec<(GlobalId, Vec<Update<T>>, T)>,
             tokio::sync::oneshot::Sender<Result<(), StorageError>>,
         ),
+        /// Appends `Vec<TimelessUpdate>` to `GlobalId` at, essentially,
+        /// `max(write_frontier, T)`.
+        MonotonicAppend(
+            Vec<(GlobalId, Vec<TimestamplessUpdate>, T)>,
+            tokio::sync::oneshot::Sender<Result<(), StorageError>>,
+        ),
         Shutdown,
     }
 
-    impl<T: Timestamp + Lattice + Codec64> PersistWorker<T> {
+    impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWorker<T> {
         pub(crate) fn new(
             mut frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
         ) -> Self {
@@ -1830,9 +1976,10 @@ mod persist_write_handles {
                     // We do this in case we can consolidate commands.
                     // It would be surprising to receive multiple concurrent `Append` commands,
                     // but we might receive multiple *empty* `Append` commands.
-                    let mut commands = vec![cmd];
+                    let mut commands = VecDeque::new();
+                    commands.push_back(cmd);
                     while let Ok(cmd) = rx.try_recv() {
-                        commands.push(cmd);
+                        commands.push_back(cmd);
                     }
 
                     // Accumulated updates and upper frontier.
@@ -1841,7 +1988,7 @@ mod persist_write_handles {
 
                     let mut shutdown = false;
 
-                    for (span, command) in commands {
+                    while let Some((span, command)) = commands.pop_front() {
                         match command {
                             PersistWorkerCmd::Register(id, write_handle) => {
                                 let previous = write_handles.insert(id, write_handle);
@@ -1877,6 +2024,45 @@ mod persist_write_handles {
                                     old_upper.join_assign(&Antichain::from_elem(upper));
                                 }
                                 all_responses.push(response);
+                            }
+                            PersistWorkerCmd::MonotonicAppend(updates, response) => {
+                                let mut updates_outer = Vec::with_capacity(updates.len());
+                                for (id, update, at_least) in updates {
+                                    let current_upper = write_handles[&id].upper().clone();
+                                    if update.is_empty() && current_upper.is_empty() {
+                                        // Ignore timestamp advancement for
+                                        // closed collections. TODO? Make this a
+                                        // correctable error
+                                        continue;
+                                    }
+
+                                    let lower = if current_upper.less_than(&at_least) {
+                                        at_least
+                                    } else {
+                                        current_upper
+                                            .elements()
+                                            .iter()
+                                            .min()
+                                            .expect("cannot append data to closed collection")
+                                            .clone()
+                                    };
+
+                                    let upper = lower.step_forward();
+                                    let update = update
+                                        .into_iter()
+                                        .map(|TimestamplessUpdate { row, diff }| Update {
+                                            row,
+                                            diff,
+                                            timestamp: lower.clone(),
+                                        })
+                                        .collect::<Vec<_>>();
+
+                                    updates_outer.push((id, update, upper));
+                                }
+                                commands.push_front((
+                                    span,
+                                    PersistWorkerCmd::Append(updates_outer, response),
+                                ));
                             }
                             PersistWorkerCmd::Shutdown => {
                                 shutdown = true;
@@ -2033,6 +2219,38 @@ mod persist_write_handles {
             }
         }
 
+        /// Appends values to collections associated with `GlobalId`, but lets
+        /// the persist worker chose timestamps guaranteed to be monotonic and
+        /// that the time will be at least `T`.
+        ///
+        /// This lets the writer influence how far forward the timestamp will be
+        /// advanced, while still guaranteeing that it will advance.
+        ///
+        /// Note it is still possible for the append operation to fail in the
+        /// face of contention from other writers.
+        ///
+        /// # Panics
+        /// - If appending non-empty `TimelessUpdate` to closed collections
+        ///   (i.e. those with empty uppers), whose uppers cannot be
+        ///   monotonically increased.
+        ///
+        ///   Collections with empty uppers can continue receiving empty
+        ///   updates, i.e. those used soley to advance collections' uppers.
+        pub(crate) fn monotonic_append(
+            &self,
+            updates: Vec<(GlobalId, Vec<TimestamplessUpdate>, T)>,
+        ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError>> {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if updates.is_empty() {
+                tx.send(Ok(()))
+                    .expect("rx has not been dropped at this point");
+                rx
+            } else {
+                self.send(PersistWorkerCmd::MonotonicAppend(updates, tx));
+                rx
+            }
+        }
+
         fn send(&self, cmd: PersistWorkerCmd<T>) {
             match self.tx.send((tracing::Span::current(), cmd)) {
                 Ok(()) => (), // All good!
@@ -2040,6 +2258,116 @@ mod persist_write_handles {
                     tracing::error!("could not forward command: {:?}", e);
                 }
             }
+        }
+    }
+}
+
+mod collection_mgmt {
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
+    use differential_dataflow::lattice::Lattice;
+    use mz_ore::now::{EpochMillis, NowFn};
+    use timely::progress::Timestamp;
+    use tokio::sync::mpsc;
+    use tokio::sync::Mutex;
+
+    use mz_persist_types::Codec64;
+    use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
+
+    use crate::protocol::client::TimestamplessUpdate;
+
+    use super::persist_write_handles;
+
+    #[derive(Debug, Clone)]
+    pub struct CollectionManager {
+        collections: Arc<Mutex<HashSet<GlobalId>>>,
+        tx: mpsc::Sender<(GlobalId, Vec<(Row, Diff)>)>,
+    }
+
+    /// The `CollectionManager` provides two complementary functions:
+    /// - Providing an API to append values to a registered set of collections.
+    ///   For this usecase:
+    ///     - The `CollectionManager` expects to be the only writer.
+    ///     - Appending to a closed collection panics
+    /// - Automatically advancing the timestamp of managed collections every
+    ///   second. For this usecase:
+    ///     - The `CollectionManager` handles contention by permitting and ignoring errors.
+    ///     - Closed collections will not panic if they continue receiving these requests.
+    impl CollectionManager {
+        pub(super) fn new<
+            T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
+        >(
+            write_handle: persist_write_handles::PersistWorker<T>,
+            now: NowFn,
+        ) -> CollectionManager {
+            let collections = Arc::new(Mutex::new(HashSet::new()));
+            let collections_outer = Arc::clone(&collections);
+            let (tx, mut rx) = mpsc::channel::<(GlobalId, Vec<(Row, Diff)>)>(1);
+
+            mz_ore::task::spawn(|| "ControllerManagedCollectionWriter", async move {
+                let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1_000));
+                loop {
+                    tokio::select! {
+                        _ = interval.tick() => {
+                            let collections = &mut *collections.lock().await;
+
+                            let now = T::from(now());
+                            let updates = collections.iter().map(|id| {
+                                (*id, vec![], now.clone())
+                            }).collect::<Vec<_>>();
+
+                            // Failures don't matter when advancing collections'
+                            // uppers. This might fail when a storaged happens
+                            // to be writing to this concurrently. Advancing
+                            // uppers here is best-effort and only needs to
+                            // succeed if no one else is advancing it;
+                            // contention proves otherwise.
+                            let _ = write_handle.monotonic_append(updates).await.expect("sender hung up");
+                        },
+                        cmd = rx.recv() => {
+                            if let Some((id, updates)) = cmd {
+                                assert!(collections.lock().await.contains(&id));
+
+                                let updates = vec![(id, updates.into_iter().map(|(row, diff)| TimestamplessUpdate {
+                                    row,
+                                    diff,
+                                }).collect::<Vec<_>>(), T::from(now()))];
+
+                                // TODO? Handle contention among multiple writers
+                                write_handle.monotonic_append(updates)
+                                    .await
+                                    .expect("sender hung up")
+                                    .expect("no write contention on collections");
+                            }
+                        }
+                    }
+                }
+            });
+
+            CollectionManager {
+                tx,
+                collections: collections_outer,
+            }
+        }
+
+        /// Registers the collection as one that `CollectionManager` will:
+        /// - Automatically advance the upper of every second
+        /// - Accept appends for. However, note that when appending, the
+        ///   `CollectionManager` expects to be the only writer.
+        pub(super) async fn register_collection(&self, id: GlobalId) {
+            self.collections.lock().await.insert(id);
+        }
+
+        /// Appends `updates` to the collection correlated with `id`.
+        ///
+        /// # Panics
+        /// - If `id` does not belong to managed collections.
+        /// - If there is contention to write to the collection identified by
+        ///   `id`.
+        /// - If the collection closed.
+        pub(super) async fn append_to_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+            self.tx.send((id, updates)).await.expect("rx hung up");
         }
     }
 }

@@ -111,7 +111,7 @@ class CreateDebeziumSource(Action):
                       }}
                     }}
 
-                    $ schema-registry-wait-schema schema=postgres.public.{self.postgres_table.name}-value
+                    $ schema-registry-wait subject=postgres.public.{self.postgres_table.name}-value
 
                     > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
 

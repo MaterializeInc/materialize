@@ -14,7 +14,7 @@ Int32(1)
 Numeric(OrderedDecimal(1))
 Float32(OrderedFloat(2.0))
 String("\"quoted\" string")
-Timestamp(2022-10-20T21:34:54)
+Timestamp(CheckedTimestamp { t: 2022-10-20T21:34:54 })
 
 build-row
 ["string" 1 2.1 true false null]

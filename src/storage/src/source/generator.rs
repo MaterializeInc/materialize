@@ -19,6 +19,7 @@ use super::{SourceMessage, SourceMessageType};
 use crate::source::commit::LogCommitter;
 use crate::source::{NextMessage, SourceReader, SourceReaderError};
 use crate::types::connections::ConnectionContext;
+use crate::types::sources::GeneratorMessageType;
 use crate::types::sources::{
     encoding::SourceDataEncoding, Generator, LoadGenerator, LoadGeneratorSourceConnection, MzOffset,
 };
@@ -37,11 +38,10 @@ pub fn as_generator(g: &LoadGenerator) -> Box<dyn Generator> {
 }
 
 pub struct LoadGeneratorSourceReader {
-    rows: Box<dyn Iterator<Item = Vec<Row>>>,
+    rows: Box<dyn Iterator<Item = (usize, GeneratorMessageType, Row)>>,
     last: Instant,
     tick: Duration,
     offset: MzOffset,
-    pending: Vec<Row>,
     // Load-generator sources support single-threaded ingestion only, so only
     // one of the `LoadGeneratorSourceReader`s will actually produce data.
     active_read_worker: bool,
@@ -94,13 +94,14 @@ impl SourceReader for LoadGeneratorSourceReader {
             rows.next();
         }
 
+        let tick = Duration::from_micros(connection.tick_micros.unwrap_or(1_000_000));
         Ok((
             Self {
                 rows: Box::new(rows),
-                last: Instant::now(),
-                tick: Duration::from_micros(connection.tick_micros.unwrap_or(1_000_000)),
+                // Subtract tick so we immediately produce a row.
+                last: Instant::now() - tick,
+                tick,
                 offset,
-                pending: Vec::new(),
                 active_read_worker,
                 reported_unconsumed_partitions: false,
             },
@@ -125,42 +126,33 @@ impl SourceReader for LoadGeneratorSourceReader {
             return Ok(NextMessage::Finished);
         }
 
-        if self.pending.is_empty() {
-            // The batch is empty, but we need to wait for the next tick to refill.
-            if self.last.elapsed() < self.tick {
-                return Ok(NextMessage::Pending);
-            }
+        if self.last.elapsed() < self.tick {
+            return Ok(NextMessage::Pending);
+        }
 
-            // Tick has passed, so we can refill.
-            self.last += self.tick;
-            match self.rows.next() {
-                Some(value) => {
-                    self.offset += 1;
-                    self.pending = value;
-                }
-                None => return Ok(NextMessage::Finished),
-            };
-        }
-        // There should be data, but possibly not if a source returned an empty Vec.
-        if let Some(value) = self.pending.pop() {
-            let message = SourceMessage {
-                partition: PartitionId::None,
-                offset: self.offset,
-                upstream_time_millis: None,
-                key: (),
-                value,
-                headers: None,
-                specific_diff: 1,
-            };
-            let message = if self.pending.is_empty() {
+        let (output, typ, value) = match self.rows.next() {
+            Some(row) => row,
+            None => return Ok(NextMessage::Finished),
+        };
+
+        let message = SourceMessage {
+            output,
+            partition: PartitionId::None,
+            offset: self.offset,
+            upstream_time_millis: None,
+            key: (),
+            value,
+            headers: None,
+            specific_diff: 1,
+        };
+        let message = match typ {
+            GeneratorMessageType::Finalized => {
+                self.last += self.tick;
+                self.offset += 1;
                 SourceMessageType::Finalized(message)
-            } else {
-                SourceMessageType::InProgress(message)
-            };
-            Ok(NextMessage::Ready(message))
-        } else {
-            // Vec returned from source was empty.
-            Ok(NextMessage::Pending)
-        }
+            }
+            GeneratorMessageType::InProgress => SourceMessageType::InProgress(message),
+        };
+        Ok(NextMessage::Ready(message))
     }
 }

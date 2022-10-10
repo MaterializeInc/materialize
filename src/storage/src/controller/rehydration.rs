@@ -38,6 +38,7 @@ use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId};
 use mz_service::client::GenericClient;
 
+use crate::controller::ResumptionFrontierCalculator;
 use crate::protocol::client::{
     CreateSinkCommand, CreateSourceCommand, StorageClient, StorageCommand, StorageGrpcClient,
     StorageResponse,
@@ -172,16 +173,15 @@ where
 
         for ingest in self.sources.values_mut() {
             let mut persist_clients = self.persist.lock().await;
-            let persist_client = persist_clients
-                .open(ingest.description.storage_metadata.persist_location.clone())
-                .await
-                .expect("error creating persist client");
-
-            ingest.resume_upper = ingest
+            let mut state = ingest
                 .description
-                .storage_metadata
-                .get_resume_upper::<T>(&persist_client, &ingest.description.desc.envelope)
+                .initialize_state(&mut persist_clients)
                 .await;
+            let resume_upper = ingest
+                .description
+                .calculate_resumption_frontier(&mut state)
+                .await;
+            ingest.resume_upper = resume_upper;
         }
 
         for export in self.sinks.values_mut() {
@@ -294,8 +294,10 @@ where
                 for ingestion in ingestions {
                     self.sources.insert(ingestion.id, ingestion.clone());
                     // Initialize the uppers we are tracking
-                    self.uppers
-                        .insert(ingestion.id, Antichain::from_elem(T::minimum()));
+                    for &export_id in ingestion.description.source_exports.keys() {
+                        self.uppers
+                            .insert(export_id, Antichain::from_elem(T::minimum()));
+                    }
                 }
             }
             StorageCommand::CreateSinks(exports) => {

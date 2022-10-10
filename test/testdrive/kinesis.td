@@ -26,25 +26,26 @@ here is a second test string
 
 > CREATE CONNECTION kinesis_bad_conn FOR AWS
   ACCESS KEY ID = 'fake_access_key_id',
-  SECRET ACCESS KEY = SECRET kinesis_bad_conn_secret;
+  SECRET ACCESS KEY = SECRET kinesis_bad_conn_secret,
+  ENDPOINT = '${testdrive.aws-endpoint}';
 
 ! CREATE SOURCE custom_source
   FROM KINESIS CONNECTION kinesis_bad_conn
   ARN 'arn:aws:kinesis:custom-region::stream/fake-stream'
   FORMAT BYTES;
-contains:dns error: failed to lookup address information: Name or service not known
+contains:Unable to validate AWS credentials
 
 > CREATE SECRET kinesis_conn_secret_access_key AS '${testdrive.aws-secret-access-key}';
 
 > CREATE CONNECTION kinesis_conn FOR AWS
   ACCESS KEY ID = '${testdrive.aws-access-key-id}',
   SECRET ACCESS KEY = SECRET kinesis_conn_secret_access_key,
-  TOKEN = '${testdrive.aws-token}';
+  TOKEN = '${testdrive.aws-token}',
+  REGION = '${testdrive.aws-region}';
 
 > CREATE SOURCE f
   FROM KINESIS CONNECTION kinesis_conn
   ARN 'arn:aws:kinesis:${testdrive.aws-region}:${testdrive.aws-account}:stream/testdrive-test-${testdrive.seed}'
-  LEGACYWITH (endpoint = '${testdrive.aws-endpoint}')
   FORMAT BYTES;
 
 > CREATE MATERIALIZED VIEW f_view

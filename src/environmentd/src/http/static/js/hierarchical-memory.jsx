@@ -25,9 +25,102 @@ async function query(sql) {
   return data;
 }
 
+function formatNameForQuery(name) {
+  return `'${name.replace('\'', '\'\'')}'`;
+}
+
 const { useState, useEffect } = React;
 
-function Dataflows() {
+function ClusterReplicaView() {
+  const [currentClusterName, setCurrentClusterName] = useState(null);
+  const [currentReplicaName, setCurrentReplicaName] = useState(null);
+  const [sqlResponse, setSqlResponse] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+
+  const queryClusterReplicas = `
+    SELECT
+      clusters.name AS cluster_name, replicas.name AS replica_name
+    FROM
+      mz_catalog.mz_cluster_replicas replicas
+      LEFT JOIN mz_catalog.mz_clusters clusters ON clusters.id = replicas.cluster_id
+    ORDER BY cluster_name ASC, replica_name ASC
+  `;
+
+  useEffect(() => {
+    const search = new URLSearchParams(location.search);
+    const clusterName = search.get('cluster_name');
+    const replicaName = search.get('replica_name');
+    if (clusterName) {
+      setCurrentClusterName(clusterName);
+    }
+    if (replicaName) {
+      setCurrentReplicaName(replicaName);
+    }
+    query(queryClusterReplicas)
+      .then((data) => {
+        const results = data.results[0].rows;
+        setSqlResponse(results);
+        if (!replicaName && results.length > 0) {
+          if(results.some(
+            result => ('default' == result[0]) && ('default_replica' == result[1]))) {
+            setCurrentClusterName('default');
+            setCurrentReplicaName('default_replica');
+          } else {
+            setCurrentClusterName(results[0][0]);
+            setCurrentReplicaName(results[0][1]);
+          }
+        }
+        setLoading(false);
+      })
+      .catch((error) => {
+        setError(error);
+        setLoading(false);
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!currentReplicaName) return;
+    const params = new URLSearchParams(location.search);
+    params.set('cluster_name', currentClusterName);
+    params.set('replica_name', currentReplicaName);
+    window.history.replaceState({}, '', `${location.pathname}?${params}`);
+  }, [currentClusterName, currentReplicaName]);
+
+  return (
+    <div>
+      {loading ? (
+        <div>Loading...</div>
+      ) : error ? (
+        <div>error: {error}</div>
+      ) : (
+        <div>
+          <label htmlFor="cluster_replica">Cluster Replica </label>
+          <select
+            id="cluster_replica"
+            name="cluster_replica"
+            onChange={(event) => {
+              const clusterReplicaJson = event.target.value;
+              const clusterReplica = JSON.parse(clusterReplicaJson);
+              setCurrentClusterName(clusterReplica[0]);
+              setCurrentReplicaName(clusterReplica[1]);
+            }}
+            defaultValue={JSON.stringify([currentClusterName, currentReplicaName])}
+          >
+            {sqlResponse.map((v) => (
+              <option key={JSON.stringify(v)} value={JSON.stringify(v)}>
+                {`${v[0]}.${v[1]}`}
+              </option>
+            ))}
+          </select>
+          <Dataflows clusterName={currentClusterName} replicaName={currentReplicaName} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Dataflows(props) {
   const [stats, setStats] = useState(null);
   const [addrs, setAddrs] = useState(null);
   const [records, setRecords] = useState(null);
@@ -39,16 +132,15 @@ function Dataflows() {
   const [page, setPage] = useState(null);
 
   useEffect(() => {
-
-    if (!loading) {
-      return;
-    }
-
     const load = async () => {
+      setLoading(true);
+      setPage(null);
 
       const {
-        results: [addr_table, oper_table, chan_table, records_table],
+        results: [_set_cluster, _set_replica, addr_table, oper_table, chan_table, records_table],
       } = await query(`
+                SET cluster = ${formatNameForQuery(props.clusterName)};
+                SET cluster_replica = ${formatNameForQuery(props.replicaName)};
                 SELECT DISTINCT
                     id, address
                 FROM
@@ -113,10 +205,9 @@ function Dataflows() {
       setError(error);
       setLoading(false);
     });
-  }, []);
+  }, [props]);
 
   useEffect(() => {
-
     if (loading || error || (page != null)) {
       return;
     }
@@ -236,7 +327,7 @@ function Dataflows() {
     render().catch((error) => {
       console.log("ERROR", error);
       setError(error);
-    });
+    }, [loading]);
   });
 
   return (
@@ -362,4 +453,4 @@ function toggle_active(e) {
 }
 
 const content = document.getElementById('content2');
-ReactDOM.render(<Dataflows />, content);
+ReactDOM.render(<ClusterReplicaView />, content);

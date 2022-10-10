@@ -18,7 +18,7 @@ CREATE TABLE alter_add_column (f1 INTEGER PRIMARY KEY);
 ALTER TABLE alter_add_column REPLICA IDENTITY FULL;
 INSERT INTO alter_add_column VALUES (123);
 
-$ schema-registry-wait-schema schema=postgres.public.alter_add_column-value
+$ schema-registry-wait subject=postgres.public.alter_add_column-value
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY

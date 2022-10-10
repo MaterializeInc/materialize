@@ -1,0 +1,22 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement error cannot materialize call to mz_version
+create materialized view temp as select mz_version()
+
+statement error cannot materialize call to mz_version
+create materialized view temp as select 1 where mz_version() = ''
+
+statement error cannot materialize call to current_timestamp
+create materialized view temp as select 1 where current_timestamp() > current_timestamp()
+
+statement error cannot materialize call to current_timestamp
+create materialized view temp as select 1 where current_timestamp() > mz_now()

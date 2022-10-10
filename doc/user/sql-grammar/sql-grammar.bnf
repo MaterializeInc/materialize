@@ -129,8 +129,6 @@ create_view ::=
   'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt |
   'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' 'IF NOT EXISTS' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt |
   'CREATE' 'OR REPLACE' 'VIEW' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt
-create_views ::=
-  'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEWS' 'IF NOT EXISTS'? 'FROM' 'SOURCE' '"'src_name'"' ( '(' '"' upstream_table '"'  (AS '"' new_view_name '"' )? ')' )?
 create_table ::=
   'CREATE' ('TEMP' | 'TEMPORARY')? 'TABLE' table_name
   '(' ((col_name col_type col_option*) (',' col_name col_type col_option*)*)? ')'
@@ -290,7 +288,7 @@ select_stmt ::=
   join_expr?
   ( 'WHERE' expr )?
   ( 'GROUP' 'BY' col_ref ( ',' col_ref )* )?
-  ( 'OPTION' '(' ( option '=' val ) ( ( ',' option '=' val ) )* ')' )?
+  ( 'OPTIONS' '(' ( option '=' val ) ( ( ',' option '=' val ) )* ')' )?
   ( 'HAVING' expr )?
   ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )?
   ( 'LIMIT' integer )?
