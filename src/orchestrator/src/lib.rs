@@ -22,6 +22,11 @@ use futures_core::stream::BoxStream;
 use serde::de::Unexpected;
 use serde::{Deserialize, Deserializer, Serialize};
 
+use mz_ore::cast;
+use mz_proto::{RustType, TryFromProtoError};
+
+include!(concat!(env!("OUT_DIR"), "/mz_orchestrator.rs"));
+
 /// An orchestrator manages services.
 ///
 /// A service is a set of one or more processes running the same image. See
@@ -226,6 +231,18 @@ impl Serialize for MemoryLimit {
     }
 }
 
+impl RustType<ProtoMemoryLimit> for MemoryLimit {
+    fn into_proto(&self) -> ProtoMemoryLimit {
+        ProtoMemoryLimit {
+            inner: self.0.as_u64(),
+        }
+    }
+
+    fn from_proto(proto: ProtoMemoryLimit) -> Result<Self, TryFromProtoError> {
+        Ok(MemoryLimit(ByteSize(proto.inner)))
+    }
+}
+
 /// Describes a limit on CPU resources.
 #[derive(Debug, Copy, Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub struct CpuLimit {
@@ -272,5 +289,19 @@ impl Serialize for CpuLimit {
         S: serde::Serializer,
     {
         <f64 as Serialize>::serialize(&(self.millicpus as f64 / 1000.0), serializer)
+    }
+}
+
+impl RustType<ProtoCpuLimit> for CpuLimit {
+    fn into_proto(&self) -> ProtoCpuLimit {
+        ProtoCpuLimit {
+            millicpus: cast::usize_to_u64(self.millicpus),
+        }
+    }
+
+    fn from_proto(proto: ProtoCpuLimit) -> Result<Self, TryFromProtoError> {
+        Ok(CpuLimit {
+            millicpus: cast::u64_to_usize(proto.millicpus),
+        })
     }
 }
