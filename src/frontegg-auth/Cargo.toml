@@ -17,4 +17,4 @@ serde = { version = "1.0.144", features = ["derive"] }
 thiserror = "1.0.35"
 tokio = "1.19.2"
 tracing = "0.1.36"
-uuid = "1.1.2"
+uuid = "1.2.1"
