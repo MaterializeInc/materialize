@@ -851,12 +851,7 @@ pub fn plan_create_source(
         }
     }
 
-    let host_config = match (remote, size) {
-        (None, None) => StorageHostConfig::Undefined,
-        (None, Some(size)) => StorageHostConfig::Managed { size },
-        (Some(addr), None) => StorageHostConfig::Remote { addr },
-        (Some(_), Some(_)) => sql_bail!("only one of REMOTE and SIZE can be set"),
-    };
+    let host_config = host_config(remote, size)?;
 
     let timestamp_interval = match timestamp_interval {
         Some(timestamp_interval) => timestamp_interval.duration()?,
@@ -1120,6 +1115,18 @@ fn get_encoding(
     };
 
     Ok(encoding)
+}
+
+fn host_config(
+    remote: Option<String>,
+    size: Option<String>,
+) -> Result<StorageHostConfig, PlanError> {
+    match (remote, size) {
+        (None, None) => Ok(StorageHostConfig::Undefined),
+        (None, Some(size)) => Ok(StorageHostConfig::Managed { size }),
+        (Some(addr), None) => Ok(StorageHostConfig::Remote { addr }),
+        (Some(_), Some(_)) => sql_bail!("only one of REMOTE and SIZE can be set"),
+    }
 }
 
 generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default(true)));
@@ -1550,6 +1557,7 @@ pub fn describe_create_sink(
 
 generate_extracted_config!(
     CreateSinkOption,
+    (Remote, String),
     (Size, String),
     (Snapshot, bool, Default(true))
 );
@@ -1568,6 +1576,19 @@ pub fn plan_create_sink(
         if_not_exists,
         with_options,
     } = stmt;
+
+    const SAFE_WITH_OPTIONS: &[CreateSinkOptionName] =
+        &[CreateSinkOptionName::Size, CreateSinkOptionName::Snapshot];
+
+    if with_options
+        .iter()
+        .any(|op| !SAFE_WITH_OPTIONS.contains(&op.name))
+    {
+        scx.require_unsafe_mode(&format!(
+            "creating sinks with WITH options other than {}",
+            comma_separated(SAFE_WITH_OPTIONS)
+        ))?;
+    }
 
     let envelope = match envelope {
         None => sql_bail!("ENVELOPE clause is required"),
@@ -1659,15 +1680,13 @@ pub fn plan_create_sink(
     };
 
     let CreateSinkOptionExtracted {
+        remote,
         size,
         snapshot,
         seen: _,
     } = with_options.try_into()?;
 
-    let host_config = match size {
-        None => StorageHostConfig::Undefined,
-        Some(size) => StorageHostConfig::Managed { size },
-    };
+    let host_config = host_config(remote, size)?;
 
     Ok(Plan::CreateSink(CreateSinkPlan {
         name,
