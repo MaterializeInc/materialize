@@ -31,7 +31,7 @@ uuid = "1.2.1"
 
 [dev-dependencies]
 once_cell = "1.14.0"
-md-5 = "0.10.4"
+md-5 = "0.10.5"
 
 [features]
 snappy = ["byteorder", "crc32fast", "snap"]
