@@ -13,6 +13,7 @@ use std::fmt::Display;
 use bytes::BufMut;
 use prost::Message;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use mz_expr::EvalError;
 use mz_persist_types::Codec;
@@ -298,8 +299,6 @@ impl Display for SourceError {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum SourceErrorDetails {
     Initialization(String),
-    FileIO(String),
-    Persistence(String),
     Other(String),
 }
 
@@ -309,8 +308,6 @@ impl RustType<ProtoSourceErrorDetails> for SourceErrorDetails {
         ProtoSourceErrorDetails {
             kind: Some(match self {
                 SourceErrorDetails::Initialization(s) => Kind::Initialization(s.clone()),
-                SourceErrorDetails::FileIO(s) => Kind::FileIo(s.clone()),
-                SourceErrorDetails::Persistence(s) => Kind::Persistence(s.clone()),
                 SourceErrorDetails::Other(s) => Kind::Other(s.clone()),
             }),
         }
@@ -321,8 +318,10 @@ impl RustType<ProtoSourceErrorDetails> for SourceErrorDetails {
         match proto.kind {
             Some(kind) => match kind {
                 Kind::Initialization(s) => Ok(SourceErrorDetails::Initialization(s)),
-                Kind::FileIo(s) => Ok(SourceErrorDetails::FileIO(s)),
-                Kind::Persistence(s) => Ok(SourceErrorDetails::Persistence(s)),
+                Kind::DeprecatedFileIo(s) | Kind::DeprecatedPersistence(s) => {
+                    warn!("Deprecated source error kind: {s}");
+                    Ok(SourceErrorDetails::Other(s))
+                }
                 Kind::Other(s) => Ok(SourceErrorDetails::Other(s)),
             },
             None => Err(TryFromProtoError::missing_field(
@@ -342,8 +341,6 @@ impl Display for SourceErrorDetails {
                     e
                 )
             }
-            SourceErrorDetails::FileIO(e) => write!(f, "file IO: {}", e),
-            SourceErrorDetails::Persistence(e) => write!(f, "persistence: {}", e),
             SourceErrorDetails::Other(e) => write!(f, "{}", e),
         }
     }

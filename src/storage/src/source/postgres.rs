@@ -436,7 +436,7 @@ async fn postgres_replication_loop_inner(
             }
             Err(ReplicationError::Fatal(e)) => {
                 return Err(SourceReaderError {
-                    inner: SourceErrorDetails::FileIO(e.to_string()),
+                    inner: SourceErrorDetails::Other(e.to_string()),
                 })
             }
             Ok(_) => {

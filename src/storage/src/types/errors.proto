@@ -29,8 +29,8 @@ message ProtoDecodeErrorKind {
 message ProtoSourceErrorDetails {
     oneof kind {
         string initialization = 1;
-        string file_io = 2;
-        string persistence = 3;
+        string deprecated_file_io = 2;
+        string deprecated_persistence = 3;
         string other = 4;
     }
 }
