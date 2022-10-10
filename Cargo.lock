@@ -3709,6 +3709,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-s3",
  "aws-smithy-http",
+ "aws-smithy-types",
  "aws-types",
  "base64",
  "bytes",
