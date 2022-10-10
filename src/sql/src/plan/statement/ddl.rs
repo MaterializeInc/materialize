@@ -695,12 +695,7 @@ pub fn plan_create_source(
             (connection, encoding, Some(available_subsources))
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
-            use mz_storage::types::sources::LoadGenerator;
-
-            let load_generator = match generator {
-                mz_sql_parser::ast::LoadGenerator::Auction => LoadGenerator::Auction,
-                mz_sql_parser::ast::LoadGenerator::Counter => LoadGenerator::Counter,
-            };
+            let load_generator = load_generator_ast_to_generator(generator, options)?;
             let generator = as_generator(&load_generator);
 
             let mut available_subsources = HashMap::new();
@@ -1062,6 +1057,21 @@ pub fn plan_create_subsource(
 }
 
 generate_extracted_config!(LoadGeneratorOption, (TickInterval, Interval));
+
+pub(crate) fn load_generator_ast_to_generator(
+    generator: &mz_sql_parser::ast::LoadGenerator,
+    _options: &[LoadGeneratorOption<Aug>],
+) -> Result<mz_storage::types::sources::LoadGenerator, PlanError> {
+    let load_generator = match generator {
+        mz_sql_parser::ast::LoadGenerator::Auction => {
+            mz_storage::types::sources::LoadGenerator::Auction
+        }
+        mz_sql_parser::ast::LoadGenerator::Counter => {
+            mz_storage::types::sources::LoadGenerator::Counter
+        }
+    };
+    Ok(load_generator)
+}
 
 fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(usize, usize), PlanError> {
     let (before_idx, before_ty) = value_desc
