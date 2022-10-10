@@ -37,6 +37,7 @@ steps:
           - { value: zippy-kafka-sources }
           - { value: zippy-user-tables }
           - { value: zippy-debezium-postgres }
+          - { value: zippy-postgres-cdc }
           - { value: zippy-cluster-replicas }
           - { value: secrets }
           - { value: checks-oneatatime-drop-create-default-replica }
@@ -291,6 +292,16 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: zippy
           args: [--scenario=UserTables, --actions=1000]
+
+  - id: zippy-postgres-cdc
+    label: "Zippy Postgres CDC"
+    timeout_in_minutes: 120
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: zippy
+          args: [--scenario=PostgresCdc, --actions=1000]
 
   - id: zippy-debezium-postgres
     label: "Zippy Debezium Postgres"
