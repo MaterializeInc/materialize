@@ -127,7 +127,7 @@ The idea is to expose to the user one source per replica-introspection type pair
 
 `mz_catalog.dataflow_operators_2` (for the cluster c1)
 
-Each table name has a cluster id suffix, users can determine the cluster id using the table `mz_catalog.mz_cluster_replicas_base`.
+Each table name has a cluster id suffix, users can determine the cluster id using the table `mz_catalog.mz_cluster_replicas`.
 
 **Benefits**: It allows the user to query up-to-date data from a single replica. There is nothing that blocks a computed of writing into the logging sources as fast as persist allows, thus the queried data should be fresh. This approach synergizes well with storage renditions, if a computed restarts, it could start a new rendition, elegantly solving the problem that a “zombie” computed writes to the same shard.
 

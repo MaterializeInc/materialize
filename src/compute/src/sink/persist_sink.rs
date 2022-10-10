@@ -13,6 +13,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
@@ -535,6 +536,8 @@ where
     let mut write_op =
         OperatorBuilder::new(format!("{} write_batches", operator_name), scope.clone());
 
+    let activator = scope.activator_for(&write_op.operator_info().address[..]);
+
     let (mut output, output_stream) = write_op.new_output();
 
     let mut descriptions_input = write_op.new_input(&batch_descriptions.broadcast(), Pipeline);
@@ -606,6 +609,21 @@ where
                     return;
                 }
 
+                // Make sure that our write handle lease does not expire!
+                //
+                // We don't write to _Consensus_ but instead only write batch
+                // data to _Blob_ so someone might eventually expire our lease.
+                // This could lead to the "leaked blob reaper" eventually
+                // removing blobs that have been written but not yet appended to
+                // the shard.
+                //
+                write.maybe_heartbeat_writer().await;
+                trace!("persist_sink {sink_id}/{shard_id}: writer heartbeating write handle");
+                // NOTE: We schedule ourselves to make sure that we keep
+                // heartbeating even in cases where there are no changes in our
+                // inputs (updates or frontier changes).
+                activator.activate_after(Duration::from_secs(60));
+
                 // Capture current frontiers.
                 let frontiers = frontiers.borrow().clone();
                 let batch_descriptions_frontier = &frontiers[0];
@@ -674,21 +692,6 @@ where
 
                 // We may have the opportunity to commit updates.
                 if !PartialOrder::less_equal(desired_frontier, persist_frontier) {
-                    // Make sure that our write handle lease does not expire!
-                    //
-                    // We don't write to _Consensus_ but instead only write batch
-                    // data to _Blob_ so someone might eventually expire our lease.
-                    // This could lead to the "leaked blob reaper" eventually
-                    // removing blobs that have been written but not yet appended to
-                    // the shard.
-                    //
-                    // NOTE: We only do this in reaction to new data being writable
-                    // and not through every iteration of the outermost loop.
-                    // Due to quirks in how async timely operators work (for
-                    // now) we can't do this blindly in every iteration because
-                    // that would lead to a busy loop.
-                    write.maybe_heartbeat_writer().await;
-
                     trace!(
                         "persist_sink {sink_id}/{shard_id}: \
                         CAN emit: \
@@ -845,6 +848,8 @@ where
     let operator_name = format!("{} append_batches", operator_name);
     let mut append_op = OperatorBuilder::new(operator_name, scope.clone());
 
+    let activator = scope.activator_for(&append_op.operator_info().address[..]);
+
     // We never output anything, but we update our capabilities based on the
     // persist frontier we know about. So someone can listen on our output
     // frontier and learn about the persist frontier advancing.
@@ -932,6 +937,14 @@ where
                     // that needs pumping away.
                     return;
                 }
+
+                // Make sure that our write handle lease does not expire!
+                write.maybe_heartbeat_writer().await;
+                trace!("persist_sink {sink_id}/{shard_id}: appender heartbeating write handle");
+                // NOTE: We schedule ourselves to make sure that we keep
+                // heartbeating even in cases where there are no changes in our
+                // inputs (updates or frontier changes).
+                activator.activate_after(Duration::from_secs(60));
 
                 // Capture current frontiers.
                 let frontiers = frontiers.borrow().clone();

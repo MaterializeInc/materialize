@@ -1620,9 +1620,6 @@ impl<'a> Parser<'a> {
             if self.parse_keyword(VIEW) {
                 self.index = index;
                 self.parse_create_view()
-            } else if self.parse_keyword(VIEWS) {
-                self.index = index;
-                self.parse_create_views()
             } else {
                 self.expected(
                     self.peek_pos(),
@@ -2609,45 +2606,6 @@ impl<'a> Parser<'a> {
             columns,
             query,
         })
-    }
-
-    fn parse_create_views(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let mut if_exists = if self.parse_keyword(OR) {
-            self.expect_keyword(REPLACE)?;
-            IfExistsBehavior::Replace
-        } else {
-            IfExistsBehavior::Error
-        };
-        let temporary = self.parse_keyword(TEMPORARY) | self.parse_keyword(TEMP);
-        self.expect_keyword(VIEWS)?;
-        if if_exists == IfExistsBehavior::Error && self.parse_if_not_exists()? {
-            if_exists = IfExistsBehavior::Skip;
-        }
-
-        self.expect_keywords(&[FROM, SOURCE])?;
-        let source = self.parse_raw_name()?;
-        let targets = if self.consume_token(&Token::LParen) {
-            let targets = self.parse_comma_separated(|parser| {
-                let name = parser.parse_object_name()?;
-                let alias = if parser.parse_keyword(AS) {
-                    Some(parser.parse_object_name()?)
-                } else {
-                    None
-                };
-                Ok(CreateViewsSourceTarget { name, alias })
-            })?;
-            self.expect_token(&Token::RParen)?;
-            Some(targets)
-        } else {
-            None
-        };
-
-        Ok(Statement::CreateViews(CreateViewsStatement {
-            temporary,
-            if_exists,
-            source,
-            targets,
-        }))
     }
 
     fn parse_create_materialized_view(&mut self) -> Result<Statement<Raw>, ParserError> {

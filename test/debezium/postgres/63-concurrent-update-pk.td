@@ -17,7 +17,7 @@ ALTER TABLE concurrent_update_pk REPLICA IDENTITY FULL;
 INSERT INTO concurrent_update_pk VALUES (1, 10);
 INSERT INTO concurrent_update_pk VALUES (2, 20);
 
-$ schema-registry-wait-schema schema=postgres.public.concurrent_update_pk-value
+$ schema-registry-wait subject=postgres.public.concurrent_update_pk-value
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY

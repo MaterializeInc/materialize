@@ -37,8 +37,8 @@ use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
     AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
-    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, LoadGenerator,
-    SetVariableValue, SshConnectionOption,
+    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, SetVariableValue,
+    SshConnectionOption,
 };
 use mz_storage::source::generator::as_generator;
 use mz_storage::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
@@ -73,18 +73,17 @@ use crate::ast::{
     CreateSinkStatement, CreateSourceConnection, CreateSourceFormat, CreateSourceOption,
     CreateSourceOptionName, CreateSourceStatement, CreateSourceSubsource, CreateSourceSubsources,
     CreateSubsourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
-    CreateViewStatement, CreateViewsStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
-    CsrConnectionAvro, CsrConnectionOption, CsrConnectionOptionName, CsrConnectionProtobuf,
-    CsrSeedProtobuf, CsvColumns, DbzMode, DropClusterReplicasStatement, DropClustersStatement,
+    CreateViewStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection, CsrConnectionAvro,
+    CsrConnectionOption, CsrConnectionOptionName, CsrConnectionProtobuf, CsrSeedProtobuf,
+    CsvColumns, DbzMode, DropClusterReplicasStatement, DropClustersStatement,
     DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
     Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConfigOptionName,
     KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint, LoadGeneratorOption,
-    LoadGeneratorOptionName, ObjectType, Op, PgConfigOption, PgConfigOptionName,
+    LoadGeneratorOptionName, ObjectType, PgConfigOption, PgConfigOptionName,
     PostgresConnectionOption, PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica,
-    Query, ReplicaDefinition, ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr,
-    SourceIncludeMetadata, SourceIncludeMetadataType, SshConnectionOptionName, Statement,
-    SubscriptPosition, TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName,
-    UnresolvedObjectName, Value, ViewDefinition,
+    ReplicaDefinition, ReplicaOption, ReplicaOptionName, SourceIncludeMetadata,
+    SourceIncludeMetadataType, SshConnectionOptionName, Statement, TableConstraint,
+    UnresolvedDatabaseName, Value, ViewDefinition,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
@@ -107,7 +106,7 @@ use crate::plan::{
     ComputeReplicaIntrospectionConfig, CreateComputeInstancePlan, CreateComputeReplicaPlan,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, DropComputeInstancesPlan,
     DropComputeReplicasPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
     FullObjectName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan, QueryContext,
     RotateKeysPlan, Secret, Sink, Source, StorageHostConfig, Table, Type, View,
@@ -368,7 +367,7 @@ pub fn plan_create_source(
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
-    let (external_connection, connection_id, encoding, available_subsources) = match connection {
+    let (external_connection, encoding, available_subsources) = match connection {
         CreateSourceConnection::Kafka(mz_sql_parser::ast::KafkaSourceConnection {
             connection:
                 mz_sql_parser::ast::KafkaConnection {
@@ -377,10 +376,10 @@ pub fn plan_create_source(
                 },
             key: _,
         }) => {
-            let item = scx.get_item_by_resolved_name(connection_name)?;
-            let kafka_connection = match item.connection()? {
+            let connection_item = scx.get_item_by_resolved_name(connection_name)?;
+            let kafka_connection = match connection_item.connection()? {
                 Connection::Kafka(connection) => connection.clone(),
-                _ => sql_bail!("{} is not a kafka connection", item.name()),
+                _ => sql_bail!("{} is not a kafka connection", connection_item.name()),
             };
 
             // Starting offsets are allowed out unsafe mode, as they are a simple,
@@ -433,6 +432,7 @@ pub fn plan_create_source(
 
             let mut connection = KafkaSourceConnection {
                 connection: kafka_connection,
+                connection_id: connection_item.id(),
                 options,
                 topic,
                 start_offsets,
@@ -491,7 +491,7 @@ pub fn plan_create_source(
 
             let connection = SourceConnection::Kafka(connection);
 
-            (connection, Some(item.id()), encoding, None)
+            (connection, encoding, None)
         }
         CreateSourceConnection::Kinesis {
             connection: aws_connection,
@@ -509,16 +509,19 @@ pub fn plan_create_source(
                 ),
             };
 
-            let item = scx.get_item_by_resolved_name(aws_connection)?;
-            let aws = match item.connection()? {
+            let connection_item = scx.get_item_by_resolved_name(aws_connection)?;
+            let aws = match connection_item.connection()? {
                 Connection::Aws(aws) => aws.clone(),
-                _ => sql_bail!("{} is not an AWS connection", item.name()),
+                _ => sql_bail!("{} is not an AWS connection", connection_item.name()),
             };
 
             let encoding = get_encoding(scx, format, &envelope, connection)?;
-            let connection =
-                SourceConnection::Kinesis(KinesisSourceConnection { stream_name, aws });
-            (connection, Some(item.id()), encoding, None)
+            let connection = SourceConnection::Kinesis(KinesisSourceConnection {
+                connection_id: connection_item.id(),
+                stream_name,
+                aws,
+            });
+            (connection, encoding, None)
         }
         CreateSourceConnection::S3 {
             connection: aws_connection,
@@ -528,10 +531,10 @@ pub fn plan_create_source(
         } => {
             scx.require_unsafe_mode("CREATE SOURCE ... FROM S3")?;
 
-            let item = scx.get_item_by_resolved_name(aws_connection)?;
-            let aws = match item.connection()? {
+            let connection_item = scx.get_item_by_resolved_name(aws_connection)?;
+            let aws = match connection_item.connection()? {
                 Connection::Aws(aws) => aws.clone(),
-                _ => sql_bail!("{} is not an AWS connection", item.name()),
+                _ => sql_bail!("{} is not an AWS connection", connection_item.name()),
             };
 
             let mut converted_sources = Vec::new();
@@ -555,6 +558,7 @@ pub fn plan_create_source(
                 sql_bail!("S3 sources do not support key decoding");
             }
             let connection = SourceConnection::S3(S3SourceConnection {
+                connection_id: connection_item.id(),
                 key_sources: converted_sources,
                 pattern: pattern
                     .as_ref()
@@ -572,16 +576,16 @@ pub fn plan_create_source(
                     Compression::None => mz_storage::types::sources::Compression::None,
                 },
             });
-            (connection, Some(item.id()), encoding, None)
+            (connection, encoding, None)
         }
         CreateSourceConnection::Postgres {
             connection,
             options,
         } => {
-            let item = scx.get_item_by_resolved_name(connection)?;
-            let connection = match item.connection()? {
+            let connection_item = scx.get_item_by_resolved_name(connection)?;
+            let connection = match connection_item.connection()? {
                 Connection::Postgres(connection) => connection.clone(),
-                _ => sql_bail!("{} is not a postgres connection", item.name()),
+                _ => sql_bail!("{} is not a postgres connection", connection_item.name()),
             };
             let PgConfigOptionExtracted {
                 details,
@@ -676,6 +680,7 @@ pub fn plan_create_source(
 
             let connection = SourceConnection::Postgres(PostgresSourceConnection {
                 connection,
+                connection_id: connection_item.id(),
                 table_casts,
                 publication: publication.expect("validated exists during purification"),
                 details: PostgresSourceDetails::from_proto(details)
@@ -687,19 +692,36 @@ pub fn plan_create_source(
             let encoding = SourceDataEncoding::Single(DataEncoding::new(
                 DataEncodingInner::RowCodec(RelationDesc::empty()),
             ));
-            (
-                connection,
-                Some(item.id()),
-                encoding,
-                Some(available_subsources),
-            )
+            (connection, encoding, Some(available_subsources))
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
+            use mz_storage::types::sources::LoadGenerator;
+
             let load_generator = match generator {
-                LoadGenerator::Auction => mz_storage::types::sources::LoadGenerator::Auction,
-                LoadGenerator::Counter => mz_storage::types::sources::LoadGenerator::Counter,
+                mz_sql_parser::ast::LoadGenerator::Auction => LoadGenerator::Auction,
+                mz_sql_parser::ast::LoadGenerator::Counter => LoadGenerator::Counter,
             };
             let generator = as_generator(&load_generator);
+
+            let mut available_subsources = HashMap::new();
+            for (i, (name, _)) in generator.views().iter().enumerate() {
+                let name = FullObjectName {
+                    database: RawDatabaseSpecifier::Name("mz_loadgenerator".to_owned()),
+                    schema: "public".to_owned(),
+                    item: name.to_string(),
+                };
+                // The zero-th output is the main output
+                // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
+                // to handle the main source and the subsources uniformly
+                available_subsources.insert(name, i + 1);
+            }
+
+            let available_subsources = if available_subsources.is_empty() {
+                None
+            } else {
+                Some(available_subsources)
+            };
+
             let LoadGeneratorOptionExtracted { tick_interval, .. } = options.clone().try_into()?;
             let tick_micros = match tick_interval {
                 Some(interval) => {
@@ -712,7 +734,7 @@ pub fn plan_create_source(
                 load_generator,
                 tick_micros,
             });
-            (connection, None, generator.data_encoding(), None)
+            (connection, generator.data_encoding(), available_subsources)
         }
     };
     let (key_desc, value_desc) = encoding.desc()?;
@@ -792,6 +814,8 @@ pub fn plan_create_source(
 
     // Apply user-specified key constraint
     if let Some(KeyConstraint::PrimaryKeyNotEnforced { columns }) = key_constraint.clone() {
+        // Don't remove this without addressing
+        // https://github.com/MaterializeInc/materialize/issues/15272.
         scx.require_unsafe_mode("PRIMARY KEY NOT ENFORCED")?;
 
         let key_columns = columns
@@ -920,7 +944,6 @@ pub fn plan_create_source(
     let source = Source {
         create_sql,
         ingestion: Some(Ingestion {
-            connection_id,
             desc: source_desc,
             // Currently no source reads from another source
             source_imports: HashSet::new(),
@@ -1438,110 +1461,6 @@ pub fn plan_create_view(
     }))
 }
 
-pub fn describe_create_views(
-    _: &StatementContext,
-    _: CreateViewsStatement<Aug>,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn plan_create_views(
-    scx: &StatementContext,
-    CreateViewsStatement {
-        if_exists,
-        temporary,
-        source: source_name,
-        targets: _,
-    }: CreateViewsStatement<Aug>,
-) -> Result<Plan, PlanError> {
-    let source_desc = match scx.get_item_by_resolved_name(&source_name)?.source_desc()? {
-        Some(source_desc) => source_desc,
-        None => sql_bail!("cannot generate views from subsources"),
-    };
-    match &source_desc.connection {
-        SourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
-            load_generator, ..
-        }) => {
-            let generator = as_generator(load_generator);
-            let names = generator.views();
-            if names.is_empty() {
-                sql_bail!(
-                    "cannot generate views from {:?} load generator sources",
-                    load_generator
-                );
-            }
-            let views = names
-                .into_iter()
-                .map(|(table, columns)| {
-                    let mut projection = vec![];
-                    for (i, (column_name, column_type)) in columns.iter().enumerate() {
-                        let column_type = mz_pgrepr::Type::from(&column_type.scalar_type);
-                        let data_type = scx.resolve_type(column_type)?;
-                        projection.push(SelectItem::Expr {
-                            expr: Expr::Cast {
-                                expr: Box::new(Expr::Subscript {
-                                    expr: Box::new(Expr::Identifier(vec![Ident::new("row_data")])),
-                                    positions: vec![SubscriptPosition {
-                                        start: Some(Expr::Value(Value::Number(
-                                            // LIST is one based
-                                            (i + 1).to_string(),
-                                        ))),
-                                        end: None,
-                                        explicit_slice: false,
-                                    }],
-                                }),
-                                data_type,
-                            },
-                            alias: Some(Ident::new(column_name.as_str())),
-                        });
-                    }
-                    let query = Query {
-                        ctes: vec![],
-                        body: SetExpr::Select(Box::new(Select {
-                            distinct: None,
-                            projection,
-                            from: vec![TableWithJoins {
-                                relation: TableFactor::Table {
-                                    name: source_name.clone(),
-                                    alias: None,
-                                },
-                                joins: vec![],
-                            }],
-                            selection: Some(Expr::Op {
-                                op: Op::bare("="),
-                                expr1: Box::new(Expr::Identifier(vec![Ident::new("table")])),
-                                expr2: Some(Box::new(Expr::Value(Value::String(
-                                    table.to_string(),
-                                )))),
-                            }),
-                            group_by: vec![],
-                            having: None,
-                            options: vec![],
-                        })),
-                        order_by: vec![],
-                        limit: None,
-                        offset: None,
-                    };
-                    let mut viewdef = ViewDefinition {
-                        name: UnresolvedObjectName::unqualified(table),
-                        columns: columns
-                            .iter_names()
-                            .map(|name| Ident::from(name.as_str()))
-                            .collect(),
-                        query,
-                    };
-                    plan_view(scx, &mut viewdef, &Params::empty(), temporary)
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(Plan::CreateViews(CreateViewsPlan {
-                views,
-                if_not_exists: if_exists == IfExistsBehavior::Skip,
-            }))
-        }
-        connection => sql_bail!("cannot generate views from {} sources", connection.name()),
-    }
-}
-
 pub fn describe_create_materialized_view(
     _: &StatementContext,
     _: CreateMaterializedViewStatement<Aug>,
@@ -1727,7 +1646,7 @@ pub fn plan_create_sink(
         return Err(PlanError::UpsertSinkWithoutKey);
     }
 
-    let (connection_id, connection_builder) = match connection {
+    let connection_builder = match connection {
         CreateSinkConnection::Kafka { connection, .. } => kafka_sink_builder(
             scx,
             connection,
@@ -1755,7 +1674,6 @@ pub fn plan_create_sink(
         sink: Sink {
             create_sql,
             from: from.id(),
-            connection_id: Some(connection_id),
             connection_builder,
             envelope,
         },
@@ -1830,7 +1748,7 @@ fn kafka_sink_builder(
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
-) -> Result<(GlobalId, StorageSinkConnectionBuilder), PlanError> {
+) -> Result<StorageSinkConnectionBuilder, PlanError> {
     let item = scx.get_item_by_resolved_name(&connection)?;
     // Get Kafka connection
     let connection = match item.connection()? {
@@ -1971,9 +1889,8 @@ fn kafka_sink_builder(
         bytes: retention_bytes,
     };
 
-    Ok((
-        connection_id,
-        StorageSinkConnectionBuilder::Kafka(KafkaSinkConnectionBuilder {
+    Ok(StorageSinkConnectionBuilder::Kafka(
+        KafkaSinkConnectionBuilder {
             connection_id,
             connection,
             options: config_options,
@@ -1987,7 +1904,7 @@ fn kafka_sink_builder(
             key_desc_and_indices,
             value_desc,
             retention,
-        }),
+        },
     ))
 }
 

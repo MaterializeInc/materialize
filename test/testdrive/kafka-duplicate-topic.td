@@ -50,6 +50,6 @@ $ kafka-ingest format=avro topic=topic1 schema=${schema} repeat=1
 
 
 
-$ kafka-verify format=avro sort-messages=true sink=materialize.public.sink1
+$ kafka-verify-data format=avro sort-messages=true sink=materialize.public.sink1
 {"f2": 1} {"before": null, "after": {"row": {"f2": 1}}}
 {"f2": 7} {"before": null, "after": {"row": {"f2": 7}}}

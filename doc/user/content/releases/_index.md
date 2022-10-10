@@ -24,7 +24,7 @@ weekly release notes after general availability.
 {{< version-list >}}
 
 For versions that predate cloud-native Materialize, see our
-historical [release notes](https://materialize.com/docs/release-notes/)
+historical [release notes](https://materialize.com/docs/lts/release-notes/)
 and [documentation](https://materialize.com/docs/lts/).
 
 ## Schedule

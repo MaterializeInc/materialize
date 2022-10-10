@@ -83,7 +83,6 @@ class CreateDebeziumSource(Action):
 
     def run(self, c: Composition) -> None:
         if self.new_debezium_source:
-            upsert = "UPSERT" if self.postgres_table.has_pk else ""
             c.testdrive(
                 dedent(
                     f"""
@@ -111,18 +110,16 @@ class CreateDebeziumSource(Action):
                       }}
                     }}
 
-                    $ schema-registry-wait-schema schema=postgres.public.{self.postgres_table.name}-value
+                    $ schema-registry-wait subject=postgres.public.{self.postgres_table.name}-value
 
                     > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
 
                     > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
 
-                    # UPSERT is requred due to https://github.com/MaterializeInc/materialize/issues/14211
                     > CREATE SOURCE {self.debezium_source.name}
                       FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.{self.postgres_table.name}')
                       FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                       ENVELOPE DEBEZIUM
-                      {upsert}
                     """
                 )
             )

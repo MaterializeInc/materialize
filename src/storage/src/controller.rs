@@ -143,6 +143,15 @@ pub struct ExportDescription<T = mz_repr::Timestamp> {
     pub host_config: StorageHostConfig,
 }
 
+/// Opaque token to ensure `prepare_export` is called before `create_exports`.  This token proves
+/// that compaction is being held back on `from_id` at least until `id` is created.  It should be
+/// held while the AS OF is determined.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreateExportToken {
+    id: GlobalId,
+    from_id: GlobalId,
+}
+
 #[async_trait(?Send)]
 pub trait StorageController: Debug + Send {
     type Timestamp;
@@ -194,8 +203,18 @@ pub trait StorageController: Debug + Send {
     /// Create the sinks described by the `ExportDescription`.
     async fn create_exports(
         &mut self,
-        exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
+        exports: Vec<(CreateExportToken, ExportDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError>;
+
+    /// Notify the storage controller to prepare for an export to be created
+    async fn prepare_export(
+        &mut self,
+        id: GlobalId,
+        from_id: GlobalId,
+    ) -> Result<CreateExportToken, StorageError>;
+
+    /// Cancel the pending export
+    async fn cancel_prepare_export(&mut self, token: CreateExportToken);
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
     async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
@@ -785,24 +804,33 @@ where
         }
 
         // Install collection state for each bound description.
-        for (id, description) in collections {
-            let durable_metadata = METADATA_COLLECTION
-                .insert_without_overwrite(
-                    &mut self.state.stash,
-                    &id,
-                    DurableCollectionMetadata {
-                        remap_shard: ShardId::new(),
-                        data_shard: ShardId::new(),
-                    },
-                )
-                .await?;
 
+        // Perform all stash writes in a single transaction, to minimize transaction overhead and
+        // the time spent waiting for stash.
+        METADATA_COLLECTION
+            .insert_without_overwrite(
+                &mut self.state.stash,
+                collections.iter().map(|(id, _)| {
+                    (
+                        *id,
+                        DurableCollectionMetadata {
+                            remap_shard: ShardId::new(),
+                            data_shard: ShardId::new(),
+                        },
+                    )
+                }),
+            )
+            .await?;
+
+        let mut durable_metadata = METADATA_COLLECTION.peek_one(&mut self.state.stash).await?;
+
+        for (id, description) in collections {
+            let collection_shards = durable_metadata.remove(&id).expect("inserted above");
             let status_shard = if let Some(status_collection_id) = description.status_collection_id
             {
                 Some(
-                    METADATA_COLLECTION
-                        .peek_key_one(&mut self.state.stash, &status_collection_id)
-                        .await?
+                    durable_metadata
+                        .remove(&status_collection_id)
                         .ok_or(StorageError::IdentifierMissing(status_collection_id))?
                         .data_shard,
                 )
@@ -812,8 +840,8 @@ where
 
             let metadata = CollectionMetadata {
                 persist_location: self.persist_location.clone(),
-                remap_shard: durable_metadata.remap_shard,
-                data_shard: durable_metadata.data_shard,
+                remap_shard: collection_shards.remap_shard,
+                data_shard: collection_shards.data_shard,
                 status_shard,
             };
 
@@ -960,13 +988,43 @@ where
             .ok_or(StorageError::IdentifierMissing(id))
     }
 
+    async fn prepare_export(
+        &mut self,
+        id: GlobalId,
+        from_id: GlobalId,
+    ) -> Result<CreateExportToken, StorageError> {
+        if let Ok(_export) = self.export(id) {
+            return Err(StorageError::SourceIdReused(id));
+        }
+
+        self.state
+            .exported_collections
+            .entry(from_id)
+            .or_default()
+            .push(id);
+
+        Ok(CreateExportToken { id, from_id })
+    }
+
+    async fn cancel_prepare_export(
+        &mut self,
+        CreateExportToken { id, from_id }: CreateExportToken,
+    ) {
+        self.state
+            .exported_collections
+            .get_mut(&from_id)
+            // Internal logic error NOT due to export not existing
+            .expect("Dangling exported collection")
+            .retain(|from_export_id| *from_export_id != id);
+    }
+
     async fn create_exports(
         &mut self,
-        exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
+        exports: Vec<(CreateExportToken, ExportDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError> {
         // Validate first, to avoid corrupting state.
         let mut dedup_hashmap = HashMap::<&_, &_>::new();
-        for (id, desc) in exports.iter() {
+        for (CreateExportToken { id, from_id }, desc) in exports.iter() {
             if dedup_hashmap.insert(id, desc).is_some() {
                 return Err(StorageError::SourceIdReused(*id));
             }
@@ -975,29 +1033,36 @@ where
                     return Err(StorageError::SourceIdReused(*id));
                 }
             }
+            if desc.sink.from != *from_id {
+                return Err(StorageError::SourceIdReused(*id));
+            }
+            if self
+                .state
+                .exported_collections
+                .get(from_id)
+                // Internal logic error NOT due to export not existing
+                .expect("Dangling exported collection")
+                .iter()
+                .find(|from_export_id| *from_export_id == id)
+                .is_none()
+            {
+                return Err(StorageError::SourceIdReused(*id));
+            }
         }
 
-        for (id, description) in exports {
-            let from = description.sink.from;
-
+        for (CreateExportToken { id, from_id }, description) in exports {
             self.state
                 .exports
                 .insert(id, ExportState::new(description.clone()));
 
-            self.state
-                .exported_collections
-                .entry(from)
-                .or_default()
-                .push(id);
-
-            let from_collection = self.collection(from)?;
+            let from_collection = self.collection(from_id)?;
             let from_storage_metadata = from_collection.collection_metadata.clone();
             // We've added the dependency above in `exported_collections` so this guaranteed not to change at least
             // until the sink is started up.
             let from_since = from_collection.implied_capability.clone();
 
             let as_of = MetadataExportFetcher::get_stash_collection()
-                .insert_without_overwrite(
+                .insert_key_without_overwrite(
                     &mut self.state.stash,
                     &id,
                     DurableExportMetadata {
@@ -1011,7 +1076,7 @@ where
             let cmd = CreateSinkCommand {
                 id,
                 description: StorageSinkDesc {
-                    from,
+                    from: from_id,
                     from_desc: description.sink.from_desc,
                     connection: description.sink.connection,
                     envelope: description.sink.envelope,
@@ -1382,8 +1447,10 @@ where
                     .state
                     .exports
                     .get(&export_id)
-                    .expect("Dangling export reference")
-                    .write_frontier,
+                    .map(|state| state.write_frontier.clone())
+                    // If sink has not been fully initialized (only `prepare_export` but not
+                    // `create_export` has been called), hold back compaction completely.
+                    .unwrap_or_else(|| Antichain::from_elem(Timestamp::minimum())),
             );
         }
 

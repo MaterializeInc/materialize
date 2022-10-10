@@ -914,9 +914,6 @@ where
                 });
 
                 let remap_trace_updates = timestamper.mint(&global_source_upper).await;
-                let mut remap_output = remap_output.activate();
-                let cap = cap_set.delayed(cap_set.first().unwrap());
-                let mut session = remap_output.session(&cap);
 
                 timestamper.advance().await;
                 let new_ts_upper = timestamper
@@ -933,7 +930,14 @@ where
                     new_ts_upper
                 );
 
-                session.give(remap_trace_updates);
+                // Out of an abundance of caution, do not hold the output handle
+                // across an await, and drop it before we downgrade the capability.
+                {
+                    let mut remap_output = remap_output.activate();
+                    let cap = cap_set.delayed(cap_set.first().unwrap());
+                    let mut session = remap_output.session(&cap);
+                    session.give(remap_trace_updates);
+                }
 
                 cap_set.downgrade(new_ts_upper);
 

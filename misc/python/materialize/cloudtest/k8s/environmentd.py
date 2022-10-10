@@ -94,7 +94,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 "--availability-zone=kind-worker3",
                 f"--persist-blob-url=s3://minio:minio123@persist/persist?endpoint={s3_endpoint}&region=minio",
                 "--orchestrator=kubernetes",
-                "--orchestrator-kubernetes-image-pull-policy=always",
+                "--orchestrator-kubernetes-image-pull-policy=if-not-present",
                 "--persist-consensus-url=postgres://postgres@postgres.default?options=--search_path=consensus",
                 "--adapter-stash-url=postgres://postgres@postgres.default?options=--search_path=catalog",
                 "--storage-stash-url=postgres://postgres@postgres.default?options=--search_path=storage",

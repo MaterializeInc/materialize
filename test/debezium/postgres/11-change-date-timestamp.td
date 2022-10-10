@@ -16,7 +16,7 @@ CREATE TABLE alter_change_date_timestamp (f1 DATE, f2 INTEGER PRIMARY KEY);
 ALTER TABLE alter_change_date_timestamp REPLICA IDENTITY FULL;
 INSERT INTO alter_change_date_timestamp VALUES ('2011-11-11', 0),('2012-12-12', 1);
 
-$ schema-registry-wait-schema schema=postgres.public.alter_change_date_timestamp-value
+$ schema-registry-wait subject=postgres.public.alter_change_date_timestamp-value
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY

@@ -29,7 +29,7 @@ use mz_storage::types::hosts::StorageHostConfig;
 use mz_storage::types::sinks::{KafkaSinkConnection, StorageSinkConnection};
 
 use crate::catalog::builtin::{
-    MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS_BASE,
+    MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS,
     MZ_CLUSTER_REPLICA_HEARTBEATS, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS,
     MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS,
     MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS,
@@ -139,11 +139,11 @@ impl CatalogState {
         };
 
         BuiltinTableUpdate {
-            id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS_BASE),
+            id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS),
             row: Row::pack_slice(&[
-                Datum::UInt64(compute_instance_id),
                 Datum::UInt64(id),
                 Datum::String(name),
+                Datum::UInt64(compute_instance_id),
                 Datum::from(size),
                 Datum::from(az),
             ]),
@@ -206,7 +206,7 @@ impl CatalogState {
                 let connection_id = source
                     .ingestion
                     .as_ref()
-                    .and_then(|ingestion| ingestion.connection_id);
+                    .and_then(|ingestion| ingestion.desc.connection.connection_id());
                 self.pack_source_update(
                     id,
                     oid,
@@ -347,7 +347,6 @@ impl CatalogState {
                 if let Some(public_keypair) = ssh.public_keys.as_ref() {
                     updates.extend(self.pack_ssh_tunnel_connection_update(
                         id,
-                        name,
                         public_keypair,
                         diff,
                     ));
@@ -368,7 +367,6 @@ impl CatalogState {
     pub(crate) fn pack_ssh_tunnel_connection_update(
         &self,
         id: GlobalId,
-        name: &str,
         (public_key_primary, public_key_secondary): &(String, String),
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
@@ -376,7 +374,6 @@ impl CatalogState {
             id: self.resolve_builtin_table(&MZ_SSH_TUNNEL_CONNECTIONS),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
-                Datum::String(name),
                 Datum::String(public_key_primary),
                 Datum::String(public_key_secondary),
             ]),
@@ -528,7 +525,7 @@ impl CatalogState {
                     Datum::UInt64(schema_id.into()),
                     Datum::String(name),
                     Datum::String(connection.name()),
-                    Datum::from(sink.connection_id.map(|id| id.to_string()).as_deref()),
+                    Datum::from(sink.connection_id().map(|id| id.to_string()).as_deref()),
                     size,
                 ]),
                 diff,
@@ -674,7 +671,7 @@ impl CatalogState {
     ) -> Vec<BuiltinTableUpdate> {
         let mut updates = vec![];
         for func_impl_details in func.inner.func_impls() {
-            let arg_ids = func_impl_details
+            let arg_type_ids = func_impl_details
                 .arg_typs
                 .iter()
                 .map(|typ| self.get_entry_in_system_schemas(typ).id().to_string())
@@ -687,10 +684,10 @@ impl CatalogState {
                         lower_bound: 1,
                         length: func_impl_details.arg_typs.len(),
                     }],
-                    arg_ids.iter().map(|id| Datum::String(id)),
+                    arg_type_ids.iter().map(|id| Datum::String(id)),
                 )
                 .unwrap();
-            let arg_ids = row.unpack_first();
+            let arg_type_ids = row.unpack_first();
 
             updates.push(BuiltinTableUpdate {
                 id: self.resolve_builtin_table(&MZ_FUNCTIONS),
@@ -699,7 +696,7 @@ impl CatalogState {
                     Datum::UInt32(func_impl_details.oid),
                     Datum::UInt64(schema_id.into()),
                     Datum::String(name),
-                    arg_ids,
+                    arg_type_ids,
                     Datum::from(
                         func_impl_details
                             .variadic_typ

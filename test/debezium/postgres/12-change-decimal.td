@@ -17,7 +17,7 @@ CREATE TABLE alter_change_decimal (f1 DECIMAL(5,3), f2 INTEGER PRIMARY KEY);
 ALTER TABLE alter_change_decimal REPLICA IDENTITY FULL;
 INSERT INTO alter_change_decimal VALUES (0, 0),(NULL, 1),(12.345, 2);
 
-$ schema-registry-wait-schema schema=postgres.public.alter_change_decimal-value
+$ schema-registry-wait subject=postgres.public.alter_change_decimal-value
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY

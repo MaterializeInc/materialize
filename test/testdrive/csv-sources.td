@@ -182,7 +182,7 @@ $ kafka-create-topic topic=static-csv-pkne-sink partitions=1
   KEY (zip)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 
-$ kafka-verify format=avro sink=materialize.public.static_csv_pkne_sink sort-messages=true
+$ kafka-verify-data format=avro sink=materialize.public.static_csv_pkne_sink sort-messages=true
 {"zip": "10004"} {"city": "New York", "state": "NY", "zip": "10004"}
 {"zip": "14618"} {"city": "Rochester", "state": "NY", "zip": "14618"}
 {"zip": "92679"} {"city": "bad,\nplace\"", "state": "CA", "zip": "92679"}

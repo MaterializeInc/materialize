@@ -73,17 +73,17 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use anyhow::Context;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::StreamExt;
 use itertools::Itertools;
+use mz_ore::retry::Retry;
 use rand::seq::SliceRandom;
 use timely::progress::Timestamp as _;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tracing::{span, Level};
+use tracing::{span, warn, Level};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
@@ -92,9 +92,9 @@ use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
-use mz_ore::stack;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::{stack, task};
 use mz_persist_client::usage::StorageUsageClient;
 use mz_persist_client::ShardId;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
@@ -103,7 +103,7 @@ use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statemen
 use mz_sql::names::Aug;
 use mz_sql::plan::{MutationKind, Params};
 use mz_stash::Append;
-use mz_storage::controller::{CollectionDescription, DataSource};
+use mz_storage::controller::{CollectionDescription, CreateExportToken, DataSource, StorageError};
 use mz_storage::types::connections::ConnectionContext;
 use mz_storage::types::sinks::StorageSinkConnection;
 use mz_storage::types::sources::{IngestionDescription, SourceExport, Timeline};
@@ -215,11 +215,11 @@ pub struct CreateSourceStatementReady {
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct SinkConnectionReady {
-    pub session: Session,
     #[derivative(Debug = "ignore")]
-    pub tx: ClientTransmitter<ExecuteResponse>,
+    pub session_and_tx: Option<(Session, ClientTransmitter<ExecuteResponse>)>,
     pub id: GlobalId,
     pub oid: u32,
+    pub create_export_token: CreateExportToken,
     pub result: Result<StorageSinkConnection, AdapterError>,
 }
 
@@ -584,36 +584,60 @@ impl<S: Append + 'static> Coordinator<S> {
                     self.ship_dataflow(df, mview.compute_instance).await;
                 }
                 CatalogItem::Sink(sink) => {
-                    // Re-create the sink on the compute instance.
+                    // Re-create the sink.
                     let builder = match &sink.connection {
-                        StorageSinkConnectionState::Pending(builder) => builder,
+                        StorageSinkConnectionState::Pending(builder) => builder.clone(),
                         StorageSinkConnectionState::Ready(_) => {
                             panic!("sink already initialized during catalog boot")
                         }
                     };
-                    let connection = mz_storage::sink::build_sink_connection(
-                        builder.clone(),
-                        self.connection_context.clone(),
-                    )
-                    .await
-                    .with_context(|| format!("recreating sink {}", entry.name()))?;
-                    // `builtin_table_updates` is the desired state of the system tables. However,
-                    // it already contains a (cur_sink, +1) entry from [`Catalog::open`]. The line
-                    // below this will negate that entry with a (cur_sink, -1) entry. The
-                    // `handle_sink_connection_ready` call will delete the current sink, create a
-                    // new sink, and send the following appends to STORAGE: (cur_sink, -1),
-                    // (new_sink, +1). Then we add a (new_sink, +1) entry to
-                    // `builtin_table_updates`.
-                    builtin_table_updates.extend(self.catalog.pack_item_update(entry.id(), -1));
-                    self.handle_sink_connection_ready(
-                        entry.id(),
-                        entry.oid(),
-                        connection,
-                        // The sink should be established on a specific compute instance.
-                        None,
-                    )
-                    .await?;
-                    builtin_table_updates.extend(self.catalog.pack_item_update(entry.id(), 1));
+                    // Now we're ready to create the sink connection. Arrange to notify the
+                    // main coordinator thread when the future completes.
+                    let internal_cmd_tx = self.internal_cmd_tx.clone();
+                    let connection_context = self.connection_context.clone();
+                    let id = entry.id();
+                    let oid = entry.oid();
+
+                    let create_export_token = self
+                        .controller
+                        .storage
+                        .prepare_export(id, sink.from)
+                        .await
+                        .unwrap();
+
+                    task::spawn(
+                        || format!("sink_connection_ready:{}", sink.from),
+                        async move {
+                            let conn_result = Retry::default()
+                                .max_tries(usize::MAX)
+                                .clamp_backoff(Duration::from_secs(60 * 10))
+                                .retry_async(|_| async {
+                                    let builder = builder.clone();
+                                    let connection_context = connection_context.clone();
+                                    mz_storage::sink::build_sink_connection(
+                                        builder,
+                                        connection_context,
+                                    )
+                                    .await
+                                })
+                                .await
+                                .map_err(StorageError::from)
+                                .map_err(AdapterError::from);
+                            // It is not an error for sink connections to become ready after `internal_cmd_rx` is dropped.
+                            let result = internal_cmd_tx.send(Message::SinkConnectionReady(
+                                SinkConnectionReady {
+                                    session_and_tx: None,
+                                    id,
+                                    oid,
+                                    create_export_token,
+                                    result: conn_result,
+                                },
+                            ));
+                            if let Err(e) = result {
+                                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                            }
+                        },
+                    );
                 }
                 CatalogItem::StorageManagedTable(coll) => {
                     let collection_desc = CollectionDescription {

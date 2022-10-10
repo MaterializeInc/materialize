@@ -8,15 +8,15 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.65"
-async-compression = { version = "0.3.14", features = ["tokio", "gzip"] }
+async-compression = { version = "0.3.15", features = ["tokio", "gzip"] }
 async-stream = "0.3.3"
 async-trait = "0.1.57"
-aws-config = { version = "0.48.0", default-features = false, features = ["native-tls"] }
-aws-sdk-kinesis = { version = "0.18.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sdk-s3 = { version = "0.18.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sdk-sqs = { version = "0.18.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-smithy-http = "0.48.0"
-aws-types = { version = "0.48.0", features = ["hardcoded-credentials"] }
+aws-config = { version = "0.49.0", default-features = false, features = ["native-tls"] }
+aws-sdk-kinesis = { version = "0.19.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sdk-s3 = { version = "0.19.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sdk-sqs = { version = "0.19.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-smithy-http = "0.49.0"
+aws-types = { version = "0.49.0", features = ["hardcoded-credentials"] }
 bytes = "1.2.1"
 bytesize = "1.1.0"
 chrono = { version = "0.4.22", default-features = false, features = ["std"] }
@@ -24,12 +24,12 @@ crossbeam-channel = { version = "0.5.6" }
 csv-core = { version = "0.1.10" }
 derivative = "2.2.0"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-fail = { version = "0.5.0", features = ["failpoints"] }
+fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.24"
 globset = { version = "0.4.9", features = ["serde1"] }
 http = "0.2.8"
 http-serde = "1.1.2"
-itertools = { version = "0.10.4" }
+itertools = { version = "0.10.5" }
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
@@ -61,27 +61,27 @@ prost = { version = "0.11.0", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = { version = "1.6.0" }
-serde = { version = "1.0.144", features = ["derive"] }
-serde_json = { version = "1.0.85" }
+serde = { version = "1.0.145", features = ["derive"] }
+serde_json = { version = "1.0.86" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.19.2", features = ["fs", "rt", "sync", "test-util"] }
+tokio = { version = "1.20.2", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde"] }
 tokio-stream = "0.1.10"
 tokio-util = { version = "0.7.3", features = ["io"] }
-tonic = "0.8.1"
+tonic = "0.8.2"
 tracing = "0.1.36"
-tracing-subscriber = "0.3.15"
-thiserror = { version = "1.0.35" }
+tracing-subscriber = "0.3.16"
+thiserror = { version = "1.0.37" }
 url = { version = "2.3.1", features = ["serde"] }
-uuid = { version = "1.1.2", features = ["serde", "v4"] }
+uuid = { version = "1.2.1", features = ["serde", "v4"] }
 
 [build-dependencies]
 protobuf-src = "1.1.0"
-tonic-build = "0.8.0"
+tonic-build = "0.8.2"
 
 [dev-dependencies]
-itertools = "0.10.4"
-tokio = { version = "1.19.2", features = ["test-util"] }
+itertools = "0.10.5"
+tokio = { version = "1.20.2", features = ["test-util"] }
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux

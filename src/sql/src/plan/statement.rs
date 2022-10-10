@@ -130,7 +130,6 @@ pub fn describe(
         Statement::CreateTable(stmt) => ddl::describe_create_table(&scx, stmt)?,
         Statement::CreateType(stmt) => ddl::describe_create_type(&scx, stmt)?,
         Statement::CreateView(stmt) => ddl::describe_create_view(&scx, stmt)?,
-        Statement::CreateViews(stmt) => ddl::describe_create_views(&scx, stmt)?,
         Statement::CreateMaterializedView(stmt) => {
             ddl::describe_create_materialized_view(&scx, stmt)?
         }
@@ -271,7 +270,6 @@ pub fn plan(
         Statement::CreateTable(stmt) => ddl::plan_create_table(scx, stmt),
         Statement::CreateType(stmt) => ddl::plan_create_type(scx, stmt),
         Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt, params),
-        Statement::CreateViews(stmt) => ddl::plan_create_views(scx, stmt),
         Statement::CreateMaterializedView(stmt) => {
             ddl::plan_create_materialized_view(scx, stmt, params)
         }

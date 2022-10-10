@@ -39,6 +39,15 @@ pub struct BuiltinCommand {
     pub input: Vec<String>,
 }
 
+impl BuiltinCommand {
+    pub fn assert_no_input(&self) -> Result<(), anyhow::Error> {
+        if !self.input.is_empty() {
+            bail!("{} action does not take input", self.name);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum SqlOutput {
     Full {

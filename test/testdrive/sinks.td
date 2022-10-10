@@ -113,15 +113,15 @@ snk1               kafka  1
 snk2               kafka  1
 snk3               kafka  1
 
-$ kafka-verify format=avro sink=materialize.public.snk1 sort-messages=true
+$ kafka-verify-data format=avro sink=materialize.public.snk1 sort-messages=true
 {"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": [0, 0, 0, 0, 0, 0, 0, 1]}}}
 {"before": null, "after": {"row":{"a": "jack", "b": "jill", "offset": [0, 0, 0, 0, 0, 0, 0, 0]}}}
 
-$ kafka-verify format=avro sink=materialize.public.snk2 sort-messages=true
+$ kafka-verify-data format=avro sink=materialize.public.snk2 sort-messages=true
 {"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": [0, 0, 0, 0, 0, 0, 0, 1]}}}
 {"before": null, "after": {"row":{"a": "jack", "b": "jill", "offset": [0, 0, 0, 0, 0, 0, 0, 0]}}}
 
-$ kafka-verify format=avro sink=materialize.public.snk3 sort-messages=true
+$ kafka-verify-data format=avro sink=materialize.public.snk3 sort-messages=true
 {"before": null, "after": {"row":{"c": "goofusgallant"}}}
 {"before": null, "after": {"row":{"c": "jackjill"}}}
 
@@ -132,7 +132,7 @@ $ kafka-verify format=avro sink=materialize.public.snk3 sort-messages=true
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk2')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-$ kafka-verify format=avro sink=materialize.public.snk_unsigned sort-messages=true
+$ kafka-verify-data format=avro sink=materialize.public.snk_unsigned sort-messages=true
 {"before": null, "after": {"row":{"a": [0, 1], "b": [0, 2], "c": [0, 0, 0, 3], "d": [0, 0, 0, 4], "e": [0, 0, 0, 0, 0, 0, 0, 5], "f": [0, 0, 0, 0, 0, 0, 0, 6]}}}
 
 # Test the case where we have non +/- 1 multiplicities
@@ -145,7 +145,7 @@ $ kafka-verify format=avro sink=materialize.public.snk_unsigned sort-messages=tr
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-$ kafka-verify format=avro sink=materialize.public.snk4
+$ kafka-verify-data format=avro sink=materialize.public.snk4
 {"before": null, "after": {"row":{"c": true}}}
 {"before": null, "after": {"row":{"c": true}}}
 
@@ -171,10 +171,10 @@ $ kafka-verify format=avro sink=materialize.public.snk4
 $ kafka-ingest topic=test format=bytes
 extra,row
 
-$ kafka-verify format=avro sink=materialize.public.snk5
+$ kafka-verify-data format=avro sink=materialize.public.snk5
 {"before": null, "after": {"row":{"a": "extra", "b": "row", "offset": [0, 0, 0, 0, 0, 0, 0, 2]}}}
 
-$ kafka-verify format=avro sink=materialize.public.snk6 sort-messages=true
+$ kafka-verify-data format=avro sink=materialize.public.snk6 sort-messages=true
 {"before": null, "after": {"row":{"a": "extra", "b": "row", "offset": [0, 0, 0, 0, 0, 0, 0, 2]}}}
 {"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": [0, 0, 0, 0, 0, 0, 0, 1]}}}
 {"before": null, "after": {"row":{"a": "jack", "b": "jill", "offset": [0, 0, 0, 0, 0, 0, 0, 0]}}}
@@ -195,7 +195,7 @@ $ kafka-verify format=avro sink=materialize.public.snk6 sort-messages=true
   ENVELOPE DEBEZIUM
   WITH (SNAPSHOT)
 
-$ kafka-verify format=avro sink=materialize.public.snk8 sort-messages=true
+$ kafka-verify-data format=avro sink=materialize.public.snk8 sort-messages=true
 {"before": null, "after": {"row":{"column1": 1}}}
 {"before": null, "after": {"row":{"column1": 2}}}
 {"before": null, "after": {"row":{"column1": 3}}}

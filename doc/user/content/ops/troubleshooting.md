@@ -9,21 +9,18 @@ aliases:
   - /ops/diagnosing-using-sql
 ---
 
-You can use the queries in this page for **spot debugging**, but it may also be
-helpful to monitor their output by using [`SUBSCRIBE`](/sql/subscribe) to capture their change stream:
+This page describes several SQL queries you can run to diagnose performance
+issues with Materialize.
 
-```sql
-COPY (SUBSCRIBE (<troubleshooting_query>)) TO STDOUT;
-```
+{{< warning >}}
+The introspection sources and views used in the queries below are subject to
+future changes without notice.
 
-Note that this additional monitoring may, however, itself affect performance.
+This is why these sources and views are all created in the `mz_internal` schema,
+and why it is not possible to create higher-level views depending on them.
+{{< /warning >}}
 
-### Limitations on Introspection Sources and Views for Troubleshooting
-
-Importantly, the introspection sources and views used in the queries below
-should be considered subject to changes in the future without further notice.
-This is why these sources and views are all created in the `mz_internal`
-schema, and it is not possible to create higher-level views depending on them.
+## Limitations
 
 Introspection sources are maintained by independently collecting internal logging
 information within each of the replicas of a cluster. Thus, in a multi-replica
@@ -37,14 +34,25 @@ Materialize also directly exposes replica-specific introspection sources by
 suffixing the respective catalog relation names with a replica ID that is unique
 across clusters. For example, `mz_internal.mz_compute_frontiers_1` corresponds to
 the introspection source `mz_internal.mz_compute_frontiers` in the replica with
-a unique ID of `1`.
+the unique ID of `1`. A mapping of replica IDs to clusters and replica names is
+provided by the [`mz_cluster_replicas`] system table.
 
 As a consequence of the above, you should expect the answers to the queries below
 to vary dependending on which cluster you are working in. In particular, indexes
 and dataflows are local to a cluster, so their introspection information will
 vary across clusters.
 
-### How fast are my sources loading data?
+It is often useful to monitor changes in the output to the below queries
+via [`SUBSCRIBE`](/sql/subscribe), e.g. via
+`COPY (SUBSCRIBE (<query>)) TO stdout`. Be mindful of the following two caveats:
+
+  * The `SUBSCRIBE` query itself may affect performance.
+  * `SUBSCRIBE` can only be used with replica-specific introspection sources
+    (i.e., the relations that are suffixed with replica IDs). You'll need to
+    rewrite the queries below to use the suffixed relations for the particular
+    replica you wish to target.
+
+## How fast are my sources loading data?
 
 You can count the number of records accepted in a source, materialized view,
 or indexed view. Note that this makes less sense for a non-materialized,
@@ -105,7 +113,7 @@ is useful:
 SELECT * FROM mz_internal.mz_worker_compute_delays;
 ```
 
-### Why is Materialize running so slowly?
+## Why is Materialize running so slowly?
 
 Materialize spends time in various dataflow operators maintaining
 materialized views or indexes. If Materialize is taking more time to update
@@ -169,7 +177,7 @@ GROUP BY mdo.id, mdo.name, mrcod.duration_ns
 ORDER BY mrcod.duration_ns DESC;
 ``` -->
 
-### Why is Materialize using so much memory?
+## Why is Materialize using so much memory?
 
 The majority of Materialize's memory use is taken up by "arrangements", which
 are differential dataflow structures that maintain indexes for data
@@ -211,7 +219,7 @@ displayed by either the visual interface or the SQL queries.
 The memory usage visualization is available at `http://<materialized
 host>:6876/memory`.
 
-### Is work distributed equally across workers?
+## Is work distributed equally across workers?
 
 Work is distributed across workers by the hash of their keys. Thus, work can
 become skewed if situations arise where Materialize needs to use arrangements
@@ -257,7 +265,7 @@ WHERE
 ORDER BY ratio DESC;
 ```
 
-### I found a problematic operator. Where did it come from?
+## I found a problematic operator. Where did it come from?
 
 Look up the operator in `mz_dataflow_addresses`. If an operator has
 value `x` at position `n`, then it is part of the `x` subregion of the region
@@ -309,7 +317,7 @@ WHERE
     AND mdo.worker_id = 0;
 ```
 
-### How many `SUBSCRIBE` processes are running?
+## How many `SUBSCRIBE` processes are running?
 
 Materialize creates a dataflow using the `Dataflow: subscribe` prefix with a unique identifier **for each subscription running**.
 Query the number of active `SUBSCRIBE` dataflows in Materialize by using the following statement:
@@ -322,3 +330,5 @@ SELECT count(1) FROM (
     GROUP BY id
 );
 ```
+
+[`mz_cluster_replicas`]: /sql/system-catalog/mz_catalog/#mz_cluster_replicas

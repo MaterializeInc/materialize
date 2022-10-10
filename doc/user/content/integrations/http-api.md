@@ -119,13 +119,21 @@ an array of the following:
 
 Result | JSON value
 ---------------------|------------
-Rows | `{"rows": <2D array of JSON-ified results>, "col_names": <array of text>}`
-Error | `{"error": <Error string from execution>}`
-Ok | `{ "ok": <tag>}`
+Rows | `{"rows": <2D array of JSON-ified results>, "col_names": <array of text>, "notices": <array of notices>}`
+Error | `{"error": <Error string from execution>, "notices": <array of notices>}`
+Ok | `{"ok": <tag>, "notices": <array of notices>}`
 
 Each committed statement returns exactly one of these values; e.g. in the case
 of "complex responses", such as `INSERT INTO...RETURNING`, the presence of a
 `"rows"` object implies `"ok"`.
+
+The `"notices"` array is present in all types of results and contains any
+diagnostic messages that were generated during execution of the query. It has
+the following structure:
+
+```
+{"severity": <"warning"|"notice"|"debug"|"info"|"log">, "message": <informational message>}
+```
 
 Note that the returned values include the results of statements which were
 ultimately rolled back because of an error in a later part of the transaction.
@@ -154,14 +162,14 @@ curl https://<MZ host address>/api/sql \
 ```json
 {
   "results": [
-    {"ok": "CREATE TABLE"},
-    {"ok": "CREATE TABLE"},
-    {"ok": "BEGIN"},
-    {"ok": "INSERT 0 2"},
-    {"ok": "COMMIT"},
-    {"ok": "BEGIN"},
-    {"ok": "INSERT 0 2"},
-    {"ok": "COMMIT"}
+    {"ok": "CREATE TABLE", "notices": []},
+    {"ok": "CREATE TABLE", "notices": []},
+    {"ok": "BEGIN", "notices": []},
+    {"ok": "INSERT 0 2", "notices": []},
+    {"ok": "COMMIT", "notices": []},
+    {"ok": "BEGIN", "notices": []},
+    {"ok": "INSERT 0 2", "notices": []},
+    {"ok": "COMMIT", "notices": []}
   ]
 }
 ```
@@ -178,12 +186,14 @@ curl https://<MZ host address>/api/sql \
 {
   "results": [
     {
-      "rows": [[null],[null],[109],[209]],
-      "col_names": ["cross_add"]
+        "rows": [[null],[null],[109],[209]],
+        "col_names": ["cross_add"],
+        "notices": []
     },
     {
         "rows":[[100],[200]],
-        "col_names":["a"]
+        "col_names":["a"],
+        "notices": []
     }
   ]
 }

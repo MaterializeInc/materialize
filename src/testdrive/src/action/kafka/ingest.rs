@@ -29,22 +29,6 @@ use crate::parser::BuiltinCommand;
 
 const INGEST_BATCH_SIZE: isize = 10000;
 
-pub struct IngestAction {
-    topic_prefix: String,
-    partition: Option<i32>,
-    format: Format,
-    key_format: Option<Format>,
-    timestamp: Option<i64>,
-    rows: Vec<String>,
-    start_iteration: isize,
-    repeat: isize,
-    headers: Option<Vec<(String, Option<String>)>>,
-    omit_key: bool,
-    omit_value: bool,
-    key_schema_id_var: Option<String>,
-    schema_id_var: Option<String>,
-}
-
 #[derive(Clone)]
 enum Format {
     Avro {
@@ -179,14 +163,9 @@ impl Transcoder {
 }
 
 pub async fn run_ingest(
-    cmd: BuiltinCommand,
+    mut cmd: BuiltinCommand,
     state: &mut State,
 ) -> Result<ControlFlow, anyhow::Error> {
-    let ingest_action = build_ingest_action(cmd)?;
-    run_ingest_action(ingest_action, state).await
-}
-
-pub fn build_ingest_action(mut cmd: BuiltinCommand) -> Result<IngestAction, anyhow::Error> {
     let topic_prefix = format!("testdrive-{}", cmd.args.string("topic")?);
     let partition = cmd.args.opt_parse::<i32>("partition")?;
     let start_iteration = cmd.args.opt_parse::<isize>("start-iteration")?.unwrap_or(0);
@@ -313,31 +292,10 @@ pub fn build_ingest_action(mut cmd: BuiltinCommand) -> Result<IngestAction, anyh
         }
     }
 
-    Ok(IngestAction {
-        topic_prefix,
-        partition,
-        format,
-        key_format,
-        timestamp,
-        rows: cmd.input,
-        start_iteration,
-        repeat,
-        headers,
-        omit_key,
-        omit_value,
-        schema_id_var,
-        key_schema_id_var,
-    })
-}
-
-pub async fn run_ingest_action(
-    action: IngestAction,
-    state: &mut State,
-) -> Result<ControlFlow, anyhow::Error> {
-    let topic_name = &format!("{}-{}", action.topic_prefix, state.seed);
+    let topic_name = &format!("{}-{}", topic_prefix, state.seed);
     println!(
         "Ingesting data into Kafka topic {} with repeat {}",
-        topic_name, action.repeat
+        topic_name, repeat
     );
 
     let set_schema_id_var = |state: &mut State, schema_id_var, transcoder| match transcoder {
@@ -347,21 +305,17 @@ pub async fn run_ingest_action(
         _ => (),
     };
 
-    let value_transcoder = make_transcoder(
-        state,
-        action.format.clone(),
-        format!("{}-value", topic_name),
-    )
-    .await?;
-    if let Some(var) = action.schema_id_var {
+    let value_transcoder =
+        make_transcoder(state, format.clone(), format!("{}-value", topic_name)).await?;
+    if let Some(var) = schema_id_var {
         set_schema_id_var(state, var, &value_transcoder);
     }
 
-    let key_transcoder = match action.key_format.clone() {
+    let key_transcoder = match key_format.clone() {
         None => None,
         Some(f) => {
             let transcoder = make_transcoder(state, f, format!("{}-key", topic_name)).await?;
-            if let Some(var) = action.key_schema_id_var {
+            if let Some(var) = key_schema_id_var {
                 set_schema_id_var(state, var, &transcoder);
             }
             Some(transcoder)
@@ -370,8 +324,8 @@ pub async fn run_ingest_action(
 
     let mut futs = FuturesUnordered::new();
 
-    for iteration in action.start_iteration..(action.start_iteration + action.repeat) {
-        let iter = &mut action.rows.iter().peekable();
+    for iteration in start_iteration..(start_iteration + repeat) {
+        let iter = &mut cmd.input.iter().peekable();
 
         for row in iter {
             let row = action::substitute_vars(
@@ -381,12 +335,12 @@ pub async fn run_ingest_action(
                 false,
             )?;
             let mut row = row.as_bytes();
-            let key = match (action.omit_key, &key_transcoder) {
+            let key = match (omit_key, &key_transcoder) {
                 (true, _) => None,
                 (false, None) => None,
                 (false, Some(kt)) => kt.transcode(&mut row)?,
             };
-            let value = if action.omit_value {
+            let value = if omit_value {
                 None
             } else {
                 value_transcoder
@@ -395,11 +349,11 @@ pub async fn run_ingest_action(
             };
             let producer = &state.kafka_producer;
             let timeout = cmp::max(state.default_timeout, Duration::from_secs(1));
-            let headers = action.headers.clone();
+            let headers = headers.clone();
             futs.push(async move {
                 let mut record: FutureRecord<_, _> = FutureRecord::to(topic_name);
 
-                if let Some(partition) = action.partition {
+                if let Some(partition) = partition {
                     record = record.partition(partition);
                 }
                 if let Some(key) = &key {
@@ -408,7 +362,7 @@ pub async fn run_ingest_action(
                 if let Some(value) = &value {
                     record = record.payload(value);
                 }
-                if let Some(timestamp) = action.timestamp {
+                if let Some(timestamp) = timestamp {
                     record = record.timestamp(timestamp);
                 }
                 if let Some(headers) = headers {
@@ -426,9 +380,7 @@ pub async fn run_ingest_action(
         }
 
         // Reap the futures thus produced periodically or after the last iteration
-        if iteration % INGEST_BATCH_SIZE == 0
-            || iteration == (action.start_iteration + action.repeat - 1)
-        {
+        if iteration % INGEST_BATCH_SIZE == 0 || iteration == (start_iteration + repeat - 1) {
             while let Some(res) = futs.next().await {
                 res.map_err(|(e, _message)| e)?;
             }

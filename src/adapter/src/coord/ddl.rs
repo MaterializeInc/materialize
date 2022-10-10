@@ -26,7 +26,7 @@ use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::ResolvedDatabaseSpecifier;
 use mz_stash::Append;
-use mz_storage::controller::ExportDescription;
+use mz_storage::controller::{CreateExportToken, ExportDescription};
 use mz_storage::types::sinks::{SinkAsOf, StorageSinkConnection};
 use mz_storage::types::sources::{PostgresSourceConnection, SourceConnection, Timeline};
 
@@ -397,7 +397,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn create_storage_export(
         &mut self,
-        id: GlobalId,
+        create_export_token: CreateExportToken,
         sink: &Sink,
         connection: StorageSinkConnection,
     ) -> Result<(), AdapterError> {
@@ -437,7 +437,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .controller
             .storage
             .create_exports(vec![(
-                id,
+                create_export_token,
                 ExportDescription {
                     sink: storage_sink_desc,
                     host_config: sink.host_config.clone(),
@@ -451,6 +451,7 @@ impl<S: Append + 'static> Coordinator<S> {
         id: GlobalId,
         oid: u32,
         connection: StorageSinkConnection,
+        create_export_token: CreateExportToken,
         session: Option<&Session>,
     ) -> Result<(), AdapterError> {
         // Update catalog entry with sink connection.
@@ -465,33 +466,42 @@ impl<S: Append + 'static> Coordinator<S> {
             ..sink.clone()
         };
 
-        let ops = vec![
-            catalog::Op::DropItem(id),
-            catalog::Op::CreateItem {
-                id,
-                oid,
-                name,
-                item: CatalogItem::Sink(sink.clone()),
-            },
-        ];
+        // We always need to drop the already existing item: either because we fail to create it or we're replacing it.
+        let mut ops = vec![catalog::Op::DropItem(id)];
 
-        let () = self.catalog_transact(session, ops, move |_| Ok(())).await?;
-        // TODO(#14220): should this happen in the same task where we build the connection?  Or should it need to happen
-        // after we update the catalog?
-        match self.create_storage_export(id, &sink, connection).await {
-            Ok(()) => Ok(()),
-            Err(storage_error) =>
-            // TODO: catalog_transact that can take async function to actually make the `CreateItem` above transactional.
-            {
-                match self
-                    .catalog_transact(session, vec![catalog::Op::DropItem(id)], move |_| Ok(()))
-                    .await
-                {
-                    Ok(()) => Err(storage_error),
-                    Err(e) => Err(e),
+        // Speculatively create the storage export before confirming in the catalog.  We chose this order of operations
+        // for the following reasons:
+        // - We want to avoid ever putting into the catalog a sink in `StorageSinkConnectionState::Ready`
+        //   if we're not able to actually create the sink for some reason
+        // - Dropping the sink will either succeed (or panic) so it's easier to reason about rolling that change back
+        //   than it is rolling back a catalog change.
+        match self
+            .create_storage_export(create_export_token, &sink, connection)
+            .await
+        {
+            Ok(()) => {
+                ops.push(catalog::Op::CreateItem {
+                    id,
+                    oid,
+                    name,
+                    item: CatalogItem::Sink(sink.clone()),
+                });
+                match self.catalog_transact(session, ops, move |_| Ok(())).await {
+                    Ok(()) => (),
+                    catalog_err @ Err(_) => {
+                        let () = self.drop_storage_sinks(vec![id]).await;
+                        catalog_err?
+                    }
                 }
             }
-        }
+            storage_err @ Err(_) => {
+                match self.catalog_transact(session, ops, move |_| Ok(())).await {
+                    Ok(()) => storage_err?,
+                    catalog_err @ Err(_) => catalog_err?,
+                }
+            }
+        };
+        Ok(())
     }
 
     /// Validate all resource limits in a catalog transaction and return an error if that limit is

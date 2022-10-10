@@ -47,7 +47,7 @@ class DebeziumPostgres(Check):
                   }
                 }
 
-                $ schema-registry-wait-schema schema=postgres.public.debezium_table-value
+                $ schema-registry-wait subject=postgres.public.debezium_table-value
 
                 > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
 

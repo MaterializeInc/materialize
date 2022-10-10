@@ -403,7 +403,15 @@ impl CatalogState {
                 },
                 item: format!("{}_{}", log.name, replica_id),
             };
-            self.insert_item(*source_id, oid, source_name, CatalogItem::Log(log));
+            self.insert_item(
+                *source_id,
+                oid,
+                source_name,
+                CatalogItem::Log(Log {
+                    variant: variant.clone(),
+                    has_storage_collection: true,
+                }),
+            );
         }
 
         for (logview, id) in &logging.views {
@@ -1325,7 +1333,7 @@ pub struct CatalogEntry {
 pub enum CatalogItem {
     Table(Table),
     Source(Source),
-    Log(&'static BuiltinLog),
+    Log(Log),
     View(View),
     MaterializedView(MaterializedView),
     Sink(Sink),
@@ -1373,8 +1381,14 @@ pub struct Source {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct Log {
+    pub variant: LogVariant,
+    /// Whether the log is backed by a storage collection.
+    pub has_storage_collection: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct Ingestion {
-    pub connection_id: Option<GlobalId>,
     // TODO(benesch): this field contains connection information that could be
     // derived from the connection ID. Too hard to fix at the moment.
     pub desc: SourceDesc,
@@ -1391,7 +1405,6 @@ pub struct Ingestion {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connection_id: Option<GlobalId>,
     // TODO(benesch): this field duplicates information that could be derived
     // from the connection ID. Too hard to fix at the moment.
     pub connection: StorageSinkConnectionState,
@@ -1399,6 +1412,15 @@ pub struct Sink {
     pub with_snapshot: bool,
     pub depends_on: Vec<GlobalId>,
     pub host_config: StorageHostConfig,
+}
+
+impl Sink {
+    pub fn connection_id(&self) -> Option<GlobalId> {
+        match &self.connection {
+            StorageSinkConnectionState::Pending(pending) => pending.connection_id(),
+            StorageSinkConnectionState::Ready(ready) => ready.connection_id(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1626,7 +1648,7 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Table(i))
             }
-            CatalogItem::Log(i) => Ok(CatalogItem::Log(i)),
+            CatalogItem::Log(i) => Ok(CatalogItem::Log(i.clone())),
             CatalogItem::Source(i) => {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql)?;
@@ -2060,9 +2082,15 @@ impl<S: Append> Catalog<S> {
             match builtin {
                 Builtin::Log(log) => {
                     let oid = catalog.allocate_oid()?;
-                    catalog
-                        .state
-                        .insert_item(id, oid, name.clone(), CatalogItem::Log(log));
+                    catalog.state.insert_item(
+                        id,
+                        oid,
+                        name.clone(),
+                        CatalogItem::Log(Log {
+                            variant: log.variant.clone(),
+                            has_storage_collection: false,
+                        }),
+                    );
                 }
 
                 Builtin::Table(table) => {
@@ -4054,18 +4082,15 @@ impl<S: Append> Catalog<S> {
                     new_public_keypair,
                 } => {
                     let entry = state.get_entry(&id);
-                    let name = &entry.name().item;
                     // Retract old keys
                     builtin_table_updates.extend(state.pack_ssh_tunnel_connection_update(
                         id,
-                        name,
                         &previous_public_keypair,
                         -1,
                     ));
-                    // Assert the new rotated keys
+                    // Insert the new rotated keys
                     builtin_table_updates.extend(state.pack_ssh_tunnel_connection_update(
                         id,
-                        name,
                         &new_public_keypair,
                         1,
                     ));
@@ -4417,7 +4442,6 @@ impl<S: Append> Catalog<S> {
             }) => CatalogItem::Source(Source {
                 create_sql: source.create_sql,
                 ingestion: source.ingestion.map(|ingestion| Ingestion {
-                    connection_id: ingestion.connection_id,
                     desc: ingestion.desc,
                     source_imports: ingestion.source_imports,
                     subsource_exports: ingestion.subsource_exports,
@@ -4469,7 +4493,6 @@ impl<S: Append> Catalog<S> {
             }) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
                 from: sink.from,
-                connection_id: sink.connection_id,
                 connection: StorageSinkConnectionState::Pending(sink.connection_builder),
                 envelope: sink.envelope,
                 with_snapshot,
