@@ -31,8 +31,6 @@ use crate::types::sources::SourceData;
 pub struct Healthchecker {
     /// Name of the source (e.g. kafka-s1)
     source_name: String,
-    /// Name of the upstream resource, if any (e.g. Kafka topic, file path)
-    upstream_name: Option<String>,
     /// Internal ID of the source (e.g. s1)
     source_id: GlobalId,
     /// Type of the source, from SourceConnection::name
@@ -60,7 +58,6 @@ pub struct Healthchecker {
 impl Healthchecker {
     pub async fn new(
         source_name: String,
-        upstream_name: Option<String>,
         source_id: GlobalId,
         source_type: &'static str,
         worker_id: usize,
@@ -99,7 +96,6 @@ impl Healthchecker {
             source_type,
             source_name,
             source_id,
-            upstream_name,
             current_status: SourceStatus::Starting,
             active,
             upper: Antichain::from_elem(Timestamp::minimum()),
@@ -265,7 +261,6 @@ impl Healthchecker {
         let source_name = Datum::String(&self.source_name);
         let source_id = Datum::String(&source_id);
         let source_type: Datum = self.source_type.into();
-        let upstream_name: Datum = self.upstream_name.as_deref().into();
         let worker_id =
             Datum::Int64(i64::try_from(self.worker_id).expect("worker_id does not fit into i64"));
         let worker_count = Datum::Int64(
@@ -279,7 +274,6 @@ impl Healthchecker {
             source_name,
             source_id,
             source_type,
-            upstream_name,
             worker_id,
             worker_count,
             status,
@@ -688,7 +682,6 @@ mod tests {
         source_name: String,
         source_id: GlobalId,
         source_type: &'static str,
-        upstream_name: Option<String>,
         worker_id: usize,
         worker_count: usize,
         active: bool,
@@ -706,7 +699,6 @@ mod tests {
 
         Healthchecker::new(
             source_name,
-            upstream_name,
             source_id,
             source_type,
             worker_id,
@@ -729,8 +721,6 @@ mod tests {
             status_shard_id,
             "source".to_string(),
             GlobalId::User(source_id),
-            "kafka",
-            Some("sample-topic".to_string()),
             1,
             1,
             true,

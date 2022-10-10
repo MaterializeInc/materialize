@@ -88,9 +88,6 @@ const YIELD_INTERVAL: Duration = Duration::from_millis(10);
 pub struct RawSourceCreationConfig {
     /// The name to attach to the underlying timely operator.
     pub name: String,
-    /// The name of the upstream resource this source corresponds to
-    /// (For example, a Kafka topic)
-    pub upstream_name: Option<String>,
     /// The ID of this instantiation of this source.
     pub id: GlobalId,
     /// The number of expected outputs from this ingestion
@@ -243,7 +240,6 @@ where
 {
     let RawSourceCreationConfig {
         name,
-        upstream_name,
         id,
         num_outputs: _,
         worker_id,
@@ -260,7 +256,6 @@ where
         let mut healthchecker = if storage_metadata.status_shard.is_some() {
             match Healthchecker::new(
                 name.clone(),
-                upstream_name,
                 id,
                 source_connection.name(),
                 worker_id,
@@ -465,7 +460,6 @@ where
     let sub_config = config.clone();
     let RawSourceCreationConfig {
         name,
-        upstream_name: _,
         id,
         num_outputs: _,
         worker_id,
@@ -783,7 +777,6 @@ where
 {
     let RawSourceCreationConfig {
         name,
-        upstream_name: _,
         id,
         num_outputs: _,
         worker_id,
@@ -1049,7 +1042,6 @@ where
 {
     let RawSourceCreationConfig {
         name,
-        upstream_name,
         id,
         num_outputs,
         worker_id,
@@ -1084,7 +1076,7 @@ where
     reclock_op.build(move |mut capabilities| {
         capabilities.clear();
 
-        let metrics_name = upstream_name.clone().unwrap_or_else(|| name.clone());
+        let metrics_name = name.clone();
         let mut source_metrics =
             SourceMetrics::new(&base_metrics, &metrics_name, id, &worker_id.to_string());
 
