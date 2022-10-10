@@ -42,7 +42,6 @@ use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::Mutex;
 use tokio_stream::StreamMap;
-use tracing::debug;
 
 use mz_build_info::BuildInfo;
 use mz_orchestrator::NamespacedOrchestrator;
@@ -825,6 +824,9 @@ where
 
         let mut durable_metadata = METADATA_COLLECTION.peek_one(&mut self.state.stash).await?;
 
+        // Open persist clients for the created collections concurrently, to minimize the time
+        // spent waiting for persist.
+        let mut futs = futures::stream::FuturesUnordered::new();
         for (id, description) in collections {
             let collection_shards = durable_metadata.remove(&id).expect("inserted above");
             let status_shard = if let Some(status_collection_id) = description.status_collection_id
@@ -846,31 +848,25 @@ where
                 status_shard,
             };
 
-            // should be replaced with real introspection (https://github.com/MaterializeInc/materialize/issues/14266)
-            // but for now, it's helpful to have this mapping written down somewhere
-            debug!(
-                "mapping GlobalId={} to remap shard ({}), data shard ({}), status shard ({:?})",
-                id, metadata.remap_shard, metadata.data_shard, status_shard
-            );
+            let persist = Arc::clone(&self.persist);
+            let persist_location = self.persist_location.clone();
+            futs.push(async move {
+                let persist_client = persist.lock().await.open(persist_location).await.unwrap();
+                let (write, mut read) = persist_client
+                    .open(metadata.data_shard)
+                    .await
+                    .expect("invalid persist usage");
 
-            let persist_client = self
-                .persist
-                .lock()
-                .await
-                .open(self.persist_location.clone())
-                .await
-                .unwrap();
+                // Advance the collection's `since` as requested.
+                if let Some(since) = &description.since {
+                    read.downgrade_since(since).await;
+                }
 
-            let (write, mut read) = persist_client
-                .open(metadata.data_shard)
-                .await
-                .expect("invalid persist usage");
+                (id, description, metadata, write, read)
+            });
+        }
 
-            // Advance the collection's `since` as requested.
-            if let Some(since) = &description.since {
-                read.downgrade_since(since).await;
-            }
-
+        while let Some((id, description, metadata, write, read)) = futs.next().await {
             let collection_state = CollectionState::new(
                 description.clone(),
                 read.since().clone(),
