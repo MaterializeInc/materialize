@@ -707,7 +707,7 @@ pub fn plan_create_source(
             for (i, (name, _)) in generator.views().iter().enumerate() {
                 let name = FullObjectName {
                     database: RawDatabaseSpecifier::Name("mz_loadgenerator".to_owned()),
-                    schema: "public".to_owned(),
+                    schema: "auction".to_owned(),
                     item: name.to_string(),
                 };
                 // The zero-th output is the main output
