@@ -14,11 +14,14 @@ from materialize.mzcompose import Composition
 from materialize.zippy.debezium_capabilities import DebeziumSourceExists
 from materialize.zippy.framework import Action, Capabilities, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
+from materialize.zippy.pg_cdc_capabilities import PostgresCdcTableExists
 from materialize.zippy.source_capabilities import SourceExists
 from materialize.zippy.table_capabilities import TableExists
 from materialize.zippy.view_capabilities import ViewExists
 
-WatermarkedObjects = List[Union[TableExists, SourceExists, DebeziumSourceExists]]
+WatermarkedObjects = List[
+    Union[TableExists, SourceExists, DebeziumSourceExists, PostgresCdcTableExists]
+]
 
 
 class CreateView(Action):
@@ -30,6 +33,7 @@ class CreateView(Action):
             {MzIsRunning, SourceExists},
             {MzIsRunning, TableExists},
             {MzIsRunning, DebeziumSourceExists},
+            {MzIsRunning, PostgresCdcTableExists},
         ]
 
     def __init__(self, capabilities: Capabilities) -> None:
@@ -48,8 +52,9 @@ class CreateView(Action):
             debezium_sources: WatermarkedObjects = capabilities.get(
                 DebeziumSourceExists
             )
+            pg_cdc_tables: WatermarkedObjects = capabilities.get(PostgresCdcTableExists)
 
-            potential_froms = sources + tables + debezium_sources
+            potential_froms = sources + tables + debezium_sources + pg_cdc_tables
             this_view.froms = random.sample(
                 potential_froms, min(len(potential_froms), random.randint(1, 5))
             )

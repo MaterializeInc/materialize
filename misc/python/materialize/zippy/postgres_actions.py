@@ -25,6 +25,7 @@ class PostgresStart(Action):
 
     def run(self, c: Composition) -> None:
         c.start_and_wait_for_tcp(services=["postgres"])
+        c.wait_for_postgres()
 
 
 class PostgresStop(Action):
@@ -39,6 +40,15 @@ class PostgresStop(Action):
 
     def run(self, c: Composition) -> None:
         c.kill("postgres")
+
+
+class PostgresRestart(Action):
+    """Restart the Postgres instance."""
+
+    def run(self, c: Composition) -> None:
+        c.kill("postgres")
+        c.start_and_wait_for_tcp(services=["postgres"])
+        c.wait_for_postgres()
 
 
 class CreatePostgresTable(Action):
