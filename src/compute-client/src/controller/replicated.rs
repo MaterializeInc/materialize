@@ -641,11 +641,11 @@ where
             }
         }
 
-        // Start tracking frontiers of persisted log collections.
+        // Start tracking frontiers of log collections.
         if let Some(logging) = &replica_state.logging_config {
-            for (id, _) in logging.sink_logs.values() {
+            for id in logging.log_identifiers() {
                 let frontier = Antichain::from_elem(Timestamp::minimum());
-                let previous = self.state.log_uppers.insert(*id, frontier);
+                let previous = self.state.log_uppers.insert(id, frontier);
                 assert!(previous.is_none());
             }
         }
