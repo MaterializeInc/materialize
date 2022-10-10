@@ -63,7 +63,7 @@ use mz_storage::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage::types::sources::{IngestionDescription, SourceExport};
 
 use crate::catalog::{
-    self, Catalog, CatalogItem, ComputeInstance, Connection, DataSourceDesc,
+    self, Catalog, CatalogItem, ComputeInstance, Connection, DataSourceDesc, Ingestion,
     SerializedComputeReplicaLocation, StorageSinkConnectionState, SYSTEM_USER,
 };
 use crate::command::{Command, ExecuteResponse};
@@ -459,27 +459,33 @@ impl<S: Append + 'static> Coordinator<S> {
 
         for (source_id, plan, depends_on) in plans {
             let source_oid = self.catalog.allocate_oid()?;
-            // Only subsources can have an undefined size outside of unsafe
-            // mode.
-            let allow_undefined_size =
-                self.catalog.config().unsafe_mode || plan.source.ingestion.is_none();
-            let host_config = self
-                .catalog
-                .resolve_storage_host_config(plan.host_config, allow_undefined_size)?;
             let source = catalog::Source {
                 create_sql: plan.source.create_sql,
                 data_source: match plan.source.ingestion {
-                    Some(ingestion) => DataSourceDesc::Ingestion(catalog::Ingestion {
-                        desc: ingestion.desc,
-                        source_imports: ingestion.source_imports,
-                        subsource_exports: ingestion.subsource_exports,
-                    }),
-                    None => DataSourceDesc::Source,
+                    Some(ingestion) => {
+                        let host_config = self.catalog.resolve_storage_host_config(
+                            plan.host_config,
+                            // Undefined sizes permitted in unsafe mode
+                            self.catalog.config().unsafe_mode,
+                        )?;
+                        DataSourceDesc::Ingestion(catalog::Ingestion {
+                            desc: ingestion.desc,
+                            source_imports: ingestion.source_imports,
+                            subsource_exports: ingestion.subsource_exports,
+                            host_config,
+                        })
+                    }
+                    None => {
+                        assert!(
+                            matches!(plan.host_config, mz_sql::plan::StorageHostConfig::Undefined),
+                            "subsources must not have a host config defined"
+                        );
+                        DataSourceDesc::Source
+                    }
                 },
                 desc: plan.source.desc,
                 timeline: plan.timeline,
                 depends_on,
-                host_config: Some(host_config),
             };
             ops.push(catalog::Op::CreateItem {
                 id: source_id,
@@ -533,6 +539,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 ingestion_metadata: (),
                                 source_imports,
                                 source_exports,
+                                host_config: ingestion.host_config,
                             })
                         }
                         DataSourceDesc::Source => DataSource::Source,
@@ -540,11 +547,6 @@ impl<S: Append + 'static> Coordinator<S> {
                             unreachable!("cannot create sources with introspection data sources")
                         }
                     };
-
-                    assert!(
-                        source.host_config.is_some(),
-                        "cannot create sources without host config; only introspection sources may elide this field"
-                    );
 
                     self.controller
                         .storage
@@ -555,7 +557,6 @@ impl<S: Append + 'static> Coordinator<S> {
                                 data_source,
                                 since: None,
                                 status_collection_id,
-                                host_config: source.host_config,
                             },
                         )])
                         .await
@@ -1501,7 +1502,6 @@ impl<S: Append + 'static> Coordinator<S> {
                             data_source: DataSource::Dataflow,
                             since: Some(as_of),
                             status_collection_id: None,
-                            host_config: None,
                         },
                     )])
                     .await
@@ -3360,17 +3360,14 @@ impl<S: Append + 'static> Coordinator<S> {
         let updated_source = entry.source().ok_or_else(|| {
             CatalogError::UnexpectedType(entry.name().to_string(), CatalogItemType::Source)
         })?;
-
-        self.controller
-            .storage
-            .alter_collections(vec![(
-                id,
-                updated_source
-                    .host_config
-                    .clone()
-                    .expect("cannot alter introspection sources"),
-            )])
-            .await?;
+        if let DataSourceDesc::Ingestion(Ingestion { host_config, .. }) =
+            &updated_source.data_source
+        {
+            self.controller
+                .storage
+                .alter_collections(vec![(id, host_config.clone())])
+                .await?;
+        }
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Source))
     }

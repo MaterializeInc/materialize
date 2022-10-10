@@ -11,6 +11,10 @@
 
 use std::num::NonZeroUsize;
 
+use proptest::prelude::any;
+use proptest::prelude::Arbitrary;
+use proptest::strategy::BoxedStrategy;
+use proptest::strategy::Strategy;
 use serde::{Deserialize, Serialize};
 
 use mz_orchestrator::{CpuLimit, MemoryLimit};
@@ -107,6 +111,17 @@ impl RustType<ProtoStorageHostConfig> for StorageHostConfig {
                 }
             },
         )
+    }
+}
+
+impl Arbitrary for StorageHostConfig {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (any::<String>())
+            .prop_map(|addr| Self::Remote { addr })
+            .boxed()
     }
 }
 

@@ -21,6 +21,7 @@ import "storage/src/controller.proto";
 import "storage/src/types/connections.proto";
 import "storage/src/types/connections/aws.proto";
 import "storage/src/types/errors.proto";
+import "storage/src/types/hosts.proto";
 import "storage/src/types/sources/encoding.proto";
 import "expr/src/scalar.proto";
 
@@ -252,4 +253,5 @@ message ProtoIngestionDescription {
     repeated ProtoSourceExport source_exports = 2;
     mz_storage.controller.ProtoCollectionMetadata ingestion_metadata = 3;
     ProtoSourceDesc desc = 4;
+    mz_storage.types.hosts.ProtoStorageHostConfig host_config = 5;
 }

@@ -25,6 +25,7 @@ use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage::types::connections::KafkaConnection;
+use mz_storage::types::hosts::StorageHostConfig;
 use mz_storage::types::sinks::{KafkaSinkConnection, StorageSinkConnection};
 
 use crate::catalog::builtin::{
@@ -41,7 +42,7 @@ use crate::catalog::{
 };
 use crate::coord::ReplicaMetadata;
 
-use super::DataSourceDesc;
+use super::{DataSourceDesc, Ingestion};
 
 /// An update to a built-in table.
 #[derive(Debug)]
@@ -218,12 +219,13 @@ impl CatalogState {
                     name,
                     source_type,
                     connection_id,
-                    source
-                        .host_config
-                        .as_ref()
-                        .as_ref()
-                        .map(|config| config.size())
-                        .flatten(),
+                    match &source.data_source {
+                        DataSourceDesc::Ingestion(Ingestion {
+                            host_config: StorageHostConfig::Managed { size, .. },
+                            ..
+                        }) => Some(size.as_str()),
+                        _ => None,
+                    },
                     diff,
                 )
             }

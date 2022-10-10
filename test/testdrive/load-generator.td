@@ -10,12 +10,12 @@
 > CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
 > SHOW SOURCES
-accounts      subsource      1
+accounts      subsource      <null>
 auction_house load-generator 1
-auctions      subsource      1
-bids          subsource      1
-organizations subsource      1
-users         subsource      1
+auctions      subsource      <null>
+bids          subsource      <null>
+organizations subsource      <null>
+users         subsource      <null>
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';

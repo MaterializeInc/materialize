@@ -39,6 +39,7 @@ use crate::source::generator::as_generator;
 use crate::types::connections::aws::AwsConfig;
 use crate::types::connections::{KafkaConnection, PostgresConnection, StringOrSecret};
 use crate::types::errors::DataflowError;
+use crate::types::hosts::StorageHostConfig;
 
 use self::encoding::{DataEncoding, DataEncodingInner, SourceDataEncoding};
 use proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
@@ -59,6 +60,8 @@ pub struct IngestionDescription<S = ()> {
     pub ingestion_metadata: S,
     /// Collections to be exported by this ingestion.
     pub source_exports: BTreeMap<GlobalId, SourceExport<S>>,
+    /// The address of a `storaged` process on which to install the source.
+    pub host_config: StorageHostConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -161,13 +164,15 @@ where
             proptest::collection::btree_map(any::<GlobalId>(), any::<SourceExport<S>>(), 1..4)
                 .boxed(),
             any::<S>().boxed(),
+            any::<StorageHostConfig>().boxed(),
         )
             .prop_map(
-                |(desc, source_imports, source_exports, ingestion_metadata)| Self {
+                |(desc, source_imports, source_exports, ingestion_metadata, host_config)| Self {
                     desc,
                     source_imports,
                     source_exports,
                     ingestion_metadata,
+                    host_config,
                 },
             )
             .boxed()
@@ -181,6 +186,7 @@ impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMeta
             source_exports: self.source_exports.into_proto(),
             ingestion_metadata: Some(self.ingestion_metadata.into_proto()),
             desc: Some(self.desc.into_proto()),
+            host_config: Some(self.host_config.into_proto()),
         }
     }
 
@@ -194,6 +200,9 @@ impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMeta
             ingestion_metadata: proto
                 .ingestion_metadata
                 .into_rust_if_some("ProtoIngestionDescription::ingestion_metadata")?,
+            host_config: proto
+                .host_config
+                .into_rust_if_some("ProtoIngestionDescription::host_config")?,
         })
     }
 }
