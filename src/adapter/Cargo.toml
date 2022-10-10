@@ -17,7 +17,7 @@ differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-
 enum-kinds = "0.5.1"
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.24"
-itertools = "0.10.4"
+itertools = "0.10.5"
 once_cell = "1.14.0"
 maplit = "1.0.2"
 mz-audit-log = { path = "../audit-log" }

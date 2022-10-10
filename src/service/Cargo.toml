@@ -14,7 +14,7 @@ clap = { version = "3.2.20", features = ["env", "derive"] }
 crossbeam-channel = "0.5.6"
 futures = "0.3.24"
 http = "0.2.8"
-itertools = "0.10.4"
+itertools = "0.10.5"
 mz-proto = { path = "../proto" }
 mz-secrets = { path = "../secrets" }
 mz-orchestrator-process = { path = "../orchestrator-process" }

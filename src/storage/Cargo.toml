@@ -29,7 +29,7 @@ futures = "0.3.24"
 globset = { version = "0.4.9", features = ["serde1"] }
 http = "0.2.8"
 http-serde = "1.1.2"
-itertools = { version = "0.10.4" }
+itertools = { version = "0.10.5" }
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
@@ -80,7 +80,7 @@ protobuf-src = "1.1.0"
 tonic-build = "0.8.2"
 
 [dev-dependencies]
-itertools = "0.10.4"
+itertools = "0.10.5"
 tokio = { version = "1.20.2", features = ["test-util"] }
 
 [package.metadata.cargo-udeps.ignore]
