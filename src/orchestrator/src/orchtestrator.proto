@@ -9,8 +9,6 @@
 
 syntax = "proto3";
 
-import "google/protobuf/empty.proto";
-
 package mz_orchestrator;
 
 message ProtoMemoryLimit {
