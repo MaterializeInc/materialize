@@ -541,6 +541,16 @@ steps:
       - ./ci/plugins/cloudtest:
           args: [-m, "not long", test/cloudtest/]
 
+  - id: checks-restart-redpanda
+    label: "Checks + restart Redpanda"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=RestartRedpanda]
+
   - id: lang-csharp
     label: ":csharp: tests"
     depends_on: build-x86_64

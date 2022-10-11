@@ -105,6 +105,14 @@ class StartComputed(MzcomposeAction):
             c.up("computed_1")
 
 
+class RestartRedpanda(MzcomposeAction):
+    def execute(self, e: Executor) -> None:
+        c = e.mzcompose_composition()
+
+        c.kill("redpanda")
+        c.start_and_wait_for_tcp(services=["redpanda"])
+
+
 class RestartPostgresBackend(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
