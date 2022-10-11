@@ -45,7 +45,7 @@ count
 # workers.
 
 # In case the environment has other replicas
-> SET cluster_replica = default_replica
+> SET cluster_replica = r1
 
 > SELECT
     sum(sent) as sent

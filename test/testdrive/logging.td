@@ -11,7 +11,7 @@
 # have any specific output.
 
 # In case the environment has other replicas
-> SET cluster_replica = default_replica
+> SET cluster_replica = r1
 
 $ set-regex match=s\d+ replacement=SID
 

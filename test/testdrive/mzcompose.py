@@ -85,9 +85,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         if args.replicas > 1 or args.replica_size > 1:
             c.sql("DROP CLUSTER default CASCADE")
-            # Make sure a replica named 'default_replica' always exists
+            # Make sure a replica named 'r1' always exists
             replica_names = [
-                "default_replica" if replica_id == 0 else f"replica{replica_id}"
+                "r1" if replica_id == 0 else f"replica{replica_id}"
                 for replica_id in range(0, args.replicas)
             ]
             replica_string = ",".join(

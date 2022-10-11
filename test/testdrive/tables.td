@@ -115,7 +115,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 # unable to select a timestamp.
 
 # In case the environment has other replicas
-> SET cluster_replica = default_replica
+> SET cluster_replica = r1
 
 > SELECT * FROM t CROSS JOIN mz_internal.mz_dataflow_operators LIMIT 0
 

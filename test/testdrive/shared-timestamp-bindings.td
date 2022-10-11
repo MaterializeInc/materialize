@@ -154,7 +154,7 @@ $ kafka-ingest format=avro topic=data partition=15 schema=${schema}
 # Make sure that none of the 'EXCEPT ALL' views above has ever produced any records.
 
 # In case the environment has other replicas
-> SET cluster_replica = default_replica
+> SET cluster_replica = r1
 
 > SELECT COUNT(*) FROM mz_internal.mz_records_per_dataflow_global WHERE name LIKE '%check_v%' AND records > 0;
 0
