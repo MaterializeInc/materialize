@@ -69,7 +69,7 @@ statement ok
 DROP CLUSTER foo;
 
 query ITTTT
-SELECT id, event_type, object_type, event_details, user FROM mz_audit_events ORDER BY id
+SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id
 ----
 1  create  database  {"id":"1","name":"materialize"}  NULL
 2  create  schema  {"id":"3","name":"public"}  NULL

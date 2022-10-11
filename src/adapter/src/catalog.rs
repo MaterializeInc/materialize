@@ -1172,19 +1172,12 @@ impl CatalogState {
         audit_events: &mut Vec<VersionedEvent>,
         event_type: EventType,
         object_type: ObjectType,
-        event_details: EventDetails,
+        details: EventDetails,
     ) -> Result<(), Error> {
         let user = session.map(|session| session.user().name.to_string());
         let occurred_at = (self.config.now)();
         let id = tx.get_and_increment_id(storage::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
-        let event = VersionedEvent::new(
-            id,
-            event_type,
-            object_type,
-            event_details,
-            user,
-            occurred_at,
-        );
+        let event = VersionedEvent::new(id, event_type, object_type, details, user, occurred_at);
         builtin_table_updates.push(self.pack_audit_log_update(&event)?);
         audit_events.push(event.clone());
         tx.insert_audit_log_event(event);
@@ -1201,10 +1194,9 @@ impl CatalogState {
         let collection_timestamp = (self.config.now)();
         let id = tx.get_and_increment_id(storage::STORAGE_USAGE_ID_ALLOC_KEY.to_string())?;
 
-        let event_details =
-            VersionedStorageUsage::new(id, shard_id, size_bytes, collection_timestamp);
-        builtin_table_updates.push(self.pack_storage_usage_update(&event_details)?);
-        tx.insert_storage_usage_event(event_details);
+        let details = VersionedStorageUsage::new(id, shard_id, size_bytes, collection_timestamp);
+        builtin_table_updates.push(self.pack_storage_usage_update(&details)?);
+        tx.insert_storage_usage_event(details);
         Ok(())
     }
 }

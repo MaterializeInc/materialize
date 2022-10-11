@@ -741,7 +741,7 @@ impl CatalogState {
         &self,
         event: &VersionedEvent,
     ) -> Result<BuiltinTableUpdate, Error> {
-        let (event_type, object_type, event_details, user, occurred_at): (
+        let (event_type, object_type, details, user, occurred_at): (
             &EventType,
             &ObjectType,
             &EventDetails,
@@ -751,12 +751,12 @@ impl CatalogState {
             VersionedEvent::V1(ev) => (
                 &ev.event_type,
                 &ev.object_type,
-                &ev.event_details,
+                &ev.details,
                 &ev.user,
                 ev.occurred_at,
             ),
         };
-        let event_details = Jsonb::from_serde_json(event_details.as_json())
+        let details = Jsonb::from_serde_json(details.as_json())
             .map_err(|e| {
                 Error::new(ErrorKind::Unstructured(format!(
                     "could not pack audit log update: {}",
@@ -764,7 +764,7 @@ impl CatalogState {
                 )))
             })?
             .into_row();
-        let event_details = event_details.iter().next().unwrap();
+        let details = details.iter().next().unwrap();
         let dt = mz_ore::now::to_datetime(occurred_at).naive_utc();
         let id = event.sortable_id();
         Ok(BuiltinTableUpdate {
@@ -773,7 +773,7 @@ impl CatalogState {
                 Datum::UInt64(id),
                 Datum::String(&format!("{}", event_type)),
                 Datum::String(&format!("{}", object_type)),
-                event_details,
+                details,
                 match user {
                     Some(user) => Datum::String(user),
                     None => Datum::Null,

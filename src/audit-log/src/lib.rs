@@ -41,7 +41,7 @@ impl VersionedEvent {
         id: u64,
         event_type: EventType,
         object_type: ObjectType,
-        event_details: EventDetails,
+        details: EventDetails,
         user: Option<String>,
         occurred_at: EpochMillis,
     ) -> Self {
@@ -49,7 +49,7 @@ impl VersionedEvent {
             id,
             event_type,
             object_type,
-            event_details,
+            details,
             user,
             occurred_at,
         ))
@@ -219,7 +219,7 @@ pub struct EventV1 {
     pub id: u64,
     pub event_type: EventType,
     pub object_type: ObjectType,
-    pub event_details: EventDetails,
+    pub details: EventDetails,
     pub user: Option<String>,
     pub occurred_at: EpochMillis,
 }
@@ -229,7 +229,7 @@ impl EventV1 {
         id: u64,
         event_type: EventType,
         object_type: ObjectType,
-        event_details: EventDetails,
+        details: EventDetails,
         user: Option<String>,
         occurred_at: EpochMillis,
     ) -> EventV1 {
@@ -237,7 +237,7 @@ impl EventV1 {
             id,
             event_type,
             object_type,
-            event_details,
+            details,
             user,
             occurred_at,
         }
@@ -261,7 +261,7 @@ fn test_audit_log() -> Result<(), anyhow::Error> {
             None,
             2,
         )),
-        r#"{"V1":{"id":2,"event_type":"drop","object_type":"cluster-replica","event_details":{"IdNameV1":{"id":"u1","name":"name"}},"user":null,"occurred_at":2}}"#,
+        r#"{"V1":{"id":2,"event_type":"drop","object_type":"cluster-replica","details":{"IdNameV1":{"id":"u1","name":"name"}},"user":null,"occurred_at":2}}"#,
     )];
 
     for (event, expected_bytes) in cases {
