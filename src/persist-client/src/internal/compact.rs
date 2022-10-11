@@ -476,6 +476,7 @@ where
             cfg.compaction_reads_max_outstanding_parts,
         ));
         let mut fetched_initial_parts = Vec::with_capacity(runs.len());
+        let start = Instant::now();
         for (runs_index, (part_desc, parts)) in runs.iter_mut().enumerate() {
             if let Some(part) = parts.next() {
                 let shard_id = shard_id.clone();
@@ -501,22 +502,18 @@ where
                 ));
 
                 if pending_initial_parts.len() > cfg.compaction_reads_max_outstanding_parts {
-                    let start = Instant::now();
                     let (index, part) = pending_initial_parts
                         .pop_front()
                         .expect("pop failed when len was just > some usize");
                     fetched_initial_parts.push((index, part.await??));
-                    timings.part_fetching += start.elapsed();
                 }
             }
         }
 
         for (runs_index, part) in pending_initial_parts {
-            let start = Instant::now();
             fetched_initial_parts.push((runs_index, part.await??));
-            timings.part_fetching += start.elapsed();
         }
-
+        timings.part_fetching += start.elapsed();
         assert_eq!(fetched_initial_parts.len(), runs.len());
 
         // serially add each fetched part into our heap. this will momentarily 2x
