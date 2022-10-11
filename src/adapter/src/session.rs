@@ -606,11 +606,12 @@ pub enum TransactionStatus<T> {
     /// Running a single-query transaction. Matches
     /// `TBLOCK_STARTED`. In PostgreSQL, when using the extended query protocol, this
     /// may be upgraded into multi-statement implicit query (see [`Self::InTransactionImplicit`]).
-    /// Aidditionally, some statements may trigger an eager commit of the implicit transaction,
+    /// Additionally, some statements may trigger an eager commit of the implicit transaction,
     /// see: <https://git.postgresql.org/gitweb/?p=postgresql.git&a=commitdiff&h=f92944137>. In
     /// Materialize however, we eagerly commit all statements outside of an explicit transaction
     /// when using the extended query protocol. Therefore, we can guarantee that this state will
-    /// always be a single-query transaction.
+    /// always be a single-query transaction and never be upgraded into a multi-statement implicit
+    /// query.
     Started(Transaction<T>),
     /// Currently in a transaction issued from a `BEGIN`. Matches `TBLOCK_INPROGRESS`.
     InTransaction(Transaction<T>),
@@ -669,7 +670,7 @@ impl<T> TransactionStatus<T> {
         }
     }
 
-    /// Expresses whether or not the transaction contains multiple statements.
+    /// Whether the transaction may contain multiple statements.
     pub fn is_in_multi_statement_transaction(&self) -> bool {
         match self {
             TransactionStatus::InTransaction(_) | TransactionStatus::InTransactionImplicit(_) => {
