@@ -11,7 +11,7 @@
 //!
 //! Raw sources are streams (currently, Timely streams) of data directly produced by the
 //! upstream service. The main export of this module is [`create_raw_source`],
-//! which turns [`RawSourceCreationConfig`]s, [`SourceConnection`]s,
+//! which turns [`RawSourceCreationConfig`]s, [`SourceReader::Connection`]s,
 //! and [`SourceReader`] implementations into the aforementioned streams.
 //!
 //! The full source, which is the _differential_ stream that represents the actual object
@@ -66,7 +66,6 @@ use crate::source::healthcheck::Healthchecker;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::ReclockFollower;
 use crate::source::reclock::ReclockOperator;
-use crate::source::types::SourceConnection;
 use crate::source::types::SourceOutput;
 use crate::source::types::SourceReaderError;
 use crate::source::types::{
@@ -227,7 +226,6 @@ struct SourceReaderOperatorOutput<S: SourceReader> {
 fn build_source_reader_stream<G, S>(
     source_reader: S,
     config: RawSourceCreationConfig,
-    source_connection: S::Connection,
     initial_source_upper: OffsetAntichain,
     mut source_upper: OffsetAntichain,
 ) -> Pin<
@@ -257,7 +255,6 @@ where
             match Healthchecker::new(
                 name.clone(),
                 id,
-                source_connection.name(),
                 worker_id,
                 worker_count,
                 true,
@@ -537,7 +534,6 @@ where
                 let mut source_reader = build_source_reader_stream::<G, S>(
                     source_reader,
                     sub_config,
-                    source_connection,
                     initial_source_upper,
                     source_upper,
                 );

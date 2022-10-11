@@ -33,8 +33,6 @@ pub struct Healthchecker {
     source_name: String,
     /// Internal ID of the source (e.g. s1)
     source_id: GlobalId,
-    /// Type of the source, from SourceConnection::name
-    source_type: &'static str,
     /// The ID of the Timely worker on which this operator is executing
     worker_id: usize,
     /// The total count of Timely workers
@@ -59,7 +57,6 @@ impl Healthchecker {
     pub async fn new(
         source_name: String,
         source_id: GlobalId,
-        source_type: &'static str,
         worker_id: usize,
         worker_count: usize,
         active: bool,
@@ -93,7 +90,6 @@ impl Healthchecker {
         let mut healthchecker = Self {
             worker_id,
             worker_count,
-            source_type,
             source_name,
             source_id,
             current_status: SourceStatus::Starting,
@@ -260,7 +256,6 @@ impl Healthchecker {
         let source_id = self.source_id.to_string();
         let source_name = Datum::String(&self.source_name);
         let source_id = Datum::String(&source_id);
-        let source_type: Datum = self.source_type.into();
         let worker_id =
             Datum::Int64(i64::try_from(self.worker_id).expect("worker_id does not fit into i64"));
         let worker_count = Datum::Int64(
@@ -273,7 +268,6 @@ impl Healthchecker {
             timestamp,
             source_name,
             source_id,
-            source_type,
             worker_id,
             worker_count,
             status,
@@ -681,7 +675,6 @@ mod tests {
         status_shard_id: ShardId,
         source_name: String,
         source_id: GlobalId,
-        source_type: &'static str,
         worker_id: usize,
         worker_count: usize,
         active: bool,
@@ -700,7 +693,6 @@ mod tests {
         Healthchecker::new(
             source_name,
             source_id,
-            source_type,
             worker_id,
             worker_count,
             active,
