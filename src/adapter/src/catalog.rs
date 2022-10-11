@@ -3559,6 +3559,24 @@ impl<S: Append> Catalog<S> {
                         // NB: this will be re-incremented by the action below.
                         builtin_table_updates.extend(state.pack_item_update(id, -1));
 
+                        state.add_to_audit_log(
+                            session,
+                            tx,
+                            builtin_table_updates,
+                            audit_events,
+                            EventType::Alter,
+                            ObjectType::Sink,
+                            EventDetails::AlterSourceSinkV1(mz_audit_log::AlterSourceSinkV1 {
+                                id: id.to_string(),
+                                name: Self::full_name_detail(&state.resolve_full_name(
+                                    &name,
+                                    session.map(|session| session.conn_id()),
+                                )),
+                                old_size: old_sink.host_config.size().map(|x| x.to_string()),
+                                new_size: host_config.size().map(|x| x.to_string()),
+                            }),
+                        )?;
+
                         let to_name = entry.name().clone();
                         catalog_action(
                             state,
@@ -3638,6 +3656,24 @@ impl<S: Append> Catalog<S> {
 
                         // NB: this will be re-incremented by the action below.
                         builtin_table_updates.extend(state.pack_item_update(id, -1));
+
+                        state.add_to_audit_log(
+                            session,
+                            tx,
+                            builtin_table_updates,
+                            audit_events,
+                            EventType::Alter,
+                            ObjectType::Source,
+                            EventDetails::AlterSourceSinkV1(mz_audit_log::AlterSourceSinkV1 {
+                                id: id.to_string(),
+                                name: Self::full_name_detail(&state.resolve_full_name(
+                                    &name,
+                                    session.map(|session| session.conn_id()),
+                                )),
+                                old_size: old_source.host_config.size().map(|x| x.to_string()),
+                                new_size: host_config.size().map(|x| x.to_string()),
+                            }),
+                        )?;
 
                         let to_name = entry.name().clone();
                         catalog_action(
@@ -3900,6 +3936,28 @@ impl<S: Append> Catalog<S> {
                     }
 
                     if Self::should_audit_log_item(&item) {
+                        let id = id.to_string();
+                        let name = Self::full_name_detail(
+                            &state
+                                .resolve_full_name(&name, session.map(|session| session.conn_id())),
+                        );
+                        let details = match &item {
+                            CatalogItem::Source(s) => {
+                                EventDetails::CreateSourceSinkV1(mz_audit_log::CreateSourceSinkV1 {
+                                    id,
+                                    name,
+                                    size: s.host_config.size().map(|x| x.to_string()),
+                                })
+                            }
+                            CatalogItem::Sink(s) => {
+                                EventDetails::CreateSourceSinkV1(mz_audit_log::CreateSourceSinkV1 {
+                                    id: id.to_string(),
+                                    name,
+                                    size: s.host_config.size().map(|x| x.to_string()),
+                                })
+                            }
+                            _ => EventDetails::IdFullNameV1(IdFullNameV1 { id, name }),
+                        };
                         state.add_to_audit_log(
                             session,
                             tx,
@@ -3907,13 +3965,7 @@ impl<S: Append> Catalog<S> {
                             audit_events,
                             EventType::Create,
                             sql_type_to_object_type(item.typ()),
-                            EventDetails::IdFullNameV1(IdFullNameV1 {
-                                id: id.to_string(),
-                                name: Self::full_name_detail(&state.resolve_full_name(
-                                    &name,
-                                    session.map(|session| session.conn_id()),
-                                )),
-                            }),
+                            details,
                         )?;
                     }
 

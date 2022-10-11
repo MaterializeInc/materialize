@@ -60,7 +60,13 @@ statement ok
 DROP VIEW renamed
 
 statement ok
-CREATE SOURCE s FROM LOAD GENERATOR COUNTER;
+CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+
+statement ok
+ALTER SOURCE s SET (SIZE '2');
+
+statement ok
+DROP SOURCE s;
 
 statement ok
 DROP CLUSTER REPLICA foo.r;
@@ -72,7 +78,7 @@ query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id
 ----
 1  create  database  {"id":"1","name":"materialize"}  NULL
-2  create  schema  {"id":"3","name":"public"}  NULL
+2  create  schema  {"database_name":"materialize","id":"3","name":"public"}  NULL
 3  create  role  {"id":"1","name":"materialize"}  NULL
 4  create  cluster  {"id":"u1","name":"default"}  NULL
 5  create  cluster-replica  {"cluster_id":"u1","cluster_name":"default","logical_size":"1","replica_name":"r1"}  NULL
@@ -98,6 +104,8 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 25  create  index  {"database":"materialize","id":"u6","item":"renamed_primary_idx","schema":"public"}  materialize
 26  drop  index  {"database":"materialize","id":"u6","item":"renamed_primary_idx","schema":"public"}  materialize
 27  drop  view  {"database":"materialize","id":"u2","item":"renamed","schema":"public"}  materialize
-28  create  source  {"database":"materialize","id":"u7","item":"s","schema":"public"}  materialize
-29  drop  cluster-replica  {"cluster_id":"u2","cluster_name":"foo","replica_name":"r"}  materialize
-30  drop  cluster  {"id":"u2","name":"foo"}  materialize
+28  create  source  {"database":"materialize","id":"u7","item":"s","schema":"public","size":"1"}  materialize
+29  alter  source  {"database":"materialize","id":"u7","item":"s","new_size":"2","old_size":"1","schema":"public"}  materialize
+30  drop  source  {"database":"materialize","id":"u7","item":"s","schema":"public"}  materialize
+31  drop  cluster-replica  {"cluster_id":"u2","cluster_name":"foo","replica_name":"r"}  materialize
+32  drop  cluster  {"id":"u2","name":"foo"}  materialize

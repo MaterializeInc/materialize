@@ -142,6 +142,8 @@ serde_plain::derive_display_from_serialize!(ObjectType);
 pub enum EventDetails {
     CreateComputeReplicaV1(CreateComputeReplicaV1),
     DropComputeReplicaV1(DropComputeReplicaV1),
+    CreateSourceSinkV1(CreateSourceSinkV1),
+    AlterSourceSinkV1(AlterSourceSinkV1),
     IdFullNameV1(IdFullNameV1),
     RenameItemV1(RenameItemV1),
     IdNameV1(IdNameV1),
@@ -191,6 +193,23 @@ pub struct CreateComputeReplicaV1 {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct CreateSourceSinkV1 {
+    pub id: String,
+    #[serde(flatten)]
+    pub name: FullNameV1,
+    pub size: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct AlterSourceSinkV1 {
+    pub id: String,
+    #[serde(flatten)]
+    pub name: FullNameV1,
+    pub old_size: Option<String>,
+    pub new_size: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct SchemaV1 {
     pub id: String,
     pub name: String,
@@ -210,6 +229,8 @@ impl EventDetails {
             EventDetails::RenameItemV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::IdNameV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::SchemaV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::CreateSourceSinkV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::AlterSourceSinkV1(v) => serde_json::to_value(v).expect("must serialize"),
         }
     }
 }

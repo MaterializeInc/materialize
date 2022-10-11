@@ -25,7 +25,6 @@ use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage::types::connections::KafkaConnection;
-use mz_storage::types::hosts::StorageHostConfig;
 use mz_storage::types::sinks::{KafkaSinkConnection, StorageSinkConnection};
 
 use crate::catalog::builtin::{
@@ -216,10 +215,7 @@ impl CatalogState {
                     name,
                     source_type,
                     connection_id,
-                    match &source.host_config {
-                        StorageHostConfig::Remote { .. } => None,
-                        StorageHostConfig::Managed { size, .. } => Some(size),
-                    },
+                    source.host_config.size(),
                     diff,
                 )
             }
@@ -512,12 +508,6 @@ impl CatalogState {
                         diff,
                     });
                 }
-            }
-            let size = match &sink.host_config {
-                mz_storage::types::hosts::StorageHostConfig::Remote { .. } => Datum::Null,
-                mz_storage::types::hosts::StorageHostConfig::Managed { size, .. } => {
-                    Datum::String(size)
-                }
             };
             updates.push(BuiltinTableUpdate {
                 id: self.resolve_builtin_table(&MZ_SINKS),
@@ -528,7 +518,7 @@ impl CatalogState {
                     Datum::String(name),
                     Datum::String(connection.name()),
                     Datum::from(sink.connection_id().map(|id| id.to_string()).as_deref()),
-                    size,
+                    Datum::from(sink.host_config.size()),
                 ]),
                 diff,
             });
