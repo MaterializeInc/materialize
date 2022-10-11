@@ -411,9 +411,6 @@ pub struct ReclockOperator {
     /// Write handle of the remap persist shard
     write_handle: WriteHandle<SourceData, (), Timestamp, Diff>,
     /// Read handle of the remap persist shard
-    ///
-    /// NB: Until #13534 is addressed, this intentionally holds back the since
-    /// of the remap shard indefinitely.
     read_handle: ReadHandle<SourceData, (), Timestamp, Diff>,
     /// A listener to tail the remap shard for new updates
     listener: Listen<SourceData, (), Timestamp, Diff>,
