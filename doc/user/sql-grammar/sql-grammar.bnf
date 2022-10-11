@@ -194,14 +194,6 @@ explain ::=
     'VIEW' view_name |
     'MATERIALIZED VIEW' view_name
   )
-explain_legacy ::=
-  'EXPLAIN'
-  'TYPED'? ( ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' )? 'PLAN FOR' )?
-  (
-    select_stmt |
-    'VIEW' view_name |
-    'MATERIALIZED VIEW' view_name
-  )
 fetch ::=
   'FETCH' 'FORWARD'? ('ALL' | count)? 'FROM'? cursor_name
   ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
