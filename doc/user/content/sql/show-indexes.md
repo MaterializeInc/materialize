@@ -50,7 +50,7 @@ SHOW VIEWS;
 ```
 
 ```sql
-SHOW INDEXES FROM my_materialized_view;
+SHOW INDEXES ON my_materialized_view;
 ```
 ```nofmt
  name | on  | cluster | key

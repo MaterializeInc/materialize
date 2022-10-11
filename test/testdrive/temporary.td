@@ -105,13 +105,13 @@ contains:catalog item 'temp_t' already exists
 
 > INSERT INTO temp_t VALUES (1, 'testing')
 
-> SHOW INDEXES FROM temp_t
+> SHOW INDEXES ON temp_t
 
 # Blocked on https://github.com/MaterializeInc/materialize/issues/3105.
 #
 # > CREATE TEMPORARY DEFAULT INDEX ON temp_t
 #
-# > SHOW INDEXES FROM temp_t
+# > SHOW INDEXES ON temp_t
 #  on_name    key_name            seq_in_index  column_name  expression  nullable
 #  name                 on          cluster         key
 # --------------------------------------------------------------------------------

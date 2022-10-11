@@ -180,16 +180,16 @@ SHOW VIEWS FROM foo LIKE '%foo%'
 Show(ShowObjects(ShowObjectsStatement { object_type: View, from: Some(UnresolvedSchemaName([Ident("foo")])), in_cluster: None, filter: Some(Like("%foo%")) }))
 
 parse-statement
-SHOW INDEXES FROM foo
+SHOW INDEXES ON foo
 ----
-SHOW INDEXES FROM foo
+SHOW INDEXES ON foo
 =>
 Show(ShowIndexes(ShowIndexesStatement { on_object: Some(Name(UnresolvedObjectName([Ident("foo")]))), from_schema: None, in_cluster: None, filter: None }))
 
 parse-statement
 SHOW INDEXES ON foo
 ----
-SHOW INDEXES FROM foo
+SHOW INDEXES ON foo
 =>
 Show(ShowIndexes(ShowIndexesStatement { on_object: Some(Name(UnresolvedObjectName([Ident("foo")]))), from_schema: None, in_cluster: None, filter: None }))
 
@@ -208,23 +208,23 @@ SHOW INDEXES IN CLUSTER c
 Show(ShowIndexes(ShowIndexesStatement { on_object: None, from_schema: None, in_cluster: Some(Unresolved(Ident("c"))), filter: None }))
 
 parse-statement
-SHOW INDEXES FROM t IN CLUSTER c
+SHOW INDEXES ON t IN CLUSTER c
 ----
-SHOW INDEXES FROM t IN CLUSTER c
+SHOW INDEXES ON t IN CLUSTER c
 =>
 Show(ShowIndexes(ShowIndexesStatement { on_object: Some(Name(UnresolvedObjectName([Ident("t")]))), from_schema: None, in_cluster: Some(Unresolved(Ident("c"))), filter: None }))
 
 parse-statement
-SHOW INDEXES FROM SCHEMA s
+SHOW INDEXES FROM s
 ----
-SHOW INDEXES FROM SCHEMA s
+SHOW INDEXES FROM s
 =>
 Show(ShowIndexes(ShowIndexesStatement { on_object: None, from_schema: Some(UnresolvedSchemaName([Ident("s")])), in_cluster: None, filter: None }))
 
 parse-statement
-SHOW INDEXES FROM SCHEMA s IN CLUSTER c
+SHOW INDEXES FROM s IN CLUSTER c
 ----
-SHOW INDEXES FROM SCHEMA s IN CLUSTER c
+SHOW INDEXES FROM s IN CLUSTER c
 =>
 Show(ShowIndexes(ShowIndexesStatement { on_object: None, from_schema: Some(UnresolvedSchemaName([Ident("s")])), in_cluster: Some(Unresolved(Ident("c"))), filter: None }))
 
@@ -236,11 +236,11 @@ SHOW INDEXES LIKE 'pattern'
 Show(ShowIndexes(ShowIndexesStatement { on_object: None, from_schema: None, in_cluster: None, filter: Some(Like("pattern")) }))
 
 parse-statement
-SHOW INDEXES FROM SCHEMA s ON t
+SHOW INDEXES FROM s ON t
 ----
-error: Cannot specify both FROM SCHEMA and FROM or ON
-SHOW INDEXES FROM SCHEMA s ON t
-                              ^
+error: Cannot specify both FROM and ON
+SHOW INDEXES FROM s ON t
+                       ^
 
 parse-statement
 SHOW CREATE VIEW foo

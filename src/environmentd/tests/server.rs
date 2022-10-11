@@ -81,7 +81,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
     );
     assert_eq!(
         client
-            .query_one("SHOW INDEXES FROM mat", &[])?
+            .query_one("SHOW INDEXES ON mat", &[])?
             .get::<_, Vec<String>>("key"),
         &["a", "a_data", "c", "c_data"],
     );

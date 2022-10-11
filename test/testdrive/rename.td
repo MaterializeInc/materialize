@@ -46,7 +46,7 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
 
 > CREATE DEFAULT INDEX ON mz_view
 
-> SHOW INDEXES FROM mz_view
+> SHOW INDEXES ON mz_view
 name                on          cluster             key
 --------------------------------------------------------------------------------------------
 mz_view_primary_idx mz_view     <VARIABLE_OUTPUT>   {a,b}
@@ -190,7 +190,7 @@ name                                create_sql
 materialize.public.renamed_mz_view  "CREATE VIEW \"materialize\".\"public\".\"renamed_mz_view\" AS SELECT * FROM \"materialize\".\"public\".\"renamed_mz_data\""
 
 # Item's indexes are properly re-attributed
-> SHOW INDEXES FROM renamed_mz_view
+> SHOW INDEXES ON renamed_mz_view
 name            on              cluster             key
 --------------------------------------------------------------------------------------------
 renamed_index   renamed_mz_view <VARIABLE_OUTPUT>   {a,b}
