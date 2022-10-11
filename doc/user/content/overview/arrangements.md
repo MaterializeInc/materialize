@@ -95,7 +95,7 @@ The number of distinct `(rider, fare)` pairs will be much smaller than the
 number of total rides that take place.
 
 The amount of memory that the arrangement requires is then further reduced by
-background [compaction](/ops/optimization/#compaction) of historical data.
+background compaction of historical data.
 
 ## Analyzing arrangements
 
