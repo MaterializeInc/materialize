@@ -35,33 +35,57 @@ three 3 1
 ----
 parts=1 len=3
 
-# Compact b1 to advance the since and lose the distinctions of the original
-# data. The truncating logic relies on the data being original fidelity and this
-# ensures that it doesn't get applied too eagerly.
+## Compact b1 to advance the since and lose the distinctions of the original
+## data. The truncating logic relies on the data being original fidelity and this
+## ensures that it doesn't get applied too eagerly.
 
 truncate-batch-desc input=b1 output=b1trunc lower=2 upper=3
 ----
 parts=1 len=3
 
-compact output=b1advanced inputs=(b1trunc) lower=2 upper=3 since=6
+# introduce a new batch to compact with b1trunc, because compaction over
+# a single batch simply returns the input with an updated description
+write-batch output=b2 lower=3 upper=4
+four 3 1
 ----
 parts=1 len=1
+
+# advance since beyond the upper. if truncation (erroneously) applied, we would not see any results in the output
+compact output=b1advanced inputs=(b1trunc,b2) lower=2 upper=4 since=6
+----
+parts=1 len=2
 
 fetch-batch input=b1advanced
 ----
 <part 0>
+four 6 1
 two 6 1
 <run 0>
 part 0
 
-compact output=b0_1trunc inputs=(b0trunc,b1advanced) lower=1 upper=3 since=10
+compact output=b0_1trunc inputs=(b0trunc,b1advanced) lower=1 upper=4 since=10
 ----
-parts=1 len=2
+parts=1 len=3
 
 fetch-batch input=b0_1trunc
 ----
 <part 0>
+four 10 1
 one 10 1
 two 10 1
+<run 0>
+part 0
+
+## Verify that the special compaction case of a single input still receives truncation.
+## The compaction res should contain all the updates of b1trunc, but should only return
+## updates within the registered desc
+compact output=b1trunc_compacted inputs=(b1trunc) lower=2 upper=3 since=6
+----
+parts=1 len=3
+
+fetch-batch input=b1trunc_compacted
+----
+<part 0>
+two 2 1
 <run 0>
 part 0

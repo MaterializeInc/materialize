@@ -1,0 +1,40 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Compaction with a single nonempty input is special cased to
+# return the nonempty batch directly with a new description
+
+write-batch output=b0 lower=0 upper=1
+zero 0 1
+----
+parts=1 len=1
+
+write-batch output=b1 lower=1 upper=2
+----
+parts=0 len=0
+
+write-batch output=b2 lower=2 upper=3
+----
+parts=0 len=0
+
+write-batch output=b3 lower=3 upper=4
+----
+parts=0 len=0
+
+compact output=b0_unchanged inputs=(b0,b1,b2,b3) lower=0 upper=4 since=99
+----
+parts=1 len=1
+
+# notably, the since has not advanced, confirming we're reading the same contents referred by b0
+fetch-batch input=b0_unchanged
+----
+<part 0>
+zero 0 1
+<run 0>
+part 0

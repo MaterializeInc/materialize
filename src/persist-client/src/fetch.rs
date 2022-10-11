@@ -466,12 +466,14 @@ where
         //   these batches, all data physically in the batch but outside of the
         //   truncated bounds must be ignored. Not every user batch is
         //   truncated.
-        // - Batches written by compaction. These always have an inline desc
-        //   that exactly matches the one they are registered with. The since
-        //   can be anything.
+        // - Batches written by compaction. These always have an inline desc that
+        //   exactly matches the lower they are registered with, and an upper that
+        //   is less_equal to the upper they are registered with. The since can be
+        //   anything.
         let inline_desc = &part.desc;
-        let needs_truncation = inline_desc.lower() != registered_desc.lower()
-            || inline_desc.upper() != registered_desc.upper();
+        let needs_truncation =
+            PartialOrder::less_than(inline_desc.lower(), registered_desc.lower())
+                || PartialOrder::less_than(registered_desc.upper(), inline_desc.upper());
         if needs_truncation {
             assert!(
                 PartialOrder::less_equal(inline_desc.lower(), registered_desc.lower()),
@@ -500,10 +502,13 @@ where
                 registered_desc
             );
         } else {
-            assert_eq!(
-                inline_desc, &registered_desc,
+            assert!(
+                inline_desc.lower() == registered_desc.lower()
+                    && PartialOrder::less_equal(inline_desc.upper(), registered_desc.upper()),
                 "key={} inline={:?} registered={:?}",
-                key, inline_desc, registered_desc
+                key,
+                inline_desc,
+                registered_desc
             );
         }
 

@@ -327,6 +327,20 @@ where
         writer_id: WriterId,
     ) -> Result<CompactRes<T>, anyhow::Error> {
         let () = Self::validate_req(&req)?;
+
+        // special case: if our inputs only contain a single batch with >0 updates in a single run,
+        // we can return the same batch with an updated description to avoid pulling it down and
+        // rewriting it.
+        let filled_batches: Vec<_> = req.inputs.iter().filter(|x| x.len > 0).collect();
+        match filled_batches[..] {
+            [batch] if batch.runs.len() == 0 => {
+                let mut output = batch.clone();
+                output.desc = req.desc;
+                return Ok(CompactRes { output });
+            }
+            _ => {}
+        }
+
         // compaction needs memory enough for at least 2 runs and 2 in-progress parts
         assert!(cfg.compaction_memory_bound_bytes >= 4 * cfg.blob_target_size);
         // reserve space for the in-progress part to be held in-mem representation and columnar
