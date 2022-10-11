@@ -25,7 +25,8 @@ use tracing::{info, trace};
 use uuid::Uuid;
 
 use mz_audit_log::{
-    EventDetails, EventType, FullNameV1, ObjectType, VersionedEvent, VersionedStorageUsage,
+    EventDetails, EventType, FullNameV1, IdFullNameV1, ObjectType, VersionedEvent,
+    VersionedStorageUsage,
 };
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::command::{ProcessId, ReplicaId};
@@ -1171,19 +1172,12 @@ impl CatalogState {
         audit_events: &mut Vec<VersionedEvent>,
         event_type: EventType,
         object_type: ObjectType,
-        event_details: EventDetails,
+        details: EventDetails,
     ) -> Result<(), Error> {
         let user = session.map(|session| session.user().name.to_string());
         let occurred_at = (self.config.now)();
         let id = tx.get_and_increment_id(storage::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
-        let event = VersionedEvent::new(
-            id,
-            event_type,
-            object_type,
-            event_details,
-            user,
-            occurred_at,
-        );
+        let event = VersionedEvent::new(id, event_type, object_type, details, user, occurred_at);
         builtin_table_updates.push(self.pack_audit_log_update(&event)?);
         audit_events.push(event.clone());
         tx.insert_audit_log_event(event);
@@ -1200,10 +1194,9 @@ impl CatalogState {
         let collection_timestamp = (self.config.now)();
         let id = tx.get_and_increment_id(storage::STORAGE_USAGE_ID_ALLOC_KEY.to_string())?;
 
-        let event_details =
-            VersionedStorageUsage::new(id, shard_id, size_bytes, collection_timestamp);
-        builtin_table_updates.push(self.pack_storage_usage_update(&event_details)?);
-        tx.insert_storage_usage_event(event_details);
+        let details = VersionedStorageUsage::new(id, shard_id, size_bytes, collection_timestamp);
+        builtin_table_updates.push(self.pack_storage_usage_update(&details)?);
+        tx.insert_storage_usage_event(details);
         Ok(())
     }
 }
@@ -2329,8 +2322,8 @@ impl<S: Append> Catalog<S> {
                 builtin_table_updates.extend(catalog.state.pack_item_update(*function_id, 1));
             }
         }
-        for (db_id, db) in &catalog.state.database_by_id {
-            builtin_table_updates.push(catalog.state.pack_database_update(db_id, 1));
+        for (_id, db) in &catalog.state.database_by_id {
+            builtin_table_updates.push(catalog.state.pack_database_update(db, 1));
             let db_spec = ResolvedDatabaseSpecifier::Id(db.id.clone());
             for (schema_id, schema) in &db.schemas_by_id {
                 builtin_table_updates
@@ -2343,8 +2336,8 @@ impl<S: Append> Catalog<S> {
                 }
             }
         }
-        for (role_name, _role) in &catalog.state.roles {
-            builtin_table_updates.push(catalog.state.pack_role_update(role_name, 1));
+        for (_name, role) in &catalog.state.roles {
+            builtin_table_updates.push(catalog.state.pack_role_update(role, 1));
         }
         for (name, id) in &catalog.state.compute_instances_by_name {
             builtin_table_updates.push(catalog.state.pack_compute_instance_update(name, 1));
@@ -3566,6 +3559,24 @@ impl<S: Append> Catalog<S> {
                         // NB: this will be re-incremented by the action below.
                         builtin_table_updates.extend(state.pack_item_update(id, -1));
 
+                        state.add_to_audit_log(
+                            session,
+                            tx,
+                            builtin_table_updates,
+                            audit_events,
+                            EventType::Alter,
+                            ObjectType::Sink,
+                            EventDetails::AlterSourceSinkV1(mz_audit_log::AlterSourceSinkV1 {
+                                id: id.to_string(),
+                                name: Self::full_name_detail(&state.resolve_full_name(
+                                    &name,
+                                    session.map(|session| session.conn_id()),
+                                )),
+                                old_size: old_sink.host_config.size().map(|x| x.to_string()),
+                                new_size: host_config.size().map(|x| x.to_string()),
+                            }),
+                        )?;
+
                         let to_name = entry.name().clone();
                         catalog_action(
                             state,
@@ -3646,6 +3657,24 @@ impl<S: Append> Catalog<S> {
                         // NB: this will be re-incremented by the action below.
                         builtin_table_updates.extend(state.pack_item_update(id, -1));
 
+                        state.add_to_audit_log(
+                            session,
+                            tx,
+                            builtin_table_updates,
+                            audit_events,
+                            EventType::Alter,
+                            ObjectType::Source,
+                            EventDetails::AlterSourceSinkV1(mz_audit_log::AlterSourceSinkV1 {
+                                id: id.to_string(),
+                                name: Self::full_name_detail(&state.resolve_full_name(
+                                    &name,
+                                    session.map(|session| session.conn_id()),
+                                )),
+                                old_size: old_source.host_config.size().map(|x| x.to_string()),
+                                new_size: host_config.size().map(|x| x.to_string()),
+                            }),
+                        )?;
+
                         let to_name = entry.name().clone();
                         catalog_action(
                             state,
@@ -3665,14 +3694,39 @@ impl<S: Append> Catalog<S> {
                 } => {
                     let database_id = tx.insert_database(&name)?;
                     let schema_id = tx.insert_schema(database_id, DEFAULT_SCHEMA)?;
+                    state.add_to_audit_log(
+                        session,
+                        tx,
+                        builtin_table_updates,
+                        audit_events,
+                        EventType::Create,
+                        ObjectType::Database,
+                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                            id: database_id.to_string(),
+                            name: name.clone(),
+                        }),
+                    )?;
                     catalog_action(
                         state,
                         builtin_table_updates,
                         Action::CreateDatabase {
                             id: database_id,
                             oid,
-                            name,
+                            name: name.clone(),
                         },
+                    )?;
+                    state.add_to_audit_log(
+                        session,
+                        tx,
+                        builtin_table_updates,
+                        audit_events,
+                        EventType::Create,
+                        ObjectType::Schema,
+                        EventDetails::SchemaV1(mz_audit_log::SchemaV1 {
+                            id: schema_id.to_string(),
+                            name: DEFAULT_SCHEMA.to_string(),
+                            database_name: name,
+                        }),
                     )?;
                     catalog_action(
                         state,
@@ -3704,6 +3758,19 @@ impl<S: Append> Catalog<S> {
                         }
                     };
                     let schema_id = tx.insert_schema(database_id, &schema_name)?;
+                    state.add_to_audit_log(
+                        session,
+                        tx,
+                        builtin_table_updates,
+                        audit_events,
+                        EventType::Create,
+                        ObjectType::Schema,
+                        EventDetails::SchemaV1(mz_audit_log::SchemaV1 {
+                            id: schema_id.to_string(),
+                            name: schema_name.clone(),
+                            database_name: state.database_by_id[&database_id].name.clone(),
+                        }),
+                    )?;
                     catalog_action(
                         state,
                         builtin_table_updates,
@@ -3722,6 +3789,18 @@ impl<S: Append> Catalog<S> {
                         )));
                     }
                     let role_id = tx.insert_user_role(&name)?;
+                    state.add_to_audit_log(
+                        session,
+                        tx,
+                        builtin_table_updates,
+                        audit_events,
+                        EventType::Create,
+                        ObjectType::Role,
+                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                            id: role_id.to_string(),
+                            name: name.clone(),
+                        }),
+                    )?;
                     catalog_action(
                         state,
                         builtin_table_updates,
@@ -3857,6 +3936,28 @@ impl<S: Append> Catalog<S> {
                     }
 
                     if Self::should_audit_log_item(&item) {
+                        let id = id.to_string();
+                        let name = Self::full_name_detail(
+                            &state
+                                .resolve_full_name(&name, session.map(|session| session.conn_id())),
+                        );
+                        let details = match &item {
+                            CatalogItem::Source(s) => {
+                                EventDetails::CreateSourceSinkV1(mz_audit_log::CreateSourceSinkV1 {
+                                    id,
+                                    name,
+                                    size: s.host_config.size().map(|x| x.to_string()),
+                                })
+                            }
+                            CatalogItem::Sink(s) => {
+                                EventDetails::CreateSourceSinkV1(mz_audit_log::CreateSourceSinkV1 {
+                                    id: id.to_string(),
+                                    name,
+                                    size: s.host_config.size().map(|x| x.to_string()),
+                                })
+                            }
+                            _ => EventDetails::IdFullNameV1(IdFullNameV1 { id, name }),
+                        };
                         state.add_to_audit_log(
                             session,
                             tx,
@@ -3864,12 +3965,7 @@ impl<S: Append> Catalog<S> {
                             audit_events,
                             EventType::Create,
                             sql_type_to_object_type(item.typ()),
-                            EventDetails::FullNameV1(Self::full_name_detail(
-                                &state.resolve_full_name(
-                                    &name,
-                                    session.map(|session| session.conn_id()),
-                                ),
-                            )),
+                            details,
                         )?;
                     }
 
@@ -3885,20 +3981,47 @@ impl<S: Append> Catalog<S> {
                     )?;
                 }
                 Op::DropDatabase { id } => {
+                    let database = &state.database_by_id[&id];
                     tx.remove_database(&id)?;
-                    builtin_table_updates.push(state.pack_database_update(&id, -1));
+                    builtin_table_updates.push(state.pack_database_update(database, -1));
+                    state.add_to_audit_log(
+                        session,
+                        tx,
+                        builtin_table_updates,
+                        audit_events,
+                        EventType::Drop,
+                        ObjectType::Database,
+                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                            id: id.to_string(),
+                            name: database.name.clone(),
+                        }),
+                    )?;
                     catalog_action(state, builtin_table_updates, Action::DropDatabase { id })?;
                 }
                 Op::DropSchema {
                     database_id,
                     schema_id,
                 } => {
+                    let schema = &state.database_by_id[&database_id].schemas_by_id[&schema_id];
                     tx.remove_schema(&database_id, &schema_id)?;
                     builtin_table_updates.push(state.pack_schema_update(
                         &ResolvedDatabaseSpecifier::Id(database_id.clone()),
                         &schema_id,
                         -1,
                     ));
+                    state.add_to_audit_log(
+                        session,
+                        tx,
+                        builtin_table_updates,
+                        audit_events,
+                        EventType::Drop,
+                        ObjectType::Schema,
+                        EventDetails::SchemaV1(mz_audit_log::SchemaV1 {
+                            id: schema_id.to_string(),
+                            name: schema.name.schema.to_string(),
+                            database_name: state.database_by_id[&database_id].name.clone(),
+                        }),
+                    )?;
                     catalog_action(
                         state,
                         builtin_table_updates,
@@ -3915,7 +4038,20 @@ impl<S: Append> Catalog<S> {
                         )));
                     }
                     tx.remove_role(&name)?;
-                    builtin_table_updates.push(state.pack_role_update(&name, -1));
+                    let role = &state.roles[&name];
+                    builtin_table_updates.push(state.pack_role_update(role, -1));
+                    state.add_to_audit_log(
+                        session,
+                        tx,
+                        builtin_table_updates,
+                        audit_events,
+                        EventType::Drop,
+                        ObjectType::Role,
+                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                            id: role.id.to_string(),
+                            name: name.clone(),
+                        }),
+                    )?;
                     catalog_action(state, builtin_table_updates, Action::DropRole { name })?;
                 }
                 Op::DropComputeInstance { name } => {
@@ -4015,12 +4151,13 @@ impl<S: Append> Catalog<S> {
                             audit_events,
                             EventType::Drop,
                             sql_type_to_object_type(entry.item().typ()),
-                            EventDetails::FullNameV1(Self::full_name_detail(
-                                &state.resolve_full_name(
+                            EventDetails::IdFullNameV1(IdFullNameV1 {
+                                id: id.to_string(),
+                                name: Self::full_name_detail(&state.resolve_full_name(
                                     &entry.name,
                                     session.map(|session| session.conn_id()),
-                                ),
-                            )),
+                                )),
+                            }),
                         )?;
                     }
                     catalog_action(state, builtin_table_updates, Action::DropItem(id))?;
@@ -4042,9 +4179,16 @@ impl<S: Append> Catalog<S> {
                         ))));
                     }
 
+                    let mut to_full_name = current_full_name.clone();
+                    to_full_name.item = to_name.clone();
+
+                    let mut to_qualified_name = entry.name().clone();
+                    to_qualified_name.item = to_name;
+
                     let details = EventDetails::RenameItemV1(mz_audit_log::RenameItemV1 {
-                        previous_name: Self::full_name_detail(&current_full_name),
-                        new_name: to_name.clone(),
+                        id: id.to_string(),
+                        old_name: Self::full_name_detail(&current_full_name),
+                        new_name: Self::full_name_detail(&to_full_name),
                     });
                     if Self::should_audit_log_item(&entry.item) {
                         state.add_to_audit_log(
@@ -4057,12 +4201,6 @@ impl<S: Append> Catalog<S> {
                             details,
                         )?;
                     }
-
-                    let mut to_full_name = current_full_name.clone();
-                    to_full_name.item = to_name.clone();
-
-                    let mut to_qualified_name = entry.name().clone();
-                    to_qualified_name.item = to_name;
 
                     // Rename item itself.
                     let item = entry
@@ -4260,7 +4398,8 @@ impl<S: Append> Catalog<S> {
                         },
                     );
                     state.database_by_name.insert(name, id.clone());
-                    builtin_table_updates.push(state.pack_database_update(&id, 1));
+                    builtin_table_updates
+                        .push(state.pack_database_update(&state.database_by_id[&id], 1));
                 }
 
                 Action::CreateSchema {
@@ -4306,7 +4445,8 @@ impl<S: Append> Catalog<S> {
                             oid,
                         },
                     );
-                    builtin_table_updates.push(state.pack_role_update(&name, 1));
+                    let role = &state.roles[&name];
+                    builtin_table_updates.push(state.pack_role_update(role, 1));
                 }
 
                 Action::CreateComputeInstance {

@@ -48,3 +48,14 @@ pub enum StorageHostConfig {
         size: String,
     },
 }
+
+impl StorageHostConfig {
+    /// Returns the size specified by the storage host configuration, if
+    /// the storage host is a managed storage host.
+    pub fn size(&self) -> Option<&str> {
+        match self {
+            StorageHostConfig::Remote { .. } => None,
+            StorageHostConfig::Managed { size, .. } => Some(size),
+        }
+    }
+}

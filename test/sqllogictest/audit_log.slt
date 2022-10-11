@@ -12,6 +12,27 @@
 mode cockroach
 
 statement ok
+CREATE DATABASE test
+
+statement ok
+CREATE SCHEMA test.sc1
+
+statement ok
+CREATE SCHEMA test.sc2
+
+statement ok
+DROP SCHEMA test.sc1
+
+statement ok
+DROP DATABASE test
+
+statement ok
+CREATE ROLE foo LOGIN SUPERUSER
+
+statement ok
+DROP ROLE foo
+
+statement ok
 CREATE CLUSTER foo REPLICAS (r (SIZE '1'));
 
 statement ok
@@ -39,7 +60,13 @@ statement ok
 DROP VIEW renamed
 
 statement ok
-CREATE SOURCE s FROM LOAD GENERATOR COUNTER;
+CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+
+statement ok
+ALTER SOURCE s SET (SIZE '2');
+
+statement ok
+DROP SOURCE s;
 
 statement ok
 DROP CLUSTER REPLICA foo.r;
@@ -48,22 +75,37 @@ statement ok
 DROP CLUSTER foo;
 
 query ITTTT
-SELECT id, event_type, object_type, event_details, user FROM mz_audit_events ORDER BY id
+SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id
 ----
-1  create  cluster  {"id":"u1","name":"default"}  NULL
-2  create  cluster-replica  {"cluster_id":"u1","cluster_name":"default","logical_size":"1","replica_name":"r1"}  NULL
-3  create  cluster  {"id":"u2","name":"foo"}  materialize
-4  create  cluster-replica  {"cluster_id":"u2","cluster_name":"foo","logical_size":"1","replica_name":"r"}  materialize
-5  create  materialized-view  {"database":"materialize","item":"v2","schema":"public"}  materialize
-6  create  view  {"database":"materialize","item":"unmat","schema":"public"}  materialize
-7  create  table  {"database":"materialize","item":"t","schema":"public"}  materialize
-8  create  index  {"database":"materialize","item":"t_primary_idx","schema":"public"}  materialize
-9  alter  view  {"new_name":"renamed","previous_name":{"database":"materialize","item":"unmat","schema":"public"}}  materialize
-10  drop  materialized-view  {"database":"materialize","item":"v2","schema":"public"}  materialize
-11  create  materialized-view  {"database":"materialize","item":"v2","schema":"public"}  materialize
-12  create  index  {"database":"materialize","item":"renamed_primary_idx","schema":"public"}  materialize
-13  drop  index  {"database":"materialize","item":"renamed_primary_idx","schema":"public"}  materialize
-14  drop  view  {"database":"materialize","item":"renamed","schema":"public"}  materialize
-15  create  source  {"database":"materialize","item":"s","schema":"public"}  materialize
-16  drop  cluster-replica  {"cluster_id":"u2","cluster_name":"foo","replica_name":"r"}  materialize
-17  drop  cluster  {"id":"u2","name":"foo"}  materialize
+1  create  database  {"id":"1","name":"materialize"}  NULL
+2  create  schema  {"database_name":"materialize","id":"3","name":"public"}  NULL
+3  create  role  {"id":"1","name":"materialize"}  NULL
+4  create  cluster  {"id":"u1","name":"default"}  NULL
+5  create  cluster-replica  {"cluster_id":"u1","cluster_name":"default","logical_size":"1","replica_name":"r1"}  NULL
+6  create  database  {"id":"2","name":"test"}  materialize
+7  create  schema  {"database_name":"test","id":"6","name":"public"}  materialize
+8  create  schema  {"database_name":"test","id":"7","name":"sc1"}  materialize
+9  create  schema  {"database_name":"test","id":"8","name":"sc2"}  materialize
+10  drop  schema  {"database_name":"test","id":"7","name":"sc1"}  materialize
+11  drop  schema  {"database_name":"test","id":"6","name":"public"}  materialize
+12  drop  schema  {"database_name":"test","id":"8","name":"sc2"}  materialize
+13  drop  database  {"id":"2","name":"test"}  materialize
+14  create  role  {"id":"u2","name":"foo"}  materialize
+15  drop  role  {"id":"u2","name":"foo"}  materialize
+16  create  cluster  {"id":"u2","name":"foo"}  materialize
+17  create  cluster-replica  {"cluster_id":"u2","cluster_name":"foo","logical_size":"1","replica_name":"r"}  materialize
+18  create  materialized-view  {"database":"materialize","id":"u1","item":"v2","schema":"public"}  materialize
+19  create  view  {"database":"materialize","id":"u2","item":"unmat","schema":"public"}  materialize
+20  create  table  {"database":"materialize","id":"u3","item":"t","schema":"public"}  materialize
+21  create  index  {"database":"materialize","id":"u4","item":"t_primary_idx","schema":"public"}  materialize
+22  alter  view  {"id":"u2","new_name":{"database":"materialize","item":"renamed","schema":"public"},"old_name":{"database":"materialize","item":"unmat","schema":"public"}}  materialize
+23  drop  materialized-view  {"database":"materialize","id":"u1","item":"v2","schema":"public"}  materialize
+24  create  materialized-view  {"database":"materialize","id":"u5","item":"v2","schema":"public"}  materialize
+25  create  index  {"database":"materialize","id":"u6","item":"renamed_primary_idx","schema":"public"}  materialize
+26  drop  index  {"database":"materialize","id":"u6","item":"renamed_primary_idx","schema":"public"}  materialize
+27  drop  view  {"database":"materialize","id":"u2","item":"renamed","schema":"public"}  materialize
+28  create  source  {"database":"materialize","id":"u7","item":"s","schema":"public","size":"1"}  materialize
+29  alter  source  {"database":"materialize","id":"u7","item":"s","new_size":"2","old_size":"1","schema":"public"}  materialize
+30  drop  source  {"database":"materialize","id":"u7","item":"s","schema":"public"}  materialize
+31  drop  cluster-replica  {"cluster_id":"u2","cluster_name":"foo","replica_name":"r"}  materialize
+32  drop  cluster  {"id":"u2","name":"foo"}  materialize
