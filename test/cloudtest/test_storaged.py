@@ -147,3 +147,71 @@ def test_storaged_shutdown(mz: MaterializeApplication) -> None:
 
     wait(condition="delete", resource=storaged_pod)
     not_exists(storaged_svc)
+
+
+def test_sink_resizing(mz: MaterializeApplication) -> None:
+    """Test that resizing a given sink causes the storaged to be replaced."""
+
+    def get_num_workers(mz: MaterializeApplication) -> str:
+        return mz.kubectl(
+            "get",
+            "pods",
+            "--selector=environmentd.materialize.cloud/namespace=storage",
+            "-o",
+            r"jsonpath='{.items[*].metadata.labels.storage\.environmentd\.materialize\.cloud/size}'",
+        )
+
+    mz.testdrive.run(
+        input=dedent(
+            """
+            > CREATE TABLE t1 (f1 int NOT NULL)
+
+            > CREATE CONNECTION IF NOT EXISTS kafka FOR KAFKA BROKER '${testdrive.kafka-addr}'
+
+            > CREATE CONNECTION IF NOT EXISTS csr_conn
+              FOR CONFLUENT SCHEMA REGISTRY
+              URL '${testdrive.schema-registry-url}'
+
+            > INSERT INTO t1 VALUES (1)
+
+            > CREATE SINK resize_sink FROM t1
+              INTO KAFKA CONNECTION kafka (TOPIC 'testdrive-sink-resize-${testdrive.seed}')
+              FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+              ENVELOPE DEBEZIUM
+              WITH (SIZE = '2')
+
+            $ kafka-verify-data format=avro sink=materialize.public.resize_sink sort-messages=true
+            {"before": null, "after": {"row":{"f1": 1}}}
+            """
+        )
+    )
+    id = mz.environmentd.sql_query(
+        f"SELECT id FROM mz_sinks WHERE name = 'resize_sink'"
+    )[0][0]
+    assert id is not None
+    storaged = f"pod/storage-{id}-0"
+
+    assert get_num_workers(mz) == "'2'"
+
+    wait(condition="condition=Ready", resource=storaged)
+
+    mz.testdrive.run(
+        input=dedent(
+            """
+            > ALTER SINK resize_sink
+              SET (SIZE '16');
+            """
+        ),
+        no_reset=True,
+    )
+
+    wait(
+        condition="condition=Ready",
+        resource="pod",
+        label="storage.environmentd.materialize.cloud/size=16",
+    )
+
+    assert get_num_workers(mz) == "'16'"
+
+    mz.environmentd.sql("DROP SINK resize_sink")
+    wait(condition="delete", resource=storaged)
