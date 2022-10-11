@@ -20,7 +20,7 @@ $ skip-if
 SELECT ${arg.replica-size} > 1
 
 # In case the environment has other replicas
-> SET cluster_replica = default_replica
+> SET cluster_replica = r1
 
 > CREATE TABLE t (a int)
 
