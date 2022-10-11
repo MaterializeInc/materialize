@@ -44,9 +44,8 @@ count
 # threshold since the actual number of messages sent depends on the number of
 # workers.
 
-# log sources require a single replica
-$ skip-if
-SELECT ${arg.replicas} > 1
+# In case the environment has other replicas
+> SET cluster_replica = default_replica
 
 > SELECT
     sum(sent) as sent
