@@ -74,11 +74,8 @@ impl OffsetAntichain {
 
     // Data apis
 
-    /// Advance the frontier represented by this `OffsetAntichain` for `pid`
-    /// to a value that contains `offset`.
-    pub fn insert_data_up_to(&mut self, pid: PartitionId, offset: MzOffset) {
-        *self.inner.entry(pid).or_default() = offset + 1;
-    }
+    // TODO(aljoscha): These "data" APIs might be more confusing than they are
+    // worth.
 
     /// Produce offsets for all partitions in this `OffsetAntichain` that
     /// were at one point given by `insert_data_up_to`.
