@@ -157,6 +157,9 @@ contains:multiple timelines within one dataflow are not supported
 > CREATE VIEW values_cdcv2_view AS SELECT * FROM input_values_view, source_cdcv2;
 > CREATE VIEW values_mz_catalog_view (a, b, c, d, e, f, g, h, i, j, k) AS SELECT * FROM mz_relations, input_values_view, mz_views;
 
+# In case the environment has other replicas
+> SET cluster_replica = default_replica
+
 > SELECT count(*) FROM (SELECT count(*) FROM input_values_view, mz_internal.mz_dataflow_operators);
 1
 

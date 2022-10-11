@@ -9,9 +9,12 @@
 
 # Regression test for https://github.com/MaterializeInc/materialize/issues/13790
 
-# The contents of the introspection tables depend on the replica size and number of replicas
+# The contents of the introspection tables depend on the replica size
 $ skip-if
-SELECT ${arg.replica-size} > 1 OR ${arg.replicas} > 1;
+SELECT ${arg.replica-size} > 1
+
+# In case the environment has other replicas
+> SET cluster_replica = default_replica
 
 > CREATE TABLE t (a int)
 
