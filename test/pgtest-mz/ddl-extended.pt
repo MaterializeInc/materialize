@@ -33,6 +33,7 @@ ParseComplete
 BindComplete
 ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"XX000"},{"typ":"M","value":"division by zero"}]}
 ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"a"}]}
 DataRow {"fields":["1"]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
