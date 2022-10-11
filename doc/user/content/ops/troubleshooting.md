@@ -1,6 +1,10 @@
 ---
 title: "Troubleshooting"
-description: "Troubleshoot performance issues."
+description: "Troubleshoot issues."
+menu:
+  main:
+    parent: ops
+    weight: 70
 aliases:
   - /ops/diagnosing-using-sql
 ---
@@ -139,7 +143,8 @@ GROUP BY mdo.id, mdo.name
 ORDER BY elapsed_ns DESC;
 ```
 
-## Why is Materialize unresponsive for seconds at a time?
+<!-- mz_raw_compute_operator_durations is not available yet. -->
+<!-- ### Why is Materialize unresponsive for seconds at a time?
 
 Materialize operators get scheduled and try to
 behave themselves by returning control promptly, but
@@ -170,7 +175,7 @@ WHERE
     mrcod.worker_id = mdo.worker_id
 GROUP BY mdo.id, mdo.name, mrcod.duration_ns
 ORDER BY mrcod.duration_ns DESC;
-```
+``` -->
 
 ## Why is Materialize using so much memory?
 
@@ -314,11 +319,10 @@ WHERE
 
 ## How many `SUBSCRIBE` processes are running?
 
-You can get the number of active `SUBSCRIBE` processes in Materialize using the statement below, or another `SUBSCRIBE` statement.
-Every time `SUBSCRIBE` is invoked, a dataflow using the `Dataflow: subscribe` prefix is created.
+Materialize creates a dataflow using the `Dataflow: subscribe` prefix with a unique identifier **for each subscription running**.
+Query the number of active `SUBSCRIBE` dataflows in Materialize by using the following statement:
 
 ```sql
--- Report the number of `SUBSCRIBE` queries running
 SELECT count(1) FROM (
     SELECT id
     FROM mz_internal.mz_dataflows
