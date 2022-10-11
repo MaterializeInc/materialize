@@ -658,7 +658,7 @@ impl<S: Append + 'static> Coordinator<S> {
             "Materialized view",
         )?;
         self.validate_resource_limit(
-            self.catalog.compute_instances().count(),
+            self.catalog.user_compute_instances().count(),
             new_clusters,
             SystemVars::max_clusters,
             "Cluster",

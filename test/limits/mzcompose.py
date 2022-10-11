@@ -1350,7 +1350,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
         for replica_id in range(0, args.replicas):
             nodes = []
             for node_id in range(0, args.nodes):
-                node_name = f"computed_{cluster_id}_{replica_id}_{node_id}"
+                node_name = f"computed_u{cluster_id}_{replica_id}_{node_id}"
                 nodes.append(node_name)
 
             for node_id in range(0, args.nodes):
@@ -1405,10 +1405,10 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                 for replica_id in range(0, args.replicas):
                     nodes = []
                     for node_id in range(0, args.nodes):
-                        node_name = f"computed_{cluster_id}_{replica_id}_{node_id}"
+                        node_name = f"computed_u{cluster_id}_{replica_id}_{node_id}"
                         nodes.append(node_name)
 
-                    replica_name = f"replica_{cluster_id}_{replica_id}"
+                    replica_name = f"replica_u{cluster_id}_{replica_id}"
 
                     replica_definitions.append(
                         f"{replica_name} (REMOTE ["
@@ -1419,14 +1419,14 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                     )
 
                 c.sql(
-                    f"CREATE CLUSTER cluster_{cluster_id} REPLICAS ("
+                    f"CREATE CLUSTER cluster_u{cluster_id} REPLICAS ("
                     + ",".join(replica_definitions)
                     + ")"
                 )
 
             # Construct some dataflows in each cluster
             for cluster_id in range(0, args.clusters):
-                cluster_name = f"cluster_{cluster_id}"
+                cluster_name = f"cluster_u{cluster_id}"
 
                 c.testdrive(
                     dedent(
@@ -1456,7 +1456,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
 
             # Validate that each individual cluster is operating properly
             for cluster_id in range(0, args.clusters):
-                cluster_name = f"cluster_{cluster_id}"
+                cluster_name = f"cluster_u{cluster_id}"
 
                 c.testdrive(
                     dedent(

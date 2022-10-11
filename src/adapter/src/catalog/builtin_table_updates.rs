@@ -113,7 +113,7 @@ impl CatalogState {
         let id = self.compute_instances_by_name[name];
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTERS),
-            row: Row::pack_slice(&[Datum::UInt64(id), Datum::String(name)]),
+            row: Row::pack_slice(&[Datum::String(&id.to_string()), Datum::String(name)]),
             diff,
         }
     }
@@ -143,7 +143,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::UInt64(id),
                 Datum::String(name),
-                Datum::UInt64(compute_instance_id),
+                Datum::String(&compute_instance_id.to_string()),
                 Datum::from(size),
                 Datum::from(az),
             ]),
@@ -477,7 +477,7 @@ impl CatalogState {
                 Datum::UInt32(oid),
                 Datum::UInt64(schema_id.into()),
                 Datum::String(name),
-                Datum::UInt64(mview.compute_instance),
+                Datum::String(&mview.compute_instance.to_string()),
                 Datum::String(&query_string),
             ]),
             diff,
@@ -559,7 +559,7 @@ impl CatalogState {
                 Datum::UInt32(oid),
                 Datum::String(name),
                 Datum::String(&index.on.to_string()),
-                Datum::UInt64(index.compute_instance),
+                Datum::String(&index.compute_instance.to_string()),
             ]),
             diff,
         });

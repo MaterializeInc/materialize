@@ -174,7 +174,7 @@ fn parse_replica_service_name(
     service_name: &str,
 ) -> Result<(ComputeInstanceId, ReplicaId), anyhow::Error> {
     static SERVICE_NAME_RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"(?-u)^cluster-(\d+)-replica-(\d+)$").unwrap());
+        Lazy::new(|| Regex::new(r"(?-u)^cluster-([us]\d+)-replica-(\d+)$").unwrap());
 
     let caps = SERVICE_NAME_RE
         .captures(service_name)

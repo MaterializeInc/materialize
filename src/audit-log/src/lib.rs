@@ -156,7 +156,7 @@ pub struct NameV1 {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct IdNameV1 {
-    pub id: u64,
+    pub id: String,
     pub name: String,
 }
 
@@ -168,14 +168,14 @@ pub struct RenameItemV1 {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct DropComputeReplicaV1 {
-    pub cluster_id: u64,
+    pub cluster_id: String,
     pub cluster_name: String,
     pub replica_name: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct CreateComputeReplicaV1 {
-    pub cluster_id: u64,
+    pub cluster_id: String,
     pub cluster_name: String,
     pub replica_name: String,
     pub logical_size: String,
@@ -253,13 +253,13 @@ fn test_audit_log() -> Result<(), anyhow::Error> {
                 EventType::Drop,
                 ObjectType::ClusterReplica,
                 EventDetails::IdNameV1(IdNameV1 {
-                    id: 0,
+                    id: "u1".to_string(),
                     name: "name".into(),
                 }),
                 None,
                 2,
             )),
-            r#"{"V1":{"id":2,"event_type":"drop","object_type":"cluster-replica","event_details":{"IdNameV1":{"id":0,"name":"name"}},"user":null,"occurred_at":2}}"#,
+            r#"{"V1":{"id":2,"event_type":"drop","object_type":"cluster-replica","event_details":{"IdNameV1":{"id":"u1","name":"name"}},"user":null,"occurred_at":2}}"#,
         ),
     ];
 

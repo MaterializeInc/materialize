@@ -69,7 +69,7 @@ use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{
     Builtin, BuiltinLog, BuiltinStorageManagedTable, BuiltinTable, BuiltinType, Fingerprint,
-    BUILTINS, BUILTIN_ROLE_PREFIXES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
+    BUILTINS, BUILTIN_PREFIXES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
     MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
@@ -103,6 +103,8 @@ pub static HTTP_DEFAULT_USER: Lazy<User> = Lazy::new(|| User {
 });
 
 const CREATE_SQL_TODO: &str = "TODO";
+
+pub const DEFAULT_CLUSTER_REPLICA_NAME: &str = "r1";
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
 ///
@@ -1693,6 +1695,23 @@ impl CatalogItem {
             CatalogItem::StorageManagedTable(i) => Ok(CatalogItem::StorageManagedTable(i)),
         }
     }
+
+    fn compute_instance_id(&self) -> Option<ComputeInstanceId> {
+        match self {
+            CatalogItem::MaterializedView(mv) => Some(mv.compute_instance),
+            CatalogItem::Index(index) => Some(index.compute_instance),
+            CatalogItem::Table(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_)
+            | CatalogItem::StorageManagedTable(_) => None,
+        }
+    }
 }
 
 impl CatalogEntry {
@@ -2773,6 +2792,7 @@ impl<S: Append> Catalog<S> {
             &BootstrapArgs {
                 now: (now)(),
                 default_cluster_replica_size: "1".into(),
+                builtin_cluster_replica_size: "1".into(),
                 default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
             },
         )
@@ -3015,6 +3035,22 @@ impl<S: Append> Catalog<S> {
         name: &str,
     ) -> Result<&ComputeInstance, SqlCatalogError> {
         self.state.resolve_compute_instance(name)
+    }
+
+    pub fn active_compute_instance(
+        &self,
+        session: &Session,
+    ) -> Result<&ComputeInstance, AdapterError> {
+        // TODO(benesch): this check here is not sufficiently protective. It'd
+        // be very easy for a code path to accidentally avoid this check by
+        // calling `resolve_compute_instance(session.vars().cluster()`.
+        if session.user().name != SYSTEM_USER.name && session.vars().cluster() == SYSTEM_USER.name {
+            coord_bail!(
+                "system cluster '{}' cannot execute user queries",
+                SYSTEM_USER.name
+            );
+        }
+        Ok(self.resolve_compute_instance(session.vars().cluster())?)
     }
 
     pub fn state(&self) -> &CatalogState {
@@ -3640,7 +3676,8 @@ impl<S: Append> Catalog<S> {
                             ErrorKind::ReservedClusterName(name),
                         )));
                     }
-                    let id = tx.insert_compute_instance(&name, &arranged_introspection_sources)?;
+                    let id =
+                        tx.insert_user_compute_instance(&name, &arranged_introspection_sources)?;
                     state.add_to_audit_log(
                         session,
                         tx,
@@ -3649,7 +3686,7 @@ impl<S: Append> Catalog<S> {
                         EventType::Create,
                         ObjectType::Cluster,
                         EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
-                            id,
+                            id: id.to_string(),
                             name: name.clone(),
                         }),
                     )?;
@@ -3673,12 +3710,12 @@ impl<S: Append> Catalog<S> {
                             ErrorKind::ReservedReplicaName(name),
                         )));
                     }
-                    let id =
+                    let (replica_id, compute_instance_id) =
                         tx.insert_compute_replica(&on_cluster_name, &name, &config.clone().into())?;
                     if let ComputeReplicaLocation::Managed { size, .. } = &config.location {
                         let details = EventDetails::CreateComputeReplicaV1(
                             mz_audit_log::CreateComputeReplicaV1 {
-                                cluster_id: id,
+                                cluster_id: compute_instance_id.to_string(),
                                 cluster_name: on_cluster_name.clone(),
                                 replica_name: name.clone(),
                                 logical_size: size.clone(),
@@ -3698,7 +3735,7 @@ impl<S: Append> Catalog<S> {
                         state,
                         builtin_table_updates,
                         Action::CreateComputeReplica {
-                            id,
+                            id: replica_id,
                             name,
                             on_cluster_name,
                             config,
@@ -3712,6 +3749,13 @@ impl<S: Append> Catalog<S> {
                     item,
                 } => {
                     state.ensure_no_unstable_uses(&item)?;
+
+                    if let Some(id @ ComputeInstanceId::System(_)) = item.compute_instance_id() {
+                        let compute_instance_name = state.compute_instances_by_id[&id].name.clone();
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReadOnlyComputeInstance(compute_instance_name),
+                        )));
+                    }
 
                     if item.is_temporary() {
                         if name.qualifiers.database_spec != ResolvedDatabaseSpecifier::Ambient
@@ -3810,6 +3854,11 @@ impl<S: Append> Catalog<S> {
                     catalog_action(state, builtin_table_updates, Action::DropRole { name })?;
                 }
                 Op::DropComputeInstance { name } => {
+                    if is_reserved_name(&name) {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReservedClusterName(name),
+                        )));
+                    }
                     let (instance_id, introspection_source_index_ids) =
                         tx.remove_compute_instance(&name)?;
                     builtin_table_updates.push(state.pack_compute_instance_update(&name, -1));
@@ -3824,7 +3873,7 @@ impl<S: Append> Catalog<S> {
                         EventType::Drop,
                         ObjectType::Cluster,
                         EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
-                            id: instance_id,
+                            id: instance_id.to_string(),
                             name: name.clone(),
                         }),
                     )?;
@@ -3838,6 +3887,11 @@ impl<S: Append> Catalog<S> {
                     )?;
                 }
                 Op::DropComputeReplica { name, compute_name } => {
+                    if is_reserved_name(&name) {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReservedReplicaName(name),
+                        )));
+                    }
                     let instance = state.resolve_compute_instance(&compute_name)?;
                     tx.remove_compute_replica(&name, instance.id)?;
 
@@ -3861,7 +3915,7 @@ impl<S: Append> Catalog<S> {
 
                     let details =
                         EventDetails::DropComputeReplicaV1(mz_audit_log::DropComputeReplicaV1 {
-                            cluster_id: instance.id,
+                            cluster_id: instance.id.to_string(),
                             cluster_name: instance.name.clone(),
                             replica_name: name.clone(),
                         });
@@ -4594,6 +4648,11 @@ impl<S: Append> Catalog<S> {
         self.state.compute_instances_by_id.values()
     }
 
+    pub fn user_compute_instances(&self) -> impl Iterator<Item = &ComputeInstance> {
+        self.compute_instances()
+            .filter(|compute_instance| compute_instance.id.is_user())
+    }
+
     pub fn databases(&self) -> impl Iterator<Item = &Database> {
         self.state.database_by_id.values()
     }
@@ -4683,7 +4742,7 @@ impl<S: Append> Catalog<S> {
 }
 
 pub fn is_reserved_name(name: &str) -> bool {
-    BUILTIN_ROLE_PREFIXES
+    BUILTIN_PREFIXES
         .iter()
         .any(|prefix| name.starts_with(prefix))
 }
@@ -5327,6 +5386,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;
+    use mz_compute_client::controller::ComputeInstanceId;
     use std::collections::HashMap;
     use std::error::Error;
 
@@ -5622,7 +5682,7 @@ mod tests {
                                 .with_column("a", ScalarType::Int32.nullable(true))
                                 .with_key(vec![0]),
                             depends_on,
-                            compute_instance: 1,
+                            compute_instance: ComputeInstanceId::User(1),
                         })
                     }
                 };

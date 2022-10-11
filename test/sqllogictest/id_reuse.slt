@@ -87,11 +87,13 @@ u3 bar
 statement ok
 CREATE CLUSTER foo REPLICAS (r1 (size '1'))
 
-query IT rowsort
+query TT rowsort
 SELECT id, name FROM mz_clusters
 ----
-1 default
-2 foo
+s1 mz_system
+s2 mz_introspection
+u1 default
+u2 foo
 
 statement ok
 DROP CLUSTER foo CASCADE
@@ -99,8 +101,10 @@ DROP CLUSTER foo CASCADE
 statement ok
 CREATE CLUSTER bar REPLICAS (r1 (size '1'))
 
-query IT rowsort
+query TT rowsort
 SELECT id, name FROM mz_clusters
 ----
-1 default
-3 bar
+s1 mz_system
+s2 mz_introspection
+u1 default
+u3 bar

@@ -63,9 +63,9 @@ function ClusterReplicaView() {
         setSqlResponse(results);
         if (!replicaName && results.length > 0) {
           if(results.some(
-            result => ('default' == result[0]) && ('default_replica' == result[1]))) {
+            result => ('default' == result[0]) && ('r1' == result[1]))) {
             setCurrentClusterName('default');
-            setCurrentReplicaName('default_replica');
+            setCurrentReplicaName('r1');
           } else {
             setCurrentClusterName(results[0][0]);
             setCurrentReplicaName(results[0][1]);

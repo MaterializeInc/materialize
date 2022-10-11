@@ -709,7 +709,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // An arbitrary compute instance ID to satisfy the function calls below. Note that
         // this only works because this function will never run.
-        let compute_instance: ComputeInstanceId = 1;
+        let compute_instance = ComputeInstanceId::User(1);
 
         let df = DataflowDesc::new("".into());
         let _: () = self.ship_dataflow(df.clone(), compute_instance).await;

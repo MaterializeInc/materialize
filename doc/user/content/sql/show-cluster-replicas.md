@@ -7,7 +7,7 @@ menu:
 
 ---
 
-`SHOW CLUSTER REPLICAS` lists the [replicas](/overview/key-concepts/#cluster-replicas) for each cluster configured in Materialize. A cluster named `default` with a single replica named `default_replica` will exist in every environment; this cluster can be dropped at any time.
+`SHOW CLUSTER REPLICAS` lists the [replicas](/overview/key-concepts/#cluster-replicas) for each cluster configured in Materialize. A cluster named `default` with a single replica named `r1` will exist in every environment; this cluster can be dropped at any time.
 
 ## Syntax
 
@@ -20,10 +20,10 @@ SHOW CLUSTER REPLICAS;
 ```
 
 ```nofmt
-    cluster    |     replica     |  size  |
----------------+-----------------|--------|
- auction_house | bigger          | xlarge |
- default       | default_replica | xsmall |
+    cluster    | replica |  size  |
+---------------+---------|--------|
+ auction_house | bigger  | xlarge |
+ default       | r1      | xsmall |
 ```
 
 ```sql
@@ -31,9 +31,9 @@ SHOW CLUSTER REPLICAS WHERE cluster='default';
 ```
 
 ```nofmt
-    cluster    |     replica     |  size  |
----------------+-----------------|--------|
- default       | default_replica | xsmall |
+    cluster    | replica |  size  |
+---------------+---------|--------|
+ default       | r1      | xsmall |
 ```
 
 

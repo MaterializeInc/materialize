@@ -376,7 +376,7 @@ fn show_materialized_views<'a>(
     let mut where_clause = format!("schema_id = {schema_spec}");
 
     if let Some(cluster) = in_cluster {
-        write!(where_clause, " AND cluster_id = {}", cluster.id)
+        write!(where_clause, " AND cluster_id = '{}'", cluster.id)
             .expect("write on string cannot fail");
     }
 
@@ -475,7 +475,7 @@ pub fn show_indexes<'a>(
     }
 
     if let Some(cluster) = in_cluster {
-        query_filter.push(format!("clusters.id = {}", cluster.id))
+        query_filter.push(format!("clusters.id = '{}'", cluster.id))
     };
 
     let query = format!(

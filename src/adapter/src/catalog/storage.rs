@@ -10,7 +10,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::Hash;
 use std::iter::once;
-use std::str::FromStr;
 use std::time::Duration;
 
 use itertools::{max, Itertools};
@@ -33,10 +32,13 @@ use mz_stash::{Append, AppendBatch, Stash, StashError, TableTransaction, TypedCo
 use mz_storage::types::sources::Timeline;
 
 use crate::catalog;
-use crate::catalog::builtin::{BuiltinLog, BUILTIN_ROLES};
+use crate::catalog::builtin::{
+    BuiltinLog, BUILTIN_COMPUTE_INSTANCES, BUILTIN_COMPUTE_REPLICAS, BUILTIN_PREFIXES,
+    BUILTIN_ROLES,
+};
 use crate::catalog::error::{Error, ErrorKind};
-use crate::catalog::SerializedComputeReplicaConfig;
-use crate::catalog::SystemObjectMapping;
+use crate::catalog::{is_reserved_name, SystemObjectMapping};
+use crate::catalog::{SerializedComputeReplicaConfig, DEFAULT_CLUSTER_REPLICA_NAME};
 
 use super::{
     SerializedCatalogItem, SerializedComputeReplicaLocation, SerializedComputeReplicaLogging,
@@ -51,14 +53,15 @@ const PUBLIC_SCHEMA_ID: u64 = 3;
 const MZ_INTERNAL_SCHEMA_ID: u64 = 4;
 const INFORMATION_SCHEMA_ID: u64 = 5;
 const MATERIALIZE_ROLE_ID: u64 = 1;
-const DEFAULT_COMPUTE_INSTANCE_ID: u64 = 1;
+const DEFAULT_USER_COMPUTE_INSTANCE_ID: ComputeInstanceId = ComputeInstanceId::User(1);
 const DEFAULT_REPLICA_ID: u64 = 1;
 
 const DATABASE_ID_ALLOC_KEY: &str = "database";
 const SCHEMA_ID_ALLOC_KEY: &str = "schema";
 const USER_ROLE_ID_ALLOC_KEY: &str = "user_role";
 const SYSTEM_ROLE_ID_ALLOC_KEY: &str = "system_role";
-const COMPUTE_ID_ALLOC_KEY: &str = "compute";
+const USER_COMPUTE_ID_ALLOC_KEY: &str = "user_compute";
+const SYSTEM_COMPUTE_ID_ALLOC_KEY: &str = "system_compute";
 const REPLICA_ID_ALLOC_KEY: &str = "replica";
 pub(crate) const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 pub(crate) const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
@@ -126,11 +129,17 @@ async fn migrate<S: Append>(
             )?;
             txn.id_allocator.insert(
                 IdAllocKey {
-                    name: COMPUTE_ID_ALLOC_KEY.into(),
+                    name: USER_COMPUTE_ID_ALLOC_KEY.into(),
                 },
                 IdAllocValue {
-                    next_id: DEFAULT_COMPUTE_INSTANCE_ID + 1,
+                    next_id: DEFAULT_USER_COMPUTE_INSTANCE_ID.inner_id() + 1,
                 },
+            )?;
+            txn.id_allocator.insert(
+                IdAllocKey {
+                    name: SYSTEM_COMPUTE_ID_ALLOC_KEY.into(),
+                },
+                IdAllocValue { next_id: 1 },
             )?;
             txn.id_allocator.insert(
                 IdAllocKey {
@@ -207,7 +216,7 @@ async fn migrate<S: Append>(
             )?;
             txn.roles.insert(
                 RoleKey {
-                    id: RoleId::User(MATERIALIZE_ROLE_ID).to_string(),
+                    id: RoleId::User(MATERIALIZE_ROLE_ID),
                 },
                 RoleValue {
                     name: "materialize".into(),
@@ -217,25 +226,13 @@ async fn migrate<S: Append>(
                 name: "default".into(),
             };
             let default_replica = ComputeReplicaValue {
-                compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
-                name: "default_replica".into(),
-                config: SerializedComputeReplicaConfig {
-                    location: SerializedComputeReplicaLocation::Managed {
-                        size: bootstrap_args.default_cluster_replica_size.clone(),
-                        availability_zone: bootstrap_args.default_availability_zone.clone(),
-                        az_user_specified: false,
-                    },
-                    logging: SerializedComputeReplicaLogging {
-                        log_logging: false,
-                        interval: Some(Duration::from_secs(1)),
-                        sources: None,
-                        views: None,
-                    },
-                },
+                compute_instance_id: DEFAULT_USER_COMPUTE_INSTANCE_ID,
+                name: DEFAULT_CLUSTER_REPLICA_NAME.into(),
+                config: default_compute_replica_config(bootstrap_args),
             };
             txn.compute_instances.insert(
                 ComputeInstanceKey {
-                    id: DEFAULT_COMPUTE_INSTANCE_ID,
+                    id: DEFAULT_USER_COMPUTE_INSTANCE_ID,
                 },
                 default_instance.clone(),
             )?;
@@ -253,7 +250,7 @@ async fn migrate<S: Append>(
                         EventType::Create,
                         ObjectType::Cluster,
                         EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
-                            id: DEFAULT_COMPUTE_INSTANCE_ID,
+                            id: DEFAULT_USER_COMPUTE_INSTANCE_ID.to_string(),
                             name: default_instance.name.clone(),
                         }),
                         None,
@@ -272,7 +269,7 @@ async fn migrate<S: Append>(
                         ObjectType::ClusterReplica,
                         EventDetails::CreateComputeReplicaV1(
                             mz_audit_log::CreateComputeReplicaV1 {
-                                cluster_id: DEFAULT_COMPUTE_INSTANCE_ID,
+                                cluster_id: DEFAULT_USER_COMPUTE_INSTANCE_ID.to_string(),
                                 cluster_name: default_instance.name,
                                 replica_name: default_replica.name,
                                 logical_size: bootstrap_args.default_cluster_replica_size.clone(),
@@ -296,6 +293,13 @@ async fn migrate<S: Append>(
             txn.configs
                 .insert(USER_VERSION.to_string(), ConfigValue { value: 0 })?;
             Ok(())
+        },
+        |txn: &mut Transaction<'_, S>, _bootstrap_args| add_new_builtin_roles_migration(txn),
+        |txn: &mut Transaction<'_, S>, _bootstrap_args| {
+            add_new_builtin_compute_instances_migration(txn)
+        },
+        |txn: &mut Transaction<'_, S>, bootstrap_args| {
+            add_new_builtin_compute_replicas_migration(txn, bootstrap_args)
         },
         // Add new migrations above.
         //
@@ -329,9 +333,115 @@ async fn migrate<S: Append>(
     Ok(())
 }
 
+fn add_new_builtin_roles_migration<S: Append>(
+    txn: &mut Transaction<'_, S>,
+) -> Result<(), catalog::error::Error> {
+    let role_names: HashSet<_> = txn
+        .roles
+        .items()
+        .into_values()
+        .map(|value| value.name)
+        .collect();
+    for builtin_role in &*BUILTIN_ROLES {
+        assert!(
+            is_reserved_name(builtin_role.name),
+            "builtin role {builtin_role:?} must start with one of the following prefixes {}",
+            BUILTIN_PREFIXES.join(", ")
+        );
+        if !role_names.contains(builtin_role.name) {
+            txn.insert_system_role(builtin_role.name)?;
+        }
+    }
+    Ok(())
+}
+
+fn add_new_builtin_compute_instances_migration<S: Append>(
+    txn: &mut Transaction<'_, S>,
+) -> Result<(), catalog::error::Error> {
+    let compute_instance_names: HashSet<_> = txn
+        .compute_instances
+        .items()
+        .into_values()
+        .map(|value| value.name)
+        .collect();
+
+    for builtin_compute_instance in &*BUILTIN_COMPUTE_INSTANCES {
+        assert!(
+            is_reserved_name(builtin_compute_instance.name),
+                "builtin compute instance {builtin_compute_instance:?} must start with one of the following prefixes {}",
+                BUILTIN_PREFIXES.join(", ")
+        );
+        if !compute_instance_names.contains(builtin_compute_instance.name) {
+            txn.insert_system_compute_instance(builtin_compute_instance.name, &Vec::new())?;
+        }
+    }
+    Ok(())
+}
+
+fn add_new_builtin_compute_replicas_migration<S: Append>(
+    txn: &mut Transaction<'_, S>,
+    bootstrap_args: &BootstrapArgs,
+) -> Result<(), catalog::error::Error> {
+    let compute_instance_lookup: HashMap<_, _> = txn
+        .compute_instances
+        .items()
+        .into_iter()
+        .map(|(key, value)| (value.name, key.id))
+        .collect();
+
+    let compute_replicas: HashMap<_, _> =
+        txn.compute_replicas
+            .items()
+            .into_values()
+            .fold(HashMap::new(), |mut acc, value| {
+                acc.entry(value.compute_instance_id)
+                    .or_insert_with(HashSet::new)
+                    .insert(value.name);
+                acc
+            });
+
+    for builtin_compute_replica in &*BUILTIN_COMPUTE_REPLICAS {
+        let compute_instance_id = compute_instance_lookup
+            .get(builtin_compute_replica.compute_instance_name)
+            .expect("builtin compute replica references non-existent compute instance");
+
+        let compute_replica_names = compute_replicas.get(compute_instance_id);
+        if matches!(compute_replica_names, None)
+            || matches!(compute_replica_names, Some(names) if !names.contains(builtin_compute_replica.name))
+        {
+            let config = default_compute_replica_config(bootstrap_args);
+            txn.insert_compute_replica(
+                builtin_compute_replica.compute_instance_name,
+                builtin_compute_replica.name,
+                &config,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn default_compute_replica_config(
+    bootstrap_args: &BootstrapArgs,
+) -> SerializedComputeReplicaConfig {
+    SerializedComputeReplicaConfig {
+        location: SerializedComputeReplicaLocation::Managed {
+            size: bootstrap_args.builtin_cluster_replica_size.clone(),
+            availability_zone: bootstrap_args.default_availability_zone.clone(),
+            az_user_specified: false,
+        },
+        logging: SerializedComputeReplicaLogging {
+            log_logging: false,
+            interval: Some(Duration::from_secs(1)),
+            sources: None,
+            views: None,
+        },
+    }
+}
+
 pub struct BootstrapArgs {
     pub now: EpochMillis,
     pub default_cluster_replica_size: String,
+    pub builtin_cluster_replica_size: String,
     pub default_availability_zone: String,
 }
 
@@ -444,32 +554,11 @@ impl<S: Append> Connection<S> {
     }
 
     pub async fn load_roles(&mut self) -> Result<Vec<(RoleId, String)>, Error> {
-        // Add in any new builtin roles.
-        let mut tx = self.transaction().await?;
-        let role_names: HashSet<_> = tx
-            .roles
-            .items()
-            .into_values()
-            .map(|value| value.name)
-            .collect();
-        for builtin_role in &*BUILTIN_ROLES {
-            if !role_names.contains(builtin_role.name) {
-                tx.insert_system_role(builtin_role.name)?;
-            }
-        }
-        tx.commit().await?;
-
         Ok(COLLECTION_ROLE
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
-            .map(|(k, v)| {
-                (
-                    RoleId::from_str(&k.id)
-                        .unwrap_or_else(|_| panic!("Invalid persisted role id {}", k.id)),
-                    v.name,
-                )
-            })
+            .map(|(k, v)| (k.id, v.name))
             .collect())
     }
 
@@ -908,7 +997,7 @@ impl<'a, S: Append> Transaction<'a, S> {
         let id = self.get_and_increment_id(id_alloc_key.to_string())?;
         let id = role_id_variant(id);
         match self.roles.insert(
-            RoleKey { id: id.to_string() },
+            RoleKey { id },
             RoleValue {
                 name: role_name.to_string(),
             },
@@ -921,12 +1010,45 @@ impl<'a, S: Append> Transaction<'a, S> {
     }
 
     /// Panics if any introspection source id is not a system id
-    pub fn insert_compute_instance(
+    pub fn insert_user_compute_instance(
         &mut self,
         cluster_name: &str,
         introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
     ) -> Result<ComputeInstanceId, Error> {
-        let id = self.get_and_increment_id(COMPUTE_ID_ALLOC_KEY.to_string())?;
+        self.insert_compute_instance(
+            cluster_name,
+            introspection_source_indexes,
+            USER_COMPUTE_ID_ALLOC_KEY,
+            ComputeInstanceId::User,
+        )
+    }
+
+    /// Panics if any introspection source id is not a system id
+    pub fn insert_system_compute_instance(
+        &mut self,
+        cluster_name: &str,
+        introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
+    ) -> Result<ComputeInstanceId, Error> {
+        self.insert_compute_instance(
+            cluster_name,
+            introspection_source_indexes,
+            SYSTEM_COMPUTE_ID_ALLOC_KEY,
+            ComputeInstanceId::System,
+        )
+    }
+
+    fn insert_compute_instance<F>(
+        &mut self,
+        cluster_name: &str,
+        introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
+        id_alloc_key: &str,
+        compute_instance_id_variant: F,
+    ) -> Result<ComputeInstanceId, Error>
+    where
+        F: Fn(u64) -> ComputeInstanceId,
+    {
+        let id = self.get_and_increment_id(id_alloc_key.to_string())?;
+        let id = compute_instance_id_variant(id);
         if let Err(_) = self.compute_instances.insert(
             ComputeInstanceKey { id },
             ComputeInstanceValue {
@@ -963,7 +1085,7 @@ impl<'a, S: Append> Transaction<'a, S> {
         compute_name: &str,
         replica_name: &str,
         config: &SerializedComputeReplicaConfig,
-    ) -> Result<ReplicaId, Error> {
+    ) -> Result<(ReplicaId, ComputeInstanceId), Error> {
         let id = self.get_and_increment_id(REPLICA_ID_ALLOC_KEY.to_string())?;
         let mut compute_instance_id = None;
         for (ComputeInstanceKey { id }, ComputeInstanceValue { name }) in
@@ -974,10 +1096,11 @@ impl<'a, S: Append> Transaction<'a, S> {
                 break;
             }
         }
+        let compute_instance_id = compute_instance_id.unwrap();
         if let Err(_) = self.compute_replicas.insert(
             ComputeReplicaKey { id },
             ComputeReplicaValue {
-                compute_instance_id: compute_instance_id.unwrap(),
+                compute_instance_id,
                 name: replica_name.into(),
                 config: config.clone(),
             },
@@ -987,7 +1110,7 @@ impl<'a, S: Append> Transaction<'a, S> {
                 compute_name.to_string(),
             )));
         };
-        Ok(id)
+        Ok((id, compute_instance_id))
     }
 
     pub fn insert_item(
@@ -1068,7 +1191,10 @@ impl<'a, S: Append> Transaction<'a, S> {
         }
     }
 
-    pub fn remove_compute_instance(&mut self, name: &str) -> Result<(u64, Vec<GlobalId>), Error> {
+    pub fn remove_compute_instance(
+        &mut self,
+        name: &str,
+    ) -> Result<(ComputeInstanceId, Vec<GlobalId>), Error> {
         let deleted = self.compute_instances.delete(|_k, v| v.name == name);
         if deleted.is_empty() {
             Err(SqlCatalogError::UnknownComputeInstance(name.to_owned()).into())
@@ -1465,7 +1591,7 @@ struct GidMappingValue {
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct ComputeInstanceKey {
-    id: u64,
+    id: ComputeInstanceId,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
@@ -1531,7 +1657,7 @@ struct ItemValue {
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct RoleKey {
-    id: String,
+    id: RoleId,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]

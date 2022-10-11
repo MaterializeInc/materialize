@@ -34,13 +34,15 @@ use mz_sql::catalog::{
 };
 use mz_storage::controller::IntrospectionType;
 
-use crate::catalog::SYSTEM_USER;
+use crate::catalog::{DEFAULT_CLUSTER_REPLICA_NAME, SYSTEM_USER};
 
 pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
 pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
 pub const PG_CATALOG_SCHEMA: &str = "pg_catalog";
 pub const MZ_INTERNAL_SCHEMA: &str = "mz_internal";
 pub const INFORMATION_SCHEMA: &str = "information_schema";
+
+pub static BUILTIN_PREFIXES: Lazy<Vec<&str>> = Lazy::new(|| vec!["mz_", "pg_"]);
 
 pub enum Builtin<T: 'static + TypeReference> {
     Log(&'static BuiltinLog),
@@ -128,14 +130,28 @@ pub struct BuiltinFunc {
     pub inner: &'static mz_sql::func::Func,
 }
 
-pub static BUILTIN_ROLE_PREFIXES: Lazy<Vec<&str>> = Lazy::new(|| vec!["mz_", "pg_"]);
-
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BuiltinRole {
     /// Name of the builtin role.
     ///
-    /// IMPORTANT: Must start with a prefix from [`BUILTIN_ROLE_PREFIXES`].
+    /// IMPORTANT: Must start with a prefix from [`BUILTIN_PREFIXES`].
     pub name: &'static str,
+}
+
+#[derive(Clone, Debug)]
+pub struct BuiltinComputeInstance {
+    /// Name of the compute instance.
+    ///
+    /// IMPORTANT: Must start with a prefix from [`BUILTIN_PREFIXES`].
+    pub name: &'static str,
+}
+
+#[derive(Clone, Debug)]
+pub struct BuiltinComputeReplica {
+    /// Name of the compute replica.
+    pub name: &'static str,
+    /// Name of the compute instance that this replica belongs to.
+    pub compute_instance_name: &'static str,
 }
 
 /// Uniquely identifies the definition of a builtin object.
@@ -1162,7 +1178,7 @@ pub static MZ_INDEXES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("on_id", ScalarType::String.nullable(false))
-        .with_column("cluster_id", ScalarType::UInt64.nullable(false)),
+        .with_column("cluster_id", ScalarType::String.nullable(false)),
 });
 pub static MZ_INDEX_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_index_columns",
@@ -1243,7 +1259,7 @@ pub static MZ_MATERIALIZED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("cluster_id", ScalarType::UInt64.nullable(false))
+        .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("definition", ScalarType::String.nullable(false)),
 });
 pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1319,7 +1335,7 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_clusters",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::UInt64.nullable(false))
+        .with_column("id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false)),
 });
 pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1336,7 +1352,7 @@ pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("cluster_id", ScalarType::UInt64.nullable(false))
+        .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("size", ScalarType::String.nullable(true))
         .with_column("availability_zone", ScalarType::String.nullable(true)),
 });
@@ -2251,9 +2267,30 @@ FROM mz_catalog.mz_roles r
 JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
 };
 
-pub static MZ_SYSTEM: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
+pub static MZ_SYSTEM_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*SYSTEM_USER.name,
 });
+
+pub static MZ_SYSTEM_COMPUTE_INSTANCE: Lazy<BuiltinComputeInstance> =
+    Lazy::new(|| BuiltinComputeInstance {
+        name: &*SYSTEM_USER.name,
+    });
+
+pub static MZ_SYSTEM_COMPUTE_REPLICA: Lazy<BuiltinComputeReplica> =
+    Lazy::new(|| BuiltinComputeReplica {
+        name: DEFAULT_CLUSTER_REPLICA_NAME,
+        compute_instance_name: MZ_SYSTEM_COMPUTE_INSTANCE.name,
+    });
+
+pub static MZ_INTROSPECTION: Lazy<BuiltinComputeInstance> = Lazy::new(|| BuiltinComputeInstance {
+    name: "mz_introspection",
+});
+
+pub static MZ_INTROSPECTION_REPLICA: Lazy<BuiltinComputeReplica> =
+    Lazy::new(|| BuiltinComputeReplica {
+        name: DEFAULT_CLUSTER_REPLICA_NAME,
+        compute_instance_name: MZ_INTROSPECTION.name,
+    });
 
 /// List of all builtin objects sorted topologically by dependency.
 pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
@@ -2449,7 +2486,11 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
 
     builtins
 });
-pub static BUILTIN_ROLES: Lazy<Vec<&BuiltinRole>> = Lazy::new(|| vec![&*MZ_SYSTEM]);
+pub static BUILTIN_ROLES: Lazy<Vec<&BuiltinRole>> = Lazy::new(|| vec![&*MZ_SYSTEM_ROLE]);
+pub static BUILTIN_COMPUTE_INSTANCES: Lazy<Vec<&BuiltinComputeInstance>> =
+    Lazy::new(|| vec![&*MZ_SYSTEM_COMPUTE_INSTANCE, &*MZ_INTROSPECTION]);
+pub static BUILTIN_COMPUTE_REPLICAS: Lazy<Vec<&BuiltinComputeReplica>> =
+    Lazy::new(|| vec![&*MZ_SYSTEM_COMPUTE_REPLICA, &*MZ_INTROSPECTION_REPLICA]);
 
 #[allow(non_snake_case)]
 pub mod BUILTINS {
