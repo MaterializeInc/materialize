@@ -1252,8 +1252,10 @@ where
                 if !cap_set.is_empty() {
                     trace!(
                         "reclock({id}) {worker_id}/{worker_count}: \
-                        downgrading to {:?}",
-                        new_ts_upper
+                        downgrading to {:?} \
+                        global_source_upper {:?}",
+                        new_ts_upper,
+                        global_source_upper
                     );
 
                     cap_set
