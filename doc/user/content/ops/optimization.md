@@ -1,6 +1,6 @@
 ---
-title: "Speed up"
-description: "Recommendations to speed up queries"
+title: "Optimization"
+description: "Recommendations for query optimization in Materialize."
 menu:
   main:
     parent: ops
