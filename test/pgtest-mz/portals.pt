@@ -27,7 +27,7 @@ Sync
 Query {"query": "FETCH c"}
 ----
 
-until err_field_typs=M
+until
 ReadyForQuery
 ReadyForQuery
 ----
@@ -36,5 +36,5 @@ BindComplete
 DataRow {"fields":["1"]}
 PortalSuspended
 ReadyForQuery {"status":"I"}
-ErrorResponse {"fields":[{"typ":"M","value":"cursor \"c\" does not exist"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"34000"},{"typ":"M","value":"cursor \"c\" does not exist"}]}
 ReadyForQuery {"status":"I"}
