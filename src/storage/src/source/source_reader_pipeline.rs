@@ -563,11 +563,16 @@ where
                         Either::Right((Some(Event::Progress(resume_frontier_update)), _)) => {
                             // The first message from the resumption frontier source
                             // could be the same frontier as the initialization frontier, so we
-                            // just move on
+                            // just move on.
+                            //
+                            // Additionally, the empty
+                            // `resumption_frontier` currently has no meaningful mapping, and
+                            // occurs only when a source is terminating.
                             if PartialOrder::less_equal(
                                 &resume_frontier_update,
                                 &initial_resume_upper,
-                            ) {
+                            ) || resume_frontier_update.elements().is_empty()
+                            {
                                 continue;
                             }
                             tracing::trace!(
@@ -884,16 +889,36 @@ where
                 // from the source_reader_operator does.
                 //
                 // Note that we are able to compact to JUST before the resumption frontier.
-                let upper_ts = frontiers.borrow()[1].as_option().copied().unwrap();
-                let compaction_since = Antichain::from_elem(upper_ts.saturating_sub(1));
-                if PartialOrder::less_than(&last_compaction_since, &compaction_since) {
-                    trace!(
-                        "remap({id}) {worker_id}/{worker_count}: compacting remap \
+                // Also note this can happen BEFORE we inspect the input. This is somewhat
+                // of an oddity in the timely world, but this frontier can ONLY advance
+                // past the input AFTER the output capability of this operator itself has
+                // been downgraded (which drives the data shard upper), AND the
+                // remap shard has been advanced below.
+                //
+                // Additionally, the empty
+                // `resumption_frontier` currently occurs only when a source is terminating,
+                // and we avoid compacting when this happens, as reclocking does not support
+                // empty frontiers.
+                //
+                // TODO(guswynn|petrosagg): support compaction to the empty frontier.
+                //
+                // This extra block is necessary to avoid holding a `RefCell` across an await,
+                // or at least convincing clippy of this fact.
+                if let Some(upper_ts) = {
+                    let f = frontiers.borrow();
+                    let upper_ts: Option<Timestamp> = f[1].as_option().copied();
+                    upper_ts
+                } {
+                    let compaction_since = Antichain::from_elem(upper_ts.saturating_sub(1));
+                    if PartialOrder::less_than(&last_compaction_since, &compaction_since) {
+                        trace!(
+                            "remap({id}) {worker_id}/{worker_count}: compacting remap \
                         shard to: {:?}",
-                        compaction_since,
-                    );
-                    timestamper.compact(compaction_since.clone()).await;
-                    last_compaction_since = compaction_since;
+                            compaction_since,
+                        );
+                        timestamper.compact(compaction_since.clone()).await;
+                        last_compaction_since = compaction_since;
+                    }
                 }
 
                 input.for_each(|_cap, data| {
