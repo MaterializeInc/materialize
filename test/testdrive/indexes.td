@@ -194,7 +194,7 @@ foo_primary_idx1    foo clstr   {a,b,z}
 > SHOW INDEXES FROM public WHERE name = 'foo_primary_idx1'
 foo_primary_idx1    foo clstr   {a,b,z}
 
-! SHOW INDEXES FROM public FROM foo
+! SHOW INDEXES FROM public ON foo
 contains:Cannot specify both FROM and ON
 
 ! SHOW INDEXES FROM nonexistent

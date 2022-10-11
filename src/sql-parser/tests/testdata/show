@@ -236,11 +236,11 @@ SHOW INDEXES LIKE 'pattern'
 Show(ShowIndexes(ShowIndexesStatement { on_object: None, from_schema: None, in_cluster: None, filter: Some(Like("pattern")) }))
 
 parse-statement
-SHOW INDEXES ON SCHEMA s ON t
+SHOW INDEXES FROM s ON t
 ----
 error: Cannot specify both FROM and ON
-SHOW INDEXES ON SCHEMA s ON t
-                            ^
+SHOW INDEXES FROM s ON t
+                       ^
 
 parse-statement
 SHOW CREATE VIEW foo
