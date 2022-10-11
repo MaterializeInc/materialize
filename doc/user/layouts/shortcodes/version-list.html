@@ -15,7 +15,10 @@
               </a>
             </strong>
           </td>
-          <td>{{$page.Date.Format "January 2, 2006"}}</td>
+          <td>
+            {{$page.Date.Format "January 2, 2006"}}
+            {{if not $page.Params.released}}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<em>Not yet released.</em>{{end}}
+          </td>
         </tr>
       {{end}}
     </tbody>
