@@ -467,7 +467,7 @@ where
         storage_metadata: _,
         resume_upper: initial_resume_upper,
         base_metrics,
-        now: _,
+        now: now_fn,
         persist_clients: _,
     } = config;
 
@@ -546,9 +546,16 @@ where
 
                 let mut timer = Instant::now();
 
-                // We just use an advancing number for our capability. No one cares
-                // about what this actually is, downstream.
-                let mut batch_counter = timely::progress::Timestamp::minimum();
+                // The timestamp that we use for emitting untimestamped batches.
+                // This doesn't _have_ to be wall-clock time, but it's easy
+                // enough to have these somewhat synchronized between all the
+                // workers, which ensures that downstream operators can always
+                // make progress.
+                //
+                // NOTE: This is separate from the wall-clock time that we use
+                // to timestamp messages. Though in practice they're the same,
+                // right now.
+                let mut emit_ts = Timestamp::from((*now_fn)());
 
                 loop {
                     let srnf = source_reader.next();
@@ -666,7 +673,7 @@ where
                     // Wrap in an Rc to avoid cloning when sending it on.
                     let message_batch = Rc::new(RefCell::new(Some(message_batch)));
 
-                    let cap = cap_set.delayed(&batch_counter);
+                    let cap = cap_set.delayed(&emit_ts);
                     {
                         let mut output = output.activate();
                         let mut session = output.session(&cap);
@@ -674,10 +681,15 @@ where
                         session.give((message_batch, source_upper_summary));
                     }
                     if is_final {
-                        cap_set.downgrade(&[batch_counter]);
+                        trace!(
+                            "create_source_raw({id}) {worker_id}/{worker_count}: \
+                            downgrading to: {:?}",
+                            emit_ts
+                        );
+                        cap_set.downgrade(&[emit_ts]);
                     }
 
-                    batch_counter = batch_counter.checked_add(1).expect("exhausted counter");
+                    emit_ts = Timestamp::from((*now_fn)());
 
                     if timer.elapsed() > YIELD_INTERVAL {
                         timer = Instant::now();
