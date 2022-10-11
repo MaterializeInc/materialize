@@ -14,7 +14,7 @@ const hpccWasm = window['@hpcc-js/wasm'];
 async function query(sql) {
   const response = await fetch('/api/sql', {
     method: 'POST',
-    body: JSON.stringify({ sql: sql }),
+    body: JSON.stringify({ query: sql }),
     headers: { 'Content-Type': 'application/json' },
   });
   if (!response.ok) {
