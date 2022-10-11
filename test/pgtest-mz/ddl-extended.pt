@@ -13,9 +13,11 @@ Parse {"query": "SELECT 1/0"}
 Bind
 Execute
 Sync
+Query {"query": "SELECT * FROM a"}
 ----
 
 until
+ReadyForQuery
 ReadyForQuery
 ----
 ParseComplete
@@ -30,6 +32,9 @@ CommandComplete {"tag":"INSERT 0 1"}
 ParseComplete
 BindComplete
 ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"XX000"},{"typ":"M","value":"division by zero"}]}
+ReadyForQuery {"status":"I"}
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
 
 send

@@ -1743,7 +1743,7 @@ fn wait_for_view_population(
     let current_isolation = mz_client
         .query_one("SHOW transaction_isolation", &[])?
         .get::<_, String>(0);
-    let _ = mz_client.query_one("SET transaction_isolation = SERIALIZABLE", &[]);
+    mz_client.query_one("SET transaction_isolation = SERIALIZABLE", &[])?;
     Retry::default()
         .max_duration(Duration::from_secs(10))
         .retry(|_| {
