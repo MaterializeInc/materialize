@@ -497,15 +497,15 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
             f.write_node(envelope);
         }
 
+        if let Some(subsources) = &self.subsources {
+            f.write_str(" ");
+            f.write_node(subsources);
+        }
+
         if !self.with_options.is_empty() {
             f.write_str(" WITH (");
             f.write_node(&display::comma_separated(&self.with_options));
             f.write_str(")");
-        }
-
-        if let Some(subsources) = &self.subsources {
-            f.write_str(" ");
-            f.write_node(subsources);
         }
     }
 }
