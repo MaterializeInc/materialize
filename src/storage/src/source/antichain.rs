@@ -106,6 +106,16 @@ impl OffsetAntichain {
     pub fn insert(&mut self, pid: PartitionId, m: MzOffset) -> Option<MzOffset> {
         self.inner.insert(pid, m)
     }
+
+    /// Insert a new `MzOffset` frontier value for `pid` if it is larger than
+    /// the previously stored value.
+    pub fn maybe_insert(&mut self, pid: PartitionId, offset: MzOffset) {
+        self.inner
+            .entry(pid)
+            .and_modify(|prev| *prev = std::cmp::max(*prev, offset))
+            .or_insert(offset);
+    }
+
     /// The same as `insert`, but for many values.
     pub fn extend<T: IntoIterator<Item = (PartitionId, MzOffset)>>(&mut self, iter: T) {
         self.inner.extend(iter)

@@ -333,6 +333,10 @@ where
 
                             match message {
                                 SourceMessageType::DropPartitionCapabilities(mut pids) => {
+                                    trace!("source_reader({id}) \
+                                          {worker_id}/{worker_count}: \
+                                          dropping partition capability for: {:?}",
+                                          pids);
                                     unconsumed_partitions.append(&mut pids);
                                 }
                                 SourceMessageType::Finalized(message) | SourceMessageType::InProgress(message) => {
@@ -916,13 +920,7 @@ where
 
                     for batch_upper_summary in buffer.drain(..) {
                         for (pid, offset) in batch_upper_summary.batch_upper.iter() {
-                            let previous_offset = global_source_upper.insert(pid.clone(), *offset);
-
-                            // TODO(guswynn&aljoscha&petrosagg): ensure this operator does not
-                            // require ordered input.
-                            if let Some(previous_offset) = previous_offset {
-                                assert!(previous_offset <= *offset);
-                            }
+                            global_source_upper.maybe_insert(pid.clone(), *offset);
                         }
                     }
                 });
@@ -1049,10 +1047,11 @@ where
         // The global view of the source_upper, which we track by combining
         // summaries from the raw reader operators.
         let mut global_source_upper = OffsetAntichain::new();
-        // For each partition, track the batch time and offset of the most recent
-        // batch. When the `batch_input` frontier has advanced past this batch time
-        // the `global_source_upper` can be advanced.
-        let mut batch_times: HashMap<PartitionId, (Timestamp, MzOffset)> = HashMap::new();
+
+        // Updates for `global_source_upper`. We stash these when they come in
+        // and process them once they are not beyond the frontier (in the domain
+        // of the timestamp that drives forward the ingestion pipeline) anymore.
+        let mut source_upper_updates = Vec::new();
 
         let mut untimestamped_batches = VecDeque::new();
 
@@ -1064,58 +1063,19 @@ where
                         .borrow_mut()
                         .take()
                         .expect("batch already taken, but we should be the only consumer");
-                    for (pid, offset) in batch.source_upper.iter() {
-                        // If we have a time for the batch in `batch_times` already, we go onto
-                        // checking the frontier. Otherwise, place the time and offset in the map
-                        // and wait for the next empty batch to push us along.
-                        if let Some((batch_ts, advance_to)) = batch_times.get(pid) {
-                            trace!(
-                                "reclock({id}) {worker_id}/{worker_count}: batch frontier: {:?}, \
-                                processing batch at ts: {}, \
-                                wanting to advance to: {:?}",
-                                frontiers[0].frontier(),
-                                batch_ts,
-                                advance_to
-                            );
-                            // If the batch_input frontier has advanced past this batch time, then
-                            // we can advance the `global_source_upper`, which will later downgrade
-                            // `cap_set`, as we are sure we have seen all messages for this
-                            // `source_upper`.
-                            let should_advance =
-                                if let Some(frontier_ts) = frontiers[0].frontier().as_option() {
-                                    frontier_ts > batch_ts
-                                } else {
-                                    // The empty frontier is trivially past all times
-                                    true
-                                };
 
-                            if should_advance {
-                                global_source_upper.insert(pid.clone(), *advance_to);
-                                // We also replace the value in `batch_times` with the new
-                                // offset, associated with the frontier, to move it along
-                                batch_times.insert(pid.clone(), (cap.time().clone(), *offset));
-                                continue;
-                            } else if offset > advance_to {
-                                // Otherwise we advance to the higher offset, assuming
-                                // that eventually the batch frontier will eventually
-                                // go past this time.
-                                batch_times.insert(pid.clone(), (cap.time().clone(), *offset));
-                            }
-                        } else {
-                            batch_times.insert(pid.clone(), (cap.time().clone(), *offset));
-                        }
+                    trace!(
+                        "reclock({id}) {worker_id}/{worker_count}: \
+                        stashing update for global_source_upper: {:?}",
+                        batch.source_upper,
+                    );
+
+                    for (pid, offset) in batch.source_upper.iter() {
+                        source_upper_updates.push((*cap.time(), (pid.clone(), *offset)));
                     }
                     untimestamped_batches.push_back(batch)
                 }
             });
-
-            // If this is the last set of updates, we finalize
-            // the frontier.
-            if frontiers[0].frontier().is_empty() {
-                batch_times.drain().for_each(|(pid, (_, offset))| {
-                    global_source_upper.insert(pid, offset);
-                });
-            }
 
             remap_input.for_each(|cap, data| {
                 data.swap(&mut remap_trace_buffer);
@@ -1232,6 +1192,27 @@ where
                     .unwrap_or(Timestamp::MAX)
                     .into(),
             );
+
+            // Update our view of the global source upper after we're done with
+            // everything else that needs processing.
+            let ingest_frontier = frontiers[0].frontier();
+            for (cap, (pid, offset)) in source_upper_updates.iter() {
+                if ingest_frontier.less_equal(cap) {
+                    continue;
+                }
+
+                trace!(
+                    "reclock({id}) {worker_id}/{worker_count}: \
+                    applying source_upper update ({:?}, {:?}) \
+                    global_source_upper {:?}",
+                    pid,
+                    offset,
+                    global_source_upper
+                );
+
+                global_source_upper.maybe_insert(pid.clone(), *offset);
+            }
+            source_upper_updates.retain(|(cap, _update)| ingest_frontier.less_equal(cap));
 
             // It can happen that our view of the global source_upper is not yet
             // up to date with what the ReclockOperator thinks. We will
