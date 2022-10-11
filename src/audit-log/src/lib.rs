@@ -100,10 +100,13 @@ pub enum ObjectType {
     Cluster,
     ClusterReplica,
     Connection,
+    Database,
     Func,
     Index,
     MaterializedView,
+    Role,
     Secret,
+    Schema,
     Sink,
     Source,
     Table,
@@ -117,9 +120,12 @@ impl ObjectType {
             ObjectType::Cluster => "Cluster",
             ObjectType::ClusterReplica => "Cluster Replica",
             ObjectType::Connection => "Connection",
+            ObjectType::Database => "Database",
             ObjectType::Func => "Function",
             ObjectType::Index => "Index",
             ObjectType::MaterializedView => "Materialized View",
+            ObjectType::Role => "Role",
+            ObjectType::Schema => "Schema",
             ObjectType::Secret => "Secret",
             ObjectType::Sink => "Sink",
             ObjectType::Source => "Source",
@@ -136,10 +142,17 @@ serde_plain::derive_display_from_serialize!(ObjectType);
 pub enum EventDetails {
     CreateComputeReplicaV1(CreateComputeReplicaV1),
     DropComputeReplicaV1(DropComputeReplicaV1),
-    FullNameV1(FullNameV1),
-    NameV1(NameV1),
+    IdFullNameV1(IdFullNameV1),
     RenameItemV1(RenameItemV1),
     IdNameV1(IdNameV1),
+    SchemaV1(SchemaV1),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct IdFullNameV1 {
+    pub id: String,
+    #[serde(flatten)]
+    pub name: FullNameV1,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
@@ -150,11 +163,6 @@ pub struct FullNameV1 {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
-pub struct NameV1 {
-    pub name: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct IdNameV1 {
     pub id: String,
     pub name: String,
@@ -162,8 +170,9 @@ pub struct IdNameV1 {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct RenameItemV1 {
-    pub previous_name: FullNameV1,
-    pub new_name: String,
+    pub id: String,
+    pub old_name: FullNameV1,
+    pub new_name: FullNameV1,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
@@ -181,6 +190,13 @@ pub struct CreateComputeReplicaV1 {
     pub logical_size: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct SchemaV1 {
+    pub id: String,
+    pub name: String,
+    pub database_name: String,
+}
+
 impl EventDetails {
     pub fn as_json(&self) -> serde_json::Value {
         match self {
@@ -190,10 +206,10 @@ impl EventDetails {
             EventDetails::DropComputeReplicaV1(v) => {
                 serde_json::to_value(v).expect("must serialize")
             }
+            EventDetails::IdFullNameV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::RenameItemV1(v) => serde_json::to_value(v).expect("must serialize"),
-            EventDetails::NameV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::IdNameV1(v) => serde_json::to_value(v).expect("must serialize"),
-            EventDetails::FullNameV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::SchemaV1(v) => serde_json::to_value(v).expect("must serialize"),
         }
     }
 }
@@ -233,35 +249,20 @@ impl EventV1 {
 // failing. Instead of changing data structures, add new variants.
 #[test]
 fn test_audit_log() -> Result<(), anyhow::Error> {
-    let cases: Vec<(VersionedEvent, &'static str)> = vec![
-        (
-            VersionedEvent::V1(EventV1::new(
-                1,
-                EventType::Create,
-                ObjectType::View,
-                EventDetails::NameV1(NameV1 {
-                    name: "name".into(),
-                }),
-                Some("user".into()),
-                1,
-            )),
-            r#"{"V1":{"id":1,"event_type":"create","object_type":"view","event_details":{"NameV1":{"name":"name"}},"user":"user","occurred_at":1}}"#,
-        ),
-        (
-            VersionedEvent::V1(EventV1::new(
-                2,
-                EventType::Drop,
-                ObjectType::ClusterReplica,
-                EventDetails::IdNameV1(IdNameV1 {
-                    id: "u1".to_string(),
-                    name: "name".into(),
-                }),
-                None,
-                2,
-            )),
-            r#"{"V1":{"id":2,"event_type":"drop","object_type":"cluster-replica","event_details":{"IdNameV1":{"id":"u1","name":"name"}},"user":null,"occurred_at":2}}"#,
-        ),
-    ];
+    let cases: Vec<(VersionedEvent, &'static str)> = vec![(
+        VersionedEvent::V1(EventV1::new(
+            2,
+            EventType::Drop,
+            ObjectType::ClusterReplica,
+            EventDetails::IdNameV1(IdNameV1 {
+                id: "u1".to_string(),
+                name: "name".into(),
+            }),
+            None,
+            2,
+        )),
+        r#"{"V1":{"id":2,"event_type":"drop","object_type":"cluster-replica","event_details":{"IdNameV1":{"id":"u1","name":"name"}},"user":null,"occurred_at":2}}"#,
+    )];
 
     for (event, expected_bytes) in cases {
         let event_bytes = serde_json::to_vec(&event).unwrap();

@@ -22,7 +22,7 @@ use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
-use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
+use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage::types::connections::KafkaConnection;
 use mz_storage::types::hosts::StorageHostConfig;
@@ -37,8 +37,8 @@ use crate::catalog::builtin::{
     MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
-    CatalogItem, CatalogState, Connection, Error, ErrorKind, Func, Index, MaterializedView, Sink,
-    StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
+    CatalogItem, CatalogState, Connection, Database, Error, ErrorKind, Func, Index,
+    MaterializedView, Role, Sink, StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
 use crate::coord::ReplicaMetadata;
 
@@ -54,12 +54,15 @@ pub struct BuiltinTableUpdate {
 }
 
 impl CatalogState {
-    pub(super) fn pack_database_update(&self, id: &DatabaseId, diff: Diff) -> BuiltinTableUpdate {
-        let database = &self.database_by_id[id];
+    pub(super) fn pack_database_update(
+        &self,
+        database: &Database,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_DATABASES),
             row: Row::pack_slice(&[
-                Datum::UInt64(id.0),
+                Datum::UInt64(database.id.0),
                 Datum::UInt32(database.oid),
                 Datum::String(database.name()),
             ]),
@@ -92,14 +95,13 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_role_update(&self, name: &str, diff: Diff) -> BuiltinTableUpdate {
-        let role = &self.roles[name];
+    pub(super) fn pack_role_update(&self, role: &Role, diff: Diff) -> BuiltinTableUpdate {
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_ROLES),
             row: Row::pack_slice(&[
                 Datum::String(&role.id.to_string()),
                 Datum::UInt32(role.oid),
-                Datum::String(name),
+                Datum::String(&role.name),
             ]),
             diff,
         }
