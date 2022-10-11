@@ -2230,16 +2230,6 @@ impl<'a> Parser<'a> {
             None
         };
 
-        // New WITH block
-        let with_options = if self.parse_keyword(WITH) {
-            self.expect_token(&Token::LParen)?;
-            let options = self.parse_comma_separated(Parser::parse_source_option)?;
-            self.expect_token(&Token::RParen)?;
-            options
-        } else {
-            vec![]
-        };
-
         let subsources = if self.parse_keywords(&[FOR, TABLES]) {
             self.expect_token(&Token::LParen)?;
             let subsources = self.parse_comma_separated(|parser| {
@@ -2259,6 +2249,16 @@ impl<'a> Parser<'a> {
             Some(CreateSourceSubsources::All)
         } else {
             None
+        };
+
+        // New WITH block
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Parser::parse_source_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
         };
 
         Ok(Statement::CreateSource(CreateSourceStatement {
