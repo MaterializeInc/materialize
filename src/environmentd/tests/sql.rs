@@ -1743,7 +1743,7 @@ fn wait_for_view_population(
     let current_isolation = mz_client
         .query_one("SHOW transaction_isolation", &[])?
         .get::<_, String>(0);
-    mz_client.query_one("SET transaction_isolation = SERIALIZABLE", &[])?;
+    mz_client.batch_execute("SET transaction_isolation = SERIALIZABLE")?;
     Retry::default()
         .max_duration(Duration::from_secs(10))
         .retry(|_| {
@@ -1760,10 +1760,9 @@ fn wait_for_view_population(
             }
         })
         .unwrap();
-    let _ = mz_client.query_one(
-        &format!("SET transaction_isolation = '{current_isolation}'"),
-        &[],
-    );
+    mz_client.batch_execute(&format!(
+        "SET transaction_isolation = '{current_isolation}'"
+    ))?;
     Ok(())
 }
 
