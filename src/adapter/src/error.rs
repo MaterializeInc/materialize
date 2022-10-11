@@ -87,6 +87,9 @@ pub enum AdapterError {
         size: String,
         expected: Vec<String>,
     },
+    StorageHostSizeRequired {
+        expected: Vec<String>,
+    },
     /// The selection value for a table mutation operation refers to an invalid object.
     InvalidTableMutationSelection,
     /// Expression violated a column's constraint
@@ -270,8 +273,12 @@ impl AdapterError {
                 expected.join(", ")
             )),
             AdapterError::InvalidStorageHostSize { expected, .. } => {
-                Some(format!("Valid source sizes are: {}", expected.join(", ")))
+                Some(format!("Valid sizes are: {}", expected.join(", ")))
             }
+            Self::StorageHostSizeRequired { expected } => Some(format!(
+                "Try choosing one of the smaller sizes to start. Available sizes: {}",
+                expected.join(", ")
+            )),
             AdapterError::NoClusterReplicasAvailable(_) => {
                 Some("You can create cluster replicas using CREATE CLUSTER REPLICA".into())
             }
@@ -349,6 +356,9 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::InvalidStorageHostSize { size, .. } => {
                 write!(f, "unknown source size {size}")
+            }
+            Self::StorageHostSizeRequired { .. } => {
+                write!(f, "size option is required")
             }
             AdapterError::InvalidTableMutationSelection => {
                 f.write_str("invalid selection: operation may only refer to user-defined tables")

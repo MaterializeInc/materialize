@@ -19,7 +19,7 @@ use reqwest::{blocking::Client, StatusCode, Url};
 use serde_json::json;
 use tokio_postgres::types::{FromSql, Type};
 
-use crate::util::KAFKA_ADDRS;
+use crate::util::{PostgresErrorExt, KAFKA_ADDRS};
 
 pub mod util;
 
@@ -105,6 +105,58 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
             .map(|row| row.get(0))
             .collect::<Vec<String>>(),
         vec!["u1", "u2", "u3", "u4", "u5", "u6"]
+    );
+
+    Ok(())
+}
+
+// Test that sources and sinks require an explicit `SIZE` parameter outside of
+// unsafe mode.
+#[test]
+fn test_source_sink_size_required() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let server = util::start_server(util::Config::default())?;
+    let mut client = server.connect(postgres::NoTls)?;
+
+    // Sources bail without an explicit size.
+    let result = client.batch_execute("CREATE SOURCE lg FROM LOAD GENERATOR COUNTER");
+    assert_eq!(
+        result.unwrap_err().unwrap_db_error().message(),
+        "size option is required"
+    );
+
+    // Sources work with an explicit size.
+    client.batch_execute("CREATE SOURCE lg FROM LOAD GENERATOR COUNTER WITH (SIZE '1')")?;
+
+    // `ALTER SOURCE ... RESET SIZE` is banned.
+    let result = client.batch_execute("ALTER SOURCE lg RESET (SIZE)");
+    assert_eq!(
+        result.unwrap_err().unwrap_db_error().message(),
+        "size option is required"
+    );
+
+    client.batch_execute(&format!(
+        "CREATE CONNECTION conn FOR KAFKA BROKER '{}'",
+        &*KAFKA_ADDRS,
+    ))?;
+
+    // Sinks bail without an explicit size.
+    let result = client.batch_execute("CREATE SINK snk FROM mz_sources INTO KAFKA CONNECTION conn (TOPIC 'foo') FORMAT JSON ENVELOPE DEBEZIUM");
+    assert_eq!(
+        result.unwrap_err().unwrap_db_error().message(),
+        "size option is required"
+    );
+
+    // Sinks work with an explicit size.
+    client.batch_execute("CREATE SINK snk FROM mz_sources INTO KAFKA CONNECTION conn (TOPIC 'foo') FORMAT JSON ENVELOPE DEBEZIUM WITH (SIZE '1')").unwrap();
+
+    // `ALTER SINK ... RESET SIZE` does not yet exist. Testing here to make
+    // sure we don't actually enable it in the future.
+    let result = client.batch_execute("ALTER SINK snk RESET (SIZE)");
+    assert_eq!(
+        result.unwrap_err().unwrap_db_error().message(),
+        "Expected RENAME, found RESET"
     );
 
     Ok(())

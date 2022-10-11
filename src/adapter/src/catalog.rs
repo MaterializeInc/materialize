@@ -1074,36 +1074,39 @@ impl CatalogState {
     pub fn resolve_storage_host_config(
         &self,
         storage_host_config: PlanStorageHostConfig,
+        allow_undefined: bool,
     ) -> Result<StorageHostConfig, AdapterError> {
         let host_sizes = &self.storage_host_sizes;
+        let mut entries = host_sizes.0.iter().collect::<Vec<_>>();
+        entries.sort_by_key(
+            |(
+                _name,
+                StorageHostResourceAllocation {
+                    workers,
+                    memory_limit,
+                    ..
+                },
+            )| (workers, memory_limit),
+        );
+        let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
         let storage_host_config = match storage_host_config {
             PlanStorageHostConfig::Remote { addr } => StorageHostConfig::Remote { addr },
             PlanStorageHostConfig::Managed { size } => {
                 let allocation = host_sizes.0.get(&size).ok_or_else(|| {
-                    let mut entries = host_sizes.0.iter().collect::<Vec<_>>();
-                    entries.sort_by_key(
-                        |(
-                            _name,
-                            StorageHostResourceAllocation {
-                                workers,
-                                memory_limit,
-                                ..
-                            },
-                        )| (workers, memory_limit),
-                    );
-                    let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
                     AdapterError::InvalidStorageHostSize {
                         size: size.clone(),
                         expected,
                     }
                 })?;
-
                 StorageHostConfig::Managed {
                     allocation: allocation.clone(),
                     size,
                 }
             }
             PlanStorageHostConfig::Undefined => {
+                if !allow_undefined {
+                    return Err(AdapterError::StorageHostSizeRequired { expected });
+                }
                 let (size, allocation) = self.default_storage_host_size();
                 StorageHostConfig::Managed { allocation, size }
             }
@@ -3287,8 +3290,10 @@ impl<S: Append> Catalog<S> {
     pub fn resolve_storage_host_config(
         &self,
         storage_host_config: PlanStorageHostConfig,
+        allow_undefined: bool,
     ) -> Result<StorageHostConfig, AdapterError> {
-        self.state.resolve_storage_host_config(storage_host_config)
+        self.state
+            .resolve_storage_host_config(storage_host_config, allow_undefined)
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -3521,7 +3526,12 @@ impl<S: Append> Catalog<S> {
                             });
                         }
 
-                        let host_config = state.resolve_storage_host_config(config)?;
+                        // Only subsources can have an undefined size outside of
+                        // unsafe mode.
+                        let allow_undefined_size =
+                            state.config().unsafe_mode || old_source.ingestion.is_none();
+                        let host_config =
+                            state.resolve_storage_host_config(config, allow_undefined_size)?;
                         let create_sql = stmt.to_ast_string_stable();
                         let source = CatalogItem::Source(Source {
                             create_sql,
@@ -4439,18 +4449,22 @@ impl<S: Append> Catalog<S> {
                 timeline,
                 host_config,
                 ..
-            }) => CatalogItem::Source(Source {
-                create_sql: source.create_sql,
-                ingestion: source.ingestion.map(|ingestion| Ingestion {
-                    desc: ingestion.desc,
-                    source_imports: ingestion.source_imports,
-                    subsource_exports: ingestion.subsource_exports,
-                }),
-                desc: source.desc,
-                timeline,
-                depends_on,
-                host_config: self.resolve_storage_host_config(host_config)?,
-            }),
+            }) => {
+                let allow_undefined_size = true;
+                CatalogItem::Source(Source {
+                    create_sql: source.create_sql,
+                    ingestion: source.ingestion.map(|ingestion| Ingestion {
+                        desc: ingestion.desc,
+                        source_imports: ingestion.source_imports,
+                        subsource_exports: ingestion.subsource_exports,
+                    }),
+                    desc: source.desc,
+                    timeline,
+                    depends_on,
+                    host_config: self
+                        .resolve_storage_host_config(host_config, allow_undefined_size)?,
+                })
+            }
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let mut optimizer = Optimizer::logical_optimizer();
                 let optimized_expr = optimizer.optimize(view.expr)?;
@@ -4490,15 +4504,19 @@ impl<S: Append> Catalog<S> {
                 with_snapshot,
                 host_config,
                 ..
-            }) => CatalogItem::Sink(Sink {
-                create_sql: sink.create_sql,
-                from: sink.from,
-                connection: StorageSinkConnectionState::Pending(sink.connection_builder),
-                envelope: sink.envelope,
-                with_snapshot,
-                depends_on,
-                host_config: self.resolve_storage_host_config(host_config)?,
-            }),
+            }) => {
+                let allow_undefined_size = true;
+                CatalogItem::Sink(Sink {
+                    create_sql: sink.create_sql,
+                    from: sink.from,
+                    connection: StorageSinkConnectionState::Pending(sink.connection_builder),
+                    envelope: sink.envelope,
+                    with_snapshot,
+                    depends_on,
+                    host_config: self
+                        .resolve_storage_host_config(host_config, allow_undefined_size)?,
+                })
+            }
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,
                 details: CatalogTypeDetails {
