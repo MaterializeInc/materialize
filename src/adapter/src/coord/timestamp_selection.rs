@@ -268,7 +268,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .collect::<Vec<_>>();
         format!(
             "Timestamp ({}) is not valid for all inputs: {:?}",
-            candidate, invalid
+            candidate, invalid,
         )
     }
 }

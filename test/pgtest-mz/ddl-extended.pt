@@ -1,0 +1,55 @@
+# Test that multiple DDL statements in the same extended request are supported
+send
+Parse {"query": "CREATE TABLE a (a int)"}
+Bind
+Execute
+Parse {"query": "CREATE TABLE b (a int)"}
+Bind
+Execute
+Parse {"query": "INSERT INTO a VALUES (1)"}
+Bind
+Execute
+Parse {"query": "SELECT 1/0"}
+Bind
+Execute
+Sync
+Query {"query": "SELECT * FROM a"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+CommandComplete {"tag":"CREATE TABLE"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"CREATE TABLE"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ParseComplete
+BindComplete
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"XX000"},{"typ":"M","value":"division by zero"}]}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"a"}]}
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+send
+Parse {"query": "SELECT * FROM a"}
+Bind
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}

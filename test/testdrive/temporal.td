@@ -277,7 +277,7 @@ contains:no overload for mz_timestamp + integer
 
 > CREATE OR REPLACE MATERIALIZED VIEW numeric_trunc AS
   SELECT 1
-  WHERE mz_now() <= 18446744073709551614.1;
+  WHERE mz_now() > 1927418240000.1;
 
 ! SELECT * FROM numeric_trunc;
 contains:Evaluation error: mz_timestamp out of range

@@ -361,15 +361,29 @@ where
                 let execute_root_span =
                     tracing::debug_span!(parent: None, "advance_ready", otel.name = message_name);
                 execute_root_span.follows_from(tracing::Span::current());
-                self.execute(
-                    portal_name,
-                    max_rows,
-                    portal_exec_message,
-                    None,
-                    ExecuteTimeout::None,
-                )
-                .instrument(execute_root_span)
-                .await?
+                let state = self
+                    .execute(
+                        portal_name,
+                        max_rows,
+                        portal_exec_message,
+                        None,
+                        ExecuteTimeout::None,
+                    )
+                    .instrument(execute_root_span)
+                    .await?;
+                // Close the current transaction if we are in an implicit transaction.
+                // In PostgreSQL, when using the extended query protocol, some statements may
+                // trigger an eager commit of the current implicit transaction,
+                // see: <https://git.postgresql.org/gitweb/?p=postgresql.git&a=commitdiff&h=f92944137>.
+                // In Materialize however, we eagerly commit all statements outside of an explicit
+                // transaction when using the extended query protocol. This allows us to remove
+                // the ambiguity between multiple and single statement implicit transactions when
+                // using the extended query protocol and apply some optimizations to single
+                // statement transactions.
+                if self.adapter_client.session().transaction().is_implicit() {
+                    self.commit_transaction().await?;
+                }
+                state
             }
             Some(FrontendMessage::DescribeStatement { name }) => {
                 self.describe_statement(&name).await?
