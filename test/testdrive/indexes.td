@@ -257,3 +257,12 @@ bar_ind bar <VARIABLE_OUTPUT> {a}
 > SET CLUSTER TO default
 
 > DROP CLUSTER clstr CASCADE;
+
+> CREATE INDEX sys_ind ON mz_array_types (id)
+> SET CLUSTER TO mz_introspection
+> SHOW INDEXES ON mz_array_types
+sys_ind mz_array_types  <VARIABLE_OUTPUT>   {id}
+> SHOW INDEXES FROM mz_catalog WHERE name = 'sys_ind'
+sys_ind mz_array_types  <VARIABLE_OUTPUT>   {id}
+> SET CLUSTER TO default
+> DROP INDEX sys_ind

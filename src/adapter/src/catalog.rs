@@ -3557,10 +3557,11 @@ impl<S: Append> Catalog<S> {
                     let name = entry.name().clone();
 
                     if entry.id().is_system() {
-                        let name = state
-                            .resolve_full_name(&name, session.map(|session| session.conn_id()));
+                        let schema_name = state
+                            .resolve_full_name(&name, session.map(|session| session.conn_id()))
+                            .schema;
                         return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReadOnlySystemSchema(name.to_string()),
+                            ErrorKind::ReadOnlySystemSchema(schema_name),
                         )));
                     }
 
@@ -3661,10 +3662,11 @@ impl<S: Append> Catalog<S> {
                     let name = entry.name().clone();
 
                     if entry.id().is_system() {
-                        let name = state
-                            .resolve_full_name(&name, session.map(|session| session.conn_id()));
+                        let schema_name = state
+                            .resolve_full_name(&name, session.map(|session| session.conn_id()))
+                            .schema;
                         return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReadOnlySystemSchema(name.to_string()),
+                            ErrorKind::ReadOnlySystemSchema(schema_name),
                         )));
                     }
 
@@ -4020,11 +4022,19 @@ impl<S: Append> Catalog<S> {
                             )));
                         }
                         if let ResolvedDatabaseSpecifier::Ambient = name.qualifiers.database_spec {
-                            let name = state
-                                .resolve_full_name(&name, session.map(|session| session.conn_id()));
-                            return Err(AdapterError::Catalog(Error::new(
-                                ErrorKind::ReadOnlySystemSchema(name.to_string()),
-                            )));
+                            // We allow users to create indexes on system objects to speed up
+                            // debugging related queries.
+                            if item.typ() != CatalogItemType::Index {
+                                let schema_name = state
+                                    .resolve_full_name(
+                                        &name,
+                                        session.map(|session| session.conn_id()),
+                                    )
+                                    .schema;
+                                return Err(AdapterError::Catalog(Error::new(
+                                    ErrorKind::ReadOnlySystemSchema(schema_name),
+                                )));
+                            }
                         }
                         let schema_id = name.qualifiers.schema_spec.clone().into();
                         let serialized_item = Self::serialize_item(&item);
@@ -4276,12 +4286,14 @@ impl<S: Append> Catalog<S> {
                     }
 
                     if entry.id().is_system() {
-                        let name = state.resolve_full_name(
-                            entry.name(),
-                            session.map(|session| session.conn_id()),
-                        );
+                        let schema_name = state
+                            .resolve_full_name(
+                                entry.name(),
+                                session.map(|session| session.conn_id()),
+                            )
+                            .schema;
                         return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReadOnlySystemSchema(name.to_string()),
+                            ErrorKind::ReadOnlySystemSchema(schema_name),
                         )));
                     }
 

@@ -107,7 +107,7 @@ EXPLAIN SHOW INDEXES
 ----
 Explained Query (fast path):
   Project (#3..=#6)
-    Filter (3 = uint8_to_double(#1))
+    Filter NOT("s%" ~~(#0)) AND (3 = uint8_to_double(#1))
       ReadExistingIndex mz_internal.mz_show_indexes_ind
 
 Used Indexes:
