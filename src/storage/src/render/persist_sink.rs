@@ -85,7 +85,12 @@ pub fn render<G>(
             // to. Data from the source not beyond this time will be dropped, as it has already
             // been persisted.
             // In the future, sources will avoid passing through data not beyond this upper
-            *current_upper.borrow_mut() = write.upper().clone();
+            if active_write_worker {
+                // VERY IMPORTANT: Only the active write worker must change the
+                // shared upper. All other workers have already cleared this
+                // upper above.
+                *current_upper.borrow_mut() = write.upper().clone();
+            }
 
             while scheduler.notified().await {
                 let input_upper = frontiers.borrow()[0].clone();
