@@ -578,7 +578,9 @@ where
                     assert!(self.subscribes.get(&subscribe_id).is_some());
 
                     let new_lower = old_upper_bound;
-                    updates.retain(|(time, _data, _diff)| new_lower.less_equal(time));
+                    if let Ok(updates) = updates.as_mut() {
+                        updates.retain(|(time, _data, _diff)| new_lower.less_equal(time));
+                    }
                     self.pending_response
                         .push_back(ActiveReplicationResponse::SubscribeResponse(
                             subscribe_id,

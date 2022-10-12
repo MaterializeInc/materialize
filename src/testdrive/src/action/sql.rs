@@ -292,7 +292,7 @@ pub async fn run_fail_sql(
     cmd: FailSqlCommand,
     state: &mut State,
 ) -> Result<ControlFlow, anyhow::Error> {
-    use Statement::{Commit, Rollback};
+    use Statement::{Commit, Fetch, Rollback};
 
     let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
         .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e));
@@ -326,6 +326,8 @@ pub async fn run_fail_sql(
         // been aborted, retrying COMMIT or ROLLBACK will actually start succeeding, which
         // causes testdrive to emit a confusing "query succeded but expected error" message.
         Some(Commit(_)) | Some(Rollback(_)) => false,
+        // FETCH should not be retried because it consumes data on each response.
+        Some(Fetch(_)) => false,
         Some(_) => true,
     };
 
