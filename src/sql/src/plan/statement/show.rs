@@ -484,12 +484,15 @@ pub fn show_indexes<'a>(
             objs.name AS on,
             clusters.name AS cluster,
             (SELECT
-                ARRAY_AGG(
-                    CASE
-                        WHEN idx_cols.on_expression IS NULL THEN obj_cols.name
-                        ELSE idx_cols.on_expression
-                    END
-                    ORDER BY idx_cols.index_position ASC
+                COALESCE(
+                    ARRAY_AGG(
+                        CASE
+                            WHEN idx_cols.on_expression IS NULL THEN obj_cols.name
+                            ELSE idx_cols.on_expression
+                        END
+                        ORDER BY idx_cols.index_position ASC
+                    ),
+                    '{{}}'::_text
                 )
             FROM
                 mz_catalog.mz_index_columns AS idx_cols

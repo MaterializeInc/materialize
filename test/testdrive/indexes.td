@@ -207,7 +207,7 @@ contains:unknown schema 'nonexistent'
 > CREATE INDEX bar_ind ON bar ();
 
 > SHOW INDEXES
-bar_ind bar <VARIABLE_OUTPUT> <null>
+bar_ind bar <VARIABLE_OUTPUT> {}
 
 > DROP TABLE bar CASCADE
 > CREATE SCHEMA foo
