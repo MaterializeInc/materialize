@@ -331,14 +331,25 @@ where
         // special case: if our inputs only contain a single batch with >0 updates in a single run,
         // we can return the same batch with an updated description to avoid pulling it down and
         // rewriting it.
-        let filled_batches: Vec<_> = req.inputs.iter().filter(|x| x.len > 0).collect();
-        match filled_batches[..] {
-            [batch] if batch.runs.len() == 0 => {
+        let mut single_nonempty_batch = None;
+        for batch in &req.inputs {
+            if batch.len > 0 {
+                match single_nonempty_batch {
+                    None => single_nonempty_batch = Some(batch),
+                    Some(_previous_nonempty_batch) => {
+                        single_nonempty_batch = None;
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(batch) = single_nonempty_batch {
+            if batch.runs.len() == 0 {
                 let mut output = batch.clone();
                 output.desc = req.desc;
+                metrics.compaction.single_batch_fast_path.inc();
                 return Ok(CompactRes { output });
             }
-            _ => {}
         }
 
         // compaction needs memory enough for at least 2 runs and 2 in-progress parts
