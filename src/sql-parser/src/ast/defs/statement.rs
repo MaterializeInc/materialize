@@ -2027,35 +2027,19 @@ impl<T: AstInfo> AstDisplay for SubscribeRelation<T> {
 impl_display_t!(SubscribeRelation);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ExplainStatement<T: AstInfo> {
-    New(ExplainStatementNew<T>),
-    Old(ExplainStatementOld<T>),
-}
-
-impl<T: AstInfo> AstDisplay for ExplainStatement<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            Self::Old(old) => old.fmt(f),
-            Self::New(new) => new.fmt(f),
-        }
-    }
-}
-impl_display_t!(ExplainStatement);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ExplainStatementNew<T: AstInfo> {
+pub struct ExplainStatement<T: AstInfo> {
     pub stage: ExplainStageNew,
     pub config_flags: Vec<Ident>,
     pub format: ExplainFormat,
     pub explainee: Explainee<T>,
 }
 
-impl<T: AstInfo> AstDisplay for ExplainStatementNew<T> {
+impl<T: AstInfo> AstDisplay for ExplainStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("EXPLAIN ");
         f.write_node(&self.stage);
         if !self.config_flags.is_empty() {
-            f.write_str(" WITH (");
+            f.write_str(" WITH(");
             f.write_node(&display::comma_separated(&self.config_flags));
             f.write_str(")");
         }
@@ -2065,33 +2049,7 @@ impl<T: AstInfo> AstDisplay for ExplainStatementNew<T> {
         f.write_node(&self.explainee);
     }
 }
-impl_display_t!(ExplainStatementNew);
-
-/// `EXPLAIN ...`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ExplainStatementOld<T: AstInfo> {
-    pub stage: ExplainStageOld,
-    pub explainee: Explainee<T>,
-    pub options: ExplainOptions,
-}
-
-impl<T: AstInfo> AstDisplay for ExplainStatementOld<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("EXPLAIN ");
-        if self.options.timing {
-            f.write_str("(TIMING ");
-            f.write_str(self.options.timing);
-            f.write_str(") ");
-        }
-        if self.options.typed {
-            f.write_str("TYPED ");
-        }
-        f.write_node(&self.stage);
-        f.write_str(" FOR ");
-        f.write_node(&self.explainee);
-    }
-}
-impl_display_t!(ExplainStatementOld);
+impl_display_t!(ExplainStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InsertSource<T: AstInfo> {

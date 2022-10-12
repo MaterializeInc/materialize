@@ -5284,14 +5284,12 @@ impl<'a> Parser<'a> {
             Explainee::Query(self.parse_query()?)
         };
 
-        Ok(Statement::Explain(ExplainStatement::New(
-            ExplainStatementNew {
-                stage: stage.unwrap_or(ExplainStageNew::OptimizedPlan),
-                config_flags,
-                format,
-                explainee,
-            },
-        )))
+        Ok(Statement::Explain(ExplainStatement {
+            stage: stage.unwrap_or(ExplainStageNew::OptimizedPlan),
+            config_flags,
+            format,
+            explainee,
+        }))
     }
 
     /// Parse a `DECLARE` statement, assuming that the `DECLARE` token

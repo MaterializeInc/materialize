@@ -26,9 +26,9 @@ use crate::ast::display::AstDisplay;
 use crate::ast::{
     AstInfo, CopyDirection, CopyOption, CopyOptionName, CopyRelation, CopyStatement, CopyTarget,
     CreateMaterializedViewStatement, CreateViewStatement, DeleteStatement, ExplainStageNew,
-    ExplainStageOld, ExplainStatement, ExplainStatementNew, ExplainStatementOld, Explainee, Ident,
-    InsertStatement, Query, SelectStatement, Statement, SubscribeOption, SubscribeOptionName,
-    SubscribeRelation, SubscribeStatement, UpdateStatement, ViewDefinition,
+    ExplainStatement, Explainee, Ident, InsertStatement, Query, SelectStatement, Statement,
+    SubscribeOption, SubscribeOptionName, SubscribeRelation, SubscribeStatement, UpdateStatement,
+    ViewDefinition,
 };
 use crate::catalog::CatalogItemType;
 use crate::names::{self, Aug, ResolvedObjectName};
@@ -36,9 +36,8 @@ use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{
-    query, CopyFormat, CopyFromPlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld, InsertPlan,
-    MutationKind, Params, PeekPlan, Plan, PlanError, QueryContext, ReadThenWritePlan,
-    SubscribeFrom, SubscribePlan,
+    query, CopyFormat, CopyFromPlan, ExplainPlan, ExplainPlanNew, InsertPlan, MutationKind, Params,
+    PeekPlan, Plan, PlanError, QueryContext, ReadThenWritePlan, SubscribeFrom, SubscribePlan,
 };
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
@@ -185,19 +184,9 @@ pub fn plan_select(
 
 pub fn describe_explain(
     scx: &StatementContext,
-    explain: ExplainStatement<Aug>,
-) -> Result<StatementDesc, PlanError> {
-    match explain {
-        ExplainStatement::New(explain) => describe_explain_new(scx, explain),
-        ExplainStatement::Old(explain) => describe_explain_old(scx, explain),
-    }
-}
-
-pub fn describe_explain_new(
-    scx: &StatementContext,
-    ExplainStatementNew {
+    ExplainStatement {
         stage, explainee, ..
-    }: ExplainStatementNew<Aug>,
+    }: ExplainStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     let mut relation_desc = RelationDesc::empty();
 
@@ -255,148 +244,14 @@ pub fn describe_explain_new(
     )
 }
 
-pub fn describe_explain_old(
-    scx: &StatementContext,
-    ExplainStatementOld {
-        stage, explainee, ..
-    }: ExplainStatementOld<Aug>,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(Some(RelationDesc::empty().with_column(
-        match stage {
-            ExplainStageOld::RawPlan => "Raw Plan",
-            ExplainStageOld::QueryGraph => "Query Graph",
-            ExplainStageOld::OptimizedQueryGraph => "Optimized Query Graph",
-            ExplainStageOld::DecorrelatedPlan => "Decorrelated Plan",
-            ExplainStageOld::OptimizedPlan { .. } => "Optimized Plan",
-            ExplainStageOld::PhysicalPlan => "Physical Plan",
-            ExplainStageOld::Timestamp => "Timestamp",
-        },
-        ScalarType::String.nullable(false),
-    )))
-    .with_params(match explainee {
-        Explainee::Query(q) => {
-            describe_select(
-                scx,
-                SelectStatement {
-                    query: q,
-                    as_of: None,
-                },
-            )?
-            .param_types
-        }
-        _ => vec![],
-    }))
-}
-
 pub fn plan_explain(
     scx: &StatementContext,
-    explain: ExplainStatement<Aug>,
-    params: &Params,
-) -> Result<Plan, PlanError> {
-    match explain {
-        ExplainStatement::Old(explain) => plan_explain_old(scx, explain, params),
-        ExplainStatement::New(explain) => plan_explain_new(scx, explain, params),
-    }
-}
-
-pub fn plan_explain_old(
-    scx: &StatementContext,
-    ExplainStatementOld {
-        stage,
-        explainee,
-        options,
-    }: ExplainStatementOld<Aug>,
-    params: &Params,
-) -> Result<Plan, PlanError> {
-    let is_view = matches!(explainee, Explainee::View(_));
-    let (view_id, query) = match explainee {
-        Explainee::View(name) => {
-            let view = scx.get_item_by_resolved_name(&name)?;
-            let item_type = view.item_type();
-            // Return a more helpful error on `EXPLAIN [...] VIEW <materialized-view>`.
-            if item_type == CatalogItemType::MaterializedView {
-                return Err(PlanError::ExplainViewOnMaterializedView(
-                    name.full_name_str(),
-                ));
-            } else if item_type != CatalogItemType::View {
-                sql_bail!(
-                    "Expected {} to be a view, not a {}",
-                    name.full_name_str(),
-                    item_type
-                );
-            }
-            let parsed = crate::parse::parse(view.create_sql())
-                .expect("Sql for existing view should be valid sql");
-            let query = match parsed.into_last() {
-                Statement::CreateView(CreateViewStatement {
-                    definition: ViewDefinition { query, .. },
-                    ..
-                }) => query,
-                _ => panic!("Sql for existing view should parse as a view"),
-            };
-            let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
-            (view.id(), names::resolve(qcx.scx.catalog, query)?.0)
-        }
-        Explainee::MaterializedView(name) => {
-            let mview = scx.get_item_by_resolved_name(&name)?;
-            let item_type = mview.item_type();
-            if item_type != CatalogItemType::MaterializedView {
-                sql_bail!(
-                    "Expected {} to be a materialized view, not a {}",
-                    name,
-                    item_type
-                );
-            }
-            let parsed = crate::parse::parse(mview.create_sql())
-                .expect("Sql for existing materialized view should be valid sql");
-            let query = match parsed.into_last() {
-                Statement::CreateMaterializedView(CreateMaterializedViewStatement {
-                    query,
-                    ..
-                }) => query,
-                _ => {
-                    panic!("Sql for existing materialized view should parse as a materialized view")
-                }
-            };
-            let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
-            (mview.id(), names::resolve(qcx.scx.catalog, query)?.0)
-        }
-        Explainee::Query(query) => (mz_repr::GlobalId::Explain, query),
-    };
-    // Previously we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
-    // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
-    let query::PlannedQuery {
-        mut expr,
-        desc,
-        finishing,
-    } = query::plan_root_query(scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
-    let finishing = if is_view {
-        // views don't use a separate finishing
-        expr.finish(finishing);
-        None
-    } else if finishing.is_trivial(desc.arity()) {
-        None
-    } else {
-        Some(finishing)
-    };
-    expr.bind_parameters(params)?;
-    Ok(Plan::Explain(ExplainPlan::Old(ExplainPlanOld {
-        raw_plan: expr,
-        row_set_finishing: finishing,
-        stage,
-        options,
-        view_id,
-    })))
-}
-
-pub fn plan_explain_new(
-    scx: &StatementContext,
-    ExplainStatementNew {
+    ExplainStatement {
         stage,
         config_flags,
         format,
         explainee,
-    }: ExplainStatementNew<Aug>,
+    }: ExplainStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, PlanError> {
     let is_view = matches!(explainee, Explainee::View(_));
