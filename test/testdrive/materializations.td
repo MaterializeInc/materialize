@@ -164,8 +164,8 @@ contains:test5 is a view, which cannot be exported as a sink
 
 $ set-regex match=(\s\(u\d+\)|\n) replacement=
 
-> EXPLAIN SELECT * FROM test5
-"%0 =| ReadExistingIndex materialize.public.test5_primary_idx"
+> EXPLAIN SELECT * FROM test5;
+"Explained Query (fast path):  ReadExistingIndex materialize.public.test5_primary_idxUsed Indexes:  - materialize.public.test5_primary_idx"
 
 > SELECT * FROM test5
 b  c
@@ -187,7 +187,7 @@ contains:catalog item 'materialize.public.idx1' is an index and so cannot be dep
 > DROP INDEX test5_primary_idx
 
 > EXPLAIN SELECT * FROM test5
-"%0 =| ReadExistingIndex materialize.public.idx1| Project (#1, #0)"
+"Explained Query (fast path):  Project (#1, #0)    ReadExistingIndex materialize.public.idx1Used Indexes:  - materialize.public.idx1"
 
 > SELECT * from test5
 b  c
