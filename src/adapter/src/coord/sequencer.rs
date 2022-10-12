@@ -542,7 +542,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 host_config: ingestion.host_config,
                             })
                         }
-                        DataSourceDesc::Source => DataSource::Source,
+                        DataSourceDesc::Source => DataSource::Other,
                         DataSourceDesc::Introspection(_) => {
                             unreachable!("cannot create sources with introspection data sources")
                         }
@@ -1499,7 +1499,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         id,
                         CollectionDescription {
                             desc,
-                            data_source: DataSource::Dataflow,
+                            data_source: DataSource::Other,
                             since: Some(as_of),
                             status_collection_id: None,
                         },
