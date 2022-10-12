@@ -208,3 +208,11 @@ contains:unknown schema 'nonexistent'
 
 > SHOW INDEXES
 bar_ind bar <VARIABLE_OUTPUT> <null>
+
+> DROP TABLE bar CASCADE
+> CREATE SCHEMA foo
+> CREATE TABLE foo.bar (a INT)
+> CREATE INDEX bar_ind ON foo.bar (a)
+
+> SHOW INDEXES ON foo.bar
+bar_ind bar <VARIABLE_OUTPUT> {a}

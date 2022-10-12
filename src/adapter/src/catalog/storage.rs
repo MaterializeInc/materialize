@@ -169,6 +169,24 @@ async fn migrate<S: Append>(
                     name: "materialize".into(),
                 },
             )?;
+            let id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+            txn.audit_log_updates.push((
+                AuditLogKey {
+                    event: VersionedEvent::new(
+                        id,
+                        EventType::Create,
+                        ObjectType::Database,
+                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                            id: MATERIALIZE_DATABASE_ID.to_string(),
+                            name: "materialize".into(),
+                        }),
+                        None,
+                        bootstrap_args.now,
+                    ),
+                },
+                (),
+                1,
+            ));
             txn.schemas.insert(
                 SchemaKey {
                     id: MZ_CATALOG_SCHEMA_ID,
@@ -196,6 +214,25 @@ async fn migrate<S: Append>(
                     name: "public".into(),
                 },
             )?;
+            let id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+            txn.audit_log_updates.push((
+                AuditLogKey {
+                    event: VersionedEvent::new(
+                        id,
+                        EventType::Create,
+                        ObjectType::Schema,
+                        EventDetails::SchemaV1(mz_audit_log::SchemaV1 {
+                            id: PUBLIC_SCHEMA_ID.to_string(),
+                            name: "public".into(),
+                            database_name: "materialize".into(),
+                        }),
+                        None,
+                        bootstrap_args.now,
+                    ),
+                },
+                (),
+                1,
+            ));
             txn.schemas.insert(
                 SchemaKey {
                     id: MZ_INTERNAL_SCHEMA_ID,
@@ -222,6 +259,24 @@ async fn migrate<S: Append>(
                     name: "materialize".into(),
                 },
             )?;
+            let id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+            txn.audit_log_updates.push((
+                AuditLogKey {
+                    event: VersionedEvent::new(
+                        id,
+                        EventType::Create,
+                        ObjectType::Role,
+                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                            id: MATERIALIZE_ROLE_ID.to_string(),
+                            name: "materialize".into(),
+                        }),
+                        None,
+                        bootstrap_args.now,
+                    ),
+                },
+                (),
+                1,
+            ));
             let default_instance = ComputeInstanceValue {
                 name: "default".into(),
             };

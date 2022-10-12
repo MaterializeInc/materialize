@@ -1382,7 +1382,7 @@ pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("id", ScalarType::UInt64.nullable(false))
         .with_column("event_type", ScalarType::String.nullable(false))
         .with_column("object_type", ScalarType::String.nullable(false))
-        .with_column("event_details", ScalarType::Jsonb.nullable(false))
+        .with_column("details", ScalarType::Jsonb.nullable(false))
         .with_column("user", ScalarType::String.nullable(true))
         .with_column("occurred_at", ScalarType::TimestampTz.nullable(false)),
 });
