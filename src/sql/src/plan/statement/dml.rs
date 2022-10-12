@@ -25,7 +25,7 @@ use mz_repr::{RelationDesc, ScalarType};
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     AstInfo, CopyDirection, CopyOption, CopyOptionName, CopyRelation, CopyStatement, CopyTarget,
-    CreateMaterializedViewStatement, CreateViewStatement, DeleteStatement, ExplainStageNew,
+    CreateMaterializedViewStatement, CreateViewStatement, DeleteStatement, ExplainStage,
     ExplainStatement, Explainee, Ident, InsertStatement, Query, SelectStatement, Statement,
     SubscribeOption, SubscribeOptionName, SubscribeRelation, SubscribeStatement, UpdateStatement,
     ViewDefinition,
@@ -36,8 +36,8 @@ use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{
-    query, CopyFormat, CopyFromPlan, ExplainPlan, ExplainPlanNew, InsertPlan, MutationKind, Params,
-    PeekPlan, Plan, PlanError, QueryContext, ReadThenWritePlan, SubscribeFrom, SubscribePlan,
+    query, CopyFormat, CopyFromPlan, ExplainPlan, InsertPlan, MutationKind, Params, PeekPlan, Plan,
+    PlanError, QueryContext, ReadThenWritePlan, SubscribeFrom, SubscribePlan,
 };
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
@@ -191,35 +191,35 @@ pub fn describe_explain(
     let mut relation_desc = RelationDesc::empty();
 
     match stage {
-        ExplainStageNew::RawPlan => {
+        ExplainStage::RawPlan => {
             relation_desc =
                 relation_desc.with_column("Raw Plan", ScalarType::String.nullable(false));
         }
-        ExplainStageNew::QueryGraph => {
+        ExplainStage::QueryGraph => {
             relation_desc =
                 relation_desc.with_column("Query Graph", ScalarType::String.nullable(false));
         }
-        ExplainStageNew::OptimizedQueryGraph => {
+        ExplainStage::OptimizedQueryGraph => {
             relation_desc = relation_desc
                 .with_column("Optimized Query Graph", ScalarType::String.nullable(false));
         }
-        ExplainStageNew::DecorrelatedPlan => {
+        ExplainStage::DecorrelatedPlan => {
             relation_desc =
                 relation_desc.with_column("Decorrelated Plan", ScalarType::String.nullable(false));
         }
-        ExplainStageNew::OptimizedPlan => {
+        ExplainStage::OptimizedPlan => {
             relation_desc =
                 relation_desc.with_column("Optimized Plan", ScalarType::String.nullable(false));
         }
-        ExplainStageNew::PhysicalPlan => {
+        ExplainStage::PhysicalPlan => {
             relation_desc =
                 relation_desc.with_column("Physical Plan", ScalarType::String.nullable(false));
         }
-        ExplainStageNew::Timestamp => {
+        ExplainStage::Timestamp => {
             relation_desc =
                 relation_desc.with_column("Timestamp", ScalarType::String.nullable(false));
         }
-        ExplainStageNew::Trace => {
+        ExplainStage::Trace => {
             relation_desc = relation_desc
                 .with_column("Time", ScalarType::UInt64.nullable(false))
                 .with_column("Path", ScalarType::String.nullable(false))
@@ -345,14 +345,14 @@ pub fn plan_explain(
         mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
     };
 
-    Ok(Plan::Explain(ExplainPlan::New(ExplainPlanNew {
+    Ok(Plan::Explain(ExplainPlan {
         raw_plan: expr,
         row_set_finishing: finishing,
         stage,
         format,
         config,
         explainee,
-    })))
+    }))
 }
 
 /// Plans and decorrelates a `Query`. Like `query::plan_root_query`, but returns

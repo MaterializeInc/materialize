@@ -5217,35 +5217,35 @@ impl<'a> Parser<'a> {
         ]) {
             Some(RAW) => {
                 self.expect_keyword(PLAN)?;
-                Some(ExplainStageNew::RawPlan)
+                Some(ExplainStage::RawPlan)
             }
             Some(QUERY) => {
                 self.expect_keyword(GRAPH)?;
-                Some(ExplainStageNew::QueryGraph)
+                Some(ExplainStage::QueryGraph)
             }
             Some(DECORRELATED) => {
                 self.expect_keyword(PLAN)?;
-                Some(ExplainStageNew::DecorrelatedPlan)
+                Some(ExplainStage::DecorrelatedPlan)
             }
             Some(OPTIMIZED) => {
                 if self.parse_keyword(QUERY) {
                     self.expect_keyword(GRAPH)?;
-                    Some(ExplainStageNew::OptimizedQueryGraph)
+                    Some(ExplainStage::OptimizedQueryGraph)
                 } else {
                     self.expect_keyword(PLAN)?;
-                    Some(ExplainStageNew::OptimizedPlan)
+                    Some(ExplainStage::OptimizedPlan)
                 }
             }
             Some(PLAN) => Some(ExplainStage::OptimizedPlan), // EXPLAIN PLAN ~= EXPLAIN OPTIMIZED PLAN
             Some(PHYSICAL) => {
                 self.expect_keyword(PLAN)?;
-                Some(ExplainStageNew::PhysicalPlan)
+                Some(ExplainStage::PhysicalPlan)
             }
             Some(OPTIMIZER) => {
                 self.expect_keyword(TRACE)?;
-                Some(ExplainStageNew::Trace)
+                Some(ExplainStage::Trace)
             }
-            Some(TIMESTAMP) => Some(ExplainStageNew::Timestamp),
+            Some(TIMESTAMP) => Some(ExplainStage::Timestamp),
             None => None,
             _ => unreachable!(),
         };
@@ -5285,7 +5285,7 @@ impl<'a> Parser<'a> {
         };
 
         Ok(Statement::Explain(ExplainStatement {
-            stage: stage.unwrap_or(ExplainStageNew::OptimizedPlan),
+            stage: stage.unwrap_or(ExplainStage::OptimizedPlan),
             config_flags,
             format,
             explainee,

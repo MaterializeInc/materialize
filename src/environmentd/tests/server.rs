@@ -377,7 +377,7 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         TestCaseSimple {
             query: "EXPLAIN SELECT 1",
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[["%0 =\n| Constant (1)\n"]],"col_names":["Optimized Plan"],"notices":[]}]}"#,
+            body: r#"{"results":[{"rows":[["Explained Query (fast path):\n  Constant\n    - (1)\n"]],"col_names":["Optimized Plan"],"notices":[]}]}"#,
         },
         TestCaseSimple {
             query: "SHOW VIEWS",
