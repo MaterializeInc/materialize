@@ -8,10 +8,12 @@
 // by the Apache License, Version 2.0.
 
 use crate::region::get_provider_region_environment;
-use crate::utils::CloudProviderRegion;
-use crate::{Environment, ValidProfile};
+use crate::utils::{exit_with_fail_message, CloudProviderRegion};
+use crate::{Environment, ExitMessage, ValidProfile};
 use anyhow::{Context, Result};
 use reqwest::Client;
+use std::os::unix::process::CommandExt;
+use std::process::Command;
 use subprocess::Exec;
 
 /// ----------------------------
@@ -34,7 +36,7 @@ fn run_psql_shell(valid_profile: ValidProfile, environment: &Environment) {
     let (host, port) = parse_pgwire(environment);
     let email = valid_profile.profile.email.clone();
 
-    let output = Exec::cmd("psql")
+    let error = Command::new("psql")
         .arg("-U")
         .arg(email)
         .arg("-h")
@@ -43,10 +45,12 @@ fn run_psql_shell(valid_profile: ValidProfile, environment: &Environment) {
         .arg(port)
         .arg("materialize")
         .env("PGPASSWORD", valid_profile.profile.app_password)
-        .join()
-        .expect("failed to execute process");
+        .exec();
 
-    assert!(output.success());
+    exit_with_fail_message(ExitMessage::String(format!(
+        "Failed to spawn psql {}",
+        error
+    )))
 }
 
 /// Runs pg_isready to check if an environment is healthy
