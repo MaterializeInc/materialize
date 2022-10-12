@@ -84,7 +84,10 @@ dbt manages all your connection configurations (or, profiles) in a file called [
           pass: <password>
           database: materialize
           schema: public
-          cluster: default
+          # optionally use the cluster connection
+          # parameter to specify the default cluster
+          # for the connection
+          cluster: <prod_cluster>
           sslmode: require
         dev:
           type: materialize
@@ -225,7 +228,7 @@ Here, the model depends on the view defined above, and is referenced as such via
 
 `source`, `view`, and `materialized view` materializations accept the following additional configuration options.
 
-#### cluster
+#### Clusters
 
 Use the [cluster](/sql/create-cluster/) option to specify the cluster in which the materialization is created. If unspecified, the default cluster for the connection is used.
 
@@ -233,16 +236,28 @@ Use the [cluster](/sql/create-cluster/) option to specify the cluster in which t
 {{ config(materialized='materializedview', cluster='cluster_a') }}
 ```
 
-#### indexes
+#### Indexes
 
-Use the indexes option to define a list of [indexes](/sql/create-index/) on a materialization. Each Materialize index can have three components:
-- columns (list, required): one or more columns on which the index is defined
-- name (string, optional): the name for the index. If unspecified, Materialize will use the materialization name and column names provided.
-- cluster (string, optional): the cluster to use to create the index. If unspecified, indexes will be created in the cluster used to create the materialization.
+Use the indexes option to define a list of [indexes](/sql/create-index/) on a materialization. Each Materialize index can have the following components:
 
+Component                            | Value     | Description
+-------------------------------------|-----------|--------------------------------------------------
+`columns`                            | `list`    | One or more columns on which the index is defined. To create an index that uses _all_ columns, use the `default` component instead.
+`name`                               | `string`  | The name for the index. If unspecified, Materialize will use the materialization name and column names provided.
+`cluster`                            | `string`  | The cluster to use to create the index. If unspecified, indexes will be created in the cluster used to create the materialization.
+`default`                            | `bool`    | Default: `False`. If set to `True`, creates a default index that uses all columns.
+
+##### Creating a multi-column index
 ```sql
 {{ config(materialized='view',
           indexes=[{'columns': ['col_a'], 'cluster': 'cluster_a'}]) }}
+```
+
+##### Creating a default index
+
+```sql
+{{ config(materialized='view',
+    indexes=[{'default': True}]) }}
 ```
 
 ## Build and run dbt
