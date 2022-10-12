@@ -63,7 +63,6 @@ impl<'a, T> From<&'a T> for Displayable<'a, T> {
 /// Explain context shared by all [`mz_repr::explain_new::Explain`]
 /// implementations in this crate.
 #[derive(Debug)]
-#[allow(dead_code)] // TODO (#13299)
 pub(crate) struct ExplainContext<'a> {
     pub(crate) config: &'a ExplainConfig,
     pub(crate) humanizer: &'a dyn ExprHumanizer,
@@ -74,7 +73,6 @@ pub(crate) struct ExplainContext<'a> {
 
 /// A somewhat ad-hoc way to keep carry a plan with a set
 /// of attributes derived for each node in that plan.
-#[allow(dead_code)] // TODO (#13299)
 pub(crate) struct AnnotatedPlan<'a, T> {
     pub(crate) plan: &'a T,
     pub(crate) annotations: HashMap<&'a T, Attributes>,
@@ -151,7 +149,6 @@ where
 /// [`mz_repr::explain_new::Explain`] implementations for points
 /// in the optimization pipeline identified with a single plan of
 /// type `T`.
-#[allow(dead_code)] // TODO (#13299)
 pub(crate) struct ExplainSinglePlan<'a, T> {
     context: &'a ExplainContext<'a>,
     plan: AnnotatedPlan<'a, T>,
@@ -358,7 +355,6 @@ impl<'a> DisplayText<RenderingContext<'a>> for Displayable<'a, MapFilterProject>
     }
 }
 
-#[allow(dead_code)] // TODO (#13299)
 #[allow(missing_debug_implementations)]
 pub(crate) struct PlanRenderingContext<'a, T> {
     pub(crate) indent: Indent, // TODO: can this be a ref?

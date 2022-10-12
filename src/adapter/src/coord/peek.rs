@@ -185,7 +185,6 @@ where
     C: AsMut<Indent> + AsRef<&'a dyn ExprHumanizer>,
 {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
-        // TODO: (#13299) print out types?
         match self {
             FastPathPlan::Constant(Ok(rows), _) => {
                 writeln!(f, "{}Constant", ctx.as_mut())?;
