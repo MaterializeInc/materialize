@@ -455,9 +455,6 @@ pub fn show_indexes<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let mut query_filter = vec!["idxs.on_id NOT LIKE 's%'".into()];
 
-    let schema_spec = scx.resolve_optional_schema(&from_schema)?;
-    query_filter.push(format!("objs.schema_id = {}", schema_spec));
-
     if let Some(on_object) = on_object {
         let on_item = scx.get_item_by_resolved_name(&on_object)?;
         if on_item.item_type() != CatalogItemType::View
@@ -472,6 +469,9 @@ pub fn show_indexes<'a>(
             );
         }
         query_filter.push(format!("objs.id = '{}'", on_item.id()));
+    } else {
+        let schema_spec = scx.resolve_optional_schema(&from_schema)?;
+        query_filter.push(format!("objs.schema_id = {}", schema_spec));
     }
 
     if let Some(cluster) = in_cluster {

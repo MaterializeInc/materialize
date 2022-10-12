@@ -194,8 +194,18 @@ foo_primary_idx1    foo clstr   {a,b,z}
 > SHOW INDEXES FROM public WHERE name = 'foo_primary_idx1'
 foo_primary_idx1    foo clstr   {a,b,z}
 
+> DROP TABLE foo CASCADE
+> DROP SOURCE data CASCADE
+
 ! SHOW INDEXES FROM public ON foo
 contains:Cannot specify both FROM and ON
 
 ! SHOW INDEXES FROM nonexistent
 contains:unknown schema 'nonexistent'
+
+> CREATE SCHEMA foo
+> CREATE TABLE foo.bar (a INT)
+> CREATE INDEX bar_ind ON foo.bar (a)
+
+> SHOW INDEXES ON foo.bar
+bar_ind bar <VARIABLE_OUTPUT> {a}
