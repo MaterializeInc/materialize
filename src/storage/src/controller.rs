@@ -97,18 +97,18 @@ pub enum IntrospectionType {
     ShardMapping,
 }
 
+/// Describes how data is written to the collection.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataSource {
     /// Ingest data from some external source.
     Ingestion(IngestionDescription),
-    /// This source's data source is some other source.
-    // TODO: embed the source's GlobalId
-    Source,
-    /// This source's data is a dataflow (i.e. it repesents a materialized view)
-    Dataflow,
     /// Data comes from introspection sources, which the controller itself is
     /// responisble for generating.
     Introspection(IntrospectionType),
+    /// This source's data is does not need to be managed by the storage
+    /// controller, e.g. it's a materialized view, table, or subsource.
+    // TODO? Add a means to track some data sources' GlobalIds.
+    Other,
 }
 
 /// Describes a request to create a source.
@@ -116,7 +116,7 @@ pub enum DataSource {
 pub struct CollectionDescription<T> {
     /// The schema of this collection
     pub desc: RelationDesc,
-    /// The description of the source of data for this collection to ingest.
+    /// The source of this collection's data.
     pub data_source: DataSource,
     /// An optional frontier to which the collection's `since` should be advanced.
     pub since: Option<Antichain<T>>,
@@ -129,7 +129,7 @@ impl<T> From<RelationDesc> for CollectionDescription<T> {
     fn from(desc: RelationDesc) -> Self {
         Self {
             desc,
-            data_source: DataSource::Dataflow,
+            data_source: DataSource::Other,
             since: None,
             status_collection_id: None,
         }
@@ -947,7 +947,7 @@ where
                         }
                     }
                 }
-                DataSource::Source | DataSource::Dataflow => {}
+                DataSource::Other => {}
             }
         }
 

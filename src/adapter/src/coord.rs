@@ -507,7 +507,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 host_config: ingestion.host_config.clone(),
                             })
                         }
-                        DataSourceDesc::Source => DataSource::Source,
+                        DataSourceDesc::Source => DataSource::Other,
                         DataSourceDesc::Introspection(introspection) => {
                             DataSource::Introspection(*introspection)
                         }
