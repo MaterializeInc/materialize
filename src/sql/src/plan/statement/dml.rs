@@ -226,6 +226,10 @@ pub fn describe_explain_new(
             relation_desc =
                 relation_desc.with_column("Physical Plan", ScalarType::String.nullable(false));
         }
+        ExplainStageNew::Timestamp => {
+            relation_desc =
+                relation_desc.with_column("Timestamp", ScalarType::String.nullable(false));
+        }
         ExplainStageNew::Trace => {
             relation_desc = relation_desc
                 .with_column("Time", ScalarType::UInt64.nullable(false))

@@ -2343,6 +2343,8 @@ pub enum ExplainStageNew {
     PhysicalPlan,
     /// The complete trace of the plan through the optimizer
     Trace,
+    /// The dependent and selected timestamps
+    Timestamp,
 }
 
 impl ExplainStageNew {
@@ -2356,6 +2358,7 @@ impl ExplainStageNew {
             ExplainStageNew::OptimizedPlan => "optimize/global",
             ExplainStageNew::PhysicalPlan => "optimize/mir_to_lir",
             ExplainStageNew::Trace => unreachable!(),
+            ExplainStageNew::Timestamp => unreachable!(),
         }
     }
 }
@@ -2370,6 +2373,7 @@ impl AstDisplay for ExplainStageNew {
             ExplainStageNew::OptimizedPlan => f.write_str("OPTIMIZED PLAN"),
             ExplainStageNew::PhysicalPlan => f.write_str("PHYSICAL PLAN"),
             ExplainStageNew::Trace => f.write_str("OPTIMIZER TRACE"),
+            ExplainStageNew::Timestamp => f.write_str("TIMESTAMP"),
         }
     }
 }
