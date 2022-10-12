@@ -25,45 +25,36 @@ CREATE TABLE t3 (f1 INTEGER PRIMARY KEY, f2 INTEGER);
 # No propagation for single tables
 
 query T multiline
-EXPLAIN SELECT * FROM t1 WHERE t1.f1 = 123 AND t1.f1 = t1.f2
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE t1.f1 = 123 AND t1.f1 = t1.f2
 ----
-Source materialize.public.t1 (u1):
-| Filter (#0 = 123), (#0 = #1)
-| Project (#0, #1)
+Explained Query:
+  Filter (#0 = 123) AND (#0 = #1) // { arity: 2 }
+    Get materialize.public.t1 // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.t1 (u1)
-| Filter (#0 = 123), (#0 = #1)
+Source materialize.public.t1
+  filter=((#0 = 123) AND (#0 = #1))
 
 EOF
 
 # Inner joins
 
 query T multiline
-EXPLAIN SELECT * FROM t1 , t2 WHERE t1.f1 = 123 AND t1.f1 = t2.f1
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 , t2 WHERE t1.f1 = 123 AND t1.f1 = t2.f1
 ----
-Source materialize.public.t1 (u1):
-| Filter (#0 = 123)
-| Project (#0, #1)
+Explained Query:
+  CrossJoin type=differential // { arity: 4 }
+    implementation
+      %1 » %0[]
+    ArrangeBy keys=[[]] // { arity: 2 }
+      Filter (#0 = 123) // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
+    Filter (#0 = 123) // { arity: 2 }
+      Get materialize.public.t2 // { arity: 2 }
 
-Source materialize.public.t2 (u2):
-| Filter (#0 = 123)
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u1)
-| Filter (#0 = 123)
-| ArrangeBy ()
-
-%1 =
-| Get materialize.public.t2 (u2)
-| Filter (#0 = 123)
-
-%2 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
+Source materialize.public.t1
+  filter=((#0 = 123))
+Source materialize.public.t2
+  filter=((#0 = 123))
 
 EOF
 
@@ -72,191 +63,148 @@ EOF
 # TODO (#6748): the second join should be removed as redundant and replaced with
 # `Get(l1)`.
 query T multiline
-EXPLAIN SELECT * FROM t1 LEFT JOIN t2 ON (t1.f1 = t2.f1) WHERE t1.f1 = 123;
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 LEFT JOIN t2 ON (t1.f1 = t2.f1) WHERE t1.f1 = 123;
 ----
-Source materialize.public.t1 (u1):
-| Filter (#0 = 123)
-| Project (#0, #1)
+Explained Query:
+  Return // { arity: 4 }
+    Union // { arity: 4 }
+      Map (null, null) // { arity: 4 }
+        Union // { arity: 2 }
+          Negate // { arity: 2 }
+            Project (#0, #1) // { arity: 2 }
+              Get l1 // { arity: 4 }
+          Get l0 // { arity: 2 }
+      Get l1 // { arity: 4 }
+  With
+    cte l1 =
+      CrossJoin type=differential // { arity: 4 }
+        implementation
+          %1 » %0[]
+        ArrangeBy keys=[[]] // { arity: 2 }
+          Get l0 // { arity: 2 }
+        Filter (#0 = 123) // { arity: 2 }
+          Get materialize.public.t2 // { arity: 2 }
+    cte l0 =
+      Filter (#0 = 123) // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
 
-Source materialize.public.t2 (u2):
-| Filter (#0 = 123)
-| Project (#0, #1)
-
-Query:
-%0 = Let l0 =
-| Get materialize.public.t1 (u1)
-| Filter (#0 = 123)
-
-%1 =
-| Get %0 (l0)
-| ArrangeBy ()
-
-%2 =
-| Get materialize.public.t2 (u2)
-| Filter (#0 = 123)
-
-%3 = Let l1 =
-| Join %1 %2
-| | implementation = Differential %2 %1.()
-
-%4 =
-| Get %3 (l1)
-| Project (#0, #1)
-| Negate
-
-%5 =
-| Union %4 %0
-| Map null, null
-
-%6 =
-| Union %5 %3
+Source materialize.public.t1
+  filter=((#0 = 123))
+Source materialize.public.t2
+  filter=((#0 = 123))
 
 EOF
 
 query T multiline
-EXPLAIN SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123;
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123;
 ----
-Source materialize.public.t1 (u1):
-| Filter (#0 = 123)
-| Project (#0, #1)
+Explained Query:
+  Return // { arity: 3 }
+    Union // { arity: 3 }
+      Get l0 // { arity: 3 }
+      Map (null) // { arity: 3 }
+        Union // { arity: 2 }
+          Project (#1, #0) // { arity: 2 }
+            Map (123) // { arity: 2 }
+              Negate // { arity: 1 }
+                Project (#1) // { arity: 1 }
+                  Get l0 // { arity: 3 }
+          Project (#2, #1) // { arity: 2 }
+            Filter (#0 = 123) // { arity: 3 }
+              Map (123) // { arity: 3 }
+                Get materialize.public.t1 // { arity: 2 }
+  With
+    cte l0 =
+      CrossJoin type=differential // { arity: 3 }
+        implementation
+          %1 » %0[]
+        ArrangeBy keys=[[]] // { arity: 2 }
+          Filter (#0 = 123) // { arity: 2 }
+            Get materialize.public.t1 // { arity: 2 }
+        Project (#1) // { arity: 1 }
+          Filter (#0 = 123) // { arity: 2 }
+            Get materialize.public.t2 // { arity: 2 }
 
-Source materialize.public.t2 (u2):
-| Filter (#0 = 123)
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u1)
-| Filter (#0 = 123)
-| ArrangeBy ()
-
-%1 =
-| Get materialize.public.t2 (u2)
-| Filter (#0 = 123)
-| Project (#1)
-
-%2 = Let l0 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
-
-%3 =
-| Get %2 (l0)
-| Project (#1)
-| Negate
-| Map 123
-| Project (#1, #0)
-
-%4 =
-| Get materialize.public.t1 (u1)
-| Map 123
-| Filter (#0 = 123)
-| Project (#2, #1)
-
-%5 =
-| Union %3 %4
-| Map null
-
-%6 =
-| Union %2 %5
+Source materialize.public.t1
+  filter=((#0 = 123))
+Source materialize.public.t2
+  filter=((#0 = 123))
 
 EOF
 
 query T multiline
-EXPLAIN SELECT * FROM t1 LEFT JOIN t2 ON (TRUE) WHERE t1.f1 = t2.f1 AND t1.f1 = 123;
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 LEFT JOIN t2 ON (TRUE) WHERE t1.f1 = t2.f1 AND t1.f1 = 123;
 ----
-Source materialize.public.t1 (u1):
-| Filter (#0 = 123)
-| Project (#0, #1)
+Explained Query:
+  CrossJoin type=differential // { arity: 4 }
+    implementation
+      %1 » %0[]
+    ArrangeBy keys=[[]] // { arity: 2 }
+      Filter (#0 = 123) // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
+    Filter (#0 = 123) // { arity: 2 }
+      Get materialize.public.t2 // { arity: 2 }
 
-Source materialize.public.t2 (u2):
-| Filter (#0 = 123)
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u1)
-| Filter (#0 = 123)
-| ArrangeBy ()
-
-%1 =
-| Get materialize.public.t2 (u2)
-| Filter (#0 = 123)
-
-%2 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
+Source materialize.public.t1
+  filter=((#0 = 123))
+Source materialize.public.t2
+  filter=((#0 = 123))
 
 EOF
 
 # Transitive application
 
 query T multiline
-EXPLAIN SELECT * FROM t1, t2, t3 WHERE t1.f1 = 123 AND t1.f1 = t2.f1 AND t2.f1 = t3.f1;
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1, t2, t3 WHERE t1.f1 = 123 AND t1.f1 = t2.f1 AND t2.f1 = t3.f1;
 ----
-Source materialize.public.t1 (u1):
-| Filter (#0 = 123)
-| Project (#0, #1)
+Explained Query:
+  CrossJoin type=differential // { arity: 6 }
+    implementation
+      %2 » %0[] » %1[]
+    ArrangeBy keys=[[]] // { arity: 2 }
+      Filter (#0 = 123) // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
+    ArrangeBy keys=[[]] // { arity: 2 }
+      Filter (#0 = 123) // { arity: 2 }
+        Get materialize.public.t2 // { arity: 2 }
+    Filter (#0 = 123) // { arity: 2 }
+      Get materialize.public.t3 // { arity: 2 }
 
-Source materialize.public.t2 (u2):
-| Filter (#0 = 123)
-| Project (#0, #1)
-
-Source materialize.public.t3 (u3):
-| Filter (#0 = 123)
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u1)
-| Filter (#0 = 123)
-| ArrangeBy ()
-
-%1 =
-| Get materialize.public.t2 (u2)
-| Filter (#0 = 123)
-| ArrangeBy ()
-
-%2 =
-| Get materialize.public.t3 (u3)
-| Filter (#0 = 123)
-
-%3 =
-| Join %0 %1 %2
-| | implementation = Differential %2 %0.() %1.()
+Source materialize.public.t1
+  filter=((#0 = 123))
+Source materialize.public.t2
+  filter=((#0 = 123))
+Source materialize.public.t3
+  filter=((#0 = 123))
 
 EOF
 
 # HAVING clause
 
 query T multiline
-EXPLAIN SELECT t1.f1 FROM t1, t2 WHERE t1.f1 = t2.f1 GROUP BY t1.f1 HAVING t1.f1 = 123;
+EXPLAIN WITH(arity, join_impls) SELECT t1.f1 FROM t1, t2 WHERE t1.f1 = t2.f1 GROUP BY t1.f1 HAVING t1.f1 = 123;
 ----
-Source materialize.public.t1 (u1):
-| Map dummy
-| Filter (#0 = 123)
-| Project (#0, #2)
+Explained Query:
+  Map (123) // { arity: 1 }
+    CrossJoin type=differential // { arity: 0 }
+      implementation
+        %1 » %0[]
+      ArrangeBy keys=[[]] // { arity: 0 }
+        Project () // { arity: 0 }
+          Filter (#0 = 123) // { arity: 2 }
+            Get materialize.public.t1 // { arity: 2 }
+      Project () // { arity: 0 }
+        Filter (#0 = 123) // { arity: 2 }
+          Get materialize.public.t2 // { arity: 2 }
 
-Source materialize.public.t2 (u2):
-| Map dummy
-| Filter (#0 = 123)
-| Project (#0, #2)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u1)
-| Filter (#0 = 123)
-| Project ()
-| ArrangeBy ()
-
-%1 =
-| Get materialize.public.t2 (u2)
-| Filter (#0 = 123)
-| Project ()
-
-%2 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
-| Map 123
+Source materialize.public.t1
+  project=(#0, #2)
+  filter=((#0 = 123))
+  map=(dummy)
+Source materialize.public.t2
+  project=(#0, #2)
+  filter=((#0 = 123))
+  map=(dummy)
 
 EOF
 
@@ -265,286 +213,224 @@ EOF
 #
 
 query T multiline
-EXPLAIN SELECT (SELECT t1.f1 FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f1 = 123;
+EXPLAIN WITH(arity, join_impls) SELECT (SELECT t1.f1 FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f1 = 123;
 ----
-Source materialize.public.t1 (u1):
-| Map dummy
-| Filter (#0 = 123)
-| Project (#0, #2)
+Explained Query:
+  Return // { arity: 1 }
+    CrossJoin type=differential // { arity: 1 }
+      implementation
+        %1 » l1[]
+      Get l1 // { arity: 0 }
+      Union // { arity: 1 }
+        Get l2 // { arity: 1 }
+        Map (null) // { arity: 1 }
+          Union // { arity: 0 }
+            Negate // { arity: 0 }
+              Project () // { arity: 0 }
+                Get l2 // { arity: 1 }
+            Get l0 // { arity: 0 }
+  With
+    cte l2 =
+      CrossJoin type=differential // { arity: 1 }
+        implementation
+          %1 » l1[]
+        Get l1 // { arity: 0 }
+        Project (#0) // { arity: 1 }
+          Filter (#0 = 123) // { arity: 2 }
+            Get materialize.public.t1 // { arity: 2 }
+    cte l1 =
+      ArrangeBy keys=[[]] // { arity: 0 }
+        Get l0 // { arity: 0 }
+    cte l0 =
+      Project () // { arity: 0 }
+        Filter (#0 = 123) // { arity: 2 }
+          Get materialize.public.t2 // { arity: 2 }
 
-Source materialize.public.t2 (u2):
-| Map dummy
-| Filter (#0 = 123)
-| Project (#0, #2)
-
-Query:
-%0 = Let l0 =
-| Get materialize.public.t2 (u2)
-| Filter (#0 = 123)
-| Project ()
-
-%1 = Let l1 =
-| Get %0 (l0)
-| ArrangeBy ()
-
-%2 =
-| Get materialize.public.t1 (u1)
-| Filter (#0 = 123)
-| Project (#0)
-
-%3 = Let l2 =
-| Join %1 %2
-| | implementation = Differential %2 %1.()
-
-%4 =
-| Get %3 (l2)
-| Project ()
-| Negate
-
-%5 =
-| Union %4 %0
-| Map null
-
-%6 =
-| Union %3 %5
-
-%7 =
-| Join %1 %6
-| | implementation = Differential %6 %1.()
+Source materialize.public.t1
+  project=(#0, #2)
+  filter=((#0 = 123))
+  map=(dummy)
+Source materialize.public.t2
+  project=(#0, #2)
+  filter=((#0 = 123))
+  map=(dummy)
 
 EOF
 
 # This case is currently not optimized
 query T multiline
-EXPLAIN SELECT (SELECT t1.f1 FROM t1) = t2.f1 FROM t2 WHERE t2.f1 = 123;
+EXPLAIN WITH(arity, join_impls) SELECT (SELECT t1.f1 FROM t1) = t2.f1 FROM t2 WHERE t2.f1 = 123;
 ----
-Source materialize.public.t1 (u1):
-| Map dummy
-| Project (#0, #2)
+Explained Query:
+  Return // { arity: 1 }
+    Project (#1) // { arity: 1 }
+      Map ((#0 = 123)) // { arity: 2 }
+        CrossJoin type=differential // { arity: 1 }
+          implementation
+            %1 » %0[]
+          ArrangeBy keys=[[]] // { arity: 0 }
+            Project () // { arity: 0 }
+              Filter (#0 = 123) // { arity: 2 }
+                Get materialize.public.t2 // { arity: 2 }
+          Union // { arity: 1 }
+            Get l0 // { arity: 1 }
+            Map (null) // { arity: 1 }
+              Union // { arity: 0 }
+                Negate // { arity: 0 }
+                  Distinct // { arity: 0 }
+                    Project () // { arity: 0 }
+                      Get l0 // { arity: 1 }
+                Constant // { arity: 0 }
+                  - ()
+  With
+    cte l0 =
+      Union // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Get materialize.public.t1 // { arity: 2 }
+        Map (error("more than one record produced in subquery")) // { arity: 1 }
+          Project () // { arity: 0 }
+            Filter (#0 > 1) // { arity: 1 }
+              Reduce aggregates=[count(true)] // { arity: 1 }
+                Project () // { arity: 0 }
+                  Get materialize.public.t1 // { arity: 2 }
 
-Source materialize.public.t2 (u2):
-| Map dummy
-| Filter (#0 = 123)
-| Project (#0, #2)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u1)
-| Project (#0)
-
-%1 =
-| Get materialize.public.t1 (u1)
-| Project ()
-| Reduce group=()
-| | agg count(true)
-| Filter (#0 > 1)
-| Project ()
-| Map (err: more than one record produced in subquery)
-
-%2 = Let l0 =
-| Union %0 %1
-
-%3 =
-| Get materialize.public.t2 (u2)
-| Filter (#0 = 123)
-| Project ()
-| ArrangeBy ()
-
-%4 =
-| Get %2 (l0)
-| Project ()
-| Distinct group=()
-| Negate
-
-%5 =
-| Constant ()
-
-%6 =
-| Union %4 %5
-| Map null
-
-%7 =
-| Union %2 %6
-
-%8 =
-| Join %3 %7
-| | implementation = Differential %7 %3.()
-| Map (#0 = 123)
-| Project (#1)
+Source materialize.public.t1
+  project=(#0, #2)
+  map=(dummy)
+Source materialize.public.t2
+  project=(#0, #2)
+  filter=((#0 = 123))
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN SELECT * FROM t1 WHERE t1.f1 = 123 AND EXISTS (SELECT * FROM t2 WHERE t2.f1 = t1.f1);
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE t1.f1 = 123 AND EXISTS (SELECT * FROM t2 WHERE t2.f1 = t1.f1);
 ----
-Source materialize.public.t1 (u1):
-| Filter (#0 = 123)
-| Project (#0, #1)
+Explained Query:
+  CrossJoin type=differential // { arity: 2 }
+    implementation
+      %1 » %0[]
+    ArrangeBy keys=[[]] // { arity: 2 }
+      Filter (#0 = 123) // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
+    Project () // { arity: 0 }
+      Filter (#0 = 123) // { arity: 2 }
+        Get materialize.public.t2 // { arity: 2 }
 
-Source materialize.public.t2 (u2):
-| Map dummy
-| Filter (#0 = 123)
-| Project (#0, #2)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u1)
-| Filter (#0 = 123)
-| ArrangeBy ()
-
-%1 =
-| Get materialize.public.t2 (u2)
-| Filter (#0 = 123)
-| Project ()
-
-%2 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
+Source materialize.public.t1
+  filter=((#0 = 123))
+Source materialize.public.t2
+  project=(#0, #2)
+  filter=((#0 = 123))
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN SELECT * FROM t1 WHERE t1.f1 = 123 AND EXISTS (SELECT * FROM t2 WHERE t2.f1 = t1.f1) AND EXISTS (SELECT * FROM t3 WHERE t3.f1 = t1.f1);
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE t1.f1 = 123 AND EXISTS (SELECT * FROM t2 WHERE t2.f1 = t1.f1) AND EXISTS (SELECT * FROM t3 WHERE t3.f1 = t1.f1);
 ----
-Source materialize.public.t1 (u1):
-| Filter (#0 = 123)
-| Project (#0, #1)
+Explained Query:
+  CrossJoin type=differential // { arity: 2 }
+    implementation
+      %2 » %0[] » %1[]
+    ArrangeBy keys=[[]] // { arity: 2 }
+      Filter (#0 = 123) // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
+    ArrangeBy keys=[[]] // { arity: 0 }
+      Project () // { arity: 0 }
+        Filter (#0 = 123) // { arity: 2 }
+          Get materialize.public.t2 // { arity: 2 }
+    Project () // { arity: 0 }
+      Filter (#0 = 123) // { arity: 2 }
+        Get materialize.public.t3 // { arity: 2 }
 
-Source materialize.public.t2 (u2):
-| Map dummy
-| Filter (#0 = 123)
-| Project (#0, #2)
-
-Source materialize.public.t3 (u3):
-| Map dummy
-| Filter (#0 = 123)
-| Project (#0, #2)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u1)
-| Filter (#0 = 123)
-| ArrangeBy ()
-
-%1 =
-| Get materialize.public.t2 (u2)
-| Filter (#0 = 123)
-| Project ()
-| ArrangeBy ()
-
-%2 =
-| Get materialize.public.t3 (u3)
-| Filter (#0 = 123)
-| Project ()
-
-%3 =
-| Join %0 %1 %2
-| | implementation = Differential %2 %0.() %1.()
+Source materialize.public.t1
+  filter=((#0 = 123))
+Source materialize.public.t2
+  project=(#0, #2)
+  filter=((#0 = 123))
+  map=(dummy)
+Source materialize.public.t3
+  project=(#0, #2)
+  filter=((#0 = 123))
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN SELECT * FROM t1, (SELECT t2.f1 FROM t2) AS dt1 WHERE dt1.f1 = t1.f1 AND t1.f1 = 123;
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1, (SELECT t2.f1 FROM t2) AS dt1 WHERE dt1.f1 = t1.f1 AND t1.f1 = 123;
 ----
-Source materialize.public.t1 (u1):
-| Filter (#0 = 123)
-| Project (#0, #1)
+Explained Query:
+  CrossJoin type=differential // { arity: 3 }
+    implementation
+      %1 » %0[]
+    ArrangeBy keys=[[]] // { arity: 2 }
+      Filter (#0 = 123) // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
+    Project (#0) // { arity: 1 }
+      Filter (#0 = 123) // { arity: 2 }
+        Get materialize.public.t2 // { arity: 2 }
 
-Source materialize.public.t2 (u2):
-| Map dummy
-| Filter (#0 = 123)
-| Project (#0, #2)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u1)
-| Filter (#0 = 123)
-| ArrangeBy ()
-
-%1 =
-| Get materialize.public.t2 (u2)
-| Filter (#0 = 123)
-| Project (#0)
-
-%2 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
+Source materialize.public.t1
+  filter=((#0 = 123))
+Source materialize.public.t2
+  project=(#0, #2)
+  filter=((#0 = 123))
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN SELECT * FROM t1 WHERE 123 = (SELECT t2.f1 FROM t2);
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE 123 = (SELECT t2.f1 FROM t2);
 ----
-Source materialize.public.t1 (u1):
-| Project (#0, #1)
+Explained Query:
+  CrossJoin type=differential // { arity: 2 }
+    implementation
+      %1 » %0[]
+    ArrangeBy keys=[[]] // { arity: 2 }
+      Get materialize.public.t1 // { arity: 2 }
+    Union // { arity: 0 }
+      Project () // { arity: 0 }
+        Filter (#0 = 123) // { arity: 2 }
+          Get materialize.public.t2 // { arity: 2 }
+      Project () // { arity: 0 }
+        Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
+          Reduce aggregates=[count(true)] // { arity: 1 }
+            Project () // { arity: 0 }
+              Get materialize.public.t2 // { arity: 2 }
 
-Source materialize.public.t2 (u2):
-| Map dummy
-| Project (#0, #2)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy ()
-
-%1 =
-| Get materialize.public.t2 (u2)
-| Filter (#0 = 123)
-| Project ()
-
-%2 =
-| Get materialize.public.t2 (u2)
-| Project ()
-| Reduce group=()
-| | agg count(true)
-| Filter (err: more than one record produced in subquery), (#0 > 1)
-| Project ()
-
-%3 =
-| Union %1 %2
-
-%4 =
-| Join %0 %3
-| | implementation = Differential %3 %0.()
+Source materialize.public.t2
+  project=(#0, #2)
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN SELECT * FROM t1 WHERE t1.f1 = 123 AND t1.f1 = (SELECT t2.f1 FROM t2);
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE t1.f1 = 123 AND t1.f1 = (SELECT t2.f1 FROM t2);
 ----
-Source materialize.public.t1 (u1):
-| Filter (#0 = 123)
-| Project (#0, #1)
+Explained Query:
+  CrossJoin type=differential // { arity: 2 }
+    implementation
+      %1 » %0[]
+    ArrangeBy keys=[[]] // { arity: 2 }
+      Filter (#0 = 123) // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
+    Union // { arity: 0 }
+      Project () // { arity: 0 }
+        Filter (#0 = 123) // { arity: 2 }
+          Get materialize.public.t2 // { arity: 2 }
+      Project () // { arity: 0 }
+        Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
+          Reduce aggregates=[count(true)] // { arity: 1 }
+            Project () // { arity: 0 }
+              Get materialize.public.t2 // { arity: 2 }
 
-Source materialize.public.t2 (u2):
-| Map dummy
-| Project (#0, #2)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u1)
-| Filter (#0 = 123)
-| ArrangeBy ()
-
-%1 =
-| Get materialize.public.t2 (u2)
-| Filter (#0 = 123)
-| Project ()
-
-%2 =
-| Get materialize.public.t2 (u2)
-| Project ()
-| Reduce group=()
-| | agg count(true)
-| Filter (err: more than one record produced in subquery), (#0 > 1)
-| Project ()
-
-%3 =
-| Union %1 %2
-
-%4 =
-| Join %0 %3
-| | implementation = Differential %3 %0.()
+Source materialize.public.t1
+  filter=((#0 = 123))
+Source materialize.public.t2
+  project=(#0, #2)
+  map=(dummy)
 
 EOF
 
@@ -557,31 +443,27 @@ statement ok
 CREATE TABLE t4 (f1 INTEGER, f2 INTEGER, PRIMARY KEY (f1, f2));
 
 query T multiline
-EXPLAIN SELECT * FROM t4 AS a1, t4 AS a2 WHERE a1.f1 = 123 AND a1.f2 = 234 AND a1.f1 = a2.f1 AND a1.f2 = a2.f2;
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t4 AS a1, t4 AS a2 WHERE a1.f1 = 123 AND a1.f2 = 234 AND a1.f1 = a2.f1 AND a1.f2 = a2.f2;
 ----
-Source materialize.public.t4 (u4):
-| Filter (#0 = 123), (#1 = 234)
-| Project (#0, #1)
+Explained Query:
+  Project (#0, #1, #0, #1) // { arity: 4 }
+    Filter (#0 = 123) AND (#1 = 234) // { arity: 2 }
+      Get materialize.public.t4 // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.t4 (u4)
-| Filter (#0 = 123), (#1 = 234)
-| Project (#0, #1, #0, #1)
+Source materialize.public.t4
+  filter=((#0 = 123) AND (#1 = 234))
 
 EOF
 
 query T multiline
-EXPLAIN SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 123 AND a1.f2 = 234;
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 123 AND a1.f2 = 234;
 ----
-Source materialize.public.t4 (u4):
-| Filter (#0 = 123), (#1 = 234)
-| Project (#0, #1)
+Explained Query:
+  Filter (#0 = 123) AND (#1 = 234) // { arity: 2 }
+    Get materialize.public.t4 // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.t4 (u4)
-| Filter (#0 = 123), (#1 = 234)
+Source materialize.public.t4
+  filter=((#0 = 123) AND (#1 = 234))
 
 EOF
 
@@ -590,16 +472,14 @@ EOF
 #
 
 query T multiline
-EXPLAIN SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 123 AND a2.f2 = 234;
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 123 AND a2.f2 = 234;
 ----
-Source materialize.public.t4 (u4):
-| Filter (#0 = 123), (#1 = 234)
-| Project (#0, #1)
+Explained Query:
+  Filter (#0 = 123) AND (#1 = 234) // { arity: 2 }
+    Get materialize.public.t4 // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.t4 (u4)
-| Filter (#0 = 123), (#1 = 234)
+Source materialize.public.t4
+  filter=((#0 = 123) AND (#1 = 234))
 
 EOF
 
@@ -608,10 +488,10 @@ EOF
 #
 
 query T multiline
-EXPLAIN SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123 AND t2.f1 = 234;
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123 AND t2.f1 = 234;
 ----
-%0 =
-| Constant
+Explained Query (fast path):
+  Constant
 
 EOF
 
@@ -620,39 +500,32 @@ EOF
 #
 
 query T multiline
-EXPLAIN SELECT * FROM t1 FULL OUTER JOIN t2 USING (f1) WHERE t1.f1 = 123 AND t2.f1 = 234;
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 FULL OUTER JOIN t2 USING (f1) WHERE t1.f1 = 123 AND t2.f1 = 234;
 ----
-%0 =
-| Constant
+Explained Query (fast path):
+  Constant
 
 EOF
 
 # Inequality between columns
 
 query T multiline
-EXPLAIN SELECT * FROM t1, t2 WHERE t1.f1 = 123 AND t1.f1 > t2.f1;
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1, t2 WHERE t1.f1 = 123 AND t1.f1 > t2.f1;
 ----
-Source materialize.public.t1 (u1):
-| Filter (#0 = 123)
-| Project (#0, #1)
+Explained Query:
+  CrossJoin type=differential // { arity: 4 }
+    implementation
+      %1 » %0[]
+    ArrangeBy keys=[[]] // { arity: 2 }
+      Filter (#0 = 123) // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
+    Filter (123 > #0) // { arity: 2 }
+      Get materialize.public.t2 // { arity: 2 }
 
-Source materialize.public.t2 (u2):
-| Filter (123 > #0)
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u1)
-| Filter (#0 = 123)
-| ArrangeBy ()
-
-%1 =
-| Get materialize.public.t2 (u2)
-| Filter (123 > #0)
-
-%2 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
+Source materialize.public.t1
+  filter=((#0 = 123))
+Source materialize.public.t2
+  filter=((123 > #0))
 
 EOF
 
@@ -665,26 +538,18 @@ create table int_table(int_col integer NOT NULL);
 # TODO: get rid of the unnecessary !isnull at the end of this plan
 
 query T multiline
-explain select * from int_table, double_table where int_table.int_col = double_table.double_col;
+explain with(arity, join_impls) select * from int_table, double_table where int_table.int_col = double_table.double_col;
 ----
-Source materialize.public.double_table (u5):
-| Filter (#0) IS NOT NULL
-| Project (#0)
+Explained Query:
+  Join on=(#1 = integer_to_double(#0)) type=differential // { arity: 2 }
+    implementation
+      %1 » %0[integer_to_double(#0)]
+    ArrangeBy keys=[[integer_to_double(#0)]] // { arity: 1 }
+      Get materialize.public.int_table // { arity: 1 }
+    Filter (#0) IS NOT NULL // { arity: 1 }
+      Get materialize.public.double_table // { arity: 1 }
 
-Source materialize.public.int_table (u6):
-| Project (#0)
-
-Query:
-%0 =
-| Get materialize.public.int_table (u6)
-| ArrangeBy (integer_to_double(#0))
-
-%1 =
-| Get materialize.public.double_table (u5)
-| Filter (#0) IS NOT NULL
-
-%2 =
-| Join %0 %1 (= #1 integer_to_double(#0))
-| | implementation = Differential %1 %0.(integer_to_double(#0))
+Source materialize.public.double_table
+  filter=((#0) IS NOT NULL)
 
 EOF

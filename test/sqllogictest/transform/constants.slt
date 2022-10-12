@@ -19,26 +19,23 @@ CREATE VIEW billion AS SELECT * FROM generate_series(0, 999) AS x, generate_seri
 # See https://github.com/MaterializeInc/materialize/issues/12963 .
 
 query T multiline
-EXPLAIN SELECT count(*) FROM billion;
+EXPLAIN WITH(arity, join_impls) SELECT count(*) FROM billion;
 ----
-%0 = Let l0 =
-| Constant (() x 1000000000)
-| Reduce group=()
-| | agg count(true)
-
-%1 =
-| Get %0 (l0)
-| Project ()
-| Negate
-
-%2 =
-| Constant ()
-
-%3 =
-| Union %1 %2
-| Map 0
-
-%4 =
-| Union %0 %3
+Explained Query:
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l0 // { arity: 1 }
+      Map (0) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l0 // { arity: 1 }
+          Constant // { arity: 0 }
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[count(true)] // { arity: 1 }
+        Constant // { arity: 0 }
+          - (() x 1000000000)
 
 EOF

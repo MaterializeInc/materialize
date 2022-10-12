@@ -244,94 +244,60 @@ mode standard
 # Verify that the plans for some simple non-correlated subqueries are sane.
 
 query T multiline
-EXPLAIN PLAN FOR SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t2)
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t2)
 ----
-Source materialize.public.t1 (u9):
-| Project (#0)
+Explained Query:
+  CrossJoin type=differential // { arity: 1 }
+    implementation
+      materialize.public.t1 » %1[]
+    Get materialize.public.t1 // { arity: 1 }
+    ArrangeBy keys=[[]] // { arity: 0 }
+      Distinct // { arity: 0 }
+        Project () // { arity: 0 }
+          Get materialize.public.t2 // { arity: 1 }
 
-Source materialize.public.t2 (u10):
-| Map dummy
-| Project (#1)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u9)
-
-%1 =
-| Get materialize.public.t2 (u10)
-| Project ()
-| Distinct group=()
-| ArrangeBy ()
-
-%2 =
-| Join %0 %1
-| | implementation = Differential %0 %1.()
+Source materialize.public.t2
+  project=(#1)
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2)
+EXPLAIN WITH(arity, join_impls) SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2)
 ----
-Source materialize.public.t1 (u9):
-| Project (#0)
+Explained Query:
+  Project (#0, #0, #2) // { arity: 3 }
+    Join on=(#0 = #1) type=differential // { arity: 3 }
+      implementation
+        materialize.public.t3 » %2[] » %0[#0]
+      ArrangeBy keys=[[#0]] // { arity: 1 }
+        Get materialize.public.t1 // { arity: 1 }
+      Get materialize.public.t3 // { arity: 2 }
+      ArrangeBy keys=[[]] // { arity: 0 }
+        Distinct // { arity: 0 }
+          Project () // { arity: 0 }
+            Get materialize.public.t2 // { arity: 1 }
 
-Source materialize.public.t2 (u10):
-| Map dummy
-| Project (#1)
-
-Source materialize.public.t3 (u11):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u9)
-| ArrangeBy (#0)
-
-%1 =
-| Get materialize.public.t3 (u11)
-
-%2 =
-| Get materialize.public.t2 (u10)
-| Project ()
-| Distinct group=()
-| ArrangeBy ()
-
-%3 =
-| Join %0 %1 %2 (= #0 #1)
-| | implementation = Differential %1 %2.() %0.(#0)
-| Project (#0, #0, #2)
+Source materialize.public.t2
+  project=(#1)
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2 WHERE t3.b = t2.b)
+EXPLAIN WITH(arity, join_impls) SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2 WHERE t3.b = t2.b)
 ----
-Source materialize.public.t1 (u9):
-| Project (#0)
-
-Source materialize.public.t2 (u10):
-| Project (#0)
-
-Source materialize.public.t3 (u11):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u9)
-| ArrangeBy (#0)
-
-%1 =
-| Get materialize.public.t3 (u11)
-
-%2 =
-| Get materialize.public.t2 (u10)
-| Distinct group=(#0)
-| ArrangeBy (#0)
-
-%3 =
-| Join %0 %1 %2 (= #0 #1) (= #2 #3)
-| | implementation = Differential %1 %2.(#0) %0.(#0)
-| Project (#0, #0, #2)
+Explained Query:
+  Project (#0, #0, #2) // { arity: 3 }
+    Join on=(#0 = #1 AND #2 = #3) type=differential // { arity: 4 }
+      implementation
+        materialize.public.t3 » %2[#0] » %0[#0]
+      ArrangeBy keys=[[#0]] // { arity: 1 }
+        Get materialize.public.t1 // { arity: 1 }
+      Get materialize.public.t3 // { arity: 2 }
+      ArrangeBy keys=[[#0]] // { arity: 1 }
+        Distinct group_by=[#0] // { arity: 1 }
+          Get materialize.public.t2 // { arity: 1 }
 
 EOF
 
@@ -340,7 +306,7 @@ EOF
 # 4 scalars that refer to other scalars in the map. If query planning optimizes away
 # this particular case, replace with another query that generates such a plan
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT age, ascii_num * 2 as result FROM (
   SELECT age, ascii(letter) AS ascii_num FROM (
     SELECT age, substr(replaced, 2, 1) AS letter FROM (
@@ -351,29 +317,22 @@ SELECT age, ascii_num * 2 as result FROM (
   )
 )
 ----
-Source materialize.public.likes (u3):
-| Filter (#0) IS NOT NULL
-| Project (#0, #1)
+Explained Query:
+  Project (#3, #4) // { arity: 2 }
+    Map ((ascii(substr(replace(#1, "o", "i"), 2, 1)) * 2)) // { arity: 5 }
+      Join on=(#0 = #2) type=differential // { arity: 4 }
+        implementation
+          %1 » %0[#0]
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Filter (#0) IS NOT NULL // { arity: 2 }
+            Get materialize.public.likes // { arity: 2 }
+        Filter (#0) IS NOT NULL // { arity: 2 }
+          Get materialize.public.age // { arity: 2 }
 
-Source materialize.public.age (u5):
-| Filter (#0) IS NOT NULL
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.likes (u3)
-| Filter (#0) IS NOT NULL
-| ArrangeBy (#0)
-
-%1 =
-| Get materialize.public.age (u5)
-| Filter (#0) IS NOT NULL
-
-%2 =
-| Join %0 %1 (= #0 #2)
-| | implementation = Differential %1 %0.(#0)
-| Map (ascii(substr(replace(#1, "o", "i"), 2, 1)) * 2)
-| Project (#3, #4)
+Source materialize.public.likes
+  filter=((#0) IS NOT NULL)
+Source materialize.public.age
+  filter=((#0) IS NOT NULL)
 
 EOF
 
@@ -478,171 +437,115 @@ false
 true
 
 query T multiline
-EXPLAIN PLAN FOR SELECT b IN (SELECT a FROM x) FROM y
+EXPLAIN WITH(arity, join_impls) SELECT b IN (SELECT a FROM x) FROM y
 ----
-Source materialize.public.x (u13):
-| Project (#0)
-
-Source materialize.public.y (u14):
-| Project (#0)
-
-Query:
-%0 = Let l0 =
-| Get materialize.public.y (u14)
-| Distinct group=(#0)
-
-%1 =
-| Get %0 (l0)
-| ArrangeBy (#0)
-
-%2 =
-| Get materialize.public.x (u13)
-| Distinct group=(#0)
-| ArrangeBy (#0)
-
-%3 = Let l1 =
-| Join %1 %2 (= #0 #1)
-| | implementation = DeltaQuery
-| |   delta %1 %2.(#0)
-| |   delta %2 %1.(#0)
-| Project (#0)
-
-%4 =
-| Get materialize.public.y (u14)
-| ArrangeBy (#0)
-
-%5 =
-| Get %3 (l1)
-| Map true
-
-%6 =
-| Get %3 (l1)
-| Negate
-
-%7 =
-| Union %6 %0
-| Map false
-
-%8 =
-| Union %5 %7
-
-%9 =
-| Join %4 %8 (= #0 #1)
-| | implementation = Differential %8 %4.(#0)
-| Project (#2)
+Explained Query:
+  Return // { arity: 1 }
+    Project (#2) // { arity: 1 }
+      Join on=(#0 = #1) type=differential // { arity: 3 }
+        implementation
+          %1 » %0[#0]
+        ArrangeBy keys=[[#0]] // { arity: 1 }
+          Get materialize.public.y // { arity: 1 }
+        Union // { arity: 2 }
+          Map (true) // { arity: 2 }
+            Get l1 // { arity: 1 }
+          Map (false) // { arity: 2 }
+            Union // { arity: 1 }
+              Negate // { arity: 1 }
+                Get l1 // { arity: 1 }
+              Get l0 // { arity: 1 }
+  With
+    cte l1 =
+      Project (#0) // { arity: 1 }
+        Join on=(#0 = #1) type=delta // { arity: 2 }
+          implementation
+            %0 » %1[#0]
+            %1 » %0[#0]
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Distinct group_by=[#0] // { arity: 1 }
+              Get materialize.public.x // { arity: 1 }
+    cte l0 =
+      Distinct group_by=[#0] // { arity: 1 }
+        Get materialize.public.y // { arity: 1 }
 
 EOF
 
 query T multiline
-EXPLAIN PLAN FOR SELECT b != ALL(SELECT a FROM x) FROM y
+EXPLAIN WITH(arity, join_impls) SELECT b != ALL(SELECT a FROM x) FROM y
 ----
-Source materialize.public.x (u13):
-| Project (#0)
-
-Source materialize.public.y (u14):
-| Project (#0)
-
-Query:
-%0 = Let l0 =
-| Get materialize.public.y (u14)
-| Distinct group=(#0)
-
-%1 =
-| Get %0 (l0)
-| ArrangeBy (#0)
-
-%2 =
-| Get materialize.public.x (u13)
-| Distinct group=(#0)
-| ArrangeBy (#0)
-
-%3 = Let l1 =
-| Join %1 %2 (= #0 #1)
-| | implementation = DeltaQuery
-| |   delta %1 %2.(#0)
-| |   delta %2 %1.(#0)
-| Project (#0)
-
-%4 =
-| Get materialize.public.y (u14)
-| ArrangeBy (#0)
-
-%5 =
-| Get %3 (l1)
-| Map true
-
-%6 =
-| Get %3 (l1)
-| Negate
-
-%7 =
-| Union %6 %0
-| Map false
-
-%8 =
-| Union %5 %7
-
-%9 =
-| Join %4 %8 (= #0 #1)
-| | implementation = Differential %8 %4.(#0)
-| Map NOT(#2)
-| Project (#3)
+Explained Query:
+  Return // { arity: 1 }
+    Project (#3) // { arity: 1 }
+      Map (NOT(#2)) // { arity: 4 }
+        Join on=(#0 = #1) type=differential // { arity: 3 }
+          implementation
+            %1 » %0[#0]
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Get materialize.public.y // { arity: 1 }
+          Union // { arity: 2 }
+            Map (true) // { arity: 2 }
+              Get l1 // { arity: 1 }
+            Map (false) // { arity: 2 }
+              Union // { arity: 1 }
+                Negate // { arity: 1 }
+                  Get l1 // { arity: 1 }
+                Get l0 // { arity: 1 }
+  With
+    cte l1 =
+      Project (#0) // { arity: 1 }
+        Join on=(#0 = #1) type=delta // { arity: 2 }
+          implementation
+            %0 » %1[#0]
+            %1 » %0[#0]
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Distinct group_by=[#0] // { arity: 1 }
+              Get materialize.public.x // { arity: 1 }
+    cte l0 =
+      Distinct group_by=[#0] // { arity: 1 }
+        Get materialize.public.y // { arity: 1 }
 
 EOF
 
 # Check that we correctly invert the filter here via De Morgan.
 query T multiline
-EXPLAIN PLAN FOR SELECT b > ALL(SELECT a FROM x) FROM y
+EXPLAIN WITH(arity, join_impls) SELECT b > ALL(SELECT a FROM x) FROM y
 ----
-Source materialize.public.x (u13):
-| Project (#0)
-
-Source materialize.public.y (u14):
-| Project (#0)
-
-Query:
-%0 = Let l0 =
-| Get materialize.public.y (u14)
-| Distinct group=(#0)
-
-%1 =
-| Get %0 (l0)
-| ArrangeBy ()
-
-%2 =
-| Get materialize.public.x (u13)
-
-%3 = Let l1 =
-| Join %1 %2
-| | implementation = Differential %2 %1.()
-| Filter (#0 <= #1)
-| Project (#0)
-| Distinct group=(#0)
-
-%4 =
-| Get materialize.public.y (u14)
-| ArrangeBy (#0)
-
-%5 =
-| Get %3 (l1)
-| Map true
-
-%6 =
-| Get %3 (l1)
-| Negate
-
-%7 =
-| Union %6 %0
-| Map false
-
-%8 =
-| Union %5 %7
-
-%9 =
-| Join %4 %8 (= #0 #1)
-| | implementation = Differential %8 %4.(#0)
-| Map NOT(#2)
-| Project (#3)
+Explained Query:
+  Return // { arity: 1 }
+    Project (#3) // { arity: 1 }
+      Map (NOT(#2)) // { arity: 4 }
+        Join on=(#0 = #1) type=differential // { arity: 3 }
+          implementation
+            %1 » %0[#0]
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Get materialize.public.y // { arity: 1 }
+          Union // { arity: 2 }
+            Map (true) // { arity: 2 }
+              Get l1 // { arity: 1 }
+            Map (false) // { arity: 2 }
+              Union // { arity: 1 }
+                Negate // { arity: 1 }
+                  Get l1 // { arity: 1 }
+                Get l0 // { arity: 1 }
+  With
+    cte l1 =
+      Distinct group_by=[#0] // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Filter (#0 <= #1) // { arity: 2 }
+            CrossJoin type=differential // { arity: 2 }
+              implementation
+                materialize.public.x » %0[]
+              ArrangeBy keys=[[]] // { arity: 1 }
+                Get l0 // { arity: 1 }
+              Get materialize.public.x // { arity: 1 }
+    cte l0 =
+      Distinct group_by=[#0] // { arity: 1 }
+        Get materialize.public.y // { arity: 1 }
 
 EOF
 
@@ -733,7 +636,7 @@ WHERE a IN (9, 0)
 1
 
 query T multiline
-EXPLAIN SELECT 1 FROM x RIGHT JOIN (SELECT 2 FROM y) ON  NULL
+EXPLAIN WITH(arity, join_impls) SELECT 1 FROM x RIGHT JOIN (SELECT 2 FROM y) ON  NULL
 WHERE a IN (9, 0)
   OR 0  <  ALL (
       SELECT agg1  NULL
@@ -742,19 +645,17 @@ WHERE a IN (9, 0)
   )
   GROUP BY TRUE;
 ----
-Source materialize.public.x (u13):
-| Map dummy
-| Project (#1)
+Explained Query:
+  Map (1) // { arity: 1 }
+    Distinct // { arity: 0 }
+      Project () // { arity: 0 }
+        Get materialize.public.y // { arity: 1 }
 
-Source materialize.public.y (u14):
-| Map dummy
-| Project (#1)
-
-Query:
-%0 =
-| Get materialize.public.y (u14)
-| Project ()
-| Distinct group=()
-| Map 1
+Source materialize.public.x
+  project=(#1)
+  map=(dummy)
+Source materialize.public.y
+  project=(#1)
+  map=(dummy)
 
 EOF

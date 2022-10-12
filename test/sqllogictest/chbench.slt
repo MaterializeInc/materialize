@@ -244,7 +244,7 @@ CREATE TABLE region (
 
 # Query 01
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT
     ol_number,
     sum(ol_quantity) AS sum_qty,
@@ -257,26 +257,23 @@ WHERE ol_delivery_d > TIMESTAMP '2007-01-02 00:00:00.000000'
 GROUP BY ol_number
 ORDER BY ol_number
 ----
-%0 =
-| Get materialize.public.orderline (u13)
-| Filter (date_to_timestamp(#6) > 2007-01-02 00:00:00)
-| Project (#3, #7, #8)
-| Reduce group=(#0)
-| | agg sum(#1)
-| | agg sum(#2)
-| | agg count(#1)
-| | agg count(#2)
-| | agg count(true)
-| Map (bigint_to_double(#1) / bigint_to_double(if (#3 = 0) then {null} else {#3})), (numeric_to_double(#2) / bigint_to_double(if (#4 = 0) then {null} else {#4}))
-| Project (#0..=#2, #6, #7, #5)
+Explained Query:
+  Finish order_by=[#0 asc nulls_last] output=[#0..=#5]
+    Project (#0..=#2, #6, #7, #5) // { arity: 6 }
+      Map ((bigint_to_double(#1) / bigint_to_double(case when (#3 = 0) then null else #3 end)), (numeric_to_double(#2) / bigint_to_double(case when (#4 = 0) then null else #4 end))) // { arity: 8 }
+        Reduce group_by=[#0] aggregates=[sum(#1), sum(#2), count(#1), count(#2), count(true)] // { arity: 6 }
+          Project (#3, #7, #8) // { arity: 3 }
+            Filter (date_to_timestamp(#6) > 2007-01-02 00:00:00) // { arity: 10 }
+              Get materialize.public.orderline // { arity: 10 }
 
-Finish order_by=(#0 asc nulls_last) limit=none offset=0 project=(#0..=#5)
+Used Indexes:
+  - materialize.public.fk_orderline_order
 
 EOF
 
 # Query 02
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT su_suppkey, su_name, n_name, i_id, i_name, su_address, su_phone, su_comment
 FROM
     item, supplier, stock, nation, region,
@@ -301,79 +298,69 @@ AND i_id = m_i_id
 AND s_quantity = m_s_quantity
 ORDER BY n_name, su_name, i_id
 ----
-Source materialize.public.item (u17):
-| Map dummy, dummy
-| Filter "%b" ~~(padchar(#4))
-| Project (#0, #5, #2, #6, #4)
+Explained Query:
+  Finish order_by=[#2 asc nulls_last, #1 asc nulls_last, #3 asc nulls_last] output=[#0..=#7]
+    Return // { arity: 8 }
+      Project (#2, #3, #12, #0, #1, #4, #6, #7) // { arity: 8 }
+        Join on=(eq(#0, #8, #15) AND #2 = #10 AND #5 = #11 AND #9 = #16 AND #13 = #14) type=differential // { arity: 17 }
+          implementation
+            %2 » %5[#0, #1] » %0[#0] » %1[#0] » %3[#0] » l0[#0]
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Project (#0, #2) // { arity: 2 }
+              Filter "%b" ~~(padchar(#4)) // { arity: 5 }
+                Get materialize.public.item // { arity: 5 }
+          ArrangeBy keys=[[#0]] // { arity: 6 }
+            Project (#0..=#4, #6) // { arity: 6 }
+              Get materialize.public.supplier // { arity: 7 }
+          Project (#0, #2, #17) // { arity: 3 }
+            Filter (#2) IS NOT NULL // { arity: 18 }
+              Get materialize.public.stock // { arity: 18 }
+          ArrangeBy keys=[[#0]] // { arity: 3 }
+            Project (#0..=#2) // { arity: 3 }
+              Get materialize.public.nation // { arity: 4 }
+          Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+            Filter (#1) IS NOT NULL // { arity: 2 }
+              Reduce group_by=[#0] aggregates=[min(#1)] // { arity: 2 }
+                Project (#0, #2) // { arity: 2 }
+                  Join on=(#17 = #18 AND #19 = #20 AND #21 = #22) type=differential // { arity: 23 }
+                    implementation
+                      %0 » %1[#0] » %2[#0] » l0[#0]
+                    ArrangeBy keys=[[#17]] // { arity: 18 }
+                      Get materialize.public.stock // { arity: 18 }
+                    ArrangeBy keys=[[#0]] // { arity: 2 }
+                      Project (#0, #3) // { arity: 2 }
+                        Get materialize.public.supplier // { arity: 7 }
+                    ArrangeBy keys=[[#0]] // { arity: 2 }
+                      Project (#0, #2) // { arity: 2 }
+                        Get materialize.public.nation // { arity: 4 }
+                    Get l0 // { arity: 1 }
+    With
+      cte l0 =
+        ArrangeBy keys=[[#0]] // { arity: 1 }
+          Project (#0) // { arity: 1 }
+            Filter "EUROP%" ~~(padchar(#1)) // { arity: 3 }
+              Get materialize.public.region // { arity: 3 }
 
-Source materialize.public.region (u26):
-| Map dummy
-| Filter "EUROP%" ~~(padchar(#1))
-| Project (#0, #1, #3)
+Source materialize.public.item
+  project=(#0, #5, #2, #6, #4)
+  filter=("%b" ~~(padchar(#4)))
+  map=(dummy, dummy)
+Source materialize.public.region
+  project=(#0, #1, #3)
+  filter=("EUROP%" ~~(padchar(#1)))
+  map=(dummy)
 
-Query:
-%0 = Let l0 =
-| Get materialize.public.region (u26)
-| Filter "EUROP%" ~~(padchar(#1))
-| Project (#0)
-| ArrangeBy (#0)
-
-%1 =
-| Get materialize.public.item (u17)
-| Filter "%b" ~~(padchar(#4))
-| Project (#0, #2)
-| ArrangeBy (#0)
-
-%2 =
-| Get materialize.public.supplier (u24)
-| Project (#0..=#4, #6)
-| ArrangeBy (#0)
-
-%3 =
-| Get materialize.public.stock (u18)
-| Filter (#2) IS NOT NULL
-| Project (#0, #2, #17)
-
-%4 =
-| Get materialize.public.nation (u22)
-| Project (#0..=#2)
-| ArrangeBy (#0)
-
-%5 =
-| Get materialize.public.stock (u18)
-| ArrangeBy (#17)
-
-%6 =
-| Get materialize.public.supplier (u24)
-| Project (#0, #3)
-| ArrangeBy (#0)
-
-%7 =
-| Get materialize.public.nation (u22)
-| Project (#0, #2)
-| ArrangeBy (#0)
-
-%8 =
-| Join %5 %6 %7 %0 (= #17 #18) (= #19 #20) (= #21 #22)
-| | implementation = Differential %5.(#17) %6.(#0) %7.(#0) %0.(#0)
-| Project (#0, #2)
-| Reduce group=(#0)
-| | agg min(#1)
-| Filter (#1) IS NOT NULL
-| ArrangeBy (#0, #1)
-
-%9 =
-| Join %1 %2 %3 %4 %0 %8 (= #0 #8 #15) (= #2 #10) (= #5 #11) (= #9 #16) (= #13 #14)
-| | implementation = Differential %3 %8.(#0, #1) %1.(#0) %2.(#0) %4.(#0) %0.(#0)
-| Project (#2, #3, #12, #0, #1, #4, #6, #7)
-
-Finish order_by=(#2 asc nulls_last, #1 asc nulls_last, #3 asc nulls_last) limit=none offset=0 project=(#0..=#7)
+Used Indexes:
+  - materialize.public.fk_stock_supplier
+  - materialize.public.fk_nation_regionkey
+  - materialize.public.fk_supplier_nationkey
 
 EOF
 
 # Query 03
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT ol_o_id, ol_w_id, ol_d_id, sum(ol_amount) AS revenue, o_entry_d
 FROM customer, neworder, "order", orderline
 WHERE c_state LIKE 'A%'
@@ -390,45 +377,37 @@ AND o_entry_d > TIMESTAMP '2007-01-02 00:00:00.000000'
 GROUP BY ol_o_id, ol_w_id, ol_d_id, o_entry_d
 ORDER BY revenue DESC, o_entry_d
 ----
-Source materialize.public.neworder (u10):
-| Project (#0..=#2)
+Explained Query:
+  Finish order_by=[#3 desc nulls_first, #4 asc nulls_last] output=[#0..=#4]
+    Project (#0..=#2, #4, #3) // { arity: 5 }
+      Reduce group_by=[#2, #1, #0, #3] aggregates=[sum(#4)] // { arity: 5 }
+        Project (#1..=#3, #10, #14) // { arity: 5 }
+          Join on=(#0 = #9 AND eq(#1, #4, #7, #12) AND eq(#2, #5, #8, #13) AND eq(#3, #6, #11)) type=differential // { arity: 15 }
+            implementation
+              %3 » %1[#0, #1, #2] » %2[#0, #1, #2] » %0[#0, #1, #2]
+            ArrangeBy keys=[[#0, #1, #2]] // { arity: 3 }
+              Project (#0..=#2) // { arity: 3 }
+                Filter "A%" ~~(padchar(#9)) // { arity: 22 }
+                  Get materialize.public.customer // { arity: 22 }
+            ArrangeBy keys=[[#0, #1, #2]] // { arity: 3 }
+              Get materialize.public.neworder // { arity: 3 }
+            ArrangeBy keys=[[#0, #1, #2]] // { arity: 5 }
+              Project (#0..=#4) // { arity: 5 }
+                Filter (#3) IS NOT NULL AND (date_to_timestamp(#4) > 2007-01-02 00:00:00) // { arity: 8 }
+                  Get materialize.public.order // { arity: 8 }
+            Project (#0..=#2, #8) // { arity: 4 }
+              Get materialize.public.orderline // { arity: 10 }
 
-Query:
-%0 =
-| Get materialize.public.customer (u4)
-| Filter "A%" ~~(padchar(#9))
-| Project (#0..=#2)
-| ArrangeBy (#0, #1, #2)
-
-%1 =
-| Get materialize.public.neworder (u10)
-| ArrangeBy (#0, #1, #2)
-
-%2 =
-| Get materialize.public.order (u11)
-| Filter (#3) IS NOT NULL, (date_to_timestamp(#4) > 2007-01-02 00:00:00)
-| Project (#0..=#4)
-| ArrangeBy (#0, #1, #2)
-
-%3 =
-| Get materialize.public.orderline (u13)
-| Project (#0..=#2, #8)
-
-%4 =
-| Join %0 %1 %2 %3 (= #0 #9) (= #1 #4 #7 #12) (= #2 #5 #8 #13) (= #3 #6 #11)
-| | implementation = Differential %3 %1.(#0, #1, #2) %2.(#0, #1, #2) %0.(#0, #1, #2)
-| Project (#1..=#3, #10, #14)
-| Reduce group=(#2, #1, #0, #3)
-| | agg sum(#4)
-| Project (#0..=#2, #4, #3)
-
-Finish order_by=(#3 desc nulls_first, #4 asc nulls_last) limit=none offset=0 project=(#0..=#4)
+Used Indexes:
+  - materialize.public.fk_customer_district
+  - materialize.public.fk_order_customer
+  - materialize.public.fk_orderline_order
 
 EOF
 
 # Query 04
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT o_ol_cnt, count(*) AS order_count
 FROM "order"
 WHERE o_entry_d >= TIMESTAMP '2007-01-02 00:00:00.000000'
@@ -444,48 +423,44 @@ AND EXISTS (
 GROUP BY o_ol_cnt
 ORDER BY o_ol_cnt
 ----
-%0 = Let l0 =
-| Get materialize.public.order (u11)
-| Map date_to_timestamp(#4)
-| Filter (#8 < 2012-01-02 00:00:00), (#8 >= 2007-01-02 00:00:00)
+Explained Query:
+  Finish order_by=[#0 asc nulls_last] output=[#0, #1]
+    Return // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[count(true)] // { arity: 2 }
+        Project (#4) // { arity: 1 }
+          Join on=(#0 = #5 AND #1 = #6 AND #2 = #7 AND #3 = #8) type=differential // { arity: 9 }
+            implementation
+              %0 » %1[#0, #1, #2, #3]
+            Project (#0..=#2, #4, #6) // { arity: 5 }
+              Get l0 // { arity: 9 }
+            ArrangeBy keys=[[#0, #1, #2, #3]] // { arity: 4 }
+              Distinct group_by=[#0, #1, #2, #3] // { arity: 4 }
+                Project (#0..=#3) // { arity: 4 }
+                  Filter (#10 >= #3) // { arity: 14 }
+                    Join on=(#0 = #4 AND #1 = #5 AND #2 = #6) type=delta // { arity: 14 }
+                      implementation
+                        %0 » %1[#2, #1, #0]
+                        %1 » %0[#0, #1, #2]
+                      ArrangeBy keys=[[#0, #1, #2]] // { arity: 4 }
+                        Project (#0..=#2, #4) // { arity: 4 }
+                          Get l0 // { arity: 9 }
+                      ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
+                        Get materialize.public.orderline // { arity: 10 }
+    With
+      cte l0 =
+        Filter (#8 < 2012-01-02 00:00:00) AND (#8 >= 2007-01-02 00:00:00) // { arity: 9 }
+          Map (date_to_timestamp(#4)) // { arity: 9 }
+            Get materialize.public.order // { arity: 8 }
 
-%1 =
-| Get %0 (l0)
-| Project (#0..=#2, #4, #6)
-
-%2 =
-| Get %0 (l0)
-| Project (#0..=#2, #4)
-| ArrangeBy (#0, #1, #2)
-
-%3 =
-| Get materialize.public.orderline (u13)
-| ArrangeBy (#2, #1, #0)
-
-%4 =
-| Join %2 %3 (= #0 #4) (= #1 #5) (= #2 #6)
-| | implementation = DeltaQuery
-| |   delta %2 %3.(#2, #1, #0)
-| |   delta %3 %2.(#0, #1, #2)
-| Filter (#10 >= #3)
-| Project (#0..=#3)
-| Distinct group=(#0, #1, #2, #3)
-| ArrangeBy (#0, #1, #2, #3)
-
-%5 =
-| Join %1 %4 (= #0 #5) (= #1 #6) (= #2 #7) (= #3 #8)
-| | implementation = Differential %1 %4.(#0, #1, #2, #3)
-| Project (#4)
-| Reduce group=(#0)
-| | agg count(true)
-
-Finish order_by=(#0 asc nulls_last) limit=none offset=0 project=(#0, #1)
+Used Indexes:
+  - materialize.public.fk_order_customer
+  - materialize.public.fk_orderline_order
 
 EOF
 
 # Query 05
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT
     n_name,
     sum(ol_amount) AS revenue
@@ -507,98 +482,89 @@ AND o_entry_d >= TIMESTAMP '2007-01-02 00:00:00.000000'
 GROUP BY n_name
 ORDER BY revenue DESC
 ----
-Source materialize.public.region (u26):
-| Map dummy
-| Filter (#1 = "EUROPE")
-| Project (#0, #1, #3)
+Explained Query:
+  Finish order_by=[#1 desc nulls_first] output=[#0, #1]
+    Reduce group_by=[#1] aggregates=[sum(#0)] // { arity: 2 }
+      Project (#12, #19) // { arity: 2 }
+        Join on=(#0 = #7 AND eq(#1, #5, #9) AND eq(#2, #6, #10, #14) AND eq(#3, #17, #18) AND #4 = #8 AND #11 = #13 AND #15 = #16 AND #20 = #21) type=differential // { arity: 22 }
+          implementation
+            %2 » %1[#0, #1, #2] » %0[#0, #1, #2] » %3[#0, #1] » %4[#0, #1] » %5[#0] » %6[#0]
+          ArrangeBy keys=[[#0, #1, #2]] // { arity: 4 }
+            Project (#0..=#2, #21) // { arity: 4 }
+              Filter (#21) IS NOT NULL // { arity: 22 }
+                Get materialize.public.customer // { arity: 22 }
+          ArrangeBy keys=[[#0, #1, #2]] // { arity: 4 }
+            Project (#0..=#3) // { arity: 4 }
+              Filter (#3) IS NOT NULL AND (date_to_timestamp(#4) >= 2007-01-02 00:00:00) // { arity: 8 }
+                Get materialize.public.order // { arity: 8 }
+          Project (#0..=#2, #4, #8) // { arity: 5 }
+            Filter (#4) IS NOT NULL // { arity: 10 }
+              Get materialize.public.orderline // { arity: 10 }
+          ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+            Project (#0, #1, #17) // { arity: 3 }
+              Get materialize.public.stock // { arity: 18 }
+          ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+            Project (#0, #3) // { arity: 2 }
+              Get materialize.public.supplier // { arity: 7 }
+          ArrangeBy keys=[[#0]] // { arity: 3 }
+            Project (#0..=#2) // { arity: 3 }
+              Get materialize.public.nation // { arity: 4 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Project (#0) // { arity: 1 }
+              Filter (#1 = "EUROPE") // { arity: 3 }
+                Get materialize.public.region // { arity: 3 }
 
-Query:
-%0 =
-| Get materialize.public.customer (u4)
-| Filter (#21) IS NOT NULL
-| Project (#0..=#2, #21)
-| ArrangeBy (#0, #1, #2)
+Source materialize.public.region
+  project=(#0, #1, #3)
+  filter=((#1 = "EUROPE"))
+  map=(dummy)
 
-%1 =
-| Get materialize.public.order (u11)
-| Filter (#3) IS NOT NULL, (date_to_timestamp(#4) >= 2007-01-02 00:00:00)
-| Project (#0..=#3)
-| ArrangeBy (#0, #1, #2)
-
-%2 =
-| Get materialize.public.orderline (u13)
-| Filter (#4) IS NOT NULL
-| Project (#0..=#2, #4, #8)
-
-%3 =
-| Get materialize.public.stock (u18)
-| Project (#0, #1, #17)
-| ArrangeBy (#0, #1)
-
-%4 =
-| Get materialize.public.supplier (u24)
-| Project (#0, #3)
-| ArrangeBy (#0, #1)
-
-%5 =
-| Get materialize.public.nation (u22)
-| Project (#0..=#2)
-| ArrangeBy (#0)
-
-%6 =
-| Get materialize.public.region (u26)
-| Filter (#1 = "EUROPE")
-| Project (#0)
-| ArrangeBy (#0)
-
-%7 =
-| Join %0 %1 %2 %3 %4 %5 %6 (= #0 #7) (= #1 #5 #9) (= #2 #6 #10 #14) (= #3 #17 #18) (= #4 #8) (= #11 #13) (= #15 #16) (= #20 #21)
-| | implementation = Differential %2 %1.(#0, #1, #2) %0.(#0, #1, #2) %3.(#0, #1) %4.(#0, #1) %5.(#0) %6.(#0)
-| Project (#12, #19)
-| Reduce group=(#1)
-| | agg sum(#0)
-
-Finish order_by=(#1 desc nulls_first) limit=none offset=0 project=(#0, #1)
+Used Indexes:
+  - materialize.public.fk_customer_district
+  - materialize.public.fk_order_customer
+  - materialize.public.fk_orderline_order
+  - materialize.public.fk_stock_warehouse
+  - materialize.public.fk_nation_regionkey
+  - materialize.public.fk_supplier_nationkey
 
 EOF
 
 # Query 06
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT sum(ol_amount) AS revenue
 FROM orderline
 WHERE ol_delivery_d >= TIMESTAMP '1999-01-01 00:00:00.000000'
 AND ol_delivery_d < TIMESTAMP '2020-01-01 00:00:00.000000'
 AND ol_quantity BETWEEN 1 AND 100000
 ----
-%0 = Let l0 =
-| Get materialize.public.orderline (u13)
-| Map date_to_timestamp(#6)
-| Filter (#10 < 2020-01-01 00:00:00), (#7 <= 100000), (#7 >= 1), (#10 >= 1999-01-01 00:00:00)
-| Project (#8)
-| Reduce group=()
-| | agg sum(#0)
+Explained Query:
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l0 // { arity: 1 }
+      Map (null) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l0 // { arity: 1 }
+          Constant // { arity: 0 }
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[sum(#0)] // { arity: 1 }
+        Project (#8) // { arity: 1 }
+          Filter (#10 < 2020-01-01 00:00:00) AND (#7 <= 100000) AND (#7 >= 1) AND (#10 >= 1999-01-01 00:00:00) // { arity: 11 }
+            Map (date_to_timestamp(#6)) // { arity: 11 }
+              Get materialize.public.orderline // { arity: 10 }
 
-%1 =
-| Get %0 (l0)
-| Project ()
-| Negate
-
-%2 =
-| Constant ()
-
-%3 =
-| Union %1 %2
-| Map null
-
-%4 =
-| Union %0 %3
+Used Indexes:
+  - materialize.public.fk_orderline_order
 
 EOF
 
 # Query 07
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT
     su_nationkey AS supp_nation,
     substr(c_state, 1, 1) AS cust_nation,
@@ -625,55 +591,55 @@ AND ol_delivery_d BETWEEN TIMESTAMP '2007-01-02 00:00:00.000000' AND TIMESTAMP '
 GROUP BY su_nationkey, substr(c_state, 1, 1), EXTRACT(year FROM o_entry_d)
 ORDER BY su_nationkey, cust_nation, l_year
 ----
-%0 = Let l0 =
-| Get materialize.public.nation (u22)
-| Filter ((#1 = "GERMANY") OR (#1 = "CAMBODIA"))
-| Project (#0, #1)
-| ArrangeBy (#0)
+Explained Query:
+  Finish order_by=[#0 asc nulls_last, #1 asc nulls_last, #2 asc nulls_last] output=[#0..=#3]
+    Return // { arity: 4 }
+      Reduce group_by=[#0, substr(char_to_text(#3), 1, 1), extract_year_d(#2)] aggregates=[sum(#1)] // { arity: 4 }
+        Project (#1, #10, #15, #19) // { arity: 4 }
+          Filter (((#22 = "GERMANY") AND (#24 = "CAMBODIA")) OR ((#22 = "CAMBODIA") AND (#24 = "GERMANY"))) // { arity: 25 }
+            Join on=(#0 = #4 AND #1 = #21 AND #2 = #8 AND #3 = #9 AND #5 = #11 AND eq(#6, #12, #17) AND eq(#7, #13, #18) AND #14 = #16 AND #20 = #23) type=differential // { arity: 25 }
+              implementation
+                %2 » %3[#0, #1, #2] » %4[#0, #1, #2] » %1[#0, #1] » %0[#0] » l0[#0] » l0[#0]
+              ArrangeBy keys=[[#0]] // { arity: 2 }
+                Project (#0, #3) // { arity: 2 }
+                  Get materialize.public.supplier // { arity: 7 }
+              ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+                Project (#0, #1, #17) // { arity: 3 }
+                  Get materialize.public.stock // { arity: 18 }
+              Project (#0..=#2, #4, #5, #8) // { arity: 6 }
+                Filter (#10 <= 2012-01-02 00:00:00) AND (#10 >= 2007-01-02 00:00:00) AND (#4) IS NOT NULL AND (#5) IS NOT NULL // { arity: 11 }
+                  Map (date_to_timestamp(#6)) // { arity: 11 }
+                    Get materialize.public.orderline // { arity: 10 }
+              ArrangeBy keys=[[#0, #1, #2]] // { arity: 5 }
+                Project (#0..=#4) // { arity: 5 }
+                  Filter (#3) IS NOT NULL // { arity: 8 }
+                    Get materialize.public.order // { arity: 8 }
+              ArrangeBy keys=[[#0, #1, #2]] // { arity: 5 }
+                Project (#0..=#2, #9, #21) // { arity: 5 }
+                  Filter (#21) IS NOT NULL // { arity: 22 }
+                    Get materialize.public.customer // { arity: 22 }
+              Get l0 // { arity: 2 }
+              Get l0 // { arity: 2 }
+    With
+      cte l0 =
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Project (#0, #1) // { arity: 2 }
+            Filter ((#1 = "GERMANY") OR (#1 = "CAMBODIA")) // { arity: 4 }
+              Get materialize.public.nation // { arity: 4 }
 
-%1 =
-| Get materialize.public.supplier (u24)
-| Project (#0, #3)
-| ArrangeBy (#0)
-
-%2 =
-| Get materialize.public.stock (u18)
-| Project (#0, #1, #17)
-| ArrangeBy (#0, #1)
-
-%3 =
-| Get materialize.public.orderline (u13)
-| Map date_to_timestamp(#6)
-| Filter (#10 <= 2012-01-02 00:00:00), (#10 >= 2007-01-02 00:00:00), (#4) IS NOT NULL, (#5) IS NOT NULL
-| Project (#0..=#2, #4, #5, #8)
-
-%4 =
-| Get materialize.public.order (u11)
-| Filter (#3) IS NOT NULL
-| Project (#0..=#4)
-| ArrangeBy (#0, #1, #2)
-
-%5 =
-| Get materialize.public.customer (u4)
-| Filter (#21) IS NOT NULL
-| Project (#0..=#2, #9, #21)
-| ArrangeBy (#0, #1, #2)
-
-%6 =
-| Join %1 %2 %3 %4 %5 %0 %0 (= #0 #4) (= #1 #21) (= #2 #8) (= #3 #9) (= #5 #11) (= #6 #12 #17) (= #7 #13 #18) (= #14 #16) (= #20 #23)
-| | implementation = Differential %3 %4.(#0, #1, #2) %5.(#0, #1, #2) %2.(#0, #1) %1.(#0) %0.(#0) %0.(#0)
-| Filter (((#22 = "GERMANY") AND (#24 = "CAMBODIA")) OR ((#22 = "CAMBODIA") AND (#24 = "GERMANY")))
-| Project (#1, #10, #15, #19)
-| Reduce group=(#0, substr(char_to_text(#3), 1, 1), extract_year_d(#2))
-| | agg sum(#1)
-
-Finish order_by=(#0 asc nulls_last, #1 asc nulls_last, #2 asc nulls_last) limit=none offset=0 project=(#0..=#3)
+Used Indexes:
+  - materialize.public.fk_customer_district
+  - materialize.public.fk_order_customer
+  - materialize.public.fk_orderline_order
+  - materialize.public.fk_stock_warehouse
+  - materialize.public.fk_nation_regionkey
+  - materialize.public.fk_supplier_nationkey
 
 EOF
 
 # Query 08
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT
     EXTRACT(year FROM o_entry_d) AS l_year,
     sum(CASE WHEN n2.n_name = 'GERMANY' THEN ol_amount ELSE 0 END) / CASE WHEN sum(ol_amount) = 0 THEN 1 ELSE sum(ol_amount) END AS mkt_share
@@ -699,85 +665,71 @@ AND i_id = ol_i_id
 GROUP BY EXTRACT(year FROM o_entry_d)
 ORDER BY l_year
 ----
-Source materialize.public.item (u17):
-| Map dummy, dummy, dummy
-| Filter (#0 < 1000), "%b" ~~(padchar(#4))
-| Project (#0, #5..=#7, #4)
+Explained Query:
+  Finish order_by=[#0 asc nulls_last] output=[#0, #1]
+    Project (#0, #3) // { arity: 2 }
+      Map ((#1 / case when (#2 = 0) then 1 else #2 end)) // { arity: 4 }
+        Reduce group_by=[extract_year_d(#1)] aggregates=[sum(case when (#2 = "GERMANY") then #0 else 0 end), sum(#0)] // { arity: 3 }
+          Project (#11, #16, #24) // { arity: 3 }
+            Join on=(eq(#0, #3, #9) AND #1 = #5 AND #2 = #23 AND #4 = #10 AND #6 = #12 AND eq(#7, #13, #18) AND eq(#8, #14, #19) AND #15 = #17 AND #20 = #21 AND #22 = #25) type=differential // { arity: 26 }
+              implementation
+                %3 » %4[#0, #1, #2] » %5[#0, #1, #2] » %2[#0, #1] » %0[#0] » %1[#0] » %6[#0] » %7[#0] » %8[#0]
+              ArrangeBy keys=[[#0]] // { arity: 1 }
+                Project (#0) // { arity: 1 }
+                  Filter (#0 < 1000) AND "%b" ~~(padchar(#4)) // { arity: 5 }
+                    Get materialize.public.item // { arity: 5 }
+              ArrangeBy keys=[[#0]] // { arity: 2 }
+                Project (#0, #3) // { arity: 2 }
+                  Get materialize.public.supplier // { arity: 7 }
+              ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+                Project (#0, #1, #17) // { arity: 3 }
+                  Filter (#0 < 1000) // { arity: 18 }
+                    Get materialize.public.stock // { arity: 18 }
+              Project (#0..=#2, #4, #5, #8) // { arity: 6 }
+                Filter (#4 < 1000) AND (#5) IS NOT NULL // { arity: 10 }
+                  Get materialize.public.orderline // { arity: 10 }
+              ArrangeBy keys=[[#0, #1, #2]] // { arity: 5 }
+                Project (#0..=#4) // { arity: 5 }
+                  Filter (#8 <= 2012-01-02 00:00:00) AND (#8 >= 2007-01-02 00:00:00) AND (#3) IS NOT NULL // { arity: 9 }
+                    Map (date_to_timestamp(#4)) // { arity: 9 }
+                      Get materialize.public.order // { arity: 8 }
+              ArrangeBy keys=[[#0, #1, #2]] // { arity: 4 }
+                Project (#0..=#2, #21) // { arity: 4 }
+                  Filter (#21) IS NOT NULL // { arity: 22 }
+                    Get materialize.public.customer // { arity: 22 }
+              ArrangeBy keys=[[#0]] // { arity: 2 }
+                Project (#0, #2) // { arity: 2 }
+                  Get materialize.public.nation // { arity: 4 }
+              ArrangeBy keys=[[#0]] // { arity: 2 }
+                Project (#0, #1) // { arity: 2 }
+                  Get materialize.public.nation // { arity: 4 }
+              ArrangeBy keys=[[#0]] // { arity: 1 }
+                Project (#0) // { arity: 1 }
+                  Filter (#1 = "EUROPE") // { arity: 3 }
+                    Get materialize.public.region // { arity: 3 }
 
-Source materialize.public.region (u26):
-| Map dummy
-| Filter (#1 = "EUROPE")
-| Project (#0, #1, #3)
+Source materialize.public.item
+  project=(#0, #5..=#7, #4)
+  filter=((#0 < 1000) AND "%b" ~~(padchar(#4)))
+  map=(dummy, dummy, dummy)
+Source materialize.public.region
+  project=(#0, #1, #3)
+  filter=((#1 = "EUROPE"))
+  map=(dummy)
 
-Query:
-%0 =
-| Get materialize.public.item (u17)
-| Filter (#0 < 1000), "%b" ~~(padchar(#4))
-| Project (#0)
-| ArrangeBy (#0)
-
-%1 =
-| Get materialize.public.supplier (u24)
-| Project (#0, #3)
-| ArrangeBy (#0)
-
-%2 =
-| Get materialize.public.stock (u18)
-| Filter (#0 < 1000)
-| Project (#0, #1, #17)
-| ArrangeBy (#0, #1)
-
-%3 =
-| Get materialize.public.orderline (u13)
-| Filter (#4 < 1000), (#5) IS NOT NULL
-| Project (#0..=#2, #4, #5, #8)
-
-%4 =
-| Get materialize.public.order (u11)
-| Map date_to_timestamp(#4)
-| Filter (#8 <= 2012-01-02 00:00:00), (#8 >= 2007-01-02 00:00:00), (#3) IS NOT NULL
-| Project (#0..=#4)
-| ArrangeBy (#0, #1, #2)
-
-%5 =
-| Get materialize.public.customer (u4)
-| Filter (#21) IS NOT NULL
-| Project (#0..=#2, #21)
-| ArrangeBy (#0, #1, #2)
-
-%6 =
-| Get materialize.public.nation (u22)
-| Project (#0, #2)
-| ArrangeBy (#0)
-
-%7 =
-| Get materialize.public.nation (u22)
-| Project (#0, #1)
-| ArrangeBy (#0)
-
-%8 =
-| Get materialize.public.region (u26)
-| Filter (#1 = "EUROPE")
-| Project (#0)
-| ArrangeBy (#0)
-
-%9 =
-| Join %0 %1 %2 %3 %4 %5 %6 %7 %8 (= #0 #3 #9) (= #1 #5) (= #2 #23) (= #4 #10) (= #6 #12) (= #7 #13 #18) (= #8 #14 #19) (= #15 #17) (= #20 #21) (= #22 #25)
-| | implementation = Differential %3 %4.(#0, #1, #2) %5.(#0, #1, #2) %2.(#0, #1) %0.(#0) %1.(#0) %6.(#0) %7.(#0) %8.(#0)
-| Project (#11, #16, #24)
-| Reduce group=(extract_year_d(#1))
-| | agg sum(if (#2 = "GERMANY") then {#0} else {0})
-| | agg sum(#0)
-| Map (#1 / if (#2 = 0) then {1} else {#2})
-| Project (#0, #3)
-
-Finish order_by=(#0 asc nulls_last) limit=none offset=0 project=(#0, #1)
+Used Indexes:
+  - materialize.public.fk_customer_district
+  - materialize.public.fk_order_customer
+  - materialize.public.fk_orderline_order
+  - materialize.public.fk_stock_warehouse
+  - materialize.public.fk_nation_regionkey
+  - materialize.public.fk_supplier_nationkey
 
 EOF
 
 # Query 09
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT
     n_name, EXTRACT(year FROM o_entry_d) AS l_year,
     sum(ol_amount) AS sum_profit
@@ -794,57 +746,50 @@ AND i_data like '%BB'
 GROUP BY n_name, EXTRACT(year FROM o_entry_d)
 ORDER BY n_name, l_year DESC
 ----
-Source materialize.public.item (u17):
-| Map dummy, dummy, dummy
-| Filter "%BB" ~~(padchar(#4))
-| Project (#0, #5..=#7, #4)
+Explained Query:
+  Finish order_by=[#0 asc nulls_last, #1 desc nulls_first] output=[#0..=#2]
+    Reduce group_by=[#2, extract_year_d(#1)] aggregates=[sum(#0)] // { arity: 3 }
+      Project (#11, #15, #17) // { arity: 3 }
+        Join on=(eq(#0, #1, #9) AND #2 = #10 AND #3 = #4 AND #5 = #16 AND #6 = #12 AND #7 = #13 AND #8 = #14) type=differential // { arity: 18 }
+          implementation
+            %3 » %4[#0, #1, #2] » %1[#0, #1] » %0[#0] » %2[#0] » %5[#0]
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Project (#0) // { arity: 1 }
+              Filter "%BB" ~~(padchar(#4)) // { arity: 5 }
+                Get materialize.public.item // { arity: 5 }
+          ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+            Project (#0, #1, #17) // { arity: 3 }
+              Get materialize.public.stock // { arity: 18 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Project (#0, #3) // { arity: 2 }
+              Get materialize.public.supplier // { arity: 7 }
+          Project (#0..=#2, #4, #5, #8) // { arity: 6 }
+            Filter (#4) IS NOT NULL AND (#5) IS NOT NULL // { arity: 10 }
+              Get materialize.public.orderline // { arity: 10 }
+          ArrangeBy keys=[[#0, #1, #2]] // { arity: 4 }
+            Project (#0..=#2, #4) // { arity: 4 }
+              Get materialize.public.order // { arity: 8 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Project (#0, #1) // { arity: 2 }
+              Get materialize.public.nation // { arity: 4 }
 
-Query:
-%0 =
-| Get materialize.public.item (u17)
-| Filter "%BB" ~~(padchar(#4))
-| Project (#0)
-| ArrangeBy (#0)
+Source materialize.public.item
+  project=(#0, #5..=#7, #4)
+  filter=("%BB" ~~(padchar(#4)))
+  map=(dummy, dummy, dummy)
 
-%1 =
-| Get materialize.public.stock (u18)
-| Project (#0, #1, #17)
-| ArrangeBy (#0, #1)
-
-%2 =
-| Get materialize.public.supplier (u24)
-| Project (#0, #3)
-| ArrangeBy (#0)
-
-%3 =
-| Get materialize.public.orderline (u13)
-| Filter (#4) IS NOT NULL, (#5) IS NOT NULL
-| Project (#0..=#2, #4, #5, #8)
-
-%4 =
-| Get materialize.public.order (u11)
-| Project (#0..=#2, #4)
-| ArrangeBy (#0, #1, #2)
-
-%5 =
-| Get materialize.public.nation (u22)
-| Project (#0, #1)
-| ArrangeBy (#0)
-
-%6 =
-| Join %0 %1 %2 %3 %4 %5 (= #0 #1 #9) (= #2 #10) (= #3 #4) (= #5 #16) (= #6 #12) (= #7 #13) (= #8 #14)
-| | implementation = Differential %3 %4.(#0, #1, #2) %1.(#0, #1) %0.(#0) %2.(#0) %5.(#0)
-| Project (#11, #15, #17)
-| Reduce group=(#2, extract_year_d(#1))
-| | agg sum(#0)
-
-Finish order_by=(#0 asc nulls_last, #1 desc nulls_first) limit=none offset=0 project=(#0..=#2)
+Used Indexes:
+  - materialize.public.fk_order_customer
+  - materialize.public.fk_orderline_order
+  - materialize.public.fk_stock_warehouse
+  - materialize.public.fk_nation_regionkey
+  - materialize.public.fk_supplier_nationkey
 
 EOF
 
 # Query 10
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT
     c_id, c_last, sum(ol_amount) AS revenue, c_city, c_phone, n_name
 FROM customer, "order", orderline, nation
@@ -860,43 +805,40 @@ AND n_nationkey = c_n_nationkey
 GROUP BY c_id, c_last, c_city, c_phone, n_name
 ORDER BY revenue DESC
 ----
-%0 =
-| Get materialize.public.customer (u4)
-| Filter (#21) IS NOT NULL
-| Project (#0..=#2, #5, #8, #11, #21)
-| ArrangeBy (#0, #1, #2)
+Explained Query:
+  Finish order_by=[#2 desc nulls_first] output=[#0..=#5]
+    Project (#0, #1, #5, #2..=#4) // { arity: 6 }
+      Reduce group_by=[#0, #1, #2, #3, #5] aggregates=[sum(#4)] // { arity: 6 }
+        Project (#0, #3..=#5, #16, #18) // { arity: 6 }
+          Filter (#11 <= #15) // { arity: 19 }
+            Join on=(#0 = #10 AND eq(#1, #8, #13) AND eq(#2, #9, #14) AND #6 = #17 AND #7 = #12) type=differential // { arity: 19 }
+              implementation
+                %2 » %1[#0, #1, #2] » %0[#0, #1, #2] » %3[#0]
+              ArrangeBy keys=[[#0, #1, #2]] // { arity: 7 }
+                Project (#0..=#2, #5, #8, #11, #21) // { arity: 7 }
+                  Filter (#21) IS NOT NULL // { arity: 22 }
+                    Get materialize.public.customer // { arity: 22 }
+              ArrangeBy keys=[[#0, #1, #2]] // { arity: 5 }
+                Project (#0..=#4) // { arity: 5 }
+                  Filter (#3) IS NOT NULL AND (date_to_timestamp(#4) >= 2007-01-02 00:00:00) // { arity: 8 }
+                    Get materialize.public.order // { arity: 8 }
+              Project (#0..=#2, #6, #8) // { arity: 5 }
+                Get materialize.public.orderline // { arity: 10 }
+              ArrangeBy keys=[[#0]] // { arity: 2 }
+                Project (#0, #1) // { arity: 2 }
+                  Get materialize.public.nation // { arity: 4 }
 
-%1 =
-| Get materialize.public.order (u11)
-| Filter (#3) IS NOT NULL, (date_to_timestamp(#4) >= 2007-01-02 00:00:00)
-| Project (#0..=#4)
-| ArrangeBy (#0, #1, #2)
-
-%2 =
-| Get materialize.public.orderline (u13)
-| Project (#0..=#2, #6, #8)
-
-%3 =
-| Get materialize.public.nation (u22)
-| Project (#0, #1)
-| ArrangeBy (#0)
-
-%4 =
-| Join %0 %1 %2 %3 (= #0 #10) (= #1 #8 #13) (= #2 #9 #14) (= #6 #17) (= #7 #12)
-| | implementation = Differential %2 %1.(#0, #1, #2) %0.(#0, #1, #2) %3.(#0)
-| Filter (#11 <= #15)
-| Project (#0, #3..=#5, #16, #18)
-| Reduce group=(#0, #1, #2, #3, #5)
-| | agg sum(#4)
-| Project (#0, #1, #5, #2..=#4)
-
-Finish order_by=(#2 desc nulls_first) limit=none offset=0 project=(#0..=#5)
+Used Indexes:
+  - materialize.public.fk_customer_district
+  - materialize.public.fk_order_customer
+  - materialize.public.fk_orderline_order
+  - materialize.public.fk_nation_regionkey
 
 EOF
 
 # Query 11
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT s_i_id, sum(s_order_cnt) AS ordercount
 FROM stock, supplier, nation
 WHERE s_su_suppkey = su_suppkey
@@ -912,51 +854,46 @@ HAVING sum(s_order_cnt) > (
 )
 ORDER BY ordercount DESC
 ----
-%0 =
-| Get materialize.public.stock (u18)
-| ArrangeBy (#17)
+Explained Query:
+  Finish order_by=[#1 desc nulls_first] output=[#0, #1]
+    Return // { arity: 2 }
+      Project (#0, #1) // { arity: 2 }
+        Filter (bigint_to_numeric(#1) > (bigint_to_numeric(#2) * 0.005)) // { arity: 3 }
+          CrossJoin type=differential // { arity: 3 }
+            implementation
+              %0 » %1[]
+            Reduce group_by=[#0] aggregates=[sum(#1)] // { arity: 2 }
+              Get l0 // { arity: 2 }
+            ArrangeBy keys=[[]] // { arity: 1 }
+              Reduce aggregates=[sum(#0)] // { arity: 1 }
+                Project (#1) // { arity: 1 }
+                  Get l0 // { arity: 2 }
+    With
+      cte l0 =
+        Project (#0, #14) // { arity: 2 }
+          Join on=(#17 = #18 AND #19 = #20) type=differential // { arity: 21 }
+            implementation
+              %0 » %1[#0] » %2[#0]
+            ArrangeBy keys=[[#17]] // { arity: 18 }
+              Get materialize.public.stock // { arity: 18 }
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Project (#0, #3) // { arity: 2 }
+                Get materialize.public.supplier // { arity: 7 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Project (#0) // { arity: 1 }
+                Filter (#1 = "GERMANY") // { arity: 4 }
+                  Get materialize.public.nation // { arity: 4 }
 
-%1 =
-| Get materialize.public.supplier (u24)
-| Project (#0, #3)
-| ArrangeBy (#0)
-
-%2 =
-| Get materialize.public.nation (u22)
-| Filter (#1 = "GERMANY")
-| Project (#0)
-| ArrangeBy (#0)
-
-%3 = Let l0 =
-| Join %0 %1 %2 (= #17 #18) (= #19 #20)
-| | implementation = Differential %0.(#17) %1.(#0) %2.(#0)
-| Project (#0, #14)
-
-%4 =
-| Get %3 (l0)
-| Reduce group=(#0)
-| | agg sum(#1)
-
-%5 =
-| Get %3 (l0)
-| Project (#1)
-| Reduce group=()
-| | agg sum(#0)
-| ArrangeBy ()
-
-%6 =
-| Join %4 %5
-| | implementation = Differential %4 %5.()
-| Filter (bigint_to_numeric(#1) > (bigint_to_numeric(#2) * 0.005))
-| Project (#0, #1)
-
-Finish order_by=(#1 desc nulls_first) limit=none offset=0 project=(#0, #1)
+Used Indexes:
+  - materialize.public.fk_stock_supplier
+  - materialize.public.fk_nation_regionkey
+  - materialize.public.fk_supplier_nationkey
 
 EOF
 
 # Query 12
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT
     o_ol_cnt,
     sum(CASE WHEN o_carrier_id = 1 OR o_carrier_id = 2 THEN 1 ELSE 0 END) AS high_line_count,
@@ -971,33 +908,30 @@ AND ol_delivery_d < TIMESTAMP '2020-01-01 00:00:00.000000'
 GROUP BY o_ol_cnt
 ORDER BY o_ol_cnt
 ----
-%0 =
-| Get materialize.public.order (u11)
-| Project (#0..=#2, #4..=#6)
-| ArrangeBy (#0, #1, #2)
+Explained Query:
+  Finish order_by=[#0 asc nulls_last] output=[#0..=#2]
+    Reduce group_by=[#1] aggregates=[sum(case when ((#0 = 1) OR (#0 = 2)) then 1 else 0 end), sum(case when ((#0 != 1) AND (#0 != 2)) then 1 else 0 end)] // { arity: 3 }
+      Project (#4, #5) // { arity: 2 }
+        Filter (date_to_timestamp(#12) < 2020-01-01 00:00:00) AND (#3 <= #12) // { arity: 16 }
+          Join on=(#0 = #6 AND #1 = #7 AND #2 = #8) type=delta // { arity: 16 }
+            implementation
+              %0 » %1[#2, #1, #0]
+              %1 » %0[#0, #1, #2]
+            ArrangeBy keys=[[#0, #1, #2]] // { arity: 6 }
+              Project (#0..=#2, #4..=#6) // { arity: 6 }
+                Get materialize.public.order // { arity: 8 }
+            ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
+              Get materialize.public.orderline // { arity: 10 }
 
-%1 =
-| Get materialize.public.orderline (u13)
-| ArrangeBy (#2, #1, #0)
-
-%2 =
-| Join %0 %1 (= #0 #6) (= #1 #7) (= #2 #8)
-| | implementation = DeltaQuery
-| |   delta %0 %1.(#2, #1, #0)
-| |   delta %1 %0.(#0, #1, #2)
-| Filter (date_to_timestamp(#12) < 2020-01-01 00:00:00), (#3 <= #12)
-| Project (#4, #5)
-| Reduce group=(#1)
-| | agg sum(if ((#0 = 1) OR (#0 = 2)) then {1} else {0})
-| | agg sum(if ((#0 != 1) AND (#0 != 2)) then {1} else {0})
-
-Finish order_by=(#0 asc nulls_last) limit=none offset=0 project=(#0..=#2)
+Used Indexes:
+  - materialize.public.fk_order_customer
+  - materialize.public.fk_orderline_order
 
 EOF
 
 # Query 13
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT
     c_count, count(*) AS custdist
 FROM (
@@ -1011,56 +945,46 @@ FROM (
 GROUP BY c_count
 ORDER BY custdist DESC, c_count DESC
 ----
-%0 =
-| Get materialize.public.customer (u4)
-| ArrangeBy (#0, #1, #2)
+Explained Query:
+  Finish order_by=[#1 desc nulls_first, #0 desc nulls_first] output=[#0, #1]
+    Return // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[count(true)] // { arity: 2 }
+        Project (#1) // { arity: 1 }
+          Reduce group_by=[#0] aggregates=[count(#1)] // { arity: 2 }
+            Union // { arity: 2 }
+              Project (#0, #22) // { arity: 2 }
+                Get l0 // { arity: 23 }
+              Map (null) // { arity: 2 }
+                Union // { arity: 1 }
+                  Negate // { arity: 1 }
+                    Project (#0) // { arity: 1 }
+                      Distinct group_by=[#0, #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #19, #20, #21] // { arity: 22 }
+                        Project (#0..=#21) // { arity: 22 }
+                          Get l0 // { arity: 23 }
+                  Project (#0) // { arity: 1 }
+                    Get materialize.public.customer // { arity: 22 }
+    With
+      cte l0 =
+        Project (#0..=#22) // { arity: 23 }
+          Filter (#27 > 8) // { arity: 30 }
+            Join on=(#0 = #25 AND #1 = #23 AND #2 = #24) type=delta // { arity: 30 }
+              implementation
+                %0 » %1[#2, #1, #3]
+                %1 » %0[#0, #1, #2]
+              ArrangeBy keys=[[#0, #1, #2]] // { arity: 22 }
+                Get materialize.public.customer // { arity: 22 }
+              ArrangeBy keys=[[#2, #1, #3]] // { arity: 8 }
+                Get materialize.public.order // { arity: 8 }
 
-%1 =
-| Get materialize.public.order (u11)
-| ArrangeBy (#2, #1, #3)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #25) (= #1 #23) (= #2 #24)
-| | implementation = DeltaQuery
-| |   delta %0 %1.(#2, #1, #3)
-| |   delta %1 %0.(#0, #1, #2)
-| Filter (#27 > 8)
-| Project (#0..=#22)
-
-%3 =
-| Get %2 (l0)
-| Project (#0, #22)
-
-%4 =
-| Get %2 (l0)
-| Project (#0..=#21)
-| Distinct group=(#0, #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #19, #20, #21)
-| Project (#0)
-| Negate
-
-%5 =
-| Get materialize.public.customer (u4)
-| Project (#0)
-
-%6 =
-| Union %4 %5
-| Map null
-
-%7 =
-| Union %3 %6
-| Reduce group=(#0)
-| | agg count(#1)
-| Project (#1)
-| Reduce group=(#0)
-| | agg count(true)
-
-Finish order_by=(#1 desc nulls_first, #0 desc nulls_first) limit=none offset=0 project=(#0, #1)
+Used Indexes:
+  - materialize.public.fk_customer_district
+  - materialize.public.fk_order_customer
 
 EOF
 
 # Query 14
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT
     100.00 * sum(CASE WHEN i_data LIKE 'PR%' THEN ol_amount ELSE 0 END) / (1 + sum(ol_amount)) AS promo_revenue
 FROM orderline, item
@@ -1068,54 +992,47 @@ WHERE ol_i_id = i_id
 AND ol_delivery_d >= TIMESTAMP '2007-01-02 00:00:00.000000'
 AND ol_delivery_d < TIMESTAMP '2020-01-02 00:00:00.000000'
 ----
-Source materialize.public.item (u17):
-| Map dummy, dummy, dummy
-| Project (#0, #5..=#7, #4)
+Explained Query:
+  Return // { arity: 1 }
+    Project (#2) // { arity: 1 }
+      Map (((100 * #0) / (1 + #1))) // { arity: 3 }
+        Union // { arity: 2 }
+          Get l0 // { arity: 2 }
+          Map (null, null) // { arity: 2 }
+            Union // { arity: 0 }
+              Negate // { arity: 0 }
+                Project () // { arity: 0 }
+                  Get l0 // { arity: 2 }
+              Constant // { arity: 0 }
+                - ()
+  With
+    cte l0 =
+      Reduce aggregates=[sum(case when "PR%" ~~(padchar(#1)) then #0 else 0 end), sum(#0)] // { arity: 2 }
+        Project (#8, #11) // { arity: 2 }
+          Filter (#12 < 2020-01-02 00:00:00) AND (#12 >= 2007-01-02 00:00:00) // { arity: 13 }
+            Map (date_to_timestamp(#6)) // { arity: 13 }
+              Join on=(#4 = #10) type=delta // { arity: 12 }
+                implementation
+                  %0 » %1[#0]
+                  %1 » %0[#4]
+                ArrangeBy keys=[[#4]] // { arity: 10 }
+                  Get materialize.public.orderline // { arity: 10 }
+                ArrangeBy keys=[[#0]] // { arity: 2 }
+                  Project (#0, #4) // { arity: 2 }
+                    Get materialize.public.item // { arity: 5 }
 
-Query:
-%0 =
-| Get materialize.public.orderline (u13)
-| ArrangeBy (#4)
+Source materialize.public.item
+  project=(#0, #5..=#7, #4)
+  map=(dummy, dummy, dummy)
 
-%1 =
-| Get materialize.public.item (u17)
-| Project (#0, #4)
-| ArrangeBy (#0)
-
-%2 = Let l0 =
-| Join %0 %1 (= #4 #10)
-| | implementation = DeltaQuery
-| |   delta %0 %1.(#0)
-| |   delta %1 %0.(#4)
-| Map date_to_timestamp(#6)
-| Filter (#12 < 2020-01-02 00:00:00), (#12 >= 2007-01-02 00:00:00)
-| Project (#8, #11)
-| Reduce group=()
-| | agg sum(if "PR%" ~~(padchar(#1)) then {#0} else {0})
-| | agg sum(#0)
-
-%3 =
-| Get %2 (l0)
-| Project ()
-| Negate
-
-%4 =
-| Constant ()
-
-%5 =
-| Union %3 %4
-| Map null, null
-
-%6 =
-| Union %2 %5
-| Map ((100 * #0) / (1 + #1))
-| Project (#2)
+Used Indexes:
+  - materialize.public.fk_orderline_item
 
 EOF
 
 # Query 15
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT su_suppkey, su_name, su_address, su_phone, total_revenue
 FROM
     supplier,
@@ -1145,53 +1062,47 @@ AND total_revenue = (
 )
 ORDER BY su_suppkey
 ----
-%0 =
-| Get materialize.public.orderline (u13)
-| ArrangeBy (#5, #4)
+Explained Query:
+  Finish order_by=[#0 asc nulls_last] output=[#0..=#4]
+    Return // { arity: 5 }
+      Project (#0..=#3, #5) // { arity: 5 }
+        Join on=(#0 = #4 AND #5 = #6) type=differential // { arity: 7 }
+          implementation
+            %0 » %1[#0] » %2[#0]
+          Project (#0..=#2, #4) // { arity: 4 }
+            Get materialize.public.supplier // { arity: 7 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Get l0 // { arity: 2 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Filter (#0) IS NOT NULL // { arity: 1 }
+              Reduce aggregates=[max(#0)] // { arity: 1 }
+                Project (#1) // { arity: 1 }
+                  Get l0 // { arity: 2 }
+    With
+      cte l0 =
+        Reduce group_by=[#1] aggregates=[sum(#0)] // { arity: 2 }
+          Project (#8, #12) // { arity: 2 }
+            Filter (date_to_timestamp(#6) >= 2007-01-02 00:00:00) // { arity: 13 }
+              Join on=(#4 = #10 AND #5 = #11) type=delta // { arity: 13 }
+                implementation
+                  %0 » %1[#0, #1]
+                  %1 » %0[#5, #4]
+                ArrangeBy keys=[[#5, #4]] // { arity: 10 }
+                  Get materialize.public.orderline // { arity: 10 }
+                ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+                  Project (#0, #1, #17) // { arity: 3 }
+                    Get materialize.public.stock // { arity: 18 }
 
-%1 =
-| Get materialize.public.stock (u18)
-| Project (#0, #1, #17)
-| ArrangeBy (#0, #1)
-
-%2 = Let l0 =
-| Join %0 %1 (= #4 #10) (= #5 #11)
-| | implementation = DeltaQuery
-| |   delta %0 %1.(#0, #1)
-| |   delta %1 %0.(#5, #4)
-| Filter (date_to_timestamp(#6) >= 2007-01-02 00:00:00)
-| Project (#8, #12)
-| Reduce group=(#1)
-| | agg sum(#0)
-
-%3 =
-| Get materialize.public.supplier (u24)
-| Project (#0..=#2, #4)
-
-%4 =
-| Get %2 (l0)
-| ArrangeBy (#0)
-
-%5 =
-| Get %2 (l0)
-| Project (#1)
-| Reduce group=()
-| | agg max(#0)
-| Filter (#0) IS NOT NULL
-| ArrangeBy (#0)
-
-%6 =
-| Join %3 %4 %5 (= #0 #4) (= #5 #6)
-| | implementation = Differential %3 %4.(#0) %5.(#0)
-| Project (#0..=#3, #5)
-
-Finish order_by=(#0 asc nulls_last) limit=none offset=0 project=(#0..=#4)
+Used Indexes:
+  - materialize.public.fk_orderline_stock
+  - materialize.public.fk_stock_warehouse
+  - materialize.public.fk_supplier_nationkey
 
 EOF
 
 # Query 16
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT
     i_name,
     substr(i_data, 1, 3) AS brand,
@@ -1206,70 +1117,60 @@ AND (
 GROUP BY i_name, substr(i_data, 1, 3), i_price
 ORDER BY supplier_cnt DESC
 ----
-Source materialize.public.item (u17):
-| Map dummy
-| Filter NOT("zz%" ~~(padchar(#4)))
-| Project (#0, #5, #2..=#4)
+Explained Query:
+  Finish order_by=[#3 desc nulls_first] output=[#0..=#3]
+    Return // { arity: 4 }
+      Reduce group_by=[#1, substr(char_to_text(#3), 1, 3), #2] aggregates=[count(distinct #0)] // { arity: 4 }
+        Project (#0..=#3) // { arity: 4 }
+          Join on=(#0 = #4) type=differential // { arity: 5 }
+            implementation
+              %1 » %0[#0]
+            ArrangeBy keys=[[#0]] // { arity: 4 }
+              Get l0 // { arity: 4 }
+            Union // { arity: 1 }
+              Negate // { arity: 1 }
+                Project (#0) // { arity: 1 }
+                  Join on=(#0 = #1) type=differential // { arity: 2 }
+                    implementation
+                      %1 » %0[#0]
+                    ArrangeBy keys=[[#0]] // { arity: 1 }
+                      Get l1 // { arity: 1 }
+                    Project (#0) // { arity: 1 }
+                      Filter "%bad%" ~~(padchar(#6)) // { arity: 7 }
+                        Get materialize.public.supplier // { arity: 7 }
+              Get l1 // { arity: 1 }
+    With
+      cte l1 =
+        Distinct group_by=[#0] // { arity: 1 }
+          Project (#0) // { arity: 1 }
+            Get l0 // { arity: 4 }
+      cte l0 =
+        Project (#17, #19..=#21) // { arity: 4 }
+          Join on=(#0 = #18) type=delta // { arity: 22 }
+            implementation
+              %0 » %1[#0]
+              %1 » %0[#0]
+            ArrangeBy keys=[[#0]] // { arity: 18 }
+              Get materialize.public.stock // { arity: 18 }
+            ArrangeBy keys=[[#0]] // { arity: 4 }
+              Project (#0, #2..=#4) // { arity: 4 }
+                Filter NOT("zz%" ~~(padchar(#4))) // { arity: 5 }
+                  Get materialize.public.item // { arity: 5 }
 
-Query:
-%0 =
-| Get materialize.public.stock (u18)
-| ArrangeBy (#0)
+Source materialize.public.item
+  project=(#0, #5, #2..=#4)
+  filter=(NOT("zz%" ~~(padchar(#4))))
+  map=(dummy)
 
-%1 =
-| Get materialize.public.item (u17)
-| Filter NOT("zz%" ~~(padchar(#4)))
-| Project (#0, #2..=#4)
-| ArrangeBy (#0)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #18)
-| | implementation = DeltaQuery
-| |   delta %0 %1.(#0)
-| |   delta %1 %0.(#0)
-| Project (#17, #19..=#21)
-
-%3 = Let l1 =
-| Get %2 (l0)
-| Project (#0)
-| Distinct group=(#0)
-
-%4 =
-| Get %2 (l0)
-| ArrangeBy (#0)
-
-%5 =
-| Get %3 (l1)
-| ArrangeBy (#0)
-
-%6 =
-| Get materialize.public.supplier (u24)
-| Filter "%bad%" ~~(padchar(#6))
-| Project (#0)
-
-%7 =
-| Join %5 %6 (= #0 #1)
-| | implementation = Differential %6 %5.(#0)
-| Project (#0)
-| Negate
-
-%8 =
-| Union %7 %3
-
-%9 =
-| Join %4 %8 (= #0 #4)
-| | implementation = Differential %8 %4.(#0)
-| Project (#0..=#3)
-| Reduce group=(#1, substr(char_to_text(#3), 1, 3), #2)
-| | agg count(distinct #0)
-
-Finish order_by=(#3 desc nulls_first) limit=none offset=0 project=(#0..=#3)
+Used Indexes:
+  - materialize.public.fk_stock_item
+  - materialize.public.fk_supplier_nationkey
 
 EOF
 
 # Query 17
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT
     sum(ol_amount) / 2.0 AS avg_yearly
 FROM
@@ -1283,65 +1184,58 @@ FROM
 WHERE ol_i_id = t.i_id
 AND ol_quantity < t.a
 ----
-Source materialize.public.item (u17):
-| Map dummy, dummy, dummy
-| Filter "%b" ~~(padchar(#4))
-| Project (#0, #5..=#7, #4)
+Explained Query:
+  Return // { arity: 1 }
+    Project (#1) // { arity: 1 }
+      Map ((#0 / 2)) // { arity: 2 }
+        Union // { arity: 1 }
+          Get l1 // { arity: 1 }
+          Map (null) // { arity: 1 }
+            Union // { arity: 0 }
+              Negate // { arity: 0 }
+                Project () // { arity: 0 }
+                  Get l1 // { arity: 1 }
+              Constant // { arity: 0 }
+                - ()
+  With
+    cte l1 =
+      Reduce aggregates=[sum(#0)] // { arity: 1 }
+        Project (#8) // { arity: 1 }
+          Filter (integer_to_double(#7) < (bigint_to_double(#11) / bigint_to_double(case when (#12 = 0) then null else #12 end))) // { arity: 13 }
+            Join on=(#4 = #10) type=delta // { arity: 13 }
+              implementation
+                l0 » %1[#0]
+                %1 » l0[#4]
+              Get l0 // { arity: 10 }
+              ArrangeBy keys=[[#0]] // { arity: 3 }
+                Reduce group_by=[#0] aggregates=[sum(#1), count(#1)] // { arity: 3 }
+                  Project (#0, #8) // { arity: 2 }
+                    Join on=(#0 = #5) type=delta // { arity: 11 }
+                      implementation
+                        %0 » l0[#4]
+                        l0 » %0[#0]
+                      ArrangeBy keys=[[#0]] // { arity: 1 }
+                        Project (#0) // { arity: 1 }
+                          Filter "%b" ~~(padchar(#4)) // { arity: 5 }
+                            Get materialize.public.item // { arity: 5 }
+                      Get l0 // { arity: 10 }
+    cte l0 =
+      ArrangeBy keys=[[#4]] // { arity: 10 }
+        Get materialize.public.orderline // { arity: 10 }
 
-Query:
-%0 = Let l0 =
-| Get materialize.public.orderline (u13)
-| ArrangeBy (#4)
+Source materialize.public.item
+  project=(#0, #5..=#7, #4)
+  filter=("%b" ~~(padchar(#4)))
+  map=(dummy, dummy, dummy)
 
-%1 =
-| Get materialize.public.item (u17)
-| Filter "%b" ~~(padchar(#4))
-| Project (#0)
-| ArrangeBy (#0)
-
-%2 =
-| Join %1 %0 (= #0 #5)
-| | implementation = DeltaQuery
-| |   delta %1 %0.(#4)
-| |   delta %0 %1.(#0)
-| Project (#0, #8)
-| Reduce group=(#0)
-| | agg sum(#1)
-| | agg count(#1)
-| ArrangeBy (#0)
-
-%3 = Let l1 =
-| Join %0 %2 (= #4 #10)
-| | implementation = DeltaQuery
-| |   delta %0 %2.(#0)
-| |   delta %2 %0.(#4)
-| Filter (integer_to_double(#7) < (bigint_to_double(#11) / bigint_to_double(if (#12 = 0) then {null} else {#12})))
-| Project (#8)
-| Reduce group=()
-| | agg sum(#0)
-
-%4 =
-| Get %3 (l1)
-| Project ()
-| Negate
-
-%5 =
-| Constant ()
-
-%6 =
-| Union %4 %5
-| Map null
-
-%7 =
-| Union %3 %6
-| Map (#0 / 2)
-| Project (#1)
+Used Indexes:
+  - materialize.public.fk_orderline_item
 
 EOF
 
 # Query 18
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT c_last, c_id, o_id, o_entry_d, o_ol_cnt, sum(ol_amount)
 FROM customer, "order", orderline
 WHERE c_id = o_c_id
@@ -1354,37 +1248,35 @@ GROUP BY o_id, o_w_id, o_d_id, c_id, c_last, o_entry_d, o_ol_cnt
 HAVING sum(ol_amount) > 200
 ORDER BY sum(ol_amount) DESC, o_entry_d
 ----
-%0 =
-| Get materialize.public.customer (u4)
-| Project (#0..=#2, #5)
-| ArrangeBy (#0, #1, #2)
+Explained Query:
+  Finish order_by=[#5 desc nulls_first, #3 asc nulls_last] output=[#0..=#5]
+    Project (#4, #3, #0, #5..=#7) // { arity: 6 }
+      Filter (#7 > 200) // { arity: 8 }
+        Reduce group_by=[#4, #2, #1, #0, #3, #5, #6] aggregates=[sum(#7)] // { arity: 8 }
+          Project (#0..=#4, #8, #9, #13) // { arity: 8 }
+            Join on=(#0 = #7 AND eq(#1, #5, #11) AND eq(#2, #6, #12) AND #4 = #10) type=differential // { arity: 14 }
+              implementation
+                %2 » %1[#0, #1, #2] » %0[#0, #1, #2]
+              ArrangeBy keys=[[#0, #1, #2]] // { arity: 4 }
+                Project (#0..=#2, #5) // { arity: 4 }
+                  Get materialize.public.customer // { arity: 22 }
+              ArrangeBy keys=[[#0, #1, #2]] // { arity: 6 }
+                Project (#0..=#4, #6) // { arity: 6 }
+                  Filter (#3) IS NOT NULL // { arity: 8 }
+                    Get materialize.public.order // { arity: 8 }
+              Project (#0..=#2, #8) // { arity: 4 }
+                Get materialize.public.orderline // { arity: 10 }
 
-%1 =
-| Get materialize.public.order (u11)
-| Filter (#3) IS NOT NULL
-| Project (#0..=#4, #6)
-| ArrangeBy (#0, #1, #2)
-
-%2 =
-| Get materialize.public.orderline (u13)
-| Project (#0..=#2, #8)
-
-%3 =
-| Join %0 %1 %2 (= #0 #7) (= #1 #5 #11) (= #2 #6 #12) (= #4 #10)
-| | implementation = Differential %2 %1.(#0, #1, #2) %0.(#0, #1, #2)
-| Project (#0..=#4, #8, #9, #13)
-| Reduce group=(#4, #2, #1, #0, #3, #5, #6)
-| | agg sum(#7)
-| Filter (#7 > 200)
-| Project (#4, #3, #0, #5..=#7)
-
-Finish order_by=(#5 desc nulls_first, #3 asc nulls_last) limit=none offset=0 project=(#0..=#5)
+Used Indexes:
+  - materialize.public.fk_customer_district
+  - materialize.public.fk_order_customer
+  - materialize.public.fk_orderline_order
 
 EOF
 
 # Query 19
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT sum(ol_amount) AS revenue
 FROM orderline, item
 WHERE (
@@ -1410,55 +1302,49 @@ WHERE (
     AND ol_w_id in (1, 5, 3)
 )
 ----
-Source materialize.public.item (u17):
-| Map padchar(#4), dummy, dummy
-| Filter (#3 <= 400000), (#3 >= 1), ("%a" ~~(#5) OR "%b" ~~(#5) OR "%c" ~~(#5))
-| Project (#0, #6, #7, #3, #4)
+Explained Query:
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l0 // { arity: 1 }
+      Map (null) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l0 // { arity: 1 }
+          Constant // { arity: 0 }
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[sum(#0)] // { arity: 1 }
+        Project (#8) // { arity: 1 }
+          Filter (#7 <= 10) AND (#7 >= 1) AND (#12 OR #13 OR #14 OR #15 OR #16) AND (("%a" ~~(#17) AND (#12 OR #13 OR #14)) OR ("%b" ~~(#17) AND (#12 OR #13 OR #15)) OR ("%c" ~~(#17) AND (#12 OR #14 OR #16))) // { arity: 18 }
+            Map ((#2 = 1), (#2 = 2), (#2 = 3), (#2 = 4), (#2 = 5), padchar(#11)) // { arity: 18 }
+              Join on=(#4 = #10) type=delta // { arity: 12 }
+                implementation
+                  %0 » %1[#0]
+                  %1 » %0[#4]
+                ArrangeBy keys=[[#4]] // { arity: 10 }
+                  Get materialize.public.orderline // { arity: 10 }
+                ArrangeBy keys=[[#0]] // { arity: 2 }
+                  Project (#0, #4) // { arity: 2 }
+                    Filter (#3 <= 400000) AND (#3 >= 1) AND ("%a" ~~(#5) OR "%b" ~~(#5) OR "%c" ~~(#5)) // { arity: 6 }
+                      Map (padchar(#4)) // { arity: 6 }
+                        Get materialize.public.item // { arity: 5 }
 
-Query:
-%0 =
-| Get materialize.public.orderline (u13)
-| ArrangeBy (#4)
+Source materialize.public.item
+  project=(#0, #6, #7, #3, #4)
+  filter=((#3 <= 400000) AND (#3 >= 1) AND ("%a" ~~(#5) OR "%b" ~~(#5) OR "%c" ~~(#5)))
+  map=(padchar(#4), dummy, dummy)
 
-%1 =
-| Get materialize.public.item (u17)
-| Map padchar(#4)
-| Filter (#3 <= 400000), (#3 >= 1), ("%a" ~~(#5) OR "%b" ~~(#5) OR "%c" ~~(#5))
-| Project (#0, #4)
-| ArrangeBy (#0)
-
-%2 = Let l0 =
-| Join %0 %1 (= #4 #10)
-| | implementation = DeltaQuery
-| |   delta %0 %1.(#0)
-| |   delta %1 %0.(#4)
-| Map (#2 = 1), (#2 = 2), (#2 = 3), (#2 = 4), (#2 = 5), padchar(#11)
-| Filter (#7 <= 10), (#7 >= 1), (#12 OR #13 OR #14 OR #15 OR #16), (("%a" ~~(#17) AND (#12 OR #13 OR #14)) OR ("%b" ~~(#17) AND (#12 OR #13 OR #15)) OR ("%c" ~~(#17) AND (#12 OR #14 OR #16)))
-| Project (#8)
-| Reduce group=()
-| | agg sum(#0)
-
-%3 =
-| Get %2 (l0)
-| Project ()
-| Negate
-
-%4 =
-| Constant ()
-
-%5 =
-| Union %3 %4
-| Map null
-
-%6 =
-| Union %2 %5
+Used Indexes:
+  - materialize.public.fk_orderline_item
 
 EOF
 
 
 # Query 20
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT su_name, su_address
 FROM supplier, nation
 WHERE su_suppkey IN (
@@ -1474,72 +1360,65 @@ AND su_nationkey = n_nationkey
 AND n_name = 'GERMANY'
 ORDER BY su_name
 ----
-Source materialize.public.item (u17):
-| Map dummy, dummy, dummy
-| Filter "co%" ~~(padchar(#4))
-| Project (#0, #5..=#7, #4)
+Explained Query:
+  Finish order_by=[#0 asc nulls_last] output=[#0, #1]
+    Return // { arity: 2 }
+      Project (#1, #2) // { arity: 2 }
+        Join on=(#0 = #3) type=differential // { arity: 4 }
+          implementation
+            l0 » %1[#0]
+          Get l0 // { arity: 3 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Distinct group_by=[#0] // { arity: 1 }
+              Project (#0) // { arity: 1 }
+                Filter (integer_to_bigint((2 * #3)) > #4) AND (#0 = ((#1 * #2) % 10000)) // { arity: 5 }
+                  Reduce group_by=[#0, #1, #2, #3] aggregates=[sum(#4)] // { arity: 5 }
+                    Project (#0..=#3, #26) // { arity: 5 }
+                      Filter (date_to_timestamp(#25) > 2010-05-23 12:00:00) // { arity: 30 }
+                        Join on=(eq(#1, #23, #29)) type=differential // { arity: 30 }
+                          implementation
+                            %1 » %3[#0] » %2[#4] » %0[]
+                          ArrangeBy keys=[[]] // { arity: 1 }
+                            Project (#0) // { arity: 1 }
+                              Get l0 // { arity: 3 }
+                          ArrangeBy keys=[[#0]] // { arity: 18 }
+                            Get materialize.public.stock // { arity: 18 }
+                          ArrangeBy keys=[[#4]] // { arity: 10 }
+                            Get materialize.public.orderline // { arity: 10 }
+                          ArrangeBy keys=[[#0]] // { arity: 1 }
+                            Project (#0) // { arity: 1 }
+                              Filter "co%" ~~(padchar(#4)) // { arity: 5 }
+                                Get materialize.public.item // { arity: 5 }
+    With
+      cte l0 =
+        Project (#0..=#2) // { arity: 3 }
+          Join on=(#3 = #7) type=delta // { arity: 8 }
+            implementation
+              %0 » %1[#0]
+              %1 » %0[#3]
+            ArrangeBy keys=[[#3]] // { arity: 7 }
+              Get materialize.public.supplier // { arity: 7 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Project (#0) // { arity: 1 }
+                Filter (#1 = "GERMANY") // { arity: 4 }
+                  Get materialize.public.nation // { arity: 4 }
 
-Query:
-%0 =
-| Get materialize.public.supplier (u24)
-| ArrangeBy (#3)
+Source materialize.public.item
+  project=(#0, #5..=#7, #4)
+  filter=("co%" ~~(padchar(#4)))
+  map=(dummy, dummy, dummy)
 
-%1 =
-| Get materialize.public.nation (u22)
-| Filter (#1 = "GERMANY")
-| Project (#0)
-| ArrangeBy (#0)
-
-%2 = Let l0 =
-| Join %0 %1 (= #3 #7)
-| | implementation = DeltaQuery
-| |   delta %0 %1.(#0)
-| |   delta %1 %0.(#3)
-| Project (#0..=#2)
-
-%3 =
-| Get %2 (l0)
-| Project (#0)
-| ArrangeBy ()
-
-%4 =
-| Get materialize.public.stock (u18)
-| ArrangeBy (#0)
-
-%5 =
-| Get materialize.public.orderline (u13)
-| ArrangeBy (#4)
-
-%6 =
-| Get materialize.public.item (u17)
-| Filter "co%" ~~(padchar(#4))
-| Project (#0)
-| ArrangeBy (#0)
-
-%7 =
-| Join %3 %4 %5 %6 (= #1 #23 #29)
-| | implementation = Differential %4.(#0) %6.(#0) %5.(#4) %3.()
-| Filter (date_to_timestamp(#25) > 2010-05-23 12:00:00)
-| Project (#0..=#3, #26)
-| Reduce group=(#0, #1, #2, #3)
-| | agg sum(#4)
-| Filter (integer_to_bigint((2 * #3)) > #4), (#0 = ((#1 * #2) % 10000))
-| Project (#0)
-| Distinct group=(#0)
-| ArrangeBy (#0)
-
-%8 =
-| Join %2 %7 (= #0 #3)
-| | implementation = Differential %2 %7.(#0)
-| Project (#1, #2)
-
-Finish order_by=(#0 asc nulls_last) limit=none offset=0 project=(#0, #1)
+Used Indexes:
+  - materialize.public.fk_orderline_item
+  - materialize.public.fk_stock_item
+  - materialize.public.fk_nation_regionkey
+  - materialize.public.fk_supplier_nationkey
 
 EOF
 
 # Query 21
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT
     su_name, count(*) as numwait
 FROM
@@ -1564,76 +1443,68 @@ AND n_name = 'GERMANY'
 GROUP BY su_name
 ORDER BY numwait DESC, su_name
 ----
-%0 =
-| Get materialize.public.supplier (u24)
-| Project (#0, #1, #3)
-| ArrangeBy (#0)
+Explained Query:
+  Finish order_by=[#1 desc nulls_first, #0 asc nulls_last] output=[#0, #1]
+    Return // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[count(true)] // { arity: 2 }
+        Project (#0) // { arity: 1 }
+          Join on=(#1 = #5 AND #2 = #6 AND #3 = #7 AND #4 = #8) type=differential // { arity: 9 }
+            implementation
+              %1 » %0[#1, #2, #3, #4]
+            ArrangeBy keys=[[#1, #2, #3, #4]] // { arity: 5 }
+              Get l0 // { arity: 5 }
+            Union // { arity: 4 }
+              Negate // { arity: 4 }
+                Distinct group_by=[#0, #1, #2, #3] // { arity: 4 }
+                  Project (#0..=#3) // { arity: 4 }
+                    Filter (#10 > #3) // { arity: 14 }
+                      Join on=(#0 = #4 AND #1 = #5 AND #2 = #6) type=differential // { arity: 14 }
+                        implementation
+                          l1 » %1[#2, #1, #0]
+                        Get l1 // { arity: 4 }
+                        ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
+                          Get materialize.public.orderline // { arity: 10 }
+              Get l1 // { arity: 4 }
+    With
+      cte l1 =
+        Distinct group_by=[#0, #1, #2, #3] // { arity: 4 }
+          Project (#1..=#4) // { arity: 4 }
+            Get l0 // { arity: 5 }
+      cte l0 =
+        Project (#1, #3..=#5, #7) // { arity: 5 }
+          Filter (#7 > #11) // { arity: 16 }
+            Join on=(#0 = #14 AND #2 = #15 AND #3 = #8 AND #4 = #9 AND eq(#5, #10, #13) AND #6 = #12) type=differential // { arity: 16 }
+              implementation
+                %1 » %2[#0, #1, #2] » %3[#0, #1] » %0[#0] » %4[#0]
+              ArrangeBy keys=[[#0]] // { arity: 3 }
+                Project (#0, #1, #3) // { arity: 3 }
+                  Get materialize.public.supplier // { arity: 7 }
+              Project (#0..=#2, #4, #6) // { arity: 5 }
+                Filter (#4) IS NOT NULL // { arity: 10 }
+                  Get materialize.public.orderline // { arity: 10 }
+              ArrangeBy keys=[[#0, #1, #2]] // { arity: 4 }
+                Project (#0..=#2, #4) // { arity: 4 }
+                  Get materialize.public.order // { arity: 8 }
+              ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+                Project (#0, #1, #17) // { arity: 3 }
+                  Get materialize.public.stock // { arity: 18 }
+              ArrangeBy keys=[[#0]] // { arity: 1 }
+                Project (#0) // { arity: 1 }
+                  Filter (#1 = "GERMANY") // { arity: 4 }
+                    Get materialize.public.nation // { arity: 4 }
 
-%1 =
-| Get materialize.public.orderline (u13)
-| Filter (#4) IS NOT NULL
-| Project (#0..=#2, #4, #6)
-
-%2 =
-| Get materialize.public.order (u11)
-| Project (#0..=#2, #4)
-| ArrangeBy (#0, #1, #2)
-
-%3 =
-| Get materialize.public.stock (u18)
-| Project (#0, #1, #17)
-| ArrangeBy (#0, #1)
-
-%4 =
-| Get materialize.public.nation (u22)
-| Filter (#1 = "GERMANY")
-| Project (#0)
-| ArrangeBy (#0)
-
-%5 = Let l0 =
-| Join %0 %1 %2 %3 %4 (= #0 #14) (= #2 #15) (= #3 #8) (= #4 #9) (= #5 #10 #13) (= #6 #12)
-| | implementation = Differential %1 %2.(#0, #1, #2) %3.(#0, #1) %0.(#0) %4.(#0)
-| Filter (#7 > #11)
-| Project (#1, #3..=#5, #7)
-
-%6 = Let l1 =
-| Get %5 (l0)
-| Project (#1..=#4)
-| Distinct group=(#0, #1, #2, #3)
-
-%7 =
-| Get %5 (l0)
-| ArrangeBy (#1, #2, #3, #4)
-
-%8 =
-| Get materialize.public.orderline (u13)
-| ArrangeBy (#2, #1, #0)
-
-%9 =
-| Join %6 %8 (= #0 #4) (= #1 #5) (= #2 #6)
-| | implementation = Differential %6 %8.(#2, #1, #0)
-| Filter (#10 > #3)
-| Project (#0..=#3)
-| Distinct group=(#0, #1, #2, #3)
-| Negate
-
-%10 =
-| Union %9 %6
-
-%11 =
-| Join %7 %10 (= #1 #5) (= #2 #6) (= #3 #7) (= #4 #8)
-| | implementation = Differential %10 %7.(#1, #2, #3, #4)
-| Project (#0)
-| Reduce group=(#0)
-| | agg count(true)
-
-Finish order_by=(#1 desc nulls_first, #0 asc nulls_last) limit=none offset=0 project=(#0, #1)
+Used Indexes:
+  - materialize.public.fk_order_customer
+  - materialize.public.fk_orderline_order
+  - materialize.public.fk_stock_warehouse
+  - materialize.public.fk_nation_regionkey
+  - materialize.public.fk_supplier_nationkey
 
 EOF
 
 # Query 22
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT
     substr(c_state, 1, 1) AS country,
     count(*) AS numcust,
@@ -1654,62 +1525,53 @@ AND NOT EXISTS (
 GROUP BY substr(c_state, 1, 1)
 ORDER BY substr(c_state, 1, 1)
 ----
-%0 = Let l0 =
-| Get materialize.public.customer (u4)
-| Map substr(char_to_text(#11), 1, 1)
+Explained Query:
+  Finish order_by=[#0 asc nulls_last] output=[#0..=#2]
+    Return // { arity: 3 }
+      Reduce group_by=[substr(char_to_text(#0), 1, 1)] aggregates=[count(true), sum(#1)] // { arity: 3 }
+        Project (#3, #4) // { arity: 2 }
+          Join on=(#0 = #5 AND #1 = #6 AND #2 = #7) type=differential // { arity: 8 }
+            implementation
+              %1 » %0[#0, #1, #2]
+            ArrangeBy keys=[[#0, #1, #2]] // { arity: 5 }
+              Get l1 // { arity: 5 }
+            Union // { arity: 3 }
+              Negate // { arity: 3 }
+                Project (#0..=#2) // { arity: 3 }
+                  Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) type=differential // { arity: 6 }
+                    implementation
+                      l2 » %1[#0, #1, #2]
+                    Get l2 // { arity: 3 }
+                    ArrangeBy keys=[[#0, #1, #2]] // { arity: 3 }
+                      Distinct group_by=[#2, #0, #1] // { arity: 3 }
+                        Project (#1..=#3) // { arity: 3 }
+                          Filter (#3) IS NOT NULL // { arity: 8 }
+                            Get materialize.public.order // { arity: 8 }
+              Get l2 // { arity: 3 }
+    With
+      cte l2 =
+        Project (#0..=#2) // { arity: 3 }
+          Get l1 // { arity: 5 }
+      cte l1 =
+        Project (#0..=#4) // { arity: 5 }
+          Filter (numeric_to_double(#4) > (numeric_to_double(#5) / bigint_to_double(case when (#6 = 0) then null else #6 end))) // { arity: 7 }
+            CrossJoin type=differential // { arity: 7 }
+              implementation
+                %0 » %1[]
+              Project (#0..=#2, #9, #16) // { arity: 5 }
+                Filter ((#22 = "1") OR (#22 = "2") OR (#22 = "3") OR (#22 = "4") OR (#22 = "5") OR (#22 = "6") OR (#22 = "7")) // { arity: 23 }
+                  Get l0 // { arity: 23 }
+              ArrangeBy keys=[[]] // { arity: 2 }
+                Reduce aggregates=[sum(#0), count(true)] // { arity: 2 }
+                  Project (#16) // { arity: 1 }
+                    Filter (#16 > 0) AND ((#22 = "1") OR (#22 = "2") OR (#22 = "3") OR (#22 = "4") OR (#22 = "5") OR (#22 = "6") OR (#22 = "7")) // { arity: 23 }
+                      Get l0 // { arity: 23 }
+      cte l0 =
+        Map (substr(char_to_text(#11), 1, 1)) // { arity: 23 }
+          Get materialize.public.customer // { arity: 22 }
 
-%1 =
-| Get %0 (l0)
-| Filter ((#22 = "1") OR (#22 = "2") OR (#22 = "3") OR (#22 = "4") OR (#22 = "5") OR (#22 = "6") OR (#22 = "7"))
-| Project (#0..=#2, #9, #16)
-
-%2 =
-| Get %0 (l0)
-| Filter (#16 > 0), ((#22 = "1") OR (#22 = "2") OR (#22 = "3") OR (#22 = "4") OR (#22 = "5") OR (#22 = "6") OR (#22 = "7"))
-| Project (#16)
-| Reduce group=()
-| | agg sum(#0)
-| | agg count(true)
-| ArrangeBy ()
-
-%3 = Let l1 =
-| Join %1 %2
-| | implementation = Differential %1 %2.()
-| Filter (numeric_to_double(#4) > (numeric_to_double(#5) / bigint_to_double(if (#6 = 0) then {null} else {#6})))
-| Project (#0..=#4)
-
-%4 = Let l2 =
-| Get %3 (l1)
-| Project (#0..=#2)
-
-%5 =
-| Get %3 (l1)
-| ArrangeBy (#0, #1, #2)
-
-%6 =
-| Get materialize.public.order (u11)
-| Filter (#3) IS NOT NULL
-| Project (#1..=#3)
-| Distinct group=(#2, #0, #1)
-| ArrangeBy (#0, #1, #2)
-
-%7 =
-| Join %4 %6 (= #0 #3) (= #1 #4) (= #2 #5)
-| | implementation = Differential %4 %6.(#0, #1, #2)
-| Project (#0..=#2)
-| Negate
-
-%8 =
-| Union %7 %4
-
-%9 =
-| Join %5 %8 (= #0 #5) (= #1 #6) (= #2 #7)
-| | implementation = Differential %8 %5.(#0, #1, #2)
-| Project (#3, #4)
-| Reduce group=(substr(char_to_text(#0), 1, 1))
-| | agg count(true)
-| | agg sum(#1)
-
-Finish order_by=(#0 asc nulls_last) limit=none offset=0 project=(#0..=#2)
+Used Indexes:
+  - materialize.public.fk_customer_district
+  - materialize.public.fk_order_customer
 
 EOF

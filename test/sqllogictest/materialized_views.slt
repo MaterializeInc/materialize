@@ -361,7 +361,7 @@ statement error materialize\.public\.mv is not a view\nHINT: Use ALTER MATERIALI
 ALTER VIEW mv RENAME TO mv2
 
 statement error materialize\.public\.mv is not a view\nHINT: Use EXPLAIN \[\.\.\.\] MATERIALIZED VIEW to explain a materialized view\.
-EXPLAIN VIEW mv
+EXPLAIN WITH(arity, join_impls) VIEW mv
 
 
 # Cleanup

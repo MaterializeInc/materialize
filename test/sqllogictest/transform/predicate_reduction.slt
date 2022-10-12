@@ -23,30 +23,26 @@ SELECT * FROM t1 WHERE f1 = 0 and (f1 = 0 or f1 = 1)
 NULL
 
 query T multiline
-EXPLAIN SELECT * FROM t1 WHERE f1 = 0 and (f1 = 0 or f1 = 1)
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE f1 = 0 and (f1 = 0 or f1 = 1)
 ----
-Source materialize.public.t1 (u1):
-| Filter (#0 = 0)
-| Project (#0, #1)
+Explained Query:
+  Filter (#0 = 0) // { arity: 2 }
+    Get materialize.public.t1 // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.t1 (u1)
-| Filter (#0 = 0)
+Source materialize.public.t1
+  filter=((#0 = 0))
 
 EOF
 
 query T multiline
-EXPLAIN SELECT * FROM t1 WHERE f1 is null and (f1 is null or f1 = 1)
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE f1 is null and (f1 is null or f1 = 1)
 ----
-Source materialize.public.t1 (u1):
-| Filter (#0) IS NULL
-| Project (#0, #1)
+Explained Query:
+  Filter (#0) IS NULL // { arity: 2 }
+    Get materialize.public.t1 // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.t1 (u1)
-| Filter (#0) IS NULL
+Source materialize.public.t1
+  filter=((#0) IS NULL)
 
 EOF
 
@@ -62,16 +58,14 @@ NULL
 # other instances of `predicate` with `false`.
 
 query T multiline
-EXPLAIN SELECT * FROM t1 WHERE f1 is not null and (f1 is null or f1 = 1)
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE f1 is not null and (f1 is null or f1 = 1)
 ----
-Source materialize.public.t1 (u1):
-| Filter (#0 = 1)
-| Project (#0, #1)
+Explained Query:
+  Filter (#0 = 1) // { arity: 2 }
+    Get materialize.public.t1 // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.t1 (u1)
-| Filter (#0 = 1)
+Source materialize.public.t1
+  filter=((#0 = 1))
 
 EOF
 
@@ -86,26 +80,25 @@ NULL
 # A test that simplification works when overlapping subexpressions are nested.
 
 query T multiline
-EXPLAIN DECORRELATED PLAN FOR SELECT * FROM t1 WHERE (f1 is null)::int - 1 = 0 and ((f1 is null) or ((f1 is null)::int - 1 = 0))
+EXPLAIN DECORRELATED PLAN WITH(arity) FOR SELECT * FROM t1 WHERE (f1 is null)::int - 1 = 0 and ((f1 is null) or ((f1 is null)::int - 1 = 0))
 ----
-%0 = Let l0 =
-| Constant ()
-
-%1 =
-| Get materialize.public.t1 (u1)
-
-%2 =
-| Join %0 %1
-| | implementation = Unimplemented
-| Filter (((boolean_to_integer((#0) IS NULL) - 1) = 0) AND ((#0) IS NULL OR ((boolean_to_integer((#0) IS NULL) - 1) = 0)))
+Return // { arity: 2 }
+  Filter (((boolean_to_integer((#0) IS NULL) - 1) = 0) AND ((#0) IS NULL OR ((boolean_to_integer((#0) IS NULL) - 1) = 0))) // { arity: 2 }
+    CrossJoin // { arity: 2 }
+      Get l0 // { arity: 0 }
+      Get materialize.public.t1 // { arity: 2 }
+With
+  cte l0 =
+    Constant // { arity: 0 }
+      - ()
 
 EOF
 
 query T multiline
-EXPLAIN SELECT * FROM t1 WHERE ((f1 is null)::int - 1)::string LIKE '1' and ((f1 is null) or not (((f1 is null)::int - 1)::string LIKE '1'))
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE ((f1 is null)::int - 1)::string LIKE '1' and ((f1 is null) or not (((f1 is null)::int - 1)::string LIKE '1'))
 ----
-%0 =
-| Constant
+Explained Query (fast path):
+  Constant
 
 EOF
 
@@ -119,36 +112,32 @@ statement ok
 INSERT INTO t2 VALUES (0, -1), (1, 5), (1, -2)
 
 query T multiline
-EXPLAIN SELECT * FROM t2 WHERE f1 + f2 > 0 and case when f1 + f2 > 0 then 1/f1 > 0 else false end;
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t2 WHERE f1 + f2 > 0 and case when f1 + f2 > 0 then 1/f1 > 0 else false end;
 ----
-Source materialize.public.t2 (u2):
-| Map ((#0 + #1) > 0)
-| Filter #2, if #2 then {((1 / #0) > 0)} else {false}
-| Project (#0, #1)
+Explained Query:
+  Project (#0, #1) // { arity: 2 }
+    Filter #2 AND case when #2 then ((1 / #0) > 0) else false end // { arity: 3 }
+      Map (((#0 + #1) > 0)) // { arity: 3 }
+        Get materialize.public.t2 // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.t2 (u2)
-| Map ((#0 + #1) > 0)
-| Filter #2, if #2 then {((1 / #0) > 0)} else {false}
-| Project (#0, #1)
+Source materialize.public.t2
+  filter=(#2 AND case when #2 then ((1 / #0) > 0) else false end)
+  map=(((#0 + #1) > 0))
 
 EOF
 
 query T multiline
-EXPLAIN SELECT * FROM t2 WHERE case when f1 + f2 > 0 then 1/f1 > 0 else false end and f1 + f2 > 0;
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t2 WHERE case when f1 + f2 > 0 then 1/f1 > 0 else false end and f1 + f2 > 0;
 ----
-Source materialize.public.t2 (u2):
-| Map ((#0 + #1) > 0)
-| Filter #2, if #2 then {((1 / #0) > 0)} else {false}
-| Project (#0, #1)
+Explained Query:
+  Project (#0, #1) // { arity: 2 }
+    Filter #2 AND case when #2 then ((1 / #0) > 0) else false end // { arity: 3 }
+      Map (((#0 + #1) > 0)) // { arity: 3 }
+        Get materialize.public.t2 // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.t2 (u2)
-| Map ((#0 + #1) > 0)
-| Filter #2, if #2 then {((1 / #0) > 0)} else {false}
-| Project (#0, #1)
+Source materialize.public.t2
+  filter=(#2 AND case when #2 then ((1 / #0) > 0) else false end)
+  map=(((#0 + #1) > 0))
 
 EOF
 

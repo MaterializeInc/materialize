@@ -115,9 +115,9 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT 1::smallint > 1;
 ----
-%0 =
-| Constant ()
-| Map (smallint_to_integer(integer_to_smallint(1)) > 1)
+Map ((smallint_to_integer(integer_to_smallint(1)) > 1))
+  Constant
+    - ()
 
 EOF
 
@@ -126,9 +126,9 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT 1::smallint > 1.1;
 ----
-%0 =
-| Constant ()
-| Map (smallint_to_numeric(integer_to_smallint(1)) > 1.1)
+Map ((smallint_to_numeric(integer_to_smallint(1)) > 1.1))
+  Constant
+    - ()
 
 EOF
 
@@ -137,9 +137,9 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT 1::bigint > 1.11111
 ----
-%0 =
-| Constant ()
-| Map (bigint_to_numeric(integer_to_bigint(1)) > 1.11111)
+Map ((bigint_to_numeric(integer_to_bigint(1)) > 1.11111))
+  Constant
+    - ()
 
 EOF
 
@@ -148,9 +148,9 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT 1::bigint > 1.11111::float
 ----
-%0 =
-| Constant ()
-| Map (bigint_to_double(integer_to_bigint(1)) > numeric_to_double(1.11111))
+Map ((bigint_to_double(integer_to_bigint(1)) > numeric_to_double(1.11111)))
+  Constant
+    - ()
 
 EOF
 
@@ -159,9 +159,9 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT 1.1 > 1::float;
 ----
-%0 =
-| Constant ()
-| Map (numeric_to_double(1.1) > integer_to_double(1))
+Map ((numeric_to_double(1.1) > integer_to_double(1)))
+  Constant
+    - ()
 
 EOF
 
@@ -170,9 +170,9 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT 1.1 > 1.1
 ----
-%0 =
-| Constant ()
-| Map (1.1 > 1.1)
+Map ((1.1 > 1.1))
+  Constant
+    - ()
 
 EOF
 
@@ -181,9 +181,9 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT 1::float > 1::float
 ----
-%0 =
-| Constant ()
-| Map (integer_to_double(1) > integer_to_double(1))
+Map ((integer_to_double(1) > integer_to_double(1)))
+  Constant
+    - ()
 
 EOF
 
@@ -192,9 +192,9 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT floor(1);
 ----
-%0 =
-| Constant ()
-| Map floorf64(integer_to_double(1))
+Map (floorf64(integer_to_double(1)))
+  Constant
+    - ()
 
 EOF
 
@@ -211,9 +211,9 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT coalesce(1::int, 1::numeric, 1::float);
 ----
-%0 =
-| Constant ()
-| Map coalesce(integer_to_double(1), numeric_to_double(integer_to_numeric(1)), integer_to_double(1))
+Map (coalesce(integer_to_double(1), numeric_to_double(integer_to_numeric(1)), integer_to_double(1)))
+  Constant
+    - ()
 
 EOF
 
@@ -234,9 +234,9 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT TIMESTAMPTZ '2001 03-04' - DATE '2002 03-04';
 ----
-%0 =
-| Constant ()
-| Map (text_to_timestamp_with_time_zone("2001 03-04") - date_to_timestamp_with_timezone(text_to_date("2002 03-04")))
+Map ((text_to_timestamp_with_time_zone("2001 03-04") - date_to_timestamp_with_timezone(text_to_date("2002 03-04"))))
+  Constant
+    - ()
 
 EOF
 
@@ -245,9 +245,9 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT TIMESTAMPTZ '2001 03-04' - TIMESTAMP '2002 03-04';
 ----
-%0 =
-| Constant ()
-| Map (text_to_timestamp_with_time_zone("2001 03-04") - timestamp_to_timestamp_with_time_zone(text_to_timestamp("2002 03-04")))
+Map ((text_to_timestamp_with_time_zone("2001 03-04") - timestamp_to_timestamp_with_time_zone(text_to_timestamp("2002 03-04"))))
+  Constant
+    - ()
 
 EOF
 
@@ -256,9 +256,9 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT TIMESTAMP '2001 03-04' - DATE '2002 03-04';
 ----
-%0 =
-| Constant ()
-| Map (text_to_timestamp("2001 03-04") - date_to_timestamp(text_to_date("2002 03-04")))
+Map ((text_to_timestamp("2001 03-04") - date_to_timestamp(text_to_date("2002 03-04"))))
+  Constant
+    - ()
 
 EOF
 
@@ -267,9 +267,9 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT coalesce(DATE '2001', TIMESTAMP '2002', TIMESTAMPTZ '2003');
 ----
-%0 =
-| Constant ()
-| Map coalesce(date_to_timestamp_with_timezone(text_to_date("2001")), timestamp_to_timestamp_with_time_zone(text_to_timestamp("2002")), text_to_timestamp_with_time_zone("2003"))
+Map (coalesce(date_to_timestamp_with_timezone(text_to_date("2001")), timestamp_to_timestamp_with_time_zone(text_to_timestamp("2002")), text_to_timestamp_with_time_zone("2003")))
+  Constant
+    - ()
 
 EOF
 
@@ -278,9 +278,9 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT lower('a'::char);
 ----
-%0 =
-| Constant ()
-| Map lower(char_to_text(text_to_char(text_to_char("a"))))
+Map (lower(char_to_text(text_to_char(text_to_char("a")))))
+  Constant
+    - ()
 
 EOF
 
@@ -289,9 +289,9 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT 'a'::char < 'a'::varchar;
 ----
-%0 =
-| Constant ()
-| Map (text_to_char(text_to_char("a")) < text_to_char(text_to_varchar("a")))
+Map ((text_to_char(text_to_char("a")) < text_to_char(text_to_varchar("a"))))
+  Constant
+    - ()
 
 EOF
 
@@ -301,9 +301,9 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT 'a'::char < 'a'::text;
 ----
-%0 =
-| Constant ()
-| Map (char_to_text(text_to_char(text_to_char("a"))) < "a")
+Map ((char_to_text(text_to_char(text_to_char("a"))) < "a"))
+  Constant
+    - ()
 
 EOF
 
@@ -311,9 +311,9 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT 'a'::varchar < 'a'::text;
 ----
-%0 =
-| Constant ()
-| Map (varchar_to_text(text_to_varchar("a")) < "a")
+Map ((varchar_to_text(text_to_varchar("a")) < "a"))
+  Constant
+    - ()
 
 EOF
 
@@ -322,9 +322,9 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT coalesce('a'::char, 'a'::varchar, 'a'::text);
 ----
-%0 =
-| Constant ()
-| Map coalesce(text_to_char(text_to_char("a")), text_to_char(text_to_varchar("a")), text_to_char("a"))
+Map (coalesce(text_to_char(text_to_char("a")), text_to_char(text_to_varchar("a")), text_to_char("a")))
+  Constant
+    - ()
 
 EOF
 

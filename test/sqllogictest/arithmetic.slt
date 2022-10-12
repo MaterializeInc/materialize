@@ -951,20 +951,19 @@ SELECT
 1 1 5
 
 query T multiline
-EXPLAIN SELECT
+EXPLAIN WITH(arity, join_impls) SELECT
   x1 >> x2 << x3 as r1,
   y1 << y2 >> y3 as r2
 FROM nums
 ----
-Source materialize.public.nums (u3):
-| Map dummy, dummy, dummy
-| Project (#0..=#5, #9..=#11)
+Explained Query:
+  Project (#9, #10) // { arity: 2 }
+    Map (((#0 >> smallint_to_integer(#1)) << smallint_to_integer(#2)), ((#3 << #4) >> #5)) // { arity: 11 }
+      Get materialize.public.nums // { arity: 9 }
 
-Query:
-%0 =
-| Get materialize.public.nums (u3)
-| Map ((#0 >> smallint_to_integer(#1)) << smallint_to_integer(#2)), ((#3 << #4) >> #5)
-| Project (#9, #10)
+Source materialize.public.nums
+  project=(#0..=#5, #9..=#11)
+  map=(dummy, dummy, dummy)
 
 EOF
 
@@ -987,20 +986,19 @@ SELECT
 8 8 5
 
 query T multiline
-EXPLAIN SELECT
+EXPLAIN WITH(arity, join_impls) SELECT
   x1 >> x2 & x3 as r1,
   y1 << y2 & y3 as r2
 FROM nums
 ----
-Source materialize.public.nums (u3):
-| Map dummy, dummy, dummy
-| Project (#0..=#5, #9..=#11)
+Explained Query:
+  Project (#9, #10) // { arity: 2 }
+    Map (((#0 >> smallint_to_integer(#1)) & #2), ((#3 << #4) & #5)) // { arity: 11 }
+      Get materialize.public.nums // { arity: 9 }
 
-Query:
-%0 =
-| Get materialize.public.nums (u3)
-| Map ((#0 >> smallint_to_integer(#1)) & #2), ((#3 << #4) & #5)
-| Project (#9, #10)
+Source materialize.public.nums
+  project=(#0..=#5, #9..=#11)
+  map=(dummy, dummy, dummy)
 
 EOF
 
@@ -1023,21 +1021,17 @@ SELECT
 0 0 1
 
 query T multiline
-EXPLAIN SELECT
+EXPLAIN WITH(arity, join_impls) SELECT
   x1 & x2 | x3 as r1,
   y1 & y2 | y3 as r2,
   z1 & z2 | z3 as r3,
   x1 & y2 | z3 as r4
 FROM nums
 ----
-Source materialize.public.nums (u3):
-| Project (#0..=#8)
-
-Query:
-%0 =
-| Get materialize.public.nums (u3)
-| Map ((#0 & #1) | #2), ((#3 & #4) | #5), ((#6 & #7) | #8), (integer_to_bigint((smallint_to_integer(#0) & #4)) | #8)
-| Project (#9..=#12)
+Explained Query:
+  Project (#9..=#12) // { arity: 4 }
+    Map (((#0 & #1) | #2), ((#3 & #4) | #5), ((#6 & #7) | #8), (integer_to_bigint((smallint_to_integer(#0) & #4)) | #8)) // { arity: 13 }
+      Get materialize.public.nums // { arity: 9 }
 
 EOF
 
@@ -1060,21 +1054,17 @@ SELECT
 0 0 1
 
 query T multiline
-EXPLAIN SELECT
+EXPLAIN WITH(arity, join_impls) SELECT
   x1 # x2 & x3 as r1,
   y1 # y2 & y3 as r2,
   z1 # z2 & z3 as r3,
   x1 # y2 & z3 as r4
 FROM nums
 ----
-Source materialize.public.nums (u3):
-| Project (#0..=#8)
-
-Query:
-%0 =
-| Get materialize.public.nums (u3)
-| Map ((#0 # #1) & #2), ((#3 # #4) & #5), ((#6 # #7) & #8), (integer_to_bigint((smallint_to_integer(#0) # #4)) & #8)
-| Project (#9..=#12)
+Explained Query:
+  Project (#9..=#12) // { arity: 4 }
+    Map (((#0 # #1) & #2), ((#3 # #4) & #5), ((#6 # #7) & #8), (integer_to_bigint((smallint_to_integer(#0) # #4)) & #8)) // { arity: 13 }
+      Get materialize.public.nums // { arity: 9 }
 
 EOF
 
@@ -1097,21 +1087,17 @@ SELECT
 1 1 0
 
 query T multiline
-EXPLAIN SELECT
+EXPLAIN WITH(arity, join_impls) SELECT
   x1 # x2 | x3 as r1,
   y1 # y2 | y3 as r2,
   z1 # z2 | z3 as r3,
   x1 # y2 | z3 as r4
 FROM nums
 ----
-Source materialize.public.nums (u3):
-| Project (#0..=#8)
-
-Query:
-%0 =
-| Get materialize.public.nums (u3)
-| Map ((#0 # #1) | #2), ((#3 # #4) | #5), ((#6 # #7) | #8), (integer_to_bigint((smallint_to_integer(#0) # #4)) | #8)
-| Project (#9..=#12)
+Explained Query:
+  Project (#9..=#12) // { arity: 4 }
+    Map (((#0 # #1) | #2), ((#3 # #4) | #5), ((#6 # #7) | #8), (integer_to_bigint((smallint_to_integer(#0) # #4)) | #8)) // { arity: 13 }
+      Get materialize.public.nums // { arity: 9 }
 
 EOF
 
