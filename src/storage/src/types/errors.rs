@@ -13,6 +13,7 @@ use std::fmt::Display;
 use bytes::BufMut;
 use prost::Message;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use mz_expr::EvalError;
 use mz_persist_types::Codec;
@@ -21,6 +22,8 @@ use mz_repr::{GlobalId, Row};
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage.types.errors.rs"));
 
+/// The underlying data was not decodable in the format we expected: eg.
+/// invalid JSON or Avro data that doesn't match a schema.
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct DecodeError {
     pub kind: DecodeErrorKind,
@@ -254,6 +257,8 @@ impl Display for UpsertError {
     }
 }
 
+/// Source-wide durable errors; for example, a replication log being meaningless or corrupted.
+/// This should _not_ include transient source errors, like connection issues or misconfigurations.
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct SourceError {
     pub source_id: GlobalId,
@@ -294,8 +299,6 @@ impl Display for SourceError {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum SourceErrorDetails {
     Initialization(String),
-    FileIO(String),
-    Persistence(String),
     Other(String),
 }
 
@@ -305,8 +308,6 @@ impl RustType<ProtoSourceErrorDetails> for SourceErrorDetails {
         ProtoSourceErrorDetails {
             kind: Some(match self {
                 SourceErrorDetails::Initialization(s) => Kind::Initialization(s.clone()),
-                SourceErrorDetails::FileIO(s) => Kind::FileIo(s.clone()),
-                SourceErrorDetails::Persistence(s) => Kind::Persistence(s.clone()),
                 SourceErrorDetails::Other(s) => Kind::Other(s.clone()),
             }),
         }
@@ -317,8 +318,10 @@ impl RustType<ProtoSourceErrorDetails> for SourceErrorDetails {
         match proto.kind {
             Some(kind) => match kind {
                 Kind::Initialization(s) => Ok(SourceErrorDetails::Initialization(s)),
-                Kind::FileIo(s) => Ok(SourceErrorDetails::FileIO(s)),
-                Kind::Persistence(s) => Ok(SourceErrorDetails::Persistence(s)),
+                Kind::DeprecatedFileIo(s) | Kind::DeprecatedPersistence(s) => {
+                    warn!("Deprecated source error kind: {s}");
+                    Ok(SourceErrorDetails::Other(s))
+                }
                 Kind::Other(s) => Ok(SourceErrorDetails::Other(s)),
             },
             None => Err(TryFromProtoError::missing_field(
@@ -338,13 +341,13 @@ impl Display for SourceErrorDetails {
                     e
                 )
             }
-            SourceErrorDetails::FileIO(e) => write!(f, "file IO: {}", e),
-            SourceErrorDetails::Persistence(e) => write!(f, "persistence: {}", e),
             SourceErrorDetails::Other(e) => write!(f, "{}", e),
         }
     }
 }
 
+/// An error that's destined to be presented to the user in a differential dataflow collection.
+/// For example, a divide by zero will be visible in the error collection for a particular row.
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash)]
 pub enum DataflowError {
     DecodeError(DecodeError),
