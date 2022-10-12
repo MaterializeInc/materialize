@@ -48,28 +48,24 @@ We'll start with some real-time data produced by Materialize's built-in [load ge
 
     ```sql
     CREATE SOURCE auction_house
-    FROM LOAD GENERATOR AUCTION;
+    FROM LOAD GENERATOR AUCTION
+    FOR ALL TABLES
+    WITH (SIZE '3xsmall');
     ```
 
     The `CREATE SOURCE` statement is a definition of where to find and how to connect to a data source. Submitting the statement will prompt Materialize to start ingesting data into durable storage.
 
-1. The auction source is meant to be used with [`CREATE VIEWS`](/sql/create-views), which will demux the source into multiple different views:
+1. The `auction_house` source will be automatically demuxed into multiple subsources, each representing a different data stream fed by the load generator:
 
-    ```sql
-    CREATE VIEWS
-    FROM SOURCE auction_house;
-    ```
-
-    ```sql
-    SHOW VIEWS;
-
-         name
-    ---------------
-     accounts
-     auctions
-     bids
-     organizations
-     users
+    ```nofmt
+         name      |      type      |  size
+    ---------------+----------------+---------
+     accounts      | subsource      | 3xsmall
+     auction_house | load-generator | 3xsmall
+     auctions      | subsource      | 3xsmall
+     bids          | subsource      | 3xsmall
+     organizations | subsource      | 3xsmall
+     users         | subsource      | 3xsmall
     ```
 
 1. Now that we have some data to play around with, let's set up a [cluster](/sql/create-cluster) (logical compute) with one `xsmall` [replica](/sql/create-cluster-replica) (physical compute) so we can start running some queries:
