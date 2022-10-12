@@ -2323,7 +2323,13 @@ mod collection_mgmt {
                             // uppers here is best-effort and only needs to
                             // succeed if no one else is advancing it;
                             // contention proves otherwise.
-                            let _ = write_handle.monotonic_append(updates).await.expect("sender hung up");
+                            match write_handle.monotonic_append(updates).await {
+                                Ok(_append_result) => (), // All good!
+                                Err(_recv_error) => {
+                                    // Sender hung up, this seems fine and can
+                                    // happen when shutting down.
+                                }
+                            }
                         },
                         cmd = rx.recv() => {
                             if let Some((id, updates)) = cmd {
