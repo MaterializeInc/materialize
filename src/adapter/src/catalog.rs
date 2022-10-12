@@ -11,6 +11,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -168,6 +169,7 @@ pub struct CatalogState {
     default_storage_host_size: Option<String>,
     availability_zones: Vec<String>,
     system_configuration: SystemVars,
+    egress_ips: Vec<Ipv4Addr>,
 }
 
 impl CatalogState {
@@ -1980,6 +1982,7 @@ impl<S: Append> Catalog<S> {
                 default_storage_host_size: config.default_storage_host_size,
                 availability_zones: config.availability_zones,
                 system_configuration: SystemVars::default(),
+                egress_ips: config.egress_ips,
             },
             transient_revision: 0,
             storage: Arc::new(Mutex::new(config.storage)),
@@ -2365,6 +2368,10 @@ impl<S: Append> Catalog<S> {
         let storage_usage_events = catalog.storage().await.storage_usage().await?;
         for event in storage_usage_events {
             builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
+        }
+
+        for ip in &catalog.state.egress_ips {
+            builtin_table_updates.push(catalog.state.pack_egress_ip_update(ip)?);
         }
 
         Ok((catalog, builtin_migration_metadata, builtin_table_updates))
@@ -2807,6 +2814,7 @@ impl<S: Append> Catalog<S> {
             default_storage_host_size: None,
             availability_zones: vec![],
             secrets_reader,
+            egress_ips: vec![],
         })
         .await?;
         Ok(catalog)

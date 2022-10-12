@@ -14,7 +14,7 @@
 //! [timely dataflow]: ../timely/index.html
 
 use std::env;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -107,6 +107,8 @@ pub struct Config {
     pub storage_usage_collection_interval: Duration,
     /// An API key for Segment. Enables export of audit events to Segment.
     pub segment_api_key: Option<String>,
+    /// IP Addresses which will be used for egress.
+    pub egress_ips: Vec<Ipv4Addr>,
 
     // === Tracing options. ===
     /// The metrics registry to use.
@@ -279,6 +281,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         storage_usage_client,
         storage_usage_collection_interval: config.storage_usage_collection_interval,
         segment_api_key: config.segment_api_key,
+        egress_ips: config.egress_ips,
     })
     .await?;
 

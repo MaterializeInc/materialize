@@ -16,7 +16,7 @@ use std::cmp;
 use std::env;
 use std::ffi::CStr;
 use std::iter;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::process;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -383,6 +383,10 @@ pub struct Args {
     /// An API key for Segment. Enables export of audit events to Segment.
     #[clap(long, env = "SEGMENT_API_KEY")]
     segment_api_key: Option<String>,
+    /// Public IP addresses which the cloud environment has configured for
+    /// egress
+    #[clap(long)]
+    announce_egress_ip: Vec<Ipv4Addr>,
 
     // === Tracing options. ===
     #[clap(flatten)]
@@ -713,6 +717,7 @@ max log level: {max_log_level}",
         tracing_target_callbacks,
         storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
         segment_api_key: args.segment_api_key,
+        egress_ips: args.announce_egress_ip,
     }))?;
 
     println!(

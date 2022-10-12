@@ -67,6 +67,7 @@
 //!
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
 use std::ops::Neg;
 use std::sync::Arc;
@@ -241,6 +242,7 @@ pub struct Config<S> {
     pub storage_usage_client: StorageUsageClient,
     pub storage_usage_collection_interval: Duration,
     pub segment_api_key: Option<String>,
+    pub egress_ips: Vec<Ipv4Addr>,
 }
 
 /// Soft-state metadata about a compute replica
@@ -871,6 +873,7 @@ pub async fn serve<S: Append + 'static>(
         storage_usage_client,
         storage_usage_collection_interval,
         segment_api_key,
+        egress_ips,
     }: Config<S>,
 ) -> Result<(Handle, Client), AdapterError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -906,6 +909,7 @@ pub async fn serve<S: Append + 'static>(
             default_storage_host_size,
             availability_zones,
             secrets_reader: secrets_controller.reader(),
+            egress_ips,
         })
         .await?;
     let session_id = catalog.config().session_id;
