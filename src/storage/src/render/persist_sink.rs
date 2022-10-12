@@ -105,13 +105,6 @@ pub fn render<G>(
                 }
 
                 // Make sure that our write handle lease does not expire!
-                //
-                // We don't write to _Consensus_ but instead only write batch
-                // data to _Blob_ so someone might eventually expire our lease.
-                // This could lead to the "leaked blob reaper" eventually
-                // removing blobs that have been written but not yet appended to
-                // the shard.
-                //
                 write.maybe_heartbeat_writer().await;
                 trace!(
                     "storage persist_sink {}/{}: writer heartbeating write handle",
