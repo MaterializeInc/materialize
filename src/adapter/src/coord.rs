@@ -383,7 +383,7 @@ impl<S: Append + 'static> Coordinator<S> {
         builtin_migration_metadata: BuiltinMigrationMetadata,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
-        let mut persisted_source_ids = vec![];
+        let mut persisted_source_ids = HashMap::new();
         for instance in self.catalog.compute_instances() {
             self.controller.compute.create_instance(
                 instance.id,
@@ -407,7 +407,10 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
-                persisted_source_ids.extend(replica.config.logging.source_ids());
+                persisted_source_ids.insert(
+                    instance.id,
+                    replica.config.logging.source_ids().collect_vec(),
+                );
 
                 self.controller
                     .active_compute()
@@ -417,11 +420,19 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
-        self.initialize_storage_read_policies(
-            persisted_source_ids,
-            DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
-        )
-        .await;
+        for (instance_id, collection_ids) in persisted_source_ids {
+            self.initialize_compute_read_policies(
+                collection_ids.clone(),
+                instance_id,
+                DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+            )
+            .await;
+            self.initialize_storage_read_policies(
+                collection_ids,
+                DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+            )
+            .await;
+        }
 
         // Migrate builtin objects.
         self.controller

@@ -72,6 +72,7 @@ impl<S: Append + 'static> Coordinator<S> {
         event!(Level::TRACE, ops = format!("{:?}", ops));
 
         let mut sources_to_drop = vec![];
+        let mut log_sources_to_drop = vec![];
         let mut tables_to_drop = vec![];
         let mut storage_sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
@@ -143,9 +144,12 @@ impl<S: Append + 'static> Coordinator<S> {
                 let id = instance.id;
 
                 // Drop the introspection sources
-                for replica in instance.replicas_by_id.values() {
-                    sources_to_drop.extend(replica.config.logging.source_ids());
-                }
+                let replica_logs = instance
+                    .replicas_by_id
+                    .values()
+                    .flat_map(|replica| replica.config.logging.source_ids())
+                    .map(|log_id| (id, log_id));
+                log_sources_to_drop.extend(replica_logs);
 
                 // Drop timelines
                 timelines_to_drop.extend(self.remove_compute_instance_from_timeline(id));
@@ -155,7 +159,12 @@ impl<S: Append + 'static> Coordinator<S> {
                 let replica = &compute_instance.replicas_by_id[replica_id];
 
                 // Drop the introspection sources
-                sources_to_drop.extend(replica.config.logging.source_ids());
+                let replica_logs = replica
+                    .config
+                    .logging
+                    .source_ids()
+                    .map(|log_id| (compute_instance.id, log_id));
+                log_sources_to_drop.extend(replica_logs);
             }
         }
 
@@ -165,6 +174,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .chain(storage_sinks_to_drop.iter())
                 .chain(tables_to_drop.iter())
                 .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
+                .chain(log_sources_to_drop.iter().map(|(_, id)| id))
                 .cloned(),
         );
         timelines_to_drop.extend(
@@ -172,6 +182,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 indexes_to_drop
                     .iter()
                     .chain(materialized_views_to_drop.iter())
+                    .chain(log_sources_to_drop.iter())
                     .cloned(),
             ),
         );
@@ -207,6 +218,10 @@ impl<S: Append + 'static> Coordinator<S> {
 
             if !sources_to_drop.is_empty() {
                 self.drop_sources(sources_to_drop).await;
+            }
+            if !log_sources_to_drop.is_empty() {
+                self.drop_sources(log_sources_to_drop.into_iter().map(|(_, id)| id).collect())
+                    .await;
             }
             if !tables_to_drop.is_empty() {
                 self.drop_sources(tables_to_drop).await;

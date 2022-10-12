@@ -869,19 +869,21 @@ impl<S: Append + 'static> Coordinator<S> {
             .catalog
             .resolve_compute_instance(&name)
             .expect("compute instance must exist after creation");
+        let instance_id = instance.id;
+
         let arranged_logs = arranged_introspection_sources
             .into_iter()
             .map(|(log, id)| (log.variant.clone(), id))
             .collect();
         self.controller.compute.create_instance(
-            instance.id,
+            instance_id,
             arranged_logs,
             self.catalog.system_config().max_result_size(),
         )?;
         for (replica_id, replica) in instance.replicas_by_id.clone() {
             self.controller
                 .active_compute()
-                .add_replica_to_instance(instance.id, replica_id, replica.config)
+                .add_replica_to_instance(instance_id, replica_id, replica.config)
                 .await
                 .unwrap();
         }
@@ -889,13 +891,19 @@ impl<S: Append + 'static> Coordinator<S> {
         if !arranged_introspection_source_ids.is_empty() {
             self.initialize_compute_read_policies(
                 arranged_introspection_source_ids,
-                instance.id,
+                instance_id,
                 DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
             )
             .await;
         }
 
         if !persisted_introspection_source_ids.is_empty() {
+            self.initialize_compute_read_policies(
+                persisted_introspection_source_ids.clone(),
+                instance_id,
+                DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+            )
+            .await;
             self.initialize_storage_read_policies(
                 persisted_introspection_source_ids,
                 DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
@@ -1026,19 +1034,25 @@ impl<S: Append + 'static> Coordinator<S> {
         let instance_id = instance.id;
         let replica_id = instance.replica_id_by_name[&name];
 
+        self.controller
+            .active_compute()
+            .add_replica_to_instance(instance_id, replica_id, replica_concrete_config)
+            .await
+            .unwrap();
+
         if !log_source_ids.is_empty() {
+            self.initialize_compute_read_policies(
+                log_source_ids.clone(),
+                instance_id,
+                DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+            )
+            .await;
             self.initialize_storage_read_policies(
                 log_source_ids,
                 DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
             )
             .await;
         }
-
-        self.controller
-            .active_compute()
-            .add_replica_to_instance(instance_id, replica_id, replica_concrete_config)
-            .await
-            .unwrap();
 
         Ok(ExecuteResponse::CreatedComputeReplica)
     }
