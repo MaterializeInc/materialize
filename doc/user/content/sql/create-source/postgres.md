@@ -200,5 +200,4 @@ By default, sources are provisioned using the smallest size (`3xsmall`). For mor
 - `CREATE SECRET`
 - [`CREATE CONNECTION`](/sql/create-connection)
 - [`CREATE SOURCE`](../)
-- [`CREATE VIEWS`](../../create-views)
 - [Change Data Capture (Postgres) guide](/integrations/cdc-postgres/#direct-postgres-source)

@@ -53,7 +53,7 @@ interval, the next number in the sequence is emitted.
 
 The auction load generator simulates an auction house, where users are bidding
 on an ongoing series of auctions. The auction source is meant to be used
-with [`CREATE VIEWS`](/sql/create-views), which will create the following five
+with , which will create the following five
 views:
 
   * `organizations` describes the organizations known to the auction
@@ -187,7 +187,6 @@ By default, sources are provisioned using the smallest size (`3xsmall`). For mor
 ## Related pages
 
 - [`CREATE SOURCE`](../)
-- [`CREATE VIEWS`](/sql/create-views/)
 
 [`bigint`]: /sql/types/bigint
 [`text`]: /sql/types/text
