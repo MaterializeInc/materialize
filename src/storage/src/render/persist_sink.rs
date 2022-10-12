@@ -11,6 +11,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use differential_dataflow::{Collection, Hashable};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
@@ -21,6 +22,7 @@ use timely::dataflow::Scope;
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp as _;
 use timely::PartialOrder;
+use tracing::trace;
 
 use crate::storage_state::StorageState;
 
@@ -51,6 +53,8 @@ pub fn render<G>(
     // shard.
     let hashed_id = src_id.hashed();
     let active_write_worker = (hashed_id as usize) % scope.peers() == scope.index();
+
+    let activator = scope.activator_for(&persist_op.operator_info().address[..]);
 
     let mut input = persist_op.new_input(&source_data.inner, Exchange::new(move |_| hashed_id));
 
@@ -99,6 +103,18 @@ pub fn render<G>(
                     // frontier from advancing for the one active write worker.
                     continue;
                 }
+
+                // Make sure that our write handle lease does not expire!
+                write.maybe_heartbeat_writer().await;
+                trace!(
+                    "storage persist_sink {}/{}: writer heartbeating write handle",
+                    src_id,
+                    metadata.data_shard
+                );
+                // NOTE: We schedule ourselves to make sure that we keep
+                // heartbeating even in cases where there are no changes in our
+                // inputs (updates or frontier changes).
+                activator.activate_after(Duration::from_secs(60));
 
                 while let Some((_cap, data)) = input.next() {
                     data.swap(&mut buffer);
