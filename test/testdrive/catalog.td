@@ -657,6 +657,9 @@ mz_worker_compute_delays
 mz_worker_compute_delays_1
 mz_worker_compute_delays_2
 mz_worker_compute_delays_3
+mz_show_cluster_replicas
+mz_show_indexes
+mz_show_materialized_views
 
 > CREATE SCHEMA tester
 

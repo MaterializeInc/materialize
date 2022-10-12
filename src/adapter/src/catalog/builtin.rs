@@ -51,6 +51,7 @@ pub enum Builtin<T: 'static + TypeReference> {
     Type(&'static BuiltinType<T>),
     Func(BuiltinFunc),
     Source(&'static BuiltinSource),
+    Index(&'static BuiltinIndex),
 }
 
 impl<T: TypeReference> Builtin<T> {
@@ -62,6 +63,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::Type(typ) => typ.name,
             Builtin::Func(func) => func.name,
             Builtin::Source(coll) => coll.name,
+            Builtin::Index(index) => index.name,
         }
     }
 
@@ -73,6 +75,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::Type(typ) => typ.schema,
             Builtin::Func(func) => func.schema,
             Builtin::Source(coll) => coll.schema,
+            Builtin::Index(index) => index.schema,
         }
     }
 
@@ -84,6 +87,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::View(_) => CatalogItemType::View,
             Builtin::Type(_) => CatalogItemType::Type,
             Builtin::Func(_) => CatalogItemType::Func,
+            Builtin::Index(_) => CatalogItemType::Index,
         }
     }
 }
@@ -130,6 +134,12 @@ pub struct BuiltinFunc {
     pub inner: &'static mz_sql::func::Func,
 }
 
+pub struct BuiltinIndex {
+    pub name: &'static str,
+    pub schema: &'static str,
+    pub sql: &'static str,
+}
+
 #[derive(Clone, Debug)]
 pub struct BuiltinRole {
     /// Name of the builtin role.
@@ -168,6 +178,7 @@ impl<T: TypeReference> Fingerprint for &Builtin<T> {
             Builtin::Type(typ) => typ.fingerprint(),
             Builtin::Func(func) => func.fingerprint(),
             Builtin::Source(coll) => coll.fingerprint(),
+            Builtin::Index(index) => index.fingerprint(),
         }
     }
 }
@@ -205,6 +216,12 @@ impl Fingerprint for &BuiltinView {
 impl Fingerprint for &BuiltinSource {
     fn fingerprint(&self) -> String {
         self.desc.fingerprint()
+    }
+}
+
+impl Fingerprint for &BuiltinIndex {
+    fn fingerprint(&self) -> String {
+        self.sql.to_string()
     }
 }
 
@@ -2271,6 +2288,186 @@ FROM mz_catalog.mz_roles r
 JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
 };
 
+pub const MZ_SHOW_MATERIALIZED_VIEWS: BuiltinView = BuiltinView {
+    name: "mz_show_materialized_views",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_show_materialized_views
+AS SELECT mviews.name, clusters.name AS cluster, schema_id, cluster_id
+FROM mz_materialized_views AS mviews
+JOIN mz_clusters AS clusters ON clusters.id = mviews.cluster_id",
+};
+
+pub const MZ_SHOW_INDEXES: BuiltinView = BuiltinView {
+    name: "mz_show_indexes",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_show_indexes
+AS SELECT
+    idxs.name AS name,
+    objs.name AS on,
+    clusters.name AS cluster,
+    COALESCE(keys.key, '{}'::_text) AS key,
+    idxs.on_id AS on_id,
+    objs.schema_id AS schema_id,
+    clusters.id AS cluster_id
+FROM
+    mz_indexes AS idxs
+    JOIN mz_catalog.mz_objects AS objs ON idxs.on_id = objs.id
+    JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = idxs.cluster_id
+    LEFT JOIN
+        (SELECT
+            idxs.id,
+            ARRAY_AGG(
+                CASE
+                    WHEN idx_cols.on_expression IS NULL THEN obj_cols.name
+                    ELSE idx_cols.on_expression
+                END
+                ORDER BY idx_cols.index_position ASC
+            ) AS key
+        FROM
+            mz_indexes AS idxs
+            JOIN mz_index_columns idx_cols ON idxs.id = idx_cols.index_id
+            LEFT JOIN mz_columns obj_cols ON
+                idxs.on_id = obj_cols.id AND idx_cols.on_position = obj_cols.position
+        GROUP BY idxs.id) AS keys
+    ON idxs.id = keys.id
+WHERE idxs.on_id NOT LIKE 's%'",
+};
+
+pub const MZ_SHOW_CLUSTER_REPLICAS: BuiltinView = BuiltinView {
+    name: "mz_show_cluster_replicas",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: r#"CREATE VIEW mz_internal.mz_show_cluster_replicas
+AS SELECT
+    mz_catalog.mz_clusters.name AS cluster,
+    mz_catalog.mz_cluster_replicas.name AS replica
+FROM
+    mz_catalog.mz_cluster_replicas
+    JOIN mz_catalog.mz_clusters ON
+            mz_catalog.mz_cluster_replicas.cluster_id = mz_catalog.mz_clusters.id
+ORDER BY
+    1, 2"#,
+};
+
+pub const MZ_SHOW_DATABASES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_show_databases_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_show_databases_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_databases (name)",
+};
+
+pub const MZ_SHOW_SCHEMAS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_show_schemas_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_show_schemas_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_schemas (database_id)",
+};
+
+pub const MZ_SHOW_CONNECTIONS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_show_connections_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_show_connections_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_connections (schema_id)",
+};
+
+pub const MZ_SHOW_TABLES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_show_tables_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_show_tables_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_tables (schema_id)",
+};
+
+pub const MZ_SHOW_SOURCES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_show_sources_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_show_sources_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_sources (schema_id)",
+};
+
+pub const MZ_SHOW_VIEWS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_show_views_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_show_views_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_views (schema_id)",
+};
+
+pub const MZ_SHOW_MATERIALIZED_VIEWS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_show_materialized_views_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_show_materialized_views_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_show_materialized_views (schema_id, cluster_id)",
+};
+
+pub const MZ_SHOW_SINKS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_show_sinks_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_show_sinks_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_sinks (schema_id)",
+};
+
+pub const MZ_SHOW_TYPES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_show_types_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_show_types_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_types (schema_id)",
+};
+
+pub const MZ_SHOW_ALL_OBJECTS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_show_all_objects_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_show_all_objects_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_objects (schema_id)",
+};
+
+pub const MZ_SHOW_INDEXES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_show_indexes_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_show_indexes_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_show_indexes (on_id, schema_id, cluster_id)",
+};
+
+pub const MZ_SHOW_COLUMNS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_show_columns_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_show_columns_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_columns (id)",
+};
+
+pub const MZ_SHOW_CLUSTERS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_show_clusters_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_show_clusters_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_clusters (name)",
+};
+
+pub const MZ_SHOW_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_show_cluster_replicas_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_show_cluster_replicas_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_show_cluster_replicas (cluster, replica)",
+};
+
+pub const MZ_SHOW_SECRETS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_show_secrets_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_show_secrets_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_secrets (schema_id)",
+};
+
 pub static MZ_SYSTEM_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*SYSTEM_USER.name,
 });
@@ -2457,6 +2654,9 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_RECORDS_PER_DATAFLOW_GLOBAL),
         Builtin::View(&MZ_SCHEDULING_ELAPSED),
         Builtin::View(&MZ_SCHEDULING_PARKS),
+        Builtin::View(&MZ_SHOW_MATERIALIZED_VIEWS),
+        Builtin::View(&MZ_SHOW_INDEXES),
+        Builtin::View(&MZ_SHOW_CLUSTER_REPLICAS),
         Builtin::View(&PG_NAMESPACE),
         Builtin::View(&PG_CLASS),
         Builtin::View(&PG_DATABASE),
@@ -2487,6 +2687,21 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         // Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),
         Builtin::Source(&MZ_STORAGE_SHARDS),
         Builtin::View(&MZ_STORAGE_USAGE),
+        Builtin::Index(&MZ_SHOW_DATABASES_IND),
+        Builtin::Index(&MZ_SHOW_SCHEMAS_IND),
+        Builtin::Index(&MZ_SHOW_CONNECTIONS_IND),
+        Builtin::Index(&MZ_SHOW_TABLES_IND),
+        Builtin::Index(&MZ_SHOW_SOURCES_IND),
+        Builtin::Index(&MZ_SHOW_VIEWS_IND),
+        Builtin::Index(&MZ_SHOW_MATERIALIZED_VIEWS_IND),
+        Builtin::Index(&MZ_SHOW_SINKS_IND),
+        Builtin::Index(&MZ_SHOW_TYPES_IND),
+        Builtin::Index(&MZ_SHOW_ALL_OBJECTS_IND),
+        Builtin::Index(&MZ_SHOW_INDEXES_IND),
+        Builtin::Index(&MZ_SHOW_COLUMNS_IND),
+        Builtin::Index(&MZ_SHOW_CLUSTERS_IND),
+        Builtin::Index(&MZ_SHOW_CLUSTER_REPLICAS_IND),
+        Builtin::Index(&MZ_SHOW_SECRETS_IND),
     ]);
 
     builtins

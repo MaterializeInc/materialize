@@ -352,7 +352,7 @@ CREATE CLUSTER test REPLICAS (foo (SIZE '1'));
 query I
 SELECT COUNT(name) FROM mz_indexes;
 ----
-76
+91
 
 statement ok
 DROP CLUSTER test CASCADE
@@ -360,7 +360,7 @@ DROP CLUSTER test CASCADE
 query T
 SELECT COUNT(name) FROM mz_indexes;
 ----
-57
+72
 
 statement error nvalid SIZE: must provide a string value
 CREATE CLUSTER REPLICA default.size_1 SIZE;
