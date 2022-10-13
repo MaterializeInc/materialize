@@ -17,7 +17,6 @@
     clippy::cast_sign_loss
 )]
 
-use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
@@ -415,21 +414,21 @@ impl PersistClient {
         let gc = GarbageCollector::new(machine.clone());
 
         let reader_id = ReaderId::new();
+        let heartbeat_ts = (self.cfg.now)();
         let (_, read_cap) = machine
-            .register_reader(&reader_id, self.cfg.reader_lease_duration, (self.cfg.now)())
+            .register_reader(&reader_id, self.cfg.reader_lease_duration, heartbeat_ts)
             .await;
-        let reader = ReadHandle {
-            cfg: self.cfg.clone(),
-            metrics: Arc::clone(&self.metrics),
-            reader_id,
+        let reader = ReadHandle::new(
+            self.cfg.clone(),
+            Arc::clone(&self.metrics),
             machine,
             gc,
-            blob: Arc::clone(&self.blob),
-            since: read_cap.since,
-            last_heartbeat: (self.cfg.now)(),
-            explicitly_expired: false,
-            leased_seqnos: BTreeMap::new(),
-        };
+            Arc::clone(&self.blob),
+            reader_id,
+            read_cap.since,
+            heartbeat_ts,
+        )
+        .await;
 
         Ok(reader)
     }
@@ -471,22 +470,23 @@ impl PersistClient {
                 writer_id.clone(),
             )
         });
+        let heartbeat_ts = (self.cfg.now)();
         let (shard_upper, _) = machine
-            .register_writer(&writer_id, self.cfg.writer_lease_duration, (self.cfg.now)())
+            .register_writer(&writer_id, self.cfg.writer_lease_duration, heartbeat_ts)
             .await;
-        let writer = WriteHandle {
-            cfg: self.cfg.clone(),
-            metrics: Arc::clone(&self.metrics),
-            writer_id,
+        let writer = WriteHandle::new(
+            self.cfg.clone(),
+            Arc::clone(&self.metrics),
             machine,
             gc,
             compact,
-            blob: Arc::clone(&self.blob),
-            cpu_heavy_runtime: Arc::clone(&self.cpu_heavy_runtime),
-            upper: shard_upper.0,
-            last_heartbeat: (self.cfg.now)(),
-            explicitly_expired: false,
-        };
+            Arc::clone(&self.blob),
+            Arc::clone(&self.cpu_heavy_runtime),
+            writer_id,
+            shard_upper.0,
+            heartbeat_ts,
+        )
+        .await;
         Ok(writer)
     }
 
@@ -1406,7 +1406,7 @@ mod tests {
             .expect_open::<String, String, u64, i64>(shard_id)
             .await;
 
-        let (_, maintenance) = read
+        let (_, _, maintenance) = read
             .machine
             .heartbeat_reader(&read.reader_id, now.load(Ordering::SeqCst))
             .await;
@@ -1665,6 +1665,40 @@ mod tests {
 
         // Read the snapshot and check that it got all the appropriate data.
         assert_eq!(snap.await, all_ok(&data[..], 3));
+    }
+
+    #[tokio::test]
+    async fn heartbeat_task_shutdown() {
+        // Verify that the ReadHandle and WriteHandle background heartbeat tasks
+        // shut down cleanly after the handle is expired.
+        let mut cache = new_test_client_cache();
+        cache.cfg.reader_lease_duration = Duration::from_millis(1);
+        cache.cfg.writer_lease_duration = Duration::from_millis(1);
+        let (mut write, mut read) = cache
+            .open(PersistLocation {
+                blob_uri: "mem://".to_owned(),
+                consensus_uri: "mem://".to_owned(),
+            })
+            .await
+            .expect("client construction failed")
+            .expect_open::<(), (), u64, i64>(ShardId::new())
+            .await;
+        let read_heartbeat_task = read
+            .heartbeat_task
+            .take()
+            .expect("handle should have heartbeat task");
+        let write_heartbeat_task = write
+            .heartbeat_task
+            .take()
+            .expect("handle should have heartbeat task");
+        write.expire().await;
+        let () = write_heartbeat_task
+            .await
+            .expect("task should shutdown cleanly");
+        read.expire().await;
+        let () = read_heartbeat_task
+            .await
+            .expect("task should shutdown cleanly");
     }
 
     proptest! {

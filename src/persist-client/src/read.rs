@@ -19,17 +19,16 @@ use differential_dataflow::lattice::Lattice;
 use futures::Stream;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::RuntimeExt;
+use mz_persist::location::{Blob, SeqNo};
 use mz_persist::retry::Retry;
+use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
-use tracing::log::debug;
-use tracing::{debug_span, instrument, trace_span, warn, Instrument};
+use tokio::task::JoinHandle;
+use tracing::{debug, debug_span, instrument, trace_span, warn, Instrument};
 use uuid::Uuid;
-
-use mz_persist::location::{Blob, SeqNo};
-use mz_persist_types::{Codec, Codec64};
 
 use crate::fetch::{
     fetch_leased_part, BatchFetcher, LeasedBatchPart, SerdeLeasedBatchPartMetadata,
@@ -412,16 +411,17 @@ where
 {
     pub(crate) cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
-    pub(crate) reader_id: ReaderId,
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) gc: GarbageCollector<K, V, T, D>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
+    pub(crate) reader_id: ReaderId,
 
-    pub(crate) since: Antichain<T>,
-    pub(crate) last_heartbeat: EpochMillis,
-    pub(crate) explicitly_expired: bool,
+    since: Antichain<T>,
+    last_heartbeat: EpochMillis,
+    explicitly_expired: bool,
+    leased_seqnos: BTreeMap<SeqNo, usize>,
 
-    pub(crate) leased_seqnos: BTreeMap<SeqNo, usize>,
+    pub(crate) heartbeat_task: Option<JoinHandle<()>>,
 }
 
 impl<K, V, T, D> ReadHandle<K, V, T, D>
@@ -431,6 +431,31 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
+    pub(crate) async fn new(
+        cfg: PersistConfig,
+        metrics: Arc<Metrics>,
+        machine: Machine<K, V, T, D>,
+        gc: GarbageCollector<K, V, T, D>,
+        blob: Arc<dyn Blob + Send + Sync>,
+        reader_id: ReaderId,
+        since: Antichain<T>,
+        last_heartbeat: EpochMillis,
+    ) -> Self {
+        ReadHandle {
+            cfg,
+            metrics,
+            machine: machine.clone(),
+            gc,
+            blob,
+            reader_id: reader_id.clone(),
+            since,
+            last_heartbeat,
+            explicitly_expired: false,
+            leased_seqnos: BTreeMap::new(),
+            heartbeat_task: Some(machine.start_reader_heartbeat_task(reader_id).await),
+        }
+    }
+
     /// This handle's `since` frontier.
     ///
     /// This will always be greater or equal to the shard-global `since`.
@@ -628,18 +653,17 @@ where
         let read_cap = machine
             .clone_reader(&new_reader_id, self.cfg.reader_lease_duration, heartbeat_ts)
             .await;
-        let new_reader = ReadHandle {
-            cfg: self.cfg.clone(),
-            metrics: Arc::clone(&self.metrics),
-            reader_id: new_reader_id,
+        let new_reader = ReadHandle::new(
+            self.cfg.clone(),
+            Arc::clone(&self.metrics),
             machine,
-            gc: self.gc.clone(),
-            blob: Arc::clone(&self.blob),
-            since: read_cap.since,
-            last_heartbeat: heartbeat_ts,
-            explicitly_expired: false,
-            leased_seqnos: BTreeMap::new(),
-        };
+            self.gc.clone(),
+            Arc::clone(&self.blob),
+            new_reader_id,
+            read_cap.since,
+            heartbeat_ts,
+        )
+        .await;
         new_reader
     }
 
@@ -676,10 +700,16 @@ where
         let elapsed_since_last_heartbeat =
             Duration::from_millis(heartbeat_ts.saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
-            let (_, maintenance) = self
+            let (_, existed, maintenance) = self
                 .machine
                 .heartbeat_reader(&self.reader_id, heartbeat_ts)
                 .await;
+            if !existed {
+                panic!(
+                    "ReaderId({}) was expired due to inactivity. Did the machine go to sleep?",
+                    self.reader_id
+                )
+            }
             self.last_heartbeat = heartbeat_ts;
             maintenance.start_performing(&self.machine, &self.gc);
         }
@@ -784,6 +814,9 @@ where
     D: Semigroup + Codec64 + Send + Sync,
 {
     fn drop(&mut self) {
+        if let Some(heartbeat_task) = self.heartbeat_task.take() {
+            heartbeat_task.abort();
+        }
         if self.explicitly_expired {
             return;
         }

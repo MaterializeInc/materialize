@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
+use tokio::task::JoinHandle;
 use tracing::{debug, debug_span, info, instrument, warn, Instrument};
 use uuid::Uuid;
 
@@ -133,9 +134,12 @@ where
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
     pub(crate) cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
     pub(crate) writer_id: WriterId,
-    pub(crate) explicitly_expired: bool,
-    pub(crate) last_heartbeat: EpochMillis,
+
     pub(crate) upper: Antichain<T>,
+    pub(crate) last_heartbeat: EpochMillis,
+    explicitly_expired: bool,
+
+    pub(crate) heartbeat_task: Option<JoinHandle<()>>,
 }
 
 impl<K, V, T, D> WriteHandle<K, V, T, D>
@@ -145,6 +149,34 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
+    pub(crate) async fn new(
+        cfg: PersistConfig,
+        metrics: Arc<Metrics>,
+        machine: Machine<K, V, T, D>,
+        gc: GarbageCollector<K, V, T, D>,
+        compact: Option<Compactor<T, D>>,
+        blob: Arc<dyn Blob + Send + Sync>,
+        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+        writer_id: WriterId,
+        upper: Antichain<T>,
+        last_heartbeat: EpochMillis,
+    ) -> Self {
+        WriteHandle {
+            cfg,
+            metrics,
+            machine: machine.clone(),
+            gc,
+            compact,
+            blob,
+            cpu_heavy_runtime,
+            writer_id: writer_id.clone(),
+            upper,
+            last_heartbeat,
+            explicitly_expired: false,
+            heartbeat_task: Some(machine.start_writer_heartbeat_task(writer_id).await),
+        }
+    }
+
     /// A cached version of the shard-global `upper` frontier.
     ///
     /// This will always be less or equal to the shard-global `upper`.
@@ -614,10 +646,16 @@ where
         let elapsed_since_last_heartbeat =
             Duration::from_millis(heartbeat_ts.saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
-            let (_, maintenance) = self
+            let (_, existed, maintenance) = self
                 .machine
                 .heartbeat_writer(&self.writer_id, heartbeat_ts)
                 .await;
+            if !existed {
+                panic!(
+                    "WriterId({}) was expired due to inactivity. Did the machine go to sleep?",
+                    self.writer_id
+                )
+            }
             self.last_heartbeat = heartbeat_ts;
             maintenance.start_performing(&self.machine, &self.gc);
         }
@@ -723,6 +761,9 @@ where
     D: Semigroup + Codec64 + Send + Sync,
 {
     fn drop(&mut self) {
+        if let Some(heartbeat_task) = self.heartbeat_task.take() {
+            heartbeat_task.abort();
+        }
         if self.explicitly_expired {
             return;
         }
