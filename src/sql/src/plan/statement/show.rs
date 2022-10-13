@@ -500,7 +500,7 @@ pub fn show_indexes<'a>(
                     ) AS key
                 FROM
                     mz_indexes AS idxs
-                    JOIN mz_index_columns idx_cols ON idxs.id = idx_cols.index_id 
+                    JOIN mz_index_columns idx_cols ON idxs.id = idx_cols.index_id
                     LEFT JOIN mz_columns obj_cols ON
                         idxs.on_id = obj_cols.id AND idx_cols.on_position = obj_cols.position
                 GROUP BY idxs.id) AS keys
