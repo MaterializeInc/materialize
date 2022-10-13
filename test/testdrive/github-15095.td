@@ -18,3 +18,5 @@
   FROM mz_cluster_replicas r, mz_internal.mz_cluster_replica_heartbeats h
   WHERE r.id = h.replica_id AND r.name = 'r'
 1
+
+> DROP CLUSTER c CASCADE;

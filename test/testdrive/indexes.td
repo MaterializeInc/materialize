@@ -209,3 +209,5 @@ contains:unknown schema 'nonexistent'
 
 > SHOW INDEXES ON foo.bar
 bar_ind bar <VARIABLE_OUTPUT> {a}
+
+> DROP CLUSTER clstr CASCADE;
