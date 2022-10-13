@@ -52,13 +52,12 @@ To avoid creating multiple replication slots upstream and minimize the required 
 ```sql
 CREATE SOURCE mz_source
   FROM POSTGRES
-    CONNECTION pg_connection
-    (PUBLICATION 'mz_source')
+    CONNECTION pg_connection (PUBLICATION 'mz_source')
   FOR ALL TABLES
   WITH (SIZE '3xsmall');
 ```
 
-, Materialize will automatically create a **subsource** for each original table in the publication:
+Materialize will automatically create a **subsource** for each original table in the publication:
 
 ```sql
 SHOW SOURCES;
@@ -81,8 +80,7 @@ It's important to note that the schema metadata is captured when the source is i
 ```sql
 CREATE SOURCE mz_source
   FROM POSTGRES
-    CONNECTION pg_connection
-    (PUBLICATION 'mz_source')
+    CONNECTION pg_connection (PUBLICATION 'mz_source')
   FOR TABLES ( schema1.table_1 AS s1_table_1,
                schema2_table_1 AS s2_table_1 )
   WITH (SIZE '3xsmall');
@@ -149,10 +147,9 @@ CREATE CONNECTION pg_connection
 ```sql
 CREATE SOURCE mz_source
   FROM POSTGRES
-    CONNECTION pg_connection
-    (PUBLICATION 'mz_source')
+    CONNECTION pg_connection (PUBLICATION 'mz_source')
   FOR ALL TABLES
-  WITH ( SIZE = 'xsmall' );
+  WITH (SIZE = 'xsmall');
 ```
 
 ### Sizing a source
@@ -162,9 +159,8 @@ To provision a specific amount of CPU and memory to a source on creation, use th
 ```sql
 CREATE SOURCE mz_source
   FROM POSTGRES
-    CONNECTION pg_connection
-    (PUBLICATION 'mz_source')
-    WITH (SIZE = 'xsmall');
+    CONNECTION pg_connection (PUBLICATION 'mz_source')
+  WITH (SIZE = 'xsmall');
 ```
 
 To resize the source after creation:

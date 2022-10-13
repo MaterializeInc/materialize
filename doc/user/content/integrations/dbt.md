@@ -141,7 +141,8 @@ Create a [Kafka source](/sql/create-source/kafka/).
 {{ config(materialized='source') }}
 
 CREATE SOURCE IF NOT EXISTS {{ this }}
-  FROM KAFKA CONNECTION kafka_connection (TOPIC 'topic_a')
+  FROM KAFKA
+    CONNECTION kafka_connection (TOPIC 'topic_a')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   WITH (SIZE = '3xsmall')
 ```
@@ -155,8 +156,7 @@ Create a [PostgreSQL source](/sql/create-source/postgres/).
 
 CREATE SOURCE IF NOT EXISTS {{ this }}
   FROM POSTGRES
-    CONNECTION pg_connection
-    (PUBLICATION 'mz_source')
+    CONNECTION pg_connection (PUBLICATION 'mz_source')
     FOR ALL TABLES
     WITH (SIZE '3xsmall')
 ```

@@ -85,8 +85,7 @@ _Create subsources for all tables included in the Postgres publication_
 ```sql
 CREATE SOURCE mz_source
     FROM POSTGRES
-      CONNECTION pg_connection
-      (PUBLICATION 'mz_source')
+      CONNECTION pg_connection (PUBLICATION 'mz_source')
     FOR ALL TABLES
     WITH (SIZE '3xsmall');
 ```
@@ -96,8 +95,7 @@ _Create subsources for specific tables included in the Postgres publication_
 ```sql
 CREATE SOURCE mz_source
   FROM POSTGRES
-    CONNECTION pg_connection
-    (PUBLICATION 'mz_source')
+    CONNECTION pg_connection (PUBLICATION 'mz_source')
   FOR TABLES ( table_1,
                table_2 AS alias_table_2 )
   WITH (SIZE '3xsmall');
@@ -222,7 +220,8 @@ Debezium emits change events using an envelope that contains detailed informatio
 
 ```sql
 CREATE SOURCE kafka_repl
-    FROM KAFKA CONNECTION kafka_connection (TOPIC 'pg_repl.public.table1')
+    FROM KAFKA
+        CONNECTION kafka_connection (TOPIC 'pg_repl.public.table1')
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
     ENVELOPE DEBEZIUM;
 ```
@@ -239,8 +238,8 @@ Any materialized view defined on top of this source will be incrementally update
 
 ```sql
 CREATE MATERIALIZED VIEW cnt_table1 AS
-SELECT field1,
-       COUNT(*) AS cnt
-FROM kafka_repl
-GROUP BY field1;
+    SELECT field1,
+           COUNT(*) AS cnt
+    FROM kafka_repl
+    GROUP BY field1;
 ```
