@@ -11,7 +11,7 @@
 
 # The contents of the introspection tables depend on the replica size
 $ skip-if
-SELECT ${arg.replica-size} > 1
+SELECT ${arg.size} > 1
 
 # In case the environment has other replicas
 > SET cluster_replica = r1

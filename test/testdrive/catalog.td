@@ -493,7 +493,7 @@ mz_storage_usage
 
 # The sources in the catalog depend on the number of replicas and computeds
 $ skip-if
-SELECT ${arg.replicas} > 1 OR ${arg.replica-size} > 1;
+SELECT ${arg.replicas} > 1 OR ${arg.size} > 1;
 
 > SHOW SOURCES FROM mz_internal
 name                                           type   size

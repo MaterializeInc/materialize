@@ -334,11 +334,15 @@ a  b
 3  4
 1  2
 
+$ set-regex match=\d replacement=<SIZE>
+
 > SHOW SOURCES
 name     type    size
 ---------------------
-data     kafka   1
-mat_data kafka   1
+data     kafka   <SIZE>
+mat_data kafka   <SIZE>
+
+$ unset-regex
 
 # If there exists another index, dropping the primary index will not #
 # unmaterialize the source. This also tests creating a default index when the

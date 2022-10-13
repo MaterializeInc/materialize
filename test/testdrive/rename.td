@@ -162,17 +162,21 @@ renamed_sink
 # Clean up temp view
 > DROP VIEW public_objects;
 
+$ set-regex match=\d replacement=<SIZE>
+
 # Source was successfully renamed
 > SHOW SOURCES;
 name               type   size
 ------------------------------
-renamed_mz_data    kafka  1
+renamed_mz_data    kafka  <SIZE>
 
 # Sink was successfully renamed
 > SHOW SINKS
 name               type   size
 ------------------------------
-renamed_sink       kafka  1
+renamed_sink       kafka  <SIZE>
+
+$ set-regex match=u\d+|cluster1|default replacement=<VARIABLE_OUTPUT>
 
 # View was successfully renamed
 > SHOW VIEWS
