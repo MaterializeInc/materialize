@@ -100,6 +100,8 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 "--storage-stash-url=postgres://postgres@postgres.default?options=--search_path=storage",
                 "--internal-sql-listen-addr=0.0.0.0:6877",
                 "--unsafe-mode",
+                "--announce-egress-ip=1.2.3.4",
+                "--announce-egress-ip=88.77.66.55",
             ],
             env=env,
             ports=ports,
