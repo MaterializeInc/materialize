@@ -28,6 +28,8 @@ _src_name_  | The name for the source.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists. _Default._
 **CONNECTION** _connection_name_ | The name of the Postgres connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgres) documentation page.
 **PUBLICATION** _publication_name_ | Postgres [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) (the replication data set containing the tables to be streamed to Materialize).
+**FOR ALL TABLES** | Creates subsources for all tables in the publication.
+**FOR TABLES** _table_name_ | Creates subsources for specific tables in the publication.
 
 ### `WITH` options
 
@@ -45,70 +47,46 @@ For this reason, the upstream database must be configured to support logical rep
 
 #### Creating a source
 
-To avoid creating multiple replication slots upstream and minimize the required bandwidth, Materialize ingests the raw replication stream data for **all** tables included in a specific publication. This means that, when you define a source:
+To avoid creating multiple replication slots upstream and minimize the required bandwidth, Materialize ingests the raw replication stream data for **all** tables included in a specific publication. When you define a Postgres source:
 
 ```sql
 CREATE SOURCE mz_source
-FROM POSTGRES
-  CONNECTION pg_connection
-  (PUBLICATION 'mz_source');
+  FROM POSTGRES
+    CONNECTION pg_connection
+    (PUBLICATION 'mz_source')
+  FOR ALL TABLES
+  WITH (SIZE '3xsmall');
 ```
 
-, its schema looks like:
+, Materialize will automatically create a **subsource** for each original table in the publication:
 
 ```sql
-SHOW COLUMNS FROM mz_source;
-
-   name   | nullable |  type
-----------+----------+---------
- oid      | f        | integer
- row_data | f        | list
+SHOW SOURCES;
 ```
 
-where each row of every upstream table is represented as a single row with two columns:
-
-| Column | Description |
-|--------|-------------|
-| `oid`  | A unique identifier for the tables included in the publication. |
-| `row_data` | A text-encoded, variable length `list`. The number of text elements in a list is always equal to the number of columns in the upstream table. |
+```nofmt
+         name         |   type    |  size
+----------------------+-----------+---------
+ table_1              | subsource | 3xsmall
+ table_2              | subsource | 3xsmall
+ mz_source            | postgres  | 3xsmall
+```
 
 It's important to note that the schema metadata is captured when the source is initially created, and is validated against the upstream schema upon restart. If you wish to add additional tables to the original publication and use them in Materialize, the source must be dropped and recreated.
 
-#### Creating replication views
-
-From here, you can break down the source into views that reproduce the publication's original tables based on the `oid` identifier and convert the text elements in `row_data` to the original data types:
-
-_Create views for specific tables included in the Postgres publication_
-
-```sql
-CREATE VIEWS FROM SOURCE mz_source (table1, table2);
-```
-
-_Create views for all tables_
-
-```sql
-CREATE VIEWS FROM SOURCE mz_source;
-```
-
-Under the hood, Materialize parses this statement into view definitions for each table that can be used as a base for your materialized views.
-
 ##### Postgres schemas
 
-`CREATE VIEWS` will attempt to create each upstream table in the same schema as Postgres. For example, if the publication contains tables `public.foo` and `otherschema.foo`, `CREATE VIEWS` is the equivalent of:
+`CREATE SOURCE` will attempt to create each upstream table in the **current** schema. This may lead to naming collisions if, for example, you are replicating `schema1.table_1` and `schema2.table_1`. Use the `FOR TABLES` clause to provide aliases for each upstream table, in such cases, or to specify an alternative destination schema in Materialize.
 
 ```sql
-CREATE VIEW public.foo;
-
-CREATE VIEW otherschema.foo;
+CREATE SOURCE mz_source
+  FROM POSTGRES
+    CONNECTION pg_connection
+    (PUBLICATION 'mz_source')
+  FOR TABLES ( schema1.table_1 AS s1_table_1,
+               schema2_table_1 AS s2_table_1 )
+  WITH (SIZE '3xsmall');
 ```
-
-For `CREATE VIEWS` to succeed, either all upstream schemas included in the publication must exist in Materialize as well, or you must explicitly specify the downstream schemas and rename the resulting views:
-
-```sql
-CREATE VIEWS FROM SOURCE mz_source
-(public.foo AS foo, otherschema.foo AS foo2);
-```
-
 #### Creating materialized views
 
 As soon as you define a Postgres source, Materialize will:
@@ -117,7 +95,7 @@ As soon as you define a Postgres source, Materialize will:
 
 1. Perform an initial, snapshot-based sync of the tables in the publication before it starts ingesting change events.
 
-1. Incrementally update any materialized views that depend on the source as change events stream in, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original Postgres database.
+1. Incrementally update any materialized or indexed views that depend on the source as change events stream in, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original Postgres database.
 
 ##### Postgres replication slots
 
@@ -127,7 +105,7 @@ Each source ingests the raw replication stream data for all tables in the specif
 Make sure to delete any replication slots if you stop using Materialize, or if either the Materialize or Postgres instances crash.
 {{< /warning >}}
 
-If you stop Materialize or delete the materialized view without also dropping the source, the upstream replication slot will linger and continue to accumulate data so that the source can resume in the future. To avoid unbounded disk space usage, make sure to use [`DROP SOURCE`](/sql/drop-source/) or manually delete the replication slot (in case you have deleted the Materialize instance).
+If you delete all objects that depend on a source without also dropping the source, the upstream replication slot will linger and continue to accumulate data so that the source can resume in the future. To avoid unbounded disk space usage, make sure to use [`DROP SOURCE`](/sql/drop-source/) or manually delete the replication slot.
 
 For PostgreSQL 13+, it is recommended that you set a reasonable value for [`max_slot_wal_keep_size`](https://www.postgresql.org/docs/13/runtime-config-replication.html#GUC-MAX-SLOT-WAL-KEEP-SIZE) to limit the amount of storage used by replication slots.
 
@@ -139,7 +117,7 @@ Materialize does not support changes to schemas for existing publications, and w
 
 ##### Supported types
 
-Sources can only be created from publications that use [data types](/sql/types/) supported by Materialize. Attempts to create sources from publications which contain unsupported data types (like `enum` {{% gh 12689 %}}) will fail with an error.
+Sources can only be created from publications that use [data types](/sql/types/) supported by Materialize. Attempts to create sources from publications which contain tables with unsupported data types (like `enum` {{% gh 12689 %}}) will fail with an error.
 
 ##### Truncation
 
@@ -170,9 +148,11 @@ CREATE CONNECTION pg_connection
 
 ```sql
 CREATE SOURCE mz_source
-FROM POSTGRES
-  CONNECTION pg_connection
-  (PUBLICATION 'mz_source');
+  FROM POSTGRES
+    CONNECTION pg_connection
+    (PUBLICATION 'mz_source')
+  FOR ALL TABLES
+  WITH ( SIZE = 'xsmall' );
 ```
 
 ### Sizing a source
@@ -181,10 +161,10 @@ To provision a specific amount of CPU and memory to a source on creation, use th
 
 ```sql
 CREATE SOURCE mz_source
-FROM POSTGRES
-  CONNECTION pg_connection
-  (PUBLICATION 'mz_source')
-  WITH (SIZE = 'xsmall');
+  FROM POSTGRES
+    CONNECTION pg_connection
+    (PUBLICATION 'mz_source')
+    WITH (SIZE = 'xsmall');
 ```
 
 To resize the source after creation:
@@ -193,12 +173,11 @@ To resize the source after creation:
 ALTER SOURCE mz_source SET (SIZE = 'large');
 ```
 
-By default, sources are provisioned using the smallest size (`3xsmall`). For more details on sizing sources, check the [`CREATE SOURCE`](../) documentation page.
+The smallest source size (`3xsmall`) is a resonable default to get started. For more details on sizing sources, check the [`CREATE SOURCE`](../) documentation page.
 
 ## Related pages
 
-- `CREATE SECRET`
+- [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
 - [`CREATE SOURCE`](../)
-- [`CREATE VIEWS`](../../create-views)
 - [Change Data Capture (Postgres) guide](/integrations/cdc-postgres/#direct-postgres-source)

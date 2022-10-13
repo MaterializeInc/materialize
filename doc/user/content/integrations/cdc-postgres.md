@@ -78,42 +78,38 @@ As a _superuser_:
 
 Postgres sources ingest the raw replication stream data for all tables included in a publication to avoid creating multiple replication slots and minimize the required bandwidth.
 
-To create a source in Materialize:
+When you define a Postgres source, Materialize will automatically create a **subsource** for each original table in the publication (so you don't have to!):
+
+_Create subsources for all tables included in the Postgres publication_
 
 ```sql
 CREATE SOURCE mz_source
     FROM POSTGRES
       CONNECTION pg_connection
-      (PUBLICATION 'mz_source');
+      (PUBLICATION 'mz_source')
+    FOR ALL TABLES
+    WITH (SIZE '3xsmall');
+```
+
+_Create subsources for specific tables included in the Postgres publication_
+
+```sql
+CREATE SOURCE mz_source
+  FROM POSTGRES
+    CONNECTION pg_connection
+    (PUBLICATION 'mz_source')
+  FOR TABLES ( table_1,
+               table_2 AS alias_table_2 )
+  WITH (SIZE '3xsmall');
 ```
 
 {{< note >}}
 Materialize performs an initial sync of all tables in the publication before it starts ingesting change events.
 {{</ note >}}
 
-The next step is to break down this source into views that reproduce the publication’s original tables and can be used as a base for your materialized views.
-
-#### Create replication views
-
-Once you've created the Postgres source, you can create views that filter the replication stream and take care of converting its elements to the original data types:
-
-_Create views for specific tables included in the Postgres publication_
-
-```sql
-CREATE VIEWS FROM SOURCE mz_source (table1, table2);
-```
-
-_Create views for all tables_
-
-```sql
-CREATE VIEWS FROM SOURCE mz_source;
-```
-
-Under the hood, Materialize parses this statement into view definitions for each table (so you don't have to!).
-
 ### Create materialized views
 
-Any materialized view that depends on replication views will be incrementally updated as change events stream in, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original Postgres database.
+Any materialized view that depends on replication subsources will be incrementally updated as change events stream in, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original Postgres database.
 
 ```sql
 CREATE MATERIALIZED VIEW cnt_view1 AS
