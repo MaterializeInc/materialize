@@ -325,7 +325,8 @@ CREATE CONNECTION csr_ssl
 CREATE SOURCE avro_source
   FROM KAFKA
     CONNECTION kafka_connection (TOPIC 'test_topic')
-    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+    WITH (SIZE = '3xsmall');
 ```
 
 {{< /tab >}}
@@ -334,7 +335,8 @@ CREATE SOURCE avro_source
 ```sql
 CREATE SOURCE json_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  FORMAT BYTES;
+  FORMAT BYTES
+  WITH (SIZE = '3xsmall');
 ```
 
 
@@ -363,7 +365,8 @@ CREATE SOURCE proto_source
 CREATE SOURCE text_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT TEXT
-  ENVELOPE UPSERT;
+  ENVELOPE UPSERT
+  WITH (SIZE = '3xsmall');
 ```
 
 {{< /tab >}}
@@ -372,7 +375,8 @@ CREATE SOURCE text_source
 ```sql
 CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  FORMAT CSV WITH 3 COLUMNS;
+  FORMAT CSV WITH 3 COLUMNS
+  WITH (SIZE = '3xsmall');
 ```
 
 {{< /tab >}}
@@ -396,7 +400,7 @@ To resize the source after creation:
 ALTER SOURCE avro_source SET (SIZE = 'large');
 ```
 
-By default, sources are provisioned using the smallest size (`3xsmall`). For more details on sizing sources, check the [`CREATE SOURCE`](../) documentation page.
+The smallest source size (`3xsmall`) is a resonable default to get started. For more details on sizing sources, check the [`CREATE SOURCE`](../#sizing-a-source) documentation page.
 
 ## Related pages
 
