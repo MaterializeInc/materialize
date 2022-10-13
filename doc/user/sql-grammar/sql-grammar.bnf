@@ -5,6 +5,8 @@ alter_index ::=
   'ALTER' 'INDEX' name 'SET' 'ENABLED'
 alter_secret ::=
   'ALTER' 'SECRET' 'IF EXISTS'? name AS value
+alter_sink ::=
+  'ALTER' 'SINK' 'IF EXISTS'? name 'SET' '(' 'SIZE' value ')'
 alter_source ::=
   'ALTER' 'SOURCE' 'IF EXISTS'? name 'SET' '(' 'SIZE' value ')'
 array_agg ::=
@@ -47,8 +49,8 @@ create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
 create_index ::=
     'CREATE' (
-        'INDEX' index_name 'ON' obj_name ('IN' 'CLUSTER' cluster_name)? ('USING' method)? '(' ( ( col_expr ) ( ( ',' col_expr ) )* ) ')'
-        | 'DEFAULT INDEX ON' obj_name ('IN' 'CLUSTER' cluster_name)? ('USING' method)?
+        'INDEX' index_name ('IN' 'CLUSTER' cluster_name)? 'ON' obj_name ('USING' method)? '(' ( ( col_expr ) ( ( ',' col_expr ) )* ) ')'
+        | 'DEFAULT INDEX' ('IN' 'CLUSTER' cluster_name)? 'ON' obj_name ('USING' method)?
     )
 create_materialized_view ::=
   'CREATE' 'MATERIALIZED VIEW' 'IF NOT EXISTS'?
@@ -95,6 +97,7 @@ create_source_load_generator ::=
   ('(' (col_name) ( ( ',' col_name ) )*)?
   'FROM LOAD GENERATOR' ('AUCTION' | 'COUNTER')
   ('(' (load_generator_option) ( ( ',' load_generator_option ) )* ')')?
+  ('FOR ALL TABLES' | 'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')')
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 load_generator_option ::=
     'TICK INTERVAL' interval
@@ -102,6 +105,7 @@ create_source_postgres ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   'FROM' 'POSTGRES' 'CONNECTION' connection_name
   '(' 'PUBLICATION' publication_name ')'
+  ('FOR ALL TABLES' | 'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')')
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_source_s3 ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name

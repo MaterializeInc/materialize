@@ -140,15 +140,6 @@ You can find the topic name and other metadata for each Kafka sink by querying [
 
 To achieve its exactly-once processing guarantees, Materialize needs to store some internal metadata in an additional *progress topic*. This topic is shared among all sinks that use a particular Kafka connection. The name of this progress topic can be specified when [creating a connection](/sql/create-connection); otherwise, a default is chosen based on the Materialize environment `id` and the connection `id`. In either case, Materialize will attempt to create the topic if it does not exist. The contents of this topic are not user-specified.
 
-## Best practices
-
-### Sizing a sink
-
-Some sinks are low traffic and require relatively few resources, while others
-are high traffic and require hefty resource allocations. You choose the amount
-of CPU and memory available to a sink using the `SIZE` option. You cannot yet
-change the size of a sink after creation.
-
 ## Examples
 
 ### Avro sinks
@@ -206,6 +197,26 @@ JOIN mz_kafka_sinks USING (id);
  u5        | materialize.public.quotes_sink       | quotes
  u6        | materialize.public.frank_quotes_sink | frank-quotes
 ```
+
+#### Sizing a sink
+
+To provision a specific amount of CPU and memory to a sink on creation, use the `SIZE` option:
+
+```sql
+CREATE SINK snk FROM src
+INTO KAFKA CONNECTION kafka_connection (TOPIC 'snk')
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+ENVELOPE DEBEZIUM
+WITH (SIZE = 'xsmall');
+```
+
+To resize the sink after creation:
+
+```sql
+ALTER SINK snk SET (SIZE = 'large');
+```
+
+The smallest sink size (`3xsmall`) is a resonable default to get started.
 
 ### JSON sinks
 

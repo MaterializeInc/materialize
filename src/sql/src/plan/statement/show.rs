@@ -118,6 +118,12 @@ pub fn plan_show_create_table(
     ShowCreateTableStatement { table_name }: ShowCreateTableStatement<Aug>,
 ) -> Result<SendRowsPlan, PlanError> {
     let table = scx.get_item_by_resolved_name(&table_name)?;
+    if table.id().is_system() {
+        sql_bail!(
+            "cannot show create for system object {}",
+            table_name.full_name_str()
+        );
+    }
     if let CatalogItemType::Table = table.item_type() {
         let name = table_name.full_name_str();
         let create_sql = simplify_names(scx.catalog, table.create_sql())?;
@@ -148,6 +154,12 @@ pub fn plan_show_create_source(
     ShowCreateSourceStatement { source_name }: ShowCreateSourceStatement<Aug>,
 ) -> Result<SendRowsPlan, PlanError> {
     let source = scx.get_item_by_resolved_name(&source_name)?;
+    if source.id().is_system() {
+        sql_bail!(
+            "cannot show create for system object {}",
+            source_name.full_name_str()
+        );
+    }
     if let CatalogItemType::Source = source.item_type() {
         let name = source_name.full_name_str();
         let create_sql = simplify_names(scx.catalog, source.create_sql())?;
