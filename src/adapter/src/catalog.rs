@@ -3508,6 +3508,15 @@ impl<S: Append> Catalog<S> {
 
                     let entry = state.get_entry(&id);
                     let name = entry.name().clone();
+
+                    if entry.id().is_system() {
+                        let name = state
+                            .resolve_full_name(&name, session.map(|session| session.conn_id()));
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReadOnlySystemSchema(name.to_string()),
+                        )));
+                    }
+
                     let old_sink = match entry.item() {
                         CatalogItem::Sink(sink) => sink.clone(),
                         other => {
@@ -3603,6 +3612,15 @@ impl<S: Append> Catalog<S> {
 
                     let entry = state.get_entry(&id);
                     let name = entry.name().clone();
+
+                    if entry.id().is_system() {
+                        let name = state
+                            .resolve_full_name(&name, session.map(|session| session.conn_id()));
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReadOnlySystemSchema(name.to_string()),
+                        )));
+                    }
+
                     let old_source = match entry.item() {
                         CatalogItem::Source(source) => source.clone(),
                         other => {
@@ -3955,6 +3973,8 @@ impl<S: Append> Catalog<S> {
                             )));
                         }
                         if let ResolvedDatabaseSpecifier::Ambient = name.qualifiers.database_spec {
+                            let name = state
+                                .resolve_full_name(&name, session.map(|session| session.conn_id()));
                             return Err(AdapterError::Catalog(Error::new(
                                 ErrorKind::ReadOnlySystemSchema(name.to_string()),
                             )));
@@ -4206,6 +4226,16 @@ impl<S: Append> Catalog<S> {
                         return Err(AdapterError::Catalog(Error::new(ErrorKind::TypeRename(
                             current_full_name.to_string(),
                         ))));
+                    }
+
+                    if entry.id().is_system() {
+                        let name = state.resolve_full_name(
+                            entry.name(),
+                            session.map(|session| session.conn_id()),
+                        );
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReadOnlySystemSchema(name.to_string()),
+                        )));
                     }
 
                     let mut to_full_name = current_full_name.clone();
