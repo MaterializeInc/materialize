@@ -567,6 +567,7 @@ mz_scheduling_parks_internal                    log   <null>
 mz_scheduling_parks_internal_1                  log   <null>
 mz_scheduling_parks_internal_2                  log   <null>
 mz_scheduling_parks_internal_3                  log   <null>
+mz_source_status_history                        source <null>
 mz_storage_shards                               source <null>
 mz_worker_compute_frontiers                     log   <null>
 mz_worker_compute_frontiers_1                   log   <null>
