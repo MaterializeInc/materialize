@@ -114,8 +114,8 @@ second:
 
 ```sql
 CREATE SOURCE counter
-FROM LOAD GENERATOR COUNTER
-WITH (SIZE '3xsmall');
+  FROM LOAD GENERATOR COUNTER
+  WITH (SIZE '3xsmall');
 ```
 
 To examine the counter:
@@ -138,9 +138,9 @@ To create the load generator source and its associated views:
 
 ```sql
 CREATE SOURCE auction_house
-    FROM LOAD GENERATOR AUCTION
-    FOR ALL TABLES
-    WITH (SIZE '3xsmall');
+  FROM LOAD GENERATOR AUCTION
+  FOR ALL TABLES
+  WITH (SIZE '3xsmall');
 ```
 
 To display the created subsources:
@@ -178,8 +178,9 @@ SELECT * from bids;
 To provision a specific amount of CPU and memory to a source on creation, use the `SIZE` option:
 
 ```sql
-CREATE SOURCE auction_load FROM LOAD GENERATOR AUCTION
-WITH (SIZE = 'xsmall');
+CREATE SOURCE auction_load
+  FROM LOAD GENERATOR AUCTION
+  WITH (SIZE = 'xsmall');
 ```
 
 To resize the source after creation:

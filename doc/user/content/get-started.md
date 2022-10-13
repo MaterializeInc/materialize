@@ -48,14 +48,14 @@ We'll start with some real-time data produced by Materialize's built-in [load ge
 
     ```sql
     CREATE SOURCE auction_house
-    FROM LOAD GENERATOR AUCTION
-    FOR ALL TABLES
-    WITH (SIZE '3xsmall');
+        FROM LOAD GENERATOR AUCTION
+        FOR ALL TABLES
+        WITH (SIZE '3xsmall');
     ```
 
     The `CREATE SOURCE` statement is a definition of where to find and how to connect to a data source. Submitting the statement will prompt Materialize to start ingesting data into durable storage.
 
-1. The `auction_house` source will be automatically demuxed into multiple subsources, each representing a different data stream fed by the load generator:
+1. The `auction_house` source will be automatically demuxed into multiple subsources, each representing a different data stream populated by the load generator:
 
     ```nofmt
          name      |      type      |  size
@@ -86,17 +86,17 @@ The first thing we might want to do with our data is find all the _on-time bids_
 
     ```sql
     CREATE VIEW on_time_bids AS
-    SELECT bids.id AS bid_id,
-           auctions.id   AS auction_id,
-           auctions.seller,
-           bids.buyer,
-           auctions.item,
-           bids.bid_time,
-           auctions.end_time,
-           bids.amount
-    FROM bids
-    JOIN auctions ON bids.auction_id = auctions.id
-    WHERE bids.bid_time < auctions.end_time;
+        SELECT bids.id AS bid_id,
+               auctions.id   AS auction_id,
+               auctions.seller,
+               bids.buyer,
+               auctions.item,
+               bids.bid_time,
+               auctions.end_time,
+               bids.amount
+        FROM bids
+        JOIN auctions ON bids.auction_id = auctions.id
+        WHERE bids.bid_time < auctions.end_time;
     ```
 
 1. To see the results:
@@ -123,10 +123,10 @@ The first thing we might want to do with our data is find all the _on-time bids_
 
     ```sql
     CREATE VIEW avg_bids AS
-    SELECT auction_id,
-           avg(amount) AS amount
-    FROM on_time_bids
-    GROUP BY auction_id;
+        SELECT auction_id,
+               avg(amount) AS amount
+        FROM on_time_bids
+        GROUP BY auction_id;
     ```
 
     One thing to note here is that we created a [non-materialized view](/overview/key-concepts/#non-materialized-views), which doesn't store the results of the query but simply provides an alias for the embedded `SELECT` statement. The results of a view can be incrementally maintained **in memory** within a
@@ -156,20 +156,20 @@ So far, we've built our auction house strictly using [views](/sql/create-view). 
 
     ```sql
     CREATE VIEW highest_bid_per_auction AS
-    SELECT grp.auction_id,
-           bid_id,
-           buyer,
-           seller,
-           item,
-           amount,
-           bid_time,
-           end_time
-    FROM
-    (SELECT DISTINCT auction_id FROM on_time_bids) grp,
-    LATERAL (
-        SELECT * FROM on_time_bids
-        WHERE auction_id = grp.auction_id
-        ORDER BY amount DESC LIMIT 1
+        SELECT grp.auction_id,
+               bid_id,
+               buyer,
+               seller,
+               item,
+               amount,
+               bid_time,
+               end_time
+        FROM
+        (SELECT DISTINCT auction_id FROM on_time_bids) grp,
+        LATERAL (
+            SELECT * FROM on_time_bids
+            WHERE auction_id = grp.auction_id
+            ORDER BY amount DESC LIMIT 1
     );
     ```
 
@@ -183,8 +183,8 @@ In Materialize, [temporal filters](/sql/patterns/temporal-filters/) allow you to
 
     ```sql
     CREATE MATERIALIZED VIEW winning_bids AS
-    SELECT * FROM highest_bid_per_auction
-    WHERE end_time < mz_now();
+        SELECT * FROM highest_bid_per_auction
+        WHERE end_time < mz_now();
     ```
 
     The `mz_now()` function is used to keep track of the logical time that your query executes (similar to `now()` in other systems, as explained more in-depth in ["now and mz_now functions"](/sql/functions/now_and_mz_now/)). As time advances, only the records that satisfy the time constraint are used in the materialized view.
