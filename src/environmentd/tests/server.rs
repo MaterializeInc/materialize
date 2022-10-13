@@ -171,6 +171,7 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         server.inner.http_local_addr()
     ))?;
 
+    #[derive(Debug)]
     struct TestCaseSimple {
         query: &'static str,
         status: StatusCode,
@@ -367,6 +368,21 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
             query: "subscribe (select * from t)",
             status: StatusCode::BAD_REQUEST,
             body: r#"unsupported via this API: SUBSCRIBE (SELECT * FROM t)"#,
+        },
+        TestCaseSimple {
+            query: "copy (select 1) to stdout",
+            status: StatusCode::BAD_REQUEST,
+            body: r#"unsupported via this API: COPY (SELECT 1) TO STDOUT"#,
+        },
+        TestCaseSimple {
+            query: "EXPLAIN SELECT 1",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[["%0 =\n| Constant (1)\n"]],"col_names":["Optimized Plan"],"notices":[]}]}"#,
+        },
+        TestCaseSimple {
+            query: "SHOW VIEWS",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[["v"]],"col_names":["name"],"notices":[]}]}"#,
         },
     ];
 

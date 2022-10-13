@@ -19,7 +19,7 @@ use mz_adapter::{ExecuteResponse, ExecuteResponseKind, PeekResponseUnary, Sessio
 use mz_pgwire::Severity;
 use mz_repr::{Datum, RowArena};
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{Raw, Statement};
+use mz_sql::ast::{Raw, Statement, StatementKind};
 use mz_sql::plan::Plan;
 
 use crate::http::AuthedClient;
@@ -141,31 +141,31 @@ async fn execute_request(
     // This API prohibits executing statements with responses whose
     // semantics are at odds with an HTTP response.
     fn check_prohibited_stmts(stmt: &Statement<Raw>) -> Result<(), anyhow::Error> {
-        let execute_responses = Plan::generated_from(stmt.into())
+        let kind: StatementKind = stmt.into();
+        let execute_responses = Plan::generated_from(kind)
             .into_iter()
             .map(ExecuteResponse::generated_from)
             .flatten()
             .collect::<Vec<_>>();
 
         if execute_responses.iter().any(|execute_response| {
-            matches!(
-                execute_response,
+            // Returns true if a statement or execute response are unsupported.
+            match execute_response {
                 ExecuteResponseKind::Fetch
-                    | ExecuteResponseKind::Subscribing
-                    | ExecuteResponseKind::CopyTo
-                    | ExecuteResponseKind::CopyFrom
-                    | ExecuteResponseKind::DeclaredCursor
-                    | ExecuteResponseKind::ClosedCursor
-            )
-        }) && !matches!(
-            stmt,
-            // Both `SelectStatement` and `CopyStatement` generate
-            // `PeekPlan`, but `SELECT` should be permitted and `COPY` not.
-            Statement::Select(mz_sql::ast::SelectStatement { query: _, as_of: _ })
-        ) {
+                | ExecuteResponseKind::Subscribing
+                | ExecuteResponseKind::CopyFrom
+                | ExecuteResponseKind::DeclaredCursor
+                | ExecuteResponseKind::ClosedCursor => true,
+                // Various statements generate `PeekPlan` (`SELECT`, `COPY`,
+                // `EXPLAIN`, `SHOW`) which has both `SendRows` and `CopyTo` as its
+                // possible response types. but `COPY` needs be picked out because
+                // http don't support its response type
+                ExecuteResponseKind::CopyTo if matches!(kind, StatementKind::Copy) => true,
+                _ => false,
+            }
+        }) {
             anyhow::bail!("unsupported via this API: {}", stmt.to_ast_string());
         }
-
         Ok(())
     }
 
