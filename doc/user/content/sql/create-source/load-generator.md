@@ -30,6 +30,8 @@ _src_name_  | The name for the source.
 **AUCTION** | Use the [auction](#auction) load generator.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists.
 **TICK INTERVAL**  | The interval at which the next datum should be emitted. Defaults to one second.
+**FOR ALL TABLES** | Creates subsources for all tables in the load generator.
+**FOR TABLES** _table_name_ | Creates subsources for specific tables in the load generator.
 
 ### `WITH` options
 
@@ -52,9 +54,9 @@ interval, the next number in the sequence is emitted.
 ### Auction
 
 The auction load generator simulates an auction house, where users are bidding
-on an ongoing series of auctions. The auction source is meant to be used
-with [`CREATE VIEWS`](/sql/create-views), which will create the following five
-views:
+on an ongoing series of auctions. The auction source will be automatically demuxed
+into multiple subsources when the `CREATE SOURCE` command is executed. This will
+create the following subsources:
 
   * `organizations` describes the organizations known to the auction
     house.
@@ -99,7 +101,7 @@ views:
     `amount`     | [`bigint`]                   | The bid amount in dollars.
     `bid_time`   | [`timestamp with time zone`] | The time at which the bid was placed.
 
-The organizations, users, and accounts are fixed at the time the auction source
+The organizations, users, and accounts are fixed at the time the source
 is created. Each tick interval, either a new auction is started, or a new bid
 is placed in the currently ongoing auction.
 
@@ -111,7 +113,9 @@ To create a load generator source that emits the next number in the sequence eve
 second:
 
 ```sql
-CREATE SOURCE counter FROM LOAD GENERATOR COUNTER;
+CREATE SOURCE counter
+  FROM LOAD GENERATOR COUNTER
+  WITH (SIZE = '3xsmall');
 ```
 
 To examine the counter:
@@ -133,24 +137,26 @@ SELECT * FROM counter;
 To create the load generator source and its associated views:
 
 ```sql
-CREATE SOURCE auction_load FROM LOAD GENERATOR AUCTION;
-CREATE VIEWS FROM SOURCE auction_load;
+CREATE SOURCE auction_house
+  FROM LOAD GENERATOR AUCTION
+  FOR ALL TABLES
+  WITH (SIZE = '3xsmall');
 ```
 
-To display the created views:
+To display the created subsources:
 
 ```sql
-SHOW VIEWS;
+SHOW SOURCES;
 ```
 ```nofmt
-     name
----------------
- accounts
- auctions
- bids
- organizations
- users
-(5 rows)
+     name      |      type      |  size
+---------------+----------------+---------
+ accounts      | subsource      | 3xsmall
+ auction_house | load-generator | 3xsmall
+ auctions      | subsource      | 3xsmall
+ bids          | subsource      | 3xsmall
+ organizations | subsource      | 3xsmall
+ users         | subsource      | 3xsmall
 ```
 
 To examine the simulated bids:
@@ -172,8 +178,9 @@ SELECT * from bids;
 To provision a specific amount of CPU and memory to a source on creation, use the `SIZE` option:
 
 ```sql
-CREATE SOURCE auction_load FROM LOAD GENERATOR AUCTION
-WITH (SIZE = 'xsmall');
+CREATE SOURCE auction_load
+  FROM LOAD GENERATOR AUCTION
+  WITH (SIZE = '3xsmall');
 ```
 
 To resize the source after creation:
@@ -182,12 +189,11 @@ To resize the source after creation:
 ALTER SOURCE auction_load SET (SIZE = 'large');
 ```
 
-By default, sources are provisioned using the smallest size (`3xsmall`). For more details on sizing sources, check the [`CREATE SOURCE`](../) documentation page.
+The smallest source size (`3xsmall`) is a resonable default to get started. For more details on sizing sources, check the [`CREATE SOURCE`](../) documentation page.
 
 ## Related pages
 
 - [`CREATE SOURCE`](../)
-- [`CREATE VIEWS`](/sql/create-views/)
 
 [`bigint`]: /sql/types/bigint
 [`text`]: /sql/types/text
