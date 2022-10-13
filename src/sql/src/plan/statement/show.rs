@@ -148,17 +148,22 @@ pub fn plan_show_create_source(
     ShowCreateSourceStatement { source_name }: ShowCreateSourceStatement<Aug>,
 ) -> Result<SendRowsPlan, PlanError> {
     let source = scx.get_item_by_resolved_name(&source_name)?;
+    let full_name = source_name.full_name_str();
+
     if let CatalogItemType::Source = source.item_type() {
-        let name = source_name.full_name_str();
+        if source.id().is_system() {
+            sql_bail!("{full_name} is a system source");
+        }
+
         let create_sql = simplify_names(scx.catalog, source.create_sql())?;
         Ok(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
-                Datum::String(&name),
+                Datum::String(&full_name),
                 Datum::String(&create_sql),
             ])],
         })
     } else {
-        sql_bail!("{} is not a source", source_name.full_name_str());
+        sql_bail!("{full_name} is not a source");
     }
 }
 
