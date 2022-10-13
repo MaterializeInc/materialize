@@ -138,6 +138,13 @@ SHOW TABLES FROM foo.bar
 Show(ShowObjects(ShowObjectsStatement { object_type: Table, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: None, filter: None }))
 
 parse-statement
+SHOW TABLES IN CLUSTER baz
+----
+error: Expected end of statement, found IN
+SHOW TABLES IN CLUSTER baz
+            ^
+
+parse-statement
 SHOW SINKS
 ----
 SHOW SINKS
@@ -154,9 +161,9 @@ Show(ShowObjects(ShowObjectsStatement { object_type: Sink, from: Some(Unresolved
 parse-statement
 SHOW SINKS FROM foo.bar IN CLUSTER baz
 ----
+error: Expected end of statement, found IN
 SHOW SINKS FROM foo.bar IN CLUSTER baz
-=>
-Show(ShowObjects(ShowObjectsStatement { object_type: Sink, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: Some(Unresolved(Ident("baz"))), filter: None }))
+                        ^
 
 parse-statement
 SHOW TABLES LIKE '%foo%'

@@ -4597,27 +4597,17 @@ impl<'a> Parser<'a> {
                 _ => unreachable!(),
             };
 
-            let (from, in_cluster) = match self.parse_one_of_keywords(&[FROM, IN]) {
-                Some(kw) => {
-                    if kw == IN && self.peek_keyword(CLUSTER) {
-                        if matches!(object_type, ObjectType::MaterializedView) {
-                            // put `IN` back
-                            self.prev_token();
-                            (None, self.parse_optional_in_cluster()?)
-                        } else {
-                            return parser_err!(
-                                self,
-                                self.peek_pos(),
-                                "expected object name, found 'cluster'"
-                            );
-                        }
-                    } else {
-                        let from = self.parse_schema_name()?;
-                        let in_cluster = self.parse_optional_in_cluster()?;
-                        (Some(from), in_cluster)
-                    }
-                }
-                None => (None, None),
+            let from = if self.parse_keywords(&[FROM]) {
+                Some(self.parse_schema_name()?)
+            } else {
+                None
+            };
+
+            // Only Materialized Views and Indexes (handled separately below) are associated with clusters.
+            let in_cluster = if matches!(object_type, ObjectType::MaterializedView) {
+                self.parse_optional_in_cluster()?
+            } else {
+                None
             };
 
             Ok(ShowStatement::ShowObjects(ShowObjectsStatement {
