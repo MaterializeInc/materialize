@@ -87,7 +87,7 @@ CREATE SOURCE mz_source
     FROM POSTGRES
       CONNECTION pg_connection (PUBLICATION 'mz_source')
     FOR ALL TABLES
-    WITH (SIZE '3xsmall');
+    WITH (SIZE = '3xsmall');
 ```
 
 _Create subsources for specific tables included in the Postgres publication_
@@ -96,9 +96,8 @@ _Create subsources for specific tables included in the Postgres publication_
 CREATE SOURCE mz_source
   FROM POSTGRES
     CONNECTION pg_connection (PUBLICATION 'mz_source')
-  FOR TABLES ( table_1,
-               table_2 AS alias_table_2 )
-  WITH (SIZE '3xsmall');
+  FOR TABLES (table_1, table_2 AS alias_table_2)
+  WITH (SIZE = '3xsmall');
 ```
 
 {{< note >}}

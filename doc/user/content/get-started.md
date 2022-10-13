@@ -50,12 +50,12 @@ We'll start with some real-time data produced by Materialize's built-in [load ge
     CREATE SOURCE auction_house
         FROM LOAD GENERATOR AUCTION
         FOR ALL TABLES
-        WITH (SIZE '3xsmall');
+        WITH (SIZE = '3xsmall');
     ```
 
     The `CREATE SOURCE` statement is a definition of where to find and how to connect to a data source. Submitting the statement will prompt Materialize to start ingesting data into durable storage.
 
-1. The `auction_house` source will be automatically demuxed into multiple subsources, each representing a different data stream populated by the load generator:
+1. The `auction_house` source will be automatically demuxed into multiple subsources, each representing a different underlying table populated by the load generator:
 
     ```nofmt
          name      |      type      |  size
@@ -210,7 +210,7 @@ In Materialize, [temporal filters](/sql/patterns/temporal-filters/) allow you to
 1. Add an additional replica to the `auction_house` cluster:
 
     ```sql
-    CREATE CLUSTER REPLICA auction_house.bigger SIZE 'bigger';
+    CREATE CLUSTER REPLICA auction_house.bigger SIZE 'small';
     ```
 
 1. To simulate a failure, drop the `xsmall_replica`:

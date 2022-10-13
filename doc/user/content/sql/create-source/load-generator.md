@@ -30,8 +30,8 @@ _src_name_  | The name for the source.
 **AUCTION** | Use the [auction](#auction) load generator.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists.
 **TICK INTERVAL**  | The interval at which the next datum should be emitted. Defaults to one second.
-**FOR ALL TABLES** | Creates subsources for all data sources in the load generator.
-**FOR TABLES** _table_name_ | Creates subsources for specific data sources in the load generator.
+**FOR ALL TABLES** | Creates subsources for all tables in the load generator.
+**FOR TABLES** _table_name_ | Creates subsources for specific tables in the load generator.
 
 ### `WITH` options
 
@@ -115,7 +115,7 @@ second:
 ```sql
 CREATE SOURCE counter
   FROM LOAD GENERATOR COUNTER
-  WITH (SIZE '3xsmall');
+  WITH (SIZE = '3xsmall');
 ```
 
 To examine the counter:
@@ -140,7 +140,7 @@ To create the load generator source and its associated views:
 CREATE SOURCE auction_house
   FROM LOAD GENERATOR AUCTION
   FOR ALL TABLES
-  WITH (SIZE '3xsmall');
+  WITH (SIZE = '3xsmall');
 ```
 
 To display the created subsources:
@@ -180,7 +180,7 @@ To provision a specific amount of CPU and memory to a source on creation, use th
 ```sql
 CREATE SOURCE auction_load
   FROM LOAD GENERATOR AUCTION
-  WITH (SIZE = 'xsmall');
+  WITH (SIZE = '3xsmall');
 ```
 
 To resize the source after creation:
