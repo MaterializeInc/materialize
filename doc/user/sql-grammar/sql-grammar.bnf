@@ -47,8 +47,8 @@ create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
 create_index ::=
     'CREATE' (
-        'INDEX' index_name 'ON' obj_name ('IN' 'CLUSTER' cluster_name)? ('USING' method)? '(' ( ( col_expr ) ( ( ',' col_expr ) )* ) ')'
-        | 'DEFAULT INDEX ON' obj_name ('IN' 'CLUSTER' cluster_name)? ('USING' method)?
+        'INDEX' index_name ('IN' 'CLUSTER' cluster_name)? 'ON' obj_name ('USING' method)? '(' ( ( col_expr ) ( ( ',' col_expr ) )* ) ')'
+        | 'DEFAULT INDEX' ('IN' 'CLUSTER' cluster_name)? 'ON' obj_name ('USING' method)?
     )
 create_materialized_view ::=
   'CREATE' 'MATERIALIZED VIEW' 'IF NOT EXISTS'?
