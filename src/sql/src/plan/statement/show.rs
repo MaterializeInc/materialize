@@ -483,27 +483,28 @@ pub fn show_indexes<'a>(
             idxs.name AS name,
             objs.name AS on,
             clusters.name AS cluster,
-            (SELECT
-                COALESCE(
+            COALESCE(keys.key, '{{}}'::_text) AS key
+        FROM
+            mz_indexes AS idxs
+            JOIN mz_catalog.mz_objects AS objs ON idxs.on_id = objs.id
+            JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = idxs.cluster_id
+            LEFT JOIN
+                (SELECT
+                    idxs.id,
                     ARRAY_AGG(
                         CASE
                             WHEN idx_cols.on_expression IS NULL THEN obj_cols.name
                             ELSE idx_cols.on_expression
                         END
                         ORDER BY idx_cols.index_position ASC
-                    ),
-                    '{{}}'::_text
-                )
-            FROM
-                mz_catalog.mz_index_columns AS idx_cols
-                LEFT JOIN mz_catalog.mz_columns AS obj_cols
-                    ON idx_cols.on_position = obj_cols.position
-            WHERE idxs.id = idx_cols.index_id AND (idxs.on_id = obj_cols.id OR obj_cols.id IS NULL)
-            ) AS key
-        FROM
-            mz_catalog.mz_indexes AS idxs
-            JOIN mz_catalog.mz_objects AS objs ON idxs.on_id = objs.id
-            JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = idxs.cluster_id
+                    ) AS key
+                FROM
+                    mz_indexes AS idxs
+                    JOIN mz_index_columns idx_cols ON idxs.id = idx_cols.index_id 
+                    LEFT JOIN mz_columns obj_cols ON
+                        idxs.on_id = obj_cols.id AND idx_cols.on_position = obj_cols.position
+                GROUP BY idxs.id) AS keys
+            ON idxs.id = keys.id
         WHERE
             {}",
         itertools::join(query_filter.iter(), " AND ")
