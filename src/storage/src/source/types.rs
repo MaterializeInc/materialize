@@ -109,6 +109,13 @@ pub trait SourceReader {
         loop {
             match self.get_next_message() {
                 Ok(NextMessage::Ready(msg)) => {
+                    if let SourceMessageType::InProgress(msg) = &msg {
+                        // delay so that we write this message all the way to persist, as its
+                        // own batch
+                        if msg.offset.offset == 0 {
+                            tokio::time::sleep(std::time::Duration::from_secs(5)).await
+                        }
+                    }
                     if let SourceMessageType::Finalized(msg) = &msg {
                         // delay a little for the final message at 2, to make the repro more clear
                         if msg.offset.offset >= 2 {

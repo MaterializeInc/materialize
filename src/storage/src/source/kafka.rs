@@ -75,6 +75,9 @@ pub struct KafkaSourceReader {
     partition_metrics: KafkaPartitionMetrics,
     /// Whether or not to unpack and allocate headers and pass them through in the `SourceMessage`
     include_headers: bool,
+
+    /// whether to delay get_next_message
+    delay: bool,
 }
 
 pub struct KafkaOffsetCommiter {
@@ -84,6 +87,7 @@ pub struct KafkaOffsetCommiter {
     consumer: Arc<BaseConsumer<GlueConsumerContext>>,
 }
 
+#[async_trait::async_trait(?Send)]
 impl SourceReader for KafkaSourceReader {
     type Key = Option<Vec<u8>>;
     type Value = Option<Vec<u8>>;
@@ -212,6 +216,7 @@ impl SourceReader for KafkaSourceReader {
                     topic.clone(),
                     source_id,
                 ),
+                delay: false,
             },
             KafkaOffsetCommiter {
                 source_id,
@@ -299,6 +304,49 @@ impl SourceReader for KafkaSourceReader {
         }
 
         Ok(next_message)
+    }
+
+    async fn next(
+        &mut self,
+        timestamp_granularity: Duration,
+    ) -> Option<Result<SourceMessageType<Self::Key, Self::Value, Self::Diff>, SourceReaderError>>
+    {
+        if self.delay {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            self.delay = false;
+        }
+        // Compatiblity implementation that delegates to the deprecated [Self::get_next_method]
+        // call. Once all source implementations have been transitioned to implement
+        // [SourceReader::next] directly this provided implementation should be removed and the
+        // method should become a required method.
+        loop {
+            match self.get_next_message() {
+                Ok(NextMessage::Ready(msg)) => {
+                    if let SourceMessageType::InProgress(msg) = &msg {
+                        // delay after so that we write this message all the way to persist, as its
+                        // own batch
+                        if msg.offset.offset == 0 {
+                            self.delay = true;
+                        }
+                    }
+                    if let SourceMessageType::Finalized(msg) = &msg {
+                        // delay a little for the final message at 2, to make the repro more clear
+                        if msg.offset.offset >= 2 {
+                            tokio::time::sleep(std::time::Duration::from_secs(2)).await
+                        }
+                    }
+                    return Some(Ok(msg));
+                }
+                Err(err) => return Some(Err(err)),
+                // There was a temporary hiccup in getting messages, check again asap.
+                Ok(NextMessage::TransientDelay) => {
+                    tokio::time::sleep(Duration::from_millis(1)).await
+                }
+                // There were no new messages, check again after a delay
+                Ok(NextMessage::Pending) => tokio::time::sleep(timestamp_granularity).await,
+                Ok(NextMessage::Finished) => return None,
+            }
+        }
     }
 }
 
@@ -583,15 +631,32 @@ impl KafkaSourceReader {
         } else {
             *last_offset_ref = offset_as_i64;
 
-            // Fake multi-message offset by assigning 2 to everything past
-            // 1
-            if message.offset.offset < 2 {
-                NextMessage::Ready(SourceMessageType::Finalized(message))
-            } else if message.offset.offset > 2 {
-                message.offset = MzOffset::from(2);
-                NextMessage::Ready(SourceMessageType::Finalized(message))
-            } else {
-                NextMessage::Ready(SourceMessageType::InProgress(message))
+            // Fake multi-message offset by assigning:
+            // 0 -> 0 (final)
+            // 1 -> 0
+            // 2 -> 1 (final)
+            // 3 -> 2
+            // 4 -> 2 (final)
+
+            match message.offset.offset {
+                0 => NextMessage::Ready(SourceMessageType::InProgress(message)),
+                1 => {
+                    message.offset = MzOffset::from(0);
+                    NextMessage::Ready(SourceMessageType::Finalized(message))
+                }
+                2 => {
+                    message.offset = MzOffset::from(1);
+                    NextMessage::Ready(SourceMessageType::Finalized(message))
+                }
+                3 => {
+                    message.offset = MzOffset::from(2);
+                    NextMessage::Ready(SourceMessageType::InProgress(message))
+                }
+                4 => {
+                    message.offset = MzOffset::from(2);
+                    NextMessage::Ready(SourceMessageType::Finalized(message))
+                }
+                _ => unreachable!(),
             }
         }
     }

@@ -15,15 +15,16 @@
 $ kafka-create-topic topic=topic partitions=1
 
 $ kafka-ingest format=bytes topic=topic
-one
-two
-three
-four
+offset-0-1
+offset-0-2
+offset-1
+offset-2
+offset-3
 
 > CREATE CONNECTION conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
 
-> CREATE SOURCE avroavro
+> CREATE SOURCE topic
   FROM KAFKA CONNECTION conn (TOPIC
   'testdrive-topic-${testdrive.seed}'
   )
@@ -31,10 +32,11 @@ four
   INCLUDE OFFSET
   ENVELOPE NONE
 
-> SELECT * from avroavro
-data    offset
------------------------------------
-one     0
-two     1
-three   2
-four    2
+> SET TRANSACTION_ISOLATION = 'SERIALIZABLE';
+
+# *** DATA LOSS ***
+# A query returns with only 1 part of the data from an offset
+> SELECT * from topic
+data           offset
+---------------------
+offset-0-1     0

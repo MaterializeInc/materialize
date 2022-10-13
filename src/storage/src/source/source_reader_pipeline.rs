@@ -406,14 +406,14 @@ where
                 _ = emission_interval.tick() => {
 
                     if let Some(actual_messages) = untimestamped_messages.get(&PartitionId::Kafka(0)) {
-                        // ensure that we get
-                        // 3 messages, from 0, 1, 2, where 2 is not finalized
-                        // in the same batch.
-                        //
-                        // These offsets will map to distinct times.
-                        //
-                        // The final message for 2 will be in its own batch.
-                        if actual_messages.len() < 3 && source_upper.get(&PartitionId::Kafka(0)).unwrap().offset < 3{
+
+                        // this is a hacky way to ensure we end up with 3 distinct batches:
+                        // 1. the first `InProgress` offset 0 message
+                        // 2. the final offset 0 message, the single offset 1 message, and the
+                        // first `InProgress` offset 2 message
+                        // 3. the final offset 2 message
+                        if (actual_messages.len() < 3 && source_upper.get(&PartitionId::Kafka(0)).map_or(0, |m| m.offset) < 3)
+                            && !source_upper.get(&PartitionId::Kafka(0)).is_none(){
                             continue;
                         }
                     }
@@ -1017,6 +1017,19 @@ where
                     }
                 });
 
+                if global_source_upper
+                    .get(&PartitionId::Kafka(0))
+                    .copied()
+                    .map(|m| m.offset)
+                    == Some(3)
+                {
+                    // We sleep here to ensure that we don't happen to panic (which is
+                    // directly triggered by the next downgrade causing the core 0,1,2 batch
+                    // to be reclockable), before the `persist_sink` processes up to
+                    // `source_upper` 2
+                    println!("delaying to let message at offset 0 through");
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                }
                 let remap_trace_updates = timestamper.mint(&global_source_upper).await;
 
                 timestamper.advance().await;
@@ -1167,6 +1180,9 @@ where
 
                     for (pid, offset) in batch.source_upper.iter() {
                         source_upper_updates.push((*cap.time(), (pid.clone(), *offset)));
+                    }
+                    if batch.messages.len() > 0 {
+                        println!("new batch: {:?}", batch);
                     }
                     untimestamped_batches.push_back(batch)
                 }
@@ -1323,8 +1339,8 @@ where
             // they match.
 
             /* UH OH */
-            // NOTE that WHEN this happens for offset 1, we effectively CLOSE offset 0, which, if
-            // there was a previous batch of messages for offset 0, would be persisted and closed.
+            // NOTE that WHEN this happens for offset 1, we effectively CLOSE offset 0, which,
+            // because there is a previous batch with offset 0, it will be persisted and closed.
             //
             // This is what I believe to be happening when we see negative sums for postgres
             // sources. It also requires that _reclocking of offset 2_ happens AFTER we persist
@@ -1332,8 +1348,8 @@ where
             // those messages can already be written to s3, and the only thing that is required
             // to happen to finalize them is a single `compare_and_append`...
             //
-            // This repro does not attempt to adjust timelines to show that bad data can be
-            // persisted, but _could_ be added, by adding additional message at offset 0.
+            // This repro does adjust timelines to show that bad data can be
+            // persisted.
             if let Ok(new_ts_upper) = timestamper.reclock_frontier(&global_source_upper) {
                 let ts = new_ts_upper.as_option().cloned().unwrap_or(Timestamp::MAX);
 
