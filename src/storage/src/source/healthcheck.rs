@@ -227,8 +227,8 @@ impl Healthchecker {
                 .expect("status collection should not have errors");
             let row_vec = row.unpack();
             let row_source_id = row_vec[2].unwrap_str();
-            let row_worker_id = row_vec[5].unwrap_int64();
-            let row_status = row_vec[7].unwrap_str();
+            let row_worker_id = row_vec[3].unwrap_int64();
+            let row_status = row_vec[5].unwrap_str();
 
             if self.source_id.to_string() == row_source_id
                 && self.worker_id == row_worker_id as usize
@@ -556,7 +556,7 @@ mod tests {
             .await
             .into_iter()
             .find_map(|row| {
-                let error = row.unpack()[8];
+                let error = row.unpack()[6];
                 if !error.is_null() {
                     Some(error.unwrap_str().to_string())
                 } else {
