@@ -143,6 +143,7 @@ Create a [Kafka source](/sql/create-source/kafka/).
 CREATE SOURCE IF NOT EXISTS {{ this }}
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'topic_a')
   FORMAT TEXT
+  WITH (SIZE = '3xsmall')
 ```
 
 {{< /tab >}} {{< tab "PostgreSQL">}}
@@ -150,13 +151,12 @@ Create a [PostgreSQL source](/sql/create-source/postgres/).
 
 **Filename:** sources/postgres.sql
 ```sql
-{{ config(materialized='source',
-    post_hook="CREATE VIEWS FROM SOURCE {{ this }} (
-                table_a as {{ this.database }}.{{ this.schema }}.table_a,
-                table_b as {{ this.database }}.{{ this.schema }}.table_b, ...)") }}
+{{ config(materialized='source') }}
 
 CREATE SOURCE IF NOT EXISTS {{ this }}
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
+  FOR TABLES (postgres_table_a, postgres_table_b)
+  WITH (SIZE = '3xsmall')
 ```
 
 The [pre-hook](https://docs.getdbt.com/reference/resource-configs/pre-hook-post-hook) defined above is used to create the replication views that reproduce the publication's original tables.
@@ -226,11 +226,10 @@ Here, the model depends on the view defined above, and is referenced as such via
 
 ### Configuration
 
-`source`, `view`, and `materialized view` materializations accept the following additional configuration options.
 
 #### Clusters
 
-Use the [cluster](/sql/create-cluster/) option to specify the cluster in which the materialization is created. If unspecified, the default cluster for the connection is used.
+Use the [cluster](/sql/create-cluster/) option to specify the cluster in which a `materialized view` is created. If unspecified, the default cluster for the connection is used.
 
 ```sql
 {{ config(materialized='materializedview', cluster='cluster_a') }}
@@ -238,7 +237,7 @@ Use the [cluster](/sql/create-cluster/) option to specify the cluster in which t
 
 #### Indexes
 
-Use the indexes option to define a list of [indexes](/sql/create-index/) on a materialization. Each Materialize index can have the following components:
+Use the indexes option to define a list of [indexes](/sql/create-index/) on `source`, `view`, or `materialized view` materializations. Each Materialize index can have the following components:
 
 Component                            | Value     | Description
 -------------------------------------|-----------|--------------------------------------------------
