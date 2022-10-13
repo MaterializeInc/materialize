@@ -12,18 +12,20 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::Stream;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::RuntimeExt;
+use mz_persist::retry::Retry;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
-use tracing::{debug_span, instrument, warn, Instrument};
+use tracing::log::debug;
+use tracing::{debug_span, instrument, trace_span, warn, Instrument};
 use uuid::Uuid;
 
 use mz_persist::location::{Blob, SeqNo};
@@ -33,7 +35,7 @@ use crate::fetch::{
     fetch_leased_part, BatchFetcher, LeasedBatchPart, SerdeLeasedBatchPartMetadata,
 };
 use crate::internal::machine::Machine;
-use crate::internal::metrics::Metrics;
+use crate::internal::metrics::{Metrics, MetricsRetryStream};
 use crate::internal::state::{HollowBatch, Since};
 use crate::{parse_id, GarbageCollector, PersistConfig};
 
@@ -235,12 +237,7 @@ where
     /// The returned `Antichain` represents the subscription progress as it will
     /// be _after_ the returned parts are fetched.
     pub async fn next_parts(&mut self) -> (Vec<LeasedBatchPart<T>>, Antichain<T>) {
-        // We might also want to call maybe_heartbeat_reader in the
-        // `next_listen_batch` loop so that we can heartbeat even when batches
-        // aren't incoming. At the moment, the ownership would be weird and we
-        // should always have batches incoming regularly, so maybe it isn't
-        // actually necessary.
-        let batch = self.handle.machine.next_listen_batch(&self.frontier).await;
+        let batch = self.handle.next_listen_batch(&self.frontier).await;
 
         // A lot of things across mz have to line up to hold the following
         // invariant and violations only show up as subtle correctness errors,
@@ -700,6 +697,47 @@ where
     pub async fn expire(mut self) {
         self.machine.expire_reader(&self.reader_id).await;
         self.explicitly_expired = true;
+    }
+
+    async fn next_listen_batch(&mut self, frontier: &Antichain<T>) -> HollowBatch<T> {
+        let mut retry: Option<MetricsRetryStream> = None;
+        loop {
+            if let Some(b) = self.machine.next_listen_batch(frontier) {
+                return b;
+            }
+            // Only sleep after the first fetch, because the first time through
+            // maybe our state was just out of date.
+            retry = Some(match retry.take() {
+                None => self
+                    .metrics
+                    .retries
+                    .next_listen_batch
+                    .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream()),
+                Some(retry) => {
+                    // Wait a bit and try again. Intentionally don't ever log
+                    // this at info level.
+                    //
+                    // TODO: See if we can watch for changes in Consensus to be
+                    // more reactive here.
+                    debug!(
+                        "next_listen_batch didn't find new data, retrying in {:?}",
+                        retry.next_sleep()
+                    );
+                    let retry = retry.sleep().instrument(trace_span!("listen::sleep")).await;
+
+                    // There might be some holdup in the next batch being
+                    // produced. Perhaps we've quiesced a table or maybe a
+                    // dataflow is taking a long time to start up because it has
+                    // to read a lot of data. Heartbeat ourself so we don't
+                    // accidentally lose our lease while we wait for things to
+                    // resume.
+                    self.maybe_heartbeat_reader().await;
+
+                    retry
+                }
+            });
+            self.machine.fetch_and_update_state().await;
+        }
     }
 
     /// Test helper for a [Self::listen] call that is expected to succeed.
