@@ -776,11 +776,22 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::tests::new_test_client;
-    use crate::ReaderId;
+    use mz_build_info::DUMMY_BUILD_INFO;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_ore::now::SYSTEM_TIME;
+    use mz_persist::location::Consensus;
+    use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
+    use mz_persist::unreliable::{UnreliableConsensus, UnreliableHandle};
     use serde::{Deserialize, Serialize};
     use serde_json::json;
     use std::str::FromStr;
+
+    use crate::async_runtime::CpuHeavyRuntime;
+    use crate::internal::metrics::Metrics;
+    use crate::tests::{all_ok, new_test_client};
+    use crate::{PersistClient, PersistConfig, ShardId};
+
+    use super::*;
 
     // Verifies `Subscribe` can be dropped while holding snapshot batches.
     #[tokio::test]
@@ -979,25 +990,6 @@ mod tests {
         let container: Container = serde_json::from_value(json).expect("deserializable");
         assert_eq!(container.reader_id, id);
     }
-}
-
-// WIP the way skip_consensus_fetch_optimization works is pretty fundamentally
-// incompatible with maintaining a lease
-#[cfg(test)]
-#[cfg(WIP)]
-mod tests {
-    use mz_ore::metrics::MetricsRegistry;
-    use mz_ore::now::SYSTEM_TIME;
-    use mz_persist::location::Consensus;
-    use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
-    use mz_persist::unreliable::{UnreliableConsensus, UnreliableHandle};
-    use timely::ExchangeData;
-
-    use crate::internal::metrics::Metrics;
-    use crate::tests::all_ok;
-    use crate::{PersistClient, PersistConfig};
-
-    use super::*;
 
     // Verifies performance optimizations where a Listener doesn't fetch the
     // latest Consensus state if the one it currently has can serve the next
@@ -1011,20 +1003,21 @@ mod tests {
             (("2".to_owned(), "two".to_owned()), 2, 1),
         ];
 
+        let cfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
         let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
         let consensus = Arc::new(MemConsensus::default());
         let unreliable = UnreliableHandle::default();
         unreliable.totally_available();
         let consensus = Arc::new(UnreliableConsensus::new(consensus, unreliable.clone()))
             as Arc<dyn Consensus + Send + Sync>;
-        let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+        let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
         let (mut write, mut read) = PersistClient::new(
-            PersistConfig::new(SYSTEM_TIME.clone()),
+            cfg,
             blob,
             consensus,
             metrics,
+            Arc::new(CpuHeavyRuntime::new()),
         )
-        .await
         .expect("client construction failed")
         .expect_open::<String, String, u64, i64>(ShardId::new())
         .await;
@@ -1033,7 +1026,7 @@ mod tests {
         write.expect_compare_and_append(&data[1..2], 1, 2).await;
         write.expect_compare_and_append(&data[2..3], 2, 3).await;
 
-        let mut snapshot = read.expect_snapshot_and_fetch(2).await;
+        let snapshot = read.expect_snapshot_and_fetch(2).await;
         let mut listen = read.expect_listen(0).await;
 
         // Manually advance the listener's machine so that it has the latest
