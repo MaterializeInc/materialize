@@ -1,0 +1,24 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for the bytea type.
+
+mode cockroach
+
+query error cannot show create for system object mz_internal.mz_dataflow_channels
+SHOW CREATE SOURCE mz_internal.mz_dataflow_channels
+
+query error cannot show create for system object mz_internal.mz_dataflow_channels_1
+SHOW CREATE SOURCE mz_internal.mz_dataflow_channels_1
+
+query error cannot show create for system object mz_internal.mz_storage_shards
+SHOW CREATE SOURCE mz_internal.mz_storage_shards
+
+query error cannot show create for system object mz_catalog.mz_tables
+SHOW CREATE TABLE mz_tables
