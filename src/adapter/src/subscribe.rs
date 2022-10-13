@@ -12,7 +12,6 @@
 use tokio::sync::mpsc;
 
 use mz_compute_client::response::{SubscribeBatch, SubscribeResponse};
-use mz_repr::adt::numeric;
 use mz_repr::{Datum, Row};
 
 use crate::coord::peek::PeekResponseUnary;
@@ -66,8 +65,7 @@ impl PendingSubscribe {
                     .into_iter()
                     .map(|(time, row, diff)| {
                         let mut packer = row_buf.packer();
-                        // TODO: Change to MzTimestamp.
-                        packer.push(Datum::from(numeric::Numeric::from(time)));
+                        packer.push(Datum::from(time));
                         if self.emit_progress {
                             // When sinking with PROGRESS, the output
                             // includes an additional column that
@@ -99,7 +97,7 @@ impl PendingSubscribe {
                         "SUBSCRIBE only supports single-dimensional timestamps"
                     );
                     let mut packer = row_buf.packer();
-                    packer.push(Datum::from(numeric::Numeric::from(upper[0])));
+                    packer.push(Datum::from(upper[0]));
                     packer.push(Datum::True);
                     // Fill in the diff column and all table columns with NULL.
                     for _ in 0..(self.arity + 1) {

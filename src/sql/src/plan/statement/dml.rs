@@ -18,7 +18,6 @@ use std::collections::{HashMap, HashSet};
 use mz_expr::MirRelationExpr;
 use mz_ore::collections::CollectionExt;
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
-use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain_new::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
 
@@ -537,13 +536,8 @@ pub fn describe_subscribe(
     };
     let SubscribeOptionExtracted { progress, .. } = stmt.options.try_into()?;
     let progress = progress.unwrap_or(false);
-    let mut desc = RelationDesc::empty().with_column(
-        "mz_timestamp",
-        ScalarType::Numeric {
-            max_scale: Some(NumericMaxScale::ZERO),
-        }
-        .nullable(false),
-    );
+    let mut desc =
+        RelationDesc::empty().with_column("mz_timestamp", ScalarType::MzTimestamp.nullable(false));
     if progress {
         desc = desc.with_column("mz_progressed", ScalarType::Bool.nullable(false));
     }
