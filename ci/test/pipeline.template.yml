@@ -538,8 +538,9 @@ steps:
     artifact_paths: junit_cloudtest_*.xml
     inputs: [test/cloudtest]
     plugins:
+      - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
-          args: [-m, "not long", test/cloudtest/]
+          args: [-m, "not long", --aws-region=us-east-2, test/cloudtest/]
 
   - id: checks-restart-redpanda
     label: "Checks + restart Redpanda"

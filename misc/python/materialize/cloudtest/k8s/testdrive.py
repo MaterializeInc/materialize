@@ -7,23 +7,37 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import os
 import subprocess
 from typing import Optional
 
-from kubernetes.client import V1Container, V1ObjectMeta, V1Pod, V1PodSpec
+from kubernetes.client import V1Container, V1EnvVar, V1ObjectMeta, V1Pod, V1PodSpec
 
 from materialize.cloudtest.k8s import K8sPod
 from materialize.cloudtest.wait import wait
 
 
 class Testdrive(K8sPod):
-    def __init__(self, release_mode: bool) -> None:
+    def __init__(self, release_mode: bool, aws_region: Optional[str] = None) -> None:
+        self.aws_region = aws_region
+
         metadata = V1ObjectMeta(name="testdrive")
+
+        # Pass through AWS credentials from the host
+        env = [
+            V1EnvVar(name=var, value=os.environ.get(var))
+            for var in [
+                "AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY",
+                "AWS_SESSION_TOKEN",
+            ]
+        ]
 
         container = V1Container(
             name="testdrive",
             image=self.image("testdrive", release_mode=release_mode),
             command=["sleep", "infinity"],
+            env=env,
         )
 
         pod_spec = V1PodSpec(containers=[container])
@@ -52,11 +66,13 @@ class Testdrive(K8sPod):
                 "--kafka-addr=redpanda:9092",
                 "--schema-registry-url=http://redpanda:8081",
                 "--default-timeout=300s",
-                "--aws-endpoint=http://minio-service.default:9000",
-                "--aws-access-key-id=minio",
-                "--aws-secret-access-key=minio123",
                 "--var=replicas=1",
                 "--var=size=1",
+                *([f"--aws-region={self.aws_region}"] if self.aws_region else []),
+                # S3 sources are not compatible with Minio unfortunately
+                # "--aws-endpoint=http://minio-service.default:9000",
+                # "--aws-access-key-id=minio",
+                # "--aws-secret-access-key=minio123",
                 *(["--no-reset"] if no_reset else []),
                 *([f"--seed={seed}"] if seed else []),
                 *args,
