@@ -19,7 +19,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
 use timely::progress::{Antichain, Timestamp};
-use tracing::{debug, info, trace_span, Instrument};
+use tracing::{debug, info};
 
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
@@ -446,35 +446,8 @@ where
         }
     }
 
-    pub async fn next_listen_batch(&mut self, frontier: &Antichain<T>) -> HollowBatch<T> {
-        let mut retry: Option<MetricsRetryStream> = None;
-        loop {
-            if let Some(b) = self.state.next_listen_batch(frontier) {
-                return b;
-            }
-            // Only sleep after the first fetch, because the first time through
-            // maybe our state was just out of date.
-            retry = Some(match retry.take() {
-                None => self
-                    .metrics
-                    .retries
-                    .next_listen_batch
-                    .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream()),
-                Some(retry) => {
-                    // Wait a bit and try again. Intentionally don't ever log
-                    // this at info level.
-                    //
-                    // TODO: See if we can watch for changes in Consensus to be
-                    // more reactive here.
-                    debug!(
-                        "next_listen_batch didn't find new data, retrying in {:?}",
-                        retry.next_sleep()
-                    );
-                    retry.sleep().instrument(trace_span!("listen::sleep")).await
-                }
-            });
-            self.fetch_and_update_state().await;
-        }
+    pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Option<HollowBatch<T>> {
+        self.state.next_listen_batch(frontier)
     }
 
     async fn apply_unbatched_idempotent_cmd<
