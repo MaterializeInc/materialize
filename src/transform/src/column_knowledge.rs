@@ -485,14 +485,12 @@ pub fn optimize(
                     DatumKnowledge::from(&*e)
                 }
                 MirScalarExpr::CallVariadic { func: _, exprs } => {
-                    let mut knows = Vec::new();
-                    // We pop as many elements as the number of arguments of the CallVariadic.
-                    for _ in exprs {
-                        knows.push(knowledge_stack.pop().unwrap());
-                    }
-                    // Note that `any` is short-circuiting, so it has to be done separately from the
-                    // above popping.
-                    if knows.iter().any(|k| k.value.is_some()) {
+                    // Drain the last `exprs.len()` knowledge, and reduce if any is `Some(_)`.
+                    assert!(knowledge_stack.len() >= exprs.len());
+                    if knowledge_stack
+                        .drain(knowledge_stack.len() - exprs.len()..)
+                        .any(|k| k.value.is_some())
+                    {
                         e.reduce(column_types);
                     }
                     DatumKnowledge::from(&*e)
