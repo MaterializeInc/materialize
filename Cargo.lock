@@ -3167,7 +3167,7 @@ dependencies = [
 
 [[package]]
 name = "mz-compute"
-version = "0.27.0-alpha.24.post"
+version = "0.28.0-dev"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3264,7 +3264,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.27.0-alpha.24.post"
+version = "0.28.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -3575,7 +3575,12 @@ dependencies = [
  "chrono",
  "derivative",
  "futures-core",
+ "mz-ore",
+ "mz-proto",
+ "prost",
+ "protobuf-src",
  "serde",
+ "tonic-build",
 ]
 
 [[package]]
@@ -4254,7 +4259,7 @@ dependencies = [
 
 [[package]]
 name = "mz-storaged"
-version = "0.27.0-alpha.24.post"
+version = "0.28.0-dev"
 dependencies = [
  "anyhow",
  "axum",

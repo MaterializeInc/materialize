@@ -14,6 +14,7 @@ import random
 from pathlib import Path
 from typing import List
 
+import frontmatter
 from semver import Version
 
 ROOT = Path(os.environ["MZ_ROOT"])
@@ -23,10 +24,20 @@ def nonce(digits: int) -> str:
     return "".join(random.choice("0123456789abcdef") for _ in range(digits))
 
 
-def known_materialize_versions() -> List[Version]:
-    """Returns all known Materialize versions.
+def released_materialize_versions() -> List[Version]:
+    """Returns all released Materialize versions.
+
+    The list is determined from the release notes files in the user
+    documentation. Only versions that declare `released: true` in their
+    frontmatter are considered.
 
     The list is returned in version order with newest versions first.
     """
-    files = Path(ROOT / "doc" / "user" / "content" / "releases").glob("*.md")
-    return [Version.parse(f.stem.lstrip("v")) for f in files if f.stem.startswith("v")]
+    files = Path(ROOT / "doc" / "user" / "content" / "releases").glob("v*.md")
+    versions = [
+        Version.parse(f.stem.lstrip("v"))
+        for f in files
+        if frontmatter.load(f).get("released", False)
+    ]
+    versions.sort(reverse=True)
+    return versions

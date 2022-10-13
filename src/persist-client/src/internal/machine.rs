@@ -552,9 +552,7 @@ where
                 let diff = StateDiff::from_diff(&self.state, &new_state);
                 // Sanity check that our diff logic roundtrips and adds back up
                 // correctly.
-                //
-                // TODO: Re-enable this #14490.
-                #[cfg(all(TODO, any(test, debug_assertions)))]
+                #[cfg(any(test, debug_assertions))]
                 {
                     if let Err(err) =
                         StateDiff::validate_roundtrip(&self.metrics, &self.state, &diff, &new_state)

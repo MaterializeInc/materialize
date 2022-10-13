@@ -215,6 +215,9 @@ pub struct PersistConfig {
     /// if the number of updates is at least this many. Compaction is performed
     /// if any of the heuristic criteria are met (they are OR'd).
     pub compaction_heuristic_min_updates: usize,
+    /// In Compactor::compact_and_apply_background, the maximum number of concurrent
+    /// compaction requests that can execute for a given shard.
+    pub compaction_concurrency_limit: usize,
     /// The maximum size of the connection pool to Postgres/CRDB when performing
     /// consensus reads and writes.
     pub consensus_connection_pool_max_size: usize,
@@ -283,6 +286,7 @@ impl PersistConfig {
             compaction_memory_bound_bytes: 1024 * MB,
             compaction_heuristic_min_inputs: 8,
             compaction_heuristic_min_updates: 1024,
+            compaction_concurrency_limit: 5,
             consensus_connection_pool_max_size: 50,
             writer_lease_duration: Duration::from_secs(60 * 15),
             reader_lease_duration: Self::DEFAULT_READ_LEASE_DURATION,

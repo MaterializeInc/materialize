@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use itertools::Itertools;
+use mz_storage::controller::IntrospectionType;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -69,9 +70,8 @@ use mz_storage::types::sources::{SourceDesc, Timeline};
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{
-    Builtin, BuiltinLog, BuiltinStorageManagedTable, BuiltinTable, BuiltinType, Fingerprint,
-    BUILTINS, BUILTIN_PREFIXES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
-    MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
+    Builtin, BuiltinLog, BuiltinTable, BuiltinType, Fingerprint, BUILTINS, BUILTIN_PREFIXES,
+    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::{ClusterReplicaSizeMap, Config, StorageHostSizeMap};
@@ -82,6 +82,8 @@ use crate::session::vars::SystemVars;
 use crate::session::{PreparedStatement, Session, User, DEFAULT_DATABASE_NAME};
 use crate::util::index_sql;
 use crate::{AdapterError, DUMMY_AVAILABILITY_ZONE};
+
+use self::builtin::BuiltinSource;
 
 mod builtin_table_updates;
 mod config;
@@ -235,8 +237,7 @@ impl CatalogState {
             | CatalogItem::Source(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
-            | CatalogItem::Secret(_)
-            | CatalogItem::StorageManagedTable(_) => (),
+            | CatalogItem::Secret(_) => (),
         }
     }
 
@@ -253,8 +254,7 @@ impl CatalogState {
             | CatalogItem::Sink(_)
             | CatalogItem::Type(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_)
-            | CatalogItem::StorageManagedTable(_) => false,
+            | CatalogItem::Connection(_) => false,
         }
     }
 
@@ -909,11 +909,8 @@ impl CatalogState {
     /// Optimized lookup for a builtin storage collection
     ///
     /// Panics if the builtin storage collection doesn't exist in the catalog
-    pub fn resolve_builtin_storage_collection(
-        &self,
-        builtin: &'static BuiltinStorageManagedTable,
-    ) -> GlobalId {
-        self.resolve_builtin_object(&Builtin::<IdReference>::StorageManagedTable(builtin))
+    pub fn resolve_builtin_source(&self, builtin: &'static BuiltinSource) -> GlobalId {
+        self.resolve_builtin_object(&Builtin::<IdReference>::Source(builtin))
     }
 
     /// Optimized lookup for a builtin object
@@ -1340,7 +1337,6 @@ pub enum CatalogItem {
     Func(Func),
     Secret(Secret),
     Connection(Connection),
-    StorageManagedTable(&'static BuiltinStorageManagedTable),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1362,20 +1358,31 @@ impl Table {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub enum DataSourceDesc {
+    /// Receives data from an external system
+    Ingestion(Ingestion),
+    /// Receives data from some other source
+    Source,
+    /// Receives introspection data from an internal system
+    Introspection(IntrospectionType),
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct Source {
     pub create_sql: String,
-    /// The ingestion description of this source.
-    ///
-    /// If Some, it will correspond to an ingestion that will insert data in this source and maybe
-    /// other, dependent subsources.
-    ///
-    /// If None, it represents a source that is being written to by the ingestion associated with
-    /// some other, parent source.
-    pub ingestion: Option<Ingestion>,
+    pub data_source: DataSourceDesc,
     pub desc: RelationDesc,
     pub timeline: Timeline,
     pub depends_on: Vec<GlobalId>,
-    pub host_config: StorageHostConfig,
+}
+
+impl Source {
+    pub fn size(&self) -> Option<&str> {
+        match &self.data_source {
+            DataSourceDesc::Ingestion(Ingestion { host_config, .. }) => host_config.size(),
+            DataSourceDesc::Introspection(_) | DataSourceDesc::Source => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1397,6 +1404,7 @@ pub struct Ingestion {
     ///
     /// This map does *not* include the export of the source associated with the ingestion itself
     pub subsource_exports: HashMap<GlobalId, usize>,
+    pub host_config: StorageHostConfig,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1503,7 +1511,6 @@ impl CatalogItem {
             CatalogItem::Func(_) => mz_sql::catalog::CatalogItemType::Func,
             CatalogItem::Secret(_) => mz_sql::catalog::CatalogItemType::Secret,
             CatalogItem::Connection(_) => mz_sql::catalog::CatalogItemType::Connection,
-            CatalogItem::StorageManagedTable(_) => mz_sql::catalog::CatalogItemType::Source,
         }
     }
 
@@ -1514,7 +1521,6 @@ impl CatalogItem {
             CatalogItem::Table(tbl) => Ok(Cow::Borrowed(&tbl.desc)),
             CatalogItem::View(view) => Ok(Cow::Borrowed(&view.desc)),
             CatalogItem::MaterializedView(mview) => Ok(Cow::Borrowed(&mview.desc)),
-            CatalogItem::StorageManagedTable(coll) => Ok(Cow::Borrowed(&coll.desc)),
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
@@ -1545,9 +1551,9 @@ impl CatalogItem {
         name: &QualifiedObjectName,
     ) -> Result<Option<&SourceDesc>, SqlCatalogError> {
         match &self {
-            CatalogItem::Source(source) => match &source.ingestion {
-                Some(ingestion) => Ok(Some(&ingestion.desc)),
-                None => Ok(None),
+            CatalogItem::Source(source) => match &source.data_source {
+                DataSourceDesc::Ingestion(ingestion) => Ok(Some(&ingestion.desc)),
+                DataSourceDesc::Source | DataSourceDesc::Introspection(_) => Ok(None),
             },
             _ => Err(SqlCatalogError::UnexpectedType(
                 name.item.clone(),
@@ -1571,7 +1577,6 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mview) => &mview.depends_on,
             CatalogItem::Secret(_) => &[],
             CatalogItem::Connection(connection) => &connection.depends_on,
-            CatalogItem::StorageManagedTable(_) => &[],
         }
     }
 
@@ -1588,8 +1593,7 @@ impl CatalogItem {
             | CatalogItem::View(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_)
-            | CatalogItem::StorageManagedTable(_) => false,
+            | CatalogItem::Connection(_) => false,
             CatalogItem::Sink(s) => match s.connection {
                 StorageSinkConnectionState::Pending(_) => true,
                 StorageSinkConnectionState::Ready(_) => false,
@@ -1611,8 +1615,7 @@ impl CatalogItem {
             | CatalogItem::Secret(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
-            | CatalogItem::Connection(_)
-            | CatalogItem::StorageManagedTable(_) => None,
+            | CatalogItem::Connection(_) => None,
         }
     }
 
@@ -1685,7 +1688,6 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Connection(i))
             }
-            CatalogItem::StorageManagedTable(i) => Ok(CatalogItem::StorageManagedTable(i)),
         }
     }
 
@@ -1701,8 +1703,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_)
-            | CatalogItem::StorageManagedTable(_) => None,
+            | CatalogItem::Connection(_) => None,
         }
     }
 }
@@ -1786,11 +1787,6 @@ impl CatalogEntry {
     /// Reports whether this catalog entry is a secret.
     pub fn is_secret(&self) -> bool {
         matches!(self.item(), CatalogItem::Secret(_))
-    }
-
-    /// Reports whether this catalog entry is a storage collection.
-    pub fn is_storage_collection(&self) -> bool {
-        matches!(self.item(), CatalogItem::StorageManagedTable(_))
     }
 
     /// Collects the identifiers of the dataflows that this dataflow depends
@@ -2156,13 +2152,24 @@ impl<S: Append> Catalog<S> {
                     );
                 }
 
-                Builtin::StorageManagedTable(coll) => {
+                Builtin::Source(coll) => {
+                    let introspection_type = match &coll.data_source {
+                        Some(i) => i.clone(),
+                        None => continue,
+                    };
+
                     let oid = catalog.allocate_oid()?;
                     catalog.state.insert_item(
                         id,
                         oid,
                         name.clone(),
-                        CatalogItem::StorageManagedTable(coll),
+                        CatalogItem::Source(Source {
+                            create_sql: CREATE_SQL_TODO.to_string(),
+                            data_source: DataSourceDesc::Introspection(introspection_type),
+                            desc: coll.desc.clone(),
+                            timeline: Timeline::EpochMilliseconds,
+                            depends_on: vec![],
+                        }),
                     );
                 }
             }
@@ -2616,10 +2623,6 @@ impl<S: Append> Catalog<S> {
                 CatalogItem::Log(_) => {
                     panic!("Log migration is unimplemented")
                 }
-                // TODO(jkosh44) Implement storage collection migration
-                CatalogItem::StorageManagedTable(_) => {
-                    panic!("Storage collection migration is unimplemented")
-                }
                 CatalogItem::View(_) | CatalogItem::Index(_) => {
                     // Views and indexes don't have any objects in STORAGE to drop.
                 }
@@ -3003,12 +3006,9 @@ impl<S: Append> Catalog<S> {
         self.state.resolve_builtin_log(builtin)
     }
 
-    /// Resolves a `BuiltinStorageManagedTable`.
-    pub fn resolve_builtin_storage_collection(
-        &self,
-        builtin: &'static BuiltinStorageManagedTable,
-    ) -> GlobalId {
-        self.state.resolve_builtin_storage_collection(builtin)
+    /// Resolves a `BuiltinSource`.
+    pub fn resolve_builtin_storage_collection(&self, builtin: &'static BuiltinSource) -> GlobalId {
+        self.state.resolve_builtin_source(builtin)
     }
 
     /// Resolves `name` to a function [`CatalogEntry`].
@@ -3616,7 +3616,12 @@ impl<S: Append> Catalog<S> {
                         ),
                     };
 
-                    let new_config = alter_host_config(&old_source.host_config, size, remote)?;
+                    let new_config = match &old_source.data_source {
+                        DataSourceDesc::Ingestion(ingestion) => {
+                            alter_host_config(&ingestion.host_config, size, remote)?
+                        }
+                        DataSourceDesc::Introspection(_) | DataSourceDesc::Source => None,
+                    };
 
                     if let Some(config) = new_config {
                         create_stmt
@@ -3638,16 +3643,32 @@ impl<S: Append> Catalog<S> {
                             });
                         }
 
-                        // Only subsources can have an undefined size outside of
+                        // Only introspection + subsources can have an undefined size outside of
                         // unsafe mode.
-                        let allow_undefined_size =
-                            state.config().unsafe_mode || old_source.ingestion.is_none();
+                        let allow_undefined_size = state.config().unsafe_mode
+                            || match old_source.data_source {
+                                DataSourceDesc::Introspection(_) | DataSourceDesc::Source => true,
+                                DataSourceDesc::Ingestion(_) => false,
+                            };
+
+                        let old_size = old_source.size().map(|s| s.to_string());
                         let host_config =
                             state.resolve_storage_host_config(config, allow_undefined_size)?;
+                        let new_size = host_config.size().map(|s| s.to_string());
+                        let data_source = match old_source.data_source {
+                            DataSourceDesc::Ingestion(ingestion) => {
+                                    DataSourceDesc::Ingestion(Ingestion {
+                                    host_config,
+                                    ..ingestion
+                                })
+                            }
+                            _ => unreachable!("already guaranteed that we do not permit modifying either SIZE or REMOTE of subsource or introspection source"),
+                        };
+
                         let create_sql = stmt.to_ast_string_stable();
                         let source = CatalogItem::Source(Source {
                             create_sql,
-                            host_config: host_config.clone(),
+                            data_source,
                             ..old_source
                         });
 
@@ -3670,8 +3691,8 @@ impl<S: Append> Catalog<S> {
                                     &name,
                                     session.map(|session| session.conn_id()),
                                 )),
-                                old_size: old_source.host_config.size().map(|x| x.to_string()),
-                                new_size: host_config.size().map(|x| x.to_string()),
+                                old_size,
+                                new_size,
                             }),
                         )?;
 
@@ -3946,7 +3967,7 @@ impl<S: Append> Catalog<S> {
                                 EventDetails::CreateSourceSinkV1(mz_audit_log::CreateSourceSinkV1 {
                                     id,
                                     name,
-                                    size: s.host_config.size().map(|x| x.to_string()),
+                                    size: s.size().map(|s| s.to_string()),
                                 })
                             }
                             CatalogItem::Sink(s) => {
@@ -4646,9 +4667,18 @@ impl<S: Append> Catalog<S> {
                 create_sql: table.create_sql.clone(),
             },
             CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
-            CatalogItem::Source(source) => SerializedCatalogItem::V1 {
-                create_sql: source.create_sql.clone(),
-            },
+            CatalogItem::Source(source) => {
+                assert!(
+                    match source.data_source {
+                        DataSourceDesc::Introspection(_) => false,
+                        _ => true,
+                    },
+                    "cannot serialize introspection/builtin sources",
+                );
+                SerializedCatalogItem::V1 {
+                    create_sql: source.create_sql.clone(),
+                }
+            }
             CatalogItem::View(view) => SerializedCatalogItem::V1 {
                 create_sql: view.create_sql.clone(),
             },
@@ -4671,9 +4701,6 @@ impl<S: Append> Catalog<S> {
                 create_sql: connection.create_sql.clone(),
             },
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
-            CatalogItem::StorageManagedTable(_) => {
-                unreachable!("builtin storage collections cannot be serialized")
-            }
         }
     }
 
@@ -4712,16 +4739,19 @@ impl<S: Append> Catalog<S> {
                 let allow_undefined_size = true;
                 CatalogItem::Source(Source {
                     create_sql: source.create_sql,
-                    ingestion: source.ingestion.map(|ingestion| Ingestion {
-                        desc: ingestion.desc,
-                        source_imports: ingestion.source_imports,
-                        subsource_exports: ingestion.subsource_exports,
-                    }),
+                    data_source: match source.ingestion {
+                        Some(ingestion) => DataSourceDesc::Ingestion(Ingestion {
+                            desc: ingestion.desc,
+                            source_imports: ingestion.source_imports,
+                            subsource_exports: ingestion.subsource_exports,
+                            host_config: self
+                                .resolve_storage_host_config(host_config, allow_undefined_size)?,
+                        }),
+                        None => DataSourceDesc::Source,
+                    },
                     desc: source.desc,
                     timeline,
                     depends_on,
-                    host_config: self
-                        .resolve_storage_host_config(host_config, allow_undefined_size)?,
                 })
             }
             Plan::CreateView(CreateViewPlan { view, .. }) => {
@@ -5557,7 +5587,6 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Connection(Connection { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "<builtin>",
             CatalogItem::Log(_) => "<builtin>",
-            CatalogItem::StorageManagedTable(_) => "<builtin>",
         }
     }
 
@@ -5599,9 +5628,11 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn subsources(&self) -> Vec<GlobalId> {
         match &self.item {
-            CatalogItem::Source(source) => match &source.ingestion {
-                Some(ingestion) => ingestion.subsource_exports.keys().copied().collect(),
-                None => vec![],
+            CatalogItem::Source(source) => match &source.data_source {
+                DataSourceDesc::Ingestion(ingestion) => {
+                    ingestion.subsource_exports.keys().copied().collect()
+                }
+                DataSourceDesc::Source | DataSourceDesc::Introspection(_) => vec![],
             },
             CatalogItem::Table(_)
             | CatalogItem::Log(_)
@@ -5612,8 +5643,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_)
-            | CatalogItem::StorageManagedTable(_) => vec![],
+            | CatalogItem::Connection(_) => vec![],
         }
     }
 }

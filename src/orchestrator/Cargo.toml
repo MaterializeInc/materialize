@@ -13,4 +13,11 @@ bytesize = "1.1.0"
 chrono = { version = "0.4.22", default_features = false, features = ["serde"] }
 derivative = "2.2.0"
 futures-core = "0.3.21"
+mz-ore = { path = "../ore"}
+mz-proto = { path = "../proto" }
+prost = { version = "0.11.0", features = ["no-recursion-limit"] }
 serde = "1.0"
+
+[build-dependencies]
+protobuf-src = "1.1.0"
+tonic-build = "0.8.0"

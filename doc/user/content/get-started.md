@@ -57,6 +57,10 @@ We'll start with some real-time data produced by Materialize's built-in [load ge
 
 1. The `auction_house` source will be automatically demuxed into multiple subsources, each representing a different underlying table populated by the load generator:
 
+    ```sql
+    SHOW SOURCES;
+    ```
+
     ```nofmt
          name      |      type      |  size
     ---------------+----------------+---------
@@ -66,7 +70,7 @@ We'll start with some real-time data produced by Materialize's built-in [load ge
      bids          | subsource      | 3xsmall
      organizations | subsource      | 3xsmall
      users         | subsource      | 3xsmall
-    ```
+     ```
 
 1. Now that we have some data to play around with, let's set up a [cluster](/sql/create-cluster) (logical compute) with one `xsmall` [replica](/sql/create-cluster-replica) (physical compute) so we can start running some queries:
 

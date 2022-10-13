@@ -97,6 +97,7 @@ pub enum IntrospectionType {
     ShardMapping,
 }
 
+/// Describes how data is written to the collection.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataSource {
     /// Ingest data from some external source.
@@ -104,6 +105,10 @@ pub enum DataSource {
     /// Data comes from introspection sources, which the controller itself is
     /// responisble for generating.
     Introspection(IntrospectionType),
+    /// This source's data is does not need to be managed by the storage
+    /// controller, e.g. it's a materialized view, table, or subsource.
+    // TODO? Add a means to track some data sources' GlobalIds.
+    Other,
 }
 
 /// Describes a request to create a source.
@@ -111,26 +116,22 @@ pub enum DataSource {
 pub struct CollectionDescription<T> {
     /// The schema of this collection
     pub desc: RelationDesc,
-    /// The description of the source of data for this collection to ingest, if any.
-    pub data_source: Option<DataSource>,
+    /// The source of this collection's data.
+    pub data_source: DataSource,
     /// An optional frontier to which the collection's `since` should be advanced.
     pub since: Option<Antichain<T>>,
     /// A GlobalId to use for this collection to use for the status collection.
     /// Used to keep track of source status/error information.
     pub status_collection_id: Option<GlobalId>,
-    /// The address of a `storaged` process on which to install the source or the
-    /// settings for spinning up a controller-managed process.
-    pub host_config: Option<StorageHostConfig>,
 }
 
 impl<T> From<RelationDesc> for CollectionDescription<T> {
     fn from(desc: RelationDesc) -> Self {
         Self {
             desc,
-            data_source: None,
+            data_source: DataSource::Other,
             since: None,
             status_collection_id: None,
-            host_config: None,
         }
     }
 }
@@ -883,78 +884,70 @@ where
             self.state.collections.insert(id, collection_state);
             self.register_shard_mapping(id).await;
 
-            if let Some(ingestion) = description.data_source {
-                match ingestion {
-                    DataSource::Ingestion(ingestion) => {
-                        // Each ingestion is augmented with the collection metadata.
-                        let mut source_imports = BTreeMap::new();
-                        for (id, _) in ingestion.source_imports {
-                            let metadata = self.collection(id)?.collection_metadata.clone();
-                            source_imports.insert(id, metadata);
-                        }
-
-                        // The ingestion metadata is simply the collection metadata of the collection with
-                        // the associated ingestion
-                        let ingestion_metadata = self.collection(id)?.collection_metadata.clone();
-
-                        let mut source_exports = BTreeMap::new();
-                        for (id, export) in ingestion.source_exports {
-                            let storage_metadata = self.collection(id)?.collection_metadata.clone();
-                            source_exports.insert(
-                                id,
-                                SourceExport {
-                                    storage_metadata,
-                                    output_index: export.output_index,
-                                },
-                            );
-                        }
-
-                        let desc = IngestionDescription {
-                            source_imports,
-                            source_exports,
-                            ingestion_metadata,
-                            // The rest of the fields are identical
-                            desc: ingestion.desc,
-                        };
-                        let mut persist_clients = self.persist.lock().await;
-                        let mut state = desc.initialize_state(&mut persist_clients).await;
-                        let resume_upper = desc.calculate_resumption_frontier(&mut state).await;
-
-                        let augmented_ingestion = CreateSourceCommand {
-                            id,
-                            description: desc,
-                            resume_upper,
-                        };
-
-                        // Provision a storage host for the ingestion.
-                        let client = self
-                    .hosts
-                    .provision(
-                        id,
-                        description.host_config.clone().expect(
-                            "CollectionDescription with ingestion should have host_config set",
-                        ),
-                    )
-                    .await?;
-                        client.send(StorageCommand::CreateSources(vec![augmented_ingestion]));
+            match description.data_source {
+                DataSource::Ingestion(ingestion) => {
+                    // Each ingestion is augmented with the collection metadata.
+                    let mut source_imports = BTreeMap::new();
+                    for (id, _) in ingestion.source_imports {
+                        let metadata = self.collection(id)?.collection_metadata.clone();
+                        source_imports.insert(id, metadata);
                     }
-                    DataSource::Introspection(i) => {
-                        let prev = self.state.introspection_ids.insert(i, id);
-                        assert!(
-                            prev.is_none(),
-                            "cannot have multiple IDs for introspection type"
+
+                    // The ingestion metadata is simply the collection metadata of the collection with
+                    // the associated ingestion
+                    let ingestion_metadata = self.collection(id)?.collection_metadata.clone();
+
+                    let mut source_exports = BTreeMap::new();
+                    for (id, export) in ingestion.source_exports {
+                        let storage_metadata = self.collection(id)?.collection_metadata.clone();
+                        source_exports.insert(
+                            id,
+                            SourceExport {
+                                storage_metadata,
+                                output_index: export.output_index,
+                            },
                         );
+                    }
 
-                        self.state.collection_manager.register_collection(id).await;
+                    let desc = IngestionDescription {
+                        source_imports,
+                        source_exports,
+                        ingestion_metadata,
+                        // The rest of the fields are identical
+                        desc: ingestion.desc,
+                        host_config: ingestion.host_config,
+                    };
+                    let mut persist_clients = self.persist.lock().await;
+                    let mut state = desc.initialize_state(&mut persist_clients).await;
+                    let resume_upper = desc.calculate_resumption_frontier(&mut state).await;
 
-                        match i {
-                            IntrospectionType::ShardMapping => {
-                                self.truncate_managed_collection(id).await;
-                                self.initialize_shard_mapping().await;
-                            }
+                    // Provision a storage host for the ingestion.
+                    let client = self.hosts.provision(id, desc.host_config.clone()).await?;
+                    let augmented_ingestion = CreateSourceCommand {
+                        id,
+                        description: desc,
+                        resume_upper,
+                    };
+
+                    client.send(StorageCommand::CreateSources(vec![augmented_ingestion]));
+                }
+                DataSource::Introspection(i) => {
+                    let prev = self.state.introspection_ids.insert(i, id);
+                    assert!(
+                        prev.is_none(),
+                        "cannot have multiple IDs for introspection type"
+                    );
+
+                    self.state.collection_manager.register_collection(id).await;
+
+                    match i {
+                        IntrospectionType::ShardMapping => {
+                            self.truncate_managed_collection(id).await;
+                            self.initialize_shard_mapping().await;
                         }
                     }
                 }
+                DataSource::Other => {}
             }
         }
 

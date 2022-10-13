@@ -11,9 +11,16 @@
 
 use std::num::NonZeroUsize;
 
+use proptest::prelude::any;
+use proptest::prelude::Arbitrary;
+use proptest::strategy::BoxedStrategy;
+use proptest::strategy::Strategy;
 use serde::{Deserialize, Serialize};
 
 use mz_orchestrator::{CpuLimit, MemoryLimit};
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+
+include!(concat!(env!("OUT_DIR"), "/mz_storage.types.hosts.rs"));
 
 /// Resource allocations for a storage host.
 ///
@@ -27,6 +34,24 @@ pub struct StorageHostResourceAllocation {
     pub cpu_limit: Option<CpuLimit>,
     /// The number of worker threads in the replica.
     pub workers: NonZeroUsize,
+}
+
+impl RustType<ProtoStorageHostResourceAllocation> for StorageHostResourceAllocation {
+    fn into_proto(&self) -> ProtoStorageHostResourceAllocation {
+        ProtoStorageHostResourceAllocation {
+            memory_limit: self.memory_limit.into_proto(),
+            cpu_limit: self.cpu_limit.into_proto(),
+            workers: self.workers.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoStorageHostResourceAllocation) -> Result<Self, TryFromProtoError> {
+        Ok(StorageHostResourceAllocation {
+            memory_limit: proto.memory_limit.into_rust()?,
+            cpu_limit: proto.cpu_limit.into_rust()?,
+            workers: proto.workers.into_rust()?,
+        })
+    }
 }
 
 /// Size or address of a storage instance
@@ -47,6 +72,57 @@ pub enum StorageHostConfig {
         /// SQL size parameter used for allocation
         size: String,
     },
+}
+
+impl RustType<ProtoStorageHostConfig> for StorageHostConfig {
+    fn into_proto(&self) -> ProtoStorageHostConfig {
+        use proto_storage_host_config::*;
+        ProtoStorageHostConfig {
+            kind: Some(match self {
+                StorageHostConfig::Remote { addr } => Kind::Remote(ProtoStorageHostConfigRemote {
+                    addr: addr.into_proto(),
+                }),
+                StorageHostConfig::Managed { allocation, size } => {
+                    Kind::Managed(ProtoStorageHostConfigManaged {
+                        allocation: Some(allocation.into_proto()),
+                        size: size.into_proto(),
+                    })
+                }
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoStorageHostConfig) -> Result<Self, TryFromProtoError> {
+        use proto_storage_host_config::*;
+        Ok(
+            match proto
+                .kind
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoStorageHostConfig::kind"))?
+            {
+                Kind::Remote(ProtoStorageHostConfigRemote { addr }) => {
+                    StorageHostConfig::Remote { addr }
+                }
+                Kind::Managed(ProtoStorageHostConfigManaged { allocation, size }) => {
+                    StorageHostConfig::Managed {
+                        allocation: allocation
+                            .into_rust_if_some("ProtoStorageHostConfigManaged::allocation")?,
+                        size,
+                    }
+                }
+            },
+        )
+    }
+}
+
+impl Arbitrary for StorageHostConfig {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (any::<String>())
+            .prop_map(|addr| Self::Remote { addr })
+            .boxed()
+    }
 }
 
 impl StorageHostConfig {

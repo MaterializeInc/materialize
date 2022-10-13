@@ -29,7 +29,7 @@ from materialize.mzcompose.services import (
 )
 
 # All released Materialize versions, in order from most to least recent.
-all_versions = util.known_materialize_versions()
+all_versions = util.released_materialize_versions()
 
 mz_options: Dict[Version, str] = {}
 

@@ -26,7 +26,7 @@ use crate::internal::state::{
     HollowBatch, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, ReaderState,
     State, StateCollections, WriterState,
 };
-use crate::internal::trace::Trace;
+use crate::internal::trace::{FueledMergeRes, Trace};
 use crate::read::ReaderId;
 use crate::write::WriterId;
 use crate::{Metrics, PersistConfig};
@@ -515,15 +515,6 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
     }
 
     // Fast-path: compaction
-    //
-    // TODO: This seems to tickle some existing bugs that we haven't been
-    // hitting because, before incremental state, we were reconstructing Spine
-    // from scratch whenever we deserialized a new version of state. Losing it
-    // is unfortunate, but no worse than where we were before and we're getting
-    // down to the wire with getting inc state (and its backward
-    // incompatibility) into the desired release. Revisit as time permits to
-    // shake out the bugs (they repro readily in CI) and re-enable.
-    #[cfg(TODO)]
     if let Some((_inputs, output)) = sniff_compaction(&diffs) {
         let res = FueledMergeRes { output };
         // We can't predict how spine will arrange the batches when it's
