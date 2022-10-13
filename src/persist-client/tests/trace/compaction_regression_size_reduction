@@ -49,7 +49,7 @@ ok
 apply-merge-res
 [0][2][0] 1 k0-1
 ----
-applied
+applied exact
 
 # Insert a batch that would force FuelingMerge(0-2,2-3) to finish and move up a
 # few levels. In the regression, this would panic.

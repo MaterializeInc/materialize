@@ -27,7 +27,7 @@ use timely::PartialOrder;
 use crate::error::{Determinacy, InvalidUsage};
 use crate::internal::gc::GcReq;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
-use crate::internal::trace::{FueledMergeReq, FueledMergeRes, Trace};
+use crate::internal::trace::{ApplyMergeResult, FueledMergeReq, FueledMergeRes, Trace};
 use crate::read::ReaderId;
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
@@ -277,9 +277,12 @@ where
         Continue(merge_reqs)
     }
 
-    pub fn apply_merge_res(&mut self, res: &FueledMergeRes<T>) -> ControlFlow<Infallible, bool> {
-        let applied = self.trace.apply_merge_res(res);
-        Continue(applied)
+    pub fn apply_merge_res(
+        &mut self,
+        res: &FueledMergeRes<T>,
+    ) -> ControlFlow<Infallible, ApplyMergeResult> {
+        let apply_merge_result = self.trace.apply_merge_res(res);
+        Continue(apply_merge_result)
     }
 
     pub fn downgrade_since(
