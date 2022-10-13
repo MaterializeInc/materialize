@@ -141,8 +141,10 @@ Create a [Kafka source](/sql/create-source/kafka/).
 {{ config(materialized='source') }}
 
 CREATE SOURCE IF NOT EXISTS {{ this }}
-  FROM KAFKA CONNECTION kafka_connection (TOPIC 'topic_a')
-  FORMAT TEXT
+  FROM KAFKA
+    CONNECTION kafka_connection (TOPIC 'topic_a')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  WITH (SIZE = '3xsmall')
 ```
 
 {{< /tab >}} {{< tab "PostgreSQL">}}
@@ -150,13 +152,13 @@ Create a [PostgreSQL source](/sql/create-source/postgres/).
 
 **Filename:** sources/postgres.sql
 ```sql
-{{ config(materialized='source',
-    post_hook="CREATE VIEWS FROM SOURCE {{ this }} (
-                table_a as {{ this.database }}.{{ this.schema }}.table_a,
-                table_b as {{ this.database }}.{{ this.schema }}.table_b, ...)") }}
+{{ config(materialized='source') }}
 
 CREATE SOURCE IF NOT EXISTS {{ this }}
-  FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
+  FROM POSTGRES
+    CONNECTION pg_connection (PUBLICATION 'mz_source')
+    FOR ALL TABLES
+    WITH (SIZE '3xsmall')
 ```
 
 The [pre-hook](https://docs.getdbt.com/reference/resource-configs/pre-hook-post-hook) defined above is used to create the replication views that reproduce the publication's original tables.
@@ -206,7 +208,7 @@ FROM {{ source('kafka','kafka_topic_a') }}
 ```
 
 The model above would be compiled to `database.schema.view_a`.
-One thing to note here is that the model depends on the Kafka source defined above. To express this dependency and track the **lineage** of your project, you can use the dbt [source()](https://docs.getdbt.com/reference/dbt-jinja-functions/source) function.
+One thing to note here is that the model depends on the Kafka source defined above. To express this dependency and track the **lineage** of your project, you can use the dbt [`source()`](https://docs.getdbt.com/reference/dbt-jinja-functions/source) function.
 
 #### Materialized views
 

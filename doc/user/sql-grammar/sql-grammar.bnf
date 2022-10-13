@@ -95,6 +95,7 @@ create_source_load_generator ::=
   ('(' (col_name) ( ( ',' col_name ) )*)?
   'FROM LOAD GENERATOR' ('AUCTION' | 'COUNTER')
   ('(' (load_generator_option) ( ( ',' load_generator_option ) )* ')')?
+  ('FOR ALL TABLES' | 'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')')
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 load_generator_option ::=
     'TICK INTERVAL' interval
@@ -102,6 +103,7 @@ create_source_postgres ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   'FROM' 'POSTGRES' 'CONNECTION' connection_name
   '(' 'PUBLICATION' publication_name ')'
+  ('FOR ALL TABLES' | 'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')')
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_source_s3 ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
