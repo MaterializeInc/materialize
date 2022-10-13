@@ -219,6 +219,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         tracing_target_callbacks: mz_ore::tracing::TracingTargetCallbacks::default(),
         storage_usage_collection_interval: config.storage_usage_collection_interval,
         segment_api_key: None,
+        egress_ips: vec![],
     }))?;
     let server = Server {
         inner,

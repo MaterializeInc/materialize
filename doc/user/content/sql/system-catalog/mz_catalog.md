@@ -101,6 +101,15 @@ Field  | Type       | Meaning
 `oid`  | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the database.
 `name` | [`text`]   | The name of the database.
 
+### `mz_egress_ips`
+
+The `mz_egress_ips` table contains a row for each potential IP address that the
+system may connect to external systems from.
+
+Field       | Type     | Meaning
+------------|----------|--------
+`egress_ip` | [`text`] | The IP address.
+
 ### `mz_functions`
 
 The `mz_functions` table contains a row for each function in the system.
