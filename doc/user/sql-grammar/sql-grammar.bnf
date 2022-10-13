@@ -5,6 +5,8 @@ alter_index ::=
   'ALTER' 'INDEX' name 'SET' 'ENABLED'
 alter_secret ::=
   'ALTER' 'SECRET' 'IF EXISTS'? name AS value
+alter_sink ::=
+  'ALTER' 'SINK' 'IF EXISTS'? name 'SET' '(' 'SIZE' value ')'
 alter_source ::=
   'ALTER' 'SOURCE' 'IF EXISTS'? name 'SET' '(' 'SIZE' value ')'
 array_agg ::=

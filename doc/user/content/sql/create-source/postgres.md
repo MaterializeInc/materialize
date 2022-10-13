@@ -54,7 +54,7 @@ CREATE SOURCE mz_source
   FROM POSTGRES
     CONNECTION pg_connection (PUBLICATION 'mz_source')
   FOR ALL TABLES
-  WITH (SIZE '3xsmall');
+  WITH (SIZE = '3xsmall');
 ```
 
 Materialize will automatically create a **subsource** for each original table in the publication:
@@ -169,7 +169,7 @@ To resize the source after creation:
 ALTER SOURCE mz_source SET (SIZE = 'large');
 ```
 
-The smallest source size (`3xsmall`) is a resonable default to get started. For more details on sizing sources, check the [`CREATE SOURCE`](../) documentation page.
+The smallest source size (`3xsmall`) is a resonable default to get started. For more details on sizing sources, check the [`CREATE SOURCE`](../#sizing-a-source) documentation page.
 
 ## Related pages
 

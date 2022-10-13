@@ -75,7 +75,7 @@ We'll start with some real-time data produced by Materialize's built-in [load ge
 1. Now that we have some data to play around with, let's set up a [cluster](/sql/create-cluster) (logical compute) with one `xsmall` [replica](/sql/create-cluster-replica) (physical compute) so we can start running some queries:
 
     ```sql
-    CREATE CLUSTER auction_house REPLICAS (xsmall_replica (SIZE 'xsmall'));
+    CREATE CLUSTER auction_house REPLICAS (xsmall_replica (SIZE = 'xsmall'));
 
     SET CLUSTER = auction_house;
     ```
@@ -214,7 +214,7 @@ In Materialize, [temporal filters](/sql/patterns/temporal-filters/) allow you to
 1. Add an additional replica to the `auction_house` cluster:
 
     ```sql
-    CREATE CLUSTER REPLICA auction_house.bigger SIZE 'small';
+    CREATE CLUSTER REPLICA auction_house.bigger SIZE = 'small';
     ```
 
 1. To simulate a failure, drop the `xsmall_replica`:
