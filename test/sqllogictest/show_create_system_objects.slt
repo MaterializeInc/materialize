@@ -7,8 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Tests for the bytea type.
-
 mode cockroach
 
 query error cannot show create for system object mz_internal.mz_dataflow_channels
