@@ -241,7 +241,7 @@ where
             Ok(startup) => startup,
             Err(e) => {
                 return conn
-                    .send(ErrorResponse::from_adapter(Severity::Fatal, e))
+                    .send(ErrorResponse::from_adapter_error(Severity::Fatal, e))
                     .await
             }
         };
@@ -303,6 +303,7 @@ where
         async move {
             let mut state = State::Ready;
             loop {
+                self.send_pending_notices().await?;
                 state = match state {
                     State::Ready => self.advance_ready().await?,
                     State::Drain => self.advance_drain().await?,
@@ -360,15 +361,29 @@ where
                 let execute_root_span =
                     tracing::debug_span!(parent: None, "advance_ready", otel.name = message_name);
                 execute_root_span.follows_from(tracing::Span::current());
-                self.execute(
-                    portal_name,
-                    max_rows,
-                    portal_exec_message,
-                    None,
-                    ExecuteTimeout::None,
-                )
-                .instrument(execute_root_span)
-                .await?
+                let state = self
+                    .execute(
+                        portal_name,
+                        max_rows,
+                        portal_exec_message,
+                        None,
+                        ExecuteTimeout::None,
+                    )
+                    .instrument(execute_root_span)
+                    .await?;
+                // Close the current transaction if we are in an implicit transaction.
+                // In PostgreSQL, when using the extended query protocol, some statements may
+                // trigger an eager commit of the current implicit transaction,
+                // see: <https://git.postgresql.org/gitweb/?p=postgresql.git&a=commitdiff&h=f92944137>.
+                // In Materialize however, we eagerly commit all statements outside of an explicit
+                // transaction when using the extended query protocol. This allows us to remove
+                // the ambiguity between multiple and single statement implicit transactions when
+                // using the extended query protocol and apply some optimizations to single
+                // statement transactions.
+                if self.adapter_client.session().transaction().is_implicit() {
+                    self.commit_transaction().await?;
+                }
+                state
             }
             Some(FrontendMessage::DescribeStatement { name }) => {
                 self.describe_statement(&name).await?
@@ -409,7 +424,7 @@ where
             .await
         {
             return self
-                .error(ErrorResponse::from_adapter(Severity::Error, e))
+                .error(ErrorResponse::from_adapter_error(Severity::Error, e))
                 .await;
         }
 
@@ -441,6 +456,7 @@ where
 
         let result = match self.adapter_client.execute(EMPTY_PORTAL.to_string()).await {
             Ok(response) => {
+                self.send_pending_notices().await?;
                 self.send_execute_response(
                     response,
                     stmt_desc.relation_desc,
@@ -453,7 +469,8 @@ where
                 .await
             }
             Err(e) => {
-                self.error(ErrorResponse::from_adapter(Severity::Error, e))
+                self.send_pending_notices().await?;
+                self.error(ErrorResponse::from_adapter_error(Severity::Error, e))
                     .await
             }
         };
@@ -587,7 +604,7 @@ where
                 Ok(State::Ready)
             }
             Err(e) => {
-                self.error(ErrorResponse::from_adapter(Severity::Error, e))
+                self.error(ErrorResponse::from_adapter_error(Severity::Error, e))
                     .await
             }
         }
@@ -607,10 +624,9 @@ where
     async fn end_transaction(&mut self, action: EndTransactionAction) -> Result<(), io::Error> {
         let resp = self.adapter_client.end_transaction(action).await;
         if let Err(err) = resp {
-            self.send(BackendMessage::ErrorResponse(ErrorResponse::from_adapter(
-                Severity::Error,
-                err,
-            )))
+            self.send(BackendMessage::ErrorResponse(
+                ErrorResponse::from_adapter_error(Severity::Error, err),
+            ))
             .await?;
         }
         Ok(())
@@ -636,7 +652,7 @@ where
             Ok(stmt) => stmt,
             Err(err) => {
                 return self
-                    .error(ErrorResponse::from_adapter(Severity::Error, err))
+                    .error(ErrorResponse::from_adapter_error(Severity::Error, err))
                     .await
             }
         };
@@ -736,7 +752,7 @@ where
             revision,
         ) {
             return self
-                .error(ErrorResponse::from_adapter(Severity::Error, err))
+                .error(ErrorResponse::from_adapter_error(Severity::Error, err))
                 .await;
         }
 
@@ -790,6 +806,7 @@ where
 
                     match self.adapter_client.execute(portal_name.clone()).await {
                         Ok(response) => {
+                            self.send_pending_notices().await?;
                             self.send_execute_response(
                                 response,
                                 row_desc,
@@ -802,7 +819,8 @@ where
                             .await
                         }
                         Err(e) => {
-                            self.error(ErrorResponse::from_adapter(Severity::Error, e))
+                            self.send_pending_notices().await?;
+                            self.error(ErrorResponse::from_adapter_error(Severity::Error, e))
                                 .await
                         }
                     }
@@ -854,7 +872,7 @@ where
             Ok(stmt) => stmt,
             Err(err) => {
                 return self
-                    .error(ErrorResponse::from_adapter(Severity::Error, err))
+                    .error(ErrorResponse::from_adapter_error(Severity::Error, err))
                     .await
             }
         };
@@ -1091,13 +1109,9 @@ where
         timeout: ExecuteTimeout,
     ) -> Result<State, io::Error> {
         let mut tag = response.tag();
-        let mut non_term_err = response.partial_err().map(ErrorResponse::from);
 
         macro_rules! command_complete {
             () => {{
-                if let Some(msg) = non_term_err.take() {
-                    self.send(msg).await?;
-                }
                 self.send(BackendMessage::CommandComplete {
                     tag: tag
                         .take()
@@ -1278,19 +1292,15 @@ where
             | ExecuteResponse::DroppedView
             | ExecuteResponse::Inserted(..)
             | ExecuteResponse::Prepare
-            | ExecuteResponse::Raise { .. }
+            | ExecuteResponse::Raised
             | ExecuteResponse::StartedTransaction { .. }
-            | ExecuteResponse::TransactionExited { .. }
+            | ExecuteResponse::TransactionCommitted
+            | ExecuteResponse::TransactionRolledBack
             | ExecuteResponse::Updated(..) => {
                 command_complete!()
             }
         };
 
-        assert!(
-            non_term_err.is_none(),
-            "non-terminal error created but not consumed: {:?}",
-            non_term_err
-        );
         assert!(tag.is_none(), "tag created but not consumed: {:?}", tag);
         r
     }
@@ -1666,7 +1676,7 @@ where
 
             if let Err(e) = self.adapter_client.insert_rows(id, columns, rows).await {
                 return self
-                    .error(ErrorResponse::from_adapter(Severity::Error, e))
+                    .error(ErrorResponse::from_adapter_error(Severity::Error, e))
                     .await;
             }
 
@@ -1675,6 +1685,17 @@ where
         }
 
         Ok(next_state)
+    }
+
+    async fn send_pending_notices(&mut self) -> Result<(), io::Error> {
+        let mut notices = vec![];
+        for notice in self.adapter_client.session().drain_notices() {
+            notices.push(BackendMessage::ErrorResponse(
+                ErrorResponse::from_adapter_notice(notice),
+            ));
+        }
+        self.send_all(notices).await?;
+        Ok(())
     }
 
     async fn error(&mut self, err: ErrorResponse) -> Result<State, io::Error> {

@@ -188,6 +188,16 @@ pub enum StorageSinkConnection {
     Kafka(KafkaSinkConnection),
 }
 
+impl StorageSinkConnection {
+    // returns an option to not constrain ourselves in the future
+    pub fn connection_id(&self) -> Option<GlobalId> {
+        use StorageSinkConnection::*;
+        match self {
+            Kafka(KafkaSinkConnection { connection_id, .. }) => Some(*connection_id),
+        }
+    }
+}
+
 impl RustType<ProtoStorageSinkConnection> for StorageSinkConnection {
     fn into_proto(&self) -> ProtoStorageSinkConnection {
         use proto_storage_sink_connection::Kind;
@@ -229,6 +239,7 @@ impl RustType<ProtoKafkaSinkProgressConnection> for KafkaSinkProgressConnection 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnection {
     pub connection: KafkaConnection,
+    pub connection_id: GlobalId,
     pub options: BTreeMap<String, StringOrSecret>,
     pub topic: String,
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
@@ -236,7 +247,6 @@ pub struct KafkaSinkConnection {
     pub value_desc: RelationDesc,
     pub published_schema_info: Option<PublishedSchemaInfo>,
     pub progress: KafkaSinkProgressConnection,
-    pub exactly_once: bool,
     // Maximum number of records the sink will attempt to send each time it is
     // invoked
     pub fuel: usize,
@@ -257,6 +267,7 @@ impl PopulateClientConfig for KafkaSinkConnection {
 proptest::prop_compose! {
     fn any_kafka_sink_connection()(
         connection in any::<KafkaConnection>(),
+        connection_id in any::<GlobalId>(),
         options in any::<BTreeMap<String, StringOrSecret>>(),
         topic in any::<String>(),
         key_desc_and_indices in any::<Option<(RelationDesc, Vec<usize>)>>(),
@@ -264,11 +275,11 @@ proptest::prop_compose! {
         value_desc in any::<RelationDesc>(),
         published_schema_info in any::<Option<PublishedSchemaInfo>>(),
         progress in any::<KafkaSinkProgressConnection>(),
-        exactly_once in any::<bool>(),
         fuel in any::<usize>(),
     ) -> KafkaSinkConnection {
         KafkaSinkConnection {
             connection,
+            connection_id,
             options,
             topic,
             key_desc_and_indices,
@@ -276,7 +287,6 @@ proptest::prop_compose! {
             value_desc,
             published_schema_info,
             progress,
-            exactly_once,
             fuel,
         }
     }
@@ -329,6 +339,7 @@ impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
     fn into_proto(&self) -> ProtoKafkaSinkConnection {
         ProtoKafkaSinkConnection {
             connection: Some(self.connection.into_proto()),
+            connection_id: Some(self.connection_id.into_proto()),
             options: self
                 .options
                 .iter()
@@ -340,7 +351,6 @@ impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
             value_desc: Some(self.value_desc.into_proto()),
             published_schema_info: self.published_schema_info.into_proto(),
             progress: Some(self.progress.into_proto()),
-            exactly_once: self.exactly_once,
             fuel: self.fuel.into_proto(),
         }
     }
@@ -356,6 +366,9 @@ impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
             connection: proto
                 .connection
                 .into_rust_if_some("ProtoKafkaSinkConnection::connection")?,
+            connection_id: proto
+                .connection_id
+                .into_rust_if_some("ProtoKafkaSinkConnection::connection_id")?,
             options: options?,
             topic: proto.topic,
             key_desc_and_indices: proto.key_desc_and_indices.into_rust()?,
@@ -367,7 +380,6 @@ impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
             progress: proto
                 .progress
                 .into_rust_if_some("ProtoKafkaSinkConnection::progress")?,
-            exactly_once: proto.exactly_once,
             fuel: proto.fuel.into_rust()?,
         })
     }
@@ -408,6 +420,16 @@ impl StorageSinkConnection {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum StorageSinkConnectionBuilder {
     Kafka(KafkaSinkConnectionBuilder),
+}
+
+impl StorageSinkConnectionBuilder {
+    // returns an option to not constrain ourselves in the future
+    pub fn connection_id(&self) -> Option<GlobalId> {
+        use StorageSinkConnectionBuilder::*;
+        match self {
+            Kafka(KafkaSinkConnectionBuilder { connection_id, .. }) => Some(*connection_id),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

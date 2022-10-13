@@ -64,6 +64,6 @@ u      false     uuid
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-$ kafka-verify format=avro sort-messages=true sink=materialize.public.uuid_sink_${testdrive.seed}
+$ kafka-verify-data format=avro sort-messages=true sink=materialize.public.uuid_sink_${testdrive.seed}
 {"before": null, "after": {"row":{"u": "16fd95b0-65b7-4249-9b66-1547cd95923d"}}}
 {"before": null, "after": {"row":{"u": "b141698b-fb7f-492d-bc8a-0d159641c7a3"}}}

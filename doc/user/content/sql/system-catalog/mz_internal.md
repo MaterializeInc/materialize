@@ -13,6 +13,9 @@ schema.
 {{< warning >}}
 The objects in the `mz_internal` schema are not part of Materialize's stable interface.
 Backwards-incompatible changes to these tables may be made at any time.
+
+`SELECT` statements may reference these objects, but creating views that
+reference these objects is not allowed.
 {{< /warning >}}
 
 {{< warning >}}

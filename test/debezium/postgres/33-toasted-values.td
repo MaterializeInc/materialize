@@ -20,7 +20,7 @@ CREATE TABLE toasted_full (f1 text, f2 INTEGER PRIMARY KEY);
 ALTER TABLE toasted_full REPLICA IDENTITY FULL;
 INSERT INTO toasted_full VALUES (NULL, 0), (REPEAT('a', 32 * 1024) || 'b', 1);
 
-$ schema-registry-wait-schema schema=postgres.public.toasted_full-value
+$ schema-registry-wait subject=postgres.public.toasted_full-value
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY

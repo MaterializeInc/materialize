@@ -459,6 +459,20 @@ CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTE
 CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Size, value: Some(Value(String("xlarge"))) }, CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(true))) }] })
 
 parse-statement
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES WITH (REMOTE = 'uri:343')
+----
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES WITH (REMOTE = 'uri:343')
+=>
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Remote, value: Some(Value(String("uri:343"))) }] })
+
+parse-statement
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES WITH (REMOTE = 'uri:343', SIZE = 'xlarge', SNAPSHOT = true)
+----
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES WITH (REMOTE = 'uri:343', SIZE = 'xlarge', SNAPSHOT = true)
+=>
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Remote, value: Some(Value(String("uri:343"))) }, CreateSinkOption { name: Size, value: Some(Value(String("xlarge"))) }, CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(true))) }] })
+
+parse-statement
 CREATE INDEX foo ON myschema.bar (a, b)
 ----
 CREATE INDEX foo ON myschema.bar (a, b)
@@ -884,9 +898,23 @@ ALTER MATERIALIZED VIEW name SET (property = true)
 parse-statement
 ALTER SINK name SET (property = true)
 ----
-error: Expected RENAME, found SET
+error: Expected one of REMOTE or SIZE or SNAPSHOT, found identifier "property"
 ALTER SINK name SET (property = true)
-                ^
+                     ^
+
+parse-statement
+ALTER SINK name SET (SIZE LARGE)
+----
+ALTER SINK name SET (SIZE = large)
+=>
+AlterSink(AlterSinkStatement { sink_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: SetOptions([CreateSinkOption { name: Size, value: Some(Object(Name(UnresolvedObjectName([Ident("large")])))) }]) })
+
+parse-statement
+ALTER SINK name RESET (SIZE)
+----
+ALTER SINK name RESET (SIZE)
+=>
+AlterSink(AlterSinkStatement { sink_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: ResetOptions([Size]) })
 
 parse-statement
 ALTER INDEX name RENAME TO name2
@@ -1389,3 +1417,25 @@ ALTER SYSTEM RESET
 error: Expected identifier, found EOF
 ALTER SYSTEM RESET
                   ^
+
+parse-statement
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR ALL TABLES;
+----
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR ALL TABLES
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("mz_source")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], subsources: Some(All) })
+
+
+parse-statement
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR ALL TABLES WITH (SIZE = 'small');
+----
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR ALL TABLES WITH (SIZE = 'small')
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("mz_source")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], subsources: Some(All) })
+
+parse-statement
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') WITH (SIZE = 'small') FOR ALL TABLES;
+----
+error: Expected end of statement, found FOR
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') WITH (SIZE = 'small') FOR ALL TABLES;
+                                                                                                    ^

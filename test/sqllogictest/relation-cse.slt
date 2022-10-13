@@ -798,8 +798,8 @@ SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)
 %6 = Let l2 =
 | Join %4 %5 (= #0 #2) (= #1 #3)
 | | implementation = Differential %5 %4.(#0, #1)
-| Project (#0, #1)
 | Map null
+| Project (#0, #1, #4)
 
 %7 =
 | Union %1 %6 %1 %6

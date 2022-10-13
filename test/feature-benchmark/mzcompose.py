@@ -154,7 +154,7 @@ def start_services(
                 + f"], WORKERS {workers};"
             )
 
-            c.sql("DROP CLUSTER REPLICA default.default_replica")
+            c.sql("DROP CLUSTER REPLICA default.r1")
 
     c.up("testdrive", persistent=True)
 

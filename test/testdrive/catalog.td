@@ -500,43 +500,81 @@ name                                           type   size
 ------------------------------------------------------------
 mz_arrangement_batches_internal                 log   <null>
 mz_arrangement_batches_internal_1               log   <null>
+mz_arrangement_batches_internal_2               log   <null>
+mz_arrangement_batches_internal_3               log   <null>
 mz_arrangement_records_internal                 log   <null>
 mz_arrangement_records_internal_1               log   <null>
+mz_arrangement_records_internal_2               log   <null>
+mz_arrangement_records_internal_3               log   <null>
 mz_arrangement_sharing_internal                 log   <null>
 mz_arrangement_sharing_internal_1               log   <null>
+mz_arrangement_sharing_internal_2               log   <null>
+mz_arrangement_sharing_internal_3               log   <null>
 mz_dataflow_channels                            log   <null>
 mz_dataflow_channels_1                          log   <null>
+mz_dataflow_channels_2                          log   <null>
+mz_dataflow_channels_3                          log   <null>
 mz_dataflow_addresses                           log   <null>
 mz_dataflow_addresses_1                         log   <null>
+mz_dataflow_addresses_2                         log   <null>
+mz_dataflow_addresses_3                         log   <null>
 mz_dataflow_operator_reachability_internal      log   <null>
 mz_dataflow_operator_reachability_internal_1    log   <null>
+mz_dataflow_operator_reachability_internal_2    log   <null>
+mz_dataflow_operator_reachability_internal_3    log   <null>
 mz_dataflow_operators                           log   <null>
 mz_dataflow_operators_1                         log   <null>
+mz_dataflow_operators_2                         log   <null>
+mz_dataflow_operators_3                         log   <null>
 mz_worker_compute_dependencies                  log   <null>
 mz_worker_compute_dependencies_1                log   <null>
+mz_worker_compute_dependencies_2                log   <null>
+mz_worker_compute_dependencies_3                log   <null>
 mz_compute_exports                              log   <null>
 mz_compute_exports_1                            log   <null>
+mz_compute_exports_2                            log   <null>
+mz_compute_exports_3                            log   <null>
 mz_message_counts_received_internal             log   <null>
 mz_message_counts_received_internal_1           log   <null>
+mz_message_counts_received_internal_2           log   <null>
+mz_message_counts_received_internal_3           log   <null>
 mz_message_counts_sent_internal                 log   <null>
 mz_message_counts_sent_internal_1               log   <null>
+mz_message_counts_sent_internal_2               log   <null>
+mz_message_counts_sent_internal_3               log   <null>
 mz_raw_peek_durations                           log   <null>
 mz_raw_peek_durations_1                         log   <null>
+mz_raw_peek_durations_2                         log   <null>
+mz_raw_peek_durations_3                         log   <null>
 mz_raw_worker_compute_delays                    log   <null>
 mz_raw_worker_compute_delays_1                  log   <null>
+mz_raw_worker_compute_delays_2                  log   <null>
+mz_raw_worker_compute_delays_3                  log   <null>
 mz_active_peeks                                 log   <null>
 mz_active_peeks_1                               log   <null>
+mz_active_peeks_2                               log   <null>
+mz_active_peeks_3                               log   <null>
 mz_scheduling_elapsed_internal                  log   <null>
 mz_scheduling_elapsed_internal_1                log   <null>
+mz_scheduling_elapsed_internal_2                log   <null>
+mz_scheduling_elapsed_internal_3                log   <null>
 mz_raw_compute_operator_durations_internal      log   <null>
 mz_raw_compute_operator_durations_internal_1    log   <null>
+mz_raw_compute_operator_durations_internal_2    log   <null>
+mz_raw_compute_operator_durations_internal_3    log   <null>
 mz_scheduling_parks_internal                    log   <null>
 mz_scheduling_parks_internal_1                  log   <null>
+mz_scheduling_parks_internal_2                  log   <null>
+mz_scheduling_parks_internal_3                  log   <null>
 mz_storage_shards                               source <null>
 mz_worker_compute_frontiers                     log   <null>
 mz_worker_compute_frontiers_1                   log   <null>
+mz_worker_compute_frontiers_2                   log   <null>
+mz_worker_compute_frontiers_3                   log   <null>
 mz_worker_compute_import_frontiers              log   <null>
 mz_worker_compute_import_frontiers_1            log   <null>
+mz_worker_compute_import_frontiers_2            log   <null>
+mz_worker_compute_import_frontiers_3            log   <null>
 
 > SHOW TABLES FROM mz_internal
 name
@@ -552,38 +590,72 @@ name
 -------------------------------------
 mz_arrangement_sharing
 mz_arrangement_sharing_1
+mz_arrangement_sharing_2
+mz_arrangement_sharing_3
 mz_arrangement_sizes
 mz_arrangement_sizes_1
+mz_arrangement_sizes_2
+mz_arrangement_sizes_3
 mz_dataflows
 mz_dataflows_1
+mz_dataflows_2
+mz_dataflows_3
 mz_dataflow_operator_dataflows
 mz_dataflow_operator_dataflows_1
+mz_dataflow_operator_dataflows_2
+mz_dataflow_operator_dataflows_3
 mz_dataflow_operator_reachability
 mz_dataflow_operator_reachability_1
+mz_dataflow_operator_reachability_2
+mz_dataflow_operator_reachability_3
 mz_compute_frontiers
 mz_compute_frontiers_1
+mz_compute_frontiers_2
+mz_compute_frontiers_3
 mz_compute_import_frontiers
 mz_compute_import_frontiers_1
+mz_compute_import_frontiers_2
+mz_compute_import_frontiers_3
 mz_compute_operator_durations
 mz_compute_operator_durations_1
+mz_compute_operator_durations_2
+mz_compute_operator_durations_3
 mz_message_counts
 mz_message_counts_1
+mz_message_counts_2
+mz_message_counts_3
 mz_peek_durations
 mz_peek_durations_1
+mz_peek_durations_2
+mz_peek_durations_3
 mz_raw_compute_operator_durations
 mz_raw_compute_operator_durations_1
+mz_raw_compute_operator_durations_2
+mz_raw_compute_operator_durations_3
 mz_records_per_dataflow
 mz_records_per_dataflow_1
+mz_records_per_dataflow_2
+mz_records_per_dataflow_3
 mz_records_per_dataflow_global
 mz_records_per_dataflow_global_1
+mz_records_per_dataflow_global_2
+mz_records_per_dataflow_global_3
 mz_records_per_dataflow_operator
 mz_records_per_dataflow_operator_1
+mz_records_per_dataflow_operator_2
+mz_records_per_dataflow_operator_3
 mz_scheduling_elapsed
 mz_scheduling_elapsed_1
+mz_scheduling_elapsed_2
+mz_scheduling_elapsed_3
 mz_scheduling_parks
 mz_scheduling_parks_1
+mz_scheduling_parks_2
+mz_scheduling_parks_3
 mz_worker_compute_delays
 mz_worker_compute_delays_1
+mz_worker_compute_delays_2
+mz_worker_compute_delays_3
 
 > CREATE SCHEMA tester
 
@@ -600,7 +672,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-19
+57
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

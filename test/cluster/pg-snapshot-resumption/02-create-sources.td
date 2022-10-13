@@ -22,7 +22,7 @@
   FROM POSTGRES
   CONNECTION pg
   (PUBLICATION 'mz_source')
+  FOR ALL TABLES
   WITH (
     REMOTE = 'storaged:2100'
-  )
-  FOR ALL TABLES;
+  );

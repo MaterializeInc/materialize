@@ -36,6 +36,7 @@ mod command;
 mod coord;
 mod error;
 mod explain_new;
+mod notice;
 mod subscribe;
 mod util;
 
@@ -45,9 +46,9 @@ pub mod session;
 
 pub use crate::client::{Client, ConnClient, Handle, SessionClient};
 pub use crate::command::{
-    Canceled, ExecuteResponse, ExecuteResponseKind, ExecuteResponsePartialError, RowsFuture,
-    StartupMessage, StartupResponse,
+    Canceled, ExecuteResponse, ExecuteResponseKind, RowsFuture, StartupMessage, StartupResponse,
 };
 pub use crate::coord::peek::PeekResponseUnary;
 pub use crate::coord::{serve, Config, DUMMY_AVAILABILITY_ZONE};
 pub use crate::error::AdapterError;
+pub use crate::notice::AdapterNotice;

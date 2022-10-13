@@ -31,8 +31,8 @@ use mz_storage::types::sinks::{SinkAsOf, StorageSinkConnection};
 use mz_storage::types::sources::{PostgresSourceConnection, SourceConnection, Timeline};
 
 use crate::catalog::{
-    CatalogItem, CatalogState, Op, Sink, StorageSinkConnectionState, TransactionResult,
-    SYSTEM_CONN_ID,
+    CatalogItem, CatalogState, DataSourceDesc, Op, Sink, StorageSinkConnectionState,
+    TransactionResult, SYSTEM_CONN_ID,
 };
 use crate::client::ConnectionId;
 use crate::coord::appends::BuiltinTableUpdateSource;
@@ -88,7 +88,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                     CatalogItem::Source(source) => {
                         sources_to_drop.push(*id);
-                        if let Some(ingestion) = &source.ingestion {
+                        if let DataSourceDesc::Ingestion(ingestion) = &source.data_source {
                             match &ingestion.desc.connection {
                                 SourceConnection::Postgres(PostgresSourceConnection {
                                     connection,
@@ -270,7 +270,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     event_type,
                     json!({
                         "event_source": "environmentd",
-                        "details": event.event_details.as_json(),
+                        "details": event.details.as_json(),
                     }),
                     Some(json!({
                         "groupId": user_metadata.group_id,
@@ -466,36 +466,42 @@ impl<S: Append + 'static> Coordinator<S> {
             ..sink.clone()
         };
 
-        let ops = vec![
-            catalog::Op::DropItem(id),
-            catalog::Op::CreateItem {
-                id,
-                oid,
-                name,
-                item: CatalogItem::Sink(sink.clone()),
-            },
-        ];
+        // We always need to drop the already existing item: either because we fail to create it or we're replacing it.
+        let mut ops = vec![catalog::Op::DropItem(id)];
 
-        let () = self.catalog_transact(session, ops, move |_| Ok(())).await?;
-        // TODO(#14220): should this happen in the same task where we build the connection?  Or should it need to happen
-        // after we update the catalog?
+        // Speculatively create the storage export before confirming in the catalog.  We chose this order of operations
+        // for the following reasons:
+        // - We want to avoid ever putting into the catalog a sink in `StorageSinkConnectionState::Ready`
+        //   if we're not able to actually create the sink for some reason
+        // - Dropping the sink will either succeed (or panic) so it's easier to reason about rolling that change back
+        //   than it is rolling back a catalog change.
         match self
             .create_storage_export(create_export_token, &sink, connection)
             .await
         {
-            Ok(()) => Ok(()),
-            Err(storage_error) =>
-            // TODO: catalog_transact that can take async function to actually make the `CreateItem` above transactional.
-            {
-                match self
-                    .catalog_transact(session, vec![catalog::Op::DropItem(id)], move |_| Ok(()))
-                    .await
-                {
-                    Ok(()) => Err(storage_error),
-                    Err(e) => Err(e),
+            Ok(()) => {
+                ops.push(catalog::Op::CreateItem {
+                    id,
+                    oid,
+                    name,
+                    item: CatalogItem::Sink(sink.clone()),
+                });
+                match self.catalog_transact(session, ops, move |_| Ok(())).await {
+                    Ok(()) => (),
+                    catalog_err @ Err(_) => {
+                        let () = self.drop_storage_sinks(vec![id]).await;
+                        catalog_err?
+                    }
                 }
             }
-        }
+            storage_err @ Err(_) => {
+                match self.catalog_transact(session, ops, move |_| Ok(())).await {
+                    Ok(()) => storage_err?,
+                    catalog_err @ Err(_) => catalog_err?,
+                }
+            }
+        };
+        Ok(())
     }
 
     /// Validate all resource limits in a catalog transaction and return an error if that limit is
@@ -564,8 +570,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         | CatalogItem::Index(_)
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
-                        | CatalogItem::Connection(_)
-                        | CatalogItem::StorageManagedTable(_) => {}
+                        | CatalogItem::Connection(_) => {}
                     }
                 }
                 Op::DropDatabase { .. } => {
@@ -610,11 +615,11 @@ impl<S: Append + 'static> Coordinator<S> {
                         | CatalogItem::Index(_)
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
-                        | CatalogItem::Connection(_)
-                        | CatalogItem::StorageManagedTable(_) => {}
+                        | CatalogItem::Connection(_) => {}
                     }
                 }
-                Op::AlterSource { .. }
+                Op::AlterSink { .. }
+                | Op::AlterSource { .. }
                 | Op::DropTimeline(_)
                 | Op::RenameItem { .. }
                 | Op::UpdateComputeInstanceStatus { .. }
@@ -652,7 +657,7 @@ impl<S: Append + 'static> Coordinator<S> {
             "Materialized view",
         )?;
         self.validate_resource_limit(
-            self.catalog.compute_instances().count(),
+            self.catalog.user_compute_instances().count(),
             new_clusters,
             SystemVars::max_clusters,
             "Cluster",

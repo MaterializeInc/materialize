@@ -13,9 +13,11 @@ from materialize.zippy.debezium_actions import CreateDebeziumSource, DebeziumSta
 from materialize.zippy.framework import Action, Scenario
 from materialize.zippy.kafka_actions import CreateTopic, Ingest, KafkaStart
 from materialize.zippy.mz_actions import KillComputed, KillStoraged, MzStart, MzStop
+from materialize.zippy.pg_cdc_actions import CreatePostgresCdcTable
 from materialize.zippy.postgres_actions import (
     CreatePostgresTable,
     PostgresDML,
+    PostgresRestart,
     PostgresStart,
 )
 from materialize.zippy.replica_actions import (
@@ -82,6 +84,25 @@ class DebeziumPostgres(Scenario):
             CreateDebeziumSource: 10,
             KillStoraged: 15,
             KillComputed: 15,
+            CreateView: 10,
+            ValidateView: 20,
+            PostgresDML: 30,
+        }
+
+
+class PostgresCdc(Scenario):
+    """A Zippy test using Postgres CDC exclusively."""
+
+    def bootstrap(self) -> List[Type[Action]]:
+        return [PostgresStart, MzStart]
+
+    def config(self) -> Dict[Type[Action], float]:
+        return {
+            CreatePostgresTable: 10,
+            CreatePostgresCdcTable: 10,
+            KillStoraged: 15,
+            KillComputed: 15,
+            PostgresRestart: 10,
             CreateView: 10,
             ValidateView: 20,
             PostgresDML: 30,

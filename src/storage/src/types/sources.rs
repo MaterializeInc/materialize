@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 use uuid::Uuid;
 
-use mz_expr::{MirScalarExpr, PartitionId};
+use mz_expr::MirScalarExpr;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriteHandle;
@@ -39,6 +39,7 @@ use crate::source::generator::as_generator;
 use crate::types::connections::aws::AwsConfig;
 use crate::types::connections::{KafkaConnection, PostgresConnection, StringOrSecret};
 use crate::types::errors::DataflowError;
+use crate::types::hosts::StorageHostConfig;
 
 use self::encoding::{DataEncoding, DataEncodingInner, SourceDataEncoding};
 use proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
@@ -59,6 +60,8 @@ pub struct IngestionDescription<S = ()> {
     pub ingestion_metadata: S,
     /// Collections to be exported by this ingestion.
     pub source_exports: BTreeMap<GlobalId, SourceExport<S>>,
+    /// The address of a `storaged` process on which to install the source.
+    pub host_config: StorageHostConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -73,16 +76,12 @@ pub struct SourceExport<S = ()> {
 impl<T: timely::progress::Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
     for IngestionDescription<CollectionMetadata>
 {
-    // A `WriteHandle` per output data shard and one for the remap shard. Once we have
-    // source envelopes that keep additional shards we have to specialize this
-    // some more.
-    type State = (
-        Vec<WriteHandle<SourceData, (), T, Diff>>,
-        WriteHandle<(), PartitionId, T, MzOffset>,
-    );
+    // A `WriteHandle` per used shard. Once we have source envelopes that keep additional shards we
+    // have to specialize this some more.
+    type State = Vec<WriteHandle<SourceData, (), T, Diff>>;
 
     async fn initialize_state(&self, client_cache: &mut PersistClientCache) -> Self::State {
-        let mut data_handles = vec![];
+        let mut handles = vec![];
         for export in self.source_exports.values() {
             // Explicit destructuring to force a compile error when the metadata change
             let CollectionMetadata {
@@ -99,7 +98,7 @@ impl<T: timely::progress::Timestamp + Lattice + Codec64> ResumptionFrontierCalcu
                 .open_writer::<SourceData, (), T, Diff>(*data_shard)
                 .await
                 .unwrap();
-            data_handles.push(handle);
+            handles.push(handle);
         }
 
         let CollectionMetadata {
@@ -113,30 +112,24 @@ impl<T: timely::progress::Timestamp + Lattice + Codec64> ResumptionFrontierCalcu
             .open(persist_location.clone())
             .await
             .expect("error creating persist client")
-            .open_writer::<(), PartitionId, T, MzOffset>(*remap_shard)
+            .open_writer::<SourceData, (), T, Diff>(*remap_shard)
             .await
             .unwrap();
+        handles.push(remap_handle);
 
-        (data_handles, remap_handle)
+        handles
     }
 
-    async fn calculate_resumption_frontier(&self, state: &mut Self::State) -> Antichain<T> {
-        let (data_handles, remap_handle) = state;
+    async fn calculate_resumption_frontier(&self, handles: &mut Self::State) -> Antichain<T> {
         // An ingestion can resume at the minimum of..
         let mut resume_upper = Antichain::new();
 
-        // ..the upper frontier of each source export
-        for handle in data_handles {
+        // ..the upper frontier of each shard
+        for handle in handles {
             handle.fetch_recent_upper().await;
             for t in handle.upper().elements() {
                 resume_upper.insert(t.clone());
             }
-        }
-
-        // ..the upper frontier of ingestion state
-        remap_handle.fetch_recent_upper().await;
-        for t in remap_handle.upper().elements() {
-            resume_upper.insert(t.clone());
         }
 
         // ..the upper of an implied envelope state shard. Eventually this could become actual
@@ -171,13 +164,15 @@ where
             proptest::collection::btree_map(any::<GlobalId>(), any::<SourceExport<S>>(), 1..4)
                 .boxed(),
             any::<S>().boxed(),
+            any::<StorageHostConfig>().boxed(),
         )
             .prop_map(
-                |(desc, source_imports, source_exports, ingestion_metadata)| Self {
+                |(desc, source_imports, source_exports, ingestion_metadata, host_config)| Self {
                     desc,
                     source_imports,
                     source_exports,
                     ingestion_metadata,
+                    host_config,
                 },
             )
             .boxed()
@@ -191,6 +186,7 @@ impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMeta
             source_exports: self.source_exports.into_proto(),
             ingestion_metadata: Some(self.ingestion_metadata.into_proto()),
             desc: Some(self.desc.into_proto()),
+            host_config: Some(self.host_config.into_proto()),
         }
     }
 
@@ -204,6 +200,9 @@ impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMeta
             ingestion_metadata: proto
                 .ingestion_metadata
                 .into_rust_if_some("ProtoIngestionDescription::ingestion_metadata")?,
+            host_config: proto
+                .host_config
+                .into_rust_if_some("ProtoIngestionDescription::host_config")?,
         })
     }
 }
@@ -1133,6 +1132,7 @@ impl UnplannedSourceEnvelope {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSourceConnection {
     pub connection: KafkaConnection,
+    pub connection_id: GlobalId,
     pub options: BTreeMap<String, StringOrSecret>,
     pub topic: String,
     // Map from partition -> starting offset
@@ -1163,6 +1163,7 @@ impl Arbitrary for KafkaSourceConnection {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
             any::<KafkaConnection>(),
+            any::<GlobalId>(),
             proptest::collection::btree_map(any::<String>(), any::<StringOrSecret>(), 1..4),
             any::<String>(),
             proptest::collection::hash_map(any::<i32>(), any::<i64>(), 1..4),
@@ -1177,6 +1178,7 @@ impl Arbitrary for KafkaSourceConnection {
             .prop_map(
                 |(
                     connection,
+                    connection_id,
                     options,
                     topic,
                     start_offsets,
@@ -1189,6 +1191,7 @@ impl Arbitrary for KafkaSourceConnection {
                     include_headers,
                 )| KafkaSourceConnection {
                     connection,
+                    connection_id,
                     options,
                     topic,
                     start_offsets,
@@ -1209,6 +1212,7 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
     fn into_proto(&self) -> ProtoKafkaSourceConnection {
         ProtoKafkaSourceConnection {
             connection: Some(self.connection.into_proto()),
+            connection_id: Some(self.connection_id.into_proto()),
             options: self
                 .options
                 .iter()
@@ -1237,6 +1241,9 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
             connection: proto
                 .connection
                 .into_rust_if_some("ProtoKafkaSourceConnection::connection")?,
+            connection_id: proto
+                .connection_id
+                .into_rust_if_some("ProtoKafkaSourceConnection::connection_id")?,
             options: options?,
             topic: proto.topic,
             start_offsets: proto.start_offsets,
@@ -1395,10 +1402,9 @@ impl SourceDesc {
             SourceConnection::Kafka(_) | SourceConnection::Kinesis(_) | SourceConnection::S3(_) => {
                 0
             }
-            SourceConnection::LoadGenerator(connection) => match &connection.load_generator {
-                generator @ LoadGenerator::Auction => as_generator(generator).views().len(),
-                LoadGenerator::Counter => 0,
-            },
+            SourceConnection::LoadGenerator(connection) => {
+                as_generator(&connection.load_generator).views().len()
+            }
             SourceConnection::Postgres(connection) => connection.details.tables.len(),
         };
         // Every ingestion produces a main stream plus subsource streams
@@ -1417,6 +1423,19 @@ pub enum SourceConnection {
     S3(S3SourceConnection),
     Postgres(PostgresSourceConnection),
     LoadGenerator(LoadGeneratorSourceConnection),
+}
+
+impl SourceConnection {
+    pub fn connection_id(&self) -> Option<GlobalId> {
+        use SourceConnection::*;
+        match self {
+            Kafka(KafkaSourceConnection { connection_id, .. })
+            | Kinesis(KinesisSourceConnection { connection_id, .. })
+            | S3(S3SourceConnection { connection_id, .. })
+            | Postgres(PostgresSourceConnection { connection_id, .. }) => Some(*connection_id),
+            LoadGenerator(_) => None,
+        }
+    }
 }
 
 impl RustType<ProtoSourceConnection> for SourceConnection {
@@ -1580,6 +1599,7 @@ impl SourceConnection {
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KinesisSourceConnection {
+    pub connection_id: GlobalId,
     pub stream_name: String,
     pub aws: AwsConfig,
 }
@@ -1595,6 +1615,7 @@ impl RustType<ProtoKinesisSourceConnection> for KinesisSourceConnection {
         ProtoKinesisSourceConnection {
             stream_name: self.stream_name.clone(),
             aws: Some(self.aws.into_proto()),
+            connection_id: Some(self.connection_id.into_proto()),
         }
     }
 
@@ -1604,12 +1625,16 @@ impl RustType<ProtoKinesisSourceConnection> for KinesisSourceConnection {
             aws: proto
                 .aws
                 .into_rust_if_some("ProtoKinesisSourceConnection::aws")?,
+            connection_id: proto
+                .connection_id
+                .into_rust_if_some("ProtoKinesisSourceConnection::connection_id")?,
         })
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PostgresSourceConnection {
+    pub connection_id: GlobalId,
     pub connection: PostgresConnection,
     /// The cast expressions to convert the incoming string encoded rows to their target types
     pub table_casts: Vec<Vec<MirScalarExpr>>,
@@ -1624,6 +1649,7 @@ impl Arbitrary for PostgresSourceConnection {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
             any::<PostgresConnection>(),
+            any::<GlobalId>(),
             proptest::collection::vec(
                 proptest::collection::vec(any::<MirScalarExpr>(), 1..4),
                 1..4,
@@ -1631,12 +1657,15 @@ impl Arbitrary for PostgresSourceConnection {
             any::<String>(),
             any::<PostgresSourceDetails>(),
         )
-            .prop_map(|(connection, table_casts, publication, details)| Self {
-                connection,
-                table_casts,
-                publication,
-                details,
-            })
+            .prop_map(
+                |(connection, connection_id, table_casts, publication, details)| Self {
+                    connection,
+                    connection_id,
+                    table_casts,
+                    publication,
+                    details,
+                },
+            )
             .boxed()
     }
 }
@@ -1662,6 +1691,7 @@ impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
         }
         ProtoPostgresSourceConnection {
             connection: Some(self.connection.into_proto()),
+            connection_id: Some(self.connection_id.into_proto()),
             publication: self.publication.clone(),
             details: Some(self.details.into_proto()),
             table_casts,
@@ -1681,6 +1711,9 @@ impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
             connection: proto
                 .connection
                 .into_rust_if_some("ProtoPostgresSourceConnection::connection")?,
+            connection_id: proto
+                .connection_id
+                .into_rust_if_some("ProtoPostgresSourceConnection::connection_id")?,
             publication: proto.publication,
             details: proto
                 .details
@@ -1742,11 +1775,18 @@ pub trait Generator {
     /// Returns the list of table names and their column types that this generator generates
     fn views(&self) -> Vec<(&str, RelationDesc)>;
 
-    /// Returns a batch of rows generated by the source. All rows in the same
-    /// batch are produced at the same logical offset to allow demonstrating strict
-    /// serializability within the system.
-    fn by_seed(&self, now: NowFn, seed: Option<u64>)
-        -> Box<dyn Iterator<Item = (usize, Vec<Row>)>>;
+    /// Returns a function that produces rows and batch information.
+    fn by_seed(
+        &self,
+        now: NowFn,
+        seed: Option<u64>,
+    ) -> Box<dyn Iterator<Item = (usize, GeneratorMessageType, Row)>>;
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum GeneratorMessageType {
+    InProgress,
+    Finalized,
 }
 
 impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnection {
@@ -1776,6 +1816,7 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct S3SourceConnection {
+    pub connection_id: GlobalId,
     pub key_sources: Vec<S3KeySource>,
     pub pattern: Option<Glob>,
     pub aws: AwsConfig,
@@ -1804,19 +1845,21 @@ impl Arbitrary for S3SourceConnection {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
+            any::<GlobalId>(),
             any::<Vec<S3KeySource>>(),
             proptest::option::of(any_glob()),
             any::<AwsConfig>(),
             any::<Compression>(),
         )
-            .prop_map(
-                |(key_sources, pattern, aws, compression)| S3SourceConnection {
+            .prop_map(|(connection_id, key_sources, pattern, aws, compression)| {
+                S3SourceConnection {
+                    connection_id,
                     key_sources,
                     pattern,
                     aws,
                     compression,
-                },
-            )
+                }
+            })
             .boxed()
     }
 }
@@ -1824,6 +1867,7 @@ impl Arbitrary for S3SourceConnection {
 impl RustType<ProtoS3SourceConnection> for S3SourceConnection {
     fn into_proto(&self) -> ProtoS3SourceConnection {
         ProtoS3SourceConnection {
+            connection_id: Some(self.connection_id.into_proto()),
             key_sources: self.key_sources.into_proto(),
             pattern: self.pattern.as_ref().map(|g| g.glob().into()),
             aws: Some(self.aws.into_proto()),
@@ -1833,6 +1877,9 @@ impl RustType<ProtoS3SourceConnection> for S3SourceConnection {
 
     fn from_proto(proto: ProtoS3SourceConnection) -> Result<Self, TryFromProtoError> {
         Ok(S3SourceConnection {
+            connection_id: proto
+                .connection_id
+                .into_rust_if_some("ProtoS3SourceConnection::connection_id")?,
             key_sources: proto.key_sources.into_rust()?,
             pattern: proto
                 .pattern

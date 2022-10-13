@@ -30,6 +30,7 @@ fn main() {
         .extern_path(".mz_repr.chrono", "::mz_repr::chrono")
         .extern_path(".mz_repr.antichain", "::mz_repr::antichain")
         .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
+        .extern_path(".mz_orchestrator", "::mz_orchestrator")
         .extern_path(".mz_proto", "::mz_proto")
         .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
         .extern_path(".mz_repr.row", "::mz_repr")
@@ -40,6 +41,7 @@ fn main() {
                 "storage/src/controller.proto",
                 "storage/src/types/errors.proto",
                 "storage/src/types/connections/aws.proto",
+                "storage/src/types/hosts.proto",
                 "storage/src/types/sinks.proto",
                 "storage/src/types/sources.proto",
                 "storage/src/types/sources/encoding.proto",

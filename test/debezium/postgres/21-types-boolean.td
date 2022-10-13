@@ -17,7 +17,7 @@ ALTER TABLE boolean_type REPLICA IDENTITY FULL;
 INSERT INTO boolean_type VALUES (TRUE, TRUE);
 INSERT INTO boolean_type VALUES (FALSE, FALSE);
 
-$ schema-registry-wait-schema schema=postgres.public.boolean_type-value
+$ schema-registry-wait subject=postgres.public.boolean_type-value
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY

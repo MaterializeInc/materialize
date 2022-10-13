@@ -7,65 +7,46 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::{anyhow, Context};
+use std::time::Duration;
+
+use anyhow::{bail, Context};
 use rdkafka::consumer::{Consumer, StreamConsumer};
-use rdkafka::topic_partition_list::Offset;
+use rdkafka::topic_partition_list::{Offset, TopicPartitionList};
 
 use mz_ore::retry::Retry;
+use mz_ore::str::StrExt;
 
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
-
-async fn get_env_id(state: &mut State) -> Result<String, anyhow::Error> {
-    let query = "select mz_environment_id();".to_string();
-    let result = state
-        .pgclient
-        .query_one(query.as_str(), &[])
-        .await
-        .context("retrieving env id")?
-        .get(0);
-    Ok(result)
-}
-
-async fn get_src_id(source: &str, state: &mut State) -> Result<String, anyhow::Error> {
-    let query = "select id from mz_sources where name = $1".to_string();
-    let result = state
-        .pgclient
-        .query_one(query.as_str(), &[&source])
-        .await
-        .context("retrieving source id")?
-        .get(0);
-    Ok(result)
-}
 
 pub async fn run_verify_commit(
     mut cmd: BuiltinCommand,
     state: &mut State,
 ) -> Result<ControlFlow, anyhow::Error> {
-    let source = cmd.args.string("source")?;
+    let consumer_group_id = cmd.args.string("consumer-group-id")?;
     let topic = cmd.args.string("topic")?;
     let partition = cmd.args.parse("partition")?;
-    let expected_offset = Offset::Offset(cmd.input[0].parse()?);
+    cmd.args.done()?;
 
-    let env_id = get_env_id(state).await?;
-    let source_id = get_src_id(&source, state).await?;
     let topic = format!("testdrive-{}-{}", topic, state.seed);
+    let expected_offset = match &cmd.input[..] {
+        [line] => Offset::Offset(line.parse().context("parsing expected offset")?),
+        _ => bail!("kafka-verify-commit requires a single expected offset as input"),
+    };
+
+    println!(
+        "Verifying committed Kafka offset for topic {} and consumer group {}...",
+        topic.quoted(),
+        consumer_group_id.quoted(),
+    );
 
     let mut config = state.kafka_config.clone();
-    config.set(
-        "group.id",
-        format!("materialize-{}-kafka-{}", env_id, source_id),
-    );
-    println!(
-        "Verifying committed kafka offset for topic ({}) and consumer group ({})",
-        topic,
-        config.get("group.id").unwrap()
-    );
+    config.set("group.id", &consumer_group_id);
     Retry::default()
         .max_duration(state.default_timeout)
         .retry_async_canceling(|_| async {
             let config = config.clone();
-            let mut tpl = rdkafka::topic_partition_list::TopicPartitionList::new();
+            let mut tpl = TopicPartitionList::new();
             tpl.add_partition(&topic, partition);
             let committed_tpl = mz_ore::task::spawn_blocking(
                 || "kakfa_committed_offsets".to_string(),
@@ -74,7 +55,7 @@ pub async fn run_verify_commit(
                         config.create().context("creating kafka consumer")?;
 
                     Ok::<_, anyhow::Error>(
-                        consumer.committed_offsets(tpl, std::time::Duration::from_secs(10))?,
+                        consumer.committed_offsets(tpl, Duration::from_secs(10))?,
                     )
                 },
             )
@@ -83,14 +64,13 @@ pub async fn run_verify_commit(
 
             let found_offset = committed_tpl.elements_for_topic(&topic)[0].offset();
             if found_offset != expected_offset {
-                Err(anyhow!(
-                    "Found committed offset `{:?}` does not match expected offset `{:?}`",
+                bail!(
+                    "found committed offset `{:?}` does not match expected offset `{:?}`",
                     found_offset,
                     expected_offset
-                ))
-            } else {
-                Ok(())
+                );
             }
+            Ok(())
         })
         .await?;
     Ok(ControlFlow::Continue)

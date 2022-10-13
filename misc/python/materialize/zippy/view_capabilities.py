@@ -11,12 +11,19 @@ from typing import List, Optional, Union
 
 from materialize.zippy.debezium_capabilities import DebeziumSourceExists
 from materialize.zippy.framework import Capability
+from materialize.zippy.pg_cdc_capabilities import PostgresCdcTableExists
 from materialize.zippy.source_capabilities import SourceExists
 from materialize.zippy.table_capabilities import TableExists
 from materialize.zippy.watermarks import Watermarks
 
 WatermarkedObjects = List[
-    Union[TableExists, SourceExists, "ViewExists", DebeziumSourceExists]
+    Union[
+        TableExists,
+        SourceExists,
+        "ViewExists",
+        DebeziumSourceExists,
+        PostgresCdcTableExists,
+    ]
 ]
 
 

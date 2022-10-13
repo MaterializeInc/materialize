@@ -63,7 +63,7 @@ $ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keysc
 # Make sure that we have produced stuff to the sink before we restart
 
 
-$ kafka-verify format=avro sink=materialize.public.exactly_once_sink sort-messages=true
+$ kafka-verify-data format=avro sink=materialize.public.exactly_once_sink sort-messages=true
 {"before":null,"after":{"row":{"f1":0,"f2":0}}}
 {"before":null,"after":{"row":{"f1":1,"f2":1}}}
 {"before":null,"after":{"row":{"f1":10,"f2":10}}}

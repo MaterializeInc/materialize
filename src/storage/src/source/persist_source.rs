@@ -16,6 +16,7 @@ use std::task::{Context, Poll};
 use std::time::Instant;
 
 use differential_dataflow::Hashable;
+use futures::stream::StreamExt;
 use futures::Stream as FuturesStream;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -29,7 +30,7 @@ use mz_expr::MfpPlan;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::ExternalError;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::fetch::SerdeLeasedBatchPart;
+use mz_persist_client::fetch::{LeasedBatchPart, SerdeLeasedBatchPart};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
@@ -79,6 +80,87 @@ where
         Err(err) => Err((err, t, r)),
     });
     (ok_stream, err_stream, token)
+}
+
+/// The stream of batches from persist cannot be dropped at the discretion of
+/// the program unaided without potentially panicking (check `LeasedBatchPart`).
+/// To prevent panics, ensure that all of the stream's values are consumed,
+/// irrespective of the source getting dropped.
+struct DropSafeLeaseStream {
+    // `pin` is an `Option` only so we can move it into a task on drop.
+    pinned_stream: Option<
+        std::pin::Pin<
+            Box<
+                dyn FuturesStream<
+                        Item = Result<
+                            (Vec<LeasedBatchPart<Timestamp>>, Antichain<Timestamp>),
+                            ExternalError,
+                        >,
+                    > + Send,
+            >,
+        >,
+    >,
+}
+
+impl DropSafeLeaseStream {
+    fn new(
+        pinned_stream: std::pin::Pin<
+            Box<
+                dyn FuturesStream<
+                        Item = Result<
+                            (Vec<LeasedBatchPart<Timestamp>>, Antichain<Timestamp>),
+                            ExternalError,
+                        >,
+                    > + Send,
+            >,
+        >,
+    ) -> DropSafeLeaseStream {
+        DropSafeLeaseStream {
+            pinned_stream: Some(pinned_stream),
+        }
+    }
+
+    fn poll_next(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<(Vec<LeasedBatchPart<Timestamp>>, Antichain<Timestamp>), ExternalError>>>
+    {
+        self.pinned_stream
+            .as_mut()
+            .expect("while being polled, pin is in place")
+            .as_mut()
+            .poll_next(cx)
+    }
+}
+
+impl Drop for DropSafeLeaseStream {
+    fn drop(&mut self) {
+        let mut pin = self.pinned_stream.take().expect("pin only taken on drop");
+
+        mz_ore::task::spawn(|| "LeaseStreamDrainer", async move {
+            // Drain the remainder of the items from the stream; this ensures
+            // that nothing gets dropped while in flight.
+            //
+            // Note that at the end of this task, we expect the internal stream
+            // to have spawned another task that receives any leases returned to
+            // the subscribe.
+            while let Some(item) = pin.as_mut().next().await {
+                match item {
+                    Ok((parts, _)) => {
+                        for part in parts {
+                            // We don't expect this task to run for long, so we
+                            // don't bother sending leases back to `subscribe`;
+                            // this delays compaction slightly, so could instead
+                            // be optimized to meaningfully return batches
+                            // instead of dropping their leases on the floor.
+                            let _ = part.into_exchangeable_part();
+                        }
+                    }
+                    Err::<_, ExternalError>(_) => {}
+                }
+            }
+        });
+    }
 }
 
 /// Creates a new source that reads from a persist shard, distributing the work
@@ -216,7 +298,7 @@ where
         });
     });
 
-    let mut pinned_stream = Box::pin(async_stream);
+    let mut pinned_stream = DropSafeLeaseStream::new(Box::pin(async_stream));
 
     let (inner, token) = crate::source::util::source(
         scope,
@@ -230,7 +312,7 @@ where
             move |cap_set, output| {
                 let mut context = Context::from_waker(&waker);
 
-                while let Poll::Ready(item) = pinned_stream.as_mut().poll_next(&mut context) {
+                while let Poll::Ready(item) = pinned_stream.poll_next(&mut context) {
                     match item {
                         Some(Ok((parts, progress))) => {
                             let session_cap = cap_set.delayed(&current_ts);

@@ -16,7 +16,7 @@ CREATE TABLE bytea_type (f1 BYTEA, f2 INTEGER PRIMARY KEY);
 ALTER TABLE bytea_type REPLICA IDENTITY FULL;
 INSERT INTO bytea_type VALUES (NULL, 0), ('', 1), (E'\\x00', 2), (E'\\xABCDEF1234', 3);
 
-$ schema-registry-wait-schema schema=postgres.public.bytea_type-value
+$ schema-registry-wait subject=postgres.public.bytea_type-value
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY

@@ -217,22 +217,27 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                             process.kill();
                         } else {
                             // Existing non-dead process, so we don't create a new one
+                            let mut all_ports_allocated = true;
                             for port in port_metadata.values() {
                                 if !self.port_allocator.mark_allocated(*port) {
                                     // Somehow we've re-allocated an already used port which
-                                    // shouldn't be possible. So we just kill the process and panic.
+                                    // is unfortunate. Kill the process and restart it.
+                                    error!("port {port} re-used in process {}; killing (this is a limitation of the process orchestrator that should be fixed)", process.pid());
+                                    all_ports_allocated = false;
                                     process.kill();
-                                    panic!("port re-use");
+                                    break;
                                 }
                             }
-                            handles.push(AbortOnDrop(Box::new(ExternalProcess {
-                                pid,
-                                _port_metadata_file: PortMetadataFile::open_existing(
-                                    port_metadata_file_location,
-                                ),
-                            })));
-                            processes.push(port_metadata);
-                            continue;
+                            if all_ports_allocated {
+                                handles.push(AbortOnDrop(Box::new(ExternalProcess {
+                                    pid,
+                                    _port_metadata_file: PortMetadataFile::open_existing(
+                                        port_metadata_file_location,
+                                    ),
+                                })));
+                                processes.push(port_metadata);
+                                continue;
+                            }
                         }
                     }
                 }

@@ -63,7 +63,7 @@ Field                                | Value     | Description
 
 Field                                | Value     | Description
 -------------------------------------|-----------|-------------------------------------
-`SIZE`                               | `text`    | Default: `3xsmall`. The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`.
+`SIZE`                               | `text`    | **Required.** The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`.
 
 ## Supported formats
 
@@ -307,7 +307,7 @@ CREATE SECRET csr_password AS '<CSR_PASSWORD>';
 
 CREATE CONNECTION csr_ssl
   FOR CONFLUENT SCHEMA REGISTRY
-    URL 'rp-f00000bar.data.vectorized.cloud:30993',
+    URL 'https://rp-f00000bar.data.vectorized.cloud:30993',
     SSL KEY = SECRET csr_ssl_key,
     SSL CERTIFICATE = SECRET csr_ssl_crt,
     USERNAME = 'foo',

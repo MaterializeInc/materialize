@@ -18,7 +18,7 @@
 $ set-regex match=^s\d*$ replacement=<GID>
 # Without qualifiers, should default to builtin bool.
 > SELECT value_id
-  FROM mz_map_types JOIN mz_types ON mz_map_types.type_id = mz_types.id
+  FROM mz_map_types JOIN mz_types ON mz_map_types.id = mz_types.id
   WHERE name = 'custom'
 <GID>
 
@@ -27,7 +27,7 @@ $ set-regex match=^s\d*$ replacement=<GID>
 $ set-regex match=^u\d*$ replacement=<GID>
 # Qualified name should point to user-defined bool.
 > SELECT value_id
-  FROM mz_map_types JOIN mz_types ON mz_map_types.type_id = mz_types.id
+  FROM mz_map_types JOIN mz_types ON mz_map_types.id = mz_types.id
   WHERE name = 'another_custom'
 <GID>
 

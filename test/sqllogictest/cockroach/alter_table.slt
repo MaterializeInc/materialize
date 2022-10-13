@@ -67,7 +67,7 @@ statement error multiple primary keys for table "t" are not allowed
 ALTER TABLE t ADD CONSTRAINT bar PRIMARY KEY (b)
 
 query TTBITTBB colnames
-SHOW INDEXES FROM t
+SHOW INDEXES ON t
 ----
 table_name  index_name  non_unique  seq_in_index  column_name  direction  storing  implicit
 t           primary     false       1             a            ASC        false    false
@@ -222,7 +222,7 @@ LIMIT 1
 SCHEMA CHANGE  DROP INDEX test.public.t@foo CASCADE  root  running  waiting for GC TTL  0  ·
 
 query TTBITTBB colnames
-SHOW INDEXES FROM t
+SHOW INDEXES ON t
 ----
 table_name  index_name  non_unique  seq_in_index  column_name  direction  storing  implicit
 t           primary     false       1             a            ASC        false    false

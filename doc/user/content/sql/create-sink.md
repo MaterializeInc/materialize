@@ -49,22 +49,23 @@ _item&lowbar;name_ | The name of the source or view you want to send to the sink
 
 ### `CONNECTION` options
 
-Field                | Value type | Description
----------------------|------------|------------
-`TOPIC`              | `text`     | The prefix used to generate the Kafka topic name to create and write to.
+Field                | Value  | Description
+---------------------|--------|------------
+`TOPIC`              | `text` | The prefix used to generate the Kafka topic name to create and write to.
 
 ### CSR `CONNECTION` options
 
-Field                | Value type | Description
----------------------|------------|------------
-`AVRO KEY FULLNAME`  | `text`     | Sets the Avro fullname on the generated key schema, if a `KEY` is specified. When used, a value must be specified for `AVRO VALUE FULLNAME`. The default fullname is `row`.
-`AVRO VALUE FULLNAME`| `text`     | Default: `envelope`. Sets the Avro fullname on the generated value schema. When `KEY` is specified, `AVRO KEY FULLNAME` must additionally be specified.
+Field                | Value  | Description
+---------------------|--------|------------
+`AVRO KEY FULLNAME`  | `text` | Sets the Avro fullname on the generated key schema, if a `KEY` is specified. When used, a value must be specified for `AVRO VALUE FULLNAME`. The default fullname is `row`.
+`AVRO VALUE FULLNAME`| `text` | Default: `envelope`. Sets the Avro fullname on the generated value schema. When `KEY` is specified, `AVRO KEY FULLNAME` must additionally be specified.
 
-### `WITH SNAPSHOT` or `WITHOUT SNAPSHOT`
+### `WITH` options
 
-By default, each `SINK` is created with a `SNAPSHOT` which contains the consolidated results of the
-query before the sink was created. Any further updates to these results are produced at the time when
-they occur. To only see results after the sink is created, specify `WITHOUT SNAPSHOT`.
+Field                | Value  | Description
+---------------------|--------|------------
+`SNAPSHOT`           | `bool` | Default: `true`. Whether to emit the consolidated results of the query before the sink was created at the start of the sink. To see only results after the sink is created, specify `WITH (SNAPSHOT = false)`.
+`SIZE`               | `text`    | **Required.** The [size](#sizing-a-sink) for the sink. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`.
 
 ## Detail
 
@@ -138,6 +139,15 @@ You can find the topic name and other metadata for each Kafka sink by querying [
 {{</ note >}}
 
 To achieve its exactly-once processing guarantees, Materialize needs to store some internal metadata in an additional *progress topic*. This topic is shared among all sinks that use a particular Kafka connection. The name of this progress topic can be specified when [creating a connection](/sql/create-connection); otherwise, a default is chosen based on the Materialize environment `id` and the connection `id`. In either case, Materialize will attempt to create the topic if it does not exist. The contents of this topic are not user-specified.
+
+## Best practices
+
+### Sizing a sink
+
+Some sinks are low traffic and require relatively few resources, while others
+are high traffic and require hefty resource allocations. You choose the amount
+of CPU and memory available to a sink using the `SIZE` option. You cannot yet
+change the size of a sink after creation.
 
 ## Examples
 

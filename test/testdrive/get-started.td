@@ -15,11 +15,11 @@
 name          type           size
 ----------------------------------
 demo          load-generator 1
-accounts      subsource      1
-auctions      subsource      1
-bids          subsource      1
-organizations subsource      1
-users         subsource      1
+accounts      subsource      <null>
+auctions      subsource      <null>
+bids          subsource      <null>
+organizations subsource      <null>
+users         subsource      <null>
 
 > SHOW COLUMNS FROM auctions
 end_time false "timestamp with time zone"

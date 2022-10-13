@@ -315,9 +315,8 @@ fn show_connections<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let query = format!(
-        "SELECT t.name, t.type
-        FROM mz_catalog.mz_connections t
-        JOIN mz_catalog.mz_schemas s on t.schema_id = s.id
+        "SELECT name, type
+        FROM mz_catalog.mz_connections
         WHERE schema_id = {schema_spec}",
     );
     ShowSelect::new(scx, query, filter, None, None)
@@ -330,9 +329,8 @@ fn show_tables<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let query = format!(
-        "SELECT t.name
-        FROM mz_catalog.mz_tables t
-        JOIN mz_catalog.mz_schemas s ON t.schema_id = s.id
+        "SELECT name
+        FROM mz_catalog.mz_tables
         WHERE schema_id = {schema_spec}",
     );
     ShowSelect::new(scx, query, filter, None, None)
@@ -376,7 +374,7 @@ fn show_materialized_views<'a>(
     let mut where_clause = format!("schema_id = {schema_spec}");
 
     if let Some(cluster) = in_cluster {
-        write!(where_clause, " AND cluster_id = {}", cluster.id)
+        write!(where_clause, " AND cluster_id = '{}'", cluster.id)
             .expect("write on string cannot fail");
     }
 
@@ -421,10 +419,9 @@ fn show_types<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let query = format!(
-        "SELECT t.name
-        FROM mz_catalog.mz_types t
-        JOIN mz_catalog.mz_schemas s ON t.schema_id = s.id
-        WHERE t.schema_id = {schema_spec}",
+        "SELECT name
+        FROM mz_catalog.mz_types
+        WHERE schema_id = {schema_spec}",
     );
     ShowSelect::new(scx, query, filter, None, None)
 }
@@ -436,10 +433,9 @@ fn show_all_objects<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let query = format!(
-        "SELECT o.name, o.type
-        FROM mz_catalog.mz_objects o
-        JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
-        WHERE o.schema_id = {schema_spec}",
+        "SELECT name, type
+        FROM mz_catalog.mz_objects
+        WHERE schema_id = {schema_spec}",
     );
     ShowSelect::new(scx, query, filter, None, None)
 }
@@ -455,9 +451,6 @@ pub fn show_indexes<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let mut query_filter = vec!["idxs.on_id NOT LIKE 's%'".into()];
 
-    let schema_spec = scx.resolve_optional_schema(&from_schema)?;
-    query_filter.push(format!("objs.schema_id = {}", schema_spec));
-
     if let Some(on_object) = on_object {
         let on_item = scx.get_item_by_resolved_name(&on_object)?;
         if on_item.item_type() != CatalogItemType::View
@@ -472,10 +465,13 @@ pub fn show_indexes<'a>(
             );
         }
         query_filter.push(format!("objs.id = '{}'", on_item.id()));
+    } else {
+        let schema_spec = scx.resolve_optional_schema(&from_schema)?;
+        query_filter.push(format!("objs.schema_id = {}", schema_spec));
     }
 
     if let Some(cluster) = in_cluster {
-        query_filter.push(format!("clusters.id = {}", cluster.id))
+        query_filter.push(format!("clusters.id = '{}'", cluster.id))
     };
 
     let query = format!(
@@ -534,7 +530,7 @@ pub fn show_columns<'a>(
             mz_columns.nullable,
             mz_columns.type,
             mz_columns.position
-         FROM mz_catalog.mz_columns AS mz_columns
+         FROM mz_catalog.mz_columns
          WHERE mz_columns.id = '{}'",
         entry.id(),
     );
@@ -583,8 +579,8 @@ pub fn show_secrets<'a>(
     let schema_spec = scx.resolve_optional_schema(&from)?;
 
     let query = format!(
-        "SELECT sec.name FROM mz_catalog.mz_secrets sec
-        JOIN mz_catalog.mz_schemas s ON sec.schema_id = s.id
+        "SELECT name
+        FROM mz_catalog.mz_secrets
         WHERE schema_id = {schema_spec}",
     );
 

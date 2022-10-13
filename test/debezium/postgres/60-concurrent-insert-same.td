@@ -16,7 +16,7 @@ CREATE TABLE insert_same_table (f1 INTEGER, PRIMARY KEY (f1));
 ALTER TABLE insert_same_table REPLICA IDENTITY FULL;
 INSERT INTO insert_same_table VALUES (0);
 
-$ schema-registry-wait-schema schema=postgres.public.insert_same_table-value
+$ schema-registry-wait subject=postgres.public.insert_same_table-value
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY

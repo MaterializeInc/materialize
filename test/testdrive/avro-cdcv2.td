@@ -9,9 +9,6 @@
 
 # Test support for Avro sources without using the Confluent Schema Registry.
 
-$ skip-if
-SELECT ${arg.replicas} > 1 OR ${arg.replica-size} > 1;
-
 $ set schema=[
   {
     "type": "array",

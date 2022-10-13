@@ -125,6 +125,7 @@ pub enum Plan {
     AlterNoop(AlterNoopPlan),
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
+    AlterSink(AlterSinkPlan),
     AlterSource(AlterSourcePlan),
     AlterItemRename(AlterItemRenamePlan),
     AlterSecret(AlterSecretPlan),
@@ -157,6 +158,7 @@ impl Plan {
                 vec![PlanKind::AlterItemRename, PlanKind::AlterNoop]
             }
             StatementKind::AlterSecret => vec![PlanKind::AlterNoop, PlanKind::AlterSecret],
+            StatementKind::AlterSink => vec![PlanKind::AlterNoop, PlanKind::AlterSink],
             StatementKind::AlterSource => vec![PlanKind::AlterNoop, PlanKind::AlterSource],
             StatementKind::AlterSystemReset => {
                 vec![PlanKind::AlterNoop, PlanKind::AlterSystemReset]
@@ -549,17 +551,25 @@ pub struct AlterIndexResetOptionsPlan {
 }
 
 #[derive(Debug, Clone)]
-pub enum AlterSourceItem {
+
+pub enum AlterOptionParameter {
     Set(String),
     Reset,
     Unchanged,
 }
 
 #[derive(Debug)]
+pub struct AlterSinkPlan {
+    pub id: GlobalId,
+    pub size: AlterOptionParameter,
+    pub remote: AlterOptionParameter,
+}
+
+#[derive(Debug)]
 pub struct AlterSourcePlan {
     pub id: GlobalId,
-    pub size: AlterSourceItem,
-    pub remote: AlterSourceItem,
+    pub size: AlterOptionParameter,
+    pub remote: AlterOptionParameter,
 }
 
 #[derive(Debug)]
@@ -653,7 +663,6 @@ pub struct Source {
 
 #[derive(Clone, Debug)]
 pub struct Ingestion {
-    pub connection_id: Option<GlobalId>,
     pub desc: SourceDesc,
     pub source_imports: HashSet<GlobalId>,
     pub subsource_exports: HashMap<GlobalId, usize>,
@@ -675,7 +684,6 @@ pub struct Secret {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connection_id: Option<GlobalId>,
     pub connection_builder: StorageSinkConnectionBuilder,
     pub envelope: SinkEnvelope,
 }

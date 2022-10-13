@@ -16,7 +16,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_drop_column_not_null (f1 INTEGER PRIMARY KEY, col_not_null INTEGER NOT NULL);
 INSERT INTO alter_drop_column_not_null VALUES (123, 234);
 
-$ schema-registry-wait-schema schema=postgres.public.alter_drop_column_not_null-value
+$ schema-registry-wait subject=postgres.public.alter_drop_column_not_null-value
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY

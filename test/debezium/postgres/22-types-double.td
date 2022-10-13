@@ -16,7 +16,7 @@ CREATE TABLE double_type (f1 DOUBLE PRECISION, f2 INTEGER PRIMARY KEY);
 ALTER TABLE double_type REPLICA IDENTITY FULL;
 INSERT INTO double_type VALUES (NULL, 0), ('Infinity', 1),('-Infinity', 2), ('NaN', 3);
 
-$ schema-registry-wait-schema schema=postgres.public.double_type-value
+$ schema-registry-wait subject=postgres.public.double_type-value
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY

@@ -10,7 +10,7 @@
 $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=sa;Password=${arg.sa-password}
 
-$ schema-registry-wait-schema schema=sql-server.dbo.types_table-value
+$ schema-registry-wait subject=sql-server.dbo.types_table-value
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY

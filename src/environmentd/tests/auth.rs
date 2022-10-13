@@ -318,7 +318,7 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                                 HeaderValue::from_static("application/json"),
                             );
                             req.body(Body::from(
-                                json!({"sql": "SELECT pg_catalog.current_user()"}).to_string(),
+                                json!({"query": "SELECT pg_catalog.current_user()"}).to_string(),
                             ))
                             .unwrap()
                         }),

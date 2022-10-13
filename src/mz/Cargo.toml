@@ -8,9 +8,9 @@ publish = false
 
 
 [dependencies]
-serde = { version = "1.0.144", features = ["derive"] }
+serde = { version = "1.0.145", features = ["derive"] }
 clap = { version = "3.2.20", features = [ "derive" ] }
-tokio = { version = "1.19.2", features = ["full"] }
+tokio = { version = "1.20.2", features = ["full"] }
 open = "3.0.3"
 axum = "0.5.16"
 rpassword = "7.0"
@@ -22,4 +22,4 @@ mz-ore = { path = "../ore", features = ["task"] }
 toml_edit = "0.14.4"
 anyhow = "1.0.62"
 indicatif = "0.17.1"
-uuid = "1.1.2"
+uuid = "1.2.1"

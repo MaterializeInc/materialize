@@ -97,6 +97,8 @@ pub struct Config {
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     /// The size of the default cluster replica if bootstrapping.
     pub bootstrap_default_cluster_replica_size: String,
+    /// The size of the builtin cluster replicas if bootstrapping.
+    pub bootstrap_builtin_cluster_replica_size: String,
     /// A map from size name to resource allocations for storage hosts.
     pub storage_host_sizes: StorageHostSizeMap,
     /// Default storage host size, should be a key from storage_host_sizes.
@@ -235,6 +237,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         &BootstrapArgs {
             now: (config.now)(),
             default_cluster_replica_size: config.bootstrap_default_cluster_replica_size,
+            builtin_cluster_replica_size: config.bootstrap_builtin_cluster_replica_size,
             // TODO(benesch, brennan): remove this after v0.27.0-alpha.4 has
             // shipped to cloud since all clusters will have had a default
             // availability zone installed.

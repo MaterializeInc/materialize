@@ -1623,7 +1623,7 @@ impl<'a> Parser<'a> {
             } else {
                 self.expected(
                     self.peek_pos(),
-                    "DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW or VIEWS, or [OR REPLACE] MATERIALIZED VIEW after CREATE",
+                    "DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW after CREATE",
                     self.peek_token(),
                 )
             }
@@ -2230,16 +2230,6 @@ impl<'a> Parser<'a> {
             None
         };
 
-        // New WITH block
-        let with_options = if self.parse_keyword(WITH) {
-            self.expect_token(&Token::LParen)?;
-            let options = self.parse_comma_separated(Parser::parse_source_option)?;
-            self.expect_token(&Token::RParen)?;
-            options
-        } else {
-            vec![]
-        };
-
         let subsources = if self.parse_keywords(&[FOR, TABLES]) {
             self.expect_token(&Token::LParen)?;
             let subsources = self.parse_comma_separated(|parser| {
@@ -2259,6 +2249,16 @@ impl<'a> Parser<'a> {
             Some(CreateSourceSubsources::All)
         } else {
             None
+        };
+
+        // New WITH block
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Parser::parse_source_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
         };
 
         Ok(Statement::CreateSource(CreateSourceStatement {
@@ -2384,14 +2384,21 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_create_sink_option(&mut self) -> Result<CreateSinkOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[SIZE, SNAPSHOT])? {
+    /// Parse the name of a CREATE SINK optional parameter
+    fn parse_create_sink_option_name(&mut self) -> Result<CreateSinkOptionName, ParserError> {
+        let name = match self.expect_one_of_keywords(&[REMOTE, SIZE, SNAPSHOT])? {
             SIZE => CreateSinkOptionName::Size,
             SNAPSHOT => CreateSinkOptionName::Snapshot,
+            REMOTE => CreateSinkOptionName::Remote,
             _ => unreachable!(),
         };
+        Ok(name)
+    }
+
+    /// Parse a NAME = VALUE parameter for CREATE SINK
+    fn parse_create_sink_option(&mut self) -> Result<CreateSinkOption<Raw>, ParserError> {
         Ok(CreateSinkOption {
-            name,
+            name: self.parse_create_sink_option_name()?,
             value: self.parse_optional_option_value()?,
         })
     }
@@ -3309,7 +3316,7 @@ impl<'a> Parser<'a> {
             SYSTEM,
             CONNECTION,
         ])? {
-            SINK => ObjectType::Sink,
+            SINK => return self.parse_alter_sink(),
             SOURCE => return self.parse_alter_source(),
             VIEW => ObjectType::View,
             MATERIALIZED => {
@@ -3439,6 +3446,49 @@ impl<'a> Parser<'a> {
 
                 Statement::AlterObjectRename(AlterObjectRenameStatement {
                     object_type: ObjectType::Secret,
+                    if_exists,
+                    name,
+                    to_item_name,
+                })
+            }
+            _ => unreachable!(),
+        })
+    }
+
+    /// Parse an ALTER SINK statement.
+    fn parse_alter_sink(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let if_exists = self.parse_if_exists()?;
+        let name = self.parse_object_name()?;
+
+        Ok(match self.expect_one_of_keywords(&[RESET, SET, RENAME])? {
+            RESET => {
+                self.expect_token(&Token::LParen)?;
+                let reset_options =
+                    self.parse_comma_separated(Parser::parse_create_sink_option_name)?;
+                self.expect_token(&Token::RParen)?;
+
+                Statement::AlterSink(AlterSinkStatement {
+                    sink_name: name,
+                    if_exists,
+                    action: AlterSinkAction::ResetOptions(reset_options),
+                })
+            }
+            SET => {
+                self.expect_token(&Token::LParen)?;
+                let set_options = self.parse_comma_separated(Parser::parse_create_sink_option)?;
+                self.expect_token(&Token::RParen)?;
+                Statement::AlterSink(AlterSinkStatement {
+                    sink_name: name,
+                    if_exists,
+                    action: AlterSinkAction::SetOptions(set_options),
+                })
+            }
+            RENAME => {
+                self.expect_keyword(TO)?;
+                let to_item_name = self.parse_identifier()?;
+
+                Statement::AlterObjectRename(AlterObjectRenameStatement {
+                    object_type: ObjectType::Sink,
                     if_exists,
                     name,
                     to_item_name,
@@ -4577,12 +4627,12 @@ impl<'a> Parser<'a> {
                 filter: self.parse_show_statement_filter()?,
             }))
         } else if self.parse_keyword(INDEXES) {
-            let from_schema = if self.parse_keywords(&[FROM, SCHEMA]) {
+            let from_schema = if self.parse_keywords(&[FROM]) {
                 Some(self.parse_schema_name()?)
             } else {
                 None
             };
-            let on_object = if self.parse_one_of_keywords(&[FROM, ON]).is_some() {
+            let on_object = if self.parse_one_of_keywords(&[ON]).is_some() {
                 Some(self.parse_raw_name()?)
             } else {
                 None
@@ -4591,7 +4641,7 @@ impl<'a> Parser<'a> {
                 return parser_err!(
                     self,
                     self.peek_prev_pos(),
-                    "Cannot specify both FROM SCHEMA and FROM or ON"
+                    "Cannot specify both FROM and ON"
                 );
             }
             let in_cluster = self.parse_optional_in_cluster()?;

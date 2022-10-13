@@ -336,7 +336,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     // Kafka topic) they need to clean up.
                 }
                 if let Some((session, tx)) = session_and_tx {
-                    tx.send(Ok(ExecuteResponse::CreatedSink { existed: false }), session);
+                    tx.send(Ok(ExecuteResponse::CreatedSink), session);
                 }
             }
             Err(e) => {

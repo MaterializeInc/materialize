@@ -25,22 +25,42 @@ ReadyForQuery {"status":"I"}
 # PG permits commits writes that are part of read-only txns, but
 # we do not if the read involves a timestamp
 send
+Query {"query": "INSERT INTO t VALUES (2); BEGIN READ ONLY; SELECT * FROM t;"}
+Query {"query": "COMMIT"}
+----
+
+until err_field_typs=M ignore=RowDescription
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"INSERT 0 1"}
+CommandComplete {"tag":"BEGIN"}
+ErrorResponse {"fields":[{"typ":"M","value":"transaction in write-only mode"}]}
+ReadyForQuery {"status":"E"}
+CommandComplete {"tag":"ROLLBACK"}
+ReadyForQuery {"status":"I"}
+
+# Unlike PostgreSQL, we do not upgrade implicit transactions in the
+# extended protocol
+send
 Parse {"query": "INSERT INTO t VALUES (2)"}
 Bind
 Execute
-Parse {"query": "BEGIN READ ONLY"}
-Bind
-Execute
-Parse {"query": "SELECT * FROM t"}
+Parse {"query": "BEGIN"}
 Bind
 Execute
 Parse {"query": "COMMIT"}
 Bind
 Execute
 Sync
+Parse {"query": "SELECT a FROM t"}
+Bind
+Execute
+Sync
 ----
 
 until err_field_typs=M ignore=RowDescription
+ReadyForQuery
 ReadyForQuery
 ----
 ParseComplete
@@ -51,5 +71,116 @@ BindComplete
 CommandComplete {"tag":"BEGIN"}
 ParseComplete
 BindComplete
-ErrorResponse {"fields":[{"typ":"M","value":"transaction in write-only mode"}]}
+CommandComplete {"tag":"COMMIT"}
+ReadyForQuery {"status":"I"}
+ParseComplete
+BindComplete
+DataRow {"fields":["1"]}
+DataRow {"fields":["2"]}
+CommandComplete {"tag":"SELECT 2"}
+ReadyForQuery {"status":"I"}
+
+send
+Parse {"query": "INSERT INTO t VALUES (3)"}
+Bind
+Execute
+Parse {"query": "BEGIN"}
+Bind
+Execute
+Parse {"query": "SELECT 0/0"}
+Bind
+Execute
+Sync
+Parse {"query": "COMMIT"}
+Bind
+Execute
+Sync
+Parse {"query": "SELECT a FROM t"}
+Bind
+Execute
+Sync
+----
+
+until err_field_typs=M ignore=RowDescription
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"BEGIN"}
+ParseComplete
+BindComplete
+ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
 ReadyForQuery {"status":"E"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"ROLLBACK"}
+ReadyForQuery {"status":"I"}
+ParseComplete
+BindComplete
+DataRow {"fields":["1"]}
+DataRow {"fields":["2"]}
+DataRow {"fields":["3"]}
+CommandComplete {"tag":"SELECT 3"}
+ReadyForQuery {"status":"I"}
+
+# Verify eager committing in implicit transactions for the extended protocol.
+# In Materialize we eagerly commit all statements in an implicit transaction
+# for the extended protocol. This differs from PostgreSQL, which only eagerly
+# commits certain statements.
+send
+Parse {"query": "INSERT INTO t VALUES (4)"}
+Bind
+Execute
+Parse {"query": "SELECT 1/(SELECT 0)"}
+Bind
+Execute
+Sync
+Query {"query": "SELECT * FROM t"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ParseComplete
+BindComplete
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"XX000"},{"typ":"M","value":"division by zero"}]}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"a"}]}
+DataRow {"fields":["1"]}
+DataRow {"fields":["2"]}
+DataRow {"fields":["3"]}
+DataRow {"fields":["4"]}
+CommandComplete {"tag":"SELECT 4"}
+ReadyForQuery {"status":"I"}
+
+# Verify that we don't eagerly commit in implicit transactions for the simple
+# protocol.
+send
+Query {"query": "INSERT INTO t VALUES (5); SELECT 1/(SELECT 0)"}
+Query {"query": "SELECT * FROM t"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"INSERT 0 1"}
+RowDescription {"fields":[{"name":"?column?"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"XX000"},{"typ":"M","value":"division by zero"}]}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"a"}]}
+DataRow {"fields":["1"]}
+DataRow {"fields":["2"]}
+DataRow {"fields":["3"]}
+DataRow {"fields":["4"]}
+CommandComplete {"tag":"SELECT 4"}
+ReadyForQuery {"status":"I"}

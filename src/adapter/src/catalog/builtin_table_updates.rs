@@ -22,7 +22,7 @@ use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
-use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
+use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage::types::connections::KafkaConnection;
 use mz_storage::types::hosts::StorageHostConfig;
@@ -37,10 +37,12 @@ use crate::catalog::builtin::{
     MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
-    CatalogItem, CatalogState, Connection, Error, ErrorKind, Func, Index, MaterializedView, Sink,
-    StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
+    CatalogItem, CatalogState, Connection, Database, Error, ErrorKind, Func, Index,
+    MaterializedView, Role, Sink, StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
 use crate::coord::ReplicaMetadata;
+
+use super::{DataSourceDesc, Ingestion};
 
 /// An update to a built-in table.
 #[derive(Debug)]
@@ -54,12 +56,15 @@ pub struct BuiltinTableUpdate {
 }
 
 impl CatalogState {
-    pub(super) fn pack_database_update(&self, id: &DatabaseId, diff: Diff) -> BuiltinTableUpdate {
-        let database = &self.database_by_id[id];
+    pub(super) fn pack_database_update(
+        &self,
+        database: &Database,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_DATABASES),
             row: Row::pack_slice(&[
-                Datum::UInt64(id.0),
+                Datum::UInt64(database.id.0),
                 Datum::UInt32(database.oid),
                 Datum::String(database.name()),
             ]),
@@ -92,14 +97,13 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_role_update(&self, name: &str, diff: Diff) -> BuiltinTableUpdate {
-        let role = &self.roles[name];
+    pub(super) fn pack_role_update(&self, role: &Role, diff: Diff) -> BuiltinTableUpdate {
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_ROLES),
             row: Row::pack_slice(&[
                 Datum::String(&role.id.to_string()),
                 Datum::UInt32(role.oid),
-                Datum::String(name),
+                Datum::String(&role.name),
             ]),
             diff,
         }
@@ -113,7 +117,7 @@ impl CatalogState {
         let id = self.compute_instances_by_name[name];
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTERS),
-            row: Row::pack_slice(&[Datum::UInt64(id), Datum::String(name)]),
+            row: Row::pack_slice(&[Datum::String(&id.to_string()), Datum::String(name)]),
             diff,
         }
     }
@@ -143,7 +147,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::UInt64(id),
                 Datum::String(name),
-                Datum::UInt64(compute_instance_id),
+                Datum::String(&compute_instance_id.to_string()),
                 Datum::from(size),
                 Datum::from(az),
             ]),
@@ -199,14 +203,15 @@ impl CatalogState {
             CatalogItem::Index(index) => self.pack_index_update(id, oid, name, index, diff),
             CatalogItem::Table(_) => self.pack_table_update(id, oid, schema_id, name, diff),
             CatalogItem::Source(source) => {
-                let source_type = match &source.ingestion {
-                    Some(ingestion) => ingestion.desc.name(),
-                    None => "subsource",
+                let (source_type, connection_id) = match &source.data_source {
+                    DataSourceDesc::Ingestion(ingestion) => (
+                        ingestion.desc.name(),
+                        ingestion.desc.connection.connection_id(),
+                    ),
+                    DataSourceDesc::Source => ("subsource", None),
+                    DataSourceDesc::Introspection(_) => ("source", None),
                 };
-                let connection_id = source
-                    .ingestion
-                    .as_ref()
-                    .and_then(|ingestion| ingestion.connection_id);
+
                 self.pack_source_update(
                     id,
                     oid,
@@ -214,9 +219,12 @@ impl CatalogState {
                     name,
                     source_type,
                     connection_id,
-                    match &source.host_config {
-                        StorageHostConfig::Remote { .. } => None,
-                        StorageHostConfig::Managed { size, .. } => Some(size),
+                    match &source.data_source {
+                        DataSourceDesc::Ingestion(Ingestion {
+                            host_config: StorageHostConfig::Managed { size, .. },
+                            ..
+                        }) => Some(size.as_str()),
+                        _ => None,
                     },
                     diff,
                 )
@@ -231,9 +239,6 @@ impl CatalogState {
             CatalogItem::Secret(_) => self.pack_secret_update(id, schema_id, name, diff),
             CatalogItem::Connection(connection) => {
                 self.pack_connection_update(id, oid, schema_id, name, connection, diff)
-            }
-            CatalogItem::StorageManagedTable(_) => {
-                self.pack_source_update(id, oid, schema_id, name, "source", None, None, diff)
             }
         };
 
@@ -347,7 +352,6 @@ impl CatalogState {
                 if let Some(public_keypair) = ssh.public_keys.as_ref() {
                     updates.extend(self.pack_ssh_tunnel_connection_update(
                         id,
-                        name,
                         public_keypair,
                         diff,
                     ));
@@ -368,7 +372,6 @@ impl CatalogState {
     pub(crate) fn pack_ssh_tunnel_connection_update(
         &self,
         id: GlobalId,
-        name: &str,
         (public_key_primary, public_key_secondary): &(String, String),
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
@@ -376,7 +379,6 @@ impl CatalogState {
             id: self.resolve_builtin_table(&MZ_SSH_TUNNEL_CONNECTIONS),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
-                Datum::String(name),
                 Datum::String(public_key_primary),
                 Datum::String(public_key_secondary),
             ]),
@@ -480,7 +482,7 @@ impl CatalogState {
                 Datum::UInt32(oid),
                 Datum::UInt64(schema_id.into()),
                 Datum::String(name),
-                Datum::UInt64(mview.compute_instance),
+                Datum::String(&mview.compute_instance.to_string()),
                 Datum::String(&query_string),
             ]),
             diff,
@@ -513,12 +515,6 @@ impl CatalogState {
                         diff,
                     });
                 }
-            }
-            let size = match &sink.host_config {
-                mz_storage::types::hosts::StorageHostConfig::Remote { .. } => Datum::Null,
-                mz_storage::types::hosts::StorageHostConfig::Managed { size, .. } => {
-                    Datum::String(size)
-                }
             };
             updates.push(BuiltinTableUpdate {
                 id: self.resolve_builtin_table(&MZ_SINKS),
@@ -528,8 +524,8 @@ impl CatalogState {
                     Datum::UInt64(schema_id.into()),
                     Datum::String(name),
                     Datum::String(connection.name()),
-                    Datum::from(sink.connection_id.map(|id| id.to_string()).as_deref()),
-                    size,
+                    Datum::from(sink.connection_id().map(|id| id.to_string()).as_deref()),
+                    Datum::from(sink.host_config.size()),
                 ]),
                 diff,
             });
@@ -562,7 +558,7 @@ impl CatalogState {
                 Datum::UInt32(oid),
                 Datum::String(name),
                 Datum::String(&index.on.to_string()),
-                Datum::UInt64(index.compute_instance),
+                Datum::String(&index.compute_instance.to_string()),
             ]),
             diff,
         });
@@ -674,7 +670,7 @@ impl CatalogState {
     ) -> Vec<BuiltinTableUpdate> {
         let mut updates = vec![];
         for func_impl_details in func.inner.func_impls() {
-            let arg_ids = func_impl_details
+            let arg_type_ids = func_impl_details
                 .arg_typs
                 .iter()
                 .map(|typ| self.get_entry_in_system_schemas(typ).id().to_string())
@@ -687,10 +683,10 @@ impl CatalogState {
                         lower_bound: 1,
                         length: func_impl_details.arg_typs.len(),
                     }],
-                    arg_ids.iter().map(|id| Datum::String(id)),
+                    arg_type_ids.iter().map(|id| Datum::String(id)),
                 )
                 .unwrap();
-            let arg_ids = row.unpack_first();
+            let arg_type_ids = row.unpack_first();
 
             updates.push(BuiltinTableUpdate {
                 id: self.resolve_builtin_table(&MZ_FUNCTIONS),
@@ -699,7 +695,7 @@ impl CatalogState {
                     Datum::UInt32(func_impl_details.oid),
                     Datum::UInt64(schema_id.into()),
                     Datum::String(name),
-                    arg_ids,
+                    arg_type_ids,
                     Datum::from(
                         func_impl_details
                             .variadic_typ
@@ -742,7 +738,7 @@ impl CatalogState {
         &self,
         event: &VersionedEvent,
     ) -> Result<BuiltinTableUpdate, Error> {
-        let (event_type, object_type, event_details, user, occurred_at): (
+        let (event_type, object_type, details, user, occurred_at): (
             &EventType,
             &ObjectType,
             &EventDetails,
@@ -752,12 +748,12 @@ impl CatalogState {
             VersionedEvent::V1(ev) => (
                 &ev.event_type,
                 &ev.object_type,
-                &ev.event_details,
+                &ev.details,
                 &ev.user,
                 ev.occurred_at,
             ),
         };
-        let event_details = Jsonb::from_serde_json(event_details.as_json())
+        let details = Jsonb::from_serde_json(details.as_json())
             .map_err(|e| {
                 Error::new(ErrorKind::Unstructured(format!(
                     "could not pack audit log update: {}",
@@ -765,7 +761,7 @@ impl CatalogState {
                 )))
             })?
             .into_row();
-        let event_details = event_details.iter().next().unwrap();
+        let details = details.iter().next().unwrap();
         let dt = mz_ore::now::to_datetime(occurred_at).naive_utc();
         let id = event.sortable_id();
         Ok(BuiltinTableUpdate {
@@ -774,7 +770,7 @@ impl CatalogState {
                 Datum::UInt64(id),
                 Datum::String(&format!("{}", event_type)),
                 Datum::String(&format!("{}", object_type)),
-                event_details,
+                details,
                 match user {
                     Some(user) => Datum::String(user),
                     None => Datum::Null,

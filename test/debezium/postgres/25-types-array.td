@@ -15,7 +15,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE array_type (f1 text[], f2 INTEGER PRIMARY KEY);
 INSERT INTO array_type VALUES ('{foo, null}', 0);
 
-$ schema-registry-wait-schema schema=postgres.public.array_type-value
+$ schema-registry-wait subject=postgres.public.array_type-value
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY

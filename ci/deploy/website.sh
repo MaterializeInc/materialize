@@ -34,8 +34,7 @@ declare -A shortlinks=(
 
 cd doc/user
 hugo --gc --baseURL /docs --destination public/docs
-cp -R ../../ci/deploy/website/. public/
-hugo deploy
+hugo deploy --maxDeletes -1
 
 touch empty
 

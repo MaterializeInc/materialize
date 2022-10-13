@@ -360,8 +360,10 @@ impl CanonicalizeMfp {
     }
 
     /// 1. Removes such OR args in which there are contradicting literal constraints.
-    /// 2. Also, if an OR arg doesn't have any contradiction, this fn just deduplicates and sorts
-    /// the AND arg list of that OR arg.
+    /// 2. Also, if an OR arg doesn't have any contradiction, this fn just deduplicates
+    /// the AND arg list of that OR arg. (Might additionally sort all AND arg lists.)
+    ///
+    /// Returns whether it performed any removal or deduplication.
     ///
     /// Example for 1:
     /// `<arg1> OR (a = 5 AND a = 5 AND a = 8) OR <arg3>`
@@ -385,10 +387,10 @@ impl CanonicalizeMfp {
                 exprs: and_args,
             } = or_arg
             {
-                let and_args_orig = and_args.clone();
                 and_args.sort();
+                let and_args_before_dedup = and_args.clone();
                 and_args.dedup();
-                if *and_args != and_args_orig {
+                if *and_args != and_args_before_dedup {
                     changed = true;
                 }
                 // Deduplicated, so we cannot have something like `a = 5 AND a = 5`.
@@ -546,9 +548,15 @@ impl CanonicalizeMfp {
     fn distribute_and_over_or(mfp: &mut MapFilterProject) -> Result<(), RecursionLimitError> {
         mfp.predicates.iter_mut().try_for_each(|(_, p)| {
             let mut old_p = MirScalarExpr::column(0);
-            let orig_size = p.size()?;
-            // We might make the expression exponentially larger, so we should have some limit.
-            while old_p != *p && p.size()? < orig_size * 10 {
+            while old_p != *p {
+                let size = p.size()?;
+                // We might make the expression exponentially larger, so we should have some limit.
+                // Below 1000 (e.g., a single IN list of ~300 elements, or 3 IN lists of 4-5
+                // elements each), we are <10 ms for a single IN list, and even less for multiple IN
+                // lists.
+                if size > 1000 {
+                    break;
+                }
                 old_p = p.clone();
                 p.visit_mut_post(&mut |e: &mut MirScalarExpr| {
                     if let MirScalarExpr::CallVariadic {

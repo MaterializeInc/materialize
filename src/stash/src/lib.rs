@@ -646,8 +646,11 @@ where
         stash.peek_key_one(collection, key).await
     }
 
-    /// Sets the given k,v pair if not already set
-    pub async fn insert_without_overwrite<S>(
+    /// Sets the given k,v pair, if not already set.
+    ///
+    /// Returns the new value stored in stash after this operations.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn insert_key_without_overwrite<S>(
         &self,
         stash: &mut S,
         key: &K,
@@ -679,6 +682,42 @@ where
                 Ok(value)
             }
         }
+    }
+
+    /// Sets the given key value pairs, if not already set.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn insert_without_overwrite<S, I>(
+        &self,
+        stash: &mut S,
+        entries: I,
+    ) -> Result<(), StashError>
+    where
+        S: Append,
+        I: IntoIterator<Item = (K, V)>,
+        K: Hash,
+    {
+        let collection = self.get(stash).await?;
+        let mut batch = collection.make_batch(stash).await?;
+        let prev = match stash.peek_one(collection).await {
+            Ok(prev) => prev,
+            Err(err) => match err.inner {
+                InternalStashError::PeekSinceUpper(_) => {
+                    // If the upper isn't > since, bump the upper and try again to find a sealed
+                    // entry. Do this by appending the empty batch which will advance the upper.
+                    stash.append(&[batch]).await?;
+                    batch = collection.make_batch(stash).await?;
+                    stash.peek_one(collection).await?
+                }
+                _ => return Err(err),
+            },
+        };
+        for (k, v) in entries {
+            if !prev.contains_key(&k) {
+                collection.append_to_batch(&mut batch, &k, &v, 1);
+            }
+        }
+        stash.append(&[batch]).await?;
+        Ok(())
     }
 
     /// Sets the given k,v pair.

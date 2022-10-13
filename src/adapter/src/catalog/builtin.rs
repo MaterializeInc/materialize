@@ -34,7 +34,7 @@ use mz_sql::catalog::{
 };
 use mz_storage::controller::IntrospectionType;
 
-use crate::catalog::SYSTEM_USER;
+use crate::catalog::{DEFAULT_CLUSTER_REPLICA_NAME, SYSTEM_USER};
 
 pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
 pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
@@ -42,13 +42,15 @@ pub const PG_CATALOG_SCHEMA: &str = "pg_catalog";
 pub const MZ_INTERNAL_SCHEMA: &str = "mz_internal";
 pub const INFORMATION_SCHEMA: &str = "information_schema";
 
+pub static BUILTIN_PREFIXES: Lazy<Vec<&str>> = Lazy::new(|| vec!["mz_", "pg_"]);
+
 pub enum Builtin<T: 'static + TypeReference> {
     Log(&'static BuiltinLog),
     Table(&'static BuiltinTable),
     View(&'static BuiltinView),
     Type(&'static BuiltinType<T>),
     Func(BuiltinFunc),
-    StorageManagedTable(&'static BuiltinStorageManagedTable),
+    Source(&'static BuiltinSource),
 }
 
 impl<T: TypeReference> Builtin<T> {
@@ -59,7 +61,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::View(view) => view.name,
             Builtin::Type(typ) => typ.name,
             Builtin::Func(func) => func.name,
-            Builtin::StorageManagedTable(coll) => coll.name,
+            Builtin::Source(coll) => coll.name,
         }
     }
 
@@ -70,18 +72,18 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::View(view) => view.schema,
             Builtin::Type(typ) => typ.schema,
             Builtin::Func(func) => func.schema,
-            Builtin::StorageManagedTable(coll) => coll.schema,
+            Builtin::Source(coll) => coll.schema,
         }
     }
 
     pub fn catalog_item_type(&self) -> CatalogItemType {
         match self {
             Builtin::Log(_) => CatalogItemType::Source,
+            Builtin::Source(_) => CatalogItemType::Source,
             Builtin::Table(_) => CatalogItemType::Table,
             Builtin::View(_) => CatalogItemType::View,
             Builtin::Type(_) => CatalogItemType::Type,
             Builtin::Func(_) => CatalogItemType::Func,
-            Builtin::StorageManagedTable(_) => CatalogItemType::Source,
         }
     }
 }
@@ -101,7 +103,7 @@ pub struct BuiltinTable {
 }
 
 #[derive(Clone, Debug, Hash, Serialize)]
-pub struct BuiltinStorageManagedTable {
+pub struct BuiltinSource {
     pub name: &'static str,
     pub schema: &'static str,
     pub desc: RelationDesc,
@@ -128,14 +130,28 @@ pub struct BuiltinFunc {
     pub inner: &'static mz_sql::func::Func,
 }
 
-pub static BUILTIN_ROLE_PREFIXES: Lazy<Vec<&str>> = Lazy::new(|| vec!["mz_", "pg_"]);
-
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BuiltinRole {
     /// Name of the builtin role.
     ///
-    /// IMPORTANT: Must start with a prefix from [`BUILTIN_ROLE_PREFIXES`].
+    /// IMPORTANT: Must start with a prefix from [`BUILTIN_PREFIXES`].
     pub name: &'static str,
+}
+
+#[derive(Clone, Debug)]
+pub struct BuiltinComputeInstance {
+    /// Name of the compute instance.
+    ///
+    /// IMPORTANT: Must start with a prefix from [`BUILTIN_PREFIXES`].
+    pub name: &'static str,
+}
+
+#[derive(Clone, Debug)]
+pub struct BuiltinComputeReplica {
+    /// Name of the compute replica.
+    pub name: &'static str,
+    /// Name of the compute instance that this replica belongs to.
+    pub compute_instance_name: &'static str,
 }
 
 /// Uniquely identifies the definition of a builtin object.
@@ -151,7 +167,7 @@ impl<T: TypeReference> Fingerprint for &Builtin<T> {
             Builtin::View(view) => view.fingerprint(),
             Builtin::Type(typ) => typ.fingerprint(),
             Builtin::Func(func) => func.fingerprint(),
-            Builtin::StorageManagedTable(coll) => coll.fingerprint(),
+            Builtin::Source(coll) => coll.fingerprint(),
         }
     }
 }
@@ -186,7 +202,7 @@ impl Fingerprint for &BuiltinView {
     }
 }
 
-impl Fingerprint for &BuiltinStorageManagedTable {
+impl Fingerprint for &BuiltinSource {
     fn fingerprint(&self) -> String {
         self.desc.fingerprint()
     }
@@ -1162,7 +1178,7 @@ pub static MZ_INDEXES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("on_id", ScalarType::String.nullable(false))
-        .with_column("cluster_id", ScalarType::UInt64.nullable(false)),
+        .with_column("cluster_id", ScalarType::String.nullable(false)),
 });
 pub static MZ_INDEX_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_index_columns",
@@ -1198,7 +1214,6 @@ pub static MZ_SSH_TUNNEL_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinT
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false))
         .with_column("public_key_1", ScalarType::String.nullable(false))
         .with_column("public_key_2", ScalarType::String.nullable(false)),
 });
@@ -1244,7 +1259,7 @@ pub static MZ_MATERIALIZED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("cluster_id", ScalarType::UInt64.nullable(false))
+        .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("definition", ScalarType::String.nullable(false)),
 });
 pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1261,26 +1276,26 @@ pub static MZ_ARRAY_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_array_types",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("type_id", ScalarType::String.nullable(false))
+        .with_column("id", ScalarType::String.nullable(false))
         .with_column("element_id", ScalarType::String.nullable(false)),
 });
 pub static MZ_BASE_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_base_types",
     schema: MZ_CATALOG_SCHEMA,
-    desc: RelationDesc::empty().with_column("type_id", ScalarType::String.nullable(false)),
+    desc: RelationDesc::empty().with_column("id", ScalarType::String.nullable(false)),
 });
 pub static MZ_LIST_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_list_types",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("type_id", ScalarType::String.nullable(false))
+        .with_column("id", ScalarType::String.nullable(false))
         .with_column("element_id", ScalarType::String.nullable(false)),
 });
 pub static MZ_MAP_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_map_types",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("type_id", ScalarType::String.nullable(false))
+        .with_column("id", ScalarType::String.nullable(false))
         .with_column("key_id", ScalarType::String.nullable(false))
         .with_column("value_id", ScalarType::String.nullable(false)),
 });
@@ -1295,7 +1310,7 @@ pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_PSEUDO_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_pseudo_types",
     schema: MZ_CATALOG_SCHEMA,
-    desc: RelationDesc::empty().with_column("type_id", ScalarType::String.nullable(false)),
+    desc: RelationDesc::empty().with_column("id", ScalarType::String.nullable(false)),
 });
 pub static MZ_FUNCTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_functions",
@@ -1306,18 +1321,21 @@ pub static MZ_FUNCTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column(
-            "arg_ids",
+            "argument_type_ids",
             ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
         )
-        .with_column("variadic_id", ScalarType::String.nullable(true))
-        .with_column("ret_id", ScalarType::String.nullable(true))
-        .with_column("ret_set", ScalarType::Bool.nullable(false)),
+        .with_column(
+            "variadic_argument_type_id",
+            ScalarType::String.nullable(true),
+        )
+        .with_column("return_type_id", ScalarType::String.nullable(true))
+        .with_column("returns_set", ScalarType::Bool.nullable(false)),
 });
 pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_clusters",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::UInt64.nullable(false))
+        .with_column("id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false)),
 });
 pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1334,7 +1352,7 @@ pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("cluster_id", ScalarType::UInt64.nullable(false))
+        .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("size", ScalarType::String.nullable(true))
         .with_column("availability_zone", ScalarType::String.nullable(true)),
 });
@@ -1364,28 +1382,27 @@ pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("id", ScalarType::UInt64.nullable(false))
         .with_column("event_type", ScalarType::String.nullable(false))
         .with_column("object_type", ScalarType::String.nullable(false))
-        .with_column("event_details", ScalarType::Jsonb.nullable(false))
+        .with_column("details", ScalarType::Jsonb.nullable(false))
         .with_column("user", ScalarType::String.nullable(true))
         .with_column("occurred_at", ScalarType::TimestampTz.nullable(false)),
 });
 
-pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinStorageManagedTable> =
-    Lazy::new(|| BuiltinStorageManagedTable {
-        name: "mz_source_status_history",
-        schema: MZ_CATALOG_SCHEMA,
-        data_source: None,
-        desc: RelationDesc::empty()
-            .with_column("timestamp", ScalarType::Timestamp.nullable(false))
-            .with_column("source_name", ScalarType::String.nullable(false))
-            .with_column("source_id", ScalarType::String.nullable(false))
-            .with_column("source_type", ScalarType::String.nullable(false))
-            .with_column("upstream_name", ScalarType::String.nullable(true))
-            .with_column("worker_id", ScalarType::Int64.nullable(false))
-            .with_column("worker_count", ScalarType::Int64.nullable(false))
-            .with_column("status", ScalarType::String.nullable(false))
-            .with_column("error", ScalarType::String.nullable(true))
-            .with_column("metadata", ScalarType::Jsonb.nullable(true)),
-    });
+pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_source_status_history",
+    schema: MZ_CATALOG_SCHEMA,
+    data_source: None,
+    desc: RelationDesc::empty()
+        .with_column("timestamp", ScalarType::Timestamp.nullable(false))
+        .with_column("source_name", ScalarType::String.nullable(false))
+        .with_column("source_id", ScalarType::String.nullable(false))
+        .with_column("source_type", ScalarType::String.nullable(false))
+        .with_column("upstream_name", ScalarType::String.nullable(true))
+        .with_column("worker_id", ScalarType::Int64.nullable(false))
+        .with_column("worker_count", ScalarType::Int64.nullable(false))
+        .with_column("status", ScalarType::String.nullable(false))
+        .with_column("error", ScalarType::String.nullable(true))
+        .with_column("metadata", ScalarType::Jsonb.nullable(true)),
+});
 
 pub static MZ_STORAGE_USAGE_BY_SHARD: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_storage_usage_by_shard",
@@ -1400,15 +1417,14 @@ pub static MZ_STORAGE_USAGE_BY_SHARD: Lazy<BuiltinTable> = Lazy::new(|| BuiltinT
         ),
 });
 
-pub static MZ_STORAGE_SHARDS: Lazy<BuiltinStorageManagedTable> =
-    Lazy::new(|| BuiltinStorageManagedTable {
-        name: "mz_storage_shards",
-        schema: MZ_INTERNAL_SCHEMA,
-        data_source: Some(IntrospectionType::ShardMapping),
-        desc: RelationDesc::empty()
-            .with_column("object_id", ScalarType::String.nullable(false))
-            .with_column("shard_id", ScalarType::String.nullable(false)),
-    });
+pub static MZ_STORAGE_SHARDS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_storage_shards",
+    schema: MZ_INTERNAL_SCHEMA,
+    data_source: Some(IntrospectionType::ShardMapping),
+    desc: RelationDesc::empty()
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("shard_id", ScalarType::String.nullable(false)),
+});
 
 pub static MZ_STORAGE_USAGE: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_storage_usage",
@@ -1416,7 +1432,7 @@ pub static MZ_STORAGE_USAGE: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     sql: "CREATE VIEW mz_catalog.mz_storage_usage (object_id, size_bytes, collection_timestamp) AS
 SELECT
     object_id,
-    sum(size_bytes),
+    sum(size_bytes)::uint8,
     collection_timestamp
 FROM
     mz_internal.mz_storage_shards
@@ -1733,7 +1749,7 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
             SELECT t.oid
             FROM mz_catalog.mz_array_types a
             JOIN mz_catalog.mz_types t ON a.element_id = t.id
-            WHERE a.type_id = mz_types.id
+            WHERE a.id = mz_types.id
         ),
         0
     ) AS typelem,
@@ -1743,7 +1759,7 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
                 t.oid
             FROM
                 mz_catalog.mz_array_types AS a
-                JOIN mz_catalog.mz_types AS t ON a.type_id = t.id
+                JOIN mz_catalog.mz_types AS t ON a.id = t.id
             WHERE
                 a.element_id = mz_types.id
         ),
@@ -1764,13 +1780,13 @@ FROM
     JOIN (
             -- 'a' is not a supported typtype, but we use it to denote an array. It is
             -- converted to the correct value above.
-            SELECT type_id, 'a' AS mztype FROM mz_catalog.mz_array_types
-            UNION ALL SELECT type_id, 'b' FROM mz_catalog.mz_base_types
-            UNION ALL SELECT type_id, 'l' FROM mz_catalog.mz_list_types
-            UNION ALL SELECT type_id, 'm' FROM mz_catalog.mz_map_types
-            UNION ALL SELECT type_id, 'p' FROM mz_catalog.mz_pseudo_types
+            SELECT id, 'a' AS mztype FROM mz_catalog.mz_array_types
+            UNION ALL SELECT id, 'b' FROM mz_catalog.mz_base_types
+            UNION ALL SELECT id, 'l' FROM mz_catalog.mz_list_types
+            UNION ALL SELECT id, 'm' FROM mz_catalog.mz_map_types
+            UNION ALL SELECT id, 'p' FROM mz_catalog.mz_pseudo_types
         )
-            AS t ON mz_types.id = t.type_id
+            AS t ON mz_types.id = t.id
     JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
 };
 
@@ -2249,9 +2265,30 @@ FROM mz_catalog.mz_roles r
 JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
 };
 
-pub static MZ_SYSTEM: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
+pub static MZ_SYSTEM_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*SYSTEM_USER.name,
 });
+
+pub static MZ_SYSTEM_COMPUTE_INSTANCE: Lazy<BuiltinComputeInstance> =
+    Lazy::new(|| BuiltinComputeInstance {
+        name: &*SYSTEM_USER.name,
+    });
+
+pub static MZ_SYSTEM_COMPUTE_REPLICA: Lazy<BuiltinComputeReplica> =
+    Lazy::new(|| BuiltinComputeReplica {
+        name: DEFAULT_CLUSTER_REPLICA_NAME,
+        compute_instance_name: MZ_SYSTEM_COMPUTE_INSTANCE.name,
+    });
+
+pub static MZ_INTROSPECTION: Lazy<BuiltinComputeInstance> = Lazy::new(|| BuiltinComputeInstance {
+    name: "mz_introspection",
+});
+
+pub static MZ_INTROSPECTION_REPLICA: Lazy<BuiltinComputeReplica> =
+    Lazy::new(|| BuiltinComputeReplica {
+        name: DEFAULT_CLUSTER_REPLICA_NAME,
+        compute_instance_name: MZ_INTROSPECTION.name,
+    });
 
 /// List of all builtin objects sorted topologically by dependency.
 pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
@@ -2440,14 +2477,18 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         // This is disabled for the moment because it has unusual upper
         // advancement behavior.
         // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
-        // Builtin::StorageManagedTable(&MZ_SOURCE_STATUS_HISTORY),
-        Builtin::StorageManagedTable(&MZ_STORAGE_SHARDS),
+        // Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),
+        Builtin::Source(&MZ_STORAGE_SHARDS),
         Builtin::View(&MZ_STORAGE_USAGE),
     ]);
 
     builtins
 });
-pub static BUILTIN_ROLES: Lazy<Vec<&BuiltinRole>> = Lazy::new(|| vec![&*MZ_SYSTEM]);
+pub static BUILTIN_ROLES: Lazy<Vec<&BuiltinRole>> = Lazy::new(|| vec![&*MZ_SYSTEM_ROLE]);
+pub static BUILTIN_COMPUTE_INSTANCES: Lazy<Vec<&BuiltinComputeInstance>> =
+    Lazy::new(|| vec![&*MZ_SYSTEM_COMPUTE_INSTANCE, &*MZ_INTROSPECTION]);
+pub static BUILTIN_COMPUTE_REPLICAS: Lazy<Vec<&BuiltinComputeReplica>> =
+    Lazy::new(|| vec![&*MZ_SYSTEM_COMPUTE_REPLICA, &*MZ_INTROSPECTION_REPLICA]);
 
 #[allow(non_snake_case)]
 pub mod BUILTINS {

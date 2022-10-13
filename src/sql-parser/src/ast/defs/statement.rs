@@ -62,6 +62,7 @@ pub enum Statement<T: AstInfo> {
     AlterObjectRename(AlterObjectRenameStatement),
     AlterIndex(AlterIndexStatement<T>),
     AlterSecret(AlterSecretStatement<T>),
+    AlterSink(AlterSinkStatement<T>),
     AlterSource(AlterSourceStatement<T>),
     AlterSystemSet(AlterSystemSetStatement),
     AlterSystemReset(AlterSystemResetStatement),
@@ -118,6 +119,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndex(stmt) => f.write_node(stmt),
             Statement::AlterSecret(stmt) => f.write_node(stmt),
+            Statement::AlterSink(stmt) => f.write_node(stmt),
             Statement::AlterSource(stmt) => f.write_node(stmt),
             Statement::AlterSystemSet(stmt) => f.write_node(stmt),
             Statement::AlterSystemReset(stmt) => f.write_node(stmt),
@@ -497,15 +499,15 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
             f.write_node(envelope);
         }
 
+        if let Some(subsources) = &self.subsources {
+            f.write_str(" ");
+            f.write_node(subsources);
+        }
+
         if !self.with_options.is_empty() {
             f.write_str(" WITH (");
             f.write_node(&display::comma_separated(&self.with_options));
             f.write_str(")");
-        }
-
-        if let Some(subsources) = &self.subsources {
-            f.write_str(" ");
-            f.write_node(subsources);
         }
     }
 }
@@ -593,6 +595,7 @@ impl_display_t!(CreateSubsourceStatement);
 /// An option in a `CREATE SINK` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSinkOptionName {
+    Remote,
     Size,
     Snapshot,
 }
@@ -600,6 +603,9 @@ pub enum CreateSinkOptionName {
 impl AstDisplay for CreateSinkOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
+            CreateSinkOptionName::Remote => {
+                f.write_str("REMOTE");
+            }
             CreateSinkOptionName::Size => {
                 f.write_str("SIZE");
             }
@@ -1278,6 +1284,43 @@ impl<T: AstInfo> AstDisplay for AlterIndexStatement<T> {
 impl_display_t!(AlterIndexStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AlterSinkAction<T: AstInfo> {
+    SetOptions(Vec<CreateSinkOption<T>>),
+    ResetOptions(Vec<CreateSinkOptionName>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterSinkStatement<T: AstInfo> {
+    pub sink_name: UnresolvedObjectName,
+    pub if_exists: bool,
+    pub action: AlterSinkAction<T>,
+}
+
+impl<T: AstInfo> AstDisplay for AlterSinkStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER SINK ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&self.sink_name);
+        f.write_str(" ");
+
+        match &self.action {
+            AlterSinkAction::SetOptions(options) => {
+                f.write_str("SET (");
+                f.write_node(&display::comma_separated(options));
+                f.write_str(")");
+            }
+            AlterSinkAction::ResetOptions(options) => {
+                f.write_str("RESET (");
+                f.write_node(&display::comma_separated(options));
+                f.write_str(")");
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AlterSourceAction<T: AstInfo> {
     SetOptions(Vec<CreateSourceOption<T>>),
     ResetOptions(Vec<CreateSourceOptionName>),
@@ -1702,11 +1745,11 @@ impl<T: AstInfo> AstDisplay for ShowIndexesStatement<T> {
         f.write_str("SHOW ");
         f.write_str("INDEXES");
         if let Some(on_object) = &self.on_object {
-            f.write_str(" FROM ");
+            f.write_str(" ON ");
             f.write_node(on_object);
         }
         if let Some(from_schema) = &self.from_schema {
-            f.write_str(" FROM SCHEMA ");
+            f.write_str(" FROM ");
             f.write_node(from_schema);
         }
         if let Some(in_cluster) = &self.in_cluster {

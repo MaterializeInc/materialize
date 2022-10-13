@@ -25,6 +25,7 @@ class PostgresStart(Action):
 
     def run(self, c: Composition) -> None:
         c.start_and_wait_for_tcp(services=["postgres"])
+        c.wait_for_postgres()
 
 
 class PostgresStop(Action):
@@ -39,6 +40,15 @@ class PostgresStop(Action):
 
     def run(self, c: Composition) -> None:
         c.kill("postgres")
+
+
+class PostgresRestart(Action):
+    """Restart the Postgres instance."""
+
+    def run(self, c: Composition) -> None:
+        c.kill("postgres")
+        c.start_and_wait_for_tcp(services=["postgres"])
+        c.wait_for_postgres()
 
 
 class CreatePostgresTable(Action):
@@ -61,7 +71,8 @@ class CreatePostgresTable(Action):
 
         if len(existing_postgres_tables) == 0:
             self.new_postgres_table = True
-            this_postgres_table.has_pk = random.choice([True, False])
+            # A PK is now required for Debezium
+            this_postgres_table.has_pk = True
 
             self.postgres_table = this_postgres_table
         elif len(existing_postgres_tables) == 1:

@@ -30,6 +30,11 @@ name = "Tools and integrations"
 weight= 25
 
 [[menu.main]]
+identifier = "ops"
+name = "Operating Materialize"
+weight= 25
+
+[[menu.main]]
 identifier = "cs_redpanda"
 name = "Redpanda"
 parent = "create-source"
@@ -145,4 +150,7 @@ unsafe = true
 name = "production"
 url = "s3://materialize-website?region=us-east-1"
 cloudFrontDistributionID = "E1F8Q2NUUC41QE"
-exclude = "lts/**"
+# Sync only the docs, to avoid deleting the marketing website.
+include = "docs/**"
+# Avoid deleting the LTS docs, which are deployed from the lts-docs branch.
+exclude = "docs/lts/**"

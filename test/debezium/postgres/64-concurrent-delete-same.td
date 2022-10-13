@@ -21,7 +21,7 @@ INSERT INTO concurrent_delete VALUES (4);
 INSERT INTO concurrent_delete VALUES (5);
 INSERT INTO concurrent_delete VALUES (6);
 
-$ schema-registry-wait-schema schema=postgres.public.concurrent_delete-value
+$ schema-registry-wait subject=postgres.public.concurrent_delete-value
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY

@@ -19,7 +19,7 @@ use reqwest::{blocking::Client, StatusCode, Url};
 use serde_json::json;
 use tokio_postgres::types::{FromSql, Type};
 
-use crate::util::KAFKA_ADDRS;
+use crate::util::{PostgresErrorExt, KAFKA_ADDRS};
 
 pub mod util;
 
@@ -81,7 +81,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
     );
     assert_eq!(
         client
-            .query_one("SHOW INDEXES FROM mat", &[])?
+            .query_one("SHOW INDEXES ON mat", &[])?
             .get::<_, Vec<String>>("key"),
         &["a", "a_data", "c", "c_data"],
     );
@@ -110,6 +110,57 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+// Test that sources and sinks require an explicit `SIZE` parameter outside of
+// unsafe mode.
+#[test]
+fn test_source_sink_size_required() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let server = util::start_server(util::Config::default())?;
+    let mut client = server.connect(postgres::NoTls)?;
+
+    // Sources bail without an explicit size.
+    let result = client.batch_execute("CREATE SOURCE lg FROM LOAD GENERATOR COUNTER");
+    assert_eq!(
+        result.unwrap_err().unwrap_db_error().message(),
+        "size option is required"
+    );
+
+    // Sources work with an explicit size.
+    client.batch_execute("CREATE SOURCE lg FROM LOAD GENERATOR COUNTER WITH (SIZE '1')")?;
+
+    // `ALTER SOURCE ... RESET SIZE` is banned.
+    let result = client.batch_execute("ALTER SOURCE lg RESET (SIZE)");
+    assert_eq!(
+        result.unwrap_err().unwrap_db_error().message(),
+        "size option is required"
+    );
+
+    client.batch_execute(&format!(
+        "CREATE CONNECTION conn FOR KAFKA BROKER '{}'",
+        &*KAFKA_ADDRS,
+    ))?;
+
+    // Sinks bail without an explicit size.
+    let result = client.batch_execute("CREATE SINK snk FROM mz_sources INTO KAFKA CONNECTION conn (TOPIC 'foo') FORMAT JSON ENVELOPE DEBEZIUM");
+    assert_eq!(
+        result.unwrap_err().unwrap_db_error().message(),
+        "size option is required"
+    );
+
+    // Sinks work with an explicit size.
+    client.batch_execute("CREATE SINK snk FROM mz_sources INTO KAFKA CONNECTION conn (TOPIC 'foo') FORMAT JSON ENVELOPE DEBEZIUM WITH (SIZE '1')").unwrap();
+
+    // `ALTER SINK ... RESET SIZE` is banned.
+    let result = client.batch_execute("ALTER SINK snk RESET (SIZE)");
+    assert_eq!(
+        result.unwrap_err().unwrap_db_error().message(),
+        "size option is required"
+    );
+
+    Ok(())
+}
+
 // Test the /sql POST endpoint of the HTTP server.
 #[test]
 fn test_http_sql() -> Result<(), Box<dyn Error>> {
@@ -131,43 +182,43 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         TestCaseSimple {
             query: "select 1+2 as col",
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[3]],"col_names":["col"]}]}"#,
+            body: r#"{"results":[{"rows":[[3]],"col_names":["col"],"notices":[]}]}"#,
         },
         // Multiple queries are ok.
         TestCaseSimple {
             query: "select 1; select 2",
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[1]],"col_names":["?column?"]},{"rows":[[2]],"col_names":["?column?"]}]}"#,
+            body: r#"{"results":[{"rows":[[1]],"col_names":["?column?"],"notices":[]},{"rows":[[2]],"col_names":["?column?"],"notices":[]}]}"#,
         },
         // Arrays + lists work
         TestCaseSimple {
             query: "select array[1], list[2]",
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[[1],[2]]],"col_names":["array","list"]}]}"#,
+            body: r#"{"results":[{"rows":[[[1],[2]]],"col_names":["array","list"],"notices":[]}]}"#,
         },
         // Succeeding and failing queries can mix and match.
         TestCaseSimple {
             query: "select 1; select * from noexist;",
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[1]],"col_names":["?column?"]},{"error":"unknown catalog item 'noexist'"}]}"#,
+            body: r#"{"results":[{"rows":[[1]],"col_names":["?column?"],"notices":[]},{"error":"unknown catalog item 'noexist'","notices":[]}]}"#,
         },
         // CREATEs should work when provided alone.
         TestCaseSimple {
             query: "create view v as select 1",
             status: StatusCode::OK,
-            body: r#"{"results":[{"ok":"CREATE VIEW"}]}"#,
+            body: r#"{"results":[{"ok":"CREATE VIEW","notices":[]}]}"#,
         },
         // Partial errors make it to the client.
         TestCaseSimple {
             query: "create view if not exists v as select 1",
             status: StatusCode::OK,
-            body: r#"{"results":[{"ok":"CREATE VIEW","partial_err":{"severity":"notice","message":"view already exists, skipping"}}]}"#,
+            body: r#"{"results":[{"ok":"CREATE VIEW","notices":[{"message":"view \"v\" already exists, skipping","severity":"notice"}]}]}"#,
         },
         // Multiple CREATEs do not work.
         TestCaseSimple {
             query: "create view v1 as select 1; create view v2 as select 1",
             status: StatusCode::OK,
-            body: r#"{"results":[{"error":"CREATE VIEW v1 AS SELECT 1 cannot be run inside a transaction block"}]}"#,
+            body: r#"{"results":[{"error":"CREATE VIEW v1 AS SELECT 1 cannot be run inside a transaction block","notices":[]}]}"#,
         },
         // Syntax errors fail the request.
         TestCaseSimple {
@@ -179,128 +230,128 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         TestCaseSimple {
             query: "create table t (a int);",
             status: StatusCode::OK,
-            body: r#"{"results":[{"ok":"CREATE TABLE"}]}"#,
+            body: r#"{"results":[{"ok":"CREATE TABLE","notices":[]}]}"#,
         },
         TestCaseSimple {
             query: "insert into t values (1)",
             status: StatusCode::OK,
-            body: r#"{"results":[{"ok":"INSERT 0 1"}]}"#,
+            body: r#"{"results":[{"ok":"INSERT 0 1","notices":[]}]}"#,
         },
         // n.b. this used to fail because the insert was treated as an
         // uncommitted explicit transaction
         TestCaseSimple {
             query: "select * from t;",
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[1]],"col_names":["a"]}]}"#,
+            body: r#"{"results":[{"rows":[[1]],"col_names":["a"],"notices":[]}]}"#,
         },
         TestCaseSimple {
             query: "delete from t",
             status: StatusCode::OK,
-            body: r#"{"results":[{"ok":"DELETE 1"}]}"#,
+            body: r#"{"results":[{"ok":"DELETE 1","notices":[]}]}"#,
         },
         TestCaseSimple {
             query: "delete from t",
             status: StatusCode::OK,
-            body: r#"{"results":[{"ok":"DELETE 0"}]}"#,
+            body: r#"{"results":[{"ok":"DELETE 0","notices":[]}]}"#,
         },
         // # Txns
         // ## Txns, read only
         TestCaseSimple {
             query: "begin; select 1; commit",
             status: StatusCode::OK,
-            body: r#"{"results":[{"ok":"BEGIN"},{"rows":[[1]],"col_names":["?column?"]},{"ok":"COMMIT"}]}"#,
+            body: r#"{"results":[{"ok":"BEGIN","notices":[]},{"rows":[[1]],"col_names":["?column?"],"notices":[]},{"ok":"COMMIT","notices":[]}]}"#,
         },
         TestCaseSimple {
             query: "begin; select 1; commit; select 2;",
             status: StatusCode::OK,
-            body: r#"{"results":[{"ok":"BEGIN"},{"rows":[[1]],"col_names":["?column?"]},{"ok":"COMMIT"},{"rows":[[2]],"col_names":["?column?"]}]}"#,
+            body: r#"{"results":[{"ok":"BEGIN","notices":[]},{"rows":[[1]],"col_names":["?column?"],"notices":[]},{"ok":"COMMIT","notices":[]},{"rows":[[2]],"col_names":["?column?"],"notices":[]}]}"#,
         },
         TestCaseSimple {
             query: "select 1; begin; select 2; commit;",
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[1]],"col_names":["?column?"]},{"ok":"BEGIN"},{"rows":[[2]],"col_names":["?column?"]},{"ok":"COMMIT"}]}"#,
+            body: r#"{"results":[{"rows":[[1]],"col_names":["?column?"],"notices":[]},{"ok":"BEGIN","notices":[]},{"rows":[[2]],"col_names":["?column?"],"notices":[]},{"ok":"COMMIT","notices":[]}]}"#,
         },
         TestCaseSimple {
             query: "begin; select 1/0; commit; select 2;",
             status: StatusCode::OK,
-            body: r#"{"results":[{"ok":"BEGIN"},{"error":"division by zero"}]}"#,
+            body: r#"{"results":[{"ok":"BEGIN","notices":[]},{"error":"division by zero","notices":[]}]}"#,
         },
         TestCaseSimple {
             query: "begin; select 1; commit; select 1/0;",
             status: StatusCode::OK,
-            body: r#"{"results":[{"ok":"BEGIN"},{"rows":[[1]],"col_names":["?column?"]},{"ok":"COMMIT"},{"error":"division by zero"}]}"#,
+            body: r#"{"results":[{"ok":"BEGIN","notices":[]},{"rows":[[1]],"col_names":["?column?"],"notices":[]},{"ok":"COMMIT","notices":[]},{"error":"division by zero","notices":[]}]}"#,
         },
         TestCaseSimple {
             query: "select 1/0; begin; select 2; commit;",
             status: StatusCode::OK,
-            body: r#"{"results":[{"error":"division by zero"}]}"#,
+            body: r#"{"results":[{"error":"division by zero","notices":[]}]}"#,
         },
         TestCaseSimple {
             query: "select 1; begin; select 1/0; commit;",
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[1]],"col_names":["?column?"]},{"ok":"BEGIN"},{"error":"division by zero"}]}"#,
+            body: r#"{"results":[{"rows":[[1]],"col_names":["?column?"],"notices":[]},{"ok":"BEGIN","notices":[]},{"error":"division by zero","notices":[]}]}"#,
         },
         // ## Txns w/ writes
         // Implicit txn aborted on first error
         TestCaseSimple {
             query: "insert into t values (1); select 1/0; insert into t values (2)",
             status: StatusCode::OK,
-            body: r#"{"results":[{"ok":"INSERT 0 1"},{"error":"division by zero"}]}"#,
+            body: r#"{"results":[{"ok":"INSERT 0 1","notices":[]},{"error":"division by zero","notices":[]}]}"#,
         },
         // Values not successfully written due to aborted txn
         TestCaseSimple {
             query: "select * from t;",
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[],"col_names":["a"]}]}"#,
+            body: r#"{"results":[{"rows":[],"col_names":["a"],"notices":[]}]}"#,
         },
         // Explicit txn invocation commits values w/in txn, irrespective of results outside txn
         TestCaseSimple {
             query: "begin; insert into t values (1); commit; insert into t values (2); select 1/0;",
             status: StatusCode::OK,
-            body: r#"{"results":[{"ok":"BEGIN"},{"ok":"INSERT 0 1"},{"ok":"COMMIT"},{"ok":"INSERT 0 1"},{"error":"division by zero"}]}"#,
+            body: r#"{"results":[{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"COMMIT","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"error":"division by zero","notices":[]}]}"#,
         },
         TestCaseSimple {
             query: "select * from t;",
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[1]],"col_names":["a"]}]}"#,
+            body: r#"{"results":[{"rows":[[1]],"col_names":["a"],"notices":[]}]}"#,
         },
         TestCaseSimple {
             query: "delete from t;",
             status: StatusCode::OK,
-            body: r#"{"results":[{"ok":"DELETE 1"}]}"#,
+            body: r#"{"results":[{"ok":"DELETE 1","notices":[]}]}"#,
         },
         TestCaseSimple {
             query: "delete from t;",
             status: StatusCode::OK,
-            body: r#"{"results":[{"ok":"DELETE 0"}]}"#,
+            body: r#"{"results":[{"ok":"DELETE 0","notices":[]}]}"#,
         },
         TestCaseSimple {
             query: "insert into t values (1); begin; insert into t values (2); insert into t values (3); commit;",
             status: StatusCode::OK,
-            body: r#"{"results":[{"ok":"INSERT 0 1"},{"ok":"BEGIN"},{"ok":"INSERT 0 1"},{"ok":"INSERT 0 1"},{"ok":"COMMIT"}]}"#,
+            body: r#"{"results":[{"ok":"INSERT 0 1","notices":[]},{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"COMMIT","notices":[]}]}"#,
         },
         TestCaseSimple {
             query: "select * from t;",
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[1],[2],[3]],"col_names":["a"]}]}"#,
+            body: r#"{"results":[{"rows":[[1],[2],[3]],"col_names":["a"],"notices":[]}]}"#,
         },
         TestCaseSimple {
             query: "delete from t;",
             status: StatusCode::OK,
-            body: r#"{"results":[{"ok":"DELETE 3"}]}"#,
+            body: r#"{"results":[{"ok":"DELETE 3","notices":[]}]}"#,
         },
         // Explicit txn must be terminated to commit
         TestCaseSimple {
             query: "begin; insert into t values (1)",
             status: StatusCode::OK,
-            body: r#"{"results":[{"ok":"BEGIN"},{"ok":"INSERT 0 1"}]}"#,
+            body: r#"{"results":[{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]}]}"#,
         },
         TestCaseSimple {
             query: "select * from t;",
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[],"col_names":["a"]}]}"#,
+            body: r#"{"results":[{"rows":[],"col_names":["a"],"notices":[]}]}"#,
         },
-        // Emtpy query OK.
+        // Empty query OK.
         TestCaseSimple {
             query: "",
             status: StatusCode::OK,
@@ -310,7 +361,7 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         TestCaseSimple {
             query: "select $1",
             status: StatusCode::OK,
-            body: r#"{"results":[{"error":"request supplied 0 parameters, but SELECT $1 requires 1"}]}"#,
+            body: r#"{"results":[{"error":"request supplied 0 parameters, but SELECT $1 requires 1","notices":[]}]}"#,
         },
         TestCaseSimple {
             query: "subscribe (select * from t)",
@@ -341,13 +392,13 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         TestCaseExtended {
             requests: vec![("select $1+$2::int as col", vec![Some("1"), Some("2")])],
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[3]],"col_names":["col"]}]}"#,
+            body: r#"{"results":[{"rows":[[3]],"col_names":["col"],"notices":[]}]}"#,
         },
         // Parameters can be present and empty
         TestCaseExtended {
             requests: vec![("select 3 as col", vec![])],
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[3]],"col_names":["col"]}]}"#,
+            body: r#"{"results":[{"rows":[[3]],"col_names":["col"],"notices":[]}]}"#,
         },
         // Multiple statements
         TestCaseExtended {
@@ -356,7 +407,7 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
                 ("select $1+$2::int as col", vec![Some("1"), Some("2")]),
             ],
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[1]],"col_names":["col"]},{"rows":[[3]],"col_names":["col"]}]}"#,
+            body: r#"{"results":[{"rows":[[1]],"col_names":["col"],"notices":[]},{"rows":[[3]],"col_names":["col"],"notices":[]}]}"#,
         },
         TestCaseExtended {
             requests: vec![
@@ -364,7 +415,7 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
                 ("select 1 as col", vec![]),
             ],
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[3]],"col_names":["col"]},{"rows":[[1]],"col_names":["col"]}]}"#,
+            body: r#"{"results":[{"rows":[[3]],"col_names":["col"],"notices":[]},{"rows":[[1]],"col_names":["col"],"notices":[]}]}"#,
         },
         TestCaseExtended {
             requests: vec![
@@ -372,7 +423,7 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
                 ("select $1*$2::int as col", vec![Some("2"), Some("3")]),
             ],
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[3]],"col_names":["col"]},{"rows":[[6]],"col_names":["col"]}]}"#,
+            body: r#"{"results":[{"rows":[[3]],"col_names":["col"],"notices":[]},{"rows":[[6]],"col_names":["col"],"notices":[]}]}"#,
         },
         // Quotes escaped
         TestCaseExtended {
@@ -381,7 +432,7 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
                 vec![Some("abc"), Some("'abc'")],
             )],
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[3,5]],"col_names":["length","length"]}]}"#,
+            body: r#"{"results":[{"rows":[[3,5]],"col_names":["length","length"],"notices":[]}]}"#,
         },
         // All parameters values treated as strings
         TestCaseExtended {
@@ -390,31 +441,31 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
                 vec![Some("sum(a)"), Some("SELECT * FROM t;")],
             )],
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[6,16]],"col_names":["length","length"]}]}"#,
+            body: r#"{"results":[{"rows":[[6,16]],"col_names":["length","length"],"notices":[]}]}"#,
         },
         // Too many parameters
         TestCaseExtended {
             requests: vec![("select $1 as col", vec![Some("1"), Some("2")])],
             status: StatusCode::OK,
-            body: r#"{"results":[{"error":"request supplied 2 parameters, but SELECT $1 AS col requires 1"}]}"#,
+            body: r#"{"results":[{"error":"request supplied 2 parameters, but SELECT $1 AS col requires 1","notices":[]}]}"#,
         },
         // Too few parameters
         TestCaseExtended {
             requests: vec![("select $1+$2::int as col", vec![Some("1")])],
             status: StatusCode::OK,
-            body: r#"{"results":[{"error":"request supplied 1 parameters, but SELECT $1 + ($2)::int4 AS col requires 2"}]}"#,
+            body: r#"{"results":[{"error":"request supplied 1 parameters, but SELECT $1 + ($2)::int4 AS col requires 2","notices":[]}]}"#,
         },
         // NaN
         TestCaseExtended {
             requests: vec![("select $1::decimal+2 as col", vec![Some("nan")])],
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[["NaN"]],"col_names":["col"]}]}"#,
+            body: r#"{"results":[{"rows":[["NaN"]],"col_names":["col"],"notices":[]}]}"#,
         },
         // Null string value parameters
         TestCaseExtended {
             requests: vec![("select $1+$2::int as col", vec![Some("1"), None])],
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[null]],"col_names":["col"]}]}"#,
+            body: r#"{"results":[{"rows":[[null]],"col_names":["col"],"notices":[]}]}"#,
         },
         // Empty query
         TestCaseExtended {
@@ -451,7 +502,7 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
                 ("rollback", vec![]),
             ],
             status: StatusCode::OK,
-            body: r#"{"results":[{"ok":"BEGIN"},{"ok":"INSERT 0 1"},{"ok":"ROLLBACK"}]}"#,
+            body: r#"{"results":[{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"ROLLBACK","notices":[]}]}"#,
         },
         // - Implicit txn
         TestCaseExtended {
@@ -460,7 +511,7 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
                 ("select 1/0;", vec![]),
             ],
             status: StatusCode::OK,
-            body: r#"{"results":[{"ok":"INSERT 0 1"},{"error":"division by zero"}]}"#,
+            body: r#"{"results":[{"ok":"INSERT 0 1","notices":[]},{"error":"division by zero","notices":[]}]}"#,
         },
         // - Errors prevent commit + further execution
         TestCaseExtended {
@@ -472,18 +523,18 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
                 ("commit", vec![]),
             ],
             status: StatusCode::OK,
-            body: r#"{"results":[{"ok":"BEGIN"},{"ok":"INSERT 0 1"},{"error":"division by zero"}]}"#,
+            body: r#"{"results":[{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"error":"division by zero","notices":[]}]}"#,
         },
         // - Requires explicit commit in explicit txn
         TestCaseExtended {
             requests: vec![("begin;", vec![]), ("insert into t values (1);", vec![])],
             status: StatusCode::OK,
-            body: r#"{"results":[{"ok":"BEGIN"},{"ok":"INSERT 0 1"}]}"#,
+            body: r#"{"results":[{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]}]}"#,
         },
         TestCaseExtended {
             requests: vec![("select * from t", vec![])],
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[],"col_names":["a"]}]}"#,
+            body: r#"{"results":[{"rows":[],"col_names":["a"],"notices":[]}]}"#,
         },
         // Writes
         TestCaseExtended {
@@ -496,12 +547,12 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
                 ("select 1/0", vec![]),
             ],
             status: StatusCode::OK,
-            body: r#"{"results":[{"ok":"INSERT 0 1"},{"ok":"BEGIN"},{"ok":"INSERT 0 1"},{"ok":"INSERT 0 1"},{"ok":"COMMIT"},{"error":"division by zero"}]}"#,
+            body: r#"{"results":[{"ok":"INSERT 0 1","notices":[]},{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"COMMIT","notices":[]},{"error":"division by zero","notices":[]}]}"#,
         },
         TestCaseExtended {
             requests: vec![("select * from t", vec![])],
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[1],[2],[3]],"col_names":["a"]}]}"#,
+            body: r#"{"results":[{"rows":[[1],[2],[3]],"col_names":["a"],"notices":[]}]}"#,
         },
         TestCaseExtended {
             requests: vec![
@@ -511,12 +562,12 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
                 ("commit;", vec![]),
             ],
             status: StatusCode::OK,
-            body: r#"{"results":[{"ok":"INSERT 0 1"},{"ok":"BEGIN"},{"error":"division by zero"}]}"#,
+            body: r#"{"results":[{"ok":"INSERT 0 1","notices":[]},{"ok":"BEGIN","notices":[]},{"error":"division by zero","notices":[]}]}"#,
         },
         TestCaseExtended {
             requests: vec![("select * from t", vec![])],
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[1],[2],[3]],"col_names":["a"]}]}"#,
+            body: r#"{"results":[{"rows":[[1],[2],[3]],"col_names":["a"],"notices":[]}]}"#,
         },
         TestCaseExtended {
             requests: vec![("subscribe (select * from t)", vec![])],

@@ -439,7 +439,7 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
 
 
 class KafkaSinks(Generator):
-    COUNT = min(Generator.COUNT, 50)  # $ kafka-verify is slow
+    COUNT = min(Generator.COUNT, 50)  # $ kafka-verify-data is slow
 
     @classmethod
     def body(cls) -> None:
@@ -478,7 +478,7 @@ class KafkaSinks(Generator):
             print(
                 dedent(
                     f"""
-                    $ kafka-verify format=avro sink=materialize.public.s{i}
+                    $ kafka-verify-data format=avro sink=materialize.public.s{i}
                     {{"before": null, "after": {{"row": {{"f1": {i}}}}}}}
                     """
                 )
@@ -486,7 +486,7 @@ class KafkaSinks(Generator):
 
 
 class KafkaSinksSameSource(Generator):
-    COUNT = min(Generator.COUNT, 50)  # $ kafka-verify is slow
+    COUNT = min(Generator.COUNT, 50)  # $ kafka-verify-data is slow
 
     @classmethod
     def body(cls) -> None:
@@ -521,7 +521,7 @@ class KafkaSinksSameSource(Generator):
 
         for i in cls.all():
             print(
-                f'$ kafka-verify format=avro sink=materialize.public.s{i}\n{{"before": null, "after": {{"row": {{"f1": 123}}}}}}\n'
+                f'$ kafka-verify-data format=avro sink=materialize.public.s{i}\n{{"before": null, "after": {{"row": {{"f1": 123}}}}}}\n'
             )
 
 
@@ -1350,7 +1350,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
         for replica_id in range(0, args.replicas):
             nodes = []
             for node_id in range(0, args.nodes):
-                node_name = f"computed_{cluster_id}_{replica_id}_{node_id}"
+                node_name = f"computed_u{cluster_id}_{replica_id}_{node_id}"
                 nodes.append(node_name)
 
             for node_id in range(0, args.nodes):
@@ -1405,10 +1405,10 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                 for replica_id in range(0, args.replicas):
                     nodes = []
                     for node_id in range(0, args.nodes):
-                        node_name = f"computed_{cluster_id}_{replica_id}_{node_id}"
+                        node_name = f"computed_u{cluster_id}_{replica_id}_{node_id}"
                         nodes.append(node_name)
 
-                    replica_name = f"replica_{cluster_id}_{replica_id}"
+                    replica_name = f"replica_u{cluster_id}_{replica_id}"
 
                     replica_definitions.append(
                         f"{replica_name} (REMOTE ["
@@ -1419,14 +1419,14 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                     )
 
                 c.sql(
-                    f"CREATE CLUSTER cluster_{cluster_id} REPLICAS ("
+                    f"CREATE CLUSTER cluster_u{cluster_id} REPLICAS ("
                     + ",".join(replica_definitions)
                     + ")"
                 )
 
             # Construct some dataflows in each cluster
             for cluster_id in range(0, args.clusters):
-                cluster_name = f"cluster_{cluster_id}"
+                cluster_name = f"cluster_u{cluster_id}"
 
                 c.testdrive(
                     dedent(
@@ -1456,7 +1456,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
 
             # Validate that each individual cluster is operating properly
             for cluster_id in range(0, args.clusters):
-                cluster_name = f"cluster_{cluster_id}"
+                cluster_name = f"cluster_u{cluster_id}"
 
                 c.testdrive(
                     dedent(

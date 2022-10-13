@@ -35,9 +35,8 @@ use mz_sql_parser::ast::{
     ColumnDef, ColumnOption, ColumnOptionDef, CsrConnection, CsrSeedAvro, CsrSeedProtobuf,
     CsrSeedProtobufSchema, DbzMode, Envelope, Ident, KafkaConfigOption, KafkaConfigOptionName,
     KafkaConnection, KafkaSourceConnection, PgConfigOption, PgConfigOptionName,
-    ReaderSchemaSelectionStrategy, UnresolvedObjectName,
+    ReaderSchemaSelectionStrategy, TableConstraint, UnresolvedObjectName,
 };
-use mz_storage::source::generator::as_generator;
 use mz_storage::types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
 use mz_storage::types::connections::{Connection, ConnectionContext};
 use mz_storage::types::sources::PostgresSourceDetails;
@@ -50,8 +49,9 @@ use crate::ast::{
 use crate::catalog::SessionCatalog;
 use crate::kafka_util;
 use crate::kafka_util::KafkaConfigOptionExtracted;
-use crate::names::{Aug, FullObjectName, RawDatabaseSpecifier, ResolvedObjectName};
+use crate::names::{Aug, RawDatabaseSpecifier, ResolvedObjectName};
 use crate::normalize;
+use crate::plan::statement::ddl::load_generator_ast_to_generator;
 use crate::plan::StatementContext;
 
 fn subsource_gen<'a, T>(
@@ -393,33 +393,11 @@ pub async fn purify_create_source(
                 )))),
             })
         }
-        CreateSourceConnection::LoadGenerator {
-            generator,
-            options: _,
-        } => {
-            use mz_storage::types::sources::LoadGenerator;
-
+        CreateSourceConnection::LoadGenerator { generator, options } => {
             let scx = StatementContext::new(None, &*catalog);
 
-            let available_subsources = match generator {
-                mz_sql_parser::ast::LoadGenerator::Auction => {
-                    let mut available_subsources = HashMap::new();
-                    let generator = as_generator(&LoadGenerator::Auction);
-                    for (i, (name, desc)) in generator.views().iter().enumerate() {
-                        let name = FullObjectName {
-                            database: RawDatabaseSpecifier::Name("mz_loadgenerator".to_owned()),
-                            schema: "public".to_owned(),
-                            item: name.to_string(),
-                        };
-                        // The zero-th output is the main output
-                        // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
-                        // to handle the main source and the subsources uniformly
-                        available_subsources.insert(name, (i + 1, desc.clone()));
-                    }
-                    Some(available_subsources)
-                }
-                mz_sql_parser::ast::LoadGenerator::Counter => None,
-            };
+            let (_load_generator, available_subsources) =
+                load_generator_ast_to_generator(generator, options)?;
 
             let mut targeted_subsources = vec![];
 
@@ -499,6 +477,19 @@ pub async fn purify_create_source(
                     });
                 }
 
+                let mut table_constraints = vec![];
+                for key in desc.typ().keys.iter() {
+                    let mut col_names = vec![];
+                    for col_idx in key {
+                        col_names.push(columns[*col_idx].name.clone());
+                    }
+                    table_constraints.push(TableConstraint::Unique {
+                        name: None,
+                        columns: col_names,
+                        is_primary: false,
+                    });
+                }
+
                 // Create the targeted AST node for the original CREATE SOURCE statement
                 let transient_id = GlobalId::Transient(u64::cast_from(i));
                 let partial_subsource_name =
@@ -520,15 +511,11 @@ pub async fn purify_create_source(
                 let subsource = CreateSubsourceStatement {
                     name: subsource_name,
                     columns,
-                    // TODO(petrosagg): nothing stops us from getting the constraints of the
-                    // upstream tables and mirroring them here which will lead to more optimization
-                    // opportunities if for example there is a primary key or an index.
-                    //
-                    // If we ever do that we must triple check that we will get notified *in the
-                    // replication stream*, if our assumptions change. Failure to do that could
-                    // mean that an upstream table that started with an index was then altered to
-                    // one without and now we're producing garbage data.
-                    constraints: vec![],
+                    // unlike sources that come from an external upstream, we
+                    // have more leniency to introduce different constraints
+                    // every time the load generator is run; i.e. we are not as
+                    // worried about introducing junk data.
+                    constraints: table_constraints,
                     if_not_exists: false,
                 };
                 subsources.push((transient_id, subsource));

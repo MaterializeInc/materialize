@@ -28,12 +28,6 @@ use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
 use crate::util::mz_data::mzdata_copy;
 
-pub struct VerifyTimestampCompactionAction {
-    source: String,
-    max_size: usize,
-    permit_progress: bool,
-}
-
 async fn run_verify_timestamp_compaction_action(
     mut cmd: BuiltinCommand,
     state: &mut State,

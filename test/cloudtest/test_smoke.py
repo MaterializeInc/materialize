@@ -14,7 +14,7 @@ from materialize.cloudtest.wait import wait
 
 
 def test_wait(mz: MaterializeApplication) -> None:
-    wait(condition="condition=Ready", resource="pod/compute-cluster-1-replica-1-0")
+    wait(condition="condition=Ready", resource="pod/compute-cluster-u1-replica-1-0")
 
 
 def test_sql(mz: MaterializeApplication) -> None:

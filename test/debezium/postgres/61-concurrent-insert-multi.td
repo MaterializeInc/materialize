@@ -21,9 +21,9 @@ CREATE TABLE insert_multi_table2 (f1 INTEGER, PRIMARY KEY (f1));
 ALTER TABLE insert_multi_table2 REPLICA IDENTITY FULL;
 INSERT INTO insert_multi_table2 VALUES (0);
 
-$ schema-registry-wait-schema schema=postgres.public.insert_multi_table1-value
+$ schema-registry-wait subject=postgres.public.insert_multi_table1-value
 
-$ schema-registry-wait-schema schema=postgres.public.insert_multi_table2-value
+$ schema-registry-wait subject=postgres.public.insert_multi_table2-value
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY

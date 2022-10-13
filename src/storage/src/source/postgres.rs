@@ -438,11 +438,11 @@ async fn postgres_replication_loop_inner(
             }
             Err(ReplicationError::Definite(e)) => {
                 return Err(SourceReaderError {
-                    inner: SourceErrorDetails::FileIO(e.to_string()),
+                    inner: SourceErrorDetails::Other(e.to_string()),
                 })
             }
             Ok(_) => {
-                // shutdown iniated elsewhere
+                // shutdown initiated elsewhere
                 return Ok(());
             }
         }

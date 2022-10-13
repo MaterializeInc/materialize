@@ -35,10 +35,10 @@ use mz_repr::strconv;
 use mz_repr::{ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
-    AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
-    AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
-    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, SetVariableValue,
-    SshConnectionOption,
+    AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceStatement,
+    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
+    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
+    SetVariableValue, SshConnectionOption,
 };
 use mz_storage::source::generator::as_generator;
 use mz_storage::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
@@ -101,8 +101,8 @@ use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
-    AlterNoopPlan, AlterSecretPlan, AlterSourceItem, AlterSourcePlan, AlterSystemResetAllPlan,
-    AlterSystemResetPlan, AlterSystemSetPlan, ComputeReplicaConfig,
+    AlterNoopPlan, AlterOptionParameter, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan,
+    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, ComputeReplicaConfig,
     ComputeReplicaIntrospectionConfig, CreateComputeInstancePlan, CreateComputeReplicaPlan,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
@@ -367,7 +367,7 @@ pub fn plan_create_source(
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
-    let (external_connection, connection_id, encoding, available_subsources) = match connection {
+    let (external_connection, encoding, available_subsources) = match connection {
         CreateSourceConnection::Kafka(mz_sql_parser::ast::KafkaSourceConnection {
             connection:
                 mz_sql_parser::ast::KafkaConnection {
@@ -376,10 +376,10 @@ pub fn plan_create_source(
                 },
             key: _,
         }) => {
-            let item = scx.get_item_by_resolved_name(connection_name)?;
-            let kafka_connection = match item.connection()? {
+            let connection_item = scx.get_item_by_resolved_name(connection_name)?;
+            let kafka_connection = match connection_item.connection()? {
                 Connection::Kafka(connection) => connection.clone(),
-                _ => sql_bail!("{} is not a kafka connection", item.name()),
+                _ => sql_bail!("{} is not a kafka connection", connection_item.name()),
             };
 
             // Starting offsets are allowed out unsafe mode, as they are a simple,
@@ -432,6 +432,7 @@ pub fn plan_create_source(
 
             let mut connection = KafkaSourceConnection {
                 connection: kafka_connection,
+                connection_id: connection_item.id(),
                 options,
                 topic,
                 start_offsets,
@@ -490,7 +491,7 @@ pub fn plan_create_source(
 
             let connection = SourceConnection::Kafka(connection);
 
-            (connection, Some(item.id()), encoding, None)
+            (connection, encoding, None)
         }
         CreateSourceConnection::Kinesis {
             connection: aws_connection,
@@ -508,16 +509,19 @@ pub fn plan_create_source(
                 ),
             };
 
-            let item = scx.get_item_by_resolved_name(aws_connection)?;
-            let aws = match item.connection()? {
+            let connection_item = scx.get_item_by_resolved_name(aws_connection)?;
+            let aws = match connection_item.connection()? {
                 Connection::Aws(aws) => aws.clone(),
-                _ => sql_bail!("{} is not an AWS connection", item.name()),
+                _ => sql_bail!("{} is not an AWS connection", connection_item.name()),
             };
 
             let encoding = get_encoding(scx, format, &envelope, connection)?;
-            let connection =
-                SourceConnection::Kinesis(KinesisSourceConnection { stream_name, aws });
-            (connection, Some(item.id()), encoding, None)
+            let connection = SourceConnection::Kinesis(KinesisSourceConnection {
+                connection_id: connection_item.id(),
+                stream_name,
+                aws,
+            });
+            (connection, encoding, None)
         }
         CreateSourceConnection::S3 {
             connection: aws_connection,
@@ -527,10 +531,10 @@ pub fn plan_create_source(
         } => {
             scx.require_unsafe_mode("CREATE SOURCE ... FROM S3")?;
 
-            let item = scx.get_item_by_resolved_name(aws_connection)?;
-            let aws = match item.connection()? {
+            let connection_item = scx.get_item_by_resolved_name(aws_connection)?;
+            let aws = match connection_item.connection()? {
                 Connection::Aws(aws) => aws.clone(),
-                _ => sql_bail!("{} is not an AWS connection", item.name()),
+                _ => sql_bail!("{} is not an AWS connection", connection_item.name()),
             };
 
             let mut converted_sources = Vec::new();
@@ -554,6 +558,7 @@ pub fn plan_create_source(
                 sql_bail!("S3 sources do not support key decoding");
             }
             let connection = SourceConnection::S3(S3SourceConnection {
+                connection_id: connection_item.id(),
                 key_sources: converted_sources,
                 pattern: pattern
                     .as_ref()
@@ -571,16 +576,16 @@ pub fn plan_create_source(
                     Compression::None => mz_storage::types::sources::Compression::None,
                 },
             });
-            (connection, Some(item.id()), encoding, None)
+            (connection, encoding, None)
         }
         CreateSourceConnection::Postgres {
             connection,
             options,
         } => {
-            let item = scx.get_item_by_resolved_name(connection)?;
-            let connection = match item.connection()? {
+            let connection_item = scx.get_item_by_resolved_name(connection)?;
+            let connection = match connection_item.connection()? {
                 Connection::Postgres(connection) => connection.clone(),
-                _ => sql_bail!("{} is not a postgres connection", item.name()),
+                _ => sql_bail!("{} is not a postgres connection", connection_item.name()),
             };
             let PgConfigOptionExtracted {
                 details,
@@ -675,6 +680,7 @@ pub fn plan_create_source(
 
             let connection = SourceConnection::Postgres(PostgresSourceConnection {
                 connection,
+                connection_id: connection_item.id(),
                 table_casts,
                 publication: publication.expect("validated exists during purification"),
                 details: PostgresSourceDetails::from_proto(details)
@@ -686,38 +692,15 @@ pub fn plan_create_source(
             let encoding = SourceDataEncoding::Single(DataEncoding::new(
                 DataEncodingInner::RowCodec(RelationDesc::empty()),
             ));
-            (
-                connection,
-                Some(item.id()),
-                encoding,
-                Some(available_subsources),
-            )
+            (connection, encoding, Some(available_subsources))
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
-            use mz_storage::types::sources::LoadGenerator;
-
-            let (load_generator, available_subsources) = match generator {
-                mz_sql_parser::ast::LoadGenerator::Auction => {
-                    let load_generator = LoadGenerator::Auction;
-                    let generator = as_generator(&load_generator);
-                    let mut available_subsources = HashMap::new();
-                    for (i, (name, _)) in generator.views().iter().enumerate() {
-                        let name = FullObjectName {
-                            database: RawDatabaseSpecifier::Name("mz_loadgenerator".to_owned()),
-                            schema: "public".to_owned(),
-                            item: name.to_string(),
-                        };
-                        // The zero-th output is the main output
-                        // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
-                        // to handle the main source and the subsources uniformly
-                        available_subsources.insert(name, i + 1);
-                    }
-                    (load_generator, Some(available_subsources))
-                }
-                mz_sql_parser::ast::LoadGenerator::Counter => (LoadGenerator::Counter, None),
-            };
-
+            let (load_generator, available_subsources) =
+                load_generator_ast_to_generator(generator, options)?;
+            let available_subsources = available_subsources
+                .map(|a| HashMap::from_iter(a.into_iter().map(|(k, v)| (k, v.0))));
             let generator = as_generator(&load_generator);
+
             let LoadGeneratorOptionExtracted { tick_interval, .. } = options.clone().try_into()?;
             let tick_micros = match tick_interval {
                 Some(interval) => {
@@ -730,12 +713,7 @@ pub fn plan_create_source(
                 load_generator,
                 tick_micros,
             });
-            (
-                connection,
-                None,
-                generator.data_encoding(),
-                available_subsources,
-            )
+            (connection, generator.data_encoding(), available_subsources)
         }
     };
     let (key_desc, value_desc) = encoding.desc()?;
@@ -815,6 +793,8 @@ pub fn plan_create_source(
 
     // Apply user-specified key constraint
     if let Some(KeyConstraint::PrimaryKeyNotEnforced { columns }) = key_constraint.clone() {
+        // Don't remove this without addressing
+        // https://github.com/MaterializeInc/materialize/issues/15272.
         scx.require_unsafe_mode("PRIMARY KEY NOT ENFORCED")?;
 
         let key_columns = columns
@@ -850,12 +830,7 @@ pub fn plan_create_source(
         }
     }
 
-    let host_config = match (remote, size) {
-        (None, None) => StorageHostConfig::Undefined,
-        (None, Some(size)) => StorageHostConfig::Managed { size },
-        (Some(addr), None) => StorageHostConfig::Remote { addr },
-        (Some(_), Some(_)) => sql_bail!("only one of REMOTE and SIZE can be set"),
-    };
+    let host_config = host_config(remote, size)?;
 
     let timestamp_interval = match timestamp_interval {
         Some(timestamp_interval) => timestamp_interval.duration()?,
@@ -943,7 +918,6 @@ pub fn plan_create_source(
     let source = Source {
         create_sql,
         ingestion: Some(Ingestion {
-            connection_id,
             desc: source_desc,
             // Currently no source reads from another source
             source_imports: HashSet::new(),
@@ -1068,6 +1042,52 @@ pub fn plan_create_subsource(
 
 generate_extracted_config!(LoadGeneratorOption, (TickInterval, Interval));
 
+pub(crate) fn load_generator_ast_to_generator(
+    loadgen: &mz_sql_parser::ast::LoadGenerator,
+    _options: &[LoadGeneratorOption<Aug>],
+) -> Result<
+    (
+        mz_storage::types::sources::LoadGenerator,
+        Option<HashMap<FullObjectName, (usize, RelationDesc)>>,
+    ),
+    PlanError,
+> {
+    let load_generator = match loadgen {
+        mz_sql_parser::ast::LoadGenerator::Auction => {
+            mz_storage::types::sources::LoadGenerator::Auction
+        }
+        mz_sql_parser::ast::LoadGenerator::Counter => {
+            mz_storage::types::sources::LoadGenerator::Counter
+        }
+    };
+
+    let mut available_subsources = HashMap::new();
+    let generator = as_generator(&load_generator);
+    for (i, (name, desc)) in generator.views().iter().enumerate() {
+        let name = FullObjectName {
+            database: RawDatabaseSpecifier::Name("mz_load_generators".to_owned()),
+            schema: match loadgen {
+                mz_sql_parser::ast::LoadGenerator::Counter => "counter".into(),
+                mz_sql_parser::ast::LoadGenerator::Auction => "auction".into(),
+                // Please use `snake_case` for any multi-word load generators
+                // that you add.
+            },
+            item: name.to_string(),
+        };
+        // The zero-th output is the main output
+        // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
+        // to handle the main source and the subsources uniformly
+        available_subsources.insert(name, (i + 1, desc.clone()));
+    }
+    let available_subsources = if available_subsources.is_empty() {
+        None
+    } else {
+        Some(available_subsources)
+    };
+
+    Ok((load_generator, available_subsources))
+}
+
 fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(usize, usize), PlanError> {
     let (before_idx, before_ty) = value_desc
         .get_by_name(&"before".into())
@@ -1120,6 +1140,18 @@ fn get_encoding(
     };
 
     Ok(encoding)
+}
+
+fn host_config(
+    remote: Option<String>,
+    size: Option<String>,
+) -> Result<StorageHostConfig, PlanError> {
+    match (remote, size) {
+        (None, None) => Ok(StorageHostConfig::Undefined),
+        (None, Some(size)) => Ok(StorageHostConfig::Managed { size }),
+        (Some(addr), None) => Ok(StorageHostConfig::Remote { addr }),
+        (Some(_), Some(_)) => sql_bail!("only one of REMOTE and SIZE can be set"),
+    }
 }
 
 generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default(true)));
@@ -1550,8 +1582,9 @@ pub fn describe_create_sink(
 
 generate_extracted_config!(
     CreateSinkOption,
+    (Remote, String),
     (Size, String),
-    (Snapshot, bool, Default(true))
+    (Snapshot, bool)
 );
 
 pub fn plan_create_sink(
@@ -1568,6 +1601,19 @@ pub fn plan_create_sink(
         if_not_exists,
         with_options,
     } = stmt;
+
+    const SAFE_WITH_OPTIONS: &[CreateSinkOptionName] =
+        &[CreateSinkOptionName::Size, CreateSinkOptionName::Snapshot];
+
+    if with_options
+        .iter()
+        .any(|op| !SAFE_WITH_OPTIONS.contains(&op.name))
+    {
+        scx.require_unsafe_mode(&format!(
+            "creating sinks with WITH options other than {}",
+            comma_separated(SAFE_WITH_OPTIONS)
+        ))?;
+    }
 
     let envelope = match envelope {
         None => sql_bail!("ENVELOPE clause is required"),
@@ -1646,7 +1692,7 @@ pub fn plan_create_sink(
         return Err(PlanError::UpsertSinkWithoutKey);
     }
 
-    let (connection_id, connection_builder) = match connection {
+    let connection_builder = match connection {
         CreateSinkConnection::Kafka { connection, .. } => kafka_sink_builder(
             scx,
             connection,
@@ -1659,26 +1705,26 @@ pub fn plan_create_sink(
     };
 
     let CreateSinkOptionExtracted {
+        remote,
         size,
         snapshot,
         seen: _,
     } = with_options.try_into()?;
 
-    let host_config = match size {
-        None => StorageHostConfig::Undefined,
-        Some(size) => StorageHostConfig::Managed { size },
-    };
+    let host_config = host_config(remote, size)?;
+
+    // WITH SNAPSHOT defaults to true
+    let with_snapshot = snapshot.unwrap_or(true);
 
     Ok(Plan::CreateSink(CreateSinkPlan {
         name,
         sink: Sink {
             create_sql,
             from: from.id(),
-            connection_id: Some(connection_id),
             connection_builder,
             envelope,
         },
-        with_snapshot: snapshot,
+        with_snapshot,
         if_not_exists,
         host_config,
     }))
@@ -1749,7 +1795,7 @@ fn kafka_sink_builder(
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
-) -> Result<(GlobalId, StorageSinkConnectionBuilder), PlanError> {
+) -> Result<StorageSinkConnectionBuilder, PlanError> {
     let item = scx.get_item_by_resolved_name(&connection)?;
     // Get Kafka connection
     let connection = match item.connection()? {
@@ -1890,9 +1936,8 @@ fn kafka_sink_builder(
         bytes: retention_bytes,
     };
 
-    Ok((
-        connection_id,
-        StorageSinkConnectionBuilder::Kafka(KafkaSinkConnectionBuilder {
+    Ok(StorageSinkConnectionBuilder::Kafka(
+        KafkaSinkConnectionBuilder {
             connection_id,
             connection,
             options: config_options,
@@ -1906,7 +1951,7 @@ fn kafka_sink_builder(
             key_desc_and_indices,
             value_desc,
             retention,
-        }),
+        },
     ))
 }
 
@@ -3289,6 +3334,83 @@ pub fn plan_alter_secret(
     Ok(Plan::AlterSecret(AlterSecretPlan { id, secret_as }))
 }
 
+pub fn describe_alter_sink(
+    _: &StatementContext,
+    _: AlterSinkStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_sink(
+    scx: &StatementContext,
+    stmt: AlterSinkStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let AlterSinkStatement {
+        sink_name,
+        if_exists,
+        action,
+    } = stmt;
+
+    let sink_name = normalize::unresolved_object_name(sink_name)?;
+    let entry = match scx.catalog.resolve_item(&sink_name) {
+        Ok(sink) => sink,
+        Err(_) if if_exists => {
+            return Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::Sink,
+            }));
+        }
+        Err(e) => return Err(e.into()),
+    };
+    if entry.item_type() != CatalogItemType::Sink {
+        sql_bail!(
+            "{} is a {} not a sink",
+            scx.catalog.resolve_full_name(entry.name()),
+            entry.item_type()
+        )
+    }
+    let id = entry.id();
+
+    let mut size = AlterOptionParameter::Unchanged;
+    let mut remote = AlterOptionParameter::Unchanged;
+    match action {
+        AlterSinkAction::SetOptions(options) => {
+            let CreateSinkOptionExtracted {
+                remote: remote_opt,
+                size: size_opt,
+                snapshot,
+                seen: _,
+            } = options.try_into()?;
+
+            if let Some(value) = remote_opt {
+                remote = AlterOptionParameter::Set(value);
+            }
+            if let Some(value) = size_opt {
+                size = AlterOptionParameter::Set(value);
+            }
+            if let Some(_) = snapshot {
+                sql_bail!("Cannot modify the SNAPSHOT of a SINK.");
+            }
+        }
+        AlterSinkAction::ResetOptions(reset) => {
+            for name in reset {
+                match name {
+                    CreateSinkOptionName::Remote => {
+                        remote = AlterOptionParameter::Reset;
+                    }
+                    CreateSinkOptionName::Size => {
+                        size = AlterOptionParameter::Reset;
+                    }
+                    CreateSinkOptionName::Snapshot => {
+                        sql_bail!("Cannot modify the SNAPSHOT of a SINK.");
+                    }
+                }
+            }
+        }
+    };
+
+    Ok(Plan::AlterSink(AlterSinkPlan { id, size, remote }))
+}
+
 pub fn describe_alter_source(
     _: &StatementContext,
     _: AlterSourceStatement<Aug>,
@@ -3332,8 +3454,8 @@ pub fn plan_alter_source(
     }
     let id = entry.id();
 
-    let mut size = AlterSourceItem::Unchanged;
-    let mut remote = AlterSourceItem::Unchanged;
+    let mut size = AlterOptionParameter::Unchanged;
+    let mut remote = AlterOptionParameter::Unchanged;
     match action {
         AlterSourceAction::SetOptions(options) => {
             let CreateSourceOptionExtracted {
@@ -3346,10 +3468,10 @@ pub fn plan_alter_source(
             } = CreateSourceOptionExtracted::try_from(options)?;
 
             if let Some(value) = remote_opt {
-                remote = AlterSourceItem::Set(value);
+                remote = AlterOptionParameter::Set(value);
             }
             if let Some(value) = size_opt {
-                size = AlterSourceItem::Set(value);
+                size = AlterOptionParameter::Set(value);
             }
             if let Some(_) = timeline_opt {
                 sql_bail!("Cannot modify the TIMELINE of a SOURCE.");
@@ -3365,10 +3487,10 @@ pub fn plan_alter_source(
             for name in reset {
                 match name {
                     CreateSourceOptionName::Remote => {
-                        remote = AlterSourceItem::Reset;
+                        remote = AlterOptionParameter::Reset;
                     }
                     CreateSourceOptionName::Size => {
-                        size = AlterSourceItem::Reset;
+                        size = AlterOptionParameter::Reset;
                     }
                     CreateSourceOptionName::Timeline => {
                         sql_bail!("Cannot modify the TIMELINE of a SOURCE.");

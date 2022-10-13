@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::{collections::VecDeque, iter};
+use std::iter;
 
 use rand::prelude::{Rng, SmallRng};
 use rand::seq::SliceRandom;
@@ -17,7 +17,7 @@ use mz_ore::now::{to_datetime, NowFn};
 use mz_repr::{Datum, RelationDesc, Row, ScalarType};
 
 use crate::types::sources::encoding::DataEncodingInner;
-use crate::types::sources::Generator;
+use crate::types::sources::{Generator, GeneratorMessageType};
 
 /// CREATE TABLE organizations
 ///   (
@@ -79,21 +79,24 @@ impl Generator for Auction {
                 "organizations",
                 RelationDesc::empty()
                     .with_column("id", ScalarType::Int64.nullable(false))
-                    .with_column("name", ScalarType::String.nullable(false)),
+                    .with_column("name", ScalarType::String.nullable(false))
+                    .with_key(vec![0]),
             ),
             (
                 "users",
                 RelationDesc::empty()
                     .with_column("id", ScalarType::Int64.nullable(false))
                     .with_column("org_id", ScalarType::Int64.nullable(false))
-                    .with_column("name", ScalarType::String.nullable(false)),
+                    .with_column("name", ScalarType::String.nullable(false))
+                    .with_key(vec![0]),
             ),
             (
                 "accounts",
                 RelationDesc::empty()
                     .with_column("id", ScalarType::Int64.nullable(false))
                     .with_column("org_id", ScalarType::Int64.nullable(false))
-                    .with_column("balance", ScalarType::Int64.nullable(false)),
+                    .with_column("balance", ScalarType::Int64.nullable(false))
+                    .with_key(vec![0]),
             ),
             (
                 "auctions",
@@ -101,7 +104,8 @@ impl Generator for Auction {
                     .with_column("id", ScalarType::Int64.nullable(false))
                     .with_column("seller", ScalarType::Int64.nullable(false))
                     .with_column("item", ScalarType::String.nullable(false))
-                    .with_column("end_time", ScalarType::TimestampTz.nullable(false)),
+                    .with_column("end_time", ScalarType::TimestampTz.nullable(false))
+                    .with_key(vec![0]),
             ),
             (
                 "bids",
@@ -110,7 +114,8 @@ impl Generator for Auction {
                     .with_column("buyer", ScalarType::Int64.nullable(false))
                     .with_column("auction_id", ScalarType::Int64.nullable(false))
                     .with_column("amount", ScalarType::Int32.nullable(false))
-                    .with_column("bid_time", ScalarType::TimestampTz.nullable(false)),
+                    .with_column("bid_time", ScalarType::TimestampTz.nullable(false))
+                    .with_key(vec![0]),
             ),
         ]
     }
@@ -119,8 +124,7 @@ impl Generator for Auction {
         &self,
         now: NowFn,
         seed: Option<u64>,
-    ) -> Box<dyn Iterator<Item = (usize, Vec<Row>)>> {
-        let mut pending = VecDeque::new();
+    ) -> Box<(dyn Iterator<Item = (usize, GeneratorMessageType, Row)>)> {
         let mut rng = SmallRng::seed_from_u64(seed.unwrap_or_default());
 
         let organizations = COMPANIES.iter().enumerate().map(|(offset, name)| {
@@ -130,7 +134,7 @@ impl Generator for Auction {
             let id = i64::try_from(offset + 1).expect("demo entries less than i64::MAX");
             packer.push(Datum::Int64(id));
             packer.push(Datum::String(*name));
-            company
+            (ORGANIZATION_OUTPUT, company)
         });
 
         let users = CELEBRETIES.iter().enumerate().map(|(offset, name)| {
@@ -143,7 +147,7 @@ impl Generator for Auction {
                 .expect("demo entries less than i64::MAX");
             packer.push(Datum::Int64(org_id));
             packer.push(Datum::String(name));
-            user
+            (USERS_OUTPUT, user)
         });
 
         let accounts = (1..=COMPANIES.len()).map(|org_id| {
@@ -154,14 +158,12 @@ impl Generator for Auction {
             packer.push(Datum::Int64(id));
             packer.push(Datum::Int64(org_id));
             packer.push(Datum::Int64(10000)); // balance
-            org
+            (ACCOUNTS_OUTPUT, org)
         });
 
-        pending.push_back((ORGANIZATION_OUTPUT, organizations.collect()));
-        pending.push_back((USERS_OUTPUT, users.collect()));
-        pending.push_back((ACCOUNTS_OUTPUT, accounts.collect()));
-
         let mut counter = 0;
+        let mut pending: Vec<(usize, Row)> = organizations.chain(users).chain(accounts).collect();
+
         Box::new(iter::from_fn(move || {
             {
                 if pending.is_empty() {
@@ -179,7 +181,7 @@ impl Generator for Auction {
                             .try_into()
                             .expect("timestamp must fit"),
                     )); // end time
-                    pending.push_back((AUCTIONS_OUTPUT, vec![auction]));
+                    pending.push((AUCTIONS_OUTPUT, auction));
                     const MAX_BIDS: i64 = 10;
                     for i in 0..rng.gen_range(2..MAX_BIDS) {
                         let bid_id = Datum::Int64(counter * MAX_BIDS + i);
@@ -197,10 +199,19 @@ impl Generator for Auction {
                             )); // bid time
                             bid
                         };
-                        pending.push_back((BIDS_OUTPUT, vec![bid]));
+                        pending.push((BIDS_OUTPUT, bid));
                     }
                 }
-                pending.pop_front()
+                let pend = pending.pop();
+                pend.map(|(output, row)| {
+                    // The first batch (orgs, users, accounts) is a single txn, all others (auctions and bids) are separate.
+                    let typ = if counter != 0 || pending.is_empty() {
+                        GeneratorMessageType::Finalized
+                    } else {
+                        GeneratorMessageType::InProgress
+                    };
+                    (output, typ, row)
+                })
             }
         }))
     }

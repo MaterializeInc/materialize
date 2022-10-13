@@ -1,0 +1,40 @@
+# In Materialize we eagerly commint implicit transactions after Execute
+# messages, causing portals to be destroyed.
+send
+Parse {"query": "VALUES (1), (2)"}
+Bind {"portal": "c"}
+Execute {"portal": "c", "max_rows": 1}
+Execute {"portal": "c", "max_rows": 1}
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["1"]}
+PortalSuspended
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"34000"},{"typ":"M","value":"portal \"c\" does not exist"}]}
+ReadyForQuery {"status":"I"}
+
+# Verify that portals (cursors) are destroyed on Execute.
+send
+Parse {"query": "VALUES (1), (2)"}
+Bind {"portal": "c"}
+Execute {"portal": "c", "max_rows": 1}
+Sync
+Query {"query": "FETCH c"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["1"]}
+PortalSuspended
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"34000"},{"typ":"M","value":"cursor \"c\" does not exist"}]}
+ReadyForQuery {"status":"I"}
