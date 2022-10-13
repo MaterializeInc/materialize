@@ -35,7 +35,7 @@ use mz_compute_client::controller::{
     ComputeInstanceEvent, ComputeInstanceId, ComputeReplicaAllocation, ComputeReplicaConfig,
     ComputeReplicaLocation, ComputeReplicaLogging,
 };
-use mz_compute_client::logging::{LogVariant, LogView, DEFAULT_LOG_VARIANTS, DEFAULT_LOG_VIEWS};
+use mz_compute_client::logging::{LogVariant, LogView};
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -4915,46 +4915,50 @@ impl<S: Append> Catalog<S> {
     }
 
     /// Allocate ids for persisted introspection views. Called once per compute replica creation
+    #[allow(clippy::unused_async)]
     pub async fn allocate_persisted_introspection_views(&mut self) -> Vec<(LogView, GlobalId)> {
-        let log_amount = DEFAULT_LOG_VIEWS
-            .len()
-            .try_into()
-            .expect("default log variants should fit into u64");
-        let system_ids = self
-            .storage()
-            .await
-            .allocate_system_ids(log_amount)
-            .await
-            .expect("cannot fail to allocate system ids");
+        vec![]
+        //let log_amount = DEFAULT_LOG_VIEWS
+        //    .len()
+        //    .try_into()
+        //    .expect("default log variants should fit into u64");
+        //let system_ids = self
+        //    .storage()
+        //    .await
+        //    .allocate_system_ids(log_amount)
+        //    .await
+        //    .expect("cannot fail to allocate system ids");
 
-        DEFAULT_LOG_VIEWS
-            .clone()
-            .into_iter()
-            .zip(system_ids.into_iter())
-            .collect()
+        //DEFAULT_LOG_VIEWS
+        //    .clone()
+        //    .into_iter()
+        //    .zip(system_ids.into_iter())
+        //    .collect()
     }
 
     /// Allocate ids for persisted introspection sources.
     /// Called once per compute replica creation.
+    #[allow(clippy::unused_async)]
     pub async fn allocate_persisted_introspection_sources(
         &mut self,
     ) -> Vec<(LogVariant, GlobalId)> {
-        let log_amount = DEFAULT_LOG_VARIANTS
-            .len()
-            .try_into()
-            .expect("default log variants should fit into u64");
-        let system_ids = self
-            .storage()
-            .await
-            .allocate_system_ids(log_amount)
-            .await
-            .expect("cannot fail to allocate system ids");
+        vec![]
+        // let log_amount = DEFAULT_LOG_VARIANTS
+        //     .len()
+        //     .try_into()
+        //     .expect("default log variants should fit into u64");
+        // let system_ids = self
+        //     .storage()
+        //     .await
+        //     .allocate_system_ids(log_amount)
+        //     .await
+        //     .expect("cannot fail to allocate system ids");
 
-        DEFAULT_LOG_VARIANTS
-            .clone()
-            .into_iter()
-            .zip(system_ids.into_iter())
-            .collect()
+        // DEFAULT_LOG_VARIANTS
+        //     .clone()
+        //     .into_iter()
+        //     .zip(system_ids.into_iter())
+        //     .collect()
     }
 
     pub fn pack_item_update(&self, id: GlobalId, diff: Diff) -> Vec<BuiltinTableUpdate> {
