@@ -13,7 +13,6 @@
 // #![allow(missing_docs)]
 
 use std::collections::HashMap;
-use std::fmt;
 use std::fmt::Debug;
 use std::marker::{Send, Sync};
 use std::rc::Rc;
@@ -109,7 +108,15 @@ pub trait SourceReader {
         // method should become a required method.
         loop {
             match self.get_next_message() {
-                Ok(NextMessage::Ready(msg)) => return Some(Ok(msg)),
+                Ok(NextMessage::Ready(msg)) => {
+                    if let SourceMessageType::Finalized(msg) = &msg {
+                        // delay a little for the final message at 2, to make the repro more clear
+                        if msg.offset.offset >= 2 {
+                            tokio::time::sleep(std::time::Duration::from_secs(2)).await
+                        }
+                    }
+                    return Some(Ok(msg));
+                }
                 Err(err) => return Some(Err(err)),
                 // There was a temporary hiccup in getting messages, check again asap.
                 Ok(NextMessage::TransientDelay) => {
@@ -221,7 +228,8 @@ pub enum SourceMessageType<Key, Value, Diff> {
 }
 
 /// Source-agnostic wrapper for messages. Each source must implement a
-/// conversion to Message.
+/// conversi)on to Message.
+#[derive(Debug)]
 pub struct SourceMessage<Key, Value, Diff> {
     /// The output stream this message belongs to. Later in the pipeline the stream is partitioned
     /// based on this value and is fed to the appropriate source exports
@@ -247,28 +255,6 @@ pub struct SourceMessage<Key, Value, Diff> {
     ///
     /// Only supported with `SourceEnvelope::None`
     pub specific_diff: Diff,
-}
-
-impl fmt::Debug for SourceMessage<(), Option<Vec<u8>>, ()> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SourceMessage")
-            .field("partition", &self.partition)
-            .field("offset", &self.offset)
-            .field("upstream_time_millis", &self.upstream_time_millis)
-            .finish()
-    }
-}
-
-impl fmt::Debug for SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SourceMessage")
-            .field("partition", &self.partition)
-            .field("offset", &self.offset)
-            .field("upstream_time_millis", &self.upstream_time_millis)
-            .field("key[present]", &self.key.is_some())
-            .field("value[present]", &self.value.is_some())
-            .finish()
-    }
 }
 
 /// A record produced by a source

@@ -532,7 +532,7 @@ impl KafkaSourceReader {
     /// past the expected offset and seeks the consumer if it is not.
     fn handle_message(
         &mut self,
-        message: SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()>,
+        mut message: SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()>,
     ) -> NextMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()> {
         let partition = match message.partition {
             PartitionId::Kafka(pid) => pid,
@@ -582,7 +582,17 @@ impl KafkaSourceReader {
             NextMessage::TransientDelay
         } else {
             *last_offset_ref = offset_as_i64;
-            NextMessage::Ready(SourceMessageType::Finalized(message))
+
+            // Fake multi-message offset by assigning 2 to everything past
+            // 1
+            if message.offset.offset < 2 {
+                NextMessage::Ready(SourceMessageType::Finalized(message))
+            } else if message.offset.offset > 2 {
+                message.offset = MzOffset::from(2);
+                NextMessage::Ready(SourceMessageType::Finalized(message))
+            } else {
+                NextMessage::Ready(SourceMessageType::InProgress(message))
+            }
         }
     }
 }

@@ -117,6 +117,7 @@ pub struct RawSourceCreationConfig {
 
 /// A batch of messages from a source reader, along with the batch upper, the
 /// current source upper, and any errors that occurred while reading that batch.
+#[derive(Debug)]
 struct SourceMessageBatch<Key, Value, Diff> {
     messages: HashMap<PartitionId, Vec<(SourceMessage<Key, Value, Diff>, MzOffset)>>,
     /// Any errors that occurred while obtaining this batch. TODO: These
@@ -167,6 +168,9 @@ pub fn create_raw_source<G, S: 'static, R>(
 where
     G: Scope<Timestamp = Timestamp> + Clone,
     S: SourceReader,
+    <S as crate::source::types::SourceReader>::Key: std::fmt::Debug,
+    <S as crate::source::types::SourceReader>::Value: std::fmt::Debug,
+    <S as crate::source::types::SourceReader>::Diff: std::fmt::Debug,
     R: ResumptionFrontierCalculator<Timestamp> + 'static,
 {
     let (resume_stream, source_reader_feedback_handle) =
@@ -400,6 +404,19 @@ where
                 }
                 // It's time to emit a batch of messages
                 _ = emission_interval.tick() => {
+
+                    if let Some(actual_messages) = untimestamped_messages.get(&PartitionId::Kafka(0)) {
+                        // ensure that we get
+                        // 3 messages, from 0, 1, 2, where 2 is not finalized
+                        // in the same batch.
+                        //
+                        // These offsets will map to distinct times.
+                        //
+                        // The final message for 2 will be in its own batch.
+                        if actual_messages.len() < 3 && source_upper.get(&PartitionId::Kafka(0)).unwrap().offset < 3{
+                            continue;
+                        }
+                    }
 
                     if !untimestamped_messages.is_empty() {
                         trace!("source_reader({id}) {worker_id}/{worker_count}: \
@@ -870,6 +887,81 @@ where
             // The last frontier we compacted the remap shard to, starting at [0].
             let mut last_compaction_since = Antichain::from_elem(Timestamp::default());
 
+            /* UH OH */
+
+            // this section prepopulates the remap trace with _distinct_ times for offset
+            // 0 and 1. This is critical for reproduction of this bug. This type of trace is
+            // trivial to obtain, if restarts happen. We can have a batch of
+            // _unfinished_ messages at offset 0 be a entirely processed batch, with their own
+            // timestamp, then can have a new batch with the final messages for offset 0,
+            // and the _unfinished_ messages for offset 1. If we crash with this second
+            // batch unprocessed (by `reclock_operator` OR `persist_sink`), but after
+            // we have mapped offset 1 to a different time than offset 0, then we will restart
+            // with this exact `remap_trace`. Note that we WILL re-read all this data, because
+            // we had not yet closed those times in `persist_sink`, which means the `resume_upper`
+            // will be held back.
+            //
+            // Note that this WAS still possible when we tracked `source_upper` and `batch_upper`
+            // at the same time, but was rarer: we had to have a batch with ALL messages for
+            // offset1 (including the `Finalized` one), reclocked to a new time, but not yet
+            // persisted in `persist_sink`. As persisting is the slowest part of this process, I
+            // feel this is totally possible.
+            //
+            //
+            // Also, we have only ever seen this bug:
+            // - _when restarting storaged_, which tracks here: this trace the repros the bug appears to only be
+            // possible if a restart happens
+            // - On sources that have multiple messages at the same offset. This is required
+            // because we need an offset (with a distinct time) to span across 2 batches. In this
+            // repro, this is offset 2, and we pretend kafka gives us messages at the same offset.
+            //
+            //
+            //
+            // Note that this will repro the bug ONCE, and upon crash looping you'll
+            // get some other error.
+            let mut offset0_upper = OffsetAntichain::new();
+            // for offset <= 0
+            offset0_upper.insert(PartitionId::Kafka(0), MzOffset::from(1));
+            global_source_upper = offset0_upper;
+            let remap_trace_updates = timestamper.mint(&global_source_upper).await;
+            timestamper.advance().await;
+            let new_ts_upper = timestamper
+                .reclock_frontier(&global_source_upper)
+                .expect("compacted past upper");
+            {
+                let mut remap_output = remap_output.activate();
+                let cap = cap_set.delayed(cap_set.first().unwrap());
+                let mut session = remap_output.session(&cap);
+                session.give(remap_trace_updates);
+            }
+            cap_set.downgrade(new_ts_upper);
+
+            // wait twice as long to ensure that 1 is timestamped to a different time.
+            tokio::time::sleep(timestamp_interval.clone()).await;
+            tokio::time::sleep(timestamp_interval.clone()).await;
+
+            let mut offset1_upper = OffsetAntichain::new();
+            // for offset <= 1
+            offset1_upper.insert(PartitionId::Kafka(0), MzOffset::from(2));
+            global_source_upper = offset1_upper;
+            let remap_trace_updates = timestamper.mint(&global_source_upper).await;
+            timestamper.advance().await;
+            let new_ts_upper = timestamper
+                .reclock_frontier(&global_source_upper)
+                .expect("compacted past upper");
+            {
+                let mut remap_output = remap_output.activate();
+                let cap = cap_set.delayed(cap_set.first().unwrap());
+                let mut session = remap_output.session(&cap);
+                session.give(remap_trace_updates);
+            }
+            cap_set.downgrade(new_ts_upper);
+
+            // ensure later mintings happens strictly after this trace
+            tokio::time::sleep(timestamp_interval.clone()).await;
+
+            /* END UH OH */
+
             while scheduler.notified().await {
                 if token_weak.upgrade().is_none() {
                     // Make sure we don't accidentally mint new updates when
@@ -993,6 +1085,9 @@ fn reclock_operator<G, S: 'static>(
 where
     G: Scope<Timestamp = Timestamp>,
     S: SourceReader,
+    <S as crate::source::types::SourceReader>::Key: std::fmt::Debug,
+    <S as crate::source::types::SourceReader>::Value: std::fmt::Debug,
+    <S as crate::source::types::SourceReader>::Diff: std::fmt::Debug,
 {
     let RawSourceCreationConfig {
         name,
@@ -1099,8 +1194,12 @@ where
 
             trace!(
                 "reclock({id}) {worker_id}/{worker_count}: \
-                untimestamped_batches.len(): {}",
+                untimestamped_batches.len(): {}, total messages: {}",
                 untimestamped_batches.len(),
+                untimestamped_batches
+                    .iter()
+                    .map(|b| b.messages.values().map(|v| v.len()).sum::<usize>())
+                    .sum::<usize>()
             );
 
             while let Some(untimestamped_batch) = untimestamped_batches.front_mut() {
@@ -1222,6 +1321,19 @@ where
             // Note that this even if the `global_source_upper` has advanced past
             // the remap input, this holds back capability downgrades until
             // they match.
+
+            /* UH OH */
+            // NOTE that WHEN this happens for offset 1, we effectively CLOSE offset 0, which, if
+            // there was a previous batch of messages for offset 0, would be persisted and closed.
+            //
+            // This is what I believe to be happening when we see negative sums for postgres
+            // sources. It also requires that _reclocking of offset 2_ happens AFTER we persist
+            // those messages. The feasibility of this is unclear to me...but remember that
+            // those messages can already be written to s3, and the only thing that is required
+            // to happen to finalize them is a single `compare_and_append`...
+            //
+            // This repro does not attempt to adjust timelines to show that bad data can be
+            // persisted, but _could_ be added, by adding additional message at offset 0.
             if let Ok(new_ts_upper) = timestamper.reclock_frontier(&global_source_upper) {
                 let ts = new_ts_upper.as_option().cloned().unwrap_or(Timestamp::MAX);
 
