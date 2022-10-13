@@ -12,6 +12,7 @@ from typing import List, Optional
 
 import pytest
 
+from materialize import util
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.all_checks import *  # noqa: F401 F403
 from materialize.checks.checks import Check
@@ -20,10 +21,6 @@ from materialize.checks.scenarios import Scenario
 from materialize.cloudtest.application import MaterializeApplication
 from materialize.cloudtest.k8s.environmentd import EnvironmentdStatefulSet
 from materialize.cloudtest.wait import wait
-
-# This will 'upgrade' from the current source.
-# Once a stable release is out, we need to get its DockerHub tag in here
-LAST_RELEASED_VERSION = None
 
 
 class ReplaceEnvironmentdStatefulSet(Action):
@@ -81,9 +78,10 @@ class CloudtestUpgrade(Scenario):
 
 @pytest.mark.long
 def test_upgrade() -> None:
-    """Test upgrade from LAST_RELEASED_VERSION to the current source by running all the Platform Checks"""
+    """Test upgrade from the last released verison to the current source by running all the Platform Checks"""
+    last_released_version = f"v{util.released_materialize_versions()[0]}"
 
-    mz = MaterializeApplication(tag=LAST_RELEASED_VERSION)
+    mz = MaterializeApplication(tag=last_released_version)
     wait(condition="condition=Ready", resource="pod/compute-cluster-u1-replica-1-0")
 
     executor = CloudtestExecutor(application=mz)

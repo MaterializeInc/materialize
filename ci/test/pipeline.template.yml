@@ -288,15 +288,15 @@ steps:
     agents:
       queue: linux-x86_64
 
-  - id: upgrade
-    label: Upgrade tests
+  - id: legacy-upgrade
+    label: Legacy upgrade tests
     depends_on: build-x86_64
     timeout_in_minutes: 60
     artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: upgrade
-          args: [--most-recent, "0"]
+          args: [--most-recent, "1"]
     agents:
       queue: linux-x86_64
 

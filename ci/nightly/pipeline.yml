@@ -404,7 +404,7 @@ steps:
           args: [--scenario=RestartRedpanda, --execution-mode=oneatatime]
 
   - id: checks-upgrade-entire-mz
-    label: "Upgrade entire Mz from v0.27.0-alpha.23"
+    label: "Platform checks upgrade, whole-Mz restart"
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -414,7 +414,7 @@ steps:
           args: [--scenario=UpgradeEntireMz]
 
   - id: checks-upgrade-computed-first
-    label: "Upgrade computed from v0.27.0-alpha.23 first"
+    label: "Platform checks upgrade, restarting computed first"
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -424,7 +424,7 @@ steps:
           args: [--scenario=UpgradeComputedFirst]
 
   - id: checks-upgrade-computed-last
-    label: "Upgrade computed from v0.27.0-alpha.23 last"
+    label: "Platform checks upgrade, restarting computed last"
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -434,14 +434,10 @@ steps:
           args: [--scenario=UpgradeComputedLast]
 
   - id: cloudtest-upgrade
-    label: "Cloudtest upgrade from main to main"
+    label: "Platform checks upgrade in Cloudtest/K8s"
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=UpgradeComputedLast]
     artifact_paths: junit_cloudtest_*.xml
     plugins:
       - ./ci/plugins/cloudtest:
