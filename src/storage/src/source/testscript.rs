@@ -21,10 +21,10 @@ use crate::types::connections::ConnectionContext;
 use crate::types::sources::encoding::SourceDataEncoding;
 use crate::types::sources::{MzOffset, TestScriptSourceConnection};
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[serde(tag = "command")]
 #[serde(rename_all = "lowercase")]
-enum ScriptCommand {
+pub enum ScriptCommand {
     /// Emit a value (and possibly a key, which may be required
     /// by the envelope), at an offset.
     Emit {

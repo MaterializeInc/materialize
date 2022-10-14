@@ -51,7 +51,9 @@ mod reclock;
 mod resumption;
 mod s3;
 mod source_reader_pipeline;
-mod testscript;
+// Public for integration testing.
+#[doc(hidden)]
+pub mod testscript;
 pub mod types;
 pub mod util;
 
