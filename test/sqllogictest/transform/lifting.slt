@@ -863,15 +863,15 @@ query T multiline
 explain with(arity, join_impls) select * from t1 as a1 join t1 as a2 on (a2.f2 = (select 6 from t1)) where a2.f2 = 9;
 ----
 Explained Query:
-  Project (#0..=#3) // { arity: 4 }
-    CrossJoin type=differential // { arity: 5 }
-      implementation
-        %1 » %2[] » %0[]
-      ArrangeBy keys=[[]] // { arity: 2 }
-        Get materialize.public.t1 // { arity: 2 }
-      Filter (#1 = 9) // { arity: 2 }
-        Get materialize.public.t1 // { arity: 2 }
-      ArrangeBy keys=[[]] // { arity: 1 }
+  CrossJoin type=differential // { arity: 4 }
+    implementation
+      %1 » %2[] » %0[]
+    ArrangeBy keys=[[]] // { arity: 2 }
+      Get materialize.public.t1 // { arity: 2 }
+    Filter (#1 = 9) // { arity: 2 }
+      Get materialize.public.t1 // { arity: 2 }
+    ArrangeBy keys=[[]] // { arity: 0 }
+      Project () // { arity: 0 }
         Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
           Reduce aggregates=[count(true)] // { arity: 1 }
             Project () // { arity: 0 }

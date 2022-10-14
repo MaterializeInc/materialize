@@ -348,17 +348,17 @@ impl MapFilterProject {
             MirRelationExpr::Map { input, scalars }
                 if scalars.iter().all(|s| !s.is_literal_err()) =>
             {
-                let (mfp, expr) = Self::extract_from_expression(input);
+                let (mfp, expr) = Self::extract_non_errors_from_expr(input);
                 (mfp.map(scalars.iter().cloned()), expr)
             }
             MirRelationExpr::Filter { input, predicates }
                 if predicates.iter().all(|p| !p.is_literal_err()) =>
             {
-                let (mfp, expr) = Self::extract_from_expression(input);
+                let (mfp, expr) = Self::extract_non_errors_from_expr(input);
                 (mfp.filter(predicates.iter().cloned()), expr)
             }
             MirRelationExpr::Project { input, outputs } => {
-                let (mfp, expr) = Self::extract_from_expression(input);
+                let (mfp, expr) = Self::extract_non_errors_from_expr(input);
                 (mfp.project(outputs.iter().cloned()), expr)
             }
             x => (Self::new(x.arity()), x),
