@@ -86,7 +86,7 @@ Create a cluster with a single replica with introspection disabled:
 
 ```sql
 CREATE CLUSTER c REPLICAS (
-    r1 (SIZE = 'xsmall', INTROSPECTION GRANULARITY = 0)
+    r1 (SIZE = 'xsmall', INTROSPECTION INTERVAL = 0)
 );
 ```
 
