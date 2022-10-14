@@ -233,7 +233,7 @@ steps:
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
-          args: [-m=long, test/cloudtest/test_full_testdrive.py]
+          args: [-m=long, --aws-region=us-east-2, test/cloudtest/test_full_testdrive.py]
 
   - id: persistence-testdrive
     label: ":racing_car: testdrive with --persistent-user-tables"
@@ -413,8 +413,9 @@ steps:
       queue: linux-x86_64
     artifact_paths: junit_cloudtest_*.xml
     plugins:
+      - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
-          args: [-m=long, test/cloudtest/test_upgrade.py]
+          args: [-m=long,  --aws-region=us-east-2, test/cloudtest/test_upgrade.py]
 
   - id: persist-maelstrom-single-node
     label: Long single-node Maelstrom coverage of persist
