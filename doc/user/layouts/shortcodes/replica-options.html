@@ -1,0 +1,6 @@
+Field                               | Value      | Description
+------------------------------------|------------|-------------------------------------
+`SIZE`                              | `text`     | The size of the replica. For valid sizes, see [cluster replica sizes](/sql/create-cluster-replica#sizes).
+`AVAILABILITY ZONE`                 | `text`     | If you want the replica to reside in a specific availability zone. You must specify an [AWS availability zone ID] in either `us-east-1` or `eu-west-1`, e.g. `use1-az1`. Note that we expect the zone's ID, rather than its name.
+`INTROSPECTION INTERVAL`         | `interval` | The interval at which to collect introspection data. See [Troubleshooting](/ops/troubleshooting) for details about introspection data. The special value `0` entirely disables the gathering of introspection data. Defaults to `1s`.
+`INTROSPECTION DEBUGGING`           | `bool`     | Whether to introspect the gathering of the introspection data. Defaults to false.

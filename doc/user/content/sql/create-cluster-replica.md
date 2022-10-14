@@ -32,17 +32,14 @@ machines.
 
 {{< diagram "create-cluster-replica.svg" >}}
 
-### `replica_option`
-
-{{< diagram "replica-option.svg" >}}
-
 Field | Use
 ------|-----
 _cluster_name_ | The cluster whose resources you want to create an additional computation of.
 _replica_name_ | A name for this replica.
-_replica_option_ | This replica's specified [options](#replica_option).
-_size_ | A "size" for a managed replica. For valid `size` values, see [Sizes](#sizes)
-_az_ | If you want the replica to reside in a specific availability zone. You must specify an [AWS availability zone ID] in either `us-east-1` or `eu-west-1`, e.g. `use1-az1`. Note that we expect the zone's ID, rather than its name.
+
+### Options
+
+{{% replica-options %}}
 
 ## Details
 

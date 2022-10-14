@@ -46,35 +46,17 @@ this might require setting up more than one cluster.
 
 {{< diagram "cluster-replica-def.svg" >}}
 
-### `replica_option`
-
-{{< diagram "replica-option.svg" >}}
-
 Field | Use
 ------|-----
 _name_ | A name for the cluster.
 _inline_replica_ | Any [replicas](#replica_definition) you want to immediately provision.
 _replica_name_ | A name for a cluster replica.
-_replica_option_ | This replica's specified [options](#replica_option).
-_size_ | A "size" for a managed replica. For valid `size` values, see [Cluster replica sizes](#cluster-replica-sizes)
-_az_ | If you want the replica to reside in a specific availability zone. You must specify an [AWS availability zone ID] in either `us-east-1` or `eu-west-1`, e.g. `use1-az1`. Note that we expect the zone's ID, rather than its name.
+
+### Replica options
+
+{{% replica-options %}}
 
 ## Details
-
-### Cluster replica sizes
-
-Valid `size` options are:
-
-- `xsmall`
-- `small`
-- `medium`
-- `large`
-- `xlarge`
-- `2xlarge`
-- `3xlarge`
-- `4xlarge`
-- `5xlarge`
-- `6xlarge`
 
 ### Deployment options
 
@@ -85,13 +67,42 @@ Action | Outcome
 Adding clusters + decreasing dataflow density | Reduced contention among dataflows, decoupled dataflow availability
 Adding replicas to clusters | See [Cluster replica scaling](/sql/create-cluster#deployment-options)
 
-## Example
+## Examples
+
+### Basic
+
+Create a cluster with two medium replicas:
 
 ```sql
-CREATE CLUSTER c1 REPLICAS (r1 (SIZE = 'medium'), r2 (SIZE = 'medium'));
+CREATE CLUSTER c1 REPLICAS (
+    r1 (SIZE = 'medium'),
+    r2 (SIZE = 'medium')
+);
+```
 
--- Create an empty cluster
+### Introspection disabled
+
+Create a cluster with a single replica with introspection disabled:
+
+```sql
+CREATE CLUSTER c REPLICAS (
+    r1 (SIZE = 'xsmall', INTROSPECTION INTERVAL = 0)
+);
+```
+
+Disabling introspection can yield a small performance improvement, but you lose
+the ability to run [troubleshooting queries](/ops/troubleshooting/) against
+that cluster replica.
+
+### Empty
+
+Create a cluster with no replicas:
+
+```sql
 CREATE CLUSTER c1 REPLICAS ();
 ```
+
+You can later add replicas to this cluster with [`CREATE CLUSTER
+REPLICA`](../create-cluster-replica).
 
 [AWS availability zone ID]: https://docs.aws.amazon.com/ram/latest/userguide/working-with-az-ids.html
