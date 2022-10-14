@@ -89,7 +89,8 @@ To create a source that uses the standard key-value convention to support insert
 CREATE SOURCE current_predictions
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'events')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-  ENVELOPE UPSERT;
+  ENVELOPE UPSERT
+  WITH (SIZE = '3xsmall');
 ```
 
 Note that:
@@ -114,7 +115,8 @@ Materialize provides a dedicated envelope (`ENVELOPE DEBEZIUM`) to decode Kafka 
 CREATE SOURCE kafka_repl
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'pg_repl.public.table1')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-  ENVELOPE DEBEZIUM;
+  ENVELOPE DEBEZIUM
+  WITH (SIZE = '3xsmall');
 ```
 
 Any materialized view defined on top of this source will be incrementally updated as new change events stream in through Kafka, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original database.
@@ -134,7 +136,8 @@ CREATE SOURCE kafka_metadata
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   KEY FORMAT TEXT
   VALUE FORMAT TEXT
-  INCLUDE KEY AS renamed_id;
+  INCLUDE KEY AS renamed_id
+  WITH (SIZE = '3xsmall');
 ```
 
 Note that:
@@ -154,7 +157,8 @@ CREATE SOURCE kafka_metadata
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   INCLUDE HEADERS
-  ENVELOPE NONE;
+  ENVELOPE NONE
+  WITH (SIZE = '3xsmall');
 ```
 
 To retrieve the headers in a message, you can unpack the value:
@@ -206,7 +210,8 @@ CREATE SOURCE kafka_metadata
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   INCLUDE PARTITION, OFFSET, TIMESTAMP AS ts
-  ENVELOPE NONE;
+  ENVELOPE NONE
+  WITH (SIZE = '3xsmall');
 ```
 
 ```sql
@@ -228,7 +233,8 @@ CREATE SOURCE kafka_offset
   -- Start reading from the earliest offset in the first partition,
   -- the second partition at 10, and the third partition at 100
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'data', START OFFSET=[0,10,100])
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  WITH (SIZE = '3xsmall');
 ```
 
 Note that:
@@ -323,10 +329,9 @@ CREATE CONNECTION csr_ssl
 
 ```sql
 CREATE SOURCE avro_source
-  FROM KAFKA
-    CONNECTION kafka_connection (TOPIC 'test_topic')
-    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-    WITH (SIZE = '3xsmall');
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  WITH (SIZE = '3xsmall');
 ```
 
 {{< /tab >}}
@@ -355,7 +360,8 @@ CREATE VIEW jsonified_kafka_source AS
 ```sql
 CREATE SOURCE proto_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
+  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  WITH (SIZE = '3xsmall');
 ```
 
 {{< /tab >}}
@@ -388,10 +394,9 @@ To provision a specific amount of CPU and memory to a source on creation, use th
 
 ```sql
 CREATE SOURCE avro_source
-  FROM KAFKA
-    CONNECTION kafka_connection (TOPIC 'test_topic')
-    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-    WITH (SIZE = 'xsmall');
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  WITH (SIZE = '3xsmall');
 ```
 
 To resize the source after creation:

@@ -207,7 +207,7 @@ CREATE SINK snk FROM src
   INTO KAFKA CONNECTION kafka_connection (TOPIC 'snk')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   ENVELOPE DEBEZIUM
-  WITH (SIZE = 'xsmall');
+  WITH (SIZE = '3xsmall');
 ```
 
 To resize the sink after creation:

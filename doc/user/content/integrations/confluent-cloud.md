@@ -58,15 +58,18 @@ The process to connect Materialize to a Confluent Cloud Kafka cluster consists o
     ```sql
       CREATE SECRET confluent_username AS '<your-username>';
       CREATE SECRET confluent_password AS '<your-password>';
+
       CREATE CONNECTION <confluent_cloud>
         FOR KAFKA
           BROKER '<confluent-broker-url>',
           SASL MECHANISMS = 'PLAIN',
           SASL USERNAME = SECRET confluent_username,
           SASL PASSWORD = SECRET confluent_password;
+
       CREATE SOURCE <topic-name>
         FROM KAFKA CONNECTION confluent_cloud TOPIC '<topic-name>'
-        FORMAT BYTES;
+        FORMAT BYTES
+        WITH (SIZE = '3xsmall');
     ```
 
     e. If the command executes without an error and outputs _CREATE SOURCE_, it means that you have successfully connected Materialize to your Confluent Cloud Kafka cluster. You can quickly test your connection by running the following statement:

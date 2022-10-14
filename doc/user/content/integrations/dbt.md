@@ -141,8 +141,7 @@ Create a [Kafka source](/sql/create-source/kafka/).
 {{ config(materialized='source') }}
 
 CREATE SOURCE IF NOT EXISTS {{ this }}
-  FROM KAFKA
-    CONNECTION kafka_connection (TOPIC 'topic_a')
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'topic_a')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   WITH (SIZE = '3xsmall')
 ```
@@ -155,10 +154,9 @@ Create a [PostgreSQL source](/sql/create-source/postgres/).
 {{ config(materialized='source') }}
 
 CREATE SOURCE IF NOT EXISTS {{ this }}
-  FROM POSTGRES
-    CONNECTION pg_connection (PUBLICATION 'mz_source')
-    FOR ALL TABLES
-    WITH (SIZE = '3xsmall')
+  FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
+  FOR ALL TABLES
+  WITH (SIZE = '3xsmall')
 ```
 
 The [pre-hook](https://docs.getdbt.com/reference/resource-configs/pre-hook-post-hook) defined above is used to create the replication views that reproduce the publication's original tables.

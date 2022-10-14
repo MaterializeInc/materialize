@@ -74,7 +74,8 @@ create a source that reads the data as [raw bytes](#bytes), and then handle the 
 ```sql
 CREATE SOURCE bytea_source
   FROM ...
-  FORMAT BYTES;
+  FORMAT BYTES
+  WITH (SIZE='3xsmall');
 
 CREATE VIEW jsonified_source AS
   SELECT
