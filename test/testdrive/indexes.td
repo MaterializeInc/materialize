@@ -203,6 +203,13 @@ contains:Cannot specify both FROM and ON
 ! SHOW INDEXES FROM nonexistent
 contains:unknown schema 'nonexistent'
 
+> CREATE TABLE bar ();
+> CREATE INDEX bar_ind ON bar ();
+
+> SHOW INDEXES
+bar_ind bar <VARIABLE_OUTPUT> {}
+
+> DROP TABLE bar CASCADE
 > CREATE SCHEMA foo
 > CREATE TABLE foo.bar (a INT)
 > CREATE INDEX bar_ind ON foo.bar (a)
