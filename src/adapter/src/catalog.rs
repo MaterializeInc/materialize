@@ -2084,7 +2084,11 @@ impl<S: Append> Catalog<S> {
             )
             .await?;
 
-        for (builtin, id) in all_builtins {
+        let (builtin_indexes, builtin_non_indexes): (Vec<_>, Vec<_>) = all_builtins
+            .into_iter()
+            .partition(|(builtin, _)| matches!(builtin, Builtin::Index(_)));
+
+        for (builtin, id) in builtin_non_indexes {
             let schema_id = catalog.state.ambient_schemas_by_name[builtin.schema()];
             let name = QualifiedObjectName {
                 qualifiers: ObjectQualifiers {
@@ -2122,7 +2126,9 @@ impl<S: Append> Catalog<S> {
                         }),
                     );
                 }
-
+                Builtin::Index(_) => {
+                    unreachable!("handled later once clusters have been created")
+                }
                 Builtin::View(view) => {
                     let item = catalog
                         .parse_item(
@@ -2177,21 +2183,6 @@ impl<S: Append> Catalog<S> {
                 }
             }
         }
-        let new_system_id_mappings = new_builtins
-            .iter()
-            .map(|(builtin, id)| SystemObjectMapping {
-                schema_name: builtin.schema().to_string(),
-                object_type: builtin.catalog_item_type(),
-                object_name: builtin.name().to_string(),
-                id: *id,
-                fingerprint: builtin.fingerprint(),
-            })
-            .collect();
-        catalog
-            .storage()
-            .await
-            .set_system_object_mapping(new_system_id_mappings)
-            .await?;
 
         let compute_instances = catalog.storage().await.load_compute_instances().await?;
         for (id, name) in compute_instances {
@@ -2262,6 +2253,62 @@ impl<S: Append> Catalog<S> {
                 .state
                 .insert_compute_replica(instance_id, name, replica_id, config);
         }
+
+        for (builtin, id) in builtin_indexes {
+            let schema_id = catalog.state.ambient_schemas_by_name[builtin.schema()];
+            let name = QualifiedObjectName {
+                qualifiers: ObjectQualifiers {
+                    database_spec: ResolvedDatabaseSpecifier::Ambient,
+                    schema_spec: SchemaSpecifier::Id(schema_id),
+                },
+                item: builtin.name().into(),
+            };
+            match builtin {
+                Builtin::Index(index) => {
+                    let item = catalog
+                        .parse_item(
+                            index.sql.into(),
+                            None,
+                        )
+                        .unwrap_or_else(|e| {
+                            panic!(
+                                "internal error: failed to load bootstrap index:\n\
+                                    {}\n\
+                                    error:\n\
+                                    {:?}\n\n\
+                                    make sure that the schema name is specified in the builtin index's create sql statement.",
+                                index.name, e
+                            )
+                        });
+                    let oid = catalog.allocate_oid()?;
+                    catalog.state.insert_item(id, oid, name, item);
+                }
+                Builtin::Log(_)
+                | Builtin::Table(_)
+                | Builtin::View(_)
+                | Builtin::Type(_)
+                | Builtin::Func(_)
+                | Builtin::Source(_) => {
+                    unreachable!("handled above")
+                }
+            }
+        }
+
+        let new_system_id_mappings = new_builtins
+            .iter()
+            .map(|(builtin, id)| SystemObjectMapping {
+                schema_name: builtin.schema().to_string(),
+                object_type: builtin.catalog_item_type(),
+                object_name: builtin.name().to_string(),
+                id: *id,
+                fingerprint: builtin.fingerprint(),
+            })
+            .collect();
+        catalog
+            .storage()
+            .await
+            .set_system_object_mapping(new_system_id_mappings)
+            .await?;
 
         let system_config = catalog.storage().await.load_system_configuration().await?;
         for (name, value) in system_config {

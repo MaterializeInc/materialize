@@ -1,0 +1,162 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+SET CLUSTER TO mz_introspection
+
+query T multiline
+EXPLAIN SHOW DATABASES
+----
+%0 =
+| ReadExistingIndex mz_internal.mz_show_databases_ind
+| Project (#0)
+
+EOF
+
+query T multiline
+EXPLAIN SHOW SCHEMAS
+----
+%0 =
+| ReadExistingIndex mz_internal.mz_show_schemas_ind
+| Filter ((#0) IS NULL OR (1 = uint8_to_double(#0)))
+| Project (#3)
+
+EOF
+
+query T multiline
+EXPLAIN SHOW CONNECTIONS
+----
+%0 =
+| ReadExistingIndex mz_internal.mz_show_connections_ind
+| Filter (3 = uint8_to_double(#0))
+| Project (#3, #4)
+
+EOF
+
+query T multiline
+EXPLAIN SHOW TABLES
+----
+%0 =
+| ReadExistingIndex mz_internal.mz_show_tables_ind
+| Filter (3 = uint8_to_double(#0))
+| Project (#3)
+
+EOF
+
+query T multiline
+EXPLAIN SHOW SOURCES
+----
+%0 =
+| ReadExistingIndex mz_internal.mz_show_sources_ind
+| Filter (3 = uint8_to_double(#0))
+| Project (#3, #4, #6)
+
+EOF
+
+query T multiline
+EXPLAIN SHOW VIEWS
+----
+%0 =
+| ReadExistingIndex mz_internal.mz_show_views_ind
+| Filter (3 = uint8_to_double(#0))
+| Project (#3)
+
+EOF
+
+query T multiline
+EXPLAIN SHOW MATERIALIZED VIEWS
+----
+%0 =
+| ReadExistingIndex mz_internal.mz_show_materialized_views_ind
+| Filter (3 = uint8_to_double(#0))
+| Project (#2, #3)
+
+EOF
+
+query T multiline
+EXPLAIN SHOW INDEXES
+----
+%0 =
+| ReadExistingIndex mz_internal.mz_show_indexes_ind
+| Filter (3 = uint8_to_double(#1))
+| Project (#3..=#6)
+
+EOF
+
+query T multiline
+EXPLAIN SHOW SINKS
+----
+%0 =
+| ReadExistingIndex mz_internal.mz_show_sinks_ind
+| Filter (3 = uint8_to_double(#0))
+| Project (#3, #4, #6)
+
+EOF
+
+query T multiline
+EXPLAIN SHOW TYPES
+----
+%0 =
+| ReadExistingIndex mz_internal.mz_show_types_ind
+| Filter (3 = uint8_to_double(#0))
+| Project (#3)
+
+EOF
+
+query T multiline
+EXPLAIN SHOW OBJECTS
+----
+%0 =
+| ReadExistingIndex mz_internal.mz_show_all_objects_ind
+| Filter (3 = uint8_to_double(#0))
+| Project (#3, #4)
+
+EOF
+
+statement ok
+CREATE TABLE t (a INT)
+
+query T multiline
+EXPLAIN SHOW COLUMNS IN t
+----
+%0 =
+| ReadExistingIndex mz_internal.mz_show_columns_ind
+| | Lookup value ("u1")
+| Project (#1, #3, #4)
+
+EOF
+
+query T multiline
+EXPLAIN SHOW CLUSTERS
+----
+%0 =
+| ReadExistingIndex mz_internal.mz_show_clusters_ind
+| Project (#0)
+
+EOF
+
+query T multiline
+EXPLAIN SHOW CLUSTER REPLICAS
+----
+%0 =
+| ReadExistingIndex mz_internal.mz_show_cluster_replicas_ind
+
+EOF
+
+query T multiline
+EXPLAIN SHOW SECRETS
+----
+%0 =
+| ReadExistingIndex mz_internal.mz_show_secrets_ind
+| Filter (3 = uint8_to_double(#0))
+| Project (#2)
+
+EOF
