@@ -383,7 +383,9 @@ impl<S: Append + 'static> Coordinator<S> {
         builtin_migration_metadata: BuiltinMigrationMetadata,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
-        let mut persisted_source_ids = HashMap::new();
+        // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
+        let mut policies_to_set: CollectionIdBundle = Default::default();
+
         for instance in self.catalog.compute_instances() {
             self.controller.compute.create_instance(
                 instance.id,
@@ -407,10 +409,14 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
-                persisted_source_ids.insert(
-                    instance.id,
-                    replica.config.logging.source_ids().collect_vec(),
-                );
+                policies_to_set
+                    .compute_ids
+                    .entry(instance.id)
+                    .or_insert_with(BTreeSet::new)
+                    .extend(replica.config.logging.source_ids());
+                policies_to_set
+                    .storage_ids
+                    .extend(replica.config.logging.source_ids());
 
                 self.controller
                     .active_compute()
@@ -418,20 +424,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
             }
-        }
-
-        for (instance_id, collection_ids) in persisted_source_ids {
-            self.initialize_compute_read_policies(
-                collection_ids.clone(),
-                instance_id,
-                DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
-            )
-            .await;
-            self.initialize_storage_read_policies(
-                collection_ids,
-                DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
-            )
-            .await;
         }
 
         // Migrate builtin objects.
@@ -464,9 +456,6 @@ impl<S: Append + 'static> Coordinator<S> {
         let logs: HashSet<_> = BUILTINS::logs()
             .map(|log| self.catalog.resolve_builtin_log(log))
             .collect();
-
-        // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
-        let mut policies_to_set: CollectionIdBundle = Default::default();
 
         // This is disabled for the moment because it has unusual upper
         // advancement behavior.
