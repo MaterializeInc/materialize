@@ -176,6 +176,7 @@ message ProtoSourceConnection {
         ProtoS3SourceConnection s3 = 3;
         ProtoPostgresSourceConnection postgres = 4;
         ProtoLoadGeneratorSourceConnection loadgen = 6;
+        ProtoTestScriptSourceConnection testscript = 7;
     }
 }
 
@@ -216,6 +217,11 @@ message ProtoLoadGeneratorSourceConnection {
     }
     optional uint64 tick_micros = 2;
 }
+
+message ProtoTestScriptSourceConnection {
+    string desc_json = 1;
+}
+
 
 message ProtoS3SourceConnection {
     mz_repr.global_id.ProtoGlobalId connection_id = 5;

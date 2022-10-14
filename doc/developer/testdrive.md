@@ -652,6 +652,39 @@ Adjust the number of tries testdrive will perform while waiting for a SQL statem
 Set `max-tries` to `1` in order to ensure that statements are executed only once. If the desired result is not achieved on the first try, the test will fail. This is
 useful when testing operations that should return the right result immediately rather than eventually.
 
+## `TEST SCRIPT` sources
+`TEST SCRIPT` sources can be a useful to have a source that emits data in specific pattern,
+without setting up data in a local source. They are created as follows:
+
+```
+> CREATE SOURCE unit
+  FROM TEST SCRIPT
+  '[
+    {"command": "emit", "key": "fish", "value": "value", "offset": 0},
+    {"command": "emit", "key": "fish2", "value": "hmm", "offset": 1},
+    {"command": "emit" ,"key": "fish", "value": "value2", "offset": 2}
+  ]'
+  KEY FORMAT BYTES
+  VALUE FORMAT BYTES
+  ENVELOPE UPSERT
+```
+
+Each "command" can be:
+- `"emit"`: emit data at a specific offset. The `"key"` is optional, but required
+for some envelopes, like `UPSERT`
+- `"terminate"`: terminate the source, ignoring all later commands. This closes the
+source's `upper`
+  - The default behavior if there is no `"terminate"` command is for the source
+  to pend forever, after it processes all other commands.
+
+Note that this soure has some limitations:
+- It does not work with formats like `avro`
+- It requires the key and value format to specified individually, as
+it does not support CSR formats.
+
+These limitations may be lifted in the future; additionally, more features may
+be added to this source.
+
 ## Actions on local files
 
 #### `$ file-append path=file.name [compression=gzip] [repeat=N]`

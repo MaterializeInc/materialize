@@ -58,7 +58,7 @@ use mz_storage::types::sources::{
     IncludedColumnPos, KafkaSourceConnection, KeyEnvelope, KinesisSourceConnection,
     LoadGeneratorSourceConnection, PostgresSourceConnection, PostgresSourceDetails,
     ProtoPostgresSourceDetails, S3SourceConnection, SourceConnection, SourceDesc, SourceEnvelope,
-    Timeline, UnplannedSourceEnvelope, UpsertStyle,
+    TestScriptSourceConnection, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 
 use crate::ast::display::AstDisplay;
@@ -428,7 +428,7 @@ pub fn plan_create_source(
                 sql_bail!("START OFFSET is not supported with ENVELOPE {}", envelope)
             }
 
-            let encoding = get_encoding(scx, format, &envelope, connection)?;
+            let encoding = get_encoding(scx, format, &envelope, Some(connection))?;
 
             let mut connection = KafkaSourceConnection {
                 connection: kafka_connection,
@@ -515,7 +515,7 @@ pub fn plan_create_source(
                 _ => sql_bail!("{} is not an AWS connection", connection_item.name()),
             };
 
-            let encoding = get_encoding(scx, format, &envelope, connection)?;
+            let encoding = get_encoding(scx, format, &envelope, Some(connection))?;
             let connection = SourceConnection::Kinesis(KinesisSourceConnection {
                 connection_id: connection_item.id(),
                 stream_name,
@@ -553,7 +553,7 @@ pub fn plan_create_source(
                 };
                 converted_sources.push(dtks);
             }
-            let encoding = get_encoding(scx, format, &envelope, connection)?;
+            let encoding = get_encoding(scx, format, &envelope, Some(connection))?;
             if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
                 sql_bail!("S3 sources do not support key decoding");
             }
@@ -714,6 +714,15 @@ pub fn plan_create_source(
                 tick_micros,
             });
             (connection, generator.data_encoding(), available_subsources)
+        }
+        CreateSourceConnection::TestScript { desc_json } => {
+            scx.require_unsafe_mode("CREATE SOURCE ... FROM TEST SCRIPT")?;
+            let connection = SourceConnection::TestScript(TestScriptSourceConnection {
+                desc_json: desc_json.clone(),
+            });
+            // we just use the encoding from the format and envelope
+            let encoding = get_encoding(scx, format, &envelope, None)?;
+            (connection, encoding, None)
         }
     };
     let (key_desc, value_desc) = encoding.desc()?;
@@ -1108,7 +1117,7 @@ fn get_encoding(
     scx: &StatementContext,
     format: &CreateSourceFormat<Aug>,
     envelope: &Envelope,
-    connection: &CreateSourceConnection<Aug>,
+    connection: Option<&CreateSourceConnection<Aug>>,
 ) -> Result<SourceDataEncoding, PlanError> {
     let encoding = match format {
         CreateSourceFormat::None => sql_bail!("Source format must be specified"),
@@ -1126,7 +1135,7 @@ fn get_encoding(
         }
     };
 
-    let force_nullable_keys = matches!(connection, CreateSourceConnection::Kafka(_))
+    let force_nullable_keys = matches!(connection, Some(CreateSourceConnection::Kafka(_)))
         && matches!(envelope, Envelope::None);
     let encoding = encoding.into_source_data_encoding(force_nullable_keys);
 
