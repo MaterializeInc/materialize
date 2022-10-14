@@ -148,39 +148,39 @@ To achieve its exactly-once processing guarantees, Materialize needs to store so
 
 ```sql
 CREATE SOURCE quotes
-FROM KAFKA CONNECTION kafka_connection (TOPIC 'quotes')
-FORMAT AVRO USING
-    CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'quotes')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  WITH (SIZE = '3xsmall');
 ```
 ```sql
 CREATE SINK quotes_sink
-FROM quotes
-INTO KAFKA CONNECTION kafka_connection (TOPIC 'quotes-sink')
-FORMAT AVRO USING
-    CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-ENVELOPE DEBEZIUM;
+  FROM quotes
+  INTO KAFKA CONNECTION kafka_connection (TOPIC 'quotes-sink')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  ENVELOPE DEBEZIUM
+  WITH (SIZE = '3xsmall');
 ```
 
 #### From materialized views
 
 ```sql
 CREATE SOURCE quotes
-FROM KAFKA CONNECTION kafka_connection (TOPIC 'quotes')
-FORMAT AVRO USING
-    CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'quotes')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  WITH (SIZE = '3xsmall');
 ```
 ```sql
 CREATE MATERIALIZED VIEW frank_quotes AS
-    SELECT * FROM quotes
-    WHERE attributed_to = 'Frank McSherry';
+  SELECT * FROM quotes
+  WHERE attributed_to = 'Frank McSherry';
 ```
 ```sql
 CREATE SINK frank_quotes_sink
-FROM frank_quotes
-INTO KAFKA CONNECTION kafka_connection (TOPIC 'frank-quotes-sink')
-FORMAT AVRO USING
-    CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-ENVELOPE DEBEZIUM;
+  FROM frank_quotes
+  INTO KAFKA CONNECTION kafka_connection (TOPIC 'frank-quotes-sink')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  ENVELOPE DEBEZIUM
+  WITH (SIZE = '3xsmall');
 ```
 
 #### Get Kafka topic names
@@ -204,10 +204,10 @@ To provision a specific amount of CPU and memory to a sink on creation, use the 
 
 ```sql
 CREATE SINK snk FROM src
-INTO KAFKA CONNECTION kafka_connection (TOPIC 'snk')
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-ENVELOPE DEBEZIUM
-WITH (SIZE = 'xsmall');
+  INTO KAFKA CONNECTION kafka_connection (TOPIC 'snk')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  ENVELOPE DEBEZIUM
+  WITH (SIZE = 'xsmall');
 ```
 
 To resize the sink after creation:
@@ -224,37 +224,40 @@ The smallest sink size (`3xsmall`) is a resonable default to get started.
 
 ```sql
 CREATE SOURCE quotes
-FROM KAFKA CONNECTION kafka_connection (TOPIC 'quotes')
-FORMAT AVRO USING
-    CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'quotes')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  WITH (SIZE = '3xsmall');
 ```
 ```sql
 CREATE SINK quotes_sink
-FROM quotes
-INTO KAFKA CONNECTION kafka_connection (TOPIC 'quotes-sink')
-FORMAT JSON
-ENVELOPE DEBEZIUM;
+  FROM quotes
+  INTO KAFKA CONNECTION kafka_connection (TOPIC 'quotes-sink')
+  FORMAT JSON
+  ENVELOPE DEBEZIUM
+  WITH (SIZE = '3xsmall');
 ```
 
 #### From materialized views
 
 ```sql
 CREATE SOURCE quotes
-FROM KAFKA CONNECTION kafka_connection (TOPIC 'quotes')
-FORMAT AVRO USING
-    CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'quotes')
+  FORMAT AVRO USING
+  CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  WITH (SIZE = '3xsmall');
 ```
 ```sql
 CREATE MATERIALIZED VIEW frank_quotes AS
-    SELECT * FROM quotes
-    WHERE attributed_to = 'Frank McSherry';
+  SELECT * FROM quotes
+  WHERE attributed_to = 'Frank McSherry';
 ```
 ```sql
 CREATE SINK frank_quotes_sink
-FROM frank_quotes
-INTO KAFKA CONNECTION kafka_connection (TOPIC 'frank-quotes-sink')
-FORMAT JSON
-ENVELOPE DEBEZIUM;
+  FROM frank_quotes
+  INTO KAFKA CONNECTION kafka_connection (TOPIC 'frank-quotes-sink')
+  FORMAT JSON
+  ENVELOPE DEBEZIUM
+  WITH (SIZE = '3xsmall');
 ```
 
 ## Related pages
