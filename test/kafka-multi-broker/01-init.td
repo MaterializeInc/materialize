@@ -24,8 +24,7 @@ $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=2
 $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=3
 {"f1": "01-03" }
 
-> CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}'
+> CREATE CONNECTION kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}')
 
 > CREATE SOURCE kafka_multi_broker
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-multi-broker-${testdrive.seed}')
@@ -41,9 +40,9 @@ $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=5
 $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=6
 {"f1": "02-03" }
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
 > CREATE SINK multi_broker_sink
   FROM kafka_multi_broker

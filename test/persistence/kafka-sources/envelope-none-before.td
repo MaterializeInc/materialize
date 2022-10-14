@@ -25,12 +25,11 @@ $ kafka-ingest format=avro topic=envelope-none schema=${schema} repeat=5000
 $ kafka-ingest format=avro topic=envelope-none key-format=avro key-schema=${schema} schema=${schema} repeat=5000
 {"f1": ${kafka-ingest.iteration}} {"f1": ${kafka-ingest.iteration}}
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE envelope_none
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-envelope-none-${testdrive.seed}')

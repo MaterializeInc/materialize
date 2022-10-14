@@ -54,7 +54,7 @@ def populate(c: Composition) -> None:
             $ kafka-ingest format=bytes topic=source1 repeat=1000000
             A${kafka-ingest.iteration}
             > CREATE CONNECTION IF NOT EXISTS kafka_conn
-              FOR KAFKA BROKER '${testdrive.kafka-addr}'
+              TO KAFKA (BROKER '${testdrive.kafka-addr}')
             > CREATE SOURCE source1
               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-source1-${testdrive.seed}')
               FORMAT BYTES
@@ -127,7 +127,7 @@ def validate(c: Composition) -> None:
             11
 
             > CREATE CONNECTION IF NOT EXISTS kafka_conn
-              FOR KAFKA BROKER '${testdrive.kafka-addr}'
+              TO KAFKA (BROKER '${testdrive.kafka-addr}')
 
             # New sources
             > CREATE SOURCE source2

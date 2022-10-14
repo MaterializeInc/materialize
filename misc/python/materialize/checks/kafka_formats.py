@@ -50,7 +50,7 @@ class KafkaFormats(Check):
                   format=protobuf descriptor-file=test.proto message=Value
                 {"key1": "key1A", "key2": "key1B"} {"value1": "value1A", "value2": "value1B"}
 
-                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+                > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
                 > CREATE SOURCE format_bytes1
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-bytes-${testdrive.seed}')

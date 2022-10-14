@@ -675,11 +675,10 @@ true
 > DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
 
 > CREATE CONNECTION s1_kafka_conn
-  FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
+  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
 
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
-FOR CONFLUENT SCHEMA REGISTRY
-URL '${{testdrive.schema-registry-url}}';
+  TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
 
 > CREATE SOURCE s1
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-raw-${{testdrive.seed}}')
@@ -714,7 +713,7 @@ $ kafka-ingest format=bytes topic=kafka-envelope-none-bytes repeat={self.n()}
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 
 > CREATE CONNECTION s1_kafka_conn
-  FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
+  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
 
 > CREATE SOURCE s1
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-envelope-none-bytes-${{testdrive.seed}}')
@@ -751,11 +750,11 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keys
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 
 > CREATE CONNECTION s1_kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}'
+  TO KAFKA (BROKER '${testdrive.kafka-addr}')
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
 > CREATE SOURCE s1
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-upsert-${testdrive.seed}')
@@ -791,11 +790,10 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
 > DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
 
 > CREATE CONNECTION s1_kafka_conn
-  FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
+  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
 
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
-FOR CONFLUENT SCHEMA REGISTRY
-URL '${{testdrive.schema-registry-url}}';
+  TO CONFLUENT SCHEMA REGISTRY URL ('${{testdrive.schema-registry-url}}');
 
   /* A */
 > CREATE SOURCE s1
@@ -832,11 +830,10 @@ $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{ke
 > DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
 
 > CREATE CONNECTION s1_kafka_conn
-  FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
+  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
 
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
-FOR CONFLUENT SCHEMA REGISTRY
-URL '${{testdrive.schema-registry-url}}';
+  TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
 
 > CREATE SOURCE s1
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-recovery-${{testdrive.seed}}')
@@ -911,7 +908,7 @@ class KafkaRestartBig(ScenarioBig):
         return TdAction(
             """
 > CREATE CONNECTION s1_kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}'
+  TO KAFKA (BROKER '${testdrive.kafka-addr}')
 
 > CREATE SOURCE s1
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-recovery-big-${testdrive.seed}')
@@ -972,7 +969,7 @@ $ kafka-create-topic topic=kafka-scalability partitions=8
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 
 > CREATE CONNECTION s1_kafka_conn
-  FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
+  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
 
 > CREATE SOURCE s1
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-scalability-${{testdrive.seed}}')
@@ -1018,7 +1015,7 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
 > DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
 
 > CREATE CONNECTION s1_kafka_conn
-  FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
+  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
 
 > CREATE CONNECTION s1_csr_conn
 FOR CONFLUENT SCHEMA REGISTRY
@@ -1041,7 +1038,7 @@ URL '${{testdrive.schema-registry-url}}';
   /* A */
 
 > CREATE CONNECTION s1_kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}'
+  TO KAFKA (BROKER '${testdrive.kafka-addr}')
 
 > CREATE SINK sink1 FROM source1
   INTO KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-sink-output-${testdrive.seed}')
@@ -1279,7 +1276,7 @@ $ kafka-ingest format=avro topic=startup-time schema=${{schema}} repeat=1
 > DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
 
 > CREATE CONNECTION s1_kafka_conn
-  FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
+  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
 
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
 FOR CONFLUENT SCHEMA REGISTRY

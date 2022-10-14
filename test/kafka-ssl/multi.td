@@ -26,12 +26,12 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 > CREATE SECRET ssl_key_csr AS '${arg.materialized-schema-registry-key}'
 > CREATE SECRET password_csr AS 'sekurity'
 
-> CREATE CONNECTION kafka_conn
-  FOR KAFKA
-  BROKER 'kafka:9092',
-  SSL KEY = SECRET ssl_key_kafka,
-  SSL CERTIFICATE = '${arg.materialized-kafka-crt}',
-  SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}';
+> CREATE CONNECTION kafka_conn TO KAFKA (
+    BROKER 'kafka:9092',
+    SSL KEY = SECRET ssl_key_kafka,
+    SSL CERTIFICATE = '${arg.materialized-kafka-crt}',
+    SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}'
+  );
 
 > CREATE CONNECTION csr_ssl
   FOR CONFLUENT SCHEMA REGISTRY

@@ -117,7 +117,7 @@ fn test_no_block() -> Result<(), anyhow::Error> {
                 info!("test_no_block: in thread; executing create source");
                 let result = client
                 .batch_execute(&format!(
-                    "CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL 'http://{}';",
+                    "CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL 'http://{}');",
                     schema_registry_server.addr,
                 ))
                 .await;
@@ -126,7 +126,7 @@ fn test_no_block() -> Result<(), anyhow::Error> {
 
                 let result = client
                     .batch_execute(&format!(
-                        "CREATE CONNECTION kafka_conn FOR KAFKA BROKER '{}'",
+                        "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}')",
                         &*KAFKA_ADDRS,
                     ))
                     .await;
@@ -192,13 +192,13 @@ fn test_drop_connection_race() -> Result<(), anyhow::Error> {
         let (client, _conn) = server.connect_async(postgres::NoTls).await?;
         client
             .batch_execute(&format!(
-                "CREATE CONNECTION conn FOR CONFLUENT SCHEMA REGISTRY URL 'http://{}'",
+                "CREATE CONNECTION conn TO CONFLUENT SCHEMA REGISTRY (URL 'http://{}')",
                 schema_registry_server.addr,
             ))
             .await?;
         client
             .batch_execute(&format!(
-                "CREATE CONNECTION kafka_conn FOR KAFKA BROKER '{}'",
+                "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}')",
                 &*KAFKA_ADDRS,
             ))
             .await?;
@@ -1705,7 +1705,7 @@ fn create_postgres_source_with_table(
         connection_str = format!("{connection_str}, PASSWORD SECRET s");
     }
     mz_client.batch_execute(&format!(
-        "CREATE CONNECTION pgconn FOR POSTGRES {connection_str}"
+        "CREATE CONNECTION pgconn TO POSTGRES ({connection_str})"
     ))?;
     mz_client.batch_execute(&format!(
         "CREATE SOURCE {source_name}

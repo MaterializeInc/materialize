@@ -15,12 +15,13 @@ bar
 
 > CREATE SECRET s3_conn_secret_access_key AS '${testdrive.aws-secret-access-key}';
 
-> CREATE CONNECTION s3_conn FOR AWS
-  ACCESS KEY ID = '${testdrive.aws-access-key-id}',
-  SECRET ACCESS KEY = SECRET s3_conn_secret_access_key,
-  TOKEN = '${testdrive.aws-token}',
-  REGION = '${testdrive.aws-region}',
-  ENDPOINT = '${testdrive.aws-endpoint}';
+> CREATE CONNECTION s3_conn TO AWS (
+    ACCESS KEY ID = '${testdrive.aws-access-key-id}',
+    SECRET ACCESS KEY = SECRET s3_conn_secret_access_key,
+    TOKEN = '${testdrive.aws-token}',
+    REGION = '${testdrive.aws-region}',
+    ENDPOINT = '${testdrive.aws-endpoint}'
+  );
 
 > CREATE SOURCE posix
   FROM S3 CONNECTION s3_conn

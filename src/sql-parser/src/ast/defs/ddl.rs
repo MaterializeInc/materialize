@@ -786,24 +786,29 @@ impl<T: AstInfo> AstDisplay for CreateConnection<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             Self::Kafka { with_options } => {
-                f.write_str("KAFKA ");
+                f.write_str("KAFKA (");
                 f.write_node(&display::comma_separated(with_options));
+                f.write_str(")");
             }
             Self::Csr { with_options } => {
-                f.write_str("CONFLUENT SCHEMA REGISTRY ");
+                f.write_str("CONFLUENT SCHEMA REGISTRY (");
                 f.write_node(&display::comma_separated(with_options));
+                f.write_str(")");
             }
             Self::Postgres { with_options } => {
-                f.write_str("POSTGRES ");
+                f.write_str("POSTGRES (");
                 f.write_node(&display::comma_separated(with_options));
+                f.write_str(")");
             }
             Self::Aws { with_options } => {
-                f.write_str("AWS ");
+                f.write_str("AWS (");
                 f.write_node(&display::comma_separated(with_options));
+                f.write_str(")");
             }
             Self::Ssh { with_options } => {
-                f.write_str("SSH TUNNEL ");
+                f.write_str("SSH TUNNEL (");
                 f.write_node(&display::comma_separated(with_options));
+                f.write_str(")");
             }
         }
     }

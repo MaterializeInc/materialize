@@ -18,12 +18,13 @@ place""",CA,92679
 
 > CREATE SECRET s3_conn_secret_access_key AS '${testdrive.aws-secret-access-key}';
 
-> CREATE CONNECTION s3_conn FOR AWS
-  ACCESS KEY ID = '${testdrive.aws-access-key-id}',
-  SECRET ACCESS KEY = SECRET s3_conn_secret_access_key,
-  TOKEN = '${testdrive.aws-token}',
-  REGION = '${testdrive.aws-region}',
-  ENDPOINT = '${testdrive.aws-endpoint}';
+> CREATE CONNECTION s3_conn TO AWS (
+    ACCESS KEY ID = '${testdrive.aws-access-key-id}',
+    SECRET ACCESS KEY = SECRET s3_conn_secret_access_key,
+    TOKEN = '${testdrive.aws-token}',
+    REGION = '${testdrive.aws-region}',
+    ENDPOINT = '${testdrive.aws-endpoint}'
+  );
 
 > CREATE SOURCE mismatched_column_count
   FROM S3 CONNECTION s3_conn
@@ -110,7 +111,7 @@ Rochester      NY         14618
 $ kafka-create-topic topic=dynamic
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE dynamic_csv (city, state, zip)
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dynamic-${testdrive.seed}')
@@ -173,9 +174,9 @@ $ kafka-create-topic topic=static-csv-pkne-sink partitions=1
   DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   FORMAT CSV WITH HEADER (city, state, zip)
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
 > CREATE SINK static_csv_pkne_sink FROM static_csv_pkne
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-static-csv-pkne-sink-${testdrive.seed}')

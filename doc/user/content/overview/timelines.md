@@ -34,7 +34,7 @@ This can be used to allow multiple CDC sources, or a CDC source and system time 
 For example, to create two CDC sources that are joinable:
 
 ```sql
-CREATE CONNECTION kafka_conn FOR KAFKA BROKER 'broker';
+CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'broker');
 
 CREATE SOURCE source_1
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'topic-1')

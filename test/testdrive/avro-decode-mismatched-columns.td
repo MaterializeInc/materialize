@@ -26,7 +26,7 @@ $ kafka-ingest format=avro topic=decode-1to2-nodefault schema=${1column} timesta
 {"f1": 123}
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE decode_1to2_nodefault
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-1to2-nodefault-${testdrive.seed}')

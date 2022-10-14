@@ -30,8 +30,7 @@ $ set schema={
         ]
     }
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 $ kafka-create-topic topic=offset
 
@@ -44,9 +43,9 @@ $ kafka-ingest format=avro topic=offset key-format=avro key-schema=${keyschema} 
 $ kafka-ingest format=avro topic=offset key-format=avro key-schema=${keyschema} schema=${schema} repeat=${count} timestamp=3
 {"f1": "c${kafka-ingest.iteration}"} {"f2": "c${kafka-ingest.iteration}"}
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
 > CREATE SOURCE start_offset
   FROM KAFKA CONNECTION kafka_conn (START OFFSET = [100], TOPIC 'testdrive-offset-${testdrive.seed}')

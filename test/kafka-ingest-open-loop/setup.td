@@ -14,7 +14,7 @@
 $ kafka-create-topic topic=load-test partitions=4
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE load_test
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-load-test-${testdrive.seed}')

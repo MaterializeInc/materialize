@@ -92,7 +92,7 @@ $ set nums-schema=[
 $ kafka-create-topic topic=nums
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE nums
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-nums-${testdrive.seed}')
@@ -105,9 +105,9 @@ $ kafka-create-topic topic=nums
 > ALTER INDEX materialize.public.nums_primary_idx
   SET (LOGICAL COMPACTION WINDOW = 0)
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
 # Create a sink before we ingest any data, to ensure the sink starts AS OF 0
 > CREATE SINK nums_sink FROM nums
