@@ -253,7 +253,6 @@ where
     Box::pin(async_stream::stream!({
         let mut healthchecker = if storage_metadata.status_shard.is_some() {
             match Healthchecker::new(
-                name.clone(),
                 id,
                 worker_id,
                 worker_count,

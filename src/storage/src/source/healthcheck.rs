@@ -29,8 +29,6 @@ use crate::types::sources::SourceData;
 /// of a Timely worker for a source, as well as updating the relevant
 /// state collection based on it.
 pub struct Healthchecker {
-    /// Name of the source (e.g. kafka-s1)
-    source_name: String,
     /// Internal ID of the source (e.g. s1)
     source_id: GlobalId,
     /// The ID of the Timely worker on which this operator is executing
@@ -55,7 +53,6 @@ pub struct Healthchecker {
 
 impl Healthchecker {
     pub async fn new(
-        source_name: String,
         source_id: GlobalId,
         worker_id: usize,
         worker_count: usize,
@@ -64,7 +61,7 @@ impl Healthchecker {
         storage_metadata: &CollectionMetadata,
         now: NowFn,
     ) -> anyhow::Result<Self> {
-        trace!("Initializing healthchecker for source {source_name}");
+        trace!("Initializing healthchecker for source {source_id}");
         let mut persist_clients = persist_clients.lock().await;
         let persist_client = persist_clients
             .open(storage_metadata.persist_location.clone())
@@ -90,7 +87,6 @@ impl Healthchecker {
         let mut healthchecker = Self {
             worker_id,
             worker_count,
-            source_name,
             source_id,
             current_status: SourceStatus::Starting,
             active,
@@ -104,7 +100,7 @@ impl Healthchecker {
         healthchecker.bootstrap_state(read_handle, &upper).await;
         tracing::trace!(
             "Healthchecker for source {} at status {} finished bootstrapping!",
-            &healthchecker.source_name,
+            &healthchecker.source_id,
             &healthchecker.current_status
         );
 
@@ -226,9 +222,9 @@ impl Healthchecker {
                 .0
                 .expect("status collection should not have errors");
             let row_vec = row.unpack();
-            let row_source_id = row_vec[2].unwrap_str();
-            let row_worker_id = row_vec[3].unwrap_int64();
-            let row_status = row_vec[5].unwrap_str();
+            let row_source_id = row_vec[1].unwrap_str();
+            let row_worker_id = row_vec[2].unwrap_int64();
+            let row_status = row_vec[4].unwrap_str();
 
             if self.source_id.to_string() == row_source_id
                 && self.worker_id == row_worker_id as usize
@@ -254,7 +250,6 @@ impl Healthchecker {
         .try_into()
         .expect("timestamp does not fit");
         let source_id = self.source_id.to_string();
-        let source_name = Datum::String(&self.source_name);
         let source_id = Datum::String(&source_id);
         let worker_id =
             Datum::Int64(i64::try_from(self.worker_id).expect("worker_id does not fit into i64"));
@@ -266,7 +261,6 @@ impl Healthchecker {
         let metadata = Datum::Null;
         let row = Row::pack_slice(&[
             timestamp,
-            source_name,
             source_id,
             worker_id,
             worker_count,
@@ -556,7 +550,7 @@ mod tests {
             .await
             .into_iter()
             .find_map(|row| {
-                let error = row.unpack()[6];
+                let error = row.unpack()[5];
                 if !error.is_null() {
                     Some(error.unwrap_str().to_string())
                 } else {
@@ -673,7 +667,6 @@ mod tests {
 
     async fn new_healthchecker(
         status_shard_id: ShardId,
-        source_name: String,
         source_id: GlobalId,
         worker_id: usize,
         worker_count: usize,
@@ -691,7 +684,6 @@ mod tests {
         };
 
         Healthchecker::new(
-            source_name,
             source_id,
             worker_id,
             worker_count,
@@ -711,7 +703,6 @@ mod tests {
     ) -> Healthchecker {
         new_healthchecker(
             status_shard_id,
-            "source".to_string(),
             GlobalId::User(source_id),
             1,
             1,
