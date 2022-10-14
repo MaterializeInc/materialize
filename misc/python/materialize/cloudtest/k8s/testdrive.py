@@ -55,6 +55,8 @@ class Testdrive(K8sPod):
                 "--aws-endpoint=http://minio-service.default:9000",
                 "--aws-access-key-id=minio",
                 "--aws-secret-access-key=minio123",
+                "--var=replicas=1",
+                "--var=size=1",
                 *(["--no-reset"] if no_reset else []),
                 *([f"--seed={seed}"] if seed else []),
                 *args,

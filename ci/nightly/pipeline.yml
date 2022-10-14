@@ -26,11 +26,9 @@ steps:
           - { value: limits }
           - { value: cluster-limits }
           - { value: limits-instance-size }
-          - { value: testdrive-workers-1 }
-          - { value: testdrive-workers-32 }
           - { value: testdrive-partitions-5 }
           - { value: testdrive-replicas-4}
-          - { value: testdrive-replica-size-4}
+          - { value: testdrive-size-4}
           - { value: testdrive-in-cloudtest}
 #          - { value: feature-benchmark-single-node }
 #          - { value: feature-benchmark-cluster }
@@ -194,31 +192,6 @@ steps:
           run: instance-size
     timeout_in_minutes: 50
 
-  - id: testdrive-workers-1
-    label: ":racing_car: testdrive with --workers 1"
-    timeout_in_minutes: 600
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/scratch-aws-access: ~
-      - ./ci/plugins/mzcompose:
-          composition: testdrive
-          # TODO(benesch): set --workers=1 again.
-          args: [--aws-region=us-east-2]
-
-  # TODO(benesch): reenable.
-  # - id: testdrive-workers-32
-  #   label: ":racing_car: testdrive with --workers 32"
-  #   depends_on: build-x86_64
-  #   timeout_in_minutes: 600
-  #   plugins:
-  #     - ./ci/plugins/scratch-aws-access: ~
-  #     - ./ci/plugins/mzcompose:
-  #         composition: testdrive
-  #         args: [--aws-region=us-east-2, --workers=32]
-  #   agents:
-  #     queue: linux-x86_64-large
-
   - id: testdrive-partitions-5
     label: ":racing_car: testdrive with --kafka-default-partitions 5"
     timeout_in_minutes: 600
@@ -241,8 +214,8 @@ steps:
           composition: testdrive
           args: [--aws-region=us-east-2, --replicas=4]
 
-  - id: testdrive-replica-size-4
-    label: ":racing_car: testdrive replica SIZE 4"
+  - id: testdrive-size-4
+    label: ":racing_car: testdrive with SIZE 4"
     timeout_in_minutes: 600
     agents:
       queue: linux-x86_64
@@ -250,7 +223,7 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          args: [--aws-region=us-east-2, --replica-size=4]
+          args: [--aws-region=us-east-2, --size=4]
 
   - id: testdrive-in-cloudtest
     label: Full Testdrive in Cloudtest (K8s)

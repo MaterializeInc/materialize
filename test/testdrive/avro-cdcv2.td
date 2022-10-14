@@ -152,7 +152,7 @@ id price
 
 # The ouput of SUBSCRIBE is dependent on the replica size
 $ skip-if
-SELECT ${arg.replica-size} > 1;
+SELECT ${arg.size} > 1;
 
 > BEGIN
 

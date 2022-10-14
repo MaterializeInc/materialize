@@ -11,15 +11,19 @@
 
 > CREATE SOURCE demo FROM LOAD GENERATOR AUCTION (TICK INTERVAL '50ms') FOR ALL TABLES
 
+$ set-regex match=\d replacement=<SIZE>
+
 > SHOW SOURCES
 name          type           size
 ----------------------------------
-demo          load-generator 1
+demo          load-generator <SIZE>
 accounts      subsource      <null>
 auctions      subsource      <null>
 bids          subsource      <null>
 organizations subsource      <null>
 users         subsource      <null>
+
+$ unset-regex
 
 > SHOW COLUMNS FROM auctions
 end_time false "timestamp with time zone"
