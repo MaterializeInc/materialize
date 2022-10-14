@@ -22,7 +22,6 @@ steps:
           - { value: kafka-multi-broker }
           - { value: redpanda-testdrive }
 #         - { value: redpanda-testdrive-aarch64 }
-          - { value: upgrade }
           - { value: limits }
           - { value: cluster-limits }
           - { value: limits-instance-size }
@@ -153,15 +152,6 @@ steps:
 #      - ./ci/plugins/mzcompose:
 #          composition: testdrive
 #          args: [--redpanda, --aws-region=us-east-2]
-
-  - id: upgrade
-    label: "Upgrade testing"
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: upgrade
-          args: [--most-recent, "0"]
 
   - id: limits
     label: "Product limits"
