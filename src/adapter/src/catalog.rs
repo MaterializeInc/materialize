@@ -2127,7 +2127,7 @@ impl<S: Append> Catalog<S> {
                     );
                 }
                 Builtin::Index(_) => {
-                    // Handled later once clusters have been created.
+                    unreachable!("handled later once clusters have been created")
                 }
                 Builtin::View(view) => {
                     let item = catalog
