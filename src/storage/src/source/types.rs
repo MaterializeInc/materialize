@@ -13,7 +13,6 @@
 // #![allow(missing_docs)]
 
 use std::collections::HashMap;
-use std::fmt;
 use std::fmt::Debug;
 use std::marker::{Send, Sync};
 use std::rc::Rc;
@@ -202,6 +201,7 @@ pub enum NextMessage<Key, Value, Diff> {
 
 /// A wrapper around [`SourceMessage`] that allows [`SourceReader`]'s to
 /// communicate additional "maintenance" messages.
+#[derive(Debug)]
 pub enum SourceMessageType<Key, Value, Diff> {
     /// Communicate that this [`SourceMessage`] is the final
     /// message its its offset.
@@ -222,6 +222,7 @@ pub enum SourceMessageType<Key, Value, Diff> {
 
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
+#[derive(Debug)]
 pub struct SourceMessage<Key, Value, Diff> {
     /// The output stream this message belongs to. Later in the pipeline the stream is partitioned
     /// based on this value and is fed to the appropriate source exports
@@ -247,28 +248,6 @@ pub struct SourceMessage<Key, Value, Diff> {
     ///
     /// Only supported with `SourceEnvelope::None`
     pub specific_diff: Diff,
-}
-
-impl fmt::Debug for SourceMessage<(), Option<Vec<u8>>, ()> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SourceMessage")
-            .field("partition", &self.partition)
-            .field("offset", &self.offset)
-            .field("upstream_time_millis", &self.upstream_time_millis)
-            .finish()
-    }
-}
-
-impl fmt::Debug for SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SourceMessage")
-            .field("partition", &self.partition)
-            .field("offset", &self.offset)
-            .field("upstream_time_millis", &self.upstream_time_millis)
-            .field("key[present]", &self.key.is_some())
-            .field("value[present]", &self.value.is_some())
-            .finish()
-    }
 }
 
 /// A record produced by a source
@@ -369,6 +348,7 @@ pub struct DecodeResult {
 /// A structured error for `SourceReader::get_next_message`
 /// implementors. Also implements `From<anyhow::Error>`
 /// for convenience.
+#[derive(Debug)]
 pub struct SourceReaderError {
     pub inner: SourceErrorDetails,
 }
