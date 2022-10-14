@@ -381,7 +381,12 @@ pub struct Args {
     segment_api_key: Option<String>,
     /// Public IP addresses which the cloud environment has configured for
     /// egress
-    #[clap(long)]
+    #[clap(
+        long,
+        env = "ANNOUNCE_EGRESS_IP",
+        multiple = true,
+        use_delimiter = true
+    )]
     announce_egress_ip: Vec<Ipv4Addr>,
 
     // === Tracing options. ===
