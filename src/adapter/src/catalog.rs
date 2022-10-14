@@ -1970,6 +1970,7 @@ impl<S: Append> Catalog<S> {
                     start_instant: Instant::now(),
                     nonce: rand::random(),
                     unsafe_mode: config.unsafe_mode,
+                    persisted_introspection: config.persisted_introspection,
                     environment_id: config.environment_id,
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,
@@ -2851,6 +2852,7 @@ impl<S: Append> Catalog<S> {
         let (catalog, _, _) = Catalog::open(Config {
             storage,
             unsafe_mode: true,
+            persisted_introspection: true,
             build_info: &DUMMY_BUILD_INFO,
             environment_id: format!("environment-{}-0", Uuid::from_u128(0)),
             now,
@@ -5001,6 +5003,10 @@ impl<S: Append> Catalog<S> {
 
     /// Allocate ids for persisted introspection views. Called once per compute replica creation
     pub async fn allocate_persisted_introspection_views(&mut self) -> Vec<(LogView, GlobalId)> {
+        if !self.state.config.persisted_introspection {
+            return Vec::new();
+        }
+
         let log_amount = DEFAULT_LOG_VIEWS
             .len()
             .try_into()
@@ -5024,6 +5030,10 @@ impl<S: Append> Catalog<S> {
     pub async fn allocate_persisted_introspection_sources(
         &mut self,
     ) -> Vec<(LogVariant, GlobalId)> {
+        if !self.state.config.persisted_introspection {
+            return Vec::new();
+        }
+
         let log_amount = DEFAULT_LOG_VARIANTS
             .len()
             .try_into()
