@@ -2289,7 +2289,7 @@ impl<S: Append> Catalog<S> {
                 | Builtin::Type(_)
                 | Builtin::Func(_)
                 | Builtin::Source(_) => {
-                    // Handled above.
+                    unreachable!("handled above")
                 }
             }
         }
