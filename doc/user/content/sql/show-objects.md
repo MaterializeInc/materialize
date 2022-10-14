@@ -9,7 +9,7 @@ aliases:
 ---
 
 `SHOW OBJECTS` returns a list of all objects available to your Materialize instances in a given schema.
-Objects include tables, sources, sinks, views, indexes, secrets and connections.
+Objects include tables, sources, sinks, views, indexes, secrets and connections.  For best performance execute this command on the `mz_introspection` cluster.
 
 ## Syntax
 

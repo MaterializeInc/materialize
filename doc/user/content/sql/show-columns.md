@@ -8,7 +8,7 @@ aliases:
     - /sql/show-column
 ---
 
-`SHOW COLUMNS` lists the columns available from an item&mdash;either sources, materialized views, or non-materialized views.
+`SHOW COLUMNS` lists the columns available from an item&mdash;either sources, materialized views, or non-materialized views. For best performance execute this command on the `mz_introspection` cluster.
 
 ## Syntax
 

@@ -8,7 +8,7 @@ aliases:
     - /sql/show-connection
 ---
 
-`SHOW CONNECTIONS` lists the connections configured in Materialize.
+`SHOW CONNECTIONS` lists the connections configured in Materialize. For best performance execute this command on the `mz_introspection` cluster.
 
 ## Syntax
 

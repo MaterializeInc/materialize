@@ -6,7 +6,7 @@ menu:
     parent: commands
 ---
 
-`SHOW TYPES` returns a list of the data types in your Materialize instance. By default, only custom types are returned.
+`SHOW TYPES` returns a list of the data types in your Materialize instance. By default, only custom types are returned. For best performance execute this command on the `mz_introspection` cluster.
 
 ## Syntax
 

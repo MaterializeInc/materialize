@@ -7,7 +7,7 @@ menu:
 ---
 
 `SHOW SCHEMAS` returns a list of all schemas available to your Materialize
-instances.
+instances. For best performance execute this command on the `mz_introspection` cluster.
 
 ## Syntax
 

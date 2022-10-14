@@ -7,7 +7,7 @@ menu:
 ---
 
 `SHOW SOURCES` returns a list of all sources available to your Materialize
-instances.
+instances. For best performance execute this command on the `mz_introspection` cluster.
 
 ## Syntax
 

@@ -7,7 +7,7 @@ menu:
 ---
 
 `SHOW MATERIALIZED VIEWS` returns a list of materialized views being maintained
-in Materialize.
+in Materialize. For best performance execute this command on the `mz_introspection` cluster.
 
 ## Syntax
 
