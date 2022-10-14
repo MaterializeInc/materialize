@@ -69,6 +69,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             V1EnvVar(name="AWS_REGION", value="minio"),
             V1EnvVar(name="AWS_ACCESS_KEY_ID", value="minio"),
             V1EnvVar(name="AWS_SECRET_ACCESS_KEY", value="minio123"),
+            V1EnvVar(name="MZ_ANNOUNCE_EGRESS_IP", value="1.2.3.4,88.77.66.55"),
         ]
 
         ports = [V1ContainerPort(container_port=5432, name="sql")]
@@ -100,8 +101,9 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 "--storage-stash-url=postgres://postgres@postgres.default?options=--search_path=storage",
                 "--internal-sql-listen-addr=0.0.0.0:6877",
                 "--unsafe-mode",
-                "--announce-egress-ip=1.2.3.4",
-                "--announce-egress-ip=88.77.66.55",
+                # cloudtest may be called upon to spin up older versions of Mz too!
+                # If you are adding a command-line option that is only supported on newer
+                # releases, do not add it here, add it as a V1EnvVar above instead.
             ],
             env=env,
             ports=ports,
