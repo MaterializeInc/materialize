@@ -1,0 +1,57 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+
+# Basic test for `TEST SCRIPT` sources.
+
+# replace timestamps
+$ set-regex match=(\d{13}|u\d{1,3}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
+
+
+> CREATE CONNECTION c_conn
+  FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}'
+
+> CREATE SOURCE unit
+  FROM TEST SCRIPT
+  '[
+    {"command": "emit", "key": "fish", "value": "value", "offset": 0},
+    {"command": "emit", "key": "fish2", "value": "hmm", "offset": 1},
+    {"command": "emit" ,"key": "fish", "value": "value2", "offset": 2}
+  ]'
+  KEY FORMAT BYTES
+  VALUE FORMAT BYTES
+  ENVELOPE UPSERT
+
+> SELECT * from unit
+key           data
+--------------------
+fish          value2
+fish2         hmm
+
+> EXPLAIN TIMESTAMP FOR SELECT * FROM unit
+"          query timestamp: <> <>\n                    since:[<> <>]\n                    upper:[<> <>]\n         global timestamp: <> <>\n  can respond immediately: <>\n\nsource materialize.public.unit (<>, storage):\n            read frontier:[<> <>]\n           write frontier:[<> <>]\n"
+
+> CREATE SOURCE unit_terminated
+  FROM TEST SCRIPT
+  '[
+    {"command": "emit", "key": "fish", "value": "value", "offset": 0},
+    {"command": "terminate"}
+  ]'
+  KEY FORMAT BYTES
+  VALUE FORMAT BYTES
+  ENVELOPE UPSERT
+
+> SELECT * from unit_terminated
+key           data
+--------------------
+fish          value
+
+# Terminal sources have empty uppers
+> EXPLAIN TIMESTAMP FOR SELECT * FROM unit_terminated
+"          query timestamp: <> <>\n                    since:[<> <>]\n                    upper:[]\n         global timestamp: <> <>\n  can respond immediately: <>\n\nsource materialize.public.unit_terminated (<>, storage):\n            read frontier:[<> <>]\n           write frontier:[]\n"

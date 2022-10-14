@@ -1390,7 +1390,10 @@ impl SourceDesc {
                 envelope:
                     SourceEnvelope::Debezium(_) | SourceEnvelope::Upsert(_) | SourceEnvelope::CdcV2,
                 connection:
-                    SourceConnection::S3(_) | SourceConnection::Kafka(_) | SourceConnection::Kinesis(_),
+                    SourceConnection::S3(_)
+                    | SourceConnection::Kafka(_)
+                    | SourceConnection::Kinesis(_)
+                    | SourceConnection::TestScript(_),
                 ..
             } => false,
         }
@@ -1399,9 +1402,10 @@ impl SourceDesc {
     /// The number of outputs this source will produce
     pub fn num_outputs(&self) -> usize {
         let subsources = match &self.connection {
-            SourceConnection::Kafka(_) | SourceConnection::Kinesis(_) | SourceConnection::S3(_) => {
-                0
-            }
+            SourceConnection::Kafka(_)
+            | SourceConnection::Kinesis(_)
+            | SourceConnection::S3(_)
+            | SourceConnection::TestScript(_) => 0,
             SourceConnection::LoadGenerator(connection) => {
                 as_generator(&connection.load_generator).views().len()
             }
@@ -1423,6 +1427,7 @@ pub enum SourceConnection {
     S3(S3SourceConnection),
     Postgres(PostgresSourceConnection),
     LoadGenerator(LoadGeneratorSourceConnection),
+    TestScript(TestScriptSourceConnection),
 }
 
 impl SourceConnection {
@@ -1433,7 +1438,7 @@ impl SourceConnection {
             | Kinesis(KinesisSourceConnection { connection_id, .. })
             | S3(S3SourceConnection { connection_id, .. })
             | Postgres(PostgresSourceConnection { connection_id, .. }) => Some(*connection_id),
-            LoadGenerator(_) => None,
+            LoadGenerator(_) | TestScript(_) => None,
         }
     }
 }
@@ -1448,6 +1453,9 @@ impl RustType<ProtoSourceConnection> for SourceConnection {
                 SourceConnection::S3(s3) => Kind::S3(s3.into_proto()),
                 SourceConnection::Postgres(postgres) => Kind::Postgres(postgres.into_proto()),
                 SourceConnection::LoadGenerator(loadgen) => Kind::Loadgen(loadgen.into_proto()),
+                SourceConnection::TestScript(testscript) => {
+                    Kind::Testscript(testscript.into_proto())
+                }
             }),
         }
     }
@@ -1463,6 +1471,7 @@ impl RustType<ProtoSourceConnection> for SourceConnection {
             Kind::S3(s3) => SourceConnection::S3(s3.into_rust()?),
             Kind::Postgres(postgres) => SourceConnection::Postgres(postgres.into_rust()?),
             Kind::Loadgen(loadgen) => SourceConnection::LoadGenerator(loadgen.into_rust()?),
+            Kind::Testscript(testscript) => SourceConnection::TestScript(testscript.into_rust()?),
         })
     }
 }
@@ -1530,6 +1539,7 @@ impl SourceConnection {
             Self::S3(_) => vec![],
             Self::Postgres(_) => vec![],
             Self::LoadGenerator(_) => vec![],
+            Self::TestScript(_) => vec![],
         }
     }
 
@@ -1565,7 +1575,8 @@ impl SourceConnection {
             SourceConnection::Kinesis(_)
             | SourceConnection::S3(_)
             | SourceConnection::Postgres(_)
-            | SourceConnection::LoadGenerator(_) => Vec::new(),
+            | SourceConnection::LoadGenerator(_)
+            | SourceConnection::TestScript(_) => Vec::new(),
         }
     }
 
@@ -1578,6 +1589,7 @@ impl SourceConnection {
             SourceConnection::S3(c) => c.name(),
             SourceConnection::Postgres(c) => c.name(),
             SourceConnection::LoadGenerator(c) => c.name(),
+            SourceConnection::TestScript(c) => c.name(),
         }
     }
 
@@ -1593,6 +1605,7 @@ impl SourceConnection {
             SourceConnection::S3(_) => None,
             SourceConnection::Postgres(_) => None,
             SourceConnection::LoadGenerator(_) => None,
+            SourceConnection::TestScript(_) => None,
         }
     }
 }
@@ -1760,7 +1773,6 @@ impl crate::source::types::SourceConnection for LoadGeneratorSourceConnection {
         "load-generator"
     }
 }
-
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum LoadGenerator {
     Auction,
@@ -1810,6 +1822,31 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
                 ProtoGenerator::Counter(()) => LoadGenerator::Counter,
             },
             tick_micros: proto.tick_micros,
+        })
+    }
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TestScriptSourceConnection {
+    pub desc_json: String,
+}
+
+impl crate::source::types::SourceConnection for TestScriptSourceConnection {
+    fn name(&self) -> &'static str {
+        "testscript"
+    }
+}
+
+impl RustType<ProtoTestScriptSourceConnection> for TestScriptSourceConnection {
+    fn into_proto(&self) -> ProtoTestScriptSourceConnection {
+        ProtoTestScriptSourceConnection {
+            desc_json: self.desc_json.clone(),
+        }
+    }
+
+    fn from_proto(proto: ProtoTestScriptSourceConnection) -> Result<Self, TryFromProtoError> {
+        Ok(TestScriptSourceConnection {
+            desc_json: proto.desc_json,
         })
     }
 }

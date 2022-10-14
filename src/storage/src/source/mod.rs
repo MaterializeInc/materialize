@@ -51,6 +51,7 @@ mod reclock;
 mod resumption;
 mod s3;
 mod source_reader_pipeline;
+mod testscript;
 pub mod types;
 pub mod util;
 
@@ -62,6 +63,7 @@ pub use postgres::PostgresSourceReader;
 pub use s3::S3SourceReader;
 pub use source_reader_pipeline::create_raw_source;
 pub use source_reader_pipeline::RawSourceCreationConfig;
+pub use testscript::TestScriptSourceReader;
 
 /// Returns true if the given source id/worker id is responsible for handling the given
 /// partition.

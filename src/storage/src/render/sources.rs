@@ -31,6 +31,7 @@ use crate::source::types::{DecodeResult, SourceOutput};
 use crate::source::{
     self, persist_source, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader,
     LoadGeneratorSourceReader, PostgresSourceReader, RawSourceCreationConfig, S3SourceReader,
+    TestScriptSourceReader,
 };
 use crate::types::errors::{DataflowError, DecodeError, EnvelopeError};
 use crate::types::sources::{encoding::*, *};
@@ -164,6 +165,17 @@ where
                 resumption_calculator,
             );
             let oks = oks.into_iter().map(SourceType::Row).collect();
+            ((oks, err), cap)
+        }
+        SourceConnection::TestScript(connection) => {
+            let ((oks, err), cap) = source::create_raw_source::<_, TestScriptSourceReader, _>(
+                scope,
+                base_source_config,
+                connection,
+                storage_state.connection_context.clone(),
+                resumption_calculator,
+            );
+            let oks: Vec<_> = oks.into_iter().map(SourceType::Delimited).collect();
             ((oks, err), cap)
         }
     };

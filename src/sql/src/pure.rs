@@ -228,6 +228,9 @@ pub async fn purify_create_source(
                 }
             }
         }
+        CreateSourceConnection::TestScript { desc_json: _ } => {
+            // TODO: verify valid json and valid schema
+        }
         CreateSourceConnection::S3 { connection, .. } => {
             let scx = StatementContext::new(None, &*catalog);
             let aws = {
@@ -539,8 +542,12 @@ async fn purify_source_format(
     connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     if matches!(format, CreateSourceFormat::KeyValue { .. })
-        && !matches!(connection, CreateSourceConnection::Kafka { .. })
+        && !matches!(
+            connection,
+            CreateSourceConnection::Kafka { .. } | CreateSourceConnection::TestScript { .. }
+        )
     {
+        // We don't mention `TestScript` to users here
         bail!("Kafka sources are the only source type that can provide KEY/VALUE formats")
     }
 

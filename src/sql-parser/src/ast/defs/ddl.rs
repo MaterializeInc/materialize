@@ -966,6 +966,9 @@ pub enum CreateSourceConnection<T: AstInfo> {
         generator: LoadGenerator,
         options: Vec<LoadGeneratorOption<T>>,
     },
+    TestScript {
+        desc_json: String,
+    },
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
@@ -1026,6 +1029,12 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
                     f.write_node(&display::comma_separated(options));
                     f.write_str(")");
                 }
+            }
+            CreateSourceConnection::TestScript { desc_json } => {
+                f.write_str("TEST SCRIPT ");
+                f.write_str("'");
+                f.write_str(&display::escape_single_quote_string(desc_json));
+                f.write_str("'");
             }
         }
     }
