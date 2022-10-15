@@ -11,7 +11,7 @@ use std::fmt;
 
 use mz_compute_client::controller::ComputeInstanceStatus;
 use mz_ore::str::StrExt;
-use mz_sql::ast::NoticeSeverity;
+use mz_sql::ast::{display::AstDisplay, Ident, NoticeSeverity};
 
 /// Notices that can occur in the adapter layer.
 ///
@@ -42,6 +42,9 @@ pub enum AdapterNotice {
         replica: String,
         status: ComputeInstanceStatus,
     },
+    AvailableIndex {
+        cluster: String,
+    },
 }
 
 impl AdapterNotice {
@@ -52,7 +55,13 @@ impl AdapterNotice {
 
     /// Reports a hint for the user about how the notice could be addressed.
     pub fn hint(&self) -> Option<String> {
-        None
+        match self {
+            AdapterNotice::AvailableIndex { cluster } => Some(format!(
+                "to change to the cluster: `SET cluster = {};`",
+                Ident::from(cluster.clone()).to_ast_string_stable()
+            )),
+            _ => None,
+        }
     }
 }
 
@@ -90,6 +99,9 @@ impl fmt::Display for AdapterNotice {
                     "cluster replica {}.{} changed status to: {:?}",
                     cluster, replica, status,
                 )
+            }
+            AdapterNotice::AvailableIndex { cluster } => {
+                write!(f, "cluster {cluster} has a fast-path index for this query")
             }
         }
     }

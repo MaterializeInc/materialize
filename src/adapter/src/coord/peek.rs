@@ -18,10 +18,13 @@ use std::{collections::HashMap, num::NonZeroUsize};
 
 use futures::TryFutureExt;
 use serde::{Deserialize, Serialize};
+use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-use mz_compute_client::command::{DataflowDescription, ReplicaId};
+use mz_compute_client::command::{
+    BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, ReplicaId,
+};
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_compute_client::response::PeekResponse;
 use mz_expr::explain::Indices;
@@ -35,8 +38,11 @@ use mz_stash::Append;
 
 use crate::client::ConnectionId;
 use crate::explain_new::Displayable;
+use crate::session::Session;
 use crate::util::send_immediate_rows;
 use crate::{AdapterError, AdapterNotice};
+
+use super::dataflows::{prep_relation_expr, ExprPrepStyle};
 
 pub(crate) struct PendingPeek {
     pub(crate) sender: oneshot::Sender<PeekResponse>,
@@ -245,13 +251,56 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
 }
 
 impl<S: Append + 'static> crate::coord::Coordinator<S> {
+    /// Creates a dataflow for the given `source` and `compute_instance`.
+    pub(crate) fn create_peek_dataflow(
+        &self,
+        view_id: GlobalId,
+        timestamp: mz_repr::Timestamp,
+        compute_instance: ComputeInstanceId,
+        session: &Session,
+        source: &OptimizedMirRelationExpr,
+        index_id: GlobalId,
+        key: &Vec<MirScalarExpr>,
+        typ: RelationType,
+    ) -> Result<DataflowDescription<OptimizedMirRelationExpr>, AdapterError> {
+        // The assembled dataflow contains a view and an index of that view.
+        let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
+        dataflow.set_as_of(Antichain::from_elem(timestamp));
+        let mut builder = self.dataflow_builder(compute_instance);
+        builder.import_view_into_dataflow(&view_id, source, &mut dataflow)?;
+        for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
+            prep_relation_expr(
+                self.catalog.state(),
+                plan,
+                ExprPrepStyle::OneShot {
+                    logical_time: Some(timestamp),
+                    session,
+                },
+            )?;
+        }
+        dataflow.export_index(
+            index_id,
+            IndexDesc {
+                on_id: view_id,
+                key: key.clone(),
+            },
+            typ,
+        );
+
+        // Optimize the dataflow across views, and any other ways that appeal.
+        mz_transform::optimize_dataflow(&mut dataflow, &builder.index_oracle())?;
+
+        // At this point, `dataflow_plan` contains our best optimized dataflow.
+        Ok(dataflow)
+    }
+
     /// Creates a [`PeekPlan`] for the given `dataflow`.
     ///
     /// The result will be a [`PeekPlan::FastPath`] plan iff the [`create_fast_path_plan`]
     /// call succeeds, or a [`PeekPlan::SlowPath`] plan wrapping a [`PeekDataflowPlan`]
     /// otherwise.
     pub(crate) fn create_peek_plan(
-        &mut self,
+        &self,
         mut dataflow: DataflowDescription<OptimizedMirRelationExpr>,
         view_id: GlobalId,
         compute_instance: ComputeInstanceId,

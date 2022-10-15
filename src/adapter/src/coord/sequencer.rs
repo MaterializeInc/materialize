@@ -20,7 +20,7 @@ use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, OwnedMutexGuard};
 use tracing::{event, warn, Level};
 
-use mz_compute_client::command::{BuildDesc, DataflowDesc, IndexDesc, ReplicaId};
+use mz_compute_client::command::{DataflowDesc, ReplicaId};
 use mz_compute_client::controller::{
     ComputeInstanceId, ComputeReplicaConfig, ComputeReplicaLogging,
 };
@@ -67,7 +67,7 @@ use crate::catalog::{
 };
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, DeferredPlan, PendingWriteTxn};
-use crate::coord::dataflows::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
+use crate::coord::dataflows::{prep_scalar_expr, ExprPrepStyle};
 use crate::coord::{
     peek, read_policy, Coordinator, Message, PendingTxn, SendDiffs, SinkConnectionReady, TxnReads,
     DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
@@ -2194,49 +2194,75 @@ impl<S: Append + 'static> Coordinator<S> {
             .iter()
             .map(|k| MirScalarExpr::Column(*k))
             .collect();
-        let (permutation, thinning) = permutation_for_arrangement(&key, typ.arity());
+        let (permutation, thinning): (HashMap<usize, usize>, _) =
+            permutation_for_arrangement(&key, typ.arity());
         // Two transient allocations. We could reclaim these if we don't use them, potentially.
         // TODO: reclaim transient identifiers in fast path cases.
         let view_id = self.allocate_transient_id()?;
         let index_id = self.allocate_transient_id()?;
-        // The assembled dataflow contains a view and an index of that view.
-        let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
-        dataflow.set_as_of(Antichain::from_elem(timestamp));
-        let mut builder = self.dataflow_builder(compute_instance);
-        builder.import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
-        for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
-            prep_relation_expr(
-                self.catalog.state(),
-                plan,
-                ExprPrepStyle::OneShot {
-                    logical_time: Some(timestamp),
-                    session,
-                },
-            )?;
-        }
-        dataflow.export_index(
+
+        let dataflow = self.create_peek_dataflow(
+            view_id,
+            timestamp,
+            compute_instance,
+            session,
+            &source,
             index_id,
-            IndexDesc {
-                on_id: view_id,
-                key: key.clone(),
-            },
-            typ,
-        );
+            &key,
+            typ.clone(),
+        )?;
 
-        // Optimize the dataflow across views, and any other ways that appeal.
-        mz_transform::optimize_dataflow(&mut dataflow, &builder.index_oracle())?;
-
-        // At this point, `dataflow_plan` contains our best optimized dataflow.
         // We will check the plan to see if there is a fast path to escape full dataflow construction.
         let peek_plan = self.create_peek_plan(
             dataflow,
             view_id,
             compute_instance,
             index_id,
-            key,
-            permutation,
+            key.clone(),
+            permutation.clone(),
             thinning.len(),
         )?;
+
+        // For slow path queries, search other clusters for an index. Don't
+        // look if the user has set a cluster replica though, because
+        // changing just the cluster session var could have a non-existent
+        // replica set.
+        if matches!(peek_plan, peek::PeekPlan::SlowPath(_))
+            && session.vars().cluster_replica().is_none()
+        {
+            let other_instances = self
+                .catalog
+                .compute_instances()
+                .filter(|i| i.id != compute_instance);
+            for instance in other_instances {
+                let dataflow = self.create_peek_dataflow(
+                    view_id,
+                    timestamp,
+                    instance.id,
+                    session,
+                    &source,
+                    index_id,
+                    &key,
+                    typ.clone(),
+                )?;
+
+                let peek_plan = self.create_peek_plan(
+                    dataflow,
+                    view_id,
+                    compute_instance,
+                    index_id,
+                    key.clone(),
+                    permutation.clone(),
+                    thinning.len(),
+                )?;
+                if matches!(peek_plan, peek::PeekPlan::FastPath(_)) {
+                    session.add_notice(AdapterNotice::AvailableIndex {
+                        cluster: instance.name.clone(),
+                    });
+                    break;
+                }
+            }
+        }
 
         // We only track the peeks in the session if the query doesn't use AS
         // OF or we're inside an explicit transaction. The latter case is

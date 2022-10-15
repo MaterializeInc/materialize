@@ -1,0 +1,77 @@
+# Test various NOTICE expectations.
+
+# Test that a query with an available index sends a notice if the index is on another cluster.
+send
+Query {"query": "drop cluster if exists c1 cascade"}
+Query {"query": "drop cluster if exists c2 cascade"}
+Query {"query": "drop table if exists t cascade"}
+Query {"query": "drop view if exists v cascade"}
+Query {"query": "create cluster c1 replicas (ra (size '1'))"}
+Query {"query": "create cluster c2 replicas (rb (size '1'))"}
+Query {"query": "create table t ()"}
+Query {"query": "create view v as select count(*) from t"}
+Query {"query": "set cluster = c1"}
+Query {"query": "create default index on v"}
+Query {"query": "set cluster = c2"}
+Query {"query": "select * from v"}
+Query {"query": "set cluster = c1"}
+Query {"query": "select * from v"}
+Query {"query": "drop cluster c1 cascade"}
+Query {"query": "drop cluster c2 cascade"}
+----
+
+until err_field_typs=SMDH
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP CLUSTER"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"DROP CLUSTER"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"DROP VIEW"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE CLUSTER"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE CLUSTER"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE VIEW"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE INDEX"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"count"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"M","value":"cluster c1 has a fast-path index for this query"},{"typ":"H","value":"to change to the cluster: `SET cluster = \"c1\";`"}]}
+DataRow {"fields":["0"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"count"}]}
+DataRow {"fields":["0"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"DROP CLUSTER"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"DROP CLUSTER"}
+ReadyForQuery {"status":"I"}
