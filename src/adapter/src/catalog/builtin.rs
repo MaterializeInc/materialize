@@ -1470,7 +1470,7 @@ pub const MZ_RELATIONS: BuiltinView = BuiltinView {
       SELECT id, oid, schema_id, name, 'table' FROM mz_catalog.mz_tables
 UNION ALL SELECT id, oid, schema_id, name, 'source' FROM mz_catalog.mz_sources
 UNION ALL SELECT id, oid, schema_id, name, 'view' FROM mz_catalog.mz_views
-UNION ALL SELECT id, oid, schema_id, name, 'materialized view' FROM mz_catalog.mz_materialized_views",
+UNION ALL SELECT id, oid, schema_id, name, 'materialized-view' FROM mz_catalog.mz_materialized_views",
 };
 
 pub const MZ_OBJECTS: BuiltinView = BuiltinView {
@@ -1648,7 +1648,7 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
         WHEN class_objects.type = 'source' THEN 'r'
         WHEN class_objects.type = 'index' THEN 'i'
         WHEN class_objects.type = 'view' THEN 'v'
-        WHEN class_objects.type = 'materialized view' THEN 'm'
+        WHEN class_objects.type = 'materialized-view' THEN 'm'
     END relkind,
     -- MZ doesn't support CHECK constraints so relchecks is filled with 0
     0::pg_catalog.int2 AS relchecks,
@@ -2197,6 +2197,7 @@ pub const INFORMATION_SCHEMA_TABLES: BuiltinView = BuiltinView {
     s.name AS table_schema,
     r.name AS table_name,
     CASE r.type
+        WHEN 'materialized-view' THEN 'MATERIALIZED VIEW'
         WHEN 'table' THEN 'BASE TABLE'
         ELSE pg_catalog.upper(r.type)
     END AS table_type
