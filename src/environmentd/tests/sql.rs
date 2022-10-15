@@ -102,7 +102,7 @@ fn test_no_block() -> Result<(), anyhow::Error> {
 
     // This is better than relying on CI to time out, because an actual failure
     // (as opposed to a CI timeout) causes `services.log` to be uploaded.
-    mz_ore::test::timeout(Duration::from_secs(30), || {
+    mz_ore::test::timeout(Duration::from_secs(60), || {
         info!("test_no_block: starting server");
         let server = util::start_server(util::Config::default())?;
 
