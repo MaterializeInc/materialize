@@ -222,7 +222,7 @@ CREATE TABLE x (a int, u int, j jsonb, b bool)
 
 # Ensure the NOT gets pushed into the binary operation.
 query T multiline
-EXPLAIN PLAN FOR SELECT
+EXPLAIN WITH(arity, join_impls) SELECT
   NOT(a = u),
   NOT(a != u),
   NOT(a < u),
@@ -234,14 +234,10 @@ EXPLAIN PLAN FOR SELECT
   NOT(j @> '{}'::JSONB)
 FROM x
 ----
-Source materialize.public.x (u2):
-| Project (#0..=#3)
-
-Query:
-%0 =
-| Get materialize.public.x (u2)
-| Map (#0 != #1), (#0 = #1), (#0 >= #1), (#0 <= #1), (#0 < #1), (#0 > #1), NOT((#2 @> {}))
-| Project (#4..=#9, #3, #10)
+Explained Query:
+  Project (#4..=#9, #3, #10) // { arity: 8 }
+    Map ((#0 != #1), (#0 = #1), (#0 >= #1), (#0 <= #1), (#0 < #1), (#0 > #1), NOT((#2 @> {}))) // { arity: 11 }
+      Get materialize.public.x // { arity: 4 }
 
 EOF
 
@@ -250,108 +246,102 @@ CREATE TABLE y (a boolean, b bool)
 
 # Bypass if statements with identical branches
 query T multiline
-EXPLAIN PLAN FOR SELECT
+EXPLAIN WITH(arity, join_impls) SELECT
   CASE WHEN b THEN a ELSE a END
 FROM y
 ----
-Source materialize.public.y (u3):
-| Map dummy
-| Project (#0, #2)
+Explained Query:
+  Project (#0) // { arity: 1 }
+    Get materialize.public.y // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.y (u3)
-| Project (#0)
+Source materialize.public.y
+  project=(#0, #2)
+  map=(dummy)
 
 EOF
 
 # Bypass if statements with identical branches
 query T multiline
-EXPLAIN PLAN FOR SELECT
+EXPLAIN WITH(arity, join_impls) SELECT
   CASE WHEN b THEN NULL ELSE true END
 FROM y
 ----
-Source materialize.public.y (u3):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Project (#2) // { arity: 1 }
+    Map ((null OR NOT(#1) OR (#1) IS NULL)) // { arity: 3 }
+      Get materialize.public.y // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.y (u3)
-| Map (null OR NOT(#1) OR (#1) IS NULL)
-| Project (#2)
+Source materialize.public.y
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
 
 
 # Bypass if statements with identical branches
 query T multiline
-EXPLAIN PLAN FOR SELECT
+EXPLAIN WITH(arity, join_impls) SELECT
   CASE WHEN b THEN NULL ELSE false END
 FROM y
 ----
-Source materialize.public.y (u3):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Project (#2) // { arity: 1 }
+    Map ((#1 AND null AND (#1) IS NOT NULL)) // { arity: 3 }
+      Get materialize.public.y // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.y (u3)
-| Map (#1 AND null AND (#1) IS NOT NULL)
-| Project (#2)
+Source materialize.public.y
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
 
 
 query T multiline
-EXPLAIN PLAN FOR SELECT
+EXPLAIN WITH(arity, join_impls) SELECT
   CASE WHEN b THEN true ELSE NULL END
 FROM y
 ----
-Source materialize.public.y (u3):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Project (#2) // { arity: 1 }
+    Map ((null OR (#1 AND (#1) IS NOT NULL))) // { arity: 3 }
+      Get materialize.public.y // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.y (u3)
-| Map (null OR (#1 AND (#1) IS NOT NULL))
-| Project (#2)
+Source materialize.public.y
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
 
 
 query T multiline
-EXPLAIN PLAN FOR SELECT
+EXPLAIN WITH(arity, join_impls) SELECT
   CASE WHEN b THEN false ELSE NULL END
 FROM y
 ----
-Source materialize.public.y (u3):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Project (#2) // { arity: 1 }
+    Map ((null AND (NOT(#1) OR (#1) IS NULL))) // { arity: 3 }
+      Get materialize.public.y // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.y (u3)
-| Map (null AND (NOT(#1) OR (#1) IS NULL))
-| Project (#2)
+Source materialize.public.y
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN PLAN FOR SELECT
+EXPLAIN WITH(arity, join_impls) SELECT
   CASE WHEN b THEN false ELSE TRUE END
 FROM y
 ----
-Source materialize.public.y (u3):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Project (#2) // { arity: 1 }
+    Map ((NOT(#1) OR (#1) IS NULL)) // { arity: 3 }
+      Get materialize.public.y // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.y (u3)
-| Map (NOT(#1) OR (#1) IS NULL)
-| Project (#2)
+Source materialize.public.y
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
 
@@ -362,18 +352,16 @@ statement ok
 insert into z values (null, null), (1, null), (null, 2), (1, 2), (2, 1)
 
 query T multiline
-EXPLAIN PLAN FOR SELECT *
+EXPLAIN WITH(arity, join_impls) SELECT *
 FROM z
 WHERE CASE WHEN a > b THEN FALSE ELSE TRUE END
 ----
-Source materialize.public.z (u4):
-| Filter ((#0) IS NULL OR (#1) IS NULL OR (#0 <= #1))
-| Project (#0, #1)
+Explained Query:
+  Filter ((#0) IS NULL OR (#1) IS NULL OR (#0 <= #1)) // { arity: 2 }
+    Get materialize.public.z // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.z (u4)
-| Filter ((#0) IS NULL OR (#1) IS NULL OR (#0 <= #1))
+Source materialize.public.z
+  filter=(((#0) IS NULL OR (#1) IS NULL OR (#0 <= #1)))
 
 EOF
 

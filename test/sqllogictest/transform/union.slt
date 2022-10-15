@@ -29,29 +29,14 @@ INSERT INTO t3 VALUES (2, 3), (5, 5), (5, 5), (6, 1)
 
 # Test that nested unions are fused into a single Union operator
 query T multiline
-EXPLAIN (SELECT * FROM t1 UNION ALL SELECT * FROM t1) UNION ALL (SELECT * FROM t2 UNION ALL SELECT * FROM t2);
+EXPLAIN WITH(arity, join_impls) (SELECT * FROM t1 UNION ALL SELECT * FROM t1) UNION ALL (SELECT * FROM t2 UNION ALL SELECT * FROM t2);
 ----
-Source materialize.public.t1 (u1):
-| Project (#0, #1)
-
-Source materialize.public.t2 (u2):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u1)
-
-%1 =
-| Get materialize.public.t1 (u1)
-
-%2 =
-| Get materialize.public.t2 (u2)
-
-%3 =
-| Get materialize.public.t2 (u2)
-
-%4 =
-| Union %0 %1 %2 %3
+Explained Query:
+  Union // { arity: 2 }
+    Get materialize.public.t1 // { arity: 2 }
+    Get materialize.public.t1 // { arity: 2 }
+    Get materialize.public.t2 // { arity: 2 }
+    Get materialize.public.t2 // { arity: 2 }
 
 EOF
 
@@ -71,28 +56,20 @@ query II
 
 # Test that nested negated unions are merged into the parent Union operator by pushing the Negate into their branches
 query T multiline
-EXPLAIN (SELECT * FROM t1 UNION ALL SELECT * FROM t1) EXCEPT ALL (SELECT * FROM t2 UNION ALL SELECT * FROM t2);
+EXPLAIN WITH(arity, join_impls) (SELECT * FROM t1 UNION ALL SELECT * FROM t1) EXCEPT ALL (SELECT * FROM t2 UNION ALL SELECT * FROM t2);
 ----
-Source materialize.public.t1 (u1):
-| Project (#0, #1)
-
-Source materialize.public.t2 (u2):
-| Project (#0, #1)
-
-Query:
-%0 = Let l0 =
-| Get materialize.public.t2 (u2)
-| Negate
-
-%1 =
-| Get materialize.public.t1 (u1)
-
-%2 =
-| Get materialize.public.t1 (u1)
-
-%3 =
-| Union %1 %2 %0 %0
-| Threshold
+Explained Query:
+  Return // { arity: 2 }
+    Threshold // { arity: 2 }
+      Union // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
+        Get l0 // { arity: 2 }
+        Get l0 // { arity: 2 }
+  With
+    cte l0 =
+      Negate // { arity: 2 }
+        Get materialize.public.t2 // { arity: 2 }
 
 EOF
 
@@ -105,39 +82,19 @@ query II
 4  5
 
 query T multiline
-EXPLAIN PLAN FOR SELECT * FROM t2  EXCEPT ALL SELECT * FROM t1 INTERSECT ALL SELECT * FROM t3;
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t2  EXCEPT ALL SELECT * FROM t1 INTERSECT ALL SELECT * FROM t3;
 ----
-Source materialize.public.t1 (u1):
-| Project (#0, #1)
-
-Source materialize.public.t2 (u2):
-| Project (#0, #1)
-
-Source materialize.public.t3 (u3):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.t2 (u2)
-
-%1 =
-| Get materialize.public.t1 (u1)
-| Negate
-
-%2 =
-| Get materialize.public.t1 (u1)
-
-%3 =
-| Get materialize.public.t3 (u3)
-| Negate
-
-%4 =
-| Union %2 %3
-| Threshold
-
-%5 =
-| Union %0 %1 %4
-| Threshold
+Explained Query:
+  Threshold // { arity: 2 }
+    Union // { arity: 2 }
+      Get materialize.public.t2 // { arity: 2 }
+      Negate // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
+      Threshold // { arity: 2 }
+        Union // { arity: 2 }
+          Get materialize.public.t1 // { arity: 2 }
+          Negate // { arity: 2 }
+            Get materialize.public.t3 // { arity: 2 }
 
 EOF
 
@@ -147,42 +104,25 @@ SELECT * FROM t2  EXCEPT ALL SELECT * FROM t1 INTERSECT ALL SELECT * FROM t3;
 5  5
 
 query T multiline
-EXPLAIN PLAN FOR SELECT * FROM t2 EXCEPT ALL (SELECT * FROM t1 INTERSECT ALL SELECT f1, null::int FROM t3);
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t2 EXCEPT ALL (SELECT * FROM t1 INTERSECT ALL SELECT f1, null::int FROM t3);
 ----
-Source materialize.public.t1 (u1):
-| Project (#0, #1)
+Explained Query:
+  Threshold // { arity: 2 }
+    Union // { arity: 2 }
+      Get materialize.public.t2 // { arity: 2 }
+      Negate // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
+      Threshold // { arity: 2 }
+        Union // { arity: 2 }
+          Get materialize.public.t1 // { arity: 2 }
+          Map (null) // { arity: 2 }
+            Negate // { arity: 1 }
+              Project (#0) // { arity: 1 }
+                Get materialize.public.t3 // { arity: 2 }
 
-Source materialize.public.t2 (u2):
-| Project (#0, #1)
-
-Source materialize.public.t3 (u3):
-| Map dummy
-| Project (#0, #2)
-
-Query:
-%0 =
-| Get materialize.public.t2 (u2)
-
-%1 =
-| Get materialize.public.t1 (u1)
-| Negate
-
-%2 =
-| Get materialize.public.t1 (u1)
-
-%3 =
-| Get materialize.public.t3 (u3)
-| Project (#0)
-| Negate
-| Map null
-
-%4 =
-| Union %2 %3
-| Threshold
-
-%5 =
-| Union %0 %1 %4
-| Threshold
+Source materialize.public.t3
+  project=(#0, #2)
+  map=(dummy)
 
 EOF
 
@@ -193,52 +133,40 @@ SELECT * FROM t2 EXCEPT ALL (SELECT * FROM t1 INTERSECT ALL SELECT f1, null::int
 5 5
 
 query T multiline
-EXPLAIN SELECT a1.* FROM t3 AS a1 LEFT JOIN t2 AS a2 ON (a1.f1 = a2.nokey);
+EXPLAIN WITH(arity, join_impls) SELECT a1.* FROM t3 AS a1 LEFT JOIN t2 AS a2 ON (a1.f1 = a2.nokey);
 ----
-Source materialize.public.t2 (u2):
-| Map dummy
-| Filter (#1) IS NOT NULL
-| Project (#2, #1)
+Explained Query:
+  Return // { arity: 2 }
+    Union // { arity: 2 }
+      Negate // { arity: 2 }
+        Project (#0, #1) // { arity: 2 }
+          Join on=(#0 = #2) type=differential // { arity: 3 }
+            implementation
+              materialize.public.t3 » %1[#0]
+            Get materialize.public.t3 // { arity: 2 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Distinct group_by=[#0] // { arity: 1 }
+                Project (#0) // { arity: 1 }
+                  Get l0 // { arity: 2 }
+      Get materialize.public.t3 // { arity: 2 }
+      Get l0 // { arity: 2 }
+  With
+    cte l0 =
+      Project (#0, #1) // { arity: 2 }
+        Join on=(#0 = #2) type=differential // { arity: 3 }
+          implementation
+            %1 » %0[#0]
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Filter (#0) IS NOT NULL // { arity: 2 }
+              Get materialize.public.t3 // { arity: 2 }
+          Project (#1) // { arity: 1 }
+            Filter (#1) IS NOT NULL // { arity: 2 }
+              Get materialize.public.t2 // { arity: 2 }
 
-Source materialize.public.t3 (u3):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.t3 (u3)
-| Filter (#0) IS NOT NULL
-| ArrangeBy (#0)
-
-%1 =
-| Get materialize.public.t2 (u2)
-| Filter (#1) IS NOT NULL
-| Project (#1)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #2)
-| | implementation = Differential %1 %0.(#0)
-| Project (#0, #1)
-
-%3 =
-| Get materialize.public.t3 (u3)
-
-%4 =
-| Get %2 (l0)
-| Project (#0)
-| Distinct group=(#0)
-| ArrangeBy (#0)
-
-%5 =
-| Join %3 %4 (= #0 #2)
-| | implementation = Differential %3 %4.(#0)
-| Project (#0, #1)
-| Negate
-
-%6 =
-| Get materialize.public.t3 (u3)
-
-%7 =
-| Union %5 %6 %2
+Source materialize.public.t2
+  project=(#2, #1)
+  filter=((#1) IS NOT NULL)
+  map=(dummy)
 
 EOF
 

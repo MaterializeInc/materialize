@@ -16,71 +16,67 @@ statement ok
 CREATE TABLE y (a int not null)
 
 query T multiline
-EXPLAIN PLAN FOR SELECT b FROM (SELECT b, not(b) as neg FROM x) WHERE NOT(neg)
+EXPLAIN WITH(arity, join_impls) SELECT b FROM (SELECT b, not(b) as neg FROM x) WHERE NOT(neg)
 ----
-Source materialize.public.x (u1):
-| Map dummy, dummy
-| Filter #2
-| Project (#3, #4, #2)
+Explained Query:
+  Project (#2) // { arity: 1 }
+    Filter #2 // { arity: 3 }
+      Get materialize.public.x // { arity: 3 }
 
-Query:
-%0 =
-| Get materialize.public.x (u1)
-| Filter #2
-| Project (#2)
+Source materialize.public.x
+  project=(#3, #4, #2)
+  filter=(#2)
+  map=(dummy, dummy)
 
 EOF
 
 query T multiline
-EXPLAIN PLAN FOR SELECT b FROM (SELECT b, b = false as neg FROM x) WHERE NOT(neg)
+EXPLAIN WITH(arity, join_impls) SELECT b FROM (SELECT b, b = false as neg FROM x) WHERE NOT(neg)
 ----
-Source materialize.public.x (u1):
-| Map dummy, dummy
-| Filter (#2 != false)
-| Project (#3, #4, #2)
+Explained Query:
+  Project (#2) // { arity: 1 }
+    Filter (#2 != false) // { arity: 3 }
+      Get materialize.public.x // { arity: 3 }
 
-Query:
-%0 =
-| Get materialize.public.x (u1)
-| Filter (#2 != false)
-| Project (#2)
+Source materialize.public.x
+  project=(#3, #4, #2)
+  filter=((#2 != false))
+  map=(dummy, dummy)
 
 EOF
 
 # Inline binary expressions.
 
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
   SELECT a FROM (SELECT a, a = 3 AS cond, u != 2 as cond2 FROM x) WHERE NOT(cond) AND NOT(cond2)
 ----
-Source materialize.public.x (u1):
-| Map dummy
-| Filter (#0 != 3), (#1 = 2)
-| Project (#0, #1, #3)
+Explained Query:
+  Project (#0) // { arity: 1 }
+    Filter (#1 = 2) AND (#0 != 3) // { arity: 3 }
+      Get materialize.public.x // { arity: 3 }
 
-Query:
-%0 =
-| Get materialize.public.x (u1)
-| Filter (#1 = 2), (#0 != 3)
-| Project (#0)
+Source materialize.public.x
+  project=(#0, #1, #3)
+  filter=((#0 != 3) AND (#1 = 2))
+  map=(dummy)
 
 EOF
 
 # Don't inline binary expressions not having a leaf argument.
 
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
   SELECT a FROM (SELECT a, (a + 1) = (u + 3) AS cond FROM x) WHERE NOT(cond)
 ----
-Source materialize.public.x (u1):
-| Map dummy
-| Project (#0, #1, #3)
+Explained Query:
+  Project (#0) // { arity: 1 }
+    Filter ((#0 + 1) != (#1 + 3)) // { arity: 3 }
+      Get materialize.public.x // { arity: 3 }
 
-Query:
-%0 =
-| Get materialize.public.x (u1)
-| Filter ((#0 + 1) != (#1 + 3))
-| Project (#0)
+Source materialize.public.x
+  project=(#0, #1, #3)
+  map=(dummy)
 
 EOF
 
@@ -88,94 +84,76 @@ EOF
 # down c = 3 since the computation of c refers to mapped columns.
 
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
   SELECT * FROM
     (SELECT a, b, b+1 as c FROM
       (SELECT a, a+1 as b FROM y))
 WHERE b = 3 AND c = 3
 ----
-Source materialize.public.y (u2):
-| Filter (3 = (#0 + 1))
-| Project (#0)
+Explained Query:
+  Filter (#1 = 3) AND (#2 = 3) // { arity: 3 }
+    Map ((#0 + 1), (#1 + 1)) // { arity: 3 }
+      Get materialize.public.y // { arity: 1 }
 
-Query:
-%0 =
-| Get materialize.public.y (u2)
-| Map (#0 + 1), (#1 + 1)
-| Filter (#1 = 3), (#2 = 3)
+Source materialize.public.y
+  filter=((3 = (#0 + 1)))
 
 EOF
 
 # Regression test to ensure that a filter gets pushed down to all inputs of a union.
 
 query T multiline
-EXPLAIN DECORRELATED PLAN FOR
+EXPLAIN DECORRELATED PLAN WITH(arity) FOR
 SELECT a FROM (SELECT DISTINCT a FROM x UNION ALL SELECT a FROM y) WHERE a = 3
 ----
-%0 = Let l0 =
-| Constant ()
-
-%1 =
-| Get materialize.public.x (u1)
-
-%2 = Let l1 =
-| Join %0 %1
-| | implementation = Unimplemented
-| Project (#0)
-| Distinct group=(#0)
-
-%3 =
-| Get %2 (l1)
-| Map #0
-| Project (#0, #1)
-| Project (#1)
-
-%4 =
-| Get materialize.public.y (u2)
-
-%5 = Let l2 =
-| Join %0 %4
-| | implementation = Unimplemented
-
-%6 =
-| Get %5 (l2)
-| Map #0
-| Project (#0, #1)
-| Project (#1)
-
-%7 =
-| Union %3 %6
-| Filter (#0 = 3)
+Return // { arity: 1 }
+  Filter (#0 = 3) // { arity: 1 }
+    Union // { arity: 1 }
+      Project (#1) // { arity: 1 }
+        Project (#0, #1) // { arity: 2 }
+          Map (#0) // { arity: 2 }
+            Get l1 // { arity: 1 }
+      Project (#1) // { arity: 1 }
+        Project (#0, #1) // { arity: 2 }
+          Map (#0) // { arity: 2 }
+            Get l2 // { arity: 1 }
+With
+  cte l2 =
+    CrossJoin // { arity: 1 }
+      Get l0 // { arity: 0 }
+      Get materialize.public.y // { arity: 1 }
+  cte l1 =
+    Distinct group_by=[#0] // { arity: 1 }
+      Project (#0) // { arity: 1 }
+        CrossJoin // { arity: 3 }
+          Get l0 // { arity: 0 }
+          Get materialize.public.x // { arity: 3 }
+  cte l0 =
+    Constant // { arity: 0 }
+      - ()
 
 EOF
 
 query T multiline
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT a FROM (SELECT DISTINCT a FROM x UNION ALL SELECT a FROM y) WHERE a = 3
 ----
-Source materialize.public.x (u1):
-| Map dummy, dummy
-| Filter (#0 = 3)
-| Project (#0, #3, #4)
+Explained Query:
+  Union // { arity: 1 }
+    Map (3) // { arity: 1 }
+      Distinct // { arity: 0 }
+        Project () // { arity: 0 }
+          Filter (#0 = 3) // { arity: 3 }
+            Get materialize.public.x // { arity: 3 }
+    Filter (#0 = 3) // { arity: 1 }
+      Get materialize.public.y // { arity: 1 }
 
-Source materialize.public.y (u2):
-| Filter (#0 = 3)
-| Project (#0)
-
-Query:
-%0 =
-| Get materialize.public.x (u1)
-| Filter (#0 = 3)
-| Project ()
-| Distinct group=()
-| Map 3
-
-%1 =
-| Get materialize.public.y (u2)
-| Filter (#0 = 3)
-
-%2 =
-| Union %0 %1
+Source materialize.public.x
+  project=(#0, #3, #4)
+  filter=((#0 = 3))
+  map=(dummy, dummy)
+Source materialize.public.y
+  filter=((#0 = 3))
 
 EOF
 
@@ -187,218 +165,149 @@ CREATE TABLE t2 (f1 integer, f2 integer)
 
 # redundant equivalence is pushed down to all join branches and removed
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 SELECT * FROM t1, t2 WHERE t1.f1 = t2.f1 AND t1.f2 = t2.f2 AND t1.f1 + t2.f2 = t2.f1 + t1.f2;
 ----
-Source materialize.public.t1 (u3):
-| Filter (#0) IS NOT NULL, (#1) IS NOT NULL
-| Project (#0, #1)
+Explained Query:
+  Project (#0, #1, #0, #1) // { arity: 4 }
+    Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
+      implementation
+        %1 » %0[#0, #1]
+      ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+        Filter (#0) IS NOT NULL AND (#1) IS NOT NULL // { arity: 2 }
+          Get materialize.public.t1 // { arity: 2 }
+      Filter (#0) IS NOT NULL AND (#1) IS NOT NULL // { arity: 2 }
+        Get materialize.public.t2 // { arity: 2 }
 
-Source materialize.public.t2 (u4):
-| Filter (#0) IS NOT NULL, (#1) IS NOT NULL
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u3)
-| Filter (#0) IS NOT NULL, (#1) IS NOT NULL
-| ArrangeBy (#0, #1)
-
-%1 =
-| Get materialize.public.t2 (u4)
-| Filter (#0) IS NOT NULL, (#1) IS NOT NULL
-
-%2 =
-| Join %0 %1 (= #0 #2) (= #1 #3)
-| | implementation = Differential %1 %0.(#0, #1)
-| Project (#0, #1, #0, #1)
+Source materialize.public.t1
+  filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
+Source materialize.public.t2
+  filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
 
 EOF
 
 # #7684 avoidable cross joins
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 select * from t1, t2 where t1.f1 = t2.f1 + 1 or (t1.f1 is null and t2.f1 is null);
 ----
-Source materialize.public.t1 (u3):
-| Project (#0, #1)
-
-Source materialize.public.t2 (u4):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u3)
-| ArrangeBy (#0)
-
-%1 =
-| Get materialize.public.t2 (u4)
-
-%2 =
-| Join %0 %1 (= #0 (#2 + 1))
-| | implementation = Differential %1 %0.(#0)
+Explained Query:
+  Join on=(#0 = (#2 + 1)) type=differential // { arity: 4 }
+    implementation
+      materialize.public.t2 » %0[#0]
+    ArrangeBy keys=[[#0]] // { arity: 2 }
+      Get materialize.public.t1 // { arity: 2 }
+    Get materialize.public.t2 // { arity: 2 }
 
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 select * from t1, t2 where t1.f1 = t2.f1 + 1 or (t1.f1 is null and (t2.f1 + 1) is null);
 ----
-Source materialize.public.t1 (u3):
-| Project (#0, #1)
-
-Source materialize.public.t2 (u4):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u3)
-| ArrangeBy (#0)
-
-%1 =
-| Get materialize.public.t2 (u4)
-
-%2 =
-| Join %0 %1 (= #0 (#2 + 1))
-| | implementation = Differential %1 %0.(#0)
+Explained Query:
+  Join on=(#0 = (#2 + 1)) type=differential // { arity: 4 }
+    implementation
+      materialize.public.t2 » %0[#0]
+    ArrangeBy keys=[[#0]] // { arity: 2 }
+      Get materialize.public.t1 // { arity: 2 }
+    Get materialize.public.t2 // { arity: 2 }
 
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 select * from t1, t2 where t2.f1 = t1.f1 + 1 or (t1.f1 is null and (t2.f1 + 1) is null);
 ----
-Source materialize.public.t1 (u3):
-| Project (#0, #1)
-
-Source materialize.public.t2 (u4):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u3)
-| ArrangeBy ((#0 + 1))
-
-%1 =
-| Get materialize.public.t2 (u4)
-
-%2 =
-| Join %0 %1 (= #2 (#0 + 1))
-| | implementation = Differential %1 %0.((#0 + 1))
+Explained Query:
+  Join on=(#2 = (#0 + 1)) type=differential // { arity: 4 }
+    implementation
+      materialize.public.t2 » %0[(#0 + 1)]
+    ArrangeBy keys=[[(#0 + 1)]] // { arity: 2 }
+      Get materialize.public.t1 // { arity: 2 }
+    Get materialize.public.t2 // { arity: 2 }
 
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 select * from t1, t2 where t2.f1 = t1.f1 + 1 or (t1.f1 is null and ((t2.f1 + 1) is null and t1.f1 is null));
 ----
-Source materialize.public.t1 (u3):
-| Project (#0, #1)
-
-Source materialize.public.t2 (u4):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u3)
-| ArrangeBy ((#0 + 1))
-
-%1 =
-| Get materialize.public.t2 (u4)
-
-%2 =
-| Join %0 %1 (= #2 (#0 + 1))
-| | implementation = Differential %1 %0.((#0 + 1))
+Explained Query:
+  Join on=(#2 = (#0 + 1)) type=differential // { arity: 4 }
+    implementation
+      materialize.public.t2 » %0[(#0 + 1)]
+    ArrangeBy keys=[[(#0 + 1)]] // { arity: 2 }
+      Get materialize.public.t1 // { arity: 2 }
+    Get materialize.public.t2 // { arity: 2 }
 
 EOF
 
 # Join-Dependent Predicate Duplication (JoinInputMapper::consequence_for_input)
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 SELECT * FROM t1, t2 WHERE t1.f1 = t2.f1 AND ((t1.f2 = 3 AND t2.f2 = 4) OR (t1.f2 = 5 AND t2.f2 = 6));
 ----
-Source materialize.public.t1 (u3):
-| Filter (#0) IS NOT NULL, ((#1 = 3) OR (#1 = 5))
-| Project (#0, #1)
+Explained Query:
+  Project (#0, #1, #0, #3) // { arity: 4 }
+    Filter (((#1 = 3) AND (#3 = 4)) OR ((#1 = 5) AND (#3 = 6))) // { arity: 4 }
+      Join on=(#0 = #2) type=differential // { arity: 4 }
+        implementation
+          %1 » %0[#0]
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Filter (#0) IS NOT NULL AND ((#1 = 3) OR (#1 = 5)) // { arity: 2 }
+            Get materialize.public.t1 // { arity: 2 }
+        Filter (#0) IS NOT NULL AND ((#1 = 4) OR (#1 = 6)) // { arity: 2 }
+          Get materialize.public.t2 // { arity: 2 }
 
-Source materialize.public.t2 (u4):
-| Filter (#0) IS NOT NULL, ((#1 = 4) OR (#1 = 6))
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u3)
-| Filter (#0) IS NOT NULL, ((#1 = 3) OR (#1 = 5))
-| ArrangeBy (#0)
-
-%1 =
-| Get materialize.public.t2 (u4)
-| Filter (#0) IS NOT NULL, ((#1 = 4) OR (#1 = 6))
-
-%2 =
-| Join %0 %1 (= #0 #2)
-| | implementation = Differential %1 %0.(#0)
-| Filter (((#1 = 3) AND (#3 = 4)) OR ((#1 = 5) AND (#3 = 6)))
-| Project (#0, #1, #0, #3)
+Source materialize.public.t1
+  filter=((#0) IS NOT NULL AND ((#1 = 3) OR (#1 = 5)))
+Source materialize.public.t2
+  filter=((#0) IS NOT NULL AND ((#1 = 4) OR (#1 = 6)))
 
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 SELECT * FROM t1, t2 WHERE t1.f1 = t2.f1 AND ((t1.f2 = 3 AND t2.f2 = 4) OR t1.f2 = 5);
 ----
-Source materialize.public.t1 (u3):
-| Filter (#0) IS NOT NULL, ((#1 = 3) OR (#1 = 5))
-| Project (#0, #1)
+Explained Query:
+  Project (#0, #1, #0, #3) // { arity: 4 }
+    Filter ((#1 = 5) OR ((#1 = 3) AND (#3 = 4))) // { arity: 4 }
+      Join on=(#0 = #2) type=differential // { arity: 4 }
+        implementation
+          %1 » %0[#0]
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Filter (#0) IS NOT NULL AND ((#1 = 3) OR (#1 = 5)) // { arity: 2 }
+            Get materialize.public.t1 // { arity: 2 }
+        Filter (#0) IS NOT NULL // { arity: 2 }
+          Get materialize.public.t2 // { arity: 2 }
 
-Source materialize.public.t2 (u4):
-| Filter (#0) IS NOT NULL
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u3)
-| Filter (#0) IS NOT NULL, ((#1 = 3) OR (#1 = 5))
-| ArrangeBy (#0)
-
-%1 =
-| Get materialize.public.t2 (u4)
-| Filter (#0) IS NOT NULL
-
-%2 =
-| Join %0 %1 (= #0 #2)
-| | implementation = Differential %1 %0.(#0)
-| Filter ((#1 = 5) OR ((#1 = 3) AND (#3 = 4)))
-| Project (#0, #1, #0, #3)
+Source materialize.public.t1
+  filter=((#0) IS NOT NULL AND ((#1 = 3) OR (#1 = 5)))
+Source materialize.public.t2
+  filter=((#0) IS NOT NULL)
 
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 SELECT * FROM t1, t2
 WHERE t1.f2 = 27 OR (t1.f2 <= 1995 AND t1.f1 = t2.f1);
 ----
-Source materialize.public.t1 (u3):
-| Filter ((#1 = 27) OR (#1 <= 1995))
-| Project (#0, #1)
+Explained Query:
+  Filter ((#1 = 27) OR ((#0 = #2) AND (#1 <= 1995))) // { arity: 4 }
+    CrossJoin type=differential // { arity: 4 }
+      implementation
+        materialize.public.t2 » %0[]
+      ArrangeBy keys=[[]] // { arity: 2 }
+        Filter ((#1 = 27) OR (#1 <= 1995)) // { arity: 2 }
+          Get materialize.public.t1 // { arity: 2 }
+      Get materialize.public.t2 // { arity: 2 }
 
-Source materialize.public.t2 (u4):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u3)
-| Filter ((#1 = 27) OR (#1 <= 1995))
-| ArrangeBy ()
-
-%1 =
-| Get materialize.public.t2 (u4)
-
-%2 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
-| Filter ((#1 = 27) OR ((#0 = #2) AND (#1 <= 1995)))
+Source materialize.public.t1
+  filter=(((#1 = 27) OR (#1 <= 1995)))
 
 EOF
 

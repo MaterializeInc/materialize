@@ -21,11 +21,12 @@ SELECT mz_now() = mz_now()
 true
 
 query T multiline
-EXPLAIN PLAN FOR select 1::mz_timestamp = mz_now()
+EXPLAIN WITH(arity, join_impls) SELECT 1::mz_timestamp = mz_now()
 ----
-%0 =
-| Constant ()
-| Map (1 = mz_now())
+Explained Query:
+  Map ((1 = mz_now())) // { arity: 1 }
+    Constant // { arity: 0 }
+      - ()
 
 EOF
 

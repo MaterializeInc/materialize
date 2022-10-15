@@ -28,40 +28,29 @@ statement ok
 INSERT INTO t3 VALUES (2, 3), (5, 5);
 
 query T multiline
-EXPLAIN SELECT * FROM t1 INNER JOIN t2 ON t2.f2 = t1.f2 INNER JOIN t3 ON t1.f1 = t3.f1 WHERE t1.f1 <= t2.f1 AND t3.f1 > 0;
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 INNER JOIN t2 ON t2.f2 = t1.f2 INNER JOIN t3 ON t1.f1 = t3.f1 WHERE t1.f1 <= t2.f1 AND t3.f1 > 0;
 ----
-Source materialize.public.t1 (u1):
-| Filter (#0 > 0), (#1) IS NOT NULL
-| Project (#0, #1)
+Explained Query:
+  Project (#0..=#2, #1, #0, #5) // { arity: 6 }
+    Filter (#0 <= #2) // { arity: 6 }
+      Join on=(#0 = #4 AND #1 = #3) type=differential // { arity: 6 }
+        implementation
+          %2 » %0[#0] » %1[#1]
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Filter (#0 > 0) AND (#1) IS NOT NULL // { arity: 2 }
+            Get materialize.public.t1 // { arity: 2 }
+        ArrangeBy keys=[[#1]] // { arity: 2 }
+          Filter (#1) IS NOT NULL // { arity: 2 }
+            Get materialize.public.t2 // { arity: 2 }
+        Filter (#0 > 0) // { arity: 2 }
+          Get materialize.public.t3 // { arity: 2 }
 
-Source materialize.public.t2 (u2):
-| Filter (#1) IS NOT NULL
-| Project (#0, #1)
-
-Source materialize.public.t3 (u3):
-| Filter (#0 > 0)
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u1)
-| Filter (#0 > 0), (#1) IS NOT NULL
-| ArrangeBy (#0)
-
-%1 =
-| Get materialize.public.t2 (u2)
-| Filter (#1) IS NOT NULL
-| ArrangeBy (#1)
-
-%2 =
-| Get materialize.public.t3 (u3)
-| Filter (#0 > 0)
-
-%3 =
-| Join %0 %1 %2 (= #0 #4) (= #1 #3)
-| | implementation = Differential %2 %0.(#0) %1.(#1)
-| Filter (#0 <= #2)
-| Project (#0..=#2, #1, #0, #5)
+Source materialize.public.t1
+  filter=((#0 > 0) AND (#1) IS NOT NULL)
+Source materialize.public.t2
+  filter=((#1) IS NOT NULL)
+Source materialize.public.t3
+  filter=((#0 > 0))
 
 EOF
 
@@ -115,191 +104,160 @@ statement ok
 CREATE INDEX fk_lineitem_partsuppkey ON lineitem (l_partkey ASC, l_suppkey ASC);
 
 query T multiline
-EXPLAIN SELECT * FROM lineitem
+EXPLAIN WITH(arity, join_impls) SELECT * FROM lineitem
   JOIN orders ON ( l_orderkey = o_orderkey )
   JOIN customer ON ( c_acctbal >= o_totalprice )
   WHERE l_shipDATE <> o_orderdate
   AND o_orderdate = l_shipDATE - INTERVAL ' 9 MONTHS ';
 ----
-%0 =
-| Get materialize.public.lineitem (u10)
-| ArrangeBy ()
+Explained Query:
+  Project (#0..=#7, #0, #9..=#14) // { arity: 15 }
+    Filter (#5 != #11) AND (#14 >= #10) // { arity: 15 }
+      Join on=(#0 = #8 AND date_to_timestamp(#11) = (#5 - 9 months)) type=differential // { arity: 15 }
+        implementation
+          materialize.public.customer » %0[] » %1[#0, date_to_timestamp(#3)]
+        ArrangeBy keys=[[]] // { arity: 8 }
+          Get materialize.public.lineitem // { arity: 8 }
+        ArrangeBy keys=[[#0, date_to_timestamp(#3)]] // { arity: 4 }
+          Filter (#0) IS NOT NULL // { arity: 4 }
+            Get materialize.public.orders // { arity: 4 }
+        Get materialize.public.customer // { arity: 3 }
 
-%1 =
-| Get materialize.public.orders (u7)
-| Filter (#0) IS NOT NULL
-| ArrangeBy (#0, date_to_timestamp(#3))
-
-%2 =
-| Get materialize.public.customer (u4)
-
-%3 =
-| Join %0 %1 %2 (= #0 #8) (= date_to_timestamp(#11) (#5 - 9 months))
-| | implementation = Differential %2 %0.() %1.(#0, date_to_timestamp(#3))
-| Filter (#5 != #11), (#14 >= #10)
-| Project (#0..=#7, #0, #9..=#14)
+Used Indexes:
+  - materialize.public.pk_customer_custkey
+  - materialize.public.pk_orders_orderkey
+  - materialize.public.pk_lineitem_orderkey_linenumber
 
 EOF
 
 query T multiline
-EXPLAIN SELECT  MIN( o_orderkey  )
+EXPLAIN WITH(arity, join_impls) SELECT  MIN( o_orderkey  )
   FROM lineitem  JOIN orders  ON ( l_extendedprice  = o_totalprice  )
   WHERE l_commitDATE  = '1997-01-25'
   AND o_orderkey  BETWEEN  38  AND  195
   AND o_orderdate  = l_commitDATE  + ' 7 MONTHS '
   AND o_orderkey  = (  SELECT l_orderkey  FROM lineitem  WHERE l_orderkey  =  38  )
 ----
-%0 =
-| Get materialize.public.lineitem (u10)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l1 // { arity: 1 }
+      Map (null) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l1 // { arity: 1 }
+          Constant // { arity: 0 }
+            - ()
+  With
+    cte l1 =
+      Reduce aggregates=[min(#0)] // { arity: 1 }
+        Project (#1) // { arity: 1 }
+          Filter (#1 <= 195) AND (#1 >= 38) AND (1997-08-25 00:00:00 = date_to_timestamp(#4)) // { arity: 6 }
+            Join on=(#0 = #3 AND #1 = #5) type=differential // { arity: 6 }
+              implementation
+                %2 » %1[#0] » %0[#0]
+              ArrangeBy keys=[[#0]] // { arity: 1 }
+                Project (#4) // { arity: 1 }
+                  Filter (#6 = 1997-01-25) // { arity: 8 }
+                    Get materialize.public.lineitem // { arity: 8 }
+              ArrangeBy keys=[[#0]] // { arity: 4 }
+                Get materialize.public.orders // { arity: 4 }
+              Union // { arity: 1 }
+                Project (#0) // { arity: 1 }
+                  Get l0 // { arity: 9 }
+                Map (error("more than one record produced in subquery")) // { arity: 1 }
+                  Project () // { arity: 0 }
+                    Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
+                      Reduce aggregates=[count(true)] // { arity: 1 }
+                        Project () // { arity: 0 }
+                          Get l0 // { arity: 9 }
+    cte l0 =
+      Join on=(#0 = #8) type=indexed_filter // { arity: 9 }
+        ArrangeBy keys=[[#0]] // { arity: 8 }
+          Get materialize.public.lineitem // { arity: 8 }
+        Constant // { arity: 1 }
+          - (38)
 
-%1 =
-| Constant (38)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #8)
-| | implementation = IndexedFilter (#0 = 38)
-
-%3 =
-| Get materialize.public.lineitem (u10)
-| Filter (#6 = 1997-01-25)
-| Project (#4)
-| ArrangeBy (#0)
-
-%4 =
-| Get materialize.public.orders (u7)
-| ArrangeBy (#0)
-
-%5 =
-| Get %2 (l0)
-| Project (#0)
-
-%6 =
-| Get %2 (l0)
-| Project ()
-| Reduce group=()
-| | agg count(true)
-| Filter (err: more than one record produced in subquery), (#0 > 1)
-| Project ()
-| Map (err: more than one record produced in subquery)
-
-%7 =
-| Union %5 %6
-
-%8 = Let l1 =
-| Join %3 %4 %7 (= #0 #3) (= #1 #5)
-| | implementation = Differential %7 %4.(#0) %3.(#0)
-| Filter (#1 <= 195), (#1 >= 38), (1997-08-25 00:00:00 = date_to_timestamp(#4))
-| Project (#1)
-| Reduce group=()
-| | agg min(#0)
-
-%9 =
-| Get %8 (l1)
-| Project ()
-| Negate
-
-%10 =
-| Constant ()
-
-%11 =
-| Union %9 %10
-| Map null
-
-%12 =
-| Union %8 %11
+Used Indexes:
+  - materialize.public.pk_orders_orderkey
+  - materialize.public.fk_lineitem_orderkey
 
 EOF
 
 query T multiline
-EXPLAIN SELECT l_partkey AS col24843 , l_orderkey AS col24844 , l_partkey AS col24845
+EXPLAIN WITH(arity, join_impls) SELECT l_partkey AS col24843 , l_orderkey AS col24844 , l_partkey AS col24845
   FROM lineitem JOIN orders ON ( l_commitDATE = o_orderdate )
   JOIN customer ON ( o_custkey = c_custkey )
   WHERE l_extendedprice = o_totalprice
   AND c_custkey = 134
   AND l_extendedprice = MOD (o_totalprice , 5 ) ;
 ----
-%0 =
-| Get materialize.public.lineitem (u10)
-| Filter (#4 = (#4 % 5))
-| Project (#0, #1, #4, #6)
-| ArrangeBy ()
+Explained Query:
+  Project (#1, #0, #1) // { arity: 3 }
+    Join on=(#2 = #4 AND #3 = #5) type=differential // { arity: 6 }
+      implementation
+        %2 » %0[] » %1[#0, #1]
+      ArrangeBy keys=[[]] // { arity: 4 }
+        Project (#0, #1, #4, #6) // { arity: 4 }
+          Filter (#4 = (#4 % 5)) // { arity: 8 }
+            Get materialize.public.lineitem // { arity: 8 }
+      ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+        Project (#2, #3) // { arity: 2 }
+          Filter (#2 = (#2 % 5)) // { arity: 5 }
+            Join on=(#1 = #4) type=indexed_filter // { arity: 5 }
+              ArrangeBy keys=[[#1]] // { arity: 4 }
+                Get materialize.public.orders // { arity: 4 }
+              Constant // { arity: 1 }
+                - (134)
+      Project () // { arity: 0 }
+        Join on=(#0 = #3) type=indexed_filter // { arity: 4 }
+          ArrangeBy keys=[[#0]] // { arity: 3 }
+            Get materialize.public.customer // { arity: 3 }
+          Constant // { arity: 1 }
+            - (134)
 
-%1 =
-| Get materialize.public.orders (u7)
-| ArrangeBy (#1)
-
-%2 =
-| Constant (134)
-
-%3 =
-| Join %1 %2 (= #1 #4)
-| | implementation = IndexedFilter (#1 = 134)
-| Filter (#2 = (#2 % 5))
-| Project (#2, #3)
-| ArrangeBy (#0, #1)
-
-%4 =
-| Get materialize.public.customer (u4)
-| ArrangeBy (#0)
-
-%5 =
-| Constant (134)
-
-%6 =
-| Join %4 %5 (= #0 #3)
-| | implementation = IndexedFilter (#0 = 134)
-| Project ()
-
-%7 =
-| Join %0 %3 %6 (= #2 #4) (= #3 #5)
-| | implementation = Differential %6 %0.() %3.(#0, #1)
-| Project (#1, #0, #1)
+Used Indexes:
+  - materialize.public.pk_customer_custkey
+  - materialize.public.fk_orders_custkey
+  - materialize.public.pk_lineitem_orderkey_linenumber
 
 EOF
 
 query T multiline
-EXPLAIN SELECT *
+EXPLAIN WITH(arity, join_impls) SELECT *
   FROM lineitem JOIN orders ON ( l_extendedprice = o_totalprice )
   JOIN customer ON ( o_custkey = c_custkey )
   WHERE o_custkey = 229
   AND l_receiptDATE = o_orderdate + INTERVAL ' 6 DAYS '
   AND l_shipDATE = o_orderdate;
 ----
-%0 =
-| Get materialize.public.lineitem (u10)
-| Filter (date_to_timestamp(#7) = (#5 + 6 days))
-| ArrangeBy ()
+Explained Query:
+  Project (#0..=#9, #4, #5, #12..=#14) // { arity: 15 }
+    Join on=(#4 = #10 AND #5 = #11) type=differential // { arity: 15 }
+      implementation
+        %2 » %0[] » %1[#2, #3]
+      ArrangeBy keys=[[]] // { arity: 8 }
+        Filter (date_to_timestamp(#7) = (#5 + 6 days)) // { arity: 8 }
+          Get materialize.public.lineitem // { arity: 8 }
+      ArrangeBy keys=[[#2, #3]] // { arity: 4 }
+        Project (#0..=#3) // { arity: 4 }
+          Join on=(#1 = #4) type=indexed_filter // { arity: 5 }
+            ArrangeBy keys=[[#1]] // { arity: 4 }
+              Get materialize.public.orders // { arity: 4 }
+            Constant // { arity: 1 }
+              - (229)
+      Project (#0..=#2) // { arity: 3 }
+        Join on=(#0 = #3) type=indexed_filter // { arity: 4 }
+          ArrangeBy keys=[[#0]] // { arity: 3 }
+            Get materialize.public.customer // { arity: 3 }
+          Constant // { arity: 1 }
+            - (229)
 
-%1 =
-| Get materialize.public.orders (u7)
-| ArrangeBy (#1)
-
-%2 =
-| Constant (229)
-
-%3 =
-| Join %1 %2 (= #1 #4)
-| | implementation = IndexedFilter (#1 = 229)
-| Project (#0..=#3)
-| ArrangeBy (#2, #3)
-
-%4 =
-| Get materialize.public.customer (u4)
-| ArrangeBy (#0)
-
-%5 =
-| Constant (229)
-
-%6 =
-| Join %4 %5 (= #0 #3)
-| | implementation = IndexedFilter (#0 = 229)
-| Project (#0..=#2)
-
-%7 =
-| Join %0 %3 %6 (= #4 #10) (= #5 #11)
-| | implementation = Differential %6 %0.() %3.(#2, #3)
-| Project (#0..=#9, #4, #5, #12..=#14)
+Used Indexes:
+  - materialize.public.pk_customer_custkey
+  - materialize.public.fk_orders_custkey
+  - materialize.public.pk_lineitem_orderkey_linenumber
 
 EOF
 
@@ -308,11 +266,11 @@ EOF
 #
 
 query T multiline
-EXPLAIN SELECT * FROM t1 AS a1, t1 AS a2
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 AS a1, t1 AS a2
 WHERE a2.f1 + a1.f2 = (SELECT 1)
 AND a2.f1 IS NULL;
 ----
-%0 =
-| Constant
+Explained Query (fast path):
+  Constant
 
 EOF

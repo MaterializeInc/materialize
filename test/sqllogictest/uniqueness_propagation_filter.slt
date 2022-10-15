@@ -26,82 +26,106 @@ CREATE DEFAULT INDEX ON v1
 #
 
 query T multiline
-EXPLAIN SELECT DISTINCT f1, f2 FROM v1 WHERE f1 = f3;
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1, f2 FROM v1 WHERE f1 = f3;
 ----
-%0 =
-| ReadExistingIndex materialize.public.v1_primary_idx
-| Filter (#0 = #2)
-| Project (#0, #1)
+Explained Query (fast path):
+  Project (#0, #1)
+    Filter (#0 = #2)
+      ReadExistingIndex materialize.public.v1_primary_idx
+
+Used Indexes:
+  - materialize.public.v1_primary_idx
 
 EOF
 
 query T multiline
-EXPLAIN SELECT f1, f2 FROM v1 WHERE f1 = f3 GROUP BY f1, f2;
+EXPLAIN WITH(arity, join_impls) SELECT f1, f2 FROM v1 WHERE f1 = f3 GROUP BY f1, f2;
 ----
-%0 =
-| ReadExistingIndex materialize.public.v1_primary_idx
-| Filter (#0 = #2)
-| Project (#0, #1)
+Explained Query (fast path):
+  Project (#0, #1)
+    Filter (#0 = #2)
+      ReadExistingIndex materialize.public.v1_primary_idx
+
+Used Indexes:
+  - materialize.public.v1_primary_idx
 
 EOF
 
 query T multiline
-EXPLAIN SELECT DISTINCT f1, f3 FROM v1 WHERE f1 = f2;
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1, f3 FROM v1 WHERE f1 = f2;
 ----
-%0 =
-| ReadExistingIndex materialize.public.v1_primary_idx
-| Filter (#0 = #1)
-| Project (#0, #2)
+Explained Query (fast path):
+  Project (#0, #2)
+    Filter (#0 = #1)
+      ReadExistingIndex materialize.public.v1_primary_idx
+
+Used Indexes:
+  - materialize.public.v1_primary_idx
 
 EOF
 
 query T multiline
-EXPLAIN SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2;
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2;
 ----
-%0 =
-| ReadExistingIndex materialize.public.v1_primary_idx
-| Filter (#0 = #1)
-| Project (#1, #2)
+Explained Query (fast path):
+  Project (#1, #2)
+    Filter (#0 = #1)
+      ReadExistingIndex materialize.public.v1_primary_idx
+
+Used Indexes:
+  - materialize.public.v1_primary_idx
 
 EOF
 
 query T multiline
-EXPLAIN SELECT DISTINCT f1 FROM v1 WHERE f1 = f2 AND f1 = f3;
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1 FROM v1 WHERE f1 = f2 AND f1 = f3;
 ----
-%0 =
-| ReadExistingIndex materialize.public.v1_primary_idx
-| Filter (#0 = #1), (#0 = #2)
-| Project (#0)
+Explained Query (fast path):
+  Project (#0)
+    Filter (#0 = #1) AND (#0 = #2)
+      ReadExistingIndex materialize.public.v1_primary_idx
+
+Used Indexes:
+  - materialize.public.v1_primary_idx
 
 EOF
 
 query T multiline
-EXPLAIN SELECT DISTINCT f1, f3 FROM v1 WHERE f1 = f2 AND f1 = f3;
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1, f3 FROM v1 WHERE f1 = f2 AND f1 = f3;
 ----
-%0 =
-| ReadExistingIndex materialize.public.v1_primary_idx
-| Filter (#0 = #1), (#0 = #2)
-| Project (#0, #2)
+Explained Query (fast path):
+  Project (#0, #2)
+    Filter (#0 = #1) AND (#0 = #2)
+      ReadExistingIndex materialize.public.v1_primary_idx
+
+Used Indexes:
+  - materialize.public.v1_primary_idx
 
 EOF
 
 query T multiline
-EXPLAIN SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 AND f1 = f3;
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 AND f1 = f3;
 ----
-%0 =
-| ReadExistingIndex materialize.public.v1_primary_idx
-| Filter (#0 = #1), (#0 = #2)
-| Project (#1, #2)
+Explained Query (fast path):
+  Project (#1, #2)
+    Filter (#0 = #1) AND (#0 = #2)
+      ReadExistingIndex materialize.public.v1_primary_idx
+
+Used Indexes:
+  - materialize.public.v1_primary_idx
 
 EOF
 
 query T multiline
-EXPLAIN SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 AND f2 = f3;
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 AND f2 = f3;
 ----
-%0 =
-| ReadExistingIndex materialize.public.v1_primary_idx
-| Filter (#0 = #1), (#1 = #2)
-| Project (#1, #2)
+Explained Query (fast path):
+  Project (#1, #2)
+    Filter (#0 = #1) AND (#1 = #2)
+      ReadExistingIndex materialize.public.v1_primary_idx
+
+Used Indexes:
+  - materialize.public.v1_primary_idx
 
 EOF
 
@@ -110,79 +134,100 @@ EOF
 #
 
 query T multiline
-EXPLAIN SELECT DISTINCT f1 FROM v1 WHERE f1 = f3;
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1 FROM v1 WHERE f1 = f3;
 ----
-%0 =
-| Get materialize.public.v1 (u2)
-| Filter (#0 = #2)
-| Project (#0)
-| Distinct group=(#0)
+Explained Query:
+  Distinct group_by=[#0] // { arity: 1 }
+    Project (#0) // { arity: 1 }
+      Filter (#0 = #2) // { arity: 3 }
+        Get materialize.public.v1 // { arity: 3 }
+
+Used Indexes:
+  - materialize.public.v1_primary_idx
 
 EOF
 
 query T multiline
-EXPLAIN SELECT DISTINCT f1, f2 FROM v1 WHERE f1 + 1 = f3;
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1, f2 FROM v1 WHERE f1 + 1 = f3;
 ----
-%0 =
-| Get materialize.public.v1 (u2)
-| Filter (#2 = (#0 + 1))
-| Project (#0, #1)
-| Distinct group=(#0, #1)
+Explained Query:
+  Distinct group_by=[#0, #1] // { arity: 2 }
+    Project (#0, #1) // { arity: 2 }
+      Filter (#2 = (#0 + 1)) // { arity: 3 }
+        Get materialize.public.v1 // { arity: 3 }
+
+Used Indexes:
+  - materialize.public.v1_primary_idx
 
 EOF
 
 query T multiline
-EXPLAIN SELECT DISTINCT f1, f2 FROM v1 WHERE f1 > f3;
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1, f2 FROM v1 WHERE f1 > f3;
 ----
-%0 =
-| Get materialize.public.v1 (u2)
-| Filter (#0 > #2)
-| Project (#0, #1)
-| Distinct group=(#0, #1)
+Explained Query:
+  Distinct group_by=[#0, #1] // { arity: 2 }
+    Project (#0, #1) // { arity: 2 }
+      Filter (#0 > #2) // { arity: 3 }
+        Get materialize.public.v1 // { arity: 3 }
+
+Used Indexes:
+  - materialize.public.v1_primary_idx
 
 EOF
 
 query T multiline
-EXPLAIN SELECT DISTINCT f1 + 1, f2 FROM v1 WHERE f1 = f3;
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1 + 1, f2 FROM v1 WHERE f1 = f3;
 ----
-%0 =
-| Get materialize.public.v1 (u2)
-| Filter (#0 = #2)
-| Project (#0, #1)
-| Distinct group=((#0 + 1), #1)
+Explained Query:
+  Distinct group_by=[(#0 + 1), #1] // { arity: 2 }
+    Project (#0, #1) // { arity: 2 }
+      Filter (#0 = #2) // { arity: 3 }
+        Get materialize.public.v1 // { arity: 3 }
+
+Used Indexes:
+  - materialize.public.v1_primary_idx
 
 EOF
 
 query T multiline
-EXPLAIN SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 OR f1 = f3;
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 OR f1 = f3;
 ----
-%0 =
-| Get materialize.public.v1 (u2)
-| Filter ((#0 = #1) OR (#0 = #2))
-| Project (#1, #2)
-| Distinct group=(#0, #1)
+Explained Query:
+  Distinct group_by=[#0, #1] // { arity: 2 }
+    Project (#1, #2) // { arity: 2 }
+      Filter ((#0 = #1) OR (#0 = #2)) // { arity: 3 }
+        Get materialize.public.v1 // { arity: 3 }
+
+Used Indexes:
+  - materialize.public.v1_primary_idx
 
 EOF
 
 query T multiline
-EXPLAIN SELECT DISTINCT f1 + 1 , f2 FROM v1 WHERE f1 + 1 = f3;
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1 + 1 , f2 FROM v1 WHERE f1 + 1 = f3;
 ----
-%0 =
-| Get materialize.public.v1 (u2)
-| Filter (#2 = (#0 + 1))
-| Project (#0, #1)
-| Distinct group=((#0 + 1), #1)
+Explained Query:
+  Distinct group_by=[(#0 + 1), #1] // { arity: 2 }
+    Project (#0, #1) // { arity: 2 }
+      Filter (#2 = (#0 + 1)) // { arity: 3 }
+        Get materialize.public.v1 // { arity: 3 }
+
+Used Indexes:
+  - materialize.public.v1_primary_idx
 
 EOF
 
 query T multiline
-EXPLAIN SELECT DISTINCT f1 FROM v1 WHERE f1 = f3;
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1 FROM v1 WHERE f1 = f3;
 ----
-%0 =
-| Get materialize.public.v1 (u2)
-| Filter (#0 = #2)
-| Project (#0)
-| Distinct group=(#0)
+Explained Query:
+  Distinct group_by=[#0] // { arity: 1 }
+    Project (#0) // { arity: 1 }
+      Filter (#0 = #2) // { arity: 3 }
+        Get materialize.public.v1 // { arity: 3 }
+
+Used Indexes:
+  - materialize.public.v1_primary_idx
 
 EOF
 
@@ -194,80 +239,73 @@ statement ok
 CREATE TABLE t2 (f1 INTEGER, f2 INTEGER, f3 INTEGER, f4 INTEGER, PRIMARY KEY (f1, f2));
 
 query T multiline
-EXPLAIN SELECT DISTINCT f1, f3 FROM t2 WHERE f2 = f3;
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1, f3 FROM t2 WHERE f2 = f3;
 ----
-Source materialize.public.t2 (u4):
-| Map dummy
-| Filter (#1 = #2)
-| Project (#0..=#2, #4)
+Explained Query:
+  Project (#0, #2) // { arity: 2 }
+    Filter (#1 = #2) // { arity: 4 }
+      Get materialize.public.t2 // { arity: 4 }
 
-Query:
-%0 =
-| Get materialize.public.t2 (u4)
-| Filter (#1 = #2)
-| Project (#0, #2)
+Source materialize.public.t2
+  project=(#0..=#2, #4)
+  filter=((#1 = #2))
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN SELECT DISTINCT f3 FROM t2 WHERE f1 = f2 AND f2 = f3;
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f3 FROM t2 WHERE f1 = f2 AND f2 = f3;
 ----
-Source materialize.public.t2 (u4):
-| Map dummy
-| Filter (#0 = #1), (#1 = #2)
-| Project (#0..=#2, #4)
+Explained Query:
+  Project (#2) // { arity: 1 }
+    Filter (#0 = #1) AND (#1 = #2) // { arity: 4 }
+      Get materialize.public.t2 // { arity: 4 }
 
-Query:
-%0 =
-| Get materialize.public.t2 (u4)
-| Filter (#0 = #1), (#1 = #2)
-| Project (#2)
+Source materialize.public.t2
+  project=(#0..=#2, #4)
+  filter=((#0 = #1) AND (#1 = #2))
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN SELECT DISTINCT f2 FROM t2 WHERE f1 = f3 AND f3 = f2;
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f2 FROM t2 WHERE f1 = f3 AND f3 = f2;
 ----
-Source materialize.public.t2 (u4):
-| Map dummy
-| Filter (#0 = #2), (#1 = #2)
-| Project (#0..=#2, #4)
+Explained Query:
+  Project (#1) // { arity: 1 }
+    Filter (#0 = #2) AND (#1 = #2) // { arity: 4 }
+      Get materialize.public.t2 // { arity: 4 }
 
-Query:
-%0 =
-| Get materialize.public.t2 (u4)
-| Filter (#0 = #2), (#1 = #2)
-| Project (#1)
+Source materialize.public.t2
+  project=(#0..=#2, #4)
+  filter=((#0 = #2) AND (#1 = #2))
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN SELECT DISTINCT f1, f2, f3, f4 FROM t2 WHERE f1 = f3 AND f2 = f4;
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1, f2, f3, f4 FROM t2 WHERE f1 = f3 AND f2 = f4;
 ----
-Source materialize.public.t2 (u4):
-| Filter (#0 = #2), (#1 = #3)
-| Project (#0..=#3)
+Explained Query:
+  Filter (#0 = #2) AND (#1 = #3) // { arity: 4 }
+    Get materialize.public.t2 // { arity: 4 }
 
-Query:
-%0 =
-| Get materialize.public.t2 (u4)
-| Filter (#0 = #2), (#1 = #3)
+Source materialize.public.t2
+  filter=((#0 = #2) AND (#1 = #3))
 
 EOF
 
 
 query T multiline
-EXPLAIN SELECT DISTINCT f3, f4 FROM t2 WHERE f1 = f3 AND f2 = f4;
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f3, f4 FROM t2 WHERE f1 = f3 AND f2 = f4;
 ----
-Source materialize.public.t2 (u4):
-| Filter (#0 = #2), (#1 = #3)
-| Project (#0..=#3)
+Explained Query:
+  Project (#2, #3) // { arity: 2 }
+    Filter (#0 = #2) AND (#1 = #3) // { arity: 4 }
+      Get materialize.public.t2 // { arity: 4 }
 
-Query:
-%0 =
-| Get materialize.public.t2 (u4)
-| Filter (#0 = #2), (#1 = #3)
-| Project (#2, #3)
+Source materialize.public.t2
+  filter=((#0 = #2) AND (#1 = #3))
 
 EOF
 
@@ -276,69 +314,65 @@ EOF
 #
 
 query T multiline
-EXPLAIN SELECT DISTINCT f2, f3 FROM t2 WHERE f3 = f4;
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f2, f3 FROM t2 WHERE f3 = f4;
 ----
-Source materialize.public.t2 (u4):
-| Map dummy
-| Filter (#2 = #3)
-| Project (#4, #1..=#3)
+Explained Query:
+  Distinct group_by=[#0, #1] // { arity: 2 }
+    Project (#1, #2) // { arity: 2 }
+      Filter (#2 = #3) // { arity: 4 }
+        Get materialize.public.t2 // { arity: 4 }
 
-Query:
-%0 =
-| Get materialize.public.t2 (u4)
-| Filter (#2 = #3)
-| Project (#1, #2)
-| Distinct group=(#0, #1)
+Source materialize.public.t2
+  project=(#4, #1..=#3)
+  filter=((#2 = #3))
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN SELECT DISTINCT f2 FROM t2 WHERE f1 = f3;
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f2 FROM t2 WHERE f1 = f3;
 ----
-Source materialize.public.t2 (u4):
-| Map dummy
-| Filter (#0 = #2)
-| Project (#0..=#2, #4)
+Explained Query:
+  Distinct group_by=[#0] // { arity: 1 }
+    Project (#1) // { arity: 1 }
+      Filter (#0 = #2) // { arity: 4 }
+        Get materialize.public.t2 // { arity: 4 }
 
-Query:
-%0 =
-| Get materialize.public.t2 (u4)
-| Filter (#0 = #2)
-| Project (#1)
-| Distinct group=(#0)
+Source materialize.public.t2
+  project=(#0..=#2, #4)
+  filter=((#0 = #2))
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN SELECT DISTINCT f3, f4 FROM t2 WHERE f1 = f3;
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f3, f4 FROM t2 WHERE f1 = f3;
 ----
-Source materialize.public.t2 (u4):
-| Map dummy
-| Filter (#0 = #2)
-| Project (#0, #4, #2, #3)
+Explained Query:
+  Distinct group_by=[#0, #1] // { arity: 2 }
+    Project (#2, #3) // { arity: 2 }
+      Filter (#0 = #2) // { arity: 4 }
+        Get materialize.public.t2 // { arity: 4 }
 
-Query:
-%0 =
-| Get materialize.public.t2 (u4)
-| Filter (#0 = #2)
-| Project (#2, #3)
-| Distinct group=(#0, #1)
+Source materialize.public.t2
+  project=(#0, #4, #2, #3)
+  filter=((#0 = #2))
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN SELECT DISTINCT f3 FROM t2 WHERE f1 = f2;
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f3 FROM t2 WHERE f1 = f2;
 ----
-Source materialize.public.t2 (u4):
-| Map dummy
-| Filter (#0 = #1)
-| Project (#0..=#2, #4)
+Explained Query:
+  Distinct group_by=[#0] // { arity: 1 }
+    Project (#2) // { arity: 1 }
+      Filter (#0 = #1) // { arity: 4 }
+        Get materialize.public.t2 // { arity: 4 }
 
-Query:
-%0 =
-| Get materialize.public.t2 (u4)
-| Filter (#0 = #1)
-| Project (#2)
-| Distinct group=(#0)
+Source materialize.public.t2
+  project=(#0..=#2, #4)
+  filter=((#0 = #1))
+  map=(dummy)
 
 EOF

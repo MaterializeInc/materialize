@@ -2596,11 +2596,14 @@ statement ok
 INSERT INTO t3 VALUES (11, 12, 13, 14, 15, 16, 17, 18, 11, 12, list[82, 83])
 
 query T multiline
-EXPLAIN SELECT LIST[f1, f2, f3, f4, f5][3] from m3
+EXPLAIN WITH(arity, join_impls) SELECT LIST[f1, f2, f3, f4, f5][3] from m3
 ----
-%0 =
-| ReadExistingIndex materialize.public.m3_primary_idx
-| Project (#2)
+Explained Query (fast path):
+  Project (#2)
+    ReadExistingIndex materialize.public.m3_primary_idx
+
+Used Indexes:
+  - materialize.public.m3_primary_idx
 
 EOF
 
@@ -2613,11 +2616,14 @@ SELECT LIST[f1, f2, f3, f4, f5][3] from m3
 # Reducing multidimensional ListIndex when all indexes are literals
 
 query T multiline
-EXPLAIN SELECT LIST[[f1, f2], [f3, f4]][2][1] from m3
+EXPLAIN WITH(arity, join_impls) SELECT LIST[[f1, f2], [f3, f4]][2][1] from m3
 ----
-%0 =
-| ReadExistingIndex materialize.public.m3_primary_idx
-| Project (#2)
+Explained Query (fast path):
+  Project (#2)
+    ReadExistingIndex materialize.public.m3_primary_idx
+
+Used Indexes:
+  - materialize.public.m3_primary_idx
 
 EOF
 
@@ -2628,11 +2634,14 @@ SELECT LIST[[f1, f2], [f3, f4]][2][1] from m3
 13
 
 query T multiline
-EXPLAIN SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][1][2] from m3
+EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][1][2] from m3
 ----
-%0 =
-| ReadExistingIndex materialize.public.m3_primary_idx
-| Project (#5)
+Explained Query (fast path):
+  Project (#5)
+    ReadExistingIndex materialize.public.m3_primary_idx
+
+Used Indexes:
+  - materialize.public.m3_primary_idx
 
 EOF
 
@@ -2645,12 +2654,15 @@ SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][1][2] from m3
 # Reducing multidimensional ListIndex when some of the indexes are not literals, and therefore can't be removed
 
 query T multiline
-EXPLAIN SELECT LIST[[[f1, f2], [f7, f8, f3, f4]], [[f5, f6], [f7, f8]]] [n][m][n] from m3
+EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f7, f8, f3, f4]], [[f5, f6], [f7, f8]]] [n][m][n] from m3
 ----
-%0 =
-| ReadExistingIndex materialize.public.m3_primary_idx
-| Map list_index(list_create(list_create(list_create(#0, #1), list_create(#6, #7, #2, #3)), list_create(list_create(#4, #5), list_create(#6, #7))), integer_to_bigint(#8), integer_to_bigint(#9), integer_to_bigint(#8))
-| Project (#11)
+Explained Query (fast path):
+  Project (#11)
+    Map (list_index(list[list[list[#0, #1], list[#6, #7, #2, #3]], list[list[#4, #5], list[#6, #7]]], integer_to_bigint(#8), integer_to_bigint(#9), integer_to_bigint(#8)))
+      ReadExistingIndex materialize.public.m3_primary_idx
+
+Used Indexes:
+  - materialize.public.m3_primary_idx
 
 EOF
 
@@ -2661,12 +2673,15 @@ SELECT LIST[[[f1, f2], [f7, f8, f3, f4]], [[f5, f6], [f7, f8]]] [n][m][n] from m
 NULL
 
 query T multiline
-EXPLAIN SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][m][1] from m3
+EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][m][1] from m3
 ----
-%0 =
-| ReadExistingIndex materialize.public.m3_primary_idx
-| Map list_index(list_create(list_create(#0, #2), list_create(#4, #6)), integer_to_bigint(#8), integer_to_bigint(#9))
-| Project (#11)
+Explained Query (fast path):
+  Project (#11)
+    Map (list_index(list[list[#0, #2], list[#4, #6]], integer_to_bigint(#8), integer_to_bigint(#9)))
+      ReadExistingIndex materialize.public.m3_primary_idx
+
+Used Indexes:
+  - materialize.public.m3_primary_idx
 
 EOF
 
@@ -2677,12 +2692,15 @@ SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][m][1] from m3
 NULL
 
 query T multiline
-EXPLAIN SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][2][m] from m3
+EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][2][m] from m3
 ----
-%0 =
-| ReadExistingIndex materialize.public.m3_primary_idx
-| Map list_index(list_create(list_create(#2, #3), list_create(#6, #7)), integer_to_bigint(#8), integer_to_bigint(#9))
-| Project (#11)
+Explained Query (fast path):
+  Project (#11)
+    Map (list_index(list[list[#2, #3], list[#6, #7]], integer_to_bigint(#8), integer_to_bigint(#9)))
+      ReadExistingIndex materialize.public.m3_primary_idx
+
+Used Indexes:
+  - materialize.public.m3_primary_idx
 
 EOF
 
@@ -2693,12 +2711,15 @@ SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][2][m] from m3
 NULL
 
 query T multiline
-EXPLAIN SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [1][n][m] from m3
+EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [1][n][m] from m3
 ----
-%0 =
-| ReadExistingIndex materialize.public.m3_primary_idx
-| Map list_index(list_create(list_create(#0, #1), list_create(#2, #3)), integer_to_bigint(#8), integer_to_bigint(#9))
-| Project (#11)
+Explained Query (fast path):
+  Project (#11)
+    Map (list_index(list[list[#0, #1], list[#2, #3]], integer_to_bigint(#8), integer_to_bigint(#9)))
+      ReadExistingIndex materialize.public.m3_primary_idx
+
+Used Indexes:
+  - materialize.public.m3_primary_idx
 
 EOF
 
@@ -2709,12 +2730,15 @@ SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [1][n][m] from m3
 NULL
 
 query T multiline
-EXPLAIN SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][1][n] from m3
+EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][1][n] from m3
 ----
-%0 =
-| ReadExistingIndex materialize.public.m3_primary_idx
-| Map list_index(list_create(#4, #5), integer_to_bigint(#8))
-| Project (#11)
+Explained Query (fast path):
+  Project (#11)
+    Map (list_index(list[#4, #5], integer_to_bigint(#8)))
+      ReadExistingIndex materialize.public.m3_primary_idx
+
+Used Indexes:
+  - materialize.public.m3_primary_idx
 
 EOF
 
@@ -2725,12 +2749,15 @@ SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][1][n] from m3
 NULL
 
 query T multiline
-EXPLAIN SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][n][2] from m3
+EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][n][2] from m3
 ----
-%0 =
-| ReadExistingIndex materialize.public.m3_primary_idx
-| Map list_index(list_create(#5, #7), integer_to_bigint(#8))
-| Project (#11)
+Explained Query (fast path):
+  Project (#11)
+    Map (list_index(list[#5, #7], integer_to_bigint(#8)))
+      ReadExistingIndex materialize.public.m3_primary_idx
+
+Used Indexes:
+  - materialize.public.m3_primary_idx
 
 EOF
 
@@ -2741,12 +2768,15 @@ SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][n][2] from m3
 NULL
 
 query T multiline
-EXPLAIN SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][2][2] from m3
+EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][2][2] from m3
 ----
-%0 =
-| ReadExistingIndex materialize.public.m3_primary_idx
-| Map list_index(list_create(#3, #7), integer_to_bigint(#8))
-| Project (#11)
+Explained Query (fast path):
+  Project (#11)
+    Map (list_index(list[#3, #7], integer_to_bigint(#8)))
+      ReadExistingIndex materialize.public.m3_primary_idx
+
+Used Indexes:
+  - materialize.public.m3_primary_idx
 
 EOF
 
@@ -2759,32 +2789,41 @@ NULL
 # Reducing ListIndex when a literal index is out of bounds
 
 query T multiline
-EXPLAIN SELECT LIST[f1, f2, f3, f4, f5][6] from m3
+EXPLAIN WITH(arity, join_impls) SELECT LIST[f1, f2, f3, f4, f5][6] from m3
 ----
-%0 =
-| ReadExistingIndex materialize.public.m3_primary_idx
-| Map null
-| Project (#11)
+Explained Query (fast path):
+  Project (#11)
+    Map (null)
+      ReadExistingIndex materialize.public.m3_primary_idx
+
+Used Indexes:
+  - materialize.public.m3_primary_idx
 
 EOF
 
 query T multiline
-EXPLAIN SELECT LIST[f1, f2, f3, f4, f5][0] from m3
+EXPLAIN WITH(arity, join_impls) SELECT LIST[f1, f2, f3, f4, f5][0] from m3
 ----
-%0 =
-| ReadExistingIndex materialize.public.m3_primary_idx
-| Map null
-| Project (#11)
+Explained Query (fast path):
+  Project (#11)
+    Map (null)
+      ReadExistingIndex materialize.public.m3_primary_idx
+
+Used Indexes:
+  - materialize.public.m3_primary_idx
 
 EOF
 
 query T multiline
-EXPLAIN SELECT LIST[f1, f2, f3, f4, f5][-1] from m3
+EXPLAIN WITH(arity, join_impls) SELECT LIST[f1, f2, f3, f4, f5][-1] from m3
 ----
-%0 =
-| ReadExistingIndex materialize.public.m3_primary_idx
-| Map null
-| Project (#11)
+Explained Query (fast path):
+  Project (#11)
+    Map (null)
+      ReadExistingIndex materialize.public.m3_primary_idx
+
+Used Indexes:
+  - materialize.public.m3_primary_idx
 
 EOF
 
@@ -2798,12 +2837,15 @@ NULL
 # Also, one of the indexes is `1+1`, which must be evaluated to make it a literal, and then the reduction can take place.
 
 query T multiline
-EXPLAIN SELECT LIST[[[f1, f2], [f3, f4]], [l, [f7, f8]]] [1+1][-1][2] from m3;
+EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [l, [f7, f8]]] [1+1][-1][2] from m3;
 ----
-%0 =
-| ReadExistingIndex materialize.public.m3_primary_idx
-| Map null
-| Project (#11)
+Explained Query (fast path):
+  Project (#11)
+    Map (null)
+      ReadExistingIndex materialize.public.m3_primary_idx
+
+Used Indexes:
+  - materialize.public.m3_primary_idx
 
 EOF
 
@@ -2811,12 +2853,15 @@ EOF
 # but has a NULL instead of a ListCreate.
 
 query T multiline
-EXPLAIN SELECT LIST[[[f1, f2], [f3, f4]], [NULL, [f7, f8]]] [1+1][1][2] from m3
+EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [NULL, [f7, f8]]] [1+1][1][2] from m3
 ----
-%0 =
-| ReadExistingIndex materialize.public.m3_primary_idx
-| Map null
-| Project (#11)
+Explained Query (fast path):
+  Project (#11)
+    Map (null)
+      ReadExistingIndex materialize.public.m3_primary_idx
+
+Used Indexes:
+  - materialize.public.m3_primary_idx
 
 EOF
 
@@ -2824,12 +2869,15 @@ EOF
 # but has a column reference instead of a ListCreate.
 
 query T multiline
-EXPLAIN SELECT LIST[[[f1, f2], [f3, f4]], [l, [f7, f8]]] [1+1][1][2] from m3
+EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [l, [f7, f8]]] [1+1][1][2] from m3
 ----
-%0 =
-| ReadExistingIndex materialize.public.m3_primary_idx
-| Map list_index(#10, 2)
-| Project (#11)
+Explained Query (fast path):
+  Project (#11)
+    Map (list_index(#10, 2))
+      ReadExistingIndex materialize.public.m3_primary_idx
+
+Used Indexes:
+  - materialize.public.m3_primary_idx
 
 EOF
 
@@ -2843,16 +2891,19 @@ SELECT LIST[[[f1, f2], [f3, f4]], [l, [f7, f8]]] [1+1][1][2] from m3
 # already took place.
 
 query T multiline
-EXPLAIN SELECT row_number() over () from (select f1 from m3 limit 1)
+EXPLAIN WITH(arity, join_impls) SELECT row_number() over () from (select f1 from m3 limit 1)
 ----
-%0 =
-| Get materialize.public.m3 (u28)
-| Project (#0)
-| TopK group=() order=() limit=1 offset=0
-| Map list_create(record_create(1, record_create(#0)))
-| Project (#1)
-| FlatMap unnest_list(#0)
-| Map record_get[0](#1)
-| Project (#2)
+Explained Query:
+  Project (#2) // { arity: 1 }
+    Map (record_get[0](#1)) // { arity: 3 }
+      FlatMap unnest_list(#0) // { arity: 2 }
+        Project (#1) // { arity: 1 }
+          Map (list[row(1, row(#0))]) // { arity: 2 }
+            TopK limit=1 monotonic=false // { arity: 1 }
+              Project (#0) // { arity: 1 }
+                Get materialize.public.m3 // { arity: 11 }
+
+Used Indexes:
+  - materialize.public.m3_primary_idx
 
 EOF

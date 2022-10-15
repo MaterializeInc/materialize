@@ -63,93 +63,77 @@ TX  Dallas
 mode standard
 
 query T multiline
-EXPLAIN PLAN FOR SELECT state, name FROM
+EXPLAIN WITH(arity, join_impls) SELECT state, name FROM
     (SELECT DISTINCT state FROM cities) grp,
     LATERAL (SELECT name, pop FROM cities WHERE state = grp.state ORDER BY pop DESC LIMIT 3)
 ----
-Source materialize.public.cities (u1):
-| Project (#0..=#2)
-
-Query:
-%0 =
-| Get materialize.public.cities (u1)
-| TopK group=(#1) order=(#2 desc nulls_first) limit=3 offset=0
-| Project (#1, #0)
+Explained Query:
+  Project (#1, #0) // { arity: 2 }
+    TopK group_by=[#1] order_by=[#2 desc nulls_first] limit=3 monotonic=false // { arity: 3 }
+      Get materialize.public.cities // { arity: 3 }
 
 EOF
 
 query T multiline
-EXPLAIN PLAN FOR SELECT state, name FROM
+EXPLAIN WITH(arity, join_impls) SELECT state, name FROM
     (SELECT DISTINCT state FROM cities) grp
     LEFT JOIN LATERAL (SELECT name, pop FROM cities  where cities.state = grp.state ORDER BY pop DESC LIMIT 3) ON true
 ----
-Source materialize.public.cities (u1):
-| Project (#0..=#2)
-
-Query:
-%0 = Let l0 =
-| Get materialize.public.cities (u1)
-| TopK group=(#1) order=(#2 desc nulls_first) limit=3 offset=0
-| Project (#0, #1)
-
-%1 =
-| Get %0 (l0)
-| Project (#1, #0)
-
-%2 =
-| Get %0 (l0)
-| Project (#1)
-| Distinct group=(#0)
-| Negate
-
-%3 =
-| Get materialize.public.cities (u1)
-| Project (#1)
-| Distinct group=(#0)
-
-%4 =
-| Union %2 %3
-| Map null
-
-%5 =
-| Union %1 %4
+Explained Query:
+  Return // { arity: 2 }
+    Union // { arity: 2 }
+      Project (#1, #0) // { arity: 2 }
+        Get l0 // { arity: 2 }
+      Map (null) // { arity: 2 }
+        Union // { arity: 1 }
+          Negate // { arity: 1 }
+            Distinct group_by=[#0] // { arity: 1 }
+              Project (#1) // { arity: 1 }
+                Get l0 // { arity: 2 }
+          Distinct group_by=[#0] // { arity: 1 }
+            Project (#1) // { arity: 1 }
+              Get materialize.public.cities // { arity: 3 }
+  With
+    cte l0 =
+      Project (#0, #1) // { arity: 2 }
+        TopK group_by=[#1] order_by=[#2 desc nulls_first] limit=3 monotonic=false // { arity: 3 }
+          Get materialize.public.cities // { arity: 3 }
 
 EOF
 
 # Test that LIMIT 0 is optimized out
 query T multiline
-EXPLAIN PLAN FOR SELECT state, COUNT(*) FROM (
+EXPLAIN WITH(arity, join_impls) SELECT state, COUNT(*) FROM (
     SELECT state, name FROM
         (SELECT DISTINCT state FROM cities) grp,
         LATERAL (SELECT name, pop FROM cities WHERE state = grp.state ORDER BY pop DESC LIMIT 0)
     )
     GROUP BY state
 ----
-%0 =
-| Constant
+Explained Query (fast path):
+  Constant
 
 EOF
 
 
 # Test that LIMIT 1 results in a unique key
 query T multiline
-EXPLAIN PLAN FOR SELECT state, COUNT(*) FROM (
+EXPLAIN WITH(arity, join_impls) SELECT state, COUNT(*) FROM (
     SELECT state, name FROM
         (SELECT DISTINCT state FROM cities) grp,
         LATERAL (SELECT name, pop FROM cities WHERE state = grp.state ORDER BY pop DESC LIMIT 1)
     )
     GROUP BY state
 ----
-Source materialize.public.cities (u1):
-| Map dummy
-| Project (#3, #1, #2)
+Explained Query:
+  Project (#0, #2) // { arity: 2 }
+    Map (1) // { arity: 3 }
+      TopK group_by=[#0] order_by=[#1 desc nulls_first] limit=1 monotonic=false // { arity: 2 }
+        Project (#1, #2) // { arity: 2 }
+          Get materialize.public.cities // { arity: 3 }
 
-Query:
-%0 =
-| Get materialize.public.cities (u1)
-| Project (#1, #2)
-| TopK group=(#0) order=(#1 desc nulls_first) limit=1 offset=0
-| Map 1
-| Project (#0, #2)
+Source materialize.public.cities
+  project=(#3, #1, #2)
+  map=(dummy)
 
 EOF

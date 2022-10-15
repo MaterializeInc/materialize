@@ -27,24 +27,22 @@ CREATE TABLE ts_table (col_null TIMESTAMP, col_not_null TIMESTAMP NOT NULL);
 #
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT 1;
+EXPLAIN WITH(types, no_fast_path) SELECT 1;
 ----
-%0 =
-| Constant (1)
-| | types = (integer)
-| | keys = (())
+Explained Query:
+  Constant // { types: "(integer)" }
+    - (1)
 
 EOF
 
 # NULL literal is NULL-able
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT NULL;
+EXPLAIN WITH(types, no_fast_path) SELECT NULL;
 ----
-%0 =
-| Constant (null)
-| | types = (text?)
-| | keys = (())
+Explained Query:
+  Constant // { types: "(text?)" }
+    - (null)
 
 EOF
 
@@ -53,23 +51,23 @@ EOF
 #
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT * FROM (VALUES(1), (2));
+EXPLAIN WITH(types, no_fast_path) SELECT * FROM (VALUES(1), (2));
 ----
-%0 =
-| Constant (1) (2)
-| | types = (integer)
-| | keys = ((#0))
+Explained Query:
+  Constant // { types: "(integer)" }
+    - (1)
+    - (2)
 
 EOF
 
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT * FROM (VALUES(1), (NULL));
+EXPLAIN WITH(types, no_fast_path) SELECT * FROM (VALUES(1), (NULL));
 ----
-%0 =
-| Constant (null) (1)
-| | types = (integer?)
-| | keys = ((#0))
+Explained Query:
+  Constant // { types: "(integer?)" }
+    - (null)
+    - (1)
 
 EOF
 
@@ -79,22 +77,12 @@ EOF
 #
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT CAST(col_null AS BIGINT), CAST(col_not_null AS BIGINT) FROM int_table;
+EXPLAIN WITH(types, no_fast_path) SELECT CAST(col_null AS BIGINT), CAST(col_not_null AS BIGINT) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Map integer_to_bigint(#0), integer_to_bigint(#1)
-| | types = (integer?, integer, bigint?, bigint)
-| | keys = ()
-| Project (#2, #3)
-| | types = (bigint?, bigint)
-| | keys = ()
+Explained Query:
+  Project (#2, #3) // { types: "(bigint?, bigint)" }
+    Map (integer_to_bigint(#0), integer_to_bigint(#1)) // { types: "(integer?, integer, bigint?, bigint)" }
+      Get materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -103,65 +91,44 @@ EOF
 #
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT col_null IS NULL, col_null IS NOT NULL FROM int_table;
+EXPLAIN WITH(types, no_fast_path) SELECT col_null IS NULL, col_null IS NOT NULL FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#0, #2)
+Explained Query:
+  Project (#2, #3) // { types: "(boolean, boolean)" }
+    Map ((#0) IS NULL, NOT(#2)) // { types: "(integer?, integer, boolean, boolean)" }
+      Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Query:
-%0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Map (#0) IS NULL, NOT(#2)
-| | types = (integer?, integer, boolean, boolean)
-| | keys = ()
-| Project (#2, #3)
-| | types = (boolean, boolean)
-| | keys = ()
+Source materialize.public.int_table
+  project=(#0, #2)
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT col_null IS TRUE, col_null IS NOT TRUE FROM bool_table;
+EXPLAIN WITH(types, no_fast_path) SELECT col_null IS TRUE, col_null IS NOT TRUE FROM bool_table;
 ----
-Source materialize.public.bool_table (u2):
-| Map dummy
-| Project (#0, #2)
+Explained Query:
+  Project (#2, #3) // { types: "(boolean, boolean)" }
+    Map ((#0) IS TRUE, NOT(#2)) // { types: "(boolean?, boolean, boolean, boolean)" }
+      Get materialize.public.bool_table // { types: "(boolean?, boolean)" }
 
-Query:
-%0 =
-| Get materialize.public.bool_table (u2)
-| | types = (boolean?, boolean)
-| | keys = ()
-| Map (#0) IS TRUE, NOT(#2)
-| | types = (boolean?, boolean, boolean, boolean)
-| | keys = ()
-| Project (#2, #3)
-| | types = (boolean, boolean)
-| | keys = ()
+Source materialize.public.bool_table
+  project=(#0, #2)
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT col_null IS UNKNOWN, col_null IS NOT UNKNOWN FROM bool_table;
+EXPLAIN WITH(types, no_fast_path) SELECT col_null IS UNKNOWN, col_null IS NOT UNKNOWN FROM bool_table;
 ----
-Source materialize.public.bool_table (u2):
-| Map dummy
-| Project (#0, #2)
+Explained Query:
+  Project (#2, #3) // { types: "(boolean, boolean)" }
+    Map ((#0) IS NULL, NOT(#2)) // { types: "(boolean?, boolean, boolean, boolean)" }
+      Get materialize.public.bool_table // { types: "(boolean?, boolean)" }
 
-Query:
-%0 =
-| Get materialize.public.bool_table (u2)
-| | types = (boolean?, boolean)
-| | keys = ()
-| Map (#0) IS NULL, NOT(#2)
-| | types = (boolean?, boolean, boolean, boolean)
-| | keys = ()
-| Project (#2, #3)
-| | types = (boolean, boolean)
-| | keys = ()
+Source materialize.public.bool_table
+  project=(#0, #2)
+  map=(dummy)
 
 EOF
 
@@ -170,23 +137,16 @@ EOF
 #
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT col_not_null + col_not_null , col_not_null + 1 , col_not_null % col_not_null , col_not_null % 2 FROM int_table;
+EXPLAIN WITH(types, no_fast_path) SELECT col_not_null + col_not_null , col_not_null + 1 , col_not_null % col_not_null , col_not_null % 2 FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Project (#2..=#5) // { types: "(integer, integer, integer, integer)" }
+    Map ((#1 + #1), (#1 + 1), (#1 % #1), (#1 % 2)) // { types: "(integer?, integer, integer, integer, integer, integer)" }
+      Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Query:
-%0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Map (#1 + #1), (#1 + 1), (#1 % #1), (#1 % 2)
-| | types = (integer?, integer, integer, integer, integer, integer)
-| | keys = ()
-| Project (#2..=#5)
-| | types = (integer, integer, integer, integer)
-| | keys = ()
+Source materialize.public.int_table
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
 
@@ -196,59 +156,31 @@ EOF
 #
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT GREATEST(col_not_null), GREATEST(col_not_null, col_not_null), GREATEST(col_not_null, col_null), GREATEST(col_null, col_null) FROM int_table;
+EXPLAIN WITH(types, no_fast_path) SELECT GREATEST(col_not_null), GREATEST(col_not_null, col_not_null), GREATEST(col_not_null, col_null), GREATEST(col_null, col_null) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Map greatest(#1), greatest(#1, #1), greatest(#1, #0), greatest(#0, #0)
-| | types = (integer?, integer, integer, integer, integer?, integer?)
-| | keys = ()
-| Project (#2..=#5)
-| | types = (integer, integer, integer?, integer?)
-| | keys = ()
+Explained Query:
+  Project (#2..=#5) // { types: "(integer, integer, integer?, integer?)" }
+    Map (greatest(#1), greatest(#1, #1), greatest(#1, #0), greatest(#0, #0)) // { types: "(integer?, integer, integer, integer, integer?, integer?)" }
+      Get materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT LEAST(col_not_null), LEAST(col_not_null, col_not_null), LEAST(col_not_null, col_null), LEAST(col_null, col_null) FROM int_table;
+EXPLAIN WITH(types, no_fast_path) SELECT LEAST(col_not_null), LEAST(col_not_null, col_not_null), LEAST(col_not_null, col_null), LEAST(col_null, col_null) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Map least(#1), least(#1, #1), least(#1, #0), least(#0, #0)
-| | types = (integer?, integer, integer, integer, integer?, integer?)
-| | keys = ()
-| Project (#2..=#5)
-| | types = (integer, integer, integer?, integer?)
-| | keys = ()
+Explained Query:
+  Project (#2..=#5) // { types: "(integer, integer, integer?, integer?)" }
+    Map (least(#1), least(#1, #1), least(#1, #0), least(#0, #0)) // { types: "(integer?, integer, integer, integer, integer?, integer?)" }
+      Get materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT COALESCE(col_not_null), COALESCE(col_not_null, col_not_null), COALESCE(col_not_null, col_null), COALESCE(col_null, col_null) FROM int_table;
+EXPLAIN WITH(types, no_fast_path) SELECT COALESCE(col_not_null), COALESCE(col_not_null, col_not_null), COALESCE(col_not_null, col_null), COALESCE(col_null, col_null) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Project (#1, #1, #1, #0)
-| | types = (integer, integer, integer, integer?)
-| | keys = ()
+Explained Query:
+  Project (#1, #1, #1, #0) // { types: "(integer, integer, integer, integer?)" }
+    Get materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -258,25 +190,13 @@ EOF
 
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT NULLIF(col_not_null, 'a') , NULLIF(col_not_null, NULL), NULLIF(col_null, NULL) , NULLIF(col_null, col_not_null) FROM int_table;
+EXPLAIN WITH(types, no_fast_path) SELECT NULLIF(col_not_null, 'a') , NULLIF(col_not_null, NULL), NULLIF(col_null, NULL) , NULLIF(col_null, col_not_null) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Map if (#0 = #1) then {null} else {#0}
-| | types = (integer?, integer, integer?)
-| | keys = ()
-| Map (err: invalid input syntax for type integer: invalid digit found in string: "a")
-| | types = (integer?, integer, integer?, integer?)
-| | keys = ()
-| Project (#3, #1, #0, #2)
-| | types = (integer?, integer, integer?, integer?)
-| | keys = ()
+Explained Query:
+  Project (#3, #1, #0, #2) // { types: "(integer?, integer, integer?, integer?)" }
+    Map (error("invalid input syntax for type integer: invalid digit found in string: \"a\"")) // { types: "(integer?, integer, integer?, integer?)" }
+      Map (case when (#0 = #1) then null else #0 end) // { types: "(integer?, integer, integer?)" }
+        Get materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -285,81 +205,49 @@ EOF
 #
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT col_not_null = 1 FROM int_table;
+EXPLAIN WITH(types, no_fast_path) SELECT col_not_null = 1 FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Project (#2) // { types: "(boolean)" }
+    Map ((#1 = 1)) // { types: "(integer?, integer, boolean)" }
+      Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Query:
-%0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Map (#1 = 1)
-| | types = (integer?, integer, boolean)
-| | keys = ()
-| Project (#2)
-| | types = (boolean)
-| | keys = ()
+Source materialize.public.int_table
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT col_not_null AND col_not_null , col_not_null OR col_not_null FROM bool_table;
+EXPLAIN WITH(types, no_fast_path) SELECT col_not_null AND col_not_null , col_not_null OR col_not_null FROM bool_table;
 ----
-Source materialize.public.bool_table (u2):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Project (#1, #1) // { types: "(boolean, boolean)" }
+    Get materialize.public.bool_table // { types: "(boolean?, boolean)" }
 
-Query:
-%0 =
-| Get materialize.public.bool_table (u2)
-| | types = (boolean?, boolean)
-| | keys = ()
-| Project (#1, #1)
-| | types = (boolean, boolean)
-| | keys = ()
+Source materialize.public.bool_table
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT col_null AND col_not_null , col_null OR col_not_null FROM bool_table;
+EXPLAIN WITH(types, no_fast_path) SELECT col_null AND col_not_null , col_null OR col_not_null FROM bool_table;
 ----
-Source materialize.public.bool_table (u2):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.bool_table (u2)
-| | types = (boolean?, boolean)
-| | keys = ()
-| Map (#0 AND #1), (#0 OR #1)
-| | types = (boolean?, boolean, boolean?, boolean?)
-| | keys = ()
-| Project (#2, #3)
-| | types = (boolean?, boolean?)
-| | keys = ()
+Explained Query:
+  Project (#2, #3) // { types: "(boolean?, boolean?)" }
+    Map ((#0 AND #1), (#0 OR #1)) // { types: "(boolean?, boolean, boolean?, boolean?)" }
+      Get materialize.public.bool_table // { types: "(boolean?, boolean)" }
 
 EOF
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT NOT col_null , NOT col_not_null FROM bool_table;
+EXPLAIN WITH(types, no_fast_path) SELECT NOT col_null , NOT col_not_null FROM bool_table;
 ----
-Source materialize.public.bool_table (u2):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.bool_table (u2)
-| | types = (boolean?, boolean)
-| | keys = ()
-| Map NOT(#0), NOT(#1)
-| | types = (boolean?, boolean, boolean?, boolean)
-| | keys = ()
-| Project (#2, #3)
-| | types = (boolean?, boolean)
-| | keys = ()
+Explained Query:
+  Project (#2, #3) // { types: "(boolean?, boolean)" }
+    Map (NOT(#0), NOT(#1)) // { types: "(boolean?, boolean, boolean?, boolean)" }
+      Get materialize.public.bool_table // { types: "(boolean?, boolean)" }
 
 EOF
 
@@ -368,23 +256,16 @@ EOF
 #
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT ABS(col_not_null), LOG(col_not_null), ROUND(col_not_null), COS(col_not_null), col_not_null << col_not_null FROM int_table;
+EXPLAIN WITH(types, no_fast_path) SELECT ABS(col_not_null), LOG(col_not_null), ROUND(col_not_null), COS(col_not_null), col_not_null << col_not_null FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Project (#2, #4..=#7) // { types: "(integer, double precision, double precision, double precision, integer)" }
+    Map (abs(#1), integer_to_double(#1), log10f64(#3), roundf64(#3), cos(#3), (#1 << #1)) // { types: "(integer?, integer, integer, double precision, double precision, double precision, double precision, integer)" }
+      Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Query:
-%0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Map abs(#1), integer_to_double(#1), log10f64(#3), roundf64(#3), cos(#3), (#1 << #1)
-| | types = (integer?, integer, integer, double precision, double precision, double precision, double precision, integer)
-| | keys = ()
-| Project (#2, #4..=#7)
-| | types = (integer, double precision, double precision, double precision, integer)
-| | keys = ()
+Source materialize.public.int_table
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
 
@@ -393,66 +274,30 @@ EOF
 #
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT MIN(col_not_null), MAX(col_not_null), AVG(col_not_null), STDDEV(col_not_null), LIST_AGG(col_not_null) FROM int_table;
+EXPLAIN WITH(types, no_fast_path) SELECT MIN(col_not_null), MAX(col_not_null), AVG(col_not_null), STDDEV(col_not_null), LIST_AGG(col_not_null) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Return // { types: "(integer?, integer?, double precision?, numeric?, integer list?)" }
+    Project (#0, #1, #8, #9, #7) // { types: "(integer?, integer?, double precision?, numeric?, integer list?)" }
+      Map ((bigint_to_double(#2) / bigint_to_double(case when (#3 = 0) then null else #3 end)), sqrtnumeric(((#4 - ((#5 * #5) / bigint_to_numeric(case when (#6 = 0) then null else #6 end))) / bigint_to_numeric(case when (0 = (#6 - 1)) then null else (#6 - 1) end)))) // { types: "(integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?, double precision?, numeric?)" }
+        Union // { types: "(integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?)" }
+          Get l0 // { types: "(integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)" }
+          Map (null, null, null, 0, null, null, 0, null) // { types: "(integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?)" }
+            Union // { types: "()" }
+              Negate // { types: "()" }
+                Project () // { types: "()" }
+                  Get l0 // { types: "(integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)" }
+              Constant // { types: "()" }
+                - ()
+  With
+    cte l0 =
+      Reduce aggregates=[min(#0), max(#0), sum(#0), count(true), sum((integer_to_numeric(#0) * integer_to_numeric(#0))), sum(integer_to_numeric(#0)), count(integer_to_numeric(#0)), list_agg(row(list[#0]))] // { types: "(integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)" }
+        Project (#1) // { types: "(integer)" }
+          Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Query:
-%0 = Let l0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Project (#1)
-| | types = (integer)
-| | keys = ()
-| Reduce group=()
-| | agg min(#0)
-| | agg max(#0)
-| | agg sum(#0)
-| | agg count(true)
-| | agg sum((integer_to_numeric(#0) * integer_to_numeric(#0)))
-| | agg sum(integer_to_numeric(#0))
-| | agg count(integer_to_numeric(#0))
-| | agg list_agg(record_create(list_create(#0)))
-| | types = (integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)
-| | keys = (())
-
-%1 =
-| Get %0 (l0)
-| | types = (integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)
-| | keys = (())
-| Project ()
-| | types = ()
-| | keys = (())
-| Negate
-| | types = ()
-| | keys = ()
-
-%2 =
-| Constant ()
-| | types = ()
-| | keys = (())
-
-%3 =
-| Union %1 %2
-| | types = ()
-| | keys = ()
-| Map null, null, null, 0, null, null, 0, null
-| | types = (integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?)
-| | keys = ()
-
-%4 =
-| Union %0 %3
-| | types = (integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?)
-| | keys = (())
-| Map (bigint_to_double(#2) / bigint_to_double(if (#3 = 0) then {null} else {#3})), sqrtnumeric(((#4 - ((#5 * #5) / bigint_to_numeric(if (#6 = 0) then {null} else {#6}))) / bigint_to_numeric(if (0 = (#6 - 1)) then {null} else {(#6 - 1)})))
-| | types = (integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?, double precision?, numeric?)
-| | keys = (())
-| Project (#0, #1, #8, #9, #7)
-| | types = (integer?, integer?, double precision?, numeric?, integer list?)
-| | keys = (())
+Source materialize.public.int_table
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
 
@@ -461,54 +306,28 @@ EOF
 #
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT COUNT(col_not_null), COUNT(DISTINCT col_not_null) FROM int_table;
+EXPLAIN WITH(types, no_fast_path) SELECT COUNT(col_not_null), COUNT(DISTINCT col_not_null) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Return // { types: "(bigint, bigint)" }
+    Union // { types: "(bigint, bigint)" }
+      Get l0 // { types: "(bigint, bigint)" }
+      Map (0, 0) // { types: "(bigint, bigint)" }
+        Union // { types: "()" }
+          Negate // { types: "()" }
+            Project () // { types: "()" }
+              Get l0 // { types: "(bigint, bigint)" }
+          Constant // { types: "()" }
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[count(true), count(distinct #0)] // { types: "(bigint, bigint)" }
+        Project (#1) // { types: "(integer)" }
+          Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Query:
-%0 = Let l0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Project (#1)
-| | types = (integer)
-| | keys = ()
-| Reduce group=()
-| | agg count(true)
-| | agg count(distinct #0)
-| | types = (bigint, bigint)
-| | keys = (())
-
-%1 =
-| Get %0 (l0)
-| | types = (bigint, bigint)
-| | keys = (())
-| Project ()
-| | types = ()
-| | keys = (())
-| Negate
-| | types = ()
-| | keys = ()
-
-%2 =
-| Constant ()
-| | types = ()
-| | keys = (())
-
-%3 =
-| Union %1 %2
-| | types = ()
-| | keys = ()
-| Map 0, 0
-| | types = (bigint, bigint)
-| | keys = ()
-
-%4 =
-| Union %0 %3
-| | types = (bigint, bigint)
-| | keys = (())
+Source materialize.public.int_table
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
 
@@ -517,22 +336,12 @@ EOF
 #
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT col_not_null LIKE col_not_null, col_null LIKE col_not_null, col_not_null LIKE col_null FROM str_table;
+EXPLAIN WITH(types, no_fast_path) SELECT col_not_null LIKE col_not_null, col_null LIKE col_not_null, col_not_null LIKE col_null FROM str_table;
 ----
-Source materialize.public.str_table (u3):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.str_table (u3)
-| | types = (text?, text)
-| | keys = ()
-| Map (#1 like #1), (#0 like #1), (#1 like #0)
-| | types = (text?, text, boolean?, boolean?, boolean?)
-| | keys = ()
-| Project (#2..=#4)
-| | types = (boolean?, boolean?, boolean?)
-| | keys = ()
+Explained Query:
+  Project (#2..=#4) // { types: "(boolean?, boolean?, boolean?)" }
+    Map ((#1 like #1), (#0 like #1), (#1 like #0)) // { types: "(text?, text, boolean?, boolean?, boolean?)" }
+      Get materialize.public.str_table // { types: "(text?, text)" }
 
 EOF
 
@@ -541,23 +350,16 @@ EOF
 #
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT REGEXP_MATCH(col_not_null, 'aaa'), REGEXP_MATCH('aaa', col_not_null) FROM str_table;
+EXPLAIN WITH(types, no_fast_path) SELECT REGEXP_MATCH(col_not_null, 'aaa'), REGEXP_MATCH('aaa', col_not_null) FROM str_table;
 ----
-Source materialize.public.str_table (u3):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Project (#2, #3) // { types: "(text[]?, text[]?)" }
+    Map (regexp_match[aaa](#1), regexp_match("aaa", #1)) // { types: "(text?, text, text[]?, text[]?)" }
+      Get materialize.public.str_table // { types: "(text?, text)" }
 
-Query:
-%0 =
-| Get materialize.public.str_table (u3)
-| | types = (text?, text)
-| | keys = ()
-| Map regexp_match[aaa](#1), regexp_match("aaa", #1)
-| | types = (text?, text, text[]?, text[]?)
-| | keys = ()
-| Project (#2, #3)
-| | types = (text[]?, text[]?)
-| | keys = ()
+Source materialize.public.str_table
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
 
@@ -566,23 +368,16 @@ EOF
 #
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT SPLIT_PART(col_not_null, 'a', 100), SPLIT_PART('a', col_not_null, 100), SPLIT_PART('a', 'a', col_not_null::int) FROM str_table;
+EXPLAIN WITH(types, no_fast_path) SELECT SPLIT_PART(col_not_null, 'a', 100), SPLIT_PART('a', col_not_null, 100), SPLIT_PART('a', 'a', col_not_null::int) FROM str_table;
 ----
-Source materialize.public.str_table (u3):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Project (#2..=#4) // { types: "(text, text, text)" }
+    Map (split_string(#1, "a", 100), split_string("a", #1, 100), split_string("a", "a", integer_to_bigint(text_to_integer(#1)))) // { types: "(text?, text, text, text, text)" }
+      Get materialize.public.str_table // { types: "(text?, text)" }
 
-Query:
-%0 =
-| Get materialize.public.str_table (u3)
-| | types = (text?, text)
-| | keys = ()
-| Map split_string(#1, "a", 100), split_string("a", #1, 100), split_string("a", "a", integer_to_bigint(text_to_integer(#1)))
-| | types = (text?, text, text, text, text)
-| | keys = ()
-| Project (#2..=#4)
-| | types = (text, text, text)
-| | keys = ()
+Source materialize.public.str_table
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
 
@@ -591,44 +386,30 @@ EOF
 #
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT col_not_null IN (1), 1 IN (col_not_null), 1 IN (1, col_null) , 1 IN (NULL), NULL IN (1), NULL IN (col_not_null) FROM int_table;
+EXPLAIN WITH(types, no_fast_path) SELECT col_not_null IN (1), 1 IN (col_not_null), 1 IN (1, col_null) , 1 IN (NULL), NULL IN (1), NULL IN (col_not_null) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Project (#2, #2..=#6) // { types: "(boolean, boolean, boolean, boolean?, boolean?, boolean?)" }
+    Map ((#1 = 1), true, null, null, null) // { types: "(integer?, integer, boolean, boolean, boolean?, boolean?, boolean?)" }
+      Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Query:
-%0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Map (#1 = 1), true, null, null, null
-| | types = (integer?, integer, boolean, boolean, boolean?, boolean?, boolean?)
-| | keys = ()
-| Project (#2, #2..=#6)
-| | types = (boolean, boolean, boolean, boolean?, boolean?, boolean?)
-| | keys = ()
+Source materialize.public.int_table
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT col_not_null NOT IN (1), 1 not IN (col_not_null), 1 NOT IN (1, col_null) , 1 NOT IN (NULL), NULL NOT IN (1), NULL NOT IN (col_not_null) FROM int_table;
+EXPLAIN WITH(types, no_fast_path) SELECT col_not_null NOT IN (1), 1 not IN (col_not_null), 1 NOT IN (1, col_null) , 1 NOT IN (NULL), NULL NOT IN (1), NULL NOT IN (col_not_null) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Project (#2, #2..=#6) // { types: "(boolean, boolean, boolean, boolean?, boolean?, boolean?)" }
+    Map ((#1 != 1), false, null, null, null) // { types: "(integer?, integer, boolean, boolean, boolean?, boolean?, boolean?)" }
+      Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Query:
-%0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Map (#1 != 1), false, null, null, null
-| | types = (integer?, integer, boolean, boolean, boolean?, boolean?, boolean?)
-| | keys = ()
-| Project (#2, #2..=#6)
-| | types = (boolean, boolean, boolean, boolean?, boolean?, boolean?)
-| | keys = ()
+Source materialize.public.int_table
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
 
@@ -637,860 +418,324 @@ EOF
 #
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT 1 = SOME (VALUES(col_null)), 1 = SOME (VALUES(col_not_null)), col_null = SOME (VALUES(NULL::int)), col_not_null = SOME (VALUES(NULL::int)) , col_null = SOME (VALUES(col_not_null)) , col_not_null = SOME (VALUES(col_null)) FROM int_table;
+EXPLAIN WITH(types, no_fast_path) SELECT 1 = SOME (VALUES(col_null)), 1 = SOME (VALUES(col_not_null)), col_null = SOME (VALUES(NULL::int)), col_not_null = SOME (VALUES(NULL::int)) , col_null = SOME (VALUES(col_not_null)) , col_not_null = SOME (VALUES(col_null)) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Project (#0, #1)
-
-Query:
-%0 = Let l0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Project (#0)
-| | types = (integer?)
-| | keys = ()
-| Distinct group=(#0)
-| | types = (integer?)
-| | keys = ((#0))
-
-%1 =
-| Get %0 (l0)
-| | types = (integer?)
-| | keys = ((#0))
-| Map (#0 = 1)
-| | types = (integer?, boolean?)
-| | keys = ((#0))
-
-%2 =
-| Get %0 (l0)
-| | types = (integer?)
-| | keys = ((#0))
-| Negate
-| | types = (integer?)
-| | keys = ()
-
-%3 =
-| Union %2 %0
-| | types = (integer?)
-| | keys = ()
-| Map false
-| | types = (integer?, boolean)
-| | keys = ()
-
-%4 = Let l1 =
-| Union %1 %3
-| | types = (integer?, boolean?)
-| | keys = ()
-
-%5 = Let l2 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Distinct group=(#0, #1)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-
-%6 =
-| Get %5 (l2)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Map (#0 = #1)
-| | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
-
-%7 =
-| Get %5 (l2)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Negate
-| | types = (integer?, integer)
-| | keys = ()
-
-%8 =
-| Union %7 %5
-| | types = (integer?, integer)
-| | keys = ()
-| Map false
-| | types = (integer?, integer, boolean)
-| | keys = ()
-
-%9 = Let l3 =
-| Union %6 %8
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-
-%10 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| ArrangeBy (#0, #1)
-| | types = (integer?, integer)
-| | keys = ()
-
-%11 =
-| Get %4 (l1)
-| | types = (integer?, boolean?)
-| | keys = ()
-| Project (#0)
-| | types = (integer?)
-| | keys = ()
-| Negate
-| | types = (integer?)
-| | keys = ()
-
-%12 =
-| Union %11 %0
-| | types = (integer?)
-| | keys = ()
-| Map null
-| | types = (integer?, boolean?)
-| | keys = ()
-
-%13 =
-| Union %4 %12
-| | types = (integer?, boolean?)
-| | keys = ((#0))
-| ArrangeBy (#0)
-| | types = (integer?, boolean?)
-| | keys = ((#0))
-
-%14 =
-| Get %5 (l2)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Map 1, true
-| | types = (integer?, integer, integer, boolean)
-| | keys = ((#0, #1))
-| Filter (#1 = 1)
-| | types = (integer?, integer, integer, boolean)
-| | keys = ((#0))
-| Project (#0, #2, #3)
-| | types = (integer?, integer, boolean)
-| | keys = ((#0))
-
-%15 =
-| Get %5 (l2)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Filter (#1 = 1)
-| | types = (integer?, integer)
-| | keys = ((#0))
-| Project (#0)
-| | types = (integer?)
-| | keys = ((#0))
-| Negate
-| | types = (integer?)
-| | keys = ()
-| Map 1
-| | types = (integer?, integer)
-| | keys = ()
-
-%16 =
-| Union %15 %5
-| | types = (integer?, integer)
-| | keys = ()
-| Map false
-| | types = (integer?, integer, boolean)
-| | keys = ()
-
-%17 =
-| Union %14 %16
-| | types = (integer?, integer, boolean)
-| | keys = ()
-
-%18 =
-| Get %9 (l3)
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-| Project (#0, #1)
-| | types = (integer?, integer)
-| | keys = ()
-| Negate
-| | types = (integer?, integer)
-| | keys = ()
-
-%19 =
-| Union %18 %5
-| | types = (integer?, integer)
-| | keys = ()
-| Map null
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-
-%20 =
-| Union %9 %19
-| | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
-| ArrangeBy (#0, #1)
-| | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
-
-%21 =
-| Join %10 %13 %17 %20 (= #0 #2 #4 #7) (= #1 #5 #8)
-| | implementation = Differential %17 %20.(#0, #1) %13.(#0) %10.(#0, #1)
-| | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?)
-| | keys = ()
-| Map null, null
-| | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?, boolean?, boolean?)
-| | keys = ()
-| Project (#3, #6, #10, #11, #9, #9)
-| | types = (boolean?, boolean, boolean?, boolean?, boolean?, boolean?)
-| | keys = ()
+Explained Query:
+  Return // { types: "(boolean?, boolean, boolean?, boolean?, boolean?, boolean?)" }
+    Project (#3, #6, #10, #11, #9, #9) // { types: "(boolean?, boolean, boolean?, boolean?, boolean?, boolean?)" }
+      Map (null, null) // { types: "(integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?, boolean?, boolean?)" }
+        Join on=(eq(#0, #2, #4, #7) AND eq(#1, #5, #8)) type=differential // { types: "(integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?)" }
+          ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer)" }
+            Get materialize.public.int_table // { types: "(integer?, integer)" }
+          ArrangeBy keys=[[#0]] // { types: "(integer?, boolean?)" }
+            Union // { types: "(integer?, boolean?)" }
+              Get l1 // { types: "(integer?, boolean?)" }
+              Map (null) // { types: "(integer?, boolean?)" }
+                Union // { types: "(integer?)" }
+                  Negate // { types: "(integer?)" }
+                    Project (#0) // { types: "(integer?)" }
+                      Get l1 // { types: "(integer?, boolean?)" }
+                  Get l0 // { types: "(integer?)" }
+          Union // { types: "(integer?, integer, boolean)" }
+            Project (#0, #2, #3) // { types: "(integer?, integer, boolean)" }
+              Filter (#1 = 1) // { types: "(integer?, integer, integer, boolean)" }
+                Map (1, true) // { types: "(integer?, integer, integer, boolean)" }
+                  Get l2 // { types: "(integer?, integer)" }
+            Map (false) // { types: "(integer?, integer, boolean)" }
+              Union // { types: "(integer?, integer)" }
+                Map (1) // { types: "(integer?, integer)" }
+                  Negate // { types: "(integer?)" }
+                    Project (#0) // { types: "(integer?)" }
+                      Filter (#1 = 1) // { types: "(integer?, integer)" }
+                        Get l2 // { types: "(integer?, integer)" }
+                Get l2 // { types: "(integer?, integer)" }
+          ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer, boolean?)" }
+            Union // { types: "(integer?, integer, boolean?)" }
+              Get l3 // { types: "(integer?, integer, boolean?)" }
+              Map (null) // { types: "(integer?, integer, boolean?)" }
+                Union // { types: "(integer?, integer)" }
+                  Negate // { types: "(integer?, integer)" }
+                    Project (#0, #1) // { types: "(integer?, integer)" }
+                      Get l3 // { types: "(integer?, integer, boolean?)" }
+                  Get l2 // { types: "(integer?, integer)" }
+  With
+    cte l3 =
+      Union // { types: "(integer?, integer, boolean?)" }
+        Map ((#0 = #1)) // { types: "(integer?, integer, boolean?)" }
+          Get l2 // { types: "(integer?, integer)" }
+        Map (false) // { types: "(integer?, integer, boolean)" }
+          Union // { types: "(integer?, integer)" }
+            Negate // { types: "(integer?, integer)" }
+              Get l2 // { types: "(integer?, integer)" }
+            Get l2 // { types: "(integer?, integer)" }
+    cte l2 =
+      Distinct group_by=[#0, #1] // { types: "(integer?, integer)" }
+        Get materialize.public.int_table // { types: "(integer?, integer)" }
+    cte l1 =
+      Union // { types: "(integer?, boolean?)" }
+        Map ((#0 = 1)) // { types: "(integer?, boolean?)" }
+          Get l0 // { types: "(integer?)" }
+        Map (false) // { types: "(integer?, boolean)" }
+          Union // { types: "(integer?)" }
+            Negate // { types: "(integer?)" }
+              Get l0 // { types: "(integer?)" }
+            Get l0 // { types: "(integer?)" }
+    cte l0 =
+      Distinct group_by=[#0] // { types: "(integer?)" }
+        Project (#0) // { types: "(integer?)" }
+          Get materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT 1 > ANY (VALUES(col_null)), 1 > ANY (VALUES(col_not_null)), col_null > ANY (VALUES(NULL::int)), col_not_null > ANY (VALUES(NULL::int)) , col_null > ANY (VALUES(col_not_null)) , col_not_null > ANY (VALUES(col_null)) FROM int_table;
+EXPLAIN WITH(types, no_fast_path) SELECT 1 > ANY (VALUES(col_null)), 1 > ANY (VALUES(col_not_null)), col_null > ANY (VALUES(NULL::int)), col_not_null > ANY (VALUES(NULL::int)) , col_null > ANY (VALUES(col_not_null)) , col_not_null > ANY (VALUES(col_null)) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Project (#0, #1)
-
-Query:
-%0 = Let l0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Project (#0)
-| | types = (integer?)
-| | keys = ()
-| Distinct group=(#0)
-| | types = (integer?)
-| | keys = ((#0))
-
-%1 =
-| Get %0 (l0)
-| | types = (integer?)
-| | keys = ((#0))
-| Map (1 > #0)
-| | types = (integer?, boolean?)
-| | keys = ((#0))
-
-%2 =
-| Get %0 (l0)
-| | types = (integer?)
-| | keys = ((#0))
-| Negate
-| | types = (integer?)
-| | keys = ()
-
-%3 =
-| Union %2 %0
-| | types = (integer?)
-| | keys = ()
-| Map false
-| | types = (integer?, boolean)
-| | keys = ()
-
-%4 = Let l1 =
-| Union %1 %3
-| | types = (integer?, boolean?)
-| | keys = ()
-
-%5 = Let l2 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Distinct group=(#0, #1)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-
-%6 =
-| Get %5 (l2)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Negate
-| | types = (integer?, integer)
-| | keys = ()
-
-%7 = Let l3 =
-| Union %6 %5
-| | types = (integer?, integer)
-| | keys = ()
-| Map false
-| | types = (integer?, integer, boolean)
-| | keys = ()
-
-%8 =
-| Get %5 (l2)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Map (#0 > #1)
-| | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
-
-%9 = Let l4 =
-| Union %8 %7
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-
-%10 =
-| Get %5 (l2)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Map (#1 > #0)
-| | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
-
-%11 = Let l5 =
-| Union %10 %7
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-
-%12 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| ArrangeBy (#0, #1)
-| | types = (integer?, integer)
-| | keys = ()
-
-%13 =
-| Get %4 (l1)
-| | types = (integer?, boolean?)
-| | keys = ()
-| Project (#0)
-| | types = (integer?)
-| | keys = ()
-| Negate
-| | types = (integer?)
-| | keys = ()
-
-%14 =
-| Union %13 %0
-| | types = (integer?)
-| | keys = ()
-| Map null
-| | types = (integer?, boolean?)
-| | keys = ()
-
-%15 =
-| Union %4 %14
-| | types = (integer?, boolean?)
-| | keys = ((#0))
-| ArrangeBy (#0)
-| | types = (integer?, boolean?)
-| | keys = ((#0))
-
-%16 =
-| Get %5 (l2)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Map true
-| | types = (integer?, integer, boolean)
-| | keys = ((#0, #1))
-| Filter (1 > #1)
-| | types = (integer?, integer, boolean)
-| | keys = ((#0, #1))
-
-%17 =
-| Get %5 (l2)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Filter (1 > #1)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Negate
-| | types = (integer?, integer)
-| | keys = ()
-
-%18 =
-| Union %17 %5
-| | types = (integer?, integer)
-| | keys = ()
-| Map false
-| | types = (integer?, integer, boolean)
-| | keys = ()
-
-%19 =
-| Union %16 %18
-| | types = (integer?, integer, boolean)
-| | keys = ()
-
-%20 =
-| Get %9 (l4)
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-| Project (#0, #1)
-| | types = (integer?, integer)
-| | keys = ()
-| Negate
-| | types = (integer?, integer)
-| | keys = ()
-
-%21 =
-| Union %20 %5
-| | types = (integer?, integer)
-| | keys = ()
-| Map null
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-
-%22 =
-| Union %9 %21
-| | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
-| ArrangeBy (#0, #1)
-| | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
-
-%23 =
-| Get %11 (l5)
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-| Project (#0, #1)
-| | types = (integer?, integer)
-| | keys = ()
-| Negate
-| | types = (integer?, integer)
-| | keys = ()
-
-%24 =
-| Union %23 %5
-| | types = (integer?, integer)
-| | keys = ()
-| Map null
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-
-%25 =
-| Union %11 %24
-| | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
-| ArrangeBy (#0, #1)
-| | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
-
-%26 =
-| Join %12 %15 %19 %22 %25 (= #0 #2 #4 #7 #10) (= #1 #5 #8 #11)
-| | implementation = Differential %19 %22.(#0, #1) %25.(#0, #1) %15.(#0) %12.(#0, #1)
-| | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?, integer?, integer, boolean?)
-| | keys = ()
-| Map null, null
-| | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?, integer?, integer, boolean?, boolean?, boolean?)
-| | keys = ()
-| Project (#3, #6, #13, #14, #9, #12)
-| | types = (boolean?, boolean, boolean?, boolean?, boolean?, boolean?)
-| | keys = ()
+Explained Query:
+  Return // { types: "(boolean?, boolean, boolean?, boolean?, boolean?, boolean?)" }
+    Project (#3, #6, #13, #14, #9, #12) // { types: "(boolean?, boolean, boolean?, boolean?, boolean?, boolean?)" }
+      Map (null, null) // { types: "(integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?, integer?, integer, boolean?, boolean?, boolean?)" }
+        Join on=(eq(#0, #2, #4, #7, #10) AND eq(#1, #5, #8, #11)) type=differential // { types: "(integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?, integer?, integer, boolean?)" }
+          ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer)" }
+            Get materialize.public.int_table // { types: "(integer?, integer)" }
+          ArrangeBy keys=[[#0]] // { types: "(integer?, boolean?)" }
+            Union // { types: "(integer?, boolean?)" }
+              Get l1 // { types: "(integer?, boolean?)" }
+              Map (null) // { types: "(integer?, boolean?)" }
+                Union // { types: "(integer?)" }
+                  Negate // { types: "(integer?)" }
+                    Project (#0) // { types: "(integer?)" }
+                      Get l1 // { types: "(integer?, boolean?)" }
+                  Get l0 // { types: "(integer?)" }
+          Union // { types: "(integer?, integer, boolean)" }
+            Filter (1 > #1) // { types: "(integer?, integer, boolean)" }
+              Map (true) // { types: "(integer?, integer, boolean)" }
+                Get l2 // { types: "(integer?, integer)" }
+            Map (false) // { types: "(integer?, integer, boolean)" }
+              Union // { types: "(integer?, integer)" }
+                Negate // { types: "(integer?, integer)" }
+                  Filter (1 > #1) // { types: "(integer?, integer)" }
+                    Get l2 // { types: "(integer?, integer)" }
+                Get l2 // { types: "(integer?, integer)" }
+          ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer, boolean?)" }
+            Union // { types: "(integer?, integer, boolean?)" }
+              Get l4 // { types: "(integer?, integer, boolean?)" }
+              Map (null) // { types: "(integer?, integer, boolean?)" }
+                Union // { types: "(integer?, integer)" }
+                  Negate // { types: "(integer?, integer)" }
+                    Project (#0, #1) // { types: "(integer?, integer)" }
+                      Get l4 // { types: "(integer?, integer, boolean?)" }
+                  Get l2 // { types: "(integer?, integer)" }
+          ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer, boolean?)" }
+            Union // { types: "(integer?, integer, boolean?)" }
+              Get l5 // { types: "(integer?, integer, boolean?)" }
+              Map (null) // { types: "(integer?, integer, boolean?)" }
+                Union // { types: "(integer?, integer)" }
+                  Negate // { types: "(integer?, integer)" }
+                    Project (#0, #1) // { types: "(integer?, integer)" }
+                      Get l5 // { types: "(integer?, integer, boolean?)" }
+                  Get l2 // { types: "(integer?, integer)" }
+  With
+    cte l5 =
+      Union // { types: "(integer?, integer, boolean?)" }
+        Map ((#1 > #0)) // { types: "(integer?, integer, boolean?)" }
+          Get l2 // { types: "(integer?, integer)" }
+        Get l3 // { types: "(integer?, integer, boolean)" }
+    cte l4 =
+      Union // { types: "(integer?, integer, boolean?)" }
+        Map ((#0 > #1)) // { types: "(integer?, integer, boolean?)" }
+          Get l2 // { types: "(integer?, integer)" }
+        Get l3 // { types: "(integer?, integer, boolean)" }
+    cte l3 =
+      Map (false) // { types: "(integer?, integer, boolean)" }
+        Union // { types: "(integer?, integer)" }
+          Negate // { types: "(integer?, integer)" }
+            Get l2 // { types: "(integer?, integer)" }
+          Get l2 // { types: "(integer?, integer)" }
+    cte l2 =
+      Distinct group_by=[#0, #1] // { types: "(integer?, integer)" }
+        Get materialize.public.int_table // { types: "(integer?, integer)" }
+    cte l1 =
+      Union // { types: "(integer?, boolean?)" }
+        Map ((1 > #0)) // { types: "(integer?, boolean?)" }
+          Get l0 // { types: "(integer?)" }
+        Map (false) // { types: "(integer?, boolean)" }
+          Union // { types: "(integer?)" }
+            Negate // { types: "(integer?)" }
+              Get l0 // { types: "(integer?)" }
+            Get l0 // { types: "(integer?)" }
+    cte l0 =
+      Distinct group_by=[#0] // { types: "(integer?)" }
+        Project (#0) // { types: "(integer?)" }
+          Get materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT 1 < ALL (VALUES(col_null)), 1 < ALL (VALUES(col_not_null)), col_null < ALL (VALUES(NULL::int)), col_not_null < ALL (VALUES(NULL::int)) , col_null < ALL (VALUES(col_not_null)) , col_not_null < ALL (VALUES(col_null)) FROM int_table;
+EXPLAIN WITH(types, no_fast_path) SELECT 1 < ALL (VALUES(col_null)), 1 < ALL (VALUES(col_not_null)), col_null < ALL (VALUES(NULL::int)), col_not_null < ALL (VALUES(NULL::int)) , col_null < ALL (VALUES(col_not_null)) , col_not_null < ALL (VALUES(col_null)) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Project (#0, #1)
-
-Query:
-%0 = Let l0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Project (#0)
-| | types = (integer?)
-| | keys = ()
-| Distinct group=(#0)
-| | types = (integer?)
-| | keys = ((#0))
-
-%1 =
-| Get %0 (l0)
-| | types = (integer?)
-| | keys = ((#0))
-| Map (1 < #0)
-| | types = (integer?, boolean?)
-| | keys = ((#0))
-
-%2 =
-| Get %0 (l0)
-| | types = (integer?)
-| | keys = ((#0))
-| Negate
-| | types = (integer?)
-| | keys = ()
-
-%3 =
-| Union %2 %0
-| | types = (integer?)
-| | keys = ()
-| Map true
-| | types = (integer?, boolean)
-| | keys = ()
-
-%4 = Let l1 =
-| Union %1 %3
-| | types = (integer?, boolean?)
-| | keys = ()
-
-%5 = Let l2 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Distinct group=(#0, #1)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-
-%6 =
-| Get %5 (l2)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Negate
-| | types = (integer?, integer)
-| | keys = ()
-
-%7 = Let l3 =
-| Union %6 %5
-| | types = (integer?, integer)
-| | keys = ()
-| Map true
-| | types = (integer?, integer, boolean)
-| | keys = ()
-
-%8 =
-| Get %5 (l2)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Map (#0 < #1)
-| | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
-
-%9 = Let l4 =
-| Union %8 %7
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-
-%10 =
-| Get %5 (l2)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Map (#1 < #0)
-| | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
-
-%11 = Let l5 =
-| Union %10 %7
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-
-%12 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| ArrangeBy (#0, #1)
-| | types = (integer?, integer)
-| | keys = ()
-
-%13 =
-| Get %4 (l1)
-| | types = (integer?, boolean?)
-| | keys = ()
-| Project (#0)
-| | types = (integer?)
-| | keys = ()
-| Negate
-| | types = (integer?)
-| | keys = ()
-
-%14 =
-| Union %13 %0
-| | types = (integer?)
-| | keys = ()
-| Map null
-| | types = (integer?, boolean?)
-| | keys = ()
-
-%15 =
-| Union %4 %14
-| | types = (integer?, boolean?)
-| | keys = ((#0))
-| ArrangeBy (#0)
-| | types = (integer?, boolean?)
-| | keys = ((#0))
-
-%16 =
-| Get %5 (l2)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Map true
-| | types = (integer?, integer, boolean)
-| | keys = ((#0, #1))
-| Filter (1 >= #1)
-| | types = (integer?, integer, boolean)
-| | keys = ((#0, #1))
-
-%17 =
-| Get %5 (l2)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Filter (1 >= #1)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Negate
-| | types = (integer?, integer)
-| | keys = ()
-
-%18 =
-| Union %17 %5
-| | types = (integer?, integer)
-| | keys = ()
-| Map false
-| | types = (integer?, integer, boolean)
-| | keys = ()
-
-%19 =
-| Union %16 %18
-| | types = (integer?, integer, boolean)
-| | keys = ()
-
-%20 =
-| Get %9 (l4)
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-| Project (#0, #1)
-| | types = (integer?, integer)
-| | keys = ()
-| Negate
-| | types = (integer?, integer)
-| | keys = ()
-
-%21 =
-| Union %20 %5
-| | types = (integer?, integer)
-| | keys = ()
-| Map null
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-
-%22 =
-| Union %9 %21
-| | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
-| ArrangeBy (#0, #1)
-| | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
-
-%23 =
-| Get %11 (l5)
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-| Project (#0, #1)
-| | types = (integer?, integer)
-| | keys = ()
-| Negate
-| | types = (integer?, integer)
-| | keys = ()
-
-%24 =
-| Union %23 %5
-| | types = (integer?, integer)
-| | keys = ()
-| Map null
-| | types = (integer?, integer, boolean?)
-| | keys = ()
-
-%25 =
-| Union %11 %24
-| | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
-| ArrangeBy (#0, #1)
-| | types = (integer?, integer, boolean?)
-| | keys = ((#0, #1))
-
-%26 =
-| Join %12 %15 %19 %22 %25 (= #0 #2 #4 #7 #10) (= #1 #5 #8 #11)
-| | implementation = Differential %19 %22.(#0, #1) %25.(#0, #1) %15.(#0) %12.(#0, #1)
-| | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?, integer?, integer, boolean?)
-| | keys = ()
-| Map NOT(#6), null, null
-| | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?, integer?, integer, boolean?, boolean, boolean?, boolean?)
-| | keys = ()
-| Project (#3, #13..=#15, #9, #12)
-| | types = (boolean?, boolean, boolean?, boolean?, boolean?, boolean?)
-| | keys = ()
+Explained Query:
+  Return // { types: "(boolean?, boolean, boolean?, boolean?, boolean?, boolean?)" }
+    Project (#3, #13..=#15, #9, #12) // { types: "(boolean?, boolean, boolean?, boolean?, boolean?, boolean?)" }
+      Map (NOT(#6), null, null) // { types: "(integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?, integer?, integer, boolean?, boolean, boolean?, boolean?)" }
+        Join on=(eq(#0, #2, #4, #7, #10) AND eq(#1, #5, #8, #11)) type=differential // { types: "(integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?, integer?, integer, boolean?)" }
+          ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer)" }
+            Get materialize.public.int_table // { types: "(integer?, integer)" }
+          ArrangeBy keys=[[#0]] // { types: "(integer?, boolean?)" }
+            Union // { types: "(integer?, boolean?)" }
+              Get l1 // { types: "(integer?, boolean?)" }
+              Map (null) // { types: "(integer?, boolean?)" }
+                Union // { types: "(integer?)" }
+                  Negate // { types: "(integer?)" }
+                    Project (#0) // { types: "(integer?)" }
+                      Get l1 // { types: "(integer?, boolean?)" }
+                  Get l0 // { types: "(integer?)" }
+          Union // { types: "(integer?, integer, boolean)" }
+            Filter (1 >= #1) // { types: "(integer?, integer, boolean)" }
+              Map (true) // { types: "(integer?, integer, boolean)" }
+                Get l2 // { types: "(integer?, integer)" }
+            Map (false) // { types: "(integer?, integer, boolean)" }
+              Union // { types: "(integer?, integer)" }
+                Negate // { types: "(integer?, integer)" }
+                  Filter (1 >= #1) // { types: "(integer?, integer)" }
+                    Get l2 // { types: "(integer?, integer)" }
+                Get l2 // { types: "(integer?, integer)" }
+          ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer, boolean?)" }
+            Union // { types: "(integer?, integer, boolean?)" }
+              Get l4 // { types: "(integer?, integer, boolean?)" }
+              Map (null) // { types: "(integer?, integer, boolean?)" }
+                Union // { types: "(integer?, integer)" }
+                  Negate // { types: "(integer?, integer)" }
+                    Project (#0, #1) // { types: "(integer?, integer)" }
+                      Get l4 // { types: "(integer?, integer, boolean?)" }
+                  Get l2 // { types: "(integer?, integer)" }
+          ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer, boolean?)" }
+            Union // { types: "(integer?, integer, boolean?)" }
+              Get l5 // { types: "(integer?, integer, boolean?)" }
+              Map (null) // { types: "(integer?, integer, boolean?)" }
+                Union // { types: "(integer?, integer)" }
+                  Negate // { types: "(integer?, integer)" }
+                    Project (#0, #1) // { types: "(integer?, integer)" }
+                      Get l5 // { types: "(integer?, integer, boolean?)" }
+                  Get l2 // { types: "(integer?, integer)" }
+  With
+    cte l5 =
+      Union // { types: "(integer?, integer, boolean?)" }
+        Map ((#1 < #0)) // { types: "(integer?, integer, boolean?)" }
+          Get l2 // { types: "(integer?, integer)" }
+        Get l3 // { types: "(integer?, integer, boolean)" }
+    cte l4 =
+      Union // { types: "(integer?, integer, boolean?)" }
+        Map ((#0 < #1)) // { types: "(integer?, integer, boolean?)" }
+          Get l2 // { types: "(integer?, integer)" }
+        Get l3 // { types: "(integer?, integer, boolean)" }
+    cte l3 =
+      Map (true) // { types: "(integer?, integer, boolean)" }
+        Union // { types: "(integer?, integer)" }
+          Negate // { types: "(integer?, integer)" }
+            Get l2 // { types: "(integer?, integer)" }
+          Get l2 // { types: "(integer?, integer)" }
+    cte l2 =
+      Distinct group_by=[#0, #1] // { types: "(integer?, integer)" }
+        Get materialize.public.int_table // { types: "(integer?, integer)" }
+    cte l1 =
+      Union // { types: "(integer?, boolean?)" }
+        Map ((1 < #0)) // { types: "(integer?, boolean?)" }
+          Get l0 // { types: "(integer?)" }
+        Map (true) // { types: "(integer?, boolean)" }
+          Union // { types: "(integer?)" }
+            Negate // { types: "(integer?)" }
+              Get l0 // { types: "(integer?)" }
+            Get l0 // { types: "(integer?)" }
+    cte l0 =
+      Distinct group_by=[#0] // { types: "(integer?)" }
+        Project (#0) // { types: "(integer?)" }
+          Get materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT 1 = SOME(VALUES(1), (NULL::int)), 1 = ALL (VALUES(1), (NULL::int)) , 1 = ANY (VALUES(1), (NULL::int));
+EXPLAIN WITH(types, no_fast_path) SELECT 1 = SOME(VALUES(1), (NULL::int)), 1 = ALL (VALUES(1), (NULL::int)) , 1 = ANY (VALUES(1), (NULL::int));
 ----
-%0 =
-| Constant (true, null, true)
-| | types = (boolean, boolean?, boolean)
-| | keys = (())
+Explained Query:
+  Constant // { types: "(boolean, boolean?, boolean)" }
+    - (true, null, true)
 
 EOF
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT 1 = SOME(VALUES(NULL::int), (1)), 1 = ALL (VALUES(NULL::int), (1)) , 1 = ANY (VALUES(NULL::int), (1));
+EXPLAIN WITH(types, no_fast_path) SELECT 1 = SOME(VALUES(NULL::int), (1)), 1 = ALL (VALUES(NULL::int), (1)) , 1 = ANY (VALUES(NULL::int), (1));
 ----
-%0 =
-| Constant (true, null, true)
-| | types = (boolean, boolean?, boolean)
-| | keys = (())
+Explained Query:
+  Constant // { types: "(boolean, boolean?, boolean)" }
+    - (true, null, true)
 
 EOF
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT 1 = SOME(VALUES(col_not_null), (NULL::int)), 1 = ALL (VALUES(col_not_null), (NULL::int)) , 1 = ANY (VALUES(col_not_null), (NULL::int)) FROM int_table;
+EXPLAIN WITH(types, no_fast_path) SELECT 1 = SOME(VALUES(col_not_null), (NULL::int)), 1 = ALL (VALUES(col_not_null), (NULL::int)) , 1 = ANY (VALUES(col_not_null), (NULL::int)) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Return // { types: "(boolean?, boolean?, boolean?)" }
+    Project (#2, #4, #2) // { types: "(boolean?, boolean?, boolean?)" }
+      Join on=(eq(#0, #1, #3)) type=differential // { types: "(integer, integer, boolean?, integer, boolean?)" }
+        Get l0 // { types: "(integer)" }
+        ArrangeBy keys=[[#0]] // { types: "(integer, boolean?)" }
+          Union // { types: "(integer, boolean?)" }
+            Get l4 // { types: "(integer, boolean?)" }
+            Map (null) // { types: "(integer, boolean?)" }
+              Union // { types: "(integer)" }
+                Negate // { types: "(integer)" }
+                  Project (#0) // { types: "(integer)" }
+                    Get l4 // { types: "(integer, boolean?)" }
+                Get l1 // { types: "(integer)" }
+        ArrangeBy keys=[[#0]] // { types: "(integer, boolean?)" }
+          Union // { types: "(integer, boolean?)" }
+            Get l6 // { types: "(integer, boolean?)" }
+            Map (null) // { types: "(integer, boolean?)" }
+              Union // { types: "(integer)" }
+                Negate // { types: "(integer)" }
+                  Project (#0) // { types: "(integer)" }
+                    Get l6 // { types: "(integer, boolean?)" }
+                Get l1 // { types: "(integer)" }
+  With
+    cte l6 =
+      Union // { types: "(integer, boolean?)" }
+        Get l5 // { types: "(integer, boolean?)" }
+        Map (true) // { types: "(integer, boolean)" }
+          Union // { types: "(integer)" }
+            Negate // { types: "(integer)" }
+              Project (#0) // { types: "(integer)" }
+                Get l5 // { types: "(integer, boolean?)" }
+            Get l1 // { types: "(integer)" }
+    cte l5 =
+      Reduce group_by=[#0] aggregates=[all((#1 = 1))] // { types: "(integer, boolean?)" }
+        Get l2 // { types: "(integer, integer?)" }
+    cte l4 =
+      Union // { types: "(integer, boolean?)" }
+        Get l3 // { types: "(integer, boolean?)" }
+        Map (false) // { types: "(integer, boolean)" }
+          Union // { types: "(integer)" }
+            Negate // { types: "(integer)" }
+              Project (#0) // { types: "(integer)" }
+                Get l3 // { types: "(integer, boolean?)" }
+            Get l1 // { types: "(integer)" }
+    cte l3 =
+      Reduce group_by=[#0] aggregates=[any((#1 = 1))] // { types: "(integer, boolean?)" }
+        Get l2 // { types: "(integer, integer?)" }
+    cte l2 =
+      FlatMap wrap1(#0, null) // { types: "(integer, integer?)" }
+        Get l1 // { types: "(integer)" }
+    cte l1 =
+      Distinct group_by=[#0] // { types: "(integer)" }
+        Get l0 // { types: "(integer)" }
+    cte l0 =
+      Project (#1) // { types: "(integer)" }
+        Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Query:
-%0 = Let l0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Project (#1)
-| | types = (integer)
-| | keys = ()
-
-%1 = Let l1 =
-| Get %0 (l0)
-| | types = (integer)
-| | keys = ()
-| Distinct group=(#0)
-| | types = (integer)
-| | keys = ((#0))
-
-%2 = Let l2 =
-| Get %1 (l1)
-| | types = (integer)
-| | keys = ((#0))
-| FlatMap wrap1(#0, null)
-| | types = (integer, integer?)
-| | keys = ()
-
-%3 = Let l3 =
-| Get %2 (l2)
-| | types = (integer, integer?)
-| | keys = ()
-| Reduce group=(#0)
-| | agg any((#1 = 1))
-| | types = (integer, boolean?)
-| | keys = ((#0))
-
-%4 =
-| Get %3 (l3)
-| | types = (integer, boolean?)
-| | keys = ((#0))
-| Project (#0)
-| | types = (integer)
-| | keys = ((#0))
-| Negate
-| | types = (integer)
-| | keys = ()
-
-%5 =
-| Union %4 %1
-| | types = (integer)
-| | keys = ()
-| Map false
-| | types = (integer, boolean)
-| | keys = ()
-
-%6 = Let l4 =
-| Union %3 %5
-| | types = (integer, boolean?)
-| | keys = ((#0))
-
-%7 = Let l5 =
-| Get %2 (l2)
-| | types = (integer, integer?)
-| | keys = ()
-| Reduce group=(#0)
-| | agg all((#1 = 1))
-| | types = (integer, boolean?)
-| | keys = ((#0))
-
-%8 =
-| Get %7 (l5)
-| | types = (integer, boolean?)
-| | keys = ((#0))
-| Project (#0)
-| | types = (integer)
-| | keys = ((#0))
-| Negate
-| | types = (integer)
-| | keys = ()
-
-%9 =
-| Union %8 %1
-| | types = (integer)
-| | keys = ()
-| Map true
-| | types = (integer, boolean)
-| | keys = ()
-
-%10 = Let l6 =
-| Union %7 %9
-| | types = (integer, boolean?)
-| | keys = ((#0))
-
-%11 =
-| Get %6 (l4)
-| | types = (integer, boolean?)
-| | keys = ((#0))
-| Project (#0)
-| | types = (integer)
-| | keys = ((#0))
-| Negate
-| | types = (integer)
-| | keys = ()
-
-%12 =
-| Union %11 %1
-| | types = (integer)
-| | keys = ()
-| Map null
-| | types = (integer, boolean?)
-| | keys = ()
-
-%13 =
-| Union %6 %12
-| | types = (integer, boolean?)
-| | keys = ((#0))
-| ArrangeBy (#0)
-| | types = (integer, boolean?)
-| | keys = ((#0))
-
-%14 =
-| Get %10 (l6)
-| | types = (integer, boolean?)
-| | keys = ((#0))
-| Project (#0)
-| | types = (integer)
-| | keys = ((#0))
-| Negate
-| | types = (integer)
-| | keys = ()
-
-%15 =
-| Union %14 %1
-| | types = (integer)
-| | keys = ()
-| Map null
-| | types = (integer, boolean?)
-| | keys = ()
-
-%16 =
-| Union %10 %15
-| | types = (integer, boolean?)
-| | keys = ((#0))
-| ArrangeBy (#0)
-| | types = (integer, boolean?)
-| | keys = ((#0))
-
-%17 =
-| Join %0 %13 %16 (= #0 #1 #3)
-| | implementation = Differential %0 %13.(#0) %16.(#0)
-| | types = (integer, integer, boolean?, integer, boolean?)
-| | keys = ()
-| Project (#2, #4, #2)
-| | types = (boolean?, boolean?, boolean?)
-| | keys = ()
+Source materialize.public.int_table
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
 
@@ -1499,97 +744,40 @@ EOF
 #
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT (SELECT col_not_null FROM int_table) FROM int_table;
+EXPLAIN WITH(types, no_fast_path) SELECT (SELECT col_not_null FROM int_table) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Return // { types: "(integer?)" }
+    CrossJoin type=differential // { types: "(integer?)" }
+      ArrangeBy keys=[[]] // { types: "()" }
+        Get l0 // { types: "()" }
+      Union // { types: "(integer?)" }
+        Get l1 // { types: "(integer)" }
+        Map (null) // { types: "(integer?)" }
+          Union // { types: "()" }
+            Negate // { types: "()" }
+              Distinct // { types: "()" }
+                Project () // { types: "()" }
+                  Get l1 // { types: "(integer)" }
+            Constant // { types: "()" }
+              - ()
+  With
+    cte l1 =
+      Union // { types: "(integer)" }
+        Project (#1) // { types: "(integer)" }
+          Get materialize.public.int_table // { types: "(integer?, integer)" }
+        Map (error("more than one record produced in subquery")) // { types: "(integer)" }
+          Project () // { types: "()" }
+            Filter (#0 > 1) // { types: "(bigint)" }
+              Reduce aggregates=[count(true)] // { types: "(bigint)" }
+                Get l0 // { types: "()" }
+    cte l0 =
+      Project () // { types: "()" }
+        Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Query:
-%0 = Let l0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Project ()
-| | types = ()
-| | keys = ()
-
-%1 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Project (#1)
-| | types = (integer)
-| | keys = ()
-
-%2 =
-| Get %0 (l0)
-| | types = ()
-| | keys = ()
-| Reduce group=()
-| | agg count(true)
-| | types = (bigint)
-| | keys = (())
-| Filter (#0 > 1)
-| | types = (bigint)
-| | keys = (())
-| Project ()
-| | types = ()
-| | keys = (())
-| Map (err: more than one record produced in subquery)
-| | types = (integer)
-| | keys = (())
-
-%3 = Let l1 =
-| Union %1 %2
-| | types = (integer)
-| | keys = ()
-
-%4 =
-| Get %0 (l0)
-| | types = ()
-| | keys = ()
-| ArrangeBy ()
-| | types = ()
-| | keys = ()
-
-%5 =
-| Get %3 (l1)
-| | types = (integer)
-| | keys = ()
-| Project ()
-| | types = ()
-| | keys = ()
-| Distinct group=()
-| | types = ()
-| | keys = (())
-| Negate
-| | types = ()
-| | keys = ()
-
-%6 =
-| Constant ()
-| | types = ()
-| | keys = (())
-
-%7 =
-| Union %5 %6
-| | types = ()
-| | keys = ()
-| Map null
-| | types = (integer?)
-| | keys = ()
-
-%8 =
-| Union %3 %7
-| | types = (integer?)
-| | keys = ()
-
-%9 =
-| Join %4 %8
-| | implementation = Differential %8 %4.()
-| | types = (integer?)
-| | keys = ()
+Source materialize.public.int_table
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
 
@@ -1598,374 +786,139 @@ EOF
 #
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT 1 IN (SELECT col_not_null FROM int_table), 1 NOT IN (SELECT col_not_null FROM int_table) FROM int_table;
+EXPLAIN WITH(types, no_fast_path) SELECT 1 IN (SELECT col_not_null FROM int_table), 1 NOT IN (SELECT col_not_null FROM int_table) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Return // { types: "(boolean, boolean)" }
+    Map (NOT(#0)) // { types: "(boolean, boolean)" }
+      CrossJoin type=differential // { types: "(boolean)" }
+        ArrangeBy keys=[[]] // { types: "()" }
+          Project () // { types: "()" }
+            Get materialize.public.int_table // { types: "(integer?, integer)" }
+        Union // { types: "(boolean)" }
+          Map (true) // { types: "(boolean)" }
+            Get l0 // { types: "()" }
+          Map (false) // { types: "(boolean)" }
+            Union // { types: "()" }
+              Negate // { types: "()" }
+                Get l0 // { types: "()" }
+              Constant // { types: "()" }
+                - ()
+  With
+    cte l0 =
+      Distinct // { types: "()" }
+        Project () // { types: "()" }
+          Filter (#1 = 1) // { types: "(integer?, integer)" }
+            Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Query:
-%0 = Let l0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Filter (#1 = 1)
-| | types = (integer?, integer)
-| | keys = ()
-| Project ()
-| | types = ()
-| | keys = ()
-| Distinct group=()
-| | types = ()
-| | keys = (())
-
-%1 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Project ()
-| | types = ()
-| | keys = ()
-| ArrangeBy ()
-| | types = ()
-| | keys = ()
-
-%2 =
-| Get %0 (l0)
-| | types = ()
-| | keys = (())
-| Map true
-| | types = (boolean)
-| | keys = (())
-
-%3 =
-| Get %0 (l0)
-| | types = ()
-| | keys = (())
-| Negate
-| | types = ()
-| | keys = ()
-
-%4 =
-| Constant ()
-| | types = ()
-| | keys = (())
-
-%5 =
-| Union %3 %4
-| | types = ()
-| | keys = ()
-| Map false
-| | types = (boolean)
-| | keys = ()
-
-%6 =
-| Union %2 %5
-| | types = (boolean)
-| | keys = ()
-
-%7 =
-| Join %1 %6
-| | implementation = Differential %6 %1.()
-| | types = (boolean)
-| | keys = ()
-| Map NOT(#0)
-| | types = (boolean, boolean)
-| | keys = ()
+Source materialize.public.int_table
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT EXISTS (SELECT col_not_null FROM int_table), NOT EXISTS (SELECT col_not_null FROM int_table) FROM int_table;
+EXPLAIN WITH(types, no_fast_path) SELECT EXISTS (SELECT col_not_null FROM int_table), NOT EXISTS (SELECT col_not_null FROM int_table) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy, dummy
-| Project (#2, #3)
+Explained Query:
+  Return // { types: "(boolean, boolean)" }
+    Map (NOT(#0)) // { types: "(boolean, boolean)" }
+      CrossJoin type=differential // { types: "(boolean)" }
+        ArrangeBy keys=[[]] // { types: "()" }
+          Get l0 // { types: "()" }
+        Union // { types: "(boolean)" }
+          Map (true) // { types: "(boolean)" }
+            Get l1 // { types: "()" }
+          Map (false) // { types: "(boolean)" }
+            Union // { types: "()" }
+              Negate // { types: "()" }
+                Get l1 // { types: "()" }
+              Constant // { types: "()" }
+                - ()
+  With
+    cte l1 =
+      Distinct // { types: "()" }
+        Get l0 // { types: "()" }
+    cte l0 =
+      Project () // { types: "()" }
+        Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Query:
-%0 = Let l0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Project ()
-| | types = ()
-| | keys = ()
-
-%1 = Let l1 =
-| Get %0 (l0)
-| | types = ()
-| | keys = ()
-| Distinct group=()
-| | types = ()
-| | keys = (())
-
-%2 =
-| Get %0 (l0)
-| | types = ()
-| | keys = ()
-| ArrangeBy ()
-| | types = ()
-| | keys = ()
-
-%3 =
-| Get %1 (l1)
-| | types = ()
-| | keys = (())
-| Map true
-| | types = (boolean)
-| | keys = (())
-
-%4 =
-| Get %1 (l1)
-| | types = ()
-| | keys = (())
-| Negate
-| | types = ()
-| | keys = ()
-
-%5 =
-| Constant ()
-| | types = ()
-| | keys = (())
-
-%6 =
-| Union %4 %5
-| | types = ()
-| | keys = ()
-| Map false
-| | types = (boolean)
-| | keys = ()
-
-%7 =
-| Union %3 %6
-| | types = (boolean)
-| | keys = ()
-
-%8 =
-| Join %2 %7
-| | implementation = Differential %7 %2.()
-| | types = (boolean)
-| | keys = ()
-| Map NOT(#0)
-| | types = (boolean, boolean)
-| | keys = ()
+Source materialize.public.int_table
+  project=(#2, #3)
+  map=(dummy, dummy)
 
 EOF
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT 1 = SOME (SELECT col_not_null FROM int_table), col_not_null = SOME (SELECT 1), col_null = SOME ( SELECT col_not_null FROM int_table ) FROM int_table;
+EXPLAIN WITH(types, no_fast_path) SELECT 1 = SOME (SELECT col_not_null FROM int_table), col_not_null = SOME (SELECT 1), col_null = SOME ( SELECT col_not_null FROM int_table ) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Project (#0, #1)
-
-Query:
-%0 = Let l0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Filter (#1 = 1)
-| | types = (integer?, integer)
-| | keys = ()
-| Project ()
-| | types = ()
-| | keys = ()
-| Distinct group=()
-| | types = ()
-| | keys = (())
-
-%1 = Let l1 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Distinct group=(#0, #1)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-
-%2 = Let l2 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Project (#0)
-| | types = (integer?)
-| | keys = ()
-| Distinct group=(#0)
-| | types = (integer?)
-| | keys = ((#0))
-
-%3 =
-| Get %2 (l2)
-| | types = (integer?)
-| | keys = ((#0))
-| ArrangeBy ()
-| | types = (integer?)
-| | keys = ((#0))
-
-%4 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Project (#1)
-| | types = (integer)
-| | keys = ()
-
-%5 = Let l3 =
-| Join %3 %4
-| | implementation = Differential %4 %3.()
-| | types = (integer?, integer)
-| | keys = ()
-| Reduce group=(#0)
-| | agg any((#0 = #1))
-| | types = (integer?, boolean?)
-| | keys = ((#0))
-
-%6 =
-| Get %5 (l3)
-| | types = (integer?, boolean?)
-| | keys = ((#0))
-| Project (#0)
-| | types = (integer?)
-| | keys = ((#0))
-| Negate
-| | types = (integer?)
-| | keys = ()
-
-%7 =
-| Union %6 %2
-| | types = (integer?)
-| | keys = ()
-| Map false
-| | types = (integer?, boolean)
-| | keys = ()
-
-%8 = Let l4 =
-| Union %5 %7
-| | types = (integer?, boolean?)
-| | keys = ((#0))
-
-%9 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| ArrangeBy ()
-| | types = (integer?, integer)
-| | keys = ()
-
-%10 =
-| Get %0 (l0)
-| | types = ()
-| | keys = (())
-| Map true
-| | types = (boolean)
-| | keys = (())
-
-%11 =
-| Get %0 (l0)
-| | types = ()
-| | keys = (())
-| Negate
-| | types = ()
-| | keys = ()
-
-%12 =
-| Constant ()
-| | types = ()
-| | keys = (())
-
-%13 =
-| Union %11 %12
-| | types = ()
-| | keys = ()
-| Map false
-| | types = (boolean)
-| | keys = ()
-
-%14 =
-| Union %10 %13
-| | types = (boolean)
-| | keys = ()
-
-%15 =
-| Get %1 (l1)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Map 1, true
-| | types = (integer?, integer, integer, boolean)
-| | keys = ((#0, #1))
-| Filter (#1 = 1)
-| | types = (integer?, integer, integer, boolean)
-| | keys = ((#0))
-| Project (#0, #2, #3)
-| | types = (integer?, integer, boolean)
-| | keys = ((#0))
-
-%16 =
-| Get %1 (l1)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Filter (#1 = 1)
-| | types = (integer?, integer)
-| | keys = ((#0))
-| Project (#0)
-| | types = (integer?)
-| | keys = ((#0))
-| Negate
-| | types = (integer?)
-| | keys = ()
-| Map 1
-| | types = (integer?, integer)
-| | keys = ()
-
-%17 =
-| Union %16 %1
-| | types = (integer?, integer)
-| | keys = ()
-| Map false
-| | types = (integer?, integer, boolean)
-| | keys = ()
-
-%18 =
-| Union %15 %17
-| | types = (integer?, integer, boolean)
-| | keys = ()
-| ArrangeBy (#0, #1)
-| | types = (integer?, integer, boolean)
-| | keys = ()
-
-%19 =
-| Get %8 (l4)
-| | types = (integer?, boolean?)
-| | keys = ((#0))
-| Project (#0)
-| | types = (integer?)
-| | keys = ((#0))
-| Negate
-| | types = (integer?)
-| | keys = ()
-
-%20 =
-| Union %19 %2
-| | types = (integer?)
-| | keys = ()
-| Map null
-| | types = (integer?, boolean?)
-| | keys = ()
-
-%21 =
-| Union %8 %20
-| | types = (integer?, boolean?)
-| | keys = ((#0))
-| ArrangeBy (#0)
-| | types = (integer?, boolean?)
-| | keys = ((#0))
-
-%22 =
-| Join %9 %14 %18 %21 (= #0 #3 #6) (= #1 #4)
-| | implementation = Differential %14 %9.() %21.(#0) %18.(#0, #1)
-| | types = (integer?, integer, boolean, integer?, integer, boolean, integer?, boolean?)
-| | keys = ()
-| Project (#2, #5, #7)
-| | types = (boolean, boolean, boolean?)
-| | keys = ()
+Explained Query:
+  Return // { types: "(boolean, boolean, boolean?)" }
+    Project (#2, #5, #7) // { types: "(boolean, boolean, boolean?)" }
+      Join on=(eq(#0, #3, #6) AND #1 = #4) type=differential // { types: "(integer?, integer, boolean, integer?, integer, boolean, integer?, boolean?)" }
+        ArrangeBy keys=[[]] // { types: "(integer?, integer)" }
+          Get materialize.public.int_table // { types: "(integer?, integer)" }
+        Union // { types: "(boolean)" }
+          Map (true) // { types: "(boolean)" }
+            Get l0 // { types: "()" }
+          Map (false) // { types: "(boolean)" }
+            Union // { types: "()" }
+              Negate // { types: "()" }
+                Get l0 // { types: "()" }
+              Constant // { types: "()" }
+                - ()
+        ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer, boolean)" }
+          Union // { types: "(integer?, integer, boolean)" }
+            Project (#0, #2, #3) // { types: "(integer?, integer, boolean)" }
+              Filter (#1 = 1) // { types: "(integer?, integer, integer, boolean)" }
+                Map (1, true) // { types: "(integer?, integer, integer, boolean)" }
+                  Get l1 // { types: "(integer?, integer)" }
+            Map (false) // { types: "(integer?, integer, boolean)" }
+              Union // { types: "(integer?, integer)" }
+                Map (1) // { types: "(integer?, integer)" }
+                  Negate // { types: "(integer?)" }
+                    Project (#0) // { types: "(integer?)" }
+                      Filter (#1 = 1) // { types: "(integer?, integer)" }
+                        Get l1 // { types: "(integer?, integer)" }
+                Get l1 // { types: "(integer?, integer)" }
+        ArrangeBy keys=[[#0]] // { types: "(integer?, boolean?)" }
+          Union // { types: "(integer?, boolean?)" }
+            Get l4 // { types: "(integer?, boolean?)" }
+            Map (null) // { types: "(integer?, boolean?)" }
+              Union // { types: "(integer?)" }
+                Negate // { types: "(integer?)" }
+                  Project (#0) // { types: "(integer?)" }
+                    Get l4 // { types: "(integer?, boolean?)" }
+                Get l2 // { types: "(integer?)" }
+  With
+    cte l4 =
+      Union // { types: "(integer?, boolean?)" }
+        Get l3 // { types: "(integer?, boolean?)" }
+        Map (false) // { types: "(integer?, boolean)" }
+          Union // { types: "(integer?)" }
+            Negate // { types: "(integer?)" }
+              Project (#0) // { types: "(integer?)" }
+                Get l3 // { types: "(integer?, boolean?)" }
+            Get l2 // { types: "(integer?)" }
+    cte l3 =
+      Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { types: "(integer?, boolean?)" }
+        CrossJoin type=differential // { types: "(integer?, integer)" }
+          ArrangeBy keys=[[]] // { types: "(integer?)" }
+            Get l2 // { types: "(integer?)" }
+          Project (#1) // { types: "(integer)" }
+            Get materialize.public.int_table // { types: "(integer?, integer)" }
+    cte l2 =
+      Distinct group_by=[#0] // { types: "(integer?)" }
+        Project (#0) // { types: "(integer?)" }
+          Get materialize.public.int_table // { types: "(integer?, integer)" }
+    cte l1 =
+      Distinct group_by=[#0, #1] // { types: "(integer?, integer)" }
+        Get materialize.public.int_table // { types: "(integer?, integer)" }
+    cte l0 =
+      Distinct // { types: "()" }
+        Project () // { types: "()" }
+          Filter (#1 = 1) // { types: "(integer?, integer)" }
+            Get materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -1973,42 +926,22 @@ EOF
 # DATE / TIME functions
 #
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT col_null - INTERVAL '1 second' , col_not_null - INTERVAL '1 second' FROM ts_table;
+EXPLAIN WITH(types, no_fast_path) SELECT col_null - INTERVAL '1 second' , col_not_null - INTERVAL '1 second' FROM ts_table;
 ----
-Source materialize.public.ts_table (u4):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.ts_table (u4)
-| | types = (timestamp?, timestamp)
-| | keys = ()
-| Map (#0 - 00:00:01), (#1 - 00:00:01)
-| | types = (timestamp?, timestamp, timestamp?, timestamp)
-| | keys = ()
-| Project (#2, #3)
-| | types = (timestamp?, timestamp)
-| | keys = ()
+Explained Query:
+  Project (#2, #3) // { types: "(timestamp?, timestamp)" }
+    Map ((#0 - 00:00:01), (#1 - 00:00:01)) // { types: "(timestamp?, timestamp, timestamp?, timestamp)" }
+      Get materialize.public.ts_table // { types: "(timestamp?, timestamp)" }
 
 EOF
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT col_null - col_not_null, col_not_null - col_null FROM ts_table;
+EXPLAIN WITH(types, no_fast_path) SELECT col_null - col_not_null, col_not_null - col_null FROM ts_table;
 ----
-Source materialize.public.ts_table (u4):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.ts_table (u4)
-| | types = (timestamp?, timestamp)
-| | keys = ()
-| Map (#0 - #1), (#1 - #0)
-| | types = (timestamp?, timestamp, interval?, interval?)
-| | keys = ()
-| Project (#2, #3)
-| | types = (interval?, interval?)
-| | keys = ()
+Explained Query:
+  Project (#2, #3) // { types: "(interval?, interval?)" }
+    Map ((#0 - #1), (#1 - #0)) // { types: "(timestamp?, timestamp, interval?, interval?)" }
+      Get materialize.public.ts_table // { types: "(timestamp?, timestamp)" }
 
 EOF
 
@@ -2018,34 +951,22 @@ EOF
 #
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 INNER JOIN int_table AS a2 ON TRUE;
+EXPLAIN WITH(types, no_fast_path) SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 INNER JOIN int_table AS a2 ON TRUE;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Return // { types: "(integer, integer)" }
+    CrossJoin type=differential // { types: "(integer, integer)" }
+      ArrangeBy keys=[[]] // { types: "(integer)" }
+        Get l0 // { types: "(integer)" }
+      Get l0 // { types: "(integer)" }
+  With
+    cte l0 =
+      Project (#1) // { types: "(integer)" }
+        Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Query:
-%0 = Let l0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Project (#1)
-| | types = (integer)
-| | keys = ()
-
-%1 =
-| Get %0 (l0)
-| | types = (integer)
-| | keys = ()
-| ArrangeBy ()
-| | types = (integer)
-| | keys = ()
-
-%2 =
-| Join %1 %0
-| | implementation = Differential %0 %1.()
-| | types = (integer, integer)
-| | keys = ()
+Source materialize.public.int_table
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
 
@@ -2054,220 +975,74 @@ EOF
 #
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 LEFT JOIN int_table AS a2 ON TRUE;
+EXPLAIN WITH(types, no_fast_path) SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 LEFT JOIN int_table AS a2 ON TRUE;
 ----
-Source materialize.public.int_table (u1):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| ArrangeBy ()
-| | types = (integer?, integer)
-| | keys = ()
-
-%1 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Project (#1)
-| | types = (integer)
-| | keys = ()
-
-%2 = Let l0 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
-| | types = (integer?, integer, integer)
-| | keys = ()
-
-%3 =
-| Get %2 (l0)
-| | types = (integer?, integer, integer)
-| | keys = ()
-| Project (#1, #2)
-| | types = (integer, integer)
-| | keys = ()
-
-%4 =
-| Get %2 (l0)
-| | types = (integer?, integer, integer)
-| | keys = ()
-| Project (#0, #1)
-| | types = (integer?, integer)
-| | keys = ()
-| Distinct group=(#0, #1)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Negate
-| | types = (integer?, integer)
-| | keys = ()
-
-%5 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Distinct group=(#0, #1)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-
-%6 =
-| Union %4 %5
-| | types = (integer?, integer)
-| | keys = ()
-| ArrangeBy (#0, #1)
-| | types = (integer?, integer)
-| | keys = ()
-
-%7 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-
-%8 =
-| Join %6 %7 (= #0 #2) (= #1 #3)
-| | implementation = Differential %7 %6.(#0, #1)
-| | types = (integer?, integer, integer?, integer)
-| | keys = ()
-| Map null
-| | types = (integer?, integer, integer?, integer, integer?)
-| | keys = ()
-| Project (#1, #4)
-| | types = (integer, integer?)
-| | keys = ()
-
-%9 =
-| Union %3 %8
-| | types = (integer, integer?)
-| | keys = ()
+Explained Query:
+  Return // { types: "(integer, integer?)" }
+    Union // { types: "(integer, integer?)" }
+      Project (#1, #2) // { types: "(integer, integer)" }
+        Get l0 // { types: "(integer?, integer, integer)" }
+      Project (#1, #4) // { types: "(integer, integer?)" }
+        Map (null) // { types: "(integer?, integer, integer?, integer, integer?)" }
+          Join on=(#0 = #2 AND #1 = #3) type=differential // { types: "(integer?, integer, integer?, integer)" }
+            ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer)" }
+              Union // { types: "(integer?, integer)" }
+                Negate // { types: "(integer?, integer)" }
+                  Distinct group_by=[#0, #1] // { types: "(integer?, integer)" }
+                    Project (#0, #1) // { types: "(integer?, integer)" }
+                      Get l0 // { types: "(integer?, integer, integer)" }
+                Distinct group_by=[#0, #1] // { types: "(integer?, integer)" }
+                  Get materialize.public.int_table // { types: "(integer?, integer)" }
+            Get materialize.public.int_table // { types: "(integer?, integer)" }
+  With
+    cte l0 =
+      CrossJoin type=differential // { types: "(integer?, integer, integer)" }
+        ArrangeBy keys=[[]] // { types: "(integer?, integer)" }
+          Get materialize.public.int_table // { types: "(integer?, integer)" }
+        Project (#1) // { types: "(integer)" }
+          Get materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 FULL OUTER JOIN int_table AS a2 ON TRUE;
+EXPLAIN WITH(types, no_fast_path) SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 FULL OUTER JOIN int_table AS a2 ON TRUE;
 ----
-Source materialize.public.int_table (u1):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| ArrangeBy ()
-| | types = (integer?, integer)
-| | keys = ()
-
-%1 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-
-%2 = Let l0 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
-| | types = (integer?, integer, integer?, integer)
-| | keys = ()
-
-%3 = Let l1 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Distinct group=(#0, #1)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-
-%4 =
-| Get %2 (l0)
-| | types = (integer?, integer, integer?, integer)
-| | keys = ()
-| Project (#1, #3)
-| | types = (integer, integer)
-| | keys = ()
-
-%5 =
-| Get %2 (l0)
-| | types = (integer?, integer, integer?, integer)
-| | keys = ()
-| Project (#0, #1)
-| | types = (integer?, integer)
-| | keys = ()
-| Distinct group=(#0, #1)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Negate
-| | types = (integer?, integer)
-| | keys = ()
-
-%6 =
-| Union %5 %3
-| | types = (integer?, integer)
-| | keys = ()
-| ArrangeBy (#0, #1)
-| | types = (integer?, integer)
-| | keys = ()
-
-%7 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-
-%8 =
-| Join %6 %7 (= #0 #2) (= #1 #3)
-| | implementation = Differential %7 %6.(#0, #1)
-| | types = (integer?, integer, integer?, integer)
-| | keys = ()
-| Map null
-| | types = (integer?, integer, integer?, integer, integer?)
-| | keys = ()
-| Project (#1, #4)
-| | types = (integer, integer?)
-| | keys = ()
-
-%9 =
-| Get %2 (l0)
-| | types = (integer?, integer, integer?, integer)
-| | keys = ()
-| Project (#2, #3)
-| | types = (integer?, integer)
-| | keys = ()
-| Distinct group=(#0, #1)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Negate
-| | types = (integer?, integer)
-| | keys = ()
-
-%10 =
-| Union %9 %3
-| | types = (integer?, integer)
-| | keys = ()
-| ArrangeBy (#0, #1)
-| | types = (integer?, integer)
-| | keys = ()
-
-%11 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-
-%12 =
-| Join %10 %11 (= #0 #2) (= #1 #3)
-| | implementation = Differential %11 %10.(#0, #1)
-| | types = (integer?, integer, integer?, integer)
-| | keys = ()
-| Map null
-| | types = (integer?, integer, integer?, integer, integer?)
-| | keys = ()
-| Project (#4, #1)
-| | types = (integer?, integer)
-| | keys = ()
-
-%13 =
-| Union %4 %8 %12
-| | types = (integer?, integer?)
-| | keys = ()
+Explained Query:
+  Return // { types: "(integer?, integer?)" }
+    Union // { types: "(integer?, integer?)" }
+      Project (#1, #3) // { types: "(integer, integer)" }
+        Get l0 // { types: "(integer?, integer, integer?, integer)" }
+      Project (#1, #4) // { types: "(integer, integer?)" }
+        Map (null) // { types: "(integer?, integer, integer?, integer, integer?)" }
+          Join on=(#0 = #2 AND #1 = #3) type=differential // { types: "(integer?, integer, integer?, integer)" }
+            ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer)" }
+              Union // { types: "(integer?, integer)" }
+                Negate // { types: "(integer?, integer)" }
+                  Distinct group_by=[#0, #1] // { types: "(integer?, integer)" }
+                    Project (#0, #1) // { types: "(integer?, integer)" }
+                      Get l0 // { types: "(integer?, integer, integer?, integer)" }
+                Get l1 // { types: "(integer?, integer)" }
+            Get materialize.public.int_table // { types: "(integer?, integer)" }
+      Project (#4, #1) // { types: "(integer?, integer)" }
+        Map (null) // { types: "(integer?, integer, integer?, integer, integer?)" }
+          Join on=(#0 = #2 AND #1 = #3) type=differential // { types: "(integer?, integer, integer?, integer)" }
+            ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer)" }
+              Union // { types: "(integer?, integer)" }
+                Negate // { types: "(integer?, integer)" }
+                  Distinct group_by=[#0, #1] // { types: "(integer?, integer)" }
+                    Project (#2, #3) // { types: "(integer?, integer)" }
+                      Get l0 // { types: "(integer?, integer, integer?, integer)" }
+                Get l1 // { types: "(integer?, integer)" }
+            Get materialize.public.int_table // { types: "(integer?, integer)" }
+  With
+    cte l1 =
+      Distinct group_by=[#0, #1] // { types: "(integer?, integer)" }
+        Get materialize.public.int_table // { types: "(integer?, integer)" }
+    cte l0 =
+      CrossJoin type=differential // { types: "(integer?, integer, integer?, integer)" }
+        ArrangeBy keys=[[]] // { types: "(integer?, integer)" }
+          Get materialize.public.int_table // { types: "(integer?, integer)" }
+        Get materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -2277,55 +1052,33 @@ EOF
 
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT col_not_null FROM int_table UNION ALL SELECT col_not_null FROM int_table;
+EXPLAIN WITH(types, no_fast_path) SELECT col_not_null FROM int_table UNION ALL SELECT col_not_null FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Return // { types: "(integer)" }
+    Union // { types: "(integer)" }
+      Get l0 // { types: "(integer)" }
+      Get l0 // { types: "(integer)" }
+  With
+    cte l0 =
+      Project (#1) // { types: "(integer)" }
+        Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Query:
-%0 = Let l0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Project (#1)
-| | types = (integer)
-| | keys = ()
-
-%1 =
-| Union %0 %0
-| | types = (integer)
-| | keys = ()
+Source materialize.public.int_table
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT col_not_null FROM int_table UNION ALL SELECT col_null FROM int_table;
+EXPLAIN WITH(types, no_fast_path) SELECT col_not_null FROM int_table UNION ALL SELECT col_null FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Project (#1)
-| | types = (integer)
-| | keys = ()
-
-%1 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Project (#0)
-| | types = (integer?)
-| | keys = ()
-
-%2 =
-| Union %0 %1
-| | types = (integer?)
-| | keys = ()
+Explained Query:
+  Union // { types: "(integer?)" }
+    Project (#1) // { types: "(integer)" }
+      Get materialize.public.int_table // { types: "(integer?, integer)" }
+    Project (#0) // { types: "(integer?)" }
+      Get materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -2334,22 +1087,15 @@ EOF
 #
 
 query T multiline
-EXPLAIN TYPED PLAN FOR SELECT f1 + 1 FROM (SELECT col_not_null + 1 AS f1 FROM int_table);
+EXPLAIN WITH(types, no_fast_path) SELECT f1 + 1 FROM (SELECT col_not_null + 1 AS f1 FROM int_table);
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Project (#2) // { types: "(integer)" }
+    Map (((#1 + 1) + 1)) // { types: "(integer?, integer, integer)" }
+      Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Query:
-%0 =
-| Get materialize.public.int_table (u1)
-| | types = (integer?, integer)
-| | keys = ()
-| Map ((#1 + 1) + 1)
-| | types = (integer?, integer, integer)
-| | keys = ()
-| Project (#2)
-| | types = (integer)
-| | keys = ()
+Source materialize.public.int_table
+  project=(#2, #1)
+  map=(dummy)
 
 EOF

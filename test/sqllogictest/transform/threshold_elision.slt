@@ -67,24 +67,19 @@ EXCEPT
     SELECT id FROM people WHERE id = 5
 )
 ----
-Source materialize.public.people (u2):
-| Map dummy, dummy, dummy
-| Project (#0, #4..=#6)
+Explained Query:
+  Union
+    Project (#0)
+      Get materialize.public.people
+    Map (5)
+      Negate
+        Project ()
+          Filter (#0 = 5)
+            Get materialize.public.people
 
-Query:
-%0 =
-| Get materialize.public.people (u2)
-| Project (#0)
-
-%1 =
-| Get materialize.public.people (u2)
-| Filter (#0 = 5)
-| Project ()
-| Negate
-| Map 5
-
-%2 =
-| Union %0 %1
+Source materialize.public.people
+  project=(#0, #4..=#6)
+  map=(dummy, dummy, dummy)
 
 EOF
 
@@ -99,23 +94,18 @@ EXCEPT ALL
     SELECT id FROM people WHERE died IS NOT NULL
 )
 ----
-Source materialize.public.people (u2):
-| Map dummy, dummy
-| Project (#0, #4, #5, #3)
+Explained Query:
+  Union
+    Project (#0)
+      Get materialize.public.people
+    Negate
+      Project (#0)
+        Filter (#3) IS NOT NULL
+          Get materialize.public.people
 
-Query:
-%0 =
-| Get materialize.public.people (u2)
-| Project (#0)
-
-%1 =
-| Get materialize.public.people (u2)
-| Filter (#3) IS NOT NULL
-| Project (#0)
-| Negate
-
-%2 =
-| Union %0 %1
+Source materialize.public.people
+  project=(#0, #4, #5, #3)
+  map=(dummy, dummy)
 
 EOF
 
@@ -126,25 +116,20 @@ SELECT name FROM people
 EXCEPT
 SELECT name FROM people WHERE id > 1
 ----
-Source materialize.public.people (u2):
-| Map dummy, dummy
-| Project (#0, #1, #4, #5)
+Explained Query:
+  Union
+    Distinct group_by=[#0]
+      Project (#1)
+        Get materialize.public.people
+    Negate
+      Distinct group_by=[#0]
+        Project (#1)
+          Filter (#0 > 1)
+            Get materialize.public.people
 
-Query:
-%0 =
-| Get materialize.public.people (u2)
-| Project (#1)
-| Distinct group=(#0)
-
-%1 =
-| Get materialize.public.people (u2)
-| Filter (#0 > 1)
-| Project (#1)
-| Distinct group=(#0)
-| Negate
-
-%2 =
-| Union %0 %1
+Source materialize.public.people
+  project=(#0, #1, #4, #5)
+  map=(dummy, dummy)
 
 EOF
 
@@ -156,30 +141,23 @@ SELECT MAX(id) FROM people GROUP BY name
 EXCEPT ALL
 SELECT MAX(id) FROM (SELECT * FROM people WHERE id > 1) GROUP BY name
 ----
-Source materialize.public.people (u2):
-| Map dummy, dummy
-| Project (#0, #1, #4, #5)
+Explained Query:
+  Threshold
+    Union
+      Project (#1)
+        Reduce group_by=[#1] aggregates=[max(#0)]
+          Project (#0, #1)
+            Get materialize.public.people
+      Negate
+        Project (#1)
+          Reduce group_by=[#1] aggregates=[max(#0)]
+            Project (#0, #1)
+              Filter (#0 > 1)
+                Get materialize.public.people
 
-Query:
-%0 =
-| Get materialize.public.people (u2)
-| Project (#0, #1)
-| Reduce group=(#1)
-| | agg max(#0)
-| Project (#1)
-
-%1 =
-| Get materialize.public.people (u2)
-| Filter (#0 > 1)
-| Project (#0, #1)
-| Reduce group=(#1)
-| | agg max(#0)
-| Project (#1)
-| Negate
-
-%2 =
-| Union %0 %1
-| Threshold
+Source materialize.public.people
+  project=(#0, #1, #4, #5)
+  map=(dummy, dummy)
 
 EOF
 
@@ -208,22 +186,21 @@ EXCEPT ALL
         )
 )
 ----
-Source materialize.public.people (u2):
-| Map dummy, dummy
-| Project (#0, #1, #4, #5)
+Explained Query:
+  Return
+    Union
+      Get l0
+      Negate
+        TopK group_by=[#0] limit=1 monotonic=false
+          Get l0
+  With
+    cte l0 =
+      Project (#0, #1)
+        Get materialize.public.people
 
-Query:
-%0 = Let l0 =
-| Get materialize.public.people (u2)
-| Project (#0, #1)
-
-%1 =
-| Get %0 (l0)
-| TopK group=(#0) order=() limit=1 offset=0
-| Negate
-
-%2 =
-| Union %0 %1
+Source materialize.public.people
+  project=(#0, #1, #4, #5)
+  map=(dummy, dummy)
 
 EOF
 
@@ -252,22 +229,21 @@ EXCEPT
         )
 )
 ----
-Source materialize.public.people (u2):
-| Map dummy, dummy
-| Project (#0, #1, #4, #5)
+Explained Query:
+  Return
+    Union
+      Get l0
+      Negate
+        TopK group_by=[#0] limit=1 monotonic=false
+          Get l0
+  With
+    cte l0 =
+      Project (#0, #1)
+        Get materialize.public.people
 
-Query:
-%0 = Let l0 =
-| Get materialize.public.people (u2)
-| Project (#0, #1)
-
-%1 =
-| Get %0 (l0)
-| TopK group=(#0) order=() limit=1 offset=0
-| Negate
-
-%2 =
-| Union %0 %1
+Source materialize.public.people
+  project=(#0, #1, #4, #5)
+  map=(dummy, dummy)
 
 EOF
 
@@ -277,35 +253,28 @@ EXPLAIN OPTIMIZED PLAN FOR
 WITH cte AS (SELECT people.id FROM people, bands)
 SELECT * FROM cte EXCEPT ALL SELECT * FROM cte where id > 5;
 ----
-Source materialize.public.bands (u1):
-| Map dummy, dummy
-| Project (#2, #3)
+Explained Query:
+  Return
+    Union
+      Get l0
+      Negate
+        Filter (#0 > 5)
+          Get l0
+  With
+    cte l0 =
+      CrossJoin type=differential
+        ArrangeBy keys=[[]]
+          Project (#0)
+            Get materialize.public.people
+        Project ()
+          Get materialize.public.bands
 
-Source materialize.public.people (u2):
-| Map dummy, dummy, dummy
-| Project (#0, #4..=#6)
-
-Query:
-%0 =
-| Get materialize.public.people (u2)
-| Project (#0)
-| ArrangeBy ()
-
-%1 =
-| Get materialize.public.bands (u1)
-| Project ()
-
-%2 = Let l0 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
-
-%3 =
-| Get %2 (l0)
-| Filter (#0 > 5)
-| Negate
-
-%4 =
-| Union %2 %3
+Source materialize.public.bands
+  project=(#2, #3)
+  map=(dummy, dummy)
+Source materialize.public.people
+  project=(#0, #4..=#6)
+  map=(dummy, dummy, dummy)
 
 EOF
 
@@ -315,23 +284,22 @@ EXPLAIN OPTIMIZED PLAN FOR
 WITH cte AS (SELECT DISTINCT name FROM people)
 SELECT * FROM cte EXCEPT ALL SELECT * FROM cte WHERE name LIKE 'J%'
 ----
-Source materialize.public.people (u2):
-| Map dummy, dummy, dummy
-| Project (#4, #1, #5, #6)
+Explained Query:
+  Return
+    Union
+      Get l0
+      Negate
+        Filter "J%" ~~(#0)
+          Get l0
+  With
+    cte l0 =
+      Distinct group_by=[#0]
+        Project (#1)
+          Get materialize.public.people
 
-Query:
-%0 = Let l0 =
-| Get materialize.public.people (u2)
-| Project (#1)
-| Distinct group=(#0)
-
-%1 =
-| Get %0 (l0)
-| Filter "J%" ~~(#0)
-| Negate
-
-%2 =
-| Union %0 %1
+Source materialize.public.people
+  project=(#4, #1, #5, #6)
+  map=(dummy, dummy, dummy)
 
 EOF
 
@@ -345,24 +313,22 @@ WITH a(birth_year, no_people_born) AS (
 )
 SELECT * FROM a EXCEPT (SELECT * FROM a WHERE birth_year > 1940);
 ----
-Source materialize.public.people (u2):
-| Map dummy, dummy, dummy
-| Project (#4, #5, #2, #6)
+Explained Query:
+  Return
+    Union
+      Get l0
+      Negate
+        Filter (#0 > 1940)
+          Get l0
+  With
+    cte l0 =
+      Reduce group_by=[extract_year_d(#0)] aggregates=[count(true)]
+        Project (#2)
+          Get materialize.public.people
 
-Query:
-%0 = Let l0 =
-| Get materialize.public.people (u2)
-| Project (#2)
-| Reduce group=(extract_year_d(#0))
-| | agg count(true)
-
-%1 =
-| Get %0 (l0)
-| Filter (#0 > 1940)
-| Negate
-
-%2 =
-| Union %0 %1
+Source materialize.public.people
+  project=(#4, #5, #2, #6)
+  map=(dummy, dummy, dummy)
 
 EOF
 
@@ -386,29 +352,21 @@ SELECT * FROM cte2
 EXCEPT
 SELECT * FROM cte2 WHERE name LIKE 'P%';
 ----
-Source materialize.public.people (u2):
-| Project (#0..=#3)
-
-Query:
-%0 =
-| Get materialize.public.people (u2)
-
-%1 =
-| Get materialize.public.people (u2)
-| Filter "J%" ~~(#1)
-| Negate
-
-%2 = Let l0 =
-| Union %0 %1
-| Distinct group=(#0, #1, #2, #3)
-
-%3 =
-| Get %2 (l0)
-| Filter "P%" ~~(#1)
-| Negate
-
-%4 =
-| Union %2 %3
+Explained Query:
+  Return
+    Union
+      Get l0
+      Negate
+        Filter "P%" ~~(#1)
+          Get l0
+  With
+    cte l0 =
+      Distinct group_by=[#0, #1, #2, #3]
+        Union
+          Get materialize.public.people
+          Negate
+            Filter "J%" ~~(#1)
+              Get materialize.public.people
 
 EOF
 
@@ -423,29 +381,22 @@ EXCEPT ALL
     SELECT name FROM people WHERE id = 2
 )
 ----
-Source materialize.public.people (u2):
-| Map dummy, dummy
-| Project (#0, #1, #4, #5)
+Explained Query:
+  Threshold
+    Union
+      Project (#1)
+        Get materialize.public.people
+      Negate
+        Project (#1)
+          Filter (#0 = 1)
+            Get materialize.public.people
+      Negate
+        Project (#1)
+          Filter (#0 = 2)
+            Get materialize.public.people
 
-Query:
-%0 =
-| Get materialize.public.people (u2)
-| Project (#1)
-
-%1 =
-| Get materialize.public.people (u2)
-| Filter (#0 = 1)
-| Project (#1)
-| Negate
-
-%2 =
-| Get materialize.public.people (u2)
-| Filter (#0 = 2)
-| Project (#1)
-| Negate
-
-%3 =
-| Union %0 %1 %2
-| Threshold
+Source materialize.public.people
+  project=(#0, #1, #4, #5)
+  map=(dummy, dummy)
 
 EOF

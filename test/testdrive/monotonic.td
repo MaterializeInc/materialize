@@ -74,71 +74,17 @@ a min max
 $ set-regex match=(.User.:\s\d+|\(u\d+\)) replacement=UID
 
 ? EXPLAIN PHYSICAL PLAN FOR VIEW v2
-{
-  "TopK": {
-    "input": {
-      "ArrangeBy": {
-        "input": {
-          "Get": {
-            "id": {
-              "Global": {
-                UID
-              }
-            },
-            "keys": {
-              "raw": false,
-              "arranged": [
-                [
-                  [
-                    {
-                      "Column": 0
-                    }
-                  ],
-                  {
-                    "0": 0
-                  },
-                  []
-                ]
-              ]
-            },
-            "plan": "PassArrangements"
-          }
-        },
-        "forms": {
-          "raw": true,
-          "arranged": []
-        },
-        "input_key": [
-          {
-            "Column": 0
-          }
-        ],
-        "input_mfp": {
-          "expressions": [],
-          "predicates": [],
-          "projection": [
-            0
-          ],
-          "input_arity": 1
-        }
-      }
-    },
-    "top_k_plan": {
-      "MonotonicTopK": {
-        "group_key": [],
-        "order_key": [
-          {
-            "column": 0,
-            "desc": false,
-            "nulls_last": true
-          }
-        ],
-        "limit": 3,
-        "arity": 1
-      }
-    }
-  }
-}
+Explained Query:
+  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=3
+    ArrangeBy
+      input_key=[#0]
+      raw=true
+      Get::PassArrangements materialize.public.i1
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=() }
+
+Used Indexes:
+  - materialize.public.i1_primary_idx
 
 > CREATE SOURCE non_dbz_data_indexed
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')
@@ -152,356 +98,89 @@ $ set-regex match=(.User.:\s\d+|\(u\d+\)) replacement=UID
 > CREATE VIEW v3 AS SELECT * FROM non_dbz_data_indexed ORDER BY b LIMIT 3
 
 ? EXPLAIN PHYSICAL PLAN FOR VIEW v3
-{
-  "TopK": {
-    "input": {
-      "ArrangeBy": {
-        "input": {
-          "Get": {
-            "id": {
-              "Global": {
-                UID
-              }
-            },
-            "keys": {
-              "raw": false,
-              "arranged": [
-                [
-                  [
-                    {
-                      "Column": 0
-                    },
-                    {
-                      "Column": 1
-                    }
-                  ],
-                  {
-                    "0": 0,
-                    "1": 1
-                  },
-                  []
-                ]
-              ]
-            },
-            "plan": "PassArrangements"
-          }
-        },
-        "forms": {
-          "raw": true,
-          "arranged": []
-        },
-        "input_key": [
-          {
-            "Column": 0
-          },
-          {
-            "Column": 1
-          }
-        ],
-        "input_mfp": {
-          "expressions": [],
-          "predicates": [],
-          "projection": [
-            0,
-            1
-          ],
-          "input_arity": 2
-        }
-      }
-    },
-    "top_k_plan": {
-      "MonotonicTopK": {
-        "group_key": [],
-        "order_key": [
-          {
-            "column": 1,
-            "desc": false,
-            "nulls_last": true
-          }
-        ],
-        "limit": 3,
-        "arity": 2
-      }
-    }
-  }
-}
+Explained Query:
+  TopK::MonotonicTopK order_by=[#1 asc nulls_last] limit=3
+    ArrangeBy
+      input_key=[#0, #1]
+      raw=true
+      Get::PassArrangements materialize.public.non_dbz_data_indexed
+        raw=false
+        arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
 
+Used Indexes:
+  - materialize.public.non_dbz_data_indexed_primary_idx
 
-> CREATE VIEW i4 AS SELECT b+1 as c FROM i1
-> CREATE DEFAULT INDEX ON i4
+> CREATE VIEW i4 AS SELECT b+1 as c FROM i1;
+> CREATE DEFAULT INDEX ON i4;
 
 # Propagating monotonicity analysis through 2 indexed views (i1 and i4)
 
-> CREATE VIEW v5 AS SELECT * from i4 ORDER BY c LIMIT 2
+> CREATE VIEW v5 AS SELECT * from i4 ORDER BY c LIMIT 2;
 
-? EXPLAIN PHYSICAL PLAN FOR VIEW v5
-{
-  "TopK": {
-    "input": {
-      "ArrangeBy": {
-        "input": {
-          "Get": {
-            "id": {
-              "Global": {
-                UID
-              }
-            },
-            "keys": {
-              "raw": false,
-              "arranged": [
-                [
-                  [
-                    {
-                      "Column": 0
-                    }
-                  ],
-                  {
-                    "0": 0
-                  },
-                  []
-                ]
-              ]
-            },
-            "plan": "PassArrangements"
-          }
-        },
-        "forms": {
-          "raw": true,
-          "arranged": []
-        },
-        "input_key": [
-          {
-            "Column": 0
-          }
-        ],
-        "input_mfp": {
-          "expressions": [],
-          "predicates": [],
-          "projection": [
-            0
-          ],
-          "input_arity": 1
-        }
-      }
-    },
-    "top_k_plan": {
-      "MonotonicTopK": {
-        "group_key": [],
-        "order_key": [
-          {
-            "column": 0,
-            "desc": false,
-            "nulls_last": true
-          }
-        ],
-        "limit": 2,
-        "arity": 1
-      }
-    }
-  }
-}
+? EXPLAIN PHYSICAL PLAN FOR VIEW v5;
+Explained Query:
+  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2
+    ArrangeBy
+      input_key=[#0]
+      raw=true
+      Get::PassArrangements materialize.public.i4
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=() }
 
-> CREATE VIEW i6 AS SELECT c FROM v5
-> CREATE DEFAULT INDEX ON i6
+Used Indexes:
+  - materialize.public.i4_primary_idx
+
+> CREATE VIEW i6 AS SELECT c FROM v5;
+> CREATE DEFAULT INDEX ON i6;
 
 # Non-monotonic indexed view -- v7 can't use a monotonic TopK plan, because i6 and v5 are not monotonic
 
-> CREATE VIEW v7 AS SELECT * from i6 ORDER BY c LIMIT 2
+> CREATE VIEW v7 AS SELECT * from i6 ORDER BY c LIMIT 2;
 
-? EXPLAIN PHYSICAL PLAN FOR VIEW v7
-{
-  "TopK": {
-    "input": {
-      "ArrangeBy": {
-        "input": {
-          "Get": {
-            "id": {
-              "Global": {
-                UID
-              }
-            },
-            "keys": {
-              "raw": false,
-              "arranged": [
-                [
-                  [
-                    {
-                      "Column": 0
-                    }
-                  ],
-                  {
-                    "0": 0
-                  },
-                  []
-                ]
-              ]
-            },
-            "plan": "PassArrangements"
-          }
-        },
-        "forms": {
-          "raw": true,
-          "arranged": []
-        },
-        "input_key": [
-          {
-            "Column": 0
-          }
-        ],
-        "input_mfp": {
-          "expressions": [],
-          "predicates": [],
-          "projection": [
-            0
-          ],
-          "input_arity": 1
-        }
-      }
-    },
-    "top_k_plan": {
-      "Basic": {
-        "group_key": [],
-        "order_key": [
-          {
-            "column": 0,
-            "desc": false,
-            "nulls_last": true
-          }
-        ],
-        "limit": 2,
-        "offset": 0,
-        "arity": 1
-      }
-    }
-  }
-}
+? EXPLAIN PHYSICAL PLAN FOR VIEW v7;
+Explained Query:
+  TopK::Basic order_by=[#0 asc nulls_last] limit=2
+    ArrangeBy
+      input_key=[#0]
+      raw=true
+      Get::PassArrangements materialize.public.i6
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=() }
 
+Used Indexes:
+  - materialize.public.i6_primary_idx
 
-> CREATE VIEW i8 AS SELECT * from (SELECT * FROM i1 UNION ALL SELECT * FROM i1)
-> CREATE DEFAULT INDEX ON i8
+> CREATE VIEW i8 AS SELECT * from (SELECT * FROM i1 UNION ALL SELECT * FROM i1);
+> CREATE DEFAULT INDEX ON i8;
 
-> CREATE VIEW i9 AS SELECT * from (SELECT * FROM i1 UNION ALL SELECT * FROM i8)
-> CREATE DEFAULT INDEX ON i9
+> CREATE VIEW i9 AS SELECT * from (SELECT * FROM i1 UNION ALL SELECT * FROM i8);
+> CREATE DEFAULT INDEX ON i9;
 
-> CREATE VIEW v10 as SELECT b FROM i9 ORDER BY b LIMIT 2;
+> CREATE VIEW v10 as SELECT b FROM i9 ORDER BY b LIMIT 2;;
 
 # Propagating monotonicity analysis in a complex situation: (i1, i1) -> i8; (i1, i8) -> i9
 
 ? EXPLAIN PHYSICAL PLAN FOR VIEW v10;
-{
-  "TopK": {
-    "input": {
-      "ArrangeBy": {
-        "input": {
-          "Get": {
-            "id": {
-              "Global": {
-                UID
-              }
-            },
-            "keys": {
-              "raw": false,
-              "arranged": [
-                [
-                  [
-                    {
-                      "Column": 0
-                    }
-                  ],
-                  {
-                    "0": 0
-                  },
-                  []
-                ]
-              ]
-            },
-            "plan": "PassArrangements"
-          }
-        },
-        "forms": {
-          "raw": true,
-          "arranged": []
-        },
-        "input_key": [
-          {
-            "Column": 0
-          }
-        ],
-        "input_mfp": {
-          "expressions": [],
-          "predicates": [],
-          "projection": [
-            0
-          ],
-          "input_arity": 1
-        }
-      }
-    },
-    "top_k_plan": {
-      "MonotonicTopK": {
-        "group_key": [],
-        "order_key": [
-          {
-            "column": 0,
-            "desc": false,
-            "nulls_last": true
-          }
-        ],
-        "limit": 2,
-        "arity": 1
-      }
-    }
-  }
-}
+Explained Query:
+  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2
+    ArrangeBy
+      input_key=[#0]
+      raw=true
+      Get::PassArrangements materialize.public.i9
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=() }
 
+Used Indexes:
+  - materialize.public.i9_primary_idx
 
-> CREATE MATERIALIZED VIEW m1 AS SELECT b FROM non_dbz_data
+> CREATE MATERIALIZED VIEW m1 AS SELECT b FROM non_dbz_data;
 
-> CREATE VIEW v11 AS SELECT * FROM m1 ORDER BY b LIMIT 3
+> CREATE VIEW v11 AS SELECT * FROM m1 ORDER BY b LIMIT 3;
 
 # Propagating monotonicity analysis through materialized views
 
-? EXPLAIN PHYSICAL PLAN FOR VIEW v11
-Source materialize.public.m1 UID:
-{
-  "expressions": [],
-  "predicates": [],
-  "projection": [
-    0
-  ],
-  "input_arity": 1
-}
-
-View materialize.public.v11 UID:
-{
-  "TopK": {
-    "input": {
-      "Get": {
-        "id": {
-          "Global": {
-            UID
-          }
-        },
-        "keys": {
-          "raw": true,
-          "arranged": []
-        },
-        "plan": "PassArrangements"
-      }
-    },
-    "top_k_plan": {
-      "MonotonicTopK": {
-        "group_key": [],
-        "order_key": [
-          {
-            "column": 0,
-            "desc": false,
-            "nulls_last": true
-          }
-        ],
-        "limit": 3,
-        "arity": 1
-      }
-    }
-  }
-}
+? EXPLAIN PHYSICAL PLAN FOR VIEW v11;
+Explained Query:
+  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=3
+    Get::PassArrangements materialize.public.m1
+      raw=true

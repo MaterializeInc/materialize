@@ -19,7 +19,7 @@
 # Remove both newlines, references to internal table identifiers, and "materialize.public" strings, all with a single regexp
 $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 > EXPLAIN SELECT (SELECT 'a' LIMIT 1);
-"%0 =| Constant (\"a\")"
+"Explained Query (fast path):  Constant    - (\"a\")"
 
 $ set schema={"type": "record", "name": "schema", "fields": [ {"name": "f1", "type": ["int", "null"]} , {"name": "f2", "type": ["int", "null"]}] }
 

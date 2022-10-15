@@ -43,15 +43,13 @@ $ set-regex match=u\d+ replacement=UID
 > CREATE VIEW v as SELECT * from data where a = 1 and d = 3;
 > CREATE DEFAULT INDEX ON v;
 
-? EXPLAIN PLAN FOR VIEW v;
-Source materialize.public.data (UID):
-| Filter (#0 = 1), (#3 = 3)
-| Project (#0..=#3)
+? EXPLAIN VIEW v;
+Explained Query:
+  Filter (#0 = 1) AND (#3 = 3)
+    Get materialize.public.data
 
-View materialize.public.v (UID):
-%0 =
-| Get materialize.public.data (UID)
-| Filter (#0 = 1), (#3 = 3)
+Source materialize.public.data
+  filter=((#0 = 1) AND (#3 = 3))
 
 > SELECT * FROM v
 1 2 2 3
@@ -63,17 +61,16 @@ View materialize.public.v (UID):
 > CREATE VIEW v as SELECT b from data where b = 1;
 > CREATE DEFAULT INDEX ON v;
 
-? EXPLAIN PLAN FOR VIEW v;
-Source materialize.public.data (UID):
-| Map dummy, dummy, dummy
-| Filter (#1 = 1)
-| Project (#4, #1, #5, #6)
+? EXPLAIN VIEW v;
+Explained Query:
+  Project (#1)
+    Filter (#1 = 1)
+      Get materialize.public.data
 
-View materialize.public.v (UID):
-%0 =
-| Get materialize.public.data (UID)
-| Filter (#1 = 1)
-| Project (#1)
+Source materialize.public.data
+  project=(#4, #1, #5, #6)
+  filter=((#1 = 1))
+  map=(dummy, dummy, dummy)
 
 
 > SELECT * FROM v
@@ -90,17 +87,16 @@ View materialize.public.v (UID):
 > CREATE VIEW v as SELECT b from inner_view where a = 1
 > CREATE DEFAULT INDEX ON v
 
-? EXPLAIN PLAN FOR VIEW v;
-Source materialize.public.data (UID):
-| Map dummy
-| Filter (#0 = 1), (#3 = 4)
-| Project (#0, #1, #4, #3)
+? EXPLAIN VIEW v;
+Explained Query:
+  Project (#1)
+    Filter (#0 = 1) AND (#3 = 4)
+      Get materialize.public.data
 
-View materialize.public.v (UID):
-%0 =
-| Get materialize.public.data (UID)
-| Filter (#0 = 1), (#3 = 4)
-| Project (#1)
+Source materialize.public.data
+  project=(#0, #1, #4, #3)
+  filter=((#0 = 1) AND (#3 = 4))
+  map=(dummy)
 
 > SELECT * FROM v
 1
@@ -109,50 +105,43 @@ View materialize.public.v (UID):
 
 # Demand gets pushed through intervening view.
 
-> CREATE VIEW v as SELECT d from inner_view where a = 1
-> CREATE DEFAULT INDEX ON v
+> CREATE VIEW v as SELECT d from inner_view where a = 1;
+> CREATE DEFAULT INDEX ON v;
 
-? EXPLAIN PLAN FOR VIEW v;
-Source materialize.public.data (UID):
-| Map dummy, dummy
-| Filter (#0 = 1), (#3 = 4)
-| Project (#0, #4, #5, #3)
+? EXPLAIN VIEW v;
+Explained Query:
+  Project (#3)
+    Filter (#0 = 1) AND (#3 = 4)
+      Get materialize.public.data
 
-View materialize.public.v (UID):
-%0 =
-| Get materialize.public.data (UID)
-| Filter (#0 = 1), (#3 = 4)
-| Project (#3)
+Source materialize.public.data
+  project=(#0, #4, #5, #3)
+  filter=((#0 = 1) AND (#3 = 4))
+  map=(dummy, dummy)
 
 > SELECT * FROM v
 4
 
 > DROP VIEW v;
 
-> CREATE VIEW v as SELECT s1.a from data s1, data s2 where s1.a = s2.b and s2.d = 4
-> CREATE DEFAULT INDEX ON v
+> CREATE VIEW v as SELECT s1.a from data s1, data s2 where s1.a = s2.b and s2.d = 4;
+> CREATE DEFAULT INDEX ON v;
 
-? EXPLAIN PLAN FOR VIEW v;
-Source materialize.public.data (UID):
-| Map dummy
-| Project (#0, #1, #4, #3)
+? EXPLAIN VIEW v;
+Explained Query:
+  Project (#0)
+    Join on=(#0 = #1) type=differential
+      ArrangeBy keys=[[#0]]
+        Project (#0)
+          Filter (#0) IS NOT NULL
+            Get materialize.public.data
+      Project (#1)
+        Filter (#3 = 4) AND (#1) IS NOT NULL
+          Get materialize.public.data
 
-View materialize.public.v (UID):
-%0 =
-| Get materialize.public.data (UID)
-| Filter (#0) IS NOT NULL
-| Project (#0)
-| ArrangeBy (#0)
-
-%1 =
-| Get materialize.public.data (UID)
-| Filter (#3 = 4), (#1) IS NOT NULL
-| Project (#1)
-
-%2 =
-| Join %0 %1 (= #0 #1)
-| | implementation = Differential %1 %0.(#0)
-| Project (#0)
+Source materialize.public.data
+  project=(#0, #1, #4, #3)
+  map=(dummy)
 
 > SELECT * FROM v
 1
@@ -164,31 +153,25 @@ View materialize.public.v (UID):
 
 # filters and demand can be inferred in more complicated queries
 
-> CREATE VIEW v as SELECT s2.a from data s1, data s2 where s1.a = s2.b and s2.d = 4 and s1.d = 4
-> CREATE DEFAULT INDEX ON v
+> CREATE VIEW v as SELECT s2.a from data s1, data s2 where s1.a = s2.b and s2.d = 4 and s1.d = 4;
+> CREATE DEFAULT INDEX ON v;
 
-? EXPLAIN PLAN FOR VIEW v;
-Source materialize.public.data (UID):
-| Map dummy
-| Filter (#3 = 4)
-| Project (#0, #1, #4, #3)
+? EXPLAIN VIEW v;
+Explained Query:
+  Project (#1)
+    Join on=(#0 = #2) type=differential
+      ArrangeBy keys=[[#0]]
+        Project (#0)
+          Filter (#3 = 4) AND (#0) IS NOT NULL
+            Get materialize.public.data
+      Project (#0, #1)
+        Filter (#3 = 4) AND (#1) IS NOT NULL
+          Get materialize.public.data
 
-View materialize.public.v (UID):
-%0 =
-| Get materialize.public.data (UID)
-| Filter (#3 = 4), (#0) IS NOT NULL
-| Project (#0)
-| ArrangeBy (#0)
-
-%1 =
-| Get materialize.public.data (UID)
-| Filter (#3 = 4), (#1) IS NOT NULL
-| Project (#0, #1)
-
-%2 =
-| Join %0 %1 (= #0 #2)
-| | implementation = Differential %1 %0.(#0)
-| Project (#1)
+Source materialize.public.data
+  project=(#0, #1, #4, #3)
+  filter=((#3 = 4))
+  map=(dummy)
 
 > SELECT * FROM v
 1
@@ -199,30 +182,25 @@ View materialize.public.v (UID):
 > CREATE VIEW v as SELECT s2.c from data s1, data s2 where s1.a = s2.a
 > CREATE DEFAULT INDEX ON v
 
-? EXPLAIN PLAN FOR VIEW v;
-Source materialize.public.data (UID):
-| Map dummy, dummy
-| Filter (#0) IS NOT NULL
-| Project (#0, #4, #2, #5)
+? EXPLAIN VIEW v;
+Explained Query:
+  Return
+    Project (#2)
+      Join on=(#0 = #1) type=differential
+        ArrangeBy keys=[[#0]]
+          Project (#0)
+            Get l0
+        Project (#0, #2)
+          Get l0
+  With
+    cte l0 =
+      Filter (#0) IS NOT NULL
+        Get materialize.public.data
 
-View materialize.public.v (UID):
-%0 = Let l0 =
-| Get materialize.public.data (UID)
-| Filter (#0) IS NOT NULL
-
-%1 =
-| Get %0 (l0)
-| Project (#0)
-| ArrangeBy (#0)
-
-%2 =
-| Get %0 (l0)
-| Project (#0, #2)
-
-%3 =
-| Join %1 %2 (= #0 #1)
-| | implementation = Differential %2 %1.(#0)
-| Project (#2)
+Source materialize.public.data
+  project=(#0, #4, #2, #5)
+  filter=((#0) IS NOT NULL)
+  map=(dummy, dummy)
 
 > SELECT * FROM v
 3
@@ -234,33 +212,27 @@ View materialize.public.v (UID):
 
 > DROP VIEW v;
 
-> CREATE VIEW v as SELECT * FROM (SELECT a, sum(b) FROM data GROUP BY a UNION ALL SELECT a, (a + c)::numeric FROM data) WHERE a = 1
-> CREATE DEFAULT INDEX ON v
+> CREATE VIEW v as SELECT * FROM (SELECT a, sum(b) FROM data GROUP BY a UNION ALL SELECT a, (a + c)::numeric FROM data) WHERE a = 1;
+> CREATE DEFAULT INDEX ON v;
 
-? EXPLAIN PLAN FOR VIEW v;
-Source materialize.public.data (UID):
-| Map dummy
-| Filter (#0 = 1)
-| Project (#0..=#2, #4)
+? EXPLAIN VIEW v;
+Explained Query:
+  Union
+    Project (#1, #0)
+      Map (1)
+        Reduce aggregates=[sum(#0)]
+          Project (#1)
+            Filter (#0 = 1)
+              Get materialize.public.data
+    Project (#0, #4)
+      Filter (#0 = 1)
+        Map (bigint_to_numeric((1 + #2)))
+          Get materialize.public.data
 
-View materialize.public.v (UID):
-%0 =
-| Get materialize.public.data (UID)
-| Filter (#0 = 1)
-| Project (#1)
-| Reduce group=()
-| | agg sum(#0)
-| Map 1
-| Project (#1, #0)
-
-%1 =
-| Get materialize.public.data (UID)
-| Map bigint_to_numeric((1 + #2))
-| Filter (#0 = 1)
-| Project (#0, #4)
-
-%2 =
-| Union %0 %1
+Source materialize.public.data
+  project=(#0..=#2, #4)
+  filter=((#0 = 1))
+  map=(dummy)
 
 > SELECT * FROM v
 1 3
@@ -284,30 +256,24 @@ $ kafka-ingest format=avro topic=data2 schema=${schema}
 > CREATE VIEW v as SELECT a, c FROM data EXCEPT ALL SELECT a, c FROM data2 where d is null
 > CREATE DEFAULT INDEX ON v
 
-? EXPLAIN PLAN FOR VIEW v;
-Source materialize.public.data (UID):
-| Map dummy, dummy
-| Project (#0, #4, #2, #5)
+? EXPLAIN VIEW v;
+Explained Query:
+  Threshold
+    Union
+      Project (#0, #2)
+        Get materialize.public.data
+      Negate
+        Project (#0, #2)
+          Filter (#3) IS NULL
+            Get materialize.public.data2
 
-Source materialize.public.data2 (UID):
-| Map dummy
-| Filter (#3) IS NULL
-| Project (#0, #4, #2, #3)
-
-View materialize.public.v (UID):
-%0 =
-| Get materialize.public.data (UID)
-| Project (#0, #2)
-
-%1 =
-| Get materialize.public.data2 (UID)
-| Filter (#3) IS NULL
-| Project (#0, #2)
-| Negate
-
-%2 =
-| Union %0 %1
-| Threshold
+Source materialize.public.data
+  project=(#0, #4, #2, #5)
+  map=(dummy, dummy)
+Source materialize.public.data2
+  project=(#0, #4, #2, #3)
+  filter=((#3) IS NULL)
+  map=(dummy)
 
 > SELECT * FROM v
 1 2

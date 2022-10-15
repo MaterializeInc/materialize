@@ -16,110 +16,90 @@ statement ok
 CREATE TABLE t2 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
 
 query T multiline
-EXPLAIN SELECT FROM ( SELECT FROM t2 a1 RIGHT JOIN t2 ON a1.f1 IS NULL WHERE TRUE AND a1.f1 = a1.f2 )
+EXPLAIN WITH(arity, join_impls) SELECT FROM ( SELECT FROM t2 a1 RIGHT JOIN t2 ON a1.f1 IS NULL WHERE TRUE AND a1.f1 = a1.f2 )
 ----
-%0 =
-| Constant
+Explained Query (fast path):
+  Constant
 
 EOF
 
 # TODO missing !isnull(#0) in %1
 query T multiline
-EXPLAIN SELECT FROM t1, t2 WHERE t1.f2 + t2.f1 = t1.f1 AND t2.f1 IS NOT NULL
+EXPLAIN WITH(arity, join_impls) SELECT FROM t1, t2 WHERE t1.f2 + t2.f1 = t1.f1 AND t2.f1 IS NOT NULL
 ----
-Source materialize.public.t1 (u1):
-| Filter (#0) IS NOT NULL
-| Project (#0, #1)
+Explained Query:
+  Project () // { arity: 0 }
+    Join on=(#0 = (#1 + #2)) type=differential // { arity: 3 }
+      implementation
+        %1 » %0[]
+      ArrangeBy keys=[[]] // { arity: 2 }
+        Filter (#0) IS NOT NULL // { arity: 2 }
+          Get materialize.public.t1 // { arity: 2 }
+      Project (#0) // { arity: 1 }
+        Get materialize.public.t2 // { arity: 2 }
 
-Source materialize.public.t2 (u2):
-| Map dummy
-| Project (#0, #2)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u1)
-| Filter (#0) IS NOT NULL
-| ArrangeBy ()
-
-%1 =
-| Get materialize.public.t2 (u2)
-| Project (#0)
-
-%2 =
-| Join %0 %1 (= #0 (#1 + #2))
-| | implementation = Differential %1 %0.()
-| Project ()
+Source materialize.public.t1
+  filter=((#0) IS NOT NULL)
+Source materialize.public.t2
+  project=(#0, #2)
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN SELECT FROM t1 WHERE f2 IN ( SELECT agg1 FROM ( SELECT COUNT ( TRUE ) agg1 FROM t2 a1 JOIN ( SELECT a2.f2 FROM t1 LEFT JOIN t1 a2 ON TRUE ) a2 ON TRUE WHERE  a2.f2 IS NOT NULL AND a2.f2 > a1.f2 ) )
+EXPLAIN WITH(arity, join_impls) SELECT FROM t1 WHERE f2 IN ( SELECT agg1 FROM ( SELECT COUNT ( TRUE ) agg1 FROM t2 a1 JOIN ( SELECT a2.f2 FROM t1 LEFT JOIN t1 a2 ON TRUE ) a2 ON TRUE WHERE  a2.f2 IS NOT NULL AND a2.f2 > a1.f2 ) )
 ----
-Source materialize.public.t1 (u1):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Return // { arity: 0 }
+    Project () // { arity: 0 }
+      Join on=(#0 = #1) type=differential // { arity: 2 }
+        implementation
+          l0 » %1[#0]
+        Get l0 // { arity: 1 }
+        ArrangeBy keys=[[#0]] // { arity: 1 }
+          Distinct group_by=[#0] // { arity: 1 }
+            Union // { arity: 1 }
+              Project (#0) // { arity: 1 }
+                Filter (#0 = bigint_to_double(#1)) // { arity: 2 }
+                  Get l2 // { arity: 2 }
+              Map (0) // { arity: 1 }
+                Negate // { arity: 0 }
+                  Project () // { arity: 0 }
+                    Filter (#0 = 0) // { arity: 2 }
+                      Get l2 // { arity: 2 }
+              Project (#1) // { arity: 1 }
+                Filter (#0 = 0) // { arity: 2 }
+                  Map (0) // { arity: 2 }
+                    Get l1 // { arity: 1 }
+  With
+    cte l2 =
+      Reduce group_by=[#0] aggregates=[count(true)] // { arity: 2 }
+        Project (#1) // { arity: 1 }
+          Filter (#2 > #0) // { arity: 3 }
+            CrossJoin type=differential // { arity: 3 }
+              implementation
+                l0 » %0[] » %1[] » %2[]
+              ArrangeBy keys=[[]] // { arity: 1 }
+                Project (#1) // { arity: 1 }
+                  Get materialize.public.t2 // { arity: 2 }
+              ArrangeBy keys=[[]] // { arity: 1 }
+                Get l1 // { arity: 1 }
+              ArrangeBy keys=[[]] // { arity: 0 }
+                Project () // { arity: 0 }
+                  Get materialize.public.t1 // { arity: 2 }
+              Get l0 // { arity: 1 }
+    cte l1 =
+      Distinct group_by=[#0] // { arity: 1 }
+        Get l0 // { arity: 1 }
+    cte l0 =
+      Project (#1) // { arity: 1 }
+        Get materialize.public.t1 // { arity: 2 }
 
-Source materialize.public.t2 (u2):
-| Map dummy
-| Project (#2, #1)
-
-Query:
-%0 = Let l0 =
-| Get materialize.public.t1 (u1)
-| Project (#1)
-
-%1 = Let l1 =
-| Get %0 (l0)
-| Distinct group=(#0)
-
-%2 =
-| Get materialize.public.t2 (u2)
-| Project (#1)
-| ArrangeBy ()
-
-%3 =
-| Get %1 (l1)
-| ArrangeBy ()
-
-%4 =
-| Get materialize.public.t1 (u1)
-| Project ()
-| ArrangeBy ()
-
-%5 = Let l2 =
-| Join %2 %3 %4 %0
-| | implementation = Differential %0 %2.() %3.() %4.()
-| Filter (#2 > #0)
-| Project (#1)
-| Reduce group=(#0)
-| | agg count(true)
-
-%6 =
-| Get %5 (l2)
-| Filter (#0 = bigint_to_double(#1))
-| Project (#0)
-
-%7 =
-| Get %5 (l2)
-| Filter (#0 = 0)
-| Project ()
-| Negate
-| Map 0
-
-%8 =
-| Get %1 (l1)
-| Map 0
-| Filter (#0 = 0)
-| Project (#1)
-
-%9 =
-| Union %6 %7 %8
-| Distinct group=(#0)
-| ArrangeBy (#0)
-
-%10 =
-| Join %0 %9 (= #0 #1)
-| | implementation = Differential %0 %9.(#0)
-| Project ()
+Source materialize.public.t1
+  project=(#2, #1)
+  map=(dummy)
+Source materialize.public.t2
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
