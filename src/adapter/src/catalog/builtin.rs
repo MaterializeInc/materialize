@@ -1765,7 +1765,7 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
         WHEN 'timespan' THEN 'T'
         WHEN 'user-defined' THEN 'U'
         WHEN 'unknown' THEN 'X'
-    END) AS typcategory,
+    END)::pg_catalog.char AS typcategory,
     0::pg_catalog.oid AS typrelid,
     coalesce(
         (
