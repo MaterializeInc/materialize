@@ -185,7 +185,10 @@ execute ::=
   'EXECUTE' name   ('(' (parameter_value) ( ',' parameter_value )* ')')?
 explain ::=
   'EXPLAIN'
-  'TYPED'? ( ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' )? 'PLAN FOR' )?
+  ( ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' | 'PHYSICAL' ) 'PLAN' )?
+  ( 'WITH (' ( output_modifier (',' output_modifier )* ) ')' )?
+  ( 'AS' ( 'TEXT' | 'JSON' ) )?
+  'FOR'?
   (
     select_stmt |
     'VIEW' view_name |
