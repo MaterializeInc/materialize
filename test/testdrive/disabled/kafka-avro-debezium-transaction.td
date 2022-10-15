@@ -163,7 +163,7 @@ $ set txschema-bad-schema={
 $ kafka-create-topic topic=data-txdata
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE data_txdata
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-txdata-${testdrive.seed}')
@@ -220,9 +220,9 @@ $ kafka-ingest format=avro topic=data-txdata schema=${txschema} timestamp=2
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": 8, "b": 9}}, "source": {"file": "binlog2", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "op": "c", "transaction": {"total_order": null, "id": "5"}}
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
 > CREATE SINK data_sink FROM data_schema_inline
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-sink-${testdrive.seed}')

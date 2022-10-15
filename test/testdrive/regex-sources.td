@@ -15,7 +15,7 @@ $ kafka-ingest topic=request-log format=bytes
 
 # Regex explained here: https://www.debuggex.com/r/k48kBEt-lTMUZbaw
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE regex_source
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-request-log-${testdrive.seed}')

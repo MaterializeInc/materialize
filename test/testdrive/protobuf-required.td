@@ -23,7 +23,7 @@ $ kafka-create-topic topic=required partitions=1
 $ kafka-ingest topic=required format=protobuf descriptor-file=required.pb message=Required
 {"f": 42}
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE required FROM
   KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-required-${testdrive.seed}')

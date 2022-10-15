@@ -19,7 +19,7 @@ $ kafka-ingest format=avro topic=avro-types-uuid schema=${uuid} timestamp=1
 {"f1": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"}
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE avro_types_uuid
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-types-uuid-${testdrive.seed}')

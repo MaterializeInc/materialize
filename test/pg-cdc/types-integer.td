@@ -11,11 +11,12 @@
 # Test various variants of integer types
 
 > CREATE SECRET pgpass AS 'postgres'
-> CREATE CONNECTION pg FOR POSTGRES
-  HOST postgres,
-  DATABASE postgres,
-  USER postgres,
-  PASSWORD SECRET pgpass
+> CREATE CONNECTION pg TO POSTGRES (
+    HOST postgres,
+    DATABASE postgres,
+    USER postgres,
+    PASSWORD SECRET pgpass
+  )
 
 
 # Insert data pre-snapshot

@@ -1922,38 +1922,60 @@ impl<'a> Parser<'a> {
         self.expect_keyword(CONNECTION)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
-        self.expect_keyword(FOR)?;
+        let expect_paren = match self.expect_one_of_keywords(&[FOR, TO])? {
+            FOR => false,
+            TO => true,
+            _ => unreachable!(),
+        };
         let connection =
             match self.expect_one_of_keywords(&[AWS, KAFKA, CONFLUENT, POSTGRES, SSH])? {
                 AWS => {
+                    if expect_paren {
+                        self.expect_token(&Token::LParen)?;
+                    }
                     let with_options =
                         self.parse_comma_separated(Parser::parse_aws_connection_option)?;
                     CreateConnection::Aws { with_options }
                 }
                 KAFKA => {
+                    if expect_paren {
+                        self.expect_token(&Token::LParen)?;
+                    }
                     let with_options =
                         self.parse_comma_separated(Parser::parse_kafka_connection_option)?;
                     CreateConnection::Kafka { with_options }
                 }
                 CONFLUENT => {
                     self.expect_keywords(&[SCHEMA, REGISTRY])?;
+                    if expect_paren {
+                        self.expect_token(&Token::LParen)?;
+                    }
                     let with_options =
                         self.parse_comma_separated(Parser::parse_csr_connection_option)?;
                     CreateConnection::Csr { with_options }
                 }
                 POSTGRES => {
+                    if expect_paren {
+                        self.expect_token(&Token::LParen)?;
+                    }
                     let with_options =
                         self.parse_comma_separated(Parser::parse_postgres_connection_option)?;
                     CreateConnection::Postgres { with_options }
                 }
                 SSH => {
                     self.expect_keyword(TUNNEL)?;
+                    if expect_paren {
+                        self.expect_token(&Token::LParen)?;
+                    }
                     let with_options =
                         self.parse_comma_separated(Parser::parse_ssh_connection_option)?;
                     CreateConnection::Ssh { with_options }
                 }
                 _ => unreachable!(),
             };
+        if expect_paren {
+            self.expect_token(&Token::RParen)?;
+        }
         Ok(Statement::CreateConnection(CreateConnectionStatement {
             name,
             connection,

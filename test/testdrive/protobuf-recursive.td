@@ -31,7 +31,7 @@ message Mutual3 {
 $ protobuf-compile-descriptors inputs=recursive.proto output=recursive.pb set-var=recursive-schema
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 ! CREATE SOURCE recursive FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-recursive-${testdrive.seed}')
   FORMAT PROTOBUF MESSAGE '.Self' USING SCHEMA '${recursive-schema}'

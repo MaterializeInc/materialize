@@ -377,7 +377,7 @@ CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name:
 parse-statement
 CREATE CONNECTION pgconn FOR postgres HOST foo, PORT 1234, SSL CERTIFICATE AUTHORITY 'foo', SSH TUNNEL tun
 ----
-CREATE CONNECTION pgconn FOR POSTGRES HOST = foo, PORT = 1234, SSL CERTIFICATE AUTHORITY = 'foo', SSH TUNNEL = tun
+CREATE CONNECTION pgconn TO POSTGRES (HOST = foo, PORT = 1234, SSL CERTIFICATE AUTHORITY = 'foo', SSH TUNNEL = tun)
 =>
 CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("pgconn")]), connection: Postgres { with_options: [PostgresConnectionOption { name: Host, value: Some(Object(Name(UnresolvedObjectName([Ident("foo")])))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, PostgresConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("foo"))) }, PostgresConnectionOption { name: SshTunnel, value: Some(Object(Name(UnresolvedObjectName([Ident("tun")])))) }] }, if_not_exists: false })
 
@@ -1178,14 +1178,19 @@ AlterSecret(AlterSecretStatement { name: UnresolvedObjectName([Ident("secret")])
 parse-statement
 CREATE CONNECTION conn1 FOR KAFKA BROKER 'kafka:1234', SSL KEY = 'foo', SSL CERTIFICATE = 'qux';
 ----
-CREATE CONNECTION conn1 FOR KAFKA BROKER = 'kafka:1234', SSL KEY = 'foo', SSL CERTIFICATE = 'qux'
+CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234', SSL KEY = 'foo', SSL CERTIFICATE = 'qux')
 =>
 CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(Value(String("kafka:1234"))) }, KafkaConnectionOption { name: SslKey, value: Some(Value(String("foo"))) }, KafkaConnectionOption { name: SslCertificate, value: Some(Value(String("qux"))) }] }, if_not_exists: false })
+
+parse-statement roundtrip
+CREATE CONNECTION conn1 TO KAFKA (BROKER 'kafka:1234', SSL KEY = 'foo', SSL CERTIFICATE = 'qux');
+----
+CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234', SSL KEY = 'foo', SSL CERTIFICATE = 'qux')
 
 parse-statement
 CREATE CONNECTION conn1 FOR KAFKA BROKER 'kafka:1234', PROGRESS TOPIC 'my-materialize-progress-topic';
 ----
-CREATE CONNECTION conn1 FOR KAFKA BROKER = 'kafka:1234', PROGRESS TOPIC = 'my-materialize-progress-topic'
+CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234', PROGRESS TOPIC = 'my-materialize-progress-topic')
 =>
 CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(Value(String("kafka:1234"))) }, KafkaConnectionOption { name: ProgressTopic, value: Some(Value(String("my-materialize-progress-topic"))) }] }, if_not_exists: false })
 
@@ -1206,9 +1211,15 @@ CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")])
 parse-statement
 CREATE CONNECTION conn1 FOR CONFLUENT SCHEMA REGISTRY URL 'http://localhost:8081', USERNAME 'user', PASSWORD 'word'
 ----
-CREATE CONNECTION conn1 FOR CONFLUENT SCHEMA REGISTRY URL = 'http://localhost:8081', USERNAME = 'user', PASSWORD = 'word'
+CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (URL = 'http://localhost:8081', USERNAME = 'user', PASSWORD = 'word')
 =>
 CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Csr { with_options: [CsrConnectionOption { name: Url, value: Some(Value(String("http://localhost:8081"))) }, CsrConnectionOption { name: Username, value: Some(Value(String("user"))) }, CsrConnectionOption { name: Password, value: Some(Value(String("word"))) }] }, if_not_exists: false })
+
+parse-statement roundtrip
+CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (URL = 'http://localhost:8081', USERNAME = 'user', PASSWORD = 'word')
+----
+CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (URL = 'http://localhost:8081', USERNAME = 'user', PASSWORD = 'word')
+
 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
@@ -1265,9 +1276,14 @@ CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT 
 parse-statement
 CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL HOST 'ssh-bastion', PORT 1234, USER 'blah'
 ----
-CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL HOST = 'ssh-bastion', PORT = 1234, USER = 'blah'
+CREATE CONNECTION my_ssh_tunnel TO SSH TUNNEL (HOST = 'ssh-bastion', PORT = 1234, USER = 'blah')
 =>
 CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("my_ssh_tunnel")]), connection: Ssh { with_options: [SshConnectionOption { name: Host, value: Some(Value(String("ssh-bastion"))) }, SshConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, SshConnectionOption { name: User, value: Some(Value(String("blah"))) }] }, if_not_exists: false })
+
+parse-statement roundtrip
+CREATE CONNECTION my_ssh_tunnel TO SSH TUNNEL (HOST 'ssh-bastion', PORT 1234, USER 'blah')
+----
+CREATE CONNECTION my_ssh_tunnel TO SSH TUNNEL (HOST = 'ssh-bastion', PORT = 1234, USER = 'blah')
 
 parse-statement
 CREATE SOURCE lg FROM LOAD GENERATOR COUNTER

@@ -17,11 +17,11 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
     mz.testdrive.run(
         input=dedent(
             """
-            > CREATE CONNECTION IF NOT EXISTS ssh_conn
-                FOR SSH TUNNEL
-                    HOST 'ssh-bastion-host',
-                    USER 'mz',
-                    PORT 22;
+            > CREATE CONNECTION IF NOT EXISTS ssh_conn TO SSH TUNNEL (
+                HOST 'ssh-bastion-host',
+                USER 'mz',
+                PORT 22
+              );
             """
         )
     )
@@ -50,13 +50,14 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
         input=dedent(
             """
         > CREATE SECRET pgpass AS 'postgres'
-        > CREATE CONNECTION pg FOR POSTGRES
-          HOST 'postgres-source',
-          DATABASE postgres,
-          USER postgres,
-          PASSWORD SECRET pgpass,
-          SSL MODE require,
-          SSH TUNNEL ssh_conn
+        > CREATE CONNECTION pg TO POSTGRES (
+            HOST 'postgres-source',
+            DATABASE postgres,
+            USER postgres,
+            PASSWORD SECRET pgpass,
+            SSL MODE require,
+            SSH TUNNEL ssh_conn
+          );
 
         $ postgres-execute connection=postgres://postgres:postgres@postgres-source
         ALTER USER postgres WITH replication;

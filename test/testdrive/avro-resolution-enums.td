@@ -19,12 +19,12 @@ $ kafka-create-topic topic=resolution-enums
 $ kafka-ingest format=avro topic=resolution-enums schema=${enum-reader} timestamp=1
 {"f1": "E1" }
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE resolution_enums
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-enums-${testdrive.seed}')

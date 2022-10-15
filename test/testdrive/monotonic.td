@@ -30,7 +30,7 @@ $ kafka-ingest format=avro topic=non-dbz-data schema=${non-dbz-schema} timestamp
 {"a": 2, "b": 4}
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE non_dbz_data
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')

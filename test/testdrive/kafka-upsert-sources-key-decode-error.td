@@ -36,12 +36,12 @@ $ kafka-create-topic topic=int2long
 $ kafka-ingest format=avro topic=int2long key-format=avro key-schema=${keyschema-1-int-key} schema=${schema}
 {"key": 1234} {"nokey": "nokey1"}
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE int2long
   FROM KAFKA CONNECTION kafka_conn (TOPIC

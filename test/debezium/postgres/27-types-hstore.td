@@ -19,12 +19,11 @@ INSERT INTO hstore_type VALUES (NULL, 0), ('a=>1'::hstore, 1);
 
 $ schema-registry-wait subject=postgres.public.hstore_type-value
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE hstore_type
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.hstore_type')

@@ -13,11 +13,11 @@
 id public_key_1 public_key_2
 ----------------------------
 
-> CREATE CONNECTION louisoix
-  FOR SSH TUNNEL
+> CREATE CONNECTION louisoix TO SSH TUNNEL (
     HOST 'chaos.example.com',
     USER 'louisoix',
-    PORT 22;
+    PORT 22
+  );
 
 # mz_ssh_tunnel_connections is properly populated, and SSH public keys look like keys
 > SELECT name, public_key_1 LIKE 'ssh-ed25519%' pkey1, public_key_2 LIKE 'ssh-ed25519%' pkey2
@@ -27,11 +27,11 @@ name     pkey1 pkey2
 --------------------
 louisoix true  true
 
-> CREATE CONNECTION omega
-  FOR SSH TUNNEL
+> CREATE CONNECTION omega TO SSH TUNNEL (
     HOST 'chaos.example.com',
     USER 'omega',
-    PORT 22;
+    PORT 22
+  );
 
 > SELECT name, public_key_1 LIKE 'ssh-ed25519%' pkey1, public_key_2 LIKE 'ssh-ed25519%' pkey2
   FROM mz_ssh_tunnel_connections
@@ -70,33 +70,36 @@ omega    true  true
 name     pkey1 pkey2
 --------------------
 
-> CREATE CONNECTION phoenix
-  FOR SSH TUNNEL
+> CREATE CONNECTION phoenix TO SSH TUNNEL (
     HOST 'light.example.com',
     USER 'phoenix',
-    PORT 22;
+    PORT 22
+  );
 
-> CREATE CONNECTION yshtola
-  FOR POSTGRES HOST 'linsa.example.com',
-  PORT 5432,
-  DATABASE 'source',
-  USER 'yshtola',
-  SSH TUNNEL phoenix;
+> CREATE CONNECTION yshtola TO POSTGRES (
+    HOST 'linsa.example.com',
+    PORT 5432,
+    DATABASE 'source',
+    USER 'yshtola',
+    SSH TUNNEL phoenix
+  );
 
-! CREATE CONNECTION papalymo
-  FOR POSTGRES HOST 'gridania.example.com',
-  PORT 5432,
-  DATABASE 'source',
-  USER 'yshtola',
-  SSH TUNNEL johto;
+! CREATE CONNECTION papalymo TO POSTGRES (
+    HOST 'gridania.example.com',
+    PORT 5432,
+    DATABASE 'source',
+    USER 'yshtola',
+    SSH TUNNEL johto
+  );
 contains: invalid SSH TUNNEL: must provide an object
 
-! CREATE CONNECTION papalymo
-  FOR POSTGRES HOST 'gridania.example.com',
-  PORT 5432,
-  DATABASE 'source',
-  USER 'yshtola',
-  SSH TUNNEL yshtola;
+! CREATE CONNECTION papalymo TO POSTGRES (
+    HOST 'gridania.example.com',
+    PORT 5432,
+    DATABASE 'source',
+    USER 'yshtola',
+    SSH TUNNEL yshtola
+  );
 contains: yshtola is not an SSH connection
 
 > SELECT name, type FROM mz_connections;

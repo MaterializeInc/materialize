@@ -53,8 +53,8 @@ class CreateSink(Action):
         c.testdrive(
             dedent(
                 f"""
-                > CREATE CONNECTION IF NOT EXISTS {self.sink.name}_kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}', PROGRESS TOPIC 'zippy-{self.sink.name}-${{testdrive.seed}}';
-                > CREATE CONNECTION IF NOT EXISTS {self.sink.name}_csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
+                > CREATE CONNECTION IF NOT EXISTS {self.sink.name}_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', PROGRESS TOPIC 'zippy-{self.sink.name}-${{testdrive.seed}}');
+                > CREATE CONNECTION IF NOT EXISTS {self.sink.name}_csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
 
                 > CREATE SINK {self.sink.name} FROM {self.source_view.name}
                   INTO KAFKA CONNECTION {self.sink.name}_kafka_conn (TOPIC 'sink-{self.sink.name}')

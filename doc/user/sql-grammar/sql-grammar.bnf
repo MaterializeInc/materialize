@@ -35,13 +35,13 @@ create_cluster ::=
     'REPLICAS' '(' (replica_definition (',' replica_definition)*)? ')'
   )?
 cluster_replica_def ::=
-  replica_name '(' replica_option = value ( ',' replica_option = value )* ')'
+  replica_name '(' replica_option '=' value ( ',' replica_option '=' value )* ')'
 create_cluster_replica ::=
   'CREATE' 'CLUSTER' 'REPLICA' cluster_name '.' replica_name (option '=' value ( ',' option '=' value )*)?
 create_connection ::=
-  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'FOR'
+  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO'
   ( 'KAFKA' | 'CONFLUENT' 'SCHEMA' 'REGISTRY' | 'POSTGRES' | 'SSH' 'TUNNEL' )
-  field '='? val ( ',' field '='? val )*
+  '(' field '='? val ( ',' field '='? val )* ')'
 create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
 create_index ::=

@@ -39,7 +39,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"d": 0, "ts": 65000000}
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE data FROM
   KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')

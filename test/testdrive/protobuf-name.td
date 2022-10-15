@@ -26,7 +26,7 @@ $ kafka-ingest topic=name format=protobuf descriptor-file=name.pb message=some.w
 {"i": 42}
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 # Ingesting with the fully-qualified absolute path should work.
 > CREATE SOURCE qualified_absolute_path FROM

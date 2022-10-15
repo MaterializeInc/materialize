@@ -198,7 +198,7 @@ $ set schema={
   }
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 ! CREATE TEMPORARY SOURCE data_schema_inline
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
@@ -206,9 +206,9 @@ $ set schema={
   ENVELOPE DEBEZIUM
 contains:Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW after CREATE, found SOURCE
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
 ##### Temporary sinks.
 ! CREATE TEMPORARY SINK data_sink FROM data

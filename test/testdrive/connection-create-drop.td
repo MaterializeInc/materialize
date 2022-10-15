@@ -17,8 +17,7 @@ $ kafka-ingest format=bytes topic=connection_test
 1,2
 2,3
 
-> CREATE CONNECTION testconn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}'
+> CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}')
 
 > SELECT name, type from mz_connections
 name       type
@@ -31,7 +30,7 @@ testconn    kafka
 > SHOW CREATE CONNECTION testconn
 name   create_sql
 ---------------------------------
-materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"testconn\" FOR KAFKA BROKER = '${testdrive.kafka-addr}'"
+materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"testconn\" TO KAFKA (BROKER = '${testdrive.kafka-addr}')"
 
 > SELECT
       brokers,
@@ -43,9 +42,10 @@ materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"te
 
 > DROP CONNECTION testconn
 
-> CREATE CONNECTION progress_override
-  FOR KAFKA BROKER '${testdrive.kafka-addr}',
-  PROGRESS TOPIC 'override_topic'
+> CREATE CONNECTION progress_override TO KAFKA (
+    BROKER '${testdrive.kafka-addr}',
+    PROGRESS TOPIC 'override_topic'
+  )
 
 > SELECT
     brokers, sink_progress_topic
@@ -57,8 +57,7 @@ materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"te
 ###
 # Test that connections work in creating a source
 ###
-> CREATE CONNECTION testconn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}'
+> CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}')
 
 > CREATE SOURCE connection_source (first, second)
   FROM KAFKA CONNECTION testconn (TOPIC 'testdrive-connection_test-${testdrive.seed}')
@@ -133,12 +132,12 @@ $ kafka-ingest format=avro topic=csr_test key-format=avro key-schema=${keyschema
 {"id": 1} {"before": {"row": {"id": 1, "creature": "salamander"}}, "after": {"row": {"id": 1, "creature": "lizard"}}}
 
 
-> CREATE CONNECTION csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
+> CREATE CONNECTION csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
+  );
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE csr_source
     FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-csr_test-${testdrive.seed}')
@@ -151,8 +150,7 @@ id creature
 -----------
 1  lizard
 
-> CREATE CONNECTION broker_connection
-  FOR KAFKA BROKER '${testdrive.kafka-addr}'
+> CREATE CONNECTION broker_connection TO KAFKA (BROKER '${testdrive.kafka-addr}')
 
 > CREATE SOURCE two_connection_source
   FROM KAFKA CONNECTION broker_connection (TOPIC 'testdrive-csr_test-${testdrive.seed}')
@@ -249,9 +247,9 @@ $ schema-registry-publish subject=testdrive-import-csr-${testdrive.seed}-value s
 $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb message=Importer confluent-wire-format=true
 {"importee1": {"b": false}, "importee2": {"ts": "1970-01-01T00:20:34.000005678Z"}}
 
-> CREATE CONNECTION proto_csr
-    FOR CONFLUENT SCHEMA REGISTRY
+> CREATE CONNECTION proto_csr TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
+  )
 
 > CREATE SOURCE import_connection_csr FROM
   KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-import-csr-${testdrive.seed}')
@@ -264,11 +262,11 @@ importee1  importee2
 
 # SSH
 
-> CREATE CONNECTION ssh_conn
-  FOR SSH TUNNEL
+> CREATE CONNECTION ssh_conn TO SSH TUNNEL (
     HOST 'host',
     USER 'user',
     PORT 1
+  );
 
 > SELECT name, public_key_1 LIKE 'ssh-ed25519%' public_key_1
   FROM mz_ssh_tunnel_connections
@@ -280,79 +278,79 @@ ssh_conn true
 # Test invalid connection parameter combinations
 
 ## Kafka
-! CREATE CONNECTION not_a_secret
-  FOR KAFKA
+! CREATE CONNECTION not_a_secret TO KAFKA (
     BROKER '',
     SASL PASSWORD = ''
+  );
 contains:invalid SASL PASSWORD: must provide a secret value
 
-! CREATE CONNECTION not_a_secret
-  FOR KAFKA
+! CREATE CONNECTION not_a_secret TO KAFKA (
     BROKER '',
     SSL KEY = ''
+  );
 contains:invalid SSL KEY: must provide a secret value
 
-! CREATE CONNECTION duplicate_option
-  FOR KAFKA
+! CREATE CONNECTION duplicate_option TO KAFKA (
     BROKER '',
     BROKER ''
+  );
 contains:BROKER specified more than once
 
-! CREATE CONNECTION no_broker
-  FOR KAFKA
-    SASL MECHANISMS = 'PLAIN';
+! CREATE CONNECTION no_broker TO KAFKA (
+    SASL MECHANISMS = 'PLAIN'
+  );
 contains:must set either BROKER or BROKERS
 
-! CREATE CONNECTION ssl_underspeced
-  FOR KAFKA
+! CREATE CONNECTION ssl_underspeced TO KAFKA (
     BROKER 'kafka:9092',
-    BROKERS ['kafka:9092', 'kafka:9093'];
+    BROKERS ['kafka:9092', 'kafka:9093']
+  );
 contains:cannot set BROKER and BROKERS
 
-! CREATE CONNECTION ssl_underspeced
-  FOR KAFKA
+! CREATE CONNECTION ssl_underspeced TO KAFKA (
     BROKER 'kafka:9092',
-    SSL CERTIFICATE = '';
+    SSL CERTIFICATE = ''
+  );
 contains:under-specified security configuration
 
-! CREATE CONNECTION sasl_underspeced
-  FOR KAFKA
+! CREATE CONNECTION sasl_underspeced TO KAFKA (
     BROKER 'kafka:9092',
-    SASL MECHANISMS = 'PLAIN';
+    SASL MECHANISMS = 'PLAIN'
+  );
 contains:under-specified security configuration
 
-! CREATE CONNECTION multiple_brokers
-  FOR KAFKA
+! CREATE CONNECTION multiple_brokers TO KAFKA (
     BROKER 'kafka:9092, kafka:9093'
+  );
 contains:cannot specify multiple Kafka broker addresses in one string
 
-! CREATE CONNECTION multiple_brokers
-  FOR KAFKA
+! CREATE CONNECTION multiple_brokers TO KAFKA (
     BROKERS ['kafka:9092, kafka:9093']
+  );
 contains:cannot specify multiple Kafka broker addresses in one string
 
 ## CSR
-! CREATE CONNECTION missing_url
-    FOR CONFLUENT SCHEMA REGISTRY
+! CREATE CONNECTION missing_url TO CONFLUENT SCHEMA REGISTRY (
     USERNAME 'foo'
+  );
 contains: must specify URL
 
 > CREATE SECRET s AS '...';
 
-! CREATE CONNECTION missing_cert
-    FOR CONFLUENT SCHEMA REGISTRY
+! CREATE CONNECTION missing_cert TO CONFLUENT SCHEMA REGISTRY (
     URL 'http://localhost',
     SSL KEY = SECRET s
+  );
 contains: requires both SSL KEY and SSL CERTIFICATE
 
-! CREATE CONNECTION missing_key
-    FOR CONFLUENT SCHEMA REGISTRY
-     URL 'http://localhost',
+! CREATE CONNECTION missing_key TO CONFLUENT SCHEMA REGISTRY (
+    URL 'http://localhost',
     SSL CERTIFICATE = ''
+  );
 contains: requires both SSL KEY and SSL CERTIFICATE
 
 ## SSH
-! CREATE CONNECTION missing_user
-    FOR SSH TUNNEL
+! CREATE CONNECTION missing_user TO SSH TUNNEL (
     USER 'foo'
+  );
 contains: HOST option is required
