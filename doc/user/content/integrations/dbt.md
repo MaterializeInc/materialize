@@ -226,7 +226,6 @@ Here, the model depends on the view defined above, and is referenced as such via
 
 ### Configuration
 
-
 #### Clusters
 
 Use the [cluster](/sql/create-cluster/) option to specify the cluster in which a `materialized view` is created. If unspecified, the default cluster for the connection is used.
