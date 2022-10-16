@@ -33,8 +33,7 @@ CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'broker', SASL PASSWORD = SECRET n
 statement ok
 CREATE SECRET pgpass AS 'postgres'
 
-# SSH TUNNELs are required to be objects, but we'll interpret it as a string
-statement error invalid SSH TUNNEL: must provide an object
+statement error unknown catalog item 'not_an_object_at_all'
 CREATE CONNECTION pg TO POSTGRES (
   HOST postgres,
   DATABASE postgres,
@@ -47,12 +46,10 @@ CREATE CONNECTION pg TO POSTGRES (
 statement ok
 CREATE TABLE object_reference (a int);
 
-statement error invalid HOST: incompatible value types
+# It's okay if idents for string options refer to objects.
+statement ok
 CREATE CONNECTION pg TO POSTGRES (
   HOST object_reference,
   DATABASE postgres,
-  USER postgres,
-  PASSWORD SECRET pgpass,
-  SSL MODE require,
-  SSH TUNNEL not_an_object_at_all
+  USER postgres
 )

@@ -2148,7 +2148,10 @@ impl<'a> Parser<'a> {
             PORT => PostgresConnectionOptionName::Port,
             SSH => {
                 self.expect_keyword(TUNNEL)?;
-                PostgresConnectionOptionName::SshTunnel
+                return Ok(PostgresConnectionOption {
+                    name: PostgresConnectionOptionName::SshTunnel,
+                    value: Some(self.parse_object_option_value()?),
+                });
             }
             SSL => match self.expect_one_of_keywords(&[CERTIFICATE, MODE, KEY])? {
                 CERTIFICATE => {
@@ -3284,6 +3287,11 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_object_option_value(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
+        let _ = self.consume_token(&Token::Eq);
+        Ok(WithOptionValue::Object(self.parse_raw_name()?))
+    }
+
     fn parse_optional_option_value(&mut self) -> Result<Option<WithOptionValue<Raw>>, ParserError> {
         // The next token might be a value and might not. The only valid things
         // that indicate no value would be `)` for end-of-options , `,` for
@@ -3303,15 +3311,6 @@ impl<'a> Parser<'a> {
             } else {
                 Ok(WithOptionValue::Ident(Ident::new("secret")))
             }
-        } else if self
-            .parse_one_of_keywords(&[NULL, TRUE, FALSE, INTERVAL])
-            .is_some()
-        {
-            // Put kw token back.
-            self.prev_token();
-            Ok(WithOptionValue::Value(self.parse_value()?))
-        } else if let Some(object) = self.maybe_parse(Parser::parse_raw_name) {
-            Ok(WithOptionValue::Object(object))
         } else if let Some(value) = self.maybe_parse(Parser::parse_value) {
             Ok(WithOptionValue::Value(value))
         } else if let Some(ident) = self.maybe_parse(Parser::parse_identifier) {
