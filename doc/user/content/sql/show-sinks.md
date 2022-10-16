@@ -8,7 +8,9 @@ aliases:
     - /sql/show-sink
 ---
 
-`SHOW SINKS` returns a list of all sinks available to your Materialize instances. For best performance execute this command on the `mz_introspection` cluster.
+{{< show-command-note >}}
+
+`SHOW SINKS` returns a list of all sinks available to your Materialize instances.
 
 ## Syntax
 

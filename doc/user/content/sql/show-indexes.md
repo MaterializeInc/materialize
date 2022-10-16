@@ -6,7 +6,9 @@ menu:
     parent: commands
 ---
 
-`SHOW INDEXES` provides details about indexes built on a source, view, or materialized view. For best performance execute this command on the `mz_introspection` cluster.
+{{< show-command-note >}}
+
+`SHOW INDEXES` provides details about indexes built on a source, view, or materialized view.
 
 ## Syntax
 

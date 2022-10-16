@@ -6,8 +6,10 @@ menu:
     parent: commands
 ---
 
+{{< show-command-note >}}
+
 `SHOW MATERIALIZED VIEWS` returns a list of materialized views being maintained
-in Materialize. For best performance execute this command on the `mz_introspection` cluster.
+in Materialize.
 
 ## Syntax
 

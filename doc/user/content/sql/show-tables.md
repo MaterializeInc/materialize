@@ -6,7 +6,9 @@ menu:
     parent: commands
 ---
 
-`SHOW TABLES` returns a list of all tables available to your Materialize instances. For best performance execute this command on the `mz_introspection` cluster.
+{{< show-command-note >}}
+
+`SHOW TABLES` returns a list of all tables available to your Materialize instances.
 
 ## Syntax
 

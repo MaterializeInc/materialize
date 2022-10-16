@@ -6,7 +6,9 @@ menu:
     parent: commands
 ---
 
-`SHOW VIEWS` returns a list of views in your Materialize instances. For best performance execute this command on the `mz_introspection` cluster.
+{{< show-command-note >}}
+
+`SHOW VIEWS` returns a list of views in your Materialize instances.
 
 ## Syntax
 

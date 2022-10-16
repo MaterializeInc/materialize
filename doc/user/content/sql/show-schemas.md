@@ -6,8 +6,10 @@ menu:
     parent: commands
 ---
 
+{{< show-command-note >}}
+
 `SHOW SCHEMAS` returns a list of all schemas available to your Materialize
-instances. For best performance execute this command on the `mz_introspection` cluster.
+instances.
 
 ## Syntax
 
