@@ -18,12 +18,8 @@
 -- See: https://github.com/dbt-labs/dbt-core/blob/13b18654f/plugins/postgres/dbt/include/postgres/macros/adapters.sql
 
 {% macro materialize__create_view_as(relation, sql) -%}
-  {%- set cluster = config.get('cluster', None) -%}
 
   create view {{ relation }}
-  {% if cluster %}
-    in cluster {{ cluster }}
-  {% endif %}
   as (
     {{ sql }}
   );
