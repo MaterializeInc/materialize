@@ -129,14 +129,13 @@ Once created, a connection is **reusable** across multiple `CREATE SOURCE` state
 ```sql
 CREATE SECRET pgpass AS '<POSTGRES_PASSWORD>';
 
-CREATE CONNECTION pg_connection TO POSTGRES (
+CREATE CONNECTION pg_connection FOR POSTGRES
     HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
     PORT 5432,
     USER 'postgres',
     PASSWORD SECRET pgpass,
     SSL MODE 'require',
-    DATABASE 'postgres'
-);
+    DATABASE 'postgres';
 ```
 
 ### Creating a source
