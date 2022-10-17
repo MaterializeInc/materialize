@@ -16,7 +16,7 @@ use std::time::Duration;
 use chrono::DurationRound;
 use tracing::{event, warn, Level};
 
-use mz_compute_client::controller::ComputeInstanceEvent;
+use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceStatus};
 use mz_controller::ControllerResponse;
 use mz_ore::now::EpochMillis;
 use mz_ore::task;
@@ -25,9 +25,9 @@ use mz_sql::ast::Statement;
 use mz_sql::plan::{Plan, SendDiffsPlan};
 use mz_stash::Append;
 
-use crate::catalog;
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred};
+use crate::{catalog, AdapterNotice};
 
 use crate::coord::{
     Coordinator, CreateSourceStatementReady, Message, PendingTxn, ReplicaMetadata, SendDiffs,
@@ -427,6 +427,31 @@ impl<S: Append + 'static> Coordinator<S> {
     #[tracing::instrument(level = "debug", skip_all)]
     async fn message_compute_instance_status(&mut self, event: ComputeInstanceEvent) {
         event!(Level::TRACE, event = format!("{:?}", event));
+
+        let (instance_name, replica_name) = self
+            .catalog
+            .compute_instances()
+            .find(|i| i.id == event.instance_id)
+            .map(|i| {
+                let mut replica = event.replica_id.to_string();
+                for (name, id) in &i.replica_id_by_name {
+                    if *id == event.replica_id {
+                        replica = name.clone();
+                        break;
+                    }
+                }
+                (i.name.clone(), replica)
+            })
+            .unwrap_or_else(|| (event.instance_id.to_string(), event.replica_id.to_string()));
+
+        if matches!(event.status, ComputeInstanceStatus::NotReady) {
+            self.broadcast_notice(AdapterNotice::ClusterReplicaStatusChanged {
+                cluster: instance_name,
+                replica: replica_name,
+                status: event.status,
+            });
+        }
+
         self.catalog_transact(
             None,
             vec![catalog::Op::UpdateComputeInstanceStatus { event }],
