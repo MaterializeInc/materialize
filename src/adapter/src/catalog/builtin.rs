@@ -1409,13 +1409,13 @@ pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinS
     schema: MZ_INTERNAL_SCHEMA,
     data_source: Some(IntrospectionType::SourceStatusHistory),
     desc: RelationDesc::empty()
-        .with_column("timestamp", ScalarType::Timestamp.nullable(false))
+        .with_column("occurred_at", ScalarType::Timestamp.nullable(false))
         .with_column("source_id", ScalarType::String.nullable(false))
         .with_column("worker_id", ScalarType::Int64.nullable(true))
         .with_column("worker_count", ScalarType::Int64.nullable(true))
         .with_column("status", ScalarType::String.nullable(false))
         .with_column("error", ScalarType::String.nullable(true))
-        .with_column("metadata", ScalarType::Jsonb.nullable(true)),
+        .with_column("details", ScalarType::Jsonb.nullable(true)),
 });
 
 pub static MZ_STORAGE_USAGE_BY_SHARD: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
