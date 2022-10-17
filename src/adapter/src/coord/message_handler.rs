@@ -109,11 +109,13 @@ impl<S: Append + 'static> Coordinator<S> {
 
     #[tracing::instrument(level = "debug", skip_all)]
     async fn storage_usage_update(&mut self, shard_sizes: HashMap<Option<ShardId>, u64>) {
+        let collection_timestamp = (self.catalog.config().now)();
         let mut ops = vec![];
         for (shard_id, size_bytes) in shard_sizes {
             ops.push(catalog::Op::UpdateStorageUsage {
                 shard_id: shard_id.map(|shard_id| shard_id.to_string()),
                 size_bytes,
+                collection_timestamp,
             });
         }
 

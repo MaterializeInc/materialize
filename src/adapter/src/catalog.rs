@@ -1189,8 +1189,8 @@ impl CatalogState {
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         shard_id: Option<String>,
         size_bytes: u64,
+        collection_timestamp: EpochMillis,
     ) -> Result<(), Error> {
-        let collection_timestamp = (self.config.now)();
         let id = tx.get_and_increment_id(storage::STORAGE_USAGE_ID_ALLOC_KEY.to_string())?;
 
         let details = VersionedStorageUsage::new(id, shard_id, size_bytes, collection_timestamp);
@@ -4424,8 +4424,15 @@ impl<S: Append> Catalog<S> {
                 Op::UpdateStorageUsage {
                     shard_id,
                     size_bytes,
+                    collection_timestamp,
                 } => {
-                    state.add_to_storage_usage(tx, builtin_table_updates, shard_id, size_bytes)?;
+                    state.add_to_storage_usage(
+                        tx,
+                        builtin_table_updates,
+                        shard_id,
+                        size_bytes,
+                        collection_timestamp,
+                    )?;
                 }
                 Op::UpdateSystemConfiguration { name, value } => {
                     tx.upsert_system_config(&name, &value)?;
@@ -5181,6 +5188,7 @@ pub enum Op {
     UpdateStorageUsage {
         shard_id: Option<String>,
         size_bytes: u64,
+        collection_timestamp: EpochMillis,
     },
     UpdateSystemConfiguration {
         name: String,
