@@ -6,6 +6,8 @@ menu:
     parent: commands
 ---
 
+{{< show-command-note >}}
+
 `SHOW SOURCES` returns a list of all sources available to your Materialize
 instances.
 
