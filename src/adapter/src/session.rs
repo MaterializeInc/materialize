@@ -31,7 +31,7 @@ use crate::catalog::SYSTEM_USER;
 use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
 use crate::error::AdapterError;
-use crate::session::vars::IsolationLevel;
+use crate::session::vars::{IsolationLevel, CLUSTER};
 use crate::util::ComputeSinkId;
 use crate::AdapterNotice;
 
@@ -100,6 +100,11 @@ impl<T: TimestampManipulation> Session<T> {
 
     fn new_internal(conn_id: ConnectionId, user: User) -> Session<T> {
         let (notices_tx, notices_rx) = mpsc::unbounded_channel();
+        let mut vars = SessionVars::default();
+        if user == *SYSTEM_USER {
+            vars.set(CLUSTER.name.as_ref(), SYSTEM_USER.name.as_ref(), false)
+                .expect("cluster var known to exist and system user is a valid value");
+        }
         Session {
             conn_id,
             transaction: TransactionStatus::Default,
@@ -107,7 +112,7 @@ impl<T: TimestampManipulation> Session<T> {
             prepared_statements: HashMap::new(),
             portals: HashMap::new(),
             user,
-            vars: SessionVars::default(),
+            vars,
             drop_sinks: vec![],
             notices_tx,
             notices_rx,

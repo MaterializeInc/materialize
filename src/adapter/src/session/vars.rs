@@ -58,7 +58,7 @@ const CLIENT_MIN_MESSAGES: ServerVar<ClientSeverity> = ServerVar {
     description: "Sets the message levels that are sent to the client (PostgreSQL).",
 };
 
-const CLUSTER: ServerVar<str> = ServerVar {
+pub(crate) const CLUSTER: ServerVar<str> = ServerVar {
     name: UncasedStr::new("cluster"),
     value: "default",
     description: "Sets the current cluster (Materialize).",
@@ -1017,7 +1017,7 @@ pub struct ServerVar<V>
 where
     V: fmt::Debug + ?Sized + 'static,
 {
-    name: &'static UncasedStr,
+    pub(crate) name: &'static UncasedStr,
     value: &'static V,
     description: &'static str,
 }
