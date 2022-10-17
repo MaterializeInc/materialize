@@ -1063,9 +1063,8 @@ where
     reclock_op.build(move |mut capabilities| {
         capabilities.clear();
 
-        let metrics_name = name.clone();
         let mut source_metrics =
-            SourceMetrics::new(&base_metrics, &metrics_name, id, &worker_id.to_string());
+            SourceMetrics::new(&base_metrics, &name, id, &worker_id.to_string());
 
         source_metrics
             .resume_upper
