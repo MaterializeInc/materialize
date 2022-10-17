@@ -9,7 +9,7 @@
 
 //! Healthchecks for sources
 use anyhow::Context;
-use chrono::NaiveDateTime;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use std::fmt::Display;
 use std::sync::Arc;
 use timely::progress::{Antichain, Timestamp as _};
@@ -246,9 +246,12 @@ impl Healthchecker {
             (ts % 1000 * 1_000_000)
                 .try_into()
                 .expect("timestamp millis does not fit into a u32"),
-        )
-        .try_into()
-        .expect("timestamp does not fit");
+        );
+        let timestamp = Datum::TimestampTz(
+            DateTime::from_utc(timestamp, Utc)
+                .try_into()
+                .expect("must fit"),
+        );
         let source_id = self.source_id.to_string();
         let source_id = Datum::String(&source_id);
         let worker_id =
