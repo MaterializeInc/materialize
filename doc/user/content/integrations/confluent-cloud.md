@@ -67,7 +67,7 @@ The process to connect Materialize to a Confluent Cloud Kafka cluster consists o
 
       CREATE SOURCE <topic-name>
         FROM KAFKA CONNECTION confluent_cloud (TOPIC '<topic-name>')
-        FORMAT BYTES;
+        FORMAT BYTES
         WITH (SIZE = '3xsmall');
     ```
 
