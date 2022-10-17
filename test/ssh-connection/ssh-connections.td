@@ -91,7 +91,7 @@ name     pkey1 pkey2
     USER 'yshtola',
     SSH TUNNEL johto
   );
-contains: invalid SSH TUNNEL: must provide an object
+contains: unknown catalog item 'johto'
 
 ! CREATE CONNECTION papalymo TO POSTGRES (
     HOST 'gridania.example.com',

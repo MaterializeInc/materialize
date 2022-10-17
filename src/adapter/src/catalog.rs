@@ -1189,8 +1189,8 @@ impl CatalogState {
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         shard_id: Option<String>,
         size_bytes: u64,
+        collection_timestamp: EpochMillis,
     ) -> Result<(), Error> {
-        let collection_timestamp = (self.config.now)();
         let id = tx.get_and_increment_id(storage::STORAGE_USAGE_ID_ALLOC_KEY.to_string())?;
 
         let details = VersionedStorageUsage::new(id, shard_id, size_bytes, collection_timestamp);
@@ -1970,6 +1970,7 @@ impl<S: Append> Catalog<S> {
                     start_instant: Instant::now(),
                     nonce: rand::random(),
                     unsafe_mode: config.unsafe_mode,
+                    persisted_introspection: config.persisted_introspection,
                     environment_id: config.environment_id,
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,
@@ -2851,6 +2852,7 @@ impl<S: Append> Catalog<S> {
         let (catalog, _, _) = Catalog::open(Config {
             storage,
             unsafe_mode: true,
+            persisted_introspection: true,
             build_info: &DUMMY_BUILD_INFO,
             environment_id: format!("environment-{}-0", Uuid::from_u128(0)),
             now,
@@ -4422,8 +4424,15 @@ impl<S: Append> Catalog<S> {
                 Op::UpdateStorageUsage {
                     shard_id,
                     size_bytes,
+                    collection_timestamp,
                 } => {
-                    state.add_to_storage_usage(tx, builtin_table_updates, shard_id, size_bytes)?;
+                    state.add_to_storage_usage(
+                        tx,
+                        builtin_table_updates,
+                        shard_id,
+                        size_bytes,
+                        collection_timestamp,
+                    )?;
                 }
                 Op::UpdateSystemConfiguration { name, value } => {
                     tx.upsert_system_config(&name, &value)?;
@@ -5001,6 +5010,10 @@ impl<S: Append> Catalog<S> {
 
     /// Allocate ids for persisted introspection views. Called once per compute replica creation
     pub async fn allocate_persisted_introspection_views(&mut self) -> Vec<(LogView, GlobalId)> {
+        if !self.state.config.persisted_introspection {
+            return Vec::new();
+        }
+
         let log_amount = DEFAULT_LOG_VIEWS
             .len()
             .try_into()
@@ -5024,6 +5037,10 @@ impl<S: Append> Catalog<S> {
     pub async fn allocate_persisted_introspection_sources(
         &mut self,
     ) -> Vec<(LogVariant, GlobalId)> {
+        if !self.state.config.persisted_introspection {
+            return Vec::new();
+        }
+
         let log_amount = DEFAULT_LOG_VARIANTS
             .len()
             .try_into()
@@ -5171,6 +5188,7 @@ pub enum Op {
     UpdateStorageUsage {
         shard_id: Option<String>,
         size_bytes: u64,
+        collection_timestamp: EpochMillis,
     },
     UpdateSystemConfiguration {
         name: String,

@@ -207,6 +207,7 @@ impl<S: Append + 'static> Coordinator<S> {
             ConnMeta {
                 cancel_tx,
                 secret_key,
+                notice_tx: session.retain_notice_transmitter(),
             },
         );
 

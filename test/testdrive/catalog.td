@@ -305,7 +305,7 @@ v2          view
 tbl         table
 pass_secret secret
 kafka_conn  connection
-mv          "materialized view"
+mv          materialized-view
 source_data source
 snk         sink
 
@@ -315,7 +315,7 @@ type
 table
 source
 view
-"materialized view"
+materialized-view
 sink
 index
 connection
@@ -328,7 +328,7 @@ bool        type
 csr_conn    connection
 int_list    type
 kafka_conn  connection
-mv          "materialized view"
+mv          materialized-view
 pass_secret secret
 snk         sink
 source_data source

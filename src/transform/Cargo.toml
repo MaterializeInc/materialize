@@ -25,5 +25,5 @@ datadriven = "0.6.0"
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore" }
-proc-macro2 = "1.0.43"
+proc-macro2 = "1.0.47"
 serde_json = "1.0.86"

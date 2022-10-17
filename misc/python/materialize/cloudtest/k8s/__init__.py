@@ -26,7 +26,7 @@ from kubernetes.client import (
 )
 from kubernetes.client.exceptions import ApiException
 from kubernetes.config import new_client_from_config  # type: ignore
-from pg8000 import Cursor
+from pg8000 import Connection, Cursor
 
 from materialize import ROOT, mzbuild
 
@@ -123,11 +123,15 @@ class K8sService(K8sResource):
 
         return node_port
 
-    def sql_cursor(self) -> Cursor:
-        """Get a cursor to run SQL queries against the service"""
-        conn = pg8000.connect(
+    def sql_conn(self) -> Connection:
+        """Get a connection to run SQL queries against the service"""
+        return pg8000.connect(
             host="localhost", port=self.node_port(), user="materialize"
         )
+
+    def sql_cursor(self) -> Cursor:
+        """Get a cursor to run SQL queries against the service"""
+        conn = self.sql_conn()
         conn.autocommit = True
         return conn.cursor()
 

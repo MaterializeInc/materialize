@@ -329,10 +329,19 @@ where
         &mut self,
         reader_id: &ReaderId,
         heartbeat_timestamp_ms: u64,
-    ) -> ControlFlow<Infallible, ()> {
-        let reader_state = self.reader(reader_id);
-        reader_state.last_heartbeat_timestamp_ms = heartbeat_timestamp_ms;
-        Continue(())
+    ) -> ControlFlow<Infallible, bool> {
+        match self.readers.get_mut(reader_id) {
+            Some(reader_state) => {
+                reader_state.last_heartbeat_timestamp_ms = std::cmp::max(
+                    heartbeat_timestamp_ms,
+                    reader_state.last_heartbeat_timestamp_ms,
+                );
+                Continue(true)
+            }
+            // No-op, but we still commit the state change so that this gets
+            // linearized (maybe we're looking at old state).
+            None => Continue(false),
+        }
     }
 
     pub fn expire_reader(&mut self, reader_id: &ReaderId) -> ControlFlow<Infallible, bool> {
@@ -349,10 +358,19 @@ where
         &mut self,
         writer_id: &WriterId,
         heartbeat_timestamp_ms: u64,
-    ) -> ControlFlow<Infallible, ()> {
-        let writer_state = self.writer(writer_id);
-        writer_state.last_heartbeat_timestamp_ms = heartbeat_timestamp_ms;
-        Continue(())
+    ) -> ControlFlow<Infallible, bool> {
+        match self.writers.get_mut(writer_id) {
+            Some(writer_state) => {
+                writer_state.last_heartbeat_timestamp_ms = std::cmp::max(
+                    heartbeat_timestamp_ms,
+                    writer_state.last_heartbeat_timestamp_ms,
+                );
+                Continue(true)
+            }
+            // No-op, but we still commit the state change so that this gets
+            // linearized (maybe we're looking at old state).
+            None => Continue(false),
+        }
     }
 
     pub fn expire_writer(&mut self, writer_id: &WriterId) -> ControlFlow<Infallible, bool> {

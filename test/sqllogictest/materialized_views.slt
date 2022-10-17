@@ -325,7 +325,7 @@ SHOW OBJECTS
 ----
 name type
 mv
-materialized view
+materialized-view
 t
 table
 

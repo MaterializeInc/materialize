@@ -853,3 +853,30 @@ fn test_storage_usage_doesnt_update_between_restarts() -> Result<(), Box<dyn Err
 
     Ok(())
 }
+
+#[test]
+fn test_storage_usage_collection_interval_timestamps() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let config =
+        util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(30));
+    let server = util::start_server(config)?;
+    let mut client = server.connect(postgres::NoTls)?;
+
+    // Retry because it may take some time for the initial snapshot to be taken.
+    Retry::default().max_duration(Duration::from_secs(10)).retry(|_| {
+        let rows = client
+            .query(
+                "SELECT collection_timestamp, SUM(size_bytes)::int8 FROM mz_catalog.mz_storage_usage GROUP BY collection_timestamp ORDER BY collection_timestamp;",
+                &[],
+            )
+            .map_err(|e| e.to_string())?;
+        if rows.len() == 1 {
+            Ok(())
+        } else {
+            Err(format!("expected a single timestamp, instead found {}", rows.len()))
+        }
+    })?;
+
+    Ok(())
+}

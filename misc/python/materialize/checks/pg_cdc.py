@@ -21,12 +21,11 @@ class PgCdc(Check):
                 """
                 > CREATE SECRET pgpass1 AS 'postgres';
 
-                > CREATE CONNECTION pg1 TO POSTGRES (
-                    HOST 'postgres-source',
-                    DATABASE postgres,
-                    USER postgres,
-                    PASSWORD SECRET pgpass1
-                  );
+                > CREATE CONNECTION pg1 FOR POSTGRES
+                  HOST 'postgres-source',
+                  DATABASE postgres,
+                  USER postgres,
+                  PASSWORD SECRET pgpass1
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres-source
                 ALTER USER postgres WITH replication;
@@ -61,12 +60,11 @@ class PgCdc(Check):
 
                 > CREATE SECRET pgpass2 AS 'postgres';
 
-                > CREATE CONNECTION pg2 TO POSTGRES (
-                    HOST 'postgres-source',
-                    DATABASE postgres,
-                    USER postgres,
-                    PASSWORD SECRET pgpass1
-                  );
+                > CREATE CONNECTION pg2 FOR POSTGRES
+                  HOST 'postgres-source',
+                  DATABASE postgres,
+                  USER postgres,
+                  PASSWORD SECRET pgpass1
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres-source
                 INSERT INTO postgres_source_table SELECT 'C', 1, REPEAT('X', 1024) FROM generate_series(1,100);
@@ -93,12 +91,11 @@ class PgCdc(Check):
 
                 > CREATE SECRET pgpass3 AS 'postgres';
 
-                > CREATE CONNECTION pg3 TO POSTGRES (
-                    HOST 'postgres-source',
-                    DATABASE postgres,
-                    USER postgres,
-                    PASSWORD SECRET pgpass3
-                  );
+                > CREATE CONNECTION pg3 FOR POSTGRES
+                  HOST 'postgres-source',
+                  DATABASE postgres,
+                  USER postgres,
+                  PASSWORD SECRET pgpass3
 
                 > CREATE SOURCE postgres_source3
                   FROM POSTGRES CONNECTION pg3

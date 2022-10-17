@@ -29,6 +29,8 @@ pub struct Config<'a, S> {
     pub storage: storage::Connection<S>,
     /// Whether to enable unsafe mode.
     pub unsafe_mode: bool,
+    /// Whether to enable persisted introspection sources.
+    pub persisted_introspection: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
     /// A persistent ID associated with the environment.
