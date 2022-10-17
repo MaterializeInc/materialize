@@ -1409,7 +1409,7 @@ pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinS
     schema: MZ_INTERNAL_SCHEMA,
     data_source: Some(IntrospectionType::SourceStatusHistory),
     desc: RelationDesc::empty()
-        .with_column("occurred_at", ScalarType::Timestamp.nullable(false))
+        .with_column("occurred_at", ScalarType::TimestampTz.nullable(false))
         .with_column("source_id", ScalarType::String.nullable(false))
         .with_column("worker_id", ScalarType::Int64.nullable(true))
         .with_column("worker_count", ScalarType::Int64.nullable(true))
