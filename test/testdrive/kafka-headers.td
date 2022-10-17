@@ -32,7 +32,7 @@ $ kafka-ingest format=avro topic=headers_src key-format=avro key-schema=${keysch
 {"key": "fish2"} {"f1": "fishval", "f2": 1000}
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE headers_src
   FROM KAFKA CONNECTION kafka_conn (TOPIC

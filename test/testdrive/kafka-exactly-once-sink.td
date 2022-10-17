@@ -157,11 +157,11 @@ $ kafka-ingest format=avro topic=input_dbz key-format=avro key-schema=${dbz-key-
 {"a": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[\"1\", \"3\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
 > CREATE SOURCE input_kafka_cdcv2
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input_cdcv2-${testdrive.seed}')
@@ -270,9 +270,10 @@ $ kafka-ingest format=avro topic=input_cdcv2 schema=${cdcv2-schema}
 # verify output of progress topic with fixed timestamps
 $ kafka-create-topic topic=progress-test-input
 
-> CREATE CONNECTION kafka_fixed
-  FOR KAFKA BROKER '${testdrive.kafka-addr}',
-  PROGRESS TOPIC 'testdrive-progress-fixed-${testdrive.seed}';
+> CREATE CONNECTION kafka_fixed TO KAFKA (
+    BROKER '${testdrive.kafka-addr}',
+    PROGRESS TOPIC 'testdrive-progress-fixed-${testdrive.seed}'
+  );
 
 > CREATE SOURCE compaction_test_input
   FROM KAFKA CONNECTION kafka_fixed (TOPIC 'testdrive-progress-test-input-${testdrive.seed}')

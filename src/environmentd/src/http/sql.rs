@@ -421,6 +421,7 @@ fn make_notices(client: &mut SessionClient) -> Vec<Notice> {
     client
         .session()
         .drain_notices()
+        .into_iter()
         .map(|notice| Notice {
             message: notice.to_string(),
             severity: Severity::for_adapter_notice(&notice)

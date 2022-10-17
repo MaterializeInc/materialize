@@ -114,7 +114,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": -1, "b": 7, "json": "[1, 2, 3]", "c": "FileNotFound", "d": "True", "e": null, "f": null}}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "op": "c"}
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > SHOW SOURCES
 name    type   size
@@ -427,9 +427,9 @@ $ kafka-create-topic topic=non-subset-key
 $ kafka-ingest format=avro topic=non-subset-key key-format=avro key-schema=${key-schema} schema=${value-schema}
 "asdf" {"a": "asdf"}
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
 > CREATE SOURCE non_subset_key
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-subset-key-${testdrive.seed}')

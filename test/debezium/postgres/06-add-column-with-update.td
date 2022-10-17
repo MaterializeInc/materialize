@@ -20,12 +20,11 @@ INSERT INTO alter_add_column VALUES (123);
 
 $ schema-registry-wait subject=postgres.public.alter_add_column-value
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE alter_add_column
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_add_column')

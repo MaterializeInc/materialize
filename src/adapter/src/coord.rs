@@ -127,6 +127,7 @@ use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, Session};
 use crate::subscribe::PendingSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter};
+use crate::AdapterNotice;
 
 pub(crate) mod id_bundle;
 pub(crate) mod peek;
@@ -229,6 +230,7 @@ pub struct Config<S> {
     pub dataflow_client: mz_controller::Controller,
     pub storage: storage::Connection<S>,
     pub unsafe_mode: bool,
+    pub persisted_introspection: bool,
     pub build_info: &'static BuildInfo,
     pub environment_id: String,
     pub metrics_registry: MetricsRegistry,
@@ -266,6 +268,9 @@ struct ConnMeta {
     /// requests are required to authenticate with the secret of the connection
     /// that they are targeting.
     secret_key: u32,
+
+    /// Channel on which to send notices to a session.
+    notice_tx: mpsc::UnboundedSender<AdapterNotice>,
 }
 
 struct TxnReads {
@@ -860,6 +865,7 @@ pub async fn serve<S: Append + 'static>(
         dataflow_client,
         storage,
         unsafe_mode,
+        persisted_introspection,
         build_info,
         environment_id,
         metrics_registry,
@@ -899,6 +905,7 @@ pub async fn serve<S: Append + 'static>(
         Catalog::open(catalog::Config {
             storage,
             unsafe_mode,
+            persisted_introspection,
             build_info,
             environment_id,
             now: now.clone(),

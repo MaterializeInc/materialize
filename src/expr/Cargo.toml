@@ -25,7 +25,7 @@ fallible-iterator = "0.2.0"
 hex = "0.4.3"
 hmac = "0.12.1"
 itertools = "0.10.5"
-once_cell = "1.14.0"
+once_cell = "1.15.0"
 md-5 = "0.10.5"
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore" }
@@ -55,7 +55,7 @@ criterion = { version = "0.4.0" }
 datadriven = "0.6.0"
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-ore = { path = "../ore" }
-proc-macro2 = "1.0.43"
+proc-macro2 = "1.0.47"
 
 [build-dependencies]
 prost-build = "0.11.1"

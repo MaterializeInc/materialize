@@ -46,6 +46,7 @@ static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
     environment_id: format!("environment-{}-0", Uuid::from_u128(0)),
     session_id: Uuid::from_u128(0),
     unsafe_mode: false,
+    persisted_introspection: false,
     build_info: &DUMMY_BUILD_INFO,
     timestamp_interval: Duration::from_secs(1),
     now: NOW_ZERO.clone(),

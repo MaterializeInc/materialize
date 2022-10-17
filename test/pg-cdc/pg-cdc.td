@@ -12,11 +12,12 @@
 # pg_hba.conf if you modify the existing user names or add new ones.
 
 > CREATE SECRET pgpass AS 'postgres'
-> CREATE CONNECTION pg FOR POSTGRES
-  HOST postgres,
-  DATABASE postgres,
-  USER postgres,
-  PASSWORD SECRET pgpass
+> CREATE CONNECTION pg TO POSTGRES (
+    HOST postgres,
+    DATABASE postgres,
+    USER postgres,
+    PASSWORD SECRET pgpass
+  )
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER USER postgres WITH replication;
@@ -110,53 +111,54 @@ $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=mat
 # Error checking
 #
 
-> CREATE CONNECTION no_such_host
-  FOR POSTGRES
-  HOST 'no_such_postgres.mtrlz.com',
-  DATABASE postgres,
-  USER postgres,
-  PASSWORD SECRET pgpass
+> CREATE CONNECTION no_such_host TO POSTGRES (
+    HOST 'no_such_postgres.mtrlz.com',
+    DATABASE postgres,
+    USER postgres,
+    PASSWORD SECRET pgpass
+  )
 ! CREATE SOURCE "no_such_host"
   FROM POSTGRES CONNECTION no_such_host (PUBLICATION 'mz_source');
 contains:failed to lookup address information
 
-> CREATE CONNECTION no_such_port
-  FOR POSTGRES
-  HOST postgres,
-  PORT 65534,
-  DATABASE postgres,
-  USER postgres,
-  PASSWORD SECRET pgpass
+> CREATE CONNECTION no_such_port TO POSTGRES (
+    HOST postgres,
+    PORT 65534,
+    DATABASE postgres,
+    USER postgres,
+    PASSWORD SECRET pgpass
+  )
 ! CREATE SOURCE "no_such_port"
   FROM POSTGRES CONNECTION no_such_port (PUBLICATION 'mz_source');
 contains:error connecting to server: Connection refused (os error 111)
 
-> CREATE CONNECTION no_such_user
-  FOR POSTGRES
-  HOST postgres,
-  DATABASE postgres,
-  USER no_such_user,
-  PASSWORD SECRET pgpass
+> CREATE CONNECTION no_such_user TO POSTGRES (
+    HOST postgres,
+    DATABASE postgres,
+    USER no_such_user,
+    PASSWORD SECRET pgpass
+  )
 ! CREATE SOURCE "no_such_user"
   FROM POSTGRES CONNECTION no_such_user (PUBLICATION 'mz_source');
 contains:db error: FATAL: role "no_such_user" does not exist
 
 > CREATE SECRET badpass AS 'badpass'
-> CREATE CONNECTION no_such_password
-  FOR POSTGRES
-  HOST postgres,
-  DATABASE postgres,
-  USER postgres,
-  PASSWORD SECRET badpass
+> CREATE CONNECTION no_such_password TO POSTGRES (
+    HOST postgres,
+    DATABASE postgres,
+    USER postgres,
+    PASSWORD SECRET badpass
+  )
 ! CREATE SOURCE "no_such_password"
   FROM POSTGRES CONNECTION no_such_password (PUBLICATION 'mz_source');
 contains:db error: FATAL: password authentication failed for user "postgres"
 
-> CREATE CONNECTION no_such_dbname FOR POSTGRES
-  HOST postgres,
-  DATABASE no_such_dbname,
-  USER postgres,
-  PASSWORD SECRET pgpass
+> CREATE CONNECTION no_such_dbname TO POSTGRES (
+    HOST postgres,
+    DATABASE no_such_dbname,
+    USER postgres,
+    PASSWORD SECRET pgpass
+  )
 ! CREATE SOURCE "no_such_dbname"
   FROM POSTGRES CONNECTION no_such_dbname (PUBLICATION 'mz_source');
 contains:db error: FATAL: database "no_such_dbname" does not exist

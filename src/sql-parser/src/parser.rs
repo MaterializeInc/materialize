@@ -1922,38 +1922,60 @@ impl<'a> Parser<'a> {
         self.expect_keyword(CONNECTION)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
-        self.expect_keyword(FOR)?;
+        let expect_paren = match self.expect_one_of_keywords(&[FOR, TO])? {
+            FOR => false,
+            TO => true,
+            _ => unreachable!(),
+        };
         let connection =
             match self.expect_one_of_keywords(&[AWS, KAFKA, CONFLUENT, POSTGRES, SSH])? {
                 AWS => {
+                    if expect_paren {
+                        self.expect_token(&Token::LParen)?;
+                    }
                     let with_options =
                         self.parse_comma_separated(Parser::parse_aws_connection_option)?;
                     CreateConnection::Aws { with_options }
                 }
                 KAFKA => {
+                    if expect_paren {
+                        self.expect_token(&Token::LParen)?;
+                    }
                     let with_options =
                         self.parse_comma_separated(Parser::parse_kafka_connection_option)?;
                     CreateConnection::Kafka { with_options }
                 }
                 CONFLUENT => {
                     self.expect_keywords(&[SCHEMA, REGISTRY])?;
+                    if expect_paren {
+                        self.expect_token(&Token::LParen)?;
+                    }
                     let with_options =
                         self.parse_comma_separated(Parser::parse_csr_connection_option)?;
                     CreateConnection::Csr { with_options }
                 }
                 POSTGRES => {
+                    if expect_paren {
+                        self.expect_token(&Token::LParen)?;
+                    }
                     let with_options =
                         self.parse_comma_separated(Parser::parse_postgres_connection_option)?;
                     CreateConnection::Postgres { with_options }
                 }
                 SSH => {
                     self.expect_keyword(TUNNEL)?;
+                    if expect_paren {
+                        self.expect_token(&Token::LParen)?;
+                    }
                     let with_options =
                         self.parse_comma_separated(Parser::parse_ssh_connection_option)?;
                     CreateConnection::Ssh { with_options }
                 }
                 _ => unreachable!(),
             };
+        if expect_paren {
+            self.expect_token(&Token::RParen)?;
+        }
         Ok(Statement::CreateConnection(CreateConnectionStatement {
             name,
             connection,
@@ -2126,7 +2148,10 @@ impl<'a> Parser<'a> {
             PORT => PostgresConnectionOptionName::Port,
             SSH => {
                 self.expect_keyword(TUNNEL)?;
-                PostgresConnectionOptionName::SshTunnel
+                return Ok(PostgresConnectionOption {
+                    name: PostgresConnectionOptionName::SshTunnel,
+                    value: Some(self.parse_object_option_value()?),
+                });
             }
             SSL => match self.expect_one_of_keywords(&[CERTIFICATE, MODE, KEY])? {
                 CERTIFICATE => {
@@ -3262,6 +3287,11 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_object_option_value(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
+        let _ = self.consume_token(&Token::Eq);
+        Ok(WithOptionValue::Object(self.parse_raw_name()?))
+    }
+
     fn parse_optional_option_value(&mut self) -> Result<Option<WithOptionValue<Raw>>, ParserError> {
         // The next token might be a value and might not. The only valid things
         // that indicate no value would be `)` for end-of-options , `,` for
@@ -3281,15 +3311,6 @@ impl<'a> Parser<'a> {
             } else {
                 Ok(WithOptionValue::Ident(Ident::new("secret")))
             }
-        } else if self
-            .parse_one_of_keywords(&[NULL, TRUE, FALSE, INTERVAL])
-            .is_some()
-        {
-            // Put kw token back.
-            self.prev_token();
-            Ok(WithOptionValue::Value(self.parse_value()?))
-        } else if let Some(object) = self.maybe_parse(Parser::parse_raw_name) {
-            Ok(WithOptionValue::Object(object))
         } else if let Some(value) = self.maybe_parse(Parser::parse_value) {
             Ok(WithOptionValue::Value(value))
         } else if let Some(ident) = self.maybe_parse(Parser::parse_identifier) {

@@ -444,7 +444,7 @@ impl<T: AstInfo> AstDisplay for CreateConnectionStatement<T> {
             f.write_str("IF NOT EXISTS ");
         }
         f.write_node(&self.name);
-        f.write_str(" FOR ");
+        f.write_str(" TO ");
         self.connection.fmt(f)
     }
 }

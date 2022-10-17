@@ -30,12 +30,11 @@ $ kafka-ingest format=avro topic=topic-compaction key-format=avro key-schema=${k
 {"f1": ${kafka-ingest.iteration}} {"f2": "B${kafka-ingest.iteration}"}
 {"f1": ${kafka-ingest.iteration}} {"f2": "C${kafka-ingest.iteration}"}
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE topic_compaction
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic-compaction-${testdrive.seed}')

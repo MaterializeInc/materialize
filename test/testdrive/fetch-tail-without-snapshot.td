@@ -22,7 +22,7 @@ $ kafka-ingest format=avro topic=tail-without-snapshot schema=${int} timestamp=1
 {"f1": 345}
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE tail_without_snapshot
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-tail-without-snapshot-${testdrive.seed}')

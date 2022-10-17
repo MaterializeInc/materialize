@@ -33,10 +33,10 @@ $ kafka-create-topic topic=data
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": 1}}}
 
-! CREATE CONNECTION kafka_sasl
-  FOR KAFKA
+! CREATE CONNECTION kafka_sasl TO KAFKA (
     BROKER 'kafka:9092',
     SASL MECHANISMS = 'PLAIN',
     SASL USERNAME = 'materialize',
-    SSL CERTIFICATE AUTHORITY = '${arg.ca}';
+    SSL CERTIFICATE AUTHORITY = '${arg.ca}'
+  );
 contains:invalid CONNECTION: under-specified security configuration

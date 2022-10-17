@@ -14,8 +14,7 @@ one
 two
 three
 
-> CREATE CONNECTION conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}'
+> CREATE CONNECTION conn TO KAFKA (BROKER '${testdrive.kafka-addr}')
 
 > CREATE SOURCE topic
   FROM KAFKA CONNECTION conn (

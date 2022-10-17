@@ -22,12 +22,12 @@ $ kafka-ingest format=avro topic=schema-strategy-test schema=${first-writer-sche
 $ kafka-ingest format=avro topic=schema-strategy-test schema=${second-writer-schema} set-schema-id-var=id2
 {"a": 2, "b": 3, "c": {"long": 4}}
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE schema_strategy_test_inline
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}')

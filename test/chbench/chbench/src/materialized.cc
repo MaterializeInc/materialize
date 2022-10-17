@@ -50,7 +50,7 @@ mz::createSource(pqxx::connection &c, const std::string& kafkaUrl, const std::st
     try {
         std::string mat = materialized? "MATERIALIZED" : "";
         std::string consistency = consistencySource.empty()? " " : " with (consistency= '" + consistencySource + "') ";
-        std::string csr_conn_creation = "CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '" + registry + "'";
+        std::string csr_conn_creation = "CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '" + registry + "')";
         w.exec0(csr_conn_creation);
 		std::string kafka_conn_creation = "CREATE CONNECTION IF NOT EXISTS kafka_conn FROM KAFKA BROKER '" + kafkaUrl + "'";
 		w.exec0(kafka_conn_creation);

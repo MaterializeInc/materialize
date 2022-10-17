@@ -13,8 +13,7 @@ $ kafka-ingest topic=envelope-none-bytes format=bytes repeat=5000
 ABC
 XYZ
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE envelope_none_bytes
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-envelope-none-bytes-${testdrive.seed}')

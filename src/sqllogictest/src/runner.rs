@@ -683,6 +683,7 @@ impl Runner {
             frontegg: None,
             cors_allowed_origin: AllowOrigin::list([]),
             unsafe_mode: true,
+            persisted_introspection: true,
             metrics_registry,
             now,
             environment_id: format!("environment-{}-0", Uuid::from_u128(0)),

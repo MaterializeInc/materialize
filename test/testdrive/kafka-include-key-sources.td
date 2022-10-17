@@ -29,7 +29,7 @@ $ kafka-ingest format=avro key-format=avro topic=avro-data key-schema=${conflict
 {"id": 1} {"id": 2, "b": 3}
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 ! CREATE SOURCE missing_key_format
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
@@ -43,9 +43,9 @@ contains:INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FO
   INCLUDE KEY AS key_col
 contains:INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
 # "Bare" format works when the key format is in a registry
 > CREATE SOURCE bareformatconfluent

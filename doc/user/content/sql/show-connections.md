@@ -8,6 +8,8 @@ aliases:
     - /sql/show-connection
 ---
 
+{{< show-command-note >}}
+
 `SHOW CONNECTIONS` lists the connections configured in Materialize.
 
 ## Syntax

@@ -139,8 +139,7 @@ Field | Description
 You specify the use of the Materialize CDC format in the [Avro schema](/sql/create-source/kafka/#format_spec) when a source is created.
 
 ```sql
-  CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER 'kafka_url:9092'
+  CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'kafka_url:9092');
 
   CREATE SOURCE name_of_source
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'name_of_kafka_topic')

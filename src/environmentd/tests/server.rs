@@ -53,7 +53,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
         let server = util::start_server(config.clone())?;
         let mut client = server.connect(postgres::NoTls)?;
         client.batch_execute(&format!(
-            "CREATE CONNECTION kafka_conn FOR KAFKA BROKER '{}'",
+            "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}')",
             &*KAFKA_ADDRS,
         ))?;
         client.batch_execute(
@@ -137,7 +137,7 @@ fn test_source_sink_size_required() -> Result<(), Box<dyn Error>> {
     );
 
     client.batch_execute(&format!(
-        "CREATE CONNECTION conn FOR KAFKA BROKER '{}'",
+        "CREATE CONNECTION conn TO KAFKA (BROKER '{}')",
         &*KAFKA_ADDRS,
     ))?;
 

@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 mz-lowertest-derive = { path = "../lowertest-derive" }
 mz-ore = { path = "../ore" }
-proc-macro2 = "1.0.43"
+proc-macro2 = "1.0.47"
 serde = { version = "1.0.145", features = ["derive"] }
 serde_json = "1.0.86"
 

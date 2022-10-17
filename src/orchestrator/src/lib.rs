@@ -79,7 +79,7 @@ pub struct ServiceEvent {
 }
 
 /// Describes the status of an orchestrated service.
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, Eq, PartialEq)]
 pub enum ServiceStatus {
     /// Service is ready to accept requests.
     Ready,

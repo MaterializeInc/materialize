@@ -21,8 +21,7 @@ users         subsource      <null>
 
 $ unset-regex
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 # Validate that the ID column of the load generator data is usable as a key.
 > CREATE SINK accounts_sink FROM accounts
