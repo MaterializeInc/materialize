@@ -170,6 +170,7 @@ where
                             let applied = machine.merge_res(&res).await;
                             if applied {
                                 metrics.compaction.applied.inc();
+                                machine.shard_metrics.compaction_applied.inc();
                             } else {
                                 metrics.compaction.noop.inc();
                                 for part in res.output.parts {
