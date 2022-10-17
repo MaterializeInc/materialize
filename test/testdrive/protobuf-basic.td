@@ -68,7 +68,7 @@ $ kafka-ingest topic=basic format=protobuf descriptor-file=basic.pb message=Basi
 {"message": {}}
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE basic FROM
   KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-basic-${testdrive.seed}')

@@ -18,7 +18,7 @@ $ set int={"type": "record", "name": "field_int", "fields": [ {"name": "f1", "ty
 $ kafka-create-topic topic=fetch-concurrent-two-sources
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE fetch_concurrent_two_sources1
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-fetch-concurrent-two-sources-${testdrive.seed}')

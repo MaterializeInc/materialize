@@ -36,7 +36,7 @@ $ kafka-ingest topic=defaults format=protobuf descriptor-file=defaults.pb messag
 {}
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE defaults FROM
   KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-defaults-${testdrive.seed}')

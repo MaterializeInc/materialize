@@ -24,10 +24,11 @@ here is a second test string
 
 > CREATE SECRET kinesis_bad_conn_secret AS 'fake_secret_access_key';
 
-> CREATE CONNECTION kinesis_bad_conn FOR AWS
-  ACCESS KEY ID = 'fake_access_key_id',
-  SECRET ACCESS KEY = SECRET kinesis_bad_conn_secret,
-  ENDPOINT = '${testdrive.aws-endpoint}';
+> CREATE CONNECTION kinesis_bad_conn TO AWS (
+    ACCESS KEY ID = 'fake_access_key_id',
+    SECRET ACCESS KEY = SECRET kinesis_bad_conn_secret,
+    ENDPOINT = '${testdrive.aws-endpoint}'
+  );
 
 ! CREATE SOURCE custom_source
   FROM KINESIS CONNECTION kinesis_bad_conn
@@ -37,11 +38,12 @@ contains:Unable to validate AWS credentials
 
 > CREATE SECRET kinesis_conn_secret_access_key AS '${testdrive.aws-secret-access-key}';
 
-> CREATE CONNECTION kinesis_conn FOR AWS
-  ACCESS KEY ID = '${testdrive.aws-access-key-id}',
-  SECRET ACCESS KEY = SECRET kinesis_conn_secret_access_key,
-  TOKEN = '${testdrive.aws-token}',
-  REGION = '${testdrive.aws-region}';
+> CREATE CONNECTION kinesis_conn TO AWS (
+    ACCESS KEY ID = '${testdrive.aws-access-key-id}',
+    SECRET ACCESS KEY = SECRET kinesis_conn_secret_access_key,
+    TOKEN = '${testdrive.aws-token}',
+    REGION = '${testdrive.aws-region}'
+  );
 
 > CREATE SOURCE f
   FROM KINESIS CONNECTION kinesis_conn

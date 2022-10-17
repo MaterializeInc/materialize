@@ -599,9 +599,13 @@ pub struct CompactionMetrics {
     pub(crate) failed: IntCounter,
     pub(crate) noop: IntCounter,
     pub(crate) seconds: Counter,
+    pub(crate) concurrency_waits: IntCounter,
     pub(crate) memory_violations: IntCounter,
     pub(crate) runs_compacted: IntCounter,
     pub(crate) chunks_compacted: IntCounter,
+
+    pub(crate) applied_exact_match: IntCounter,
+    pub(crate) applied_subset_match: IntCounter,
 
     pub(crate) batch: BatchWriteMetrics,
     pub(crate) steps: CompactionStepTimings,
@@ -646,6 +650,10 @@ impl CompactionMetrics {
                 name: "mz_persist_compaction_seconds",
                 help: "time spent in compaction",
             )),
+            concurrency_waits: registry.register(metric!(
+                name: "mz_persist_compaction_concurrency_waits",
+                help: "count of compaction requests that ever blocked due to concurrency limit",
+            )),
             memory_violations: registry.register(metric!(
                 name: "mz_persist_compaction_memory_violations",
                 help: "count of compaction memory requirement violations",
@@ -657,6 +665,14 @@ impl CompactionMetrics {
             chunks_compacted: registry.register(metric!(
                 name: "mz_persist_compaction_chunks_compacted",
                 help: "count of run chunks compacted",
+            )),
+            applied_exact_match: registry.register(metric!(
+                name: "mz_persist_compaction_applied_exact_match",
+                help: "count of merge results that exactly replaced a SpineBatch",
+            )),
+            applied_subset_match: registry.register(metric!(
+                name: "mz_persist_compaction_applied_subset_match",
+                help: "count of merge results that replaced a subset of a SpineBatch",
             )),
             batch: BatchWriteMetrics::new(registry, "compaction"),
             steps: CompactionStepTimings::new(step_timings.clone()),

@@ -50,7 +50,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="set the default number of kafka partitions per topic",
     )
     parser.add_argument(
-        "--replica-size", type=int, default=1, help="use REPLICA SIZE 'N'"
+        "--size", type=int, default=4, help="use SIZE 'N' for replicas and sources"
     )
 
     parser.add_argument("--replicas", type=int, default=1, help="use multiple replicas")
@@ -79,11 +79,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         validate_postgres_stash=True,
     )
 
-    with c.override(testdrive):
+    materialized = Materialized(size=args.size) if args.size else Materialized()
+
+    with c.override(testdrive, materialized):
         c.start_and_wait_for_tcp(services=dependencies)
         c.wait_for_materialized("materialized")
 
-        if args.replicas > 1 or args.replica_size > 1:
+        if args.replicas > 1 or args.size > 1:
             c.sql("DROP CLUSTER default CASCADE")
             # Make sure a replica named 'r1' always exists
             replica_names = [
@@ -91,8 +93,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 for replica_id in range(0, args.replicas)
             ]
             replica_string = ",".join(
-                f"{replica_name} (SIZE '{args.replica_size}')"
-                for replica_name in replica_names
+                f"{replica_name} (SIZE '{args.size}')" for replica_name in replica_names
             )
             c.sql(f"CREATE CLUSTER default REPLICAS ({replica_string})")
 
@@ -102,7 +103,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "testdrive",
                 f"--junit-report={junit_report}",
                 f"--var=replicas={args.replicas}",
-                f"--var=replica-size={args.replica_size}",
+                f"--var=size={args.size}",
                 *args.files,
             )
         finally:

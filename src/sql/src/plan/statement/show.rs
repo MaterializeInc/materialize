@@ -118,6 +118,12 @@ pub fn plan_show_create_table(
     ShowCreateTableStatement { table_name }: ShowCreateTableStatement<Aug>,
 ) -> Result<SendRowsPlan, PlanError> {
     let table = scx.get_item_by_resolved_name(&table_name)?;
+    if table.id().is_system() {
+        sql_bail!(
+            "cannot show create for system object {}",
+            table_name.full_name_str()
+        );
+    }
     if let CatalogItemType::Table = table.item_type() {
         let name = table_name.full_name_str();
         let create_sql = simplify_names(scx.catalog, table.create_sql())?;
@@ -148,6 +154,12 @@ pub fn plan_show_create_source(
     ShowCreateSourceStatement { source_name }: ShowCreateSourceStatement<Aug>,
 ) -> Result<SendRowsPlan, PlanError> {
     let source = scx.get_item_by_resolved_name(&source_name)?;
+    if source.id().is_system() {
+        sql_bail!(
+            "cannot show create for system object {}",
+            source_name.full_name_str()
+        );
+    }
     if let CatalogItemType::Source = source.item_type() {
         let name = source_name.full_name_str();
         let create_sql = simplify_names(scx.catalog, source.create_sql())?;
@@ -379,10 +391,8 @@ fn show_materialized_views<'a>(
     }
 
     let query = format!(
-        "SELECT mviews.name, clusters.name AS cluster
-         FROM mz_materialized_views AS mviews
-         JOIN mz_clusters AS clusters
-            ON clusters.id = mviews.cluster_id
+        "SELECT name, cluster
+         FROM mz_internal.mz_show_materialized_views
          WHERE {where_clause}"
     );
 
@@ -394,20 +404,15 @@ fn show_sinks<'a>(
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
-    let mut query_filters = vec![];
-
-    if let Some(ResolvedSchemaName::Schema { schema_spec, .. }) = from {
-        query_filters.push(format!("schema_id = {}", schema_spec));
+    let schema_spec = if let Some(ResolvedSchemaName::Schema { schema_spec, .. }) = from {
+        schema_spec.to_string()
     } else {
-        query_filters.push(format!("schema_id = {}", scx.resolve_active_schema()?));
+        scx.resolve_active_schema()?.to_string()
     };
-
-    let query_filters = itertools::join(query_filters.iter(), " AND ");
-
     let query = format!(
         "SELECT sinks.name, sinks.type, sinks.size
-        FROM mz_catalog.mz_sinks AS sinks
-        WHERE {query_filters}",
+         FROM mz_catalog.mz_sinks AS sinks
+         WHERE schema_id = {schema_spec}",
     );
     ShowSelect::new(scx, query, filter, None, None)
 }
@@ -449,7 +454,7 @@ pub fn show_indexes<'a>(
         filter,
     }: ShowIndexesStatement<Aug>,
 ) -> Result<ShowSelect<'a>, PlanError> {
-    let mut query_filter = vec!["idxs.on_id NOT LIKE 's%'".into()];
+    let mut query_filter = Vec::new();
 
     if let Some(on_object) = on_object {
         let on_item = scx.get_item_by_resolved_name(&on_object)?;
@@ -464,38 +469,20 @@ pub fn show_indexes<'a>(
                 on_item.item_type(),
             );
         }
-        query_filter.push(format!("objs.id = '{}'", on_item.id()));
+        query_filter.push(format!("on_id = '{}'", on_item.id()));
     } else {
         let schema_spec = scx.resolve_optional_schema(&from_schema)?;
-        query_filter.push(format!("objs.schema_id = {}", schema_spec));
+        query_filter.push(format!("schema_id = {}", schema_spec));
     }
 
     if let Some(cluster) = in_cluster {
-        query_filter.push(format!("clusters.id = '{}'", cluster.id))
+        query_filter.push(format!("cluster_id = '{}'", cluster.id))
     };
 
     let query = format!(
-        "SELECT
-            idxs.name AS name,
-            objs.name AS on,
-            clusters.name AS cluster,
-            ARRAY_AGG(
-                CASE
-                    WHEN idx_cols.on_expression IS NULL THEN obj_cols.name
-                    ELSE idx_cols.on_expression
-                END
-                ORDER BY idx_cols.index_position ASC
-            ) AS key
-        FROM
-            mz_catalog.mz_indexes AS idxs
-            JOIN mz_catalog.mz_index_columns AS idx_cols ON idxs.id = idx_cols.index_id
-            JOIN mz_catalog.mz_objects AS objs ON idxs.on_id = objs.id
-            JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = idxs.cluster_id
-            LEFT JOIN mz_catalog.mz_columns AS obj_cols
-                ON idxs.on_id = obj_cols.id AND idx_cols.on_position = obj_cols.position
-        WHERE
-            {}
-        GROUP BY idxs.name, objs.name, clusters.name",
+        "SELECT name, on, cluster, key
+        FROM mz_internal.mz_show_indexes
+        WHERE {}",
         itertools::join(query_filter.iter(), " AND ")
     );
 
@@ -556,17 +543,7 @@ pub fn show_cluster_replicas<'a>(
     scx: &'a StatementContext<'a>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
-    let query = r#"
-    SELECT
-        mz_catalog.mz_clusters.name AS cluster,
-        mz_catalog.mz_cluster_replicas.name AS replica
-    FROM
-        mz_catalog.mz_cluster_replicas
-        JOIN mz_catalog.mz_clusters ON
-                mz_catalog.mz_cluster_replicas.cluster_id = mz_catalog.mz_clusters.id
-    ORDER BY
-        1, 2"#
-        .to_string();
+    let query = "SELECT cluster, replica FROM mz_internal.mz_show_cluster_replicas".to_string();
 
     ShowSelect::new(scx, query, filter, None, None)
 }

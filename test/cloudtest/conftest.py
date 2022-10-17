@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from _pytest.config import Config
@@ -26,8 +26,22 @@ def pytest_configure(config: "Config") -> None:
 
 @pytest.fixture(scope="session")
 def mz(pytestconfig: pytest.Config) -> MaterializeApplication:
-    return MaterializeApplication(release_mode=(not pytestconfig.getoption("dev")))
+    return MaterializeApplication(
+        release_mode=(not pytestconfig.getoption("dev")),
+        aws_region=pytestconfig.getoption("aws_region"),
+    )
+
+
+@pytest.fixture(scope="session")
+def aws_region(pytestconfig: pytest.Config) -> Any:
+    return pytestconfig.getoption("aws_region")
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--dev", action="store_true")
+    parser.addoption(
+        "--aws-region",
+        action="store",
+        default=None,
+        help="AWS region to pass to testdrive",
+    )

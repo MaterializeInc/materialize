@@ -245,6 +245,8 @@ impl<C: Debug> Debug for ClusterClient<C> {
 #[async_trait]
 impl GenericClient<ComputeCommand, ComputeResponse> for ClusterClient<PartitionedClient> {
     async fn send(&mut self, cmd: ComputeCommand) -> Result<(), Error> {
+        // Changing this debug statement requires changing the replica-isolation test
+        tracing::debug!("ClusterClient send={:?}", &cmd);
         match cmd {
             ComputeCommand::CreateTimely(comm_config) => self.build(comm_config),
             ComputeCommand::DropInstance => {

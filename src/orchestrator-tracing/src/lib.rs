@@ -34,7 +34,7 @@ use mz_orchestrator::{
 use mz_ore::cli::{DefaultTrue, KeyValueArg};
 #[cfg(feature = "tokio-console")]
 use mz_ore::tracing::TokioConsoleConfig;
-use mz_ore::tracing::{OpenTelemetryConfig, StderrLogConfig, TracingConfig};
+use mz_ore::tracing::{OpenTelemetryConfig, SentryConfig, StderrLogConfig, TracingConfig};
 
 /// Command line arguments for application tracing.
 ///
@@ -174,6 +174,9 @@ pub struct TracingCliArgs {
         default_value = "1h",
     )]
     pub tokio_console_retention: Duration,
+    /// Sentry data source to submit events and exceptions (e.g. panics) to.
+    #[clap(long, env = "SENTRY_DSN")]
+    pub sentry_dsn: Option<String>,
 }
 
 impl Default for TracingCliArgs {
@@ -217,6 +220,15 @@ impl From<&TracingCliArgs> for TracingConfig {
                     publish_interval: args.tokio_console_publish_interval,
                     retention: args.tokio_console_retention,
                 }),
+            sentry: args.sentry_dsn.clone().map(|dsn| SentryConfig {
+                dsn,
+                tags: args
+                    .opentelemetry_resource
+                    .iter()
+                    .cloned()
+                    .map(|kv| (kv.key, kv.value))
+                    .collect(),
+            }),
         }
     }
 }
@@ -287,6 +299,7 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 tokio_console_publish_interval,
                 #[cfg(feature = "tokio-console")]
                 tokio_console_retention,
+                sentry_dsn,
             } = &self.tracing_args;
             args.push(format!("--log-filter={log_filter}"));
             if log_prefix.is_some() {
@@ -323,6 +336,9 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                     "--tokio-console-retention={} microseconds",
                     tokio_console_retention.as_micros(),
                 ));
+            }
+            if let Some(dsn) = sentry_dsn {
+                args.push(format!("--sentry-dsn={dsn}"));
             }
             args
         };

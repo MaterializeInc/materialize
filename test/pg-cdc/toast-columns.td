@@ -12,11 +12,12 @@
 #
 
 > CREATE SECRET pgpass AS 'postgres'
-> CREATE CONNECTION pg FOR POSTGRES
-  HOST postgres,
-  DATABASE postgres,
-  USER postgres,
-  PASSWORD SECRET pgpass
+> CREATE CONNECTION pg TO POSTGRES (
+    HOST postgres,
+    DATABASE postgres,
+    USER postgres,
+    PASSWORD SECRET pgpass
+  )
 
 # Insert data pre-snapshot by generating 16kB of uncompressible data to force
 # TOASTed storage by concatenating 1024 random MD5 hashes, each being 128bit

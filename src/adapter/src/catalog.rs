@@ -11,6 +11,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -168,6 +169,7 @@ pub struct CatalogState {
     default_storage_host_size: Option<String>,
     availability_zones: Vec<String>,
     system_configuration: SystemVars,
+    egress_ips: Vec<Ipv4Addr>,
 }
 
 impl CatalogState {
@@ -1187,8 +1189,8 @@ impl CatalogState {
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         shard_id: Option<String>,
         size_bytes: u64,
+        collection_timestamp: EpochMillis,
     ) -> Result<(), Error> {
-        let collection_timestamp = (self.config.now)();
         let id = tx.get_and_increment_id(storage::STORAGE_USAGE_ID_ALLOC_KEY.to_string())?;
 
         let details = VersionedStorageUsage::new(id, shard_id, size_bytes, collection_timestamp);
@@ -1968,6 +1970,7 @@ impl<S: Append> Catalog<S> {
                     start_instant: Instant::now(),
                     nonce: rand::random(),
                     unsafe_mode: config.unsafe_mode,
+                    persisted_introspection: config.persisted_introspection,
                     environment_id: config.environment_id,
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,
@@ -1980,6 +1983,7 @@ impl<S: Append> Catalog<S> {
                 default_storage_host_size: config.default_storage_host_size,
                 availability_zones: config.availability_zones,
                 system_configuration: SystemVars::default(),
+                egress_ips: config.egress_ips,
             },
             transient_revision: 0,
             storage: Arc::new(Mutex::new(config.storage)),
@@ -2081,7 +2085,11 @@ impl<S: Append> Catalog<S> {
             )
             .await?;
 
-        for (builtin, id) in all_builtins {
+        let (builtin_indexes, builtin_non_indexes): (Vec<_>, Vec<_>) = all_builtins
+            .into_iter()
+            .partition(|(builtin, _)| matches!(builtin, Builtin::Index(_)));
+
+        for (builtin, id) in builtin_non_indexes {
             let schema_id = catalog.state.ambient_schemas_by_name[builtin.schema()];
             let name = QualifiedObjectName {
                 qualifiers: ObjectQualifiers {
@@ -2119,7 +2127,9 @@ impl<S: Append> Catalog<S> {
                         }),
                     );
                 }
-
+                Builtin::Index(_) => {
+                    unreachable!("handled later once clusters have been created")
+                }
                 Builtin::View(view) => {
                     let item = catalog
                         .parse_item(
@@ -2174,21 +2184,6 @@ impl<S: Append> Catalog<S> {
                 }
             }
         }
-        let new_system_id_mappings = new_builtins
-            .iter()
-            .map(|(builtin, id)| SystemObjectMapping {
-                schema_name: builtin.schema().to_string(),
-                object_type: builtin.catalog_item_type(),
-                object_name: builtin.name().to_string(),
-                id: *id,
-                fingerprint: builtin.fingerprint(),
-            })
-            .collect();
-        catalog
-            .storage()
-            .await
-            .set_system_object_mapping(new_system_id_mappings)
-            .await?;
 
         let compute_instances = catalog.storage().await.load_compute_instances().await?;
         for (id, name) in compute_instances {
@@ -2259,6 +2254,62 @@ impl<S: Append> Catalog<S> {
                 .state
                 .insert_compute_replica(instance_id, name, replica_id, config);
         }
+
+        for (builtin, id) in builtin_indexes {
+            let schema_id = catalog.state.ambient_schemas_by_name[builtin.schema()];
+            let name = QualifiedObjectName {
+                qualifiers: ObjectQualifiers {
+                    database_spec: ResolvedDatabaseSpecifier::Ambient,
+                    schema_spec: SchemaSpecifier::Id(schema_id),
+                },
+                item: builtin.name().into(),
+            };
+            match builtin {
+                Builtin::Index(index) => {
+                    let item = catalog
+                        .parse_item(
+                            index.sql.into(),
+                            None,
+                        )
+                        .unwrap_or_else(|e| {
+                            panic!(
+                                "internal error: failed to load bootstrap index:\n\
+                                    {}\n\
+                                    error:\n\
+                                    {:?}\n\n\
+                                    make sure that the schema name is specified in the builtin index's create sql statement.",
+                                index.name, e
+                            )
+                        });
+                    let oid = catalog.allocate_oid()?;
+                    catalog.state.insert_item(id, oid, name, item);
+                }
+                Builtin::Log(_)
+                | Builtin::Table(_)
+                | Builtin::View(_)
+                | Builtin::Type(_)
+                | Builtin::Func(_)
+                | Builtin::Source(_) => {
+                    unreachable!("handled above")
+                }
+            }
+        }
+
+        let new_system_id_mappings = new_builtins
+            .iter()
+            .map(|(builtin, id)| SystemObjectMapping {
+                schema_name: builtin.schema().to_string(),
+                object_type: builtin.catalog_item_type(),
+                object_name: builtin.name().to_string(),
+                id: *id,
+                fingerprint: builtin.fingerprint(),
+            })
+            .collect();
+        catalog
+            .storage()
+            .await
+            .set_system_object_mapping(new_system_id_mappings)
+            .await?;
 
         let system_config = catalog.storage().await.load_system_configuration().await?;
         for (name, value) in system_config {
@@ -2365,6 +2416,10 @@ impl<S: Append> Catalog<S> {
         let storage_usage_events = catalog.storage().await.storage_usage().await?;
         for event in storage_usage_events {
             builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
+        }
+
+        for ip in &catalog.state.egress_ips {
+            builtin_table_updates.push(catalog.state.pack_egress_ip_update(ip)?);
         }
 
         Ok((catalog, builtin_migration_metadata, builtin_table_updates))
@@ -2797,6 +2852,7 @@ impl<S: Append> Catalog<S> {
         let (catalog, _, _) = Catalog::open(Config {
             storage,
             unsafe_mode: true,
+            persisted_introspection: true,
             build_info: &DUMMY_BUILD_INFO,
             environment_id: format!("environment-{}-0", Uuid::from_u128(0)),
             now,
@@ -2807,6 +2863,7 @@ impl<S: Append> Catalog<S> {
             default_storage_host_size: None,
             availability_zones: vec![],
             secrets_reader,
+            egress_ips: vec![],
         })
         .await?;
         Ok(catalog)
@@ -3500,6 +3557,15 @@ impl<S: Append> Catalog<S> {
 
                     let entry = state.get_entry(&id);
                     let name = entry.name().clone();
+
+                    if entry.id().is_system() {
+                        let name = state
+                            .resolve_full_name(&name, session.map(|session| session.conn_id()));
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReadOnlySystemSchema(name.to_string()),
+                        )));
+                    }
+
                     let old_sink = match entry.item() {
                         CatalogItem::Sink(sink) => sink.clone(),
                         other => {
@@ -3595,6 +3661,15 @@ impl<S: Append> Catalog<S> {
 
                     let entry = state.get_entry(&id);
                     let name = entry.name().clone();
+
+                    if entry.id().is_system() {
+                        let name = state
+                            .resolve_full_name(&name, session.map(|session| session.conn_id()));
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReadOnlySystemSchema(name.to_string()),
+                        )));
+                    }
+
                     let old_source = match entry.item() {
                         CatalogItem::Source(source) => source.clone(),
                         other => {
@@ -3947,6 +4022,8 @@ impl<S: Append> Catalog<S> {
                             )));
                         }
                         if let ResolvedDatabaseSpecifier::Ambient = name.qualifiers.database_spec {
+                            let name = state
+                                .resolve_full_name(&name, session.map(|session| session.conn_id()));
                             return Err(AdapterError::Catalog(Error::new(
                                 ErrorKind::ReadOnlySystemSchema(name.to_string()),
                             )));
@@ -4200,6 +4277,16 @@ impl<S: Append> Catalog<S> {
                         ))));
                     }
 
+                    if entry.id().is_system() {
+                        let name = state.resolve_full_name(
+                            entry.name(),
+                            session.map(|session| session.conn_id()),
+                        );
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReadOnlySystemSchema(name.to_string()),
+                        )));
+                    }
+
                     let mut to_full_name = current_full_name.clone();
                     to_full_name.item = to_name.clone();
 
@@ -4337,8 +4424,15 @@ impl<S: Append> Catalog<S> {
                 Op::UpdateStorageUsage {
                     shard_id,
                     size_bytes,
+                    collection_timestamp,
                 } => {
-                    state.add_to_storage_usage(tx, builtin_table_updates, shard_id, size_bytes)?;
+                    state.add_to_storage_usage(
+                        tx,
+                        builtin_table_updates,
+                        shard_id,
+                        size_bytes,
+                        collection_timestamp,
+                    )?;
                 }
                 Op::UpdateSystemConfiguration { name, value } => {
                     tx.upsert_system_config(&name, &value)?;
@@ -4916,6 +5010,10 @@ impl<S: Append> Catalog<S> {
 
     /// Allocate ids for persisted introspection views. Called once per compute replica creation
     pub async fn allocate_persisted_introspection_views(&mut self) -> Vec<(LogView, GlobalId)> {
+        if !self.state.config.persisted_introspection {
+            return Vec::new();
+        }
+
         let log_amount = DEFAULT_LOG_VIEWS
             .len()
             .try_into()
@@ -4939,6 +5037,10 @@ impl<S: Append> Catalog<S> {
     pub async fn allocate_persisted_introspection_sources(
         &mut self,
     ) -> Vec<(LogVariant, GlobalId)> {
+        if !self.state.config.persisted_introspection {
+            return Vec::new();
+        }
+
         let log_amount = DEFAULT_LOG_VARIANTS
             .len()
             .try_into()
@@ -5086,6 +5188,7 @@ pub enum Op {
     UpdateStorageUsage {
         shard_id: Option<String>,
         size_bytes: u64,
+        collection_timestamp: EpochMillis,
     },
     UpdateSystemConfiguration {
         name: String,

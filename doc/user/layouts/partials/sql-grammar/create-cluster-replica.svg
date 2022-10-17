@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="505" height="147">
+<svg xmlns="http://www.w3.org/2000/svg" width="505" height="163">
    <polygon points="9 17 1 13 1 21"/>
    <polygon points="17 17 9 13 9 21"/>
    <rect x="31" y="3" width="76" height="32" rx="10"/>
@@ -36,22 +36,33 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="467" y="21">.</text>
-   <rect x="199" y="113" width="106" height="32"/>
-   <rect x="197" y="111" width="106" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="207" y="131">replica_name</text>
-   <rect x="345" y="113" width="112" height="32"/>
-   <rect x="343" y="111" width="112" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="353" y="131">replica_option</text>
-   <rect x="345" y="69" width="24" height="32" rx="10"/>
-   <rect x="343"
+   <rect x="87" y="113" width="106" height="32"/>
+   <rect x="85" y="111" width="106" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="95" y="131">replica_name</text>
+   <rect x="253" y="113" width="62" height="32"/>
+   <rect x="251" y="111" width="62" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="261" y="131">option</text>
+   <rect x="335" y="113" width="28" height="32" rx="10"/>
+   <rect x="333"
+         y="111"
+         width="28"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="343" y="131">=</text>
+   <rect x="383" y="113" width="54" height="32"/>
+   <rect x="381" y="111" width="54" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="391" y="131">value</text>
+   <rect x="253" y="69" width="24" height="32" rx="10"/>
+   <rect x="251"
          y="67"
          width="24"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="353" y="87">,</text>
+   <text class="terminal" x="261" y="87">,</text>
    <path class="line"
-         d="m17 17 h2 m0 0 h10 m76 0 h10 m0 0 h10 m84 0 h10 m0 0 h10 m80 0 h10 m0 0 h10 m108 0 h10 m0 0 h10 m24 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-328 110 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m106 0 h10 m20 0 h10 m112 0 h10 m-152 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m132 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-132 0 h10 m24 0 h10 m0 0 h88 m23 44 h-3"/>
+         d="m17 17 h2 m0 0 h10 m76 0 h10 m0 0 h10 m84 0 h10 m0 0 h10 m80 0 h10 m0 0 h10 m108 0 h10 m0 0 h10 m24 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-440 110 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m106 0 h10 m40 0 h10 m62 0 h10 m0 0 h10 m28 0 h10 m0 0 h10 m54 0 h10 m-224 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m204 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-204 0 h10 m24 0 h10 m0 0 h160 m-244 44 h20 m244 0 h20 m-284 0 q10 0 10 10 m264 0 q0 -10 10 -10 m-274 10 v14 m264 0 v-14 m-264 14 q0 10 10 10 m244 0 q10 0 10 -10 m-254 10 h10 m0 0 h234 m23 -34 h-3"/>
    <polygon points="495 127 503 123 503 131"/>
    <polygon points="495 127 487 123 487 131"/>
 </svg>

@@ -9,6 +9,7 @@
 
 use std::fmt;
 
+use mz_compute_client::controller::ComputeInstanceStatus;
 use mz_ore::str::StrExt;
 use mz_sql::ast::NoticeSeverity;
 
@@ -16,15 +17,31 @@ use mz_sql::ast::NoticeSeverity;
 ///
 /// These are diagnostic warnings or informational messages that are not
 /// severe enough to warrant failing a query entirely.
-#[derive(Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AdapterNotice {
-    DatabaseAlreadyExists { name: String },
-    SchemaAlreadyExists { name: String },
-    TableAlreadyExists { name: String },
-    ObjectAlreadyExists { name: String, ty: &'static str },
+    DatabaseAlreadyExists {
+        name: String,
+    },
+    SchemaAlreadyExists {
+        name: String,
+    },
+    TableAlreadyExists {
+        name: String,
+    },
+    ObjectAlreadyExists {
+        name: String,
+        ty: &'static str,
+    },
     ExistingTransactionInProgress,
     ExplicitTransactionControlInImplicitTransaction,
-    UserRequested { severity: NoticeSeverity },
+    UserRequested {
+        severity: NoticeSeverity,
+    },
+    ClusterReplicaStatusChanged {
+        cluster: String,
+        replica: String,
+        status: ComputeInstanceStatus,
+    },
 }
 
 impl AdapterNotice {
@@ -62,6 +79,17 @@ impl fmt::Display for AdapterNotice {
             }
             AdapterNotice::UserRequested { severity } => {
                 write!(f, "raised a test {}", severity.to_string().to_lowercase())
+            }
+            AdapterNotice::ClusterReplicaStatusChanged {
+                cluster,
+                replica,
+                status,
+            } => {
+                write!(
+                    f,
+                    "cluster replica {}.{} changed status to: {:?}",
+                    cluster, replica, status,
+                )
             }
         }
     }

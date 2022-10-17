@@ -30,7 +30,8 @@ use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
 use timely::PartialOrder;
 use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, TryAcquireError};
+use tracing::log::warn;
 use tracing::{debug, debug_span, info, Instrument, Span};
 
 use crate::async_runtime::CpuHeavyRuntime;
@@ -38,7 +39,7 @@ use crate::batch::BatchParts;
 use crate::fetch::fetch_batch_part;
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::state::{HollowBatch, HollowBatchPart};
-use crate::internal::trace::FueledMergeRes;
+use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::{Metrics, PersistConfig, ShardId, WriterId};
 
 /// A request for compaction.
@@ -93,6 +94,9 @@ where
     {
         let (compact_req_sender, mut compact_req_receiver) =
             mpsc::unbounded_channel::<(CompactReq<T>, oneshot::Sender<()>)>();
+        let concurrency_limit = Arc::new(tokio::sync::Semaphore::new(
+            machine.cfg.compaction_concurrency_limit,
+        ));
         let metrics = Arc::clone(&machine.metrics);
         let cfg = machine.cfg.clone();
 
@@ -108,6 +112,27 @@ where
                 let cpu_heavy_runtime = Arc::clone(&cpu_heavy_runtime);
                 let mut machine = machine.clone();
                 let writer_id = writer_id.clone();
+                let permit = {
+                    let inner = Arc::clone(&concurrency_limit);
+                    // perform a non-blocking attempt to acquire a permit so we can
+                    // record how often we're ever blocked on the concurrency limit
+                    match inner.try_acquire_owned() {
+                        Ok(permit) => permit,
+                        Err(TryAcquireError::NoPermits) => {
+                            metrics.compaction.concurrency_waits.inc();
+                            Arc::clone(&concurrency_limit)
+                                .acquire_owned()
+                                .await
+                                .expect("semaphore is never closed")
+                        }
+                        Err(TryAcquireError::Closed) => {
+                            // should never happen in practice. the semaphore is
+                            // never explicitly closed, nor will it close on Drop
+                            warn!("semaphore for shard {} is closed", machine.shard_id());
+                            continue;
+                        }
+                    }
+                };
 
                 let compact_span =
                     debug_span!(parent: None, "compact::apply", shard_id=%machine.shard_id());
@@ -142,18 +167,27 @@ where
                     match res {
                         Ok(Ok(res)) => {
                             let res = FueledMergeRes { output: res.output };
-                            let applied = machine.merge_res(&res).await;
-                            if applied {
-                                metrics.compaction.applied.inc();
-                            } else {
-                                metrics.compaction.noop.inc();
-                                for part in res.output.parts {
-                                    let key = part.key.complete(&machine.shard_id());
-                                    retry_external(
-                                        &metrics.retries.external.compaction_noop_delete,
-                                        || blob.delete(&key),
-                                    )
-                                    .await;
+                            match machine.merge_res(&res).await {
+                                ApplyMergeResult::AppliedExact => {
+                                    metrics.compaction.applied.inc();
+                                    metrics.compaction.applied_exact_match.inc();
+                                    machine.shard_metrics.compaction_applied.inc();
+                                }
+                                ApplyMergeResult::AppliedSubset => {
+                                    metrics.compaction.applied.inc();
+                                    metrics.compaction.applied_subset_match.inc();
+                                    machine.shard_metrics.compaction_applied.inc();
+                                }
+                                ApplyMergeResult::NotApplied => {
+                                    metrics.compaction.noop.inc();
+                                    for part in res.output.parts {
+                                        let key = part.key.complete(&machine.shard_id());
+                                        retry_external(
+                                            &metrics.retries.external.compaction_noop_delete,
+                                            || blob.delete(&key),
+                                        )
+                                        .await;
+                                    }
                                 }
                             }
                         }
@@ -162,6 +196,9 @@ where
                             debug!("compaction for {} failed: {:#}", machine.shard_id(), err);
                         }
                     };
+
+                    // moves `permit` into async scope so it can be dropped upon completion
+                    drop(permit);
                 }
                 .instrument(compact_span)
                 .await;

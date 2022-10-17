@@ -34,7 +34,7 @@ $ kafka-ingest format=avro topic=data schema=${schema}
 {"u": "b141698b-fb7f-492d-bc8a-0d159641c7a3"}
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE data FROM
   KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
@@ -55,9 +55,9 @@ u      false     uuid
 > SELECT '85907cb9-ac9b-4e35-84b8-60dc69368aca'::uuid::text
 "85907cb9-ac9b-4e35-84b8-60dc69368aca"
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
 > CREATE SINK uuid_sink_${testdrive.seed} FROM data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-data-${testdrive.seed}')

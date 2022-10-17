@@ -52,7 +52,7 @@ mz-stash = { path = "../stash" }
 # TODO(benesch): this crate should not depend on the SQL parser.
 mz-sql-parser = { path = "../sql-parser" }
 mz-timely-util = { path = "../timely-util" }
-once_cell = { version = "1.14.0" }
+once_cell = { version = "1.15.0" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 prometheus = { version = "0.13.2", default-features = false }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
@@ -61,12 +61,13 @@ prost = { version = "0.11.0", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = { version = "1.6.0" }
+sentry = { version = "0.27.0", optional = true }
 serde = { version = "1.0.145", features = ["derive"] }
 serde_json = { version = "1.0.86" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.20.2", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde"] }
-tokio-stream = "0.1.10"
+tokio-stream = "0.1.11"
 tokio-util = { version = "0.7.3", features = ["io"] }
 tonic = "0.8.2"
 tracing = "0.1.36"

@@ -12,7 +12,7 @@ axum = { version = "0.5.16", features = ["headers"] }
 headers = "0.3.7"
 serde = "1.0.145"
 tracing-subscriber = "0.3.16"
-include_dir = "0.7.2"
+include_dir = "0.7.3"
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "tracing_"] }
 prometheus = { version = "0.13.2", default-features = false, features = ["process"] }
 

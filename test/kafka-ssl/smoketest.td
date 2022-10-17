@@ -27,12 +27,12 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 > CREATE SECRET password_csr AS 'sekurity'
 
 # Ensure connections track their dependencies
-> CREATE CONNECTION kafka_ssl
-  FOR KAFKA
+> CREATE CONNECTION kafka_ssl TO KAFKA (
     BROKER 'kafka:9092',
     SSL KEY = SECRET ssl_key_kafka,
     SSL CERTIFICATE = '${arg.materialized-kafka-crt}',
-    SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}';
+    SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}'
+  );
 
 > CREATE CONNECTION csr_ssl
   FOR CONFLUENT SCHEMA REGISTRY
@@ -49,9 +49,9 @@ contains: cannot drop
 # Ensure non-secrets cannot be used as secrets
 > CREATE TABLE not_a_secret (a int);
 
-! CREATE CONNECTION conn
-  FOR KAFKA
-    SSL KEY = SECRET not_a_secret;
+! CREATE CONNECTION conn TO KAFKA (
+    SSL KEY = SECRET not_a_secret
+  );
 contains: materialize.public.not_a_secret is not a secret
 
 > CREATE SOURCE data
@@ -108,10 +108,11 @@ contains:error publishing kafka schemas for sink: unable to publish value schema
 contains:self signed certificate in certificate chain
 
 # missing config
-! CREATE CONNECTION m
-  FOR KAFKA BROKER 'kafka:9092',
-  SSL CERTIFICATE '${arg.materialized-kafka-crt}',
-  SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}';
+! CREATE CONNECTION m TO KAFKA (
+    BROKER 'kafka:9092',
+    SSL CERTIFICATE '${arg.materialized-kafka-crt}',
+    SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}'
+  );
 contains:invalid CONNECTION: under-specified security configuration
 
 > CREATE SOURCE kafka_csr_connector_source
@@ -128,19 +129,19 @@ a
 
 # Ensure that connectors do not require the certificate authority
 
-> CREATE CONNECTION kafka_sasl_no_ca
-  FOR KAFKA
+> CREATE CONNECTION kafka_sasl_no_ca TO KAFKA (
     BROKER 'kafka:9092',
     SSL KEY = SECRET ssl_key_kafka,
-    SSL CERTIFICATE = '${arg.materialized-kafka-crt}';
+    SSL CERTIFICATE = '${arg.materialized-kafka-crt}'
+  );
 
-> CREATE CONNECTION csr_ssl_no_ca
-  FOR CONFLUENT SCHEMA REGISTRY
+> CREATE CONNECTION csr_ssl_no_ca TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}',
     SSL KEY = SECRET ssl_key_csr,
     SSL CERTIFICATE = '${arg.materialized-schema-registry-crt}',
     USERNAME = 'materialize',
-    PASSWORD = SECRET password_csr;
+    PASSWORD = SECRET password_csr
+  );
 
 # This ensures that the error is not that the CA was required, but simply that
 # not providing it prohibits connecting.

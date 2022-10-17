@@ -31,6 +31,7 @@ class Application:
     resources: List[K8sResource]
     images: List[str]
     release_mode: bool
+    aws_region: Optional[str]
 
     def __init__(self) -> None:
         self.create()
@@ -65,10 +66,16 @@ class Application:
 
 
 class MaterializeApplication(Application):
-    def __init__(self, release_mode: bool = True, tag: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        release_mode: bool = True,
+        tag: Optional[str] = None,
+        aws_region: Optional[str] = None,
+    ) -> None:
         self.environmentd = EnvironmentdService()
-        self.testdrive = Testdrive(release_mode=release_mode)
+        self.testdrive = Testdrive(release_mode=release_mode, aws_region=aws_region)
         self.release_mode = release_mode
+        self.aws_region = aws_region
 
         self.resources = [
             *POSTGRES_RESOURCES,

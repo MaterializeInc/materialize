@@ -28,17 +28,15 @@ statement ok
 INSERT INTO bar (a, d, e) VALUES (-45, 'our', 3.14), (5, 'still', -0.0), (-3, 'is', -1.0)
 
 query T multiline
-explain plan for select b, c from foo where a = 5
+explain with(arity, join_impls) select b, c from foo where a = 5
 ----
-Source materialize.public.foo (u1):
-| Filter (#0 = 5)
-| Project (#0..=#2)
+Explained Query:
+  Project (#1, #2) // { arity: 2 }
+    Filter (#0 = 5) // { arity: 3 }
+      Get materialize.public.foo // { arity: 3 }
 
-Query:
-%0 =
-| Get materialize.public.foo (u1)
-| Filter (#0 = 5)
-| Project (#1, #2)
+Source materialize.public.foo
+  filter=((#0 = 5))
 
 EOF
 
@@ -51,17 +49,15 @@ this
 # Test that a query that joins to a (select literal) gets planned as a filter
 # and not a join.
 query T multiline
-explain plan for select b, c from foo, (select 5 as a) const where foo.a = const.a
+explain with(arity, join_impls) select b, c from foo, (select 5 as a) const where foo.a = const.a
 ----
-Source materialize.public.foo (u1):
-| Filter (#0 = 5)
-| Project (#0..=#2)
+Explained Query:
+  Project (#1, #2) // { arity: 2 }
+    Filter (#0 = 5) // { arity: 3 }
+      Get materialize.public.foo // { arity: 3 }
 
-Query:
-%0 =
-| Get materialize.public.foo (u1)
-| Filter (#0 = 5)
-| Project (#1, #2)
+Source materialize.public.foo
+  filter=((#0 = 5))
 
 EOF
 
@@ -74,29 +70,22 @@ this
 # Test that equality with a literal predicate gets pushed down to both inputs
 # even when one of the join constraints is an expression as opposed to a column reference.
 query T multiline
-explain plan for select * from foo, bar where foo.a = abs(bar.a) and foo.a = 3
+explain with(arity, join_impls) select * from foo, bar where foo.a = abs(bar.a) and foo.a = 3
 ----
-Source materialize.public.foo (u1):
-| Filter (#0 = 3)
-| Project (#0..=#2)
+Explained Query:
+  CrossJoin type=differential // { arity: 6 }
+    implementation
+      %1 » %0[]
+    ArrangeBy keys=[[]] // { arity: 3 }
+      Filter (#0 = 3) // { arity: 3 }
+        Get materialize.public.foo // { arity: 3 }
+    Filter (3 = abs(#0)) // { arity: 3 }
+      Get materialize.public.bar // { arity: 3 }
 
-Source materialize.public.bar (u2):
-| Filter (3 = abs(#0))
-| Project (#0..=#2)
-
-Query:
-%0 =
-| Get materialize.public.foo (u1)
-| Filter (#0 = 3)
-| ArrangeBy ()
-
-%1 =
-| Get materialize.public.bar (u2)
-| Filter (3 = abs(#0))
-
-%2 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
+Source materialize.public.foo
+  filter=((#0 = 3))
+Source materialize.public.bar
+  filter=((3 = abs(#0)))
 
 EOF
 
@@ -116,7 +105,7 @@ create index foo_idx on foo(a);
 #TODO (wangandi) (materialize#616): uncomment these tests when FilterEqualLiteral is enabled
 
 #query T multiline
-#explain plan for select b, c from foo where a = 5
+#explain with(arity, join_impls) select b, c from foo where a = 5
 #----
 #Project {
 #  outputs: [1, 2],
@@ -134,7 +123,7 @@ this
 -4.4
 
 #query T multiline
-#explain plan for select b, c from foo where a = 5 and b = 'this'
+#explain with(arity, join_impls) select b, c from foo where a = 5 and b = 'this'
 #----
 #Project {
 #  outputs: [1, 2],
@@ -161,7 +150,7 @@ statement ok
 create index foo_idx3 on foo(b);
 
 #query T multiline
-#explain plan for select b, c from foo where a = 5 and b = 'this'
+#explain with(arity, join_impls) select b, c from foo where a = 5 and b = 'this'
 #----
 #Project {
 #  outputs: [1, 2],
@@ -178,7 +167,7 @@ create index foo_idx3 on foo(b);
 #create index bar_idx on bar(a)
 #
 #query T multiline
-#explain plan for select foo.a, b, c, d, e from foo, bar where foo.a = bar.a and b = 'this'
+#explain with(arity, join_impls) select foo.a, b, c, d, e from foo, bar where foo.a = bar.a and b = 'this'
 #----
 
 query ITRTR

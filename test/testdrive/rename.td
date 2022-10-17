@@ -24,11 +24,11 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
 
 # Create library of objects and verify names
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
 > CREATE SOURCE mz_data
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
@@ -162,17 +162,21 @@ renamed_sink
 # Clean up temp view
 > DROP VIEW public_objects;
 
+$ set-regex match=\d replacement=<SIZE>
+
 # Source was successfully renamed
 > SHOW SOURCES;
 name               type   size
 ------------------------------
-renamed_mz_data    kafka  1
+renamed_mz_data    kafka  <SIZE>
 
 # Sink was successfully renamed
 > SHOW SINKS
 name               type   size
 ------------------------------
-renamed_sink       kafka  1
+renamed_sink       kafka  <SIZE>
+
+$ set-regex match=u\d+|cluster1|default replacement=<VARIABLE_OUTPUT>
 
 # View was successfully renamed
 > SHOW VIEWS

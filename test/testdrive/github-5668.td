@@ -83,7 +83,7 @@
 # {"before": null, "after": {"row":{"val": "too late"}}, "source": {"lsn": {"long": 1}, "sequence": {"string": "[\"1\", \"1\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
 
 # > CREATE CONNECTION kafka_conn
-#   FOR KAFKA BROKER '${testdrive.kafka-addr}';
+#   TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 # > CREATE SOURCE pg_dbz
 #   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-pg-dbz-data-${testdrive.seed}')

@@ -41,8 +41,7 @@ Field                       | Value            | Required | Description
 CREATE SECRET kafka_ssl_crt AS '<BROKER_SSL_CRT>';
 CREATE SECRET kafka_ssl_key AS '<BROKER_SSL_KEY>';
 
-CREATE CONNECTION kafka_connection
-  FOR KAFKA
+CREATE CONNECTION kafka_connection FOR KAFKA
     BROKER 'rp-f00000bar.data.vectorized.cloud:30365',
     SSL KEY = SECRET kafka_ssl_key,
     SSL CERTIFICATE = SECRET kafka_ssl_crt;
@@ -68,8 +67,7 @@ Field                                   | Value            | Required | Descript
 ```sql
 CREATE SECRET kafka_password AS '<BROKER_PASSWORD>';
 
-CREATE CONNECTION kafka_connection
-  FOR KAFKA
+CREATE CONNECTION kafka_connection FOR KAFKA
     BROKER 'unique-jellyfish-0000-kafka.upstash.io:9092',
     SASL MECHANISMS = 'SCRAM-SHA-256',
     SASL USERNAME = 'foo',
@@ -100,8 +98,7 @@ CREATE SECRET csr_ssl_crt AS '<CSR_SSL_CRT>';
 CREATE SECRET csr_ssl_key AS '<CSR_SSL_KEY>';
 CREATE SECRET csr_password AS '<CSR_PASSWORD>';
 
-CREATE CONNECTION csr_ssl
-  FOR CONFLUENT SCHEMA REGISTRY
+CREATE CONNECTION csr_ssl FOR CONFLUENT SCHEMA REGISTRY
     URL 'https://rp-f00000bar.data.vectorized.cloud:30993',
     SSL KEY = SECRET csr_ssl_key,
     SSL CERTIFICATE = SECRET csr_ssl_crt,
@@ -129,8 +126,7 @@ Field                       | Value            | Required | Description
 ```sql
 CREATE SECRET pgpass AS '<POSTGRES_PASSWORD>';
 
-CREATE CONNECTION pg_connection
-  FOR POSTGRES
+CREATE CONNECTION pg_connection FOR POSTGRES
     HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
     PORT 5432,
     USER 'postgres',
@@ -159,8 +155,7 @@ Once a connection is created, you can find and retrieve the public keys to be us
 ##### Example
 
 ```sql
-CREATE CONNECTION ssh_connection
-  FOR SSH TUNNEL
+CREATE CONNECTION ssh_connection FOR SSH TUNNEL
     HOST '<SSH_BASTION_HOST>',
     USER '<SSH_BASTION_USER>',
     PORT 1;

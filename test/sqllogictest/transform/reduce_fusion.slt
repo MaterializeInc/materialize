@@ -11,104 +11,94 @@ statement ok
 CREATE TABLE t (f0 int, f1 int, f2 int)
 
 query T multiline
-EXPLAIN SELECT DISTINCT * FROM t GROUP BY f1, f2, f0
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT * FROM t GROUP BY f1, f2, f0
 ----
-Source materialize.public.t (u1):
-| Project (#0..=#2)
-
-Query:
-%0 =
-| Get materialize.public.t (u1)
-| Distinct group=(#0, #1, #2)
+Explained Query:
+  Distinct group_by=[#0, #1, #2] // { arity: 3 }
+    Get materialize.public.t // { arity: 3 }
 
 EOF
 
 query T multiline
-EXPLAIN SELECT DISTINCT r0 FROM (SELECT DISTINCT f1 + 1 as r0, f0 FROM t)
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT r0 FROM (SELECT DISTINCT f1 + 1 as r0, f0 FROM t)
 ----
-Source materialize.public.t (u1):
-| Map dummy, dummy
-| Project (#3, #1, #4)
+Explained Query:
+  Distinct group_by=[(#0 + 1)] // { arity: 1 }
+    Project (#1) // { arity: 1 }
+      Get materialize.public.t // { arity: 3 }
 
-Query:
-%0 =
-| Get materialize.public.t (u1)
-| Project (#1)
-| Distinct group=((#0 + 1))
+Source materialize.public.t
+  project=(#3, #1, #4)
+  map=(dummy, dummy)
 
 EOF
 
 query T multiline
-EXPLAIN SELECT DISTINCT f1 FROM (SELECT DISTINCT f0, f1 FROM t)
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1 FROM (SELECT DISTINCT f0, f1 FROM t)
 ----
-Source materialize.public.t (u1):
-| Map dummy, dummy
-| Project (#3, #1, #4)
+Explained Query:
+  Distinct group_by=[#0] // { arity: 1 }
+    Project (#1) // { arity: 1 }
+      Get materialize.public.t // { arity: 3 }
 
-Query:
-%0 =
-| Get materialize.public.t (u1)
-| Project (#1)
-| Distinct group=(#0)
+Source materialize.public.t
+  project=(#3, #1, #4)
+  map=(dummy, dummy)
 
 EOF
 
 query T multiline
-EXPLAIN SELECT DISTINCT FROM (SELECT DISTINCT f0, f1 FROM t)
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT FROM (SELECT DISTINCT f0, f1 FROM t)
 ----
-Source materialize.public.t (u1):
-| Map dummy, dummy, dummy
-| Project (#3..=#5)
+Explained Query:
+  Distinct // { arity: 0 }
+    Project () // { arity: 0 }
+      Get materialize.public.t // { arity: 3 }
 
-Query:
-%0 =
-| Get materialize.public.t (u1)
-| Project ()
-| Distinct group=()
+Source materialize.public.t
+  project=(#3..=#5)
+  map=(dummy, dummy, dummy)
 
 EOF
 
 query T multiline
-EXPLAIN SELECT DISTINCT FROM (SELECT DISTINCT f0 FROM (SELECT DISTINCT f0, f1 FROM t));
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT FROM (SELECT DISTINCT f0 FROM (SELECT DISTINCT f0, f1 FROM t));
 ----
-Source materialize.public.t (u1):
-| Map dummy, dummy, dummy
-| Project (#3..=#5)
+Explained Query:
+  Distinct // { arity: 0 }
+    Project () // { arity: 0 }
+      Get materialize.public.t // { arity: 3 }
 
-Query:
-%0 =
-| Get materialize.public.t (u1)
-| Project ()
-| Distinct group=()
+Source materialize.public.t
+  project=(#3..=#5)
+  map=(dummy, dummy, dummy)
 
 EOF
 
 query T multiline
-EXPLAIN SELECT f0 FROM (SELECT f0 FROM t GROUP BY f1 / 10, f0) GROUP BY f0;
+EXPLAIN WITH(arity, join_impls) SELECT f0 FROM (SELECT f0 FROM t GROUP BY f1 / 10, f0) GROUP BY f0;
 ----
-Source materialize.public.t (u1):
-| Map dummy, dummy
-| Project (#0, #3, #4)
+Explained Query:
+  Distinct group_by=[#0] // { arity: 1 }
+    Project (#0) // { arity: 1 }
+      Get materialize.public.t // { arity: 3 }
 
-Query:
-%0 =
-| Get materialize.public.t (u1)
-| Project (#0)
-| Distinct group=(#0)
+Source materialize.public.t
+  project=(#0, #3, #4)
+  map=(dummy, dummy)
 
 EOF
 
 query T multiline
-EXPLAIN SELECT f0 / 20 FROM (SELECT f0 / 10 AS f0 FROM t GROUP BY f0 / 10) GROUP BY f0 / 20;
+EXPLAIN WITH(arity, join_impls) SELECT f0 / 20 FROM (SELECT f0 / 10 AS f0 FROM t GROUP BY f0 / 10) GROUP BY f0 / 20;
 ----
-Source materialize.public.t (u1):
-| Map dummy, dummy
-| Project (#0, #3, #4)
+Explained Query:
+  Distinct group_by=[((#0 / 10) / 20)] // { arity: 1 }
+    Project (#0) // { arity: 1 }
+      Get materialize.public.t // { arity: 3 }
 
-Query:
-%0 =
-| Get materialize.public.t (u1)
-| Project (#0)
-| Distinct group=(((#0 / 10) / 20))
+Source materialize.public.t
+  project=(#0, #3, #4)
+  map=(dummy, dummy)
 
 EOF

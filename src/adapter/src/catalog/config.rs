@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::HashMap;
+use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -28,6 +29,8 @@ pub struct Config<'a, S> {
     pub storage: storage::Connection<S>,
     /// Whether to enable unsafe mode.
     pub unsafe_mode: bool,
+    /// Whether to enable persisted introspection sources.
+    pub persisted_introspection: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
     /// A persistent ID associated with the environment.
@@ -48,6 +51,8 @@ pub struct Config<'a, S> {
     pub availability_zones: Vec<String>,
     /// A handle to a secrets manager that can only read secrets.
     pub secrets_reader: Arc<dyn SecretsReader>,
+    /// IP Addresses which will be used for egress.
+    pub egress_ips: Vec<Ipv4Addr>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

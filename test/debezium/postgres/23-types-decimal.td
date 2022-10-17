@@ -18,12 +18,11 @@ INSERT INTO decimal_type VALUES (NULL, 0), (NULL, 1), (12.345, 2), ('NaN', 3);
 
 $ schema-registry-wait subject=postgres.public.decimal_type-value
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE decimal_type
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.decimal_type')

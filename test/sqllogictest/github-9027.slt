@@ -59,650 +59,82 @@ WHERE
  OR l_commitdate = o_orderdate - ' 7 DAY '
  );
 ----
-Source materialize.public.orders (u1):
-{
-  "expressions": [],
-  "predicates": [],
-  "projection": [
-    0,
-    4
-  ],
-  "input_arity": 9
-}
+Explained Query:
+  Return
+    Join::Linear
+      final_closure
+        project=(#0)
+        map=(1)
+      linear_stage[0]
+        closure
+          project=()
+        lookup={ relation=1, key=[#0] }
+        stream={ key=[#0], thinning=() }
+      source={ relation=0, key=[] }
+      Get::PassArrangements l0
+        raw=true
+      ArrangeBy
+        input_key=[#0]
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=() }
+        Reduce::Distinct
+          val_plan
+            project=()
+          key_plan=id
+          Join::Linear
+            linear_stage[1]
+              closure
+                project=(#0)
+                filter=(((#3 = 1997-07-06) OR (date_to_timestamp(#2) = (#1 - 7 days))))
+              lookup={ relation=0, key=[] }
+              stream={ key=[], thinning=(#0, #1) }
+            linear_stage[0]
+              lookup={ relation=2, key=[#0] }
+              stream={ key=[#0], thinning=() }
+            source={ relation=1, key=[#0] }
+            ArrangeBy
+              raw=true
+              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+              Get::Collection materialize.public.lineitem
+                project=(#1, #2)
+                raw=true
+            ArrangeBy
+              input_key=[#0]
+              raw=false
+              arrangements[0]={ key=[#0], permutation=id, thinning=() }
+              Reduce::Distinct
+                val_plan
+                  project=()
+                key_plan=id
+                Get::PassArrangements l0
+                  raw=true
+            ArrangeBy
+              raw=true
+              arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+              Get::Collection materialize.public.orders
+                filter=((#0) IS NOT NULL)
+                raw=true
+  Where
+    cte l0 =
+      Join::Linear
+        linear_stage[0]
+          lookup={ relation=0, key=[] }
+          stream={ key=[], thinning=() }
+        source={ relation=1, key=[] }
+        ArrangeBy
+          raw=true
+          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+          Get::Collection materialize.public.lineitem
+            project=(#0)
+            raw=true
+        Get::Collection materialize.public.orders
+          project=()
+          raw=true
 
-Source materialize.public.lineitem (u2):
-{
-  "expressions": [],
-  "predicates": [],
-  "projection": [
-    0,
-    11,
-    12
-  ],
-  "input_arity": 16
-}
-
-Query:
-{
-  "Let": {
-    "id": 0,
-    "value": {
-      "Join": {
-        "inputs": [
-          {
-            "ArrangeBy": {
-              "input": {
-                "Get": {
-                  "id": {
-                    "Global": {
-                      "User": 2
-                    }
-                  },
-                  "keys": {
-                    "raw": true,
-                    "arranged": []
-                  },
-                  "plan": {
-                    "Collection": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0
-                      ],
-                      "input_arity": 3
-                    }
-                  }
-                }
-              },
-              "forms": {
-                "raw": true,
-                "arranged": [
-                  [
-                    [],
-                    {
-                      "0": 0
-                    },
-                    [
-                      0
-                    ]
-                  ]
-                ]
-              },
-              "input_key": null,
-              "input_mfp": {
-                "expressions": [],
-                "predicates": [],
-                "projection": [
-                  0
-                ],
-                "input_arity": 1
-              }
-            }
-          },
-          {
-            "Get": {
-              "id": {
-                "Global": {
-                  "User": 1
-                }
-              },
-              "keys": {
-                "raw": true,
-                "arranged": []
-              },
-              "plan": {
-                "Collection": {
-                  "expressions": [],
-                  "predicates": [],
-                  "projection": [],
-                  "input_arity": 2
-                }
-              }
-            }
-          }
-        ],
-        "plan": {
-          "Linear": {
-            "source_relation": 1,
-            "source_key": null,
-            "initial_closure": null,
-            "stage_plans": [
-              {
-                "lookup_relation": 0,
-                "stream_key": [],
-                "stream_thinning": [],
-                "lookup_key": [],
-                "closure": {
-                  "ready_equivalences": [],
-                  "before": {
-                    "mfp": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0
-                      ],
-                      "input_arity": 1
-                    }
-                  }
-                }
-              }
-            ],
-            "final_closure": null
-          }
-        }
-      }
-    },
-    "body": {
-      "Join": {
-        "inputs": [
-          {
-            "Get": {
-              "id": {
-                "Local": 0
-              },
-              "keys": {
-                "raw": true,
-                "arranged": []
-              },
-              "plan": "PassArrangements"
-            }
-          },
-          {
-            "ArrangeBy": {
-              "input": {
-                "Reduce": {
-                  "input": {
-                    "Join": {
-                      "inputs": [
-                        {
-                          "ArrangeBy": {
-                            "input": {
-                              "Get": {
-                                "id": {
-                                  "Global": {
-                                    "User": 2
-                                  }
-                                },
-                                "keys": {
-                                  "raw": true,
-                                  "arranged": []
-                                },
-                                "plan": {
-                                  "Collection": {
-                                    "expressions": [],
-                                    "predicates": [],
-                                    "projection": [
-                                      1,
-                                      2
-                                    ],
-                                    "input_arity": 3
-                                  }
-                                }
-                              }
-                            },
-                            "forms": {
-                              "raw": true,
-                              "arranged": [
-                                [
-                                  [],
-                                  {
-                                    "0": 0,
-                                    "1": 1
-                                  },
-                                  [
-                                    0,
-                                    1
-                                  ]
-                                ]
-                              ]
-                            },
-                            "input_key": null,
-                            "input_mfp": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                0,
-                                1
-                              ],
-                              "input_arity": 2
-                            }
-                          }
-                        },
-                        {
-                          "ArrangeBy": {
-                            "input": {
-                              "Reduce": {
-                                "input": {
-                                  "Get": {
-                                    "id": {
-                                      "Local": 0
-                                    },
-                                    "keys": {
-                                      "raw": true,
-                                      "arranged": []
-                                    },
-                                    "plan": "PassArrangements"
-                                  }
-                                },
-                                "key_val_plan": {
-                                  "key_plan": {
-                                    "mfp": {
-                                      "expressions": [],
-                                      "predicates": [],
-                                      "projection": [
-                                        0
-                                      ],
-                                      "input_arity": 1
-                                    }
-                                  },
-                                  "val_plan": {
-                                    "mfp": {
-                                      "expressions": [],
-                                      "predicates": [],
-                                      "projection": [],
-                                      "input_arity": 1
-                                    }
-                                  }
-                                },
-                                "plan": "Distinct",
-                                "input_key": null
-                              }
-                            },
-                            "forms": {
-                              "raw": false,
-                              "arranged": [
-                                [
-                                  [
-                                    {
-                                      "Column": 0
-                                    }
-                                  ],
-                                  {
-                                    "0": 0
-                                  },
-                                  []
-                                ]
-                              ]
-                            },
-                            "input_key": [
-                              {
-                                "Column": 0
-                              }
-                            ],
-                            "input_mfp": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                0
-                              ],
-                              "input_arity": 1
-                            }
-                          }
-                        },
-                        {
-                          "ArrangeBy": {
-                            "input": {
-                              "Get": {
-                                "id": {
-                                  "Global": {
-                                    "User": 1
-                                  }
-                                },
-                                "keys": {
-                                  "raw": true,
-                                  "arranged": []
-                                },
-                                "plan": {
-                                  "Collection": {
-                                    "expressions": [],
-                                    "predicates": [
-                                      [
-                                        1,
-                                        {
-                                          "CallUnary": {
-                                            "func": {
-                                              "Not": null
-                                            },
-                                            "expr": {
-                                              "CallUnary": {
-                                                "func": {
-                                                  "IsNull": null
-                                                },
-                                                "expr": {
-                                                  "Column": 0
-                                                }
-                                              }
-                                            }
-                                          }
-                                        }
-                                      ]
-                                    ],
-                                    "projection": [
-                                      0,
-                                      1
-                                    ],
-                                    "input_arity": 2
-                                  }
-                                }
-                              }
-                            },
-                            "forms": {
-                              "raw": true,
-                              "arranged": [
-                                [
-                                  [
-                                    {
-                                      "Column": 0
-                                    }
-                                  ],
-                                  {
-                                    "0": 0,
-                                    "1": 1
-                                  },
-                                  [
-                                    1
-                                  ]
-                                ]
-                              ]
-                            },
-                            "input_key": null,
-                            "input_mfp": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                0,
-                                1
-                              ],
-                              "input_arity": 2
-                            }
-                          }
-                        }
-                      ],
-                      "plan": {
-                        "Linear": {
-                          "source_relation": 1,
-                          "source_key": [
-                            {
-                              "Column": 0
-                            }
-                          ],
-                          "initial_closure": null,
-                          "stage_plans": [
-                            {
-                              "lookup_relation": 2,
-                              "stream_key": [
-                                {
-                                  "Column": 0
-                                }
-                              ],
-                              "stream_thinning": [],
-                              "lookup_key": [
-                                {
-                                  "Column": 0
-                                }
-                              ],
-                              "closure": {
-                                "ready_equivalences": [],
-                                "before": {
-                                  "mfp": {
-                                    "expressions": [],
-                                    "predicates": [],
-                                    "projection": [
-                                      0,
-                                      1
-                                    ],
-                                    "input_arity": 2
-                                  }
-                                }
-                              }
-                            },
-                            {
-                              "lookup_relation": 0,
-                              "stream_key": [],
-                              "stream_thinning": [
-                                0,
-                                1
-                              ],
-                              "lookup_key": [],
-                              "closure": {
-                                "ready_equivalences": [],
-                                "before": {
-                                  "mfp": {
-                                    "expressions": [],
-                                    "predicates": [
-                                      [
-                                        4,
-                                        {
-                                          "CallVariadic": {
-                                            "func": "Or",
-                                            "exprs": [
-                                              {
-                                                "CallBinary": {
-                                                  "func": "Eq",
-                                                  "expr1": {
-                                                    "Column": 3
-                                                  },
-                                                  "expr2": {
-                                                    "Literal": [
-                                                      {
-                                                        "Ok": {
-                                                          "data": [
-                                                            10,
-                                                            115,
-                                                            252,
-                                                            255,
-                                                            255
-                                                          ]
-                                                        }
-                                                      },
-                                                      {
-                                                        "scalar_type": "Date",
-                                                        "nullable": false
-                                                      }
-                                                    ]
-                                                  }
-                                                }
-                                              },
-                                              {
-                                                "CallBinary": {
-                                                  "func": "Eq",
-                                                  "expr1": {
-                                                    "CallUnary": {
-                                                      "func": {
-                                                        "CastDateToTimestamp": null
-                                                      },
-                                                      "expr": {
-                                                        "Column": 2
-                                                      }
-                                                    }
-                                                  },
-                                                  "expr2": {
-                                                    "CallBinary": {
-                                                      "func": "SubDateInterval",
-                                                      "expr1": {
-                                                        "Column": 1
-                                                      },
-                                                      "expr2": {
-                                                        "Literal": [
-                                                          {
-                                                            "Ok": {
-                                                              "data": [
-                                                                14,
-                                                                0,
-                                                                0,
-                                                                0,
-                                                                0,
-                                                                7,
-                                                                0,
-                                                                0,
-                                                                0,
-                                                                0,
-                                                                0,
-                                                                0,
-                                                                0,
-                                                                0,
-                                                                0,
-                                                                0,
-                                                                0
-                                                              ]
-                                                            }
-                                                          },
-                                                          {
-                                                            "scalar_type": "Interval",
-                                                            "nullable": false
-                                                          }
-                                                        ]
-                                                      }
-                                                    }
-                                                  }
-                                                }
-                                              }
-                                            ]
-                                          }
-                                        }
-                                      ]
-                                    ],
-                                    "projection": [
-                                      0
-                                    ],
-                                    "input_arity": 4
-                                  }
-                                }
-                              }
-                            }
-                          ],
-                          "final_closure": null
-                        }
-                      }
-                    }
-                  },
-                  "key_val_plan": {
-                    "key_plan": {
-                      "mfp": {
-                        "expressions": [],
-                        "predicates": [],
-                        "projection": [
-                          0
-                        ],
-                        "input_arity": 1
-                      }
-                    },
-                    "val_plan": {
-                      "mfp": {
-                        "expressions": [],
-                        "predicates": [],
-                        "projection": [],
-                        "input_arity": 1
-                      }
-                    }
-                  },
-                  "plan": "Distinct",
-                  "input_key": null
-                }
-              },
-              "forms": {
-                "raw": false,
-                "arranged": [
-                  [
-                    [
-                      {
-                        "Column": 0
-                      }
-                    ],
-                    {
-                      "0": 0
-                    },
-                    []
-                  ]
-                ]
-              },
-              "input_key": [
-                {
-                  "Column": 0
-                }
-              ],
-              "input_mfp": {
-                "expressions": [],
-                "predicates": [],
-                "projection": [
-                  0
-                ],
-                "input_arity": 1
-              }
-            }
-          }
-        ],
-        "plan": {
-          "Linear": {
-            "source_relation": 0,
-            "source_key": null,
-            "initial_closure": null,
-            "stage_plans": [
-              {
-                "lookup_relation": 1,
-                "stream_key": [
-                  {
-                    "Column": 0
-                  }
-                ],
-                "stream_thinning": [],
-                "lookup_key": [
-                  {
-                    "Column": 0
-                  }
-                ],
-                "closure": {
-                  "ready_equivalences": [],
-                  "before": {
-                    "mfp": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [],
-                      "input_arity": 1
-                    }
-                  }
-                }
-              }
-            ],
-            "final_closure": {
-              "ready_equivalences": [],
-              "before": {
-                "mfp": {
-                  "expressions": [
-                    {
-                      "Literal": [
-                        {
-                          "Ok": {
-                            "data": [
-                              4,
-                              1,
-                              0,
-                              0,
-                              0
-                            ]
-                          }
-                        },
-                        {
-                          "scalar_type": "Int32",
-                          "nullable": false
-                        }
-                      ]
-                    }
-                  ],
-                  "predicates": [],
-                  "projection": [
-                    0
-                  ],
-                  "input_arity": 0
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-}
+Source materialize.public.orders
+  project=(#0, #4)
+Source materialize.public.lineitem
+  project=(#0, #11, #12)
 
 EOF
 

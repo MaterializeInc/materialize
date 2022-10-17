@@ -14,34 +14,30 @@ statement ok
 create table t1(f1 int, f2 int);
 
 query T multiline
-EXPLAIN SELECT * FROM t1 WHERE 1 in (SELECT 1 FROM (VALUES (0)) CONSTANT WHERE f1 > 1);
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE 1 in (SELECT 1 FROM (VALUES (0)) CONSTANT WHERE f1 > 1);
 ----
-Source materialize.public.t1 (u1):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.t1 (u1)
-
-%1 =
-| Get materialize.public.t1 (u1)
-| Filter (#0 > 1)
-| Project (#0)
-| Distinct group=(#0)
-| ArrangeBy (#0)
-
-%2 =
-| Join %0 %1 (= #0 #2)
-| | implementation = Differential %0 %1.(#0)
-| Project (#0, #1)
+Explained Query:
+  Project (#0, #1) // { arity: 2 }
+    Join on=(#0 = #2) type=differential // { arity: 3 }
+      implementation
+        materialize.public.t1 » %1[#0]
+      Get materialize.public.t1 // { arity: 2 }
+      ArrangeBy keys=[[#0]] // { arity: 1 }
+        Distinct group_by=[#0] // { arity: 1 }
+          Project (#0) // { arity: 1 }
+            Filter (#0 > 1) // { arity: 2 }
+              Get materialize.public.t1 // { arity: 2 }
 
 EOF
 
 
 query T multiline
-EXPLAIN SELECT jsonb_array_elements('[1,2,3]'::jsonb);
+EXPLAIN WITH(arity, join_impls) SELECT jsonb_array_elements('[1,2,3]'::jsonb);
 ----
-%0 =
-| Constant (1) (2) (3)
+Explained Query (fast path):
+  Constant
+    - (1)
+    - (2)
+    - (3)
 
 EOF

@@ -142,8 +142,7 @@ The process to connect Materialize to Amazon MSK consists of the following steps
     ```
       CREATE SECRET msk_password AS '<your-password>';
 
-      CREATE CONNECTION kafka_connection
-        FOR KAFKA
+      CREATE CONNECTION kafka_connection FOR KAFKA
           BROKER '<broker-url>',
           SASL MECHANISMS = 'SCRAM-SHA-512',
           SASL USERNAME = '<your-username>',

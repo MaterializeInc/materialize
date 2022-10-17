@@ -1922,38 +1922,60 @@ impl<'a> Parser<'a> {
         self.expect_keyword(CONNECTION)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
-        self.expect_keyword(FOR)?;
+        let expect_paren = match self.expect_one_of_keywords(&[FOR, TO])? {
+            FOR => false,
+            TO => true,
+            _ => unreachable!(),
+        };
         let connection =
             match self.expect_one_of_keywords(&[AWS, KAFKA, CONFLUENT, POSTGRES, SSH])? {
                 AWS => {
+                    if expect_paren {
+                        self.expect_token(&Token::LParen)?;
+                    }
                     let with_options =
                         self.parse_comma_separated(Parser::parse_aws_connection_option)?;
                     CreateConnection::Aws { with_options }
                 }
                 KAFKA => {
+                    if expect_paren {
+                        self.expect_token(&Token::LParen)?;
+                    }
                     let with_options =
                         self.parse_comma_separated(Parser::parse_kafka_connection_option)?;
                     CreateConnection::Kafka { with_options }
                 }
                 CONFLUENT => {
                     self.expect_keywords(&[SCHEMA, REGISTRY])?;
+                    if expect_paren {
+                        self.expect_token(&Token::LParen)?;
+                    }
                     let with_options =
                         self.parse_comma_separated(Parser::parse_csr_connection_option)?;
                     CreateConnection::Csr { with_options }
                 }
                 POSTGRES => {
+                    if expect_paren {
+                        self.expect_token(&Token::LParen)?;
+                    }
                     let with_options =
                         self.parse_comma_separated(Parser::parse_postgres_connection_option)?;
                     CreateConnection::Postgres { with_options }
                 }
                 SSH => {
                     self.expect_keyword(TUNNEL)?;
+                    if expect_paren {
+                        self.expect_token(&Token::LParen)?;
+                    }
                     let with_options =
                         self.parse_comma_separated(Parser::parse_ssh_connection_option)?;
                     CreateConnection::Ssh { with_options }
                 }
                 _ => unreachable!(),
             };
+        if expect_paren {
+            self.expect_token(&Token::RParen)?;
+        }
         Ok(Statement::CreateConnection(CreateConnectionStatement {
             name,
             connection,
@@ -2126,7 +2148,10 @@ impl<'a> Parser<'a> {
             PORT => PostgresConnectionOptionName::Port,
             SSH => {
                 self.expect_keyword(TUNNEL)?;
-                PostgresConnectionOptionName::SshTunnel
+                return Ok(PostgresConnectionOption {
+                    name: PostgresConnectionOptionName::SshTunnel,
+                    value: Some(self.parse_object_option_value()?),
+                });
             }
             SSL => match self.expect_one_of_keywords(&[CERTIFICATE, MODE, KEY])? {
                 CERTIFICATE => {
@@ -3262,6 +3287,11 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_object_option_value(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
+        let _ = self.consume_token(&Token::Eq);
+        Ok(WithOptionValue::Object(self.parse_raw_name()?))
+    }
+
     fn parse_optional_option_value(&mut self) -> Result<Option<WithOptionValue<Raw>>, ParserError> {
         // The next token might be a value and might not. The only valid things
         // that indicate no value would be `)` for end-of-options , `,` for
@@ -3281,15 +3311,6 @@ impl<'a> Parser<'a> {
             } else {
                 Ok(WithOptionValue::Ident(Ident::new("secret")))
             }
-        } else if self
-            .parse_one_of_keywords(&[NULL, TRUE, FALSE, INTERVAL])
-            .is_some()
-        {
-            // Put kw token back.
-            self.prev_token();
-            Ok(WithOptionValue::Value(self.parse_value()?))
-        } else if let Some(object) = self.maybe_parse(Parser::parse_raw_name) {
-            Ok(WithOptionValue::Object(object))
         } else if let Some(value) = self.maybe_parse(Parser::parse_value) {
             Ok(WithOptionValue::Value(value))
         } else if let Some(ident) = self.maybe_parse(Parser::parse_identifier) {
@@ -3658,17 +3679,6 @@ impl<'a> Parser<'a> {
                 self.peek_prev_pos(),
                 "Expecting a value, but found EOF"
             ),
-        }
-    }
-
-    fn parse_boolean_value(&mut self) -> Result<bool, ParserError> {
-        match self.next_token() {
-            Some(t) => match t {
-                Token::Keyword(TRUE) => Ok(true),
-                Token::Keyword(FALSE) => Ok(false),
-                _ => self.expected(self.peek_prev_pos(), "boolean value", Some(t)),
-            },
-            None => self.expected(self.peek_prev_pos(), "boolean value", None),
         }
     }
 
@@ -4597,27 +4607,17 @@ impl<'a> Parser<'a> {
                 _ => unreachable!(),
             };
 
-            let (from, in_cluster) = match self.parse_one_of_keywords(&[FROM, IN]) {
-                Some(kw) => {
-                    if kw == IN && self.peek_keyword(CLUSTER) {
-                        if matches!(object_type, ObjectType::MaterializedView) {
-                            // put `IN` back
-                            self.prev_token();
-                            (None, self.parse_optional_in_cluster()?)
-                        } else {
-                            return parser_err!(
-                                self,
-                                self.peek_pos(),
-                                "expected object name, found 'cluster'"
-                            );
-                        }
-                    } else {
-                        let from = self.parse_schema_name()?;
-                        let in_cluster = self.parse_optional_in_cluster()?;
-                        (Some(from), in_cluster)
-                    }
-                }
-                None => (None, None),
+            let from = if self.parse_keywords(&[FROM]) {
+                Some(self.parse_schema_name()?)
+            } else {
+                None
+            };
+
+            // Only Materialized Views and Indexes (handled separately below) are associated with clusters.
+            let in_cluster = if matches!(object_type, ObjectType::MaterializedView) {
+                self.parse_optional_in_cluster()?
+            } else {
+                None
             };
 
             Ok(ShowStatement::ShowObjects(ShowObjectsStatement {
@@ -5216,54 +5216,48 @@ impl<'a> Parser<'a> {
     /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
     /// has already been consumed.
     fn parse_explain(&mut self) -> Result<Statement<Raw>, ParserError> {
-        if let Some(parse) = self.maybe_parse(Self::parse_explain_new) {
-            Ok(parse)
-        } else {
-            self.parse_explain_old()
-        }
-    }
-
-    /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
-    /// has already been consumed.
-    fn parse_explain_new(&mut self) -> Result<Statement<Raw>, ParserError> {
         let stage = match self.parse_one_of_keywords(&[
             RAW,
             DECORRELATED,
             OPTIMIZED,
             PHYSICAL,
+            PLAN,
             OPTIMIZER,
             QUERY,
+            TIMESTAMP,
         ]) {
             Some(RAW) => {
                 self.expect_keyword(PLAN)?;
-                ExplainStageNew::RawPlan
+                Some(ExplainStage::RawPlan)
             }
             Some(QUERY) => {
                 self.expect_keyword(GRAPH)?;
-                ExplainStageNew::QueryGraph
+                Some(ExplainStage::QueryGraph)
             }
             Some(DECORRELATED) => {
                 self.expect_keyword(PLAN)?;
-                ExplainStageNew::DecorrelatedPlan
+                Some(ExplainStage::DecorrelatedPlan)
             }
             Some(OPTIMIZED) => {
                 if self.parse_keyword(QUERY) {
                     self.expect_keyword(GRAPH)?;
-                    ExplainStageNew::OptimizedQueryGraph
+                    Some(ExplainStage::OptimizedQueryGraph)
                 } else {
                     self.expect_keyword(PLAN)?;
-                    ExplainStageNew::OptimizedPlan
+                    Some(ExplainStage::OptimizedPlan)
                 }
             }
+            Some(PLAN) => Some(ExplainStage::OptimizedPlan), // EXPLAIN PLAN ~= EXPLAIN OPTIMIZED PLAN
             Some(PHYSICAL) => {
                 self.expect_keyword(PLAN)?;
-                ExplainStageNew::PhysicalPlan
+                Some(ExplainStage::PhysicalPlan)
             }
             Some(OPTIMIZER) => {
                 self.expect_keyword(TRACE)?;
-                ExplainStageNew::Trace
+                Some(ExplainStage::Trace)
             }
-            None => ExplainStageNew::OptimizedPlan,
+            Some(TIMESTAMP) => Some(ExplainStage::Timestamp),
+            None => None,
             _ => unreachable!(),
         };
 
@@ -5276,112 +5270,22 @@ impl<'a> Parser<'a> {
             vec![]
         };
 
-        // TODO (#13299): Make specifying the format optional upon getting rid
-        // of the old explain syntax
-        self.expect_keyword(AS)?;
-        let format = match self.parse_one_of_keywords(&[TEXT, JSON, DOT]) {
-            Some(TEXT) => ExplainFormat::Text,
-            Some(JSON) => ExplainFormat::Json,
-            Some(DOT) => ExplainFormat::Dot,
-            None => return Err(ParserError::new(self.index, "expected a format")),
-            _ => unreachable!(),
-        };
-
-        self.expect_keyword(FOR)?;
-
-        // VIEW name | MATERIALIZED VIEW name | query
-        let explainee = if self.parse_keyword(VIEW) {
-            Explainee::View(self.parse_raw_name()?)
-        } else if self.parse_keywords(&[MATERIALIZED, VIEW]) {
-            Explainee::MaterializedView(self.parse_raw_name()?)
-        } else {
-            Explainee::Query(self.parse_query()?)
-        };
-
-        Ok(Statement::Explain(ExplainStatement::New(
-            ExplainStatementNew {
-                stage,
-                config_flags,
-                format,
-                explainee,
-            },
-        )))
-    }
-
-    /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
-    /// has already been consumed (old code path).
-    fn parse_explain_old(&mut self) -> Result<Statement<Raw>, ParserError> {
-        // (TYPED)?
-        let typed = self.parse_keyword(TYPED);
-        let mut timing = false;
-
-        // options: ( '(' TIMING (true|false) ')' )?
-        if let Some(Token::LParen) = self.peek_token() {
-            // Check whether a valid option is after the parentheses, since the
-            // parentheses may belong to the actual query to be explained.
-            match self.peek_nth_token(1) {
-                Some(Token::Keyword(TIMING)) => {
-                    self.next_token(); // Consume the LParen
-                    self.parse_comma_separated(|s| match s.expect_one_of_keywords(&[TIMING])? {
-                        TIMING => {
-                            timing = s.parse_boolean_value()?;
-                            Ok(())
-                        }
-                        _ => unreachable!(),
-                    })?;
-                    self.expect_token(&Token::RParen)?;
-                }
-                _ => {}
+        let format = if self.parse_keyword(AS) {
+            match self.parse_one_of_keywords(&[TEXT, JSON, DOT]) {
+                Some(TEXT) => ExplainFormat::Text,
+                Some(JSON) => ExplainFormat::Json,
+                Some(DOT) => ExplainFormat::Dot,
+                None => return Err(ParserError::new(self.index, "expected a format")),
+                _ => unreachable!(),
             }
+        } else {
+            ExplainFormat::Text
+        };
+
+        if stage.is_some() {
+            self.expect_keyword(FOR)?;
         }
 
-        // (RAW | DECORRELATED | OPTIMIZED | PHYSICAL)? PLAN
-        let stage = match self.parse_one_of_keywords(&[
-            RAW,
-            DECORRELATED,
-            OPTIMIZED,
-            PHYSICAL,
-            PLAN,
-            QUERY,
-            TIMESTAMP,
-        ]) {
-            Some(RAW) => {
-                self.expect_keywords(&[PLAN, FOR])?;
-                ExplainStageOld::RawPlan
-            }
-            Some(QUERY) => {
-                self.expect_keywords(&[GRAPH, FOR])?;
-                ExplainStageOld::QueryGraph
-            }
-            Some(DECORRELATED) => {
-                self.expect_keywords(&[PLAN, FOR])?;
-                ExplainStageOld::DecorrelatedPlan
-            }
-            Some(OPTIMIZED) => {
-                if self.parse_keyword(QUERY) {
-                    self.expect_keywords(&[GRAPH, FOR])?;
-                    ExplainStageOld::OptimizedQueryGraph
-                } else {
-                    self.expect_keywords(&[PLAN, FOR])?;
-                    ExplainStageOld::OptimizedPlan
-                }
-            }
-            Some(PLAN) => {
-                self.expect_keyword(FOR)?;
-                ExplainStageOld::OptimizedPlan
-            }
-            Some(PHYSICAL) => {
-                self.expect_keywords(&[PLAN, FOR])?;
-                ExplainStageOld::PhysicalPlan
-            }
-            Some(TIMESTAMP) => {
-                self.expect_keywords(&[FOR])?;
-                ExplainStageOld::Timestamp
-            }
-            None => ExplainStageOld::OptimizedPlan,
-            _ => unreachable!(),
-        };
-
         // VIEW name | MATERIALIZED VIEW name | query
         let explainee = if self.parse_keyword(VIEW) {
             Explainee::View(self.parse_raw_name()?)
@@ -5391,14 +5295,12 @@ impl<'a> Parser<'a> {
             Explainee::Query(self.parse_query()?)
         };
 
-        let options = ExplainOptions { typed, timing };
-        Ok(Statement::Explain(ExplainStatement::Old(
-            ExplainStatementOld {
-                stage,
-                explainee,
-                options,
-            },
-        )))
+        Ok(Statement::Explain(ExplainStatement {
+            stage: stage.unwrap_or(ExplainStage::OptimizedPlan),
+            config_flags,
+            format,
+            explainee,
+        }))
     }
 
     /// Parse a `DECLARE` statement, assuming that the `DECLARE` token

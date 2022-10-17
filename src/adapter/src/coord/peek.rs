@@ -27,7 +27,7 @@ use mz_compute_client::response::PeekResponse;
 use mz_expr::explain::Indices;
 use mz_expr::{EvalError, Id, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::str::StrExt;
-use mz_ore::str::{bracketed, separated, Indent};
+use mz_ore::str::{separated, Indent};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText, ExprHumanizer};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
@@ -36,7 +36,7 @@ use mz_stash::Append;
 use crate::client::ConnectionId;
 use crate::explain_new::Displayable;
 use crate::util::send_immediate_rows;
-use crate::AdapterError;
+use crate::{AdapterError, AdapterNotice};
 
 pub(crate) struct PendingPeek {
     pub(crate) sender: oneshot::Sender<PeekResponse>,
@@ -74,118 +74,11 @@ pub enum FastPathPlan<T = mz_repr::Timestamp> {
     PeekExisting(GlobalId, Option<Vec<Row>>, mz_expr::SafeMfpPlan),
 }
 
-impl FastPathPlan {
-    pub fn explain_old<'a>(&self, humanizer: &'a dyn ExprHumanizer, typed: bool) -> String {
-        let mut explanation = String::new();
-        use std::fmt::Write;
-        match self {
-            FastPathPlan::PeekExisting(index, literal_constraints, mfp) => {
-                writeln!(
-                    &mut explanation,
-                    "%0 =\n| ReadExistingIndex {}",
-                    humanizer
-                        .humanize_id(*index)
-                        .unwrap_or_else(|| index.to_string())
-                )
-                .unwrap();
-                if let Some(literal_constraints) = literal_constraints {
-                    write!(&mut explanation, "| | Lookup ").unwrap();
-                    if literal_constraints.len() == 1 {
-                        writeln!(
-                            &mut explanation,
-                            "value {}",
-                            literal_constraints.get(0).unwrap()
-                        )
-                        .unwrap();
-                    } else {
-                        writeln!(
-                            &mut explanation,
-                            "values [{}]",
-                            separated("; ", literal_constraints)
-                        )
-                        .unwrap();
-                    }
-                }
-                if !mfp.is_identity() {
-                    let (map, filter, project) = mfp.as_map_filter_project();
-                    if !map.is_empty() {
-                        writeln!(&mut explanation, "| Map {}", separated(", ", &map)).unwrap();
-                    }
-                    if !filter.is_empty() {
-                        writeln!(&mut explanation, "| Filter {}", separated(", ", filter)).unwrap();
-                    }
-                    if project.len() != mfp.input_arity + map.len()
-                        || project.iter().enumerate().any(|(i, p)| i != *p)
-                    {
-                        writeln!(
-                            &mut explanation,
-                            "| Project {}",
-                            bracketed("(", ")", Indices(&project))
-                        )
-                        .unwrap();
-                    }
-                }
-            }
-            FastPathPlan::Constant(rows, typ) => {
-                // Copied from mz_expr::explain
-                write!(&mut explanation, "%0 =\n| Constant").unwrap();
-                match rows {
-                    Ok(rows) if !rows.is_empty() => writeln!(
-                        &mut explanation,
-                        " {}",
-                        separated(
-                            " ",
-                            rows.iter().map(|(row, _, count)| if *count == 1 {
-                                format!("{row}")
-                            } else {
-                                format!("({row} x {count})")
-                            })
-                        )
-                    )
-                    .unwrap(),
-                    Ok(_) => writeln!(&mut explanation).unwrap(),
-                    Err(e) => {
-                        writeln!(&mut explanation, " Err({})", e.to_string().quoted()).unwrap()
-                    }
-                };
-                // The `typed` support is just to prevent changes to some
-                // constant test queries; there are no plans to add `typed`
-                // to the PeekExisting branch since the function will soon be
-                // deprecated.
-                if typed {
-                    let column_types: Vec<_> = typ
-                        .column_types
-                        .iter()
-                        .map(|c| humanizer.humanize_column_type(c))
-                        .collect();
-                    writeln!(
-                        &mut explanation,
-                        "| | types = ({})",
-                        separated(", ", column_types)
-                    )
-                    .unwrap();
-                    writeln!(
-                        &mut explanation,
-                        "| | keys = ({})",
-                        separated(
-                            ", ",
-                            typ.keys.iter().map(|key| bracketed("(", ")", Indices(key)))
-                        )
-                    )
-                    .unwrap()
-                }
-            }
-        }
-        explanation
-    }
-}
-
 impl<'a, C, T> DisplayText<C> for FastPathPlan<T>
 where
     C: AsMut<Indent> + AsRef<&'a dyn ExprHumanizer>,
 {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
-        // TODO: (#13299) print out types?
         match self {
             FastPathPlan::Constant(Ok(rows), _) => {
                 writeln!(f, "{}Constant", ctx.as_mut())?;
@@ -642,6 +535,13 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
     /// Clean up a peek's state.
     pub(crate) fn remove_pending_peek(&mut self, uuid: &Uuid) -> Option<PendingPeek> {
         self.pending_peeks.remove(uuid)
+    }
+
+    /// Publishes a notice message to all sessions.
+    pub(crate) fn broadcast_notice(&mut self, notice: AdapterNotice) {
+        for meta in self.active_conns.values() {
+            let _ = meta.notice_tx.send(notice.clone());
+        }
     }
 }
 

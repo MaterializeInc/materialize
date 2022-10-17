@@ -53,7 +53,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
         let server = util::start_server(config.clone())?;
         let mut client = server.connect(postgres::NoTls)?;
         client.batch_execute(&format!(
-            "CREATE CONNECTION kafka_conn FOR KAFKA BROKER '{}'",
+            "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}')",
             &*KAFKA_ADDRS,
         ))?;
         client.batch_execute(
@@ -137,7 +137,7 @@ fn test_source_sink_size_required() -> Result<(), Box<dyn Error>> {
     );
 
     client.batch_execute(&format!(
-        "CREATE CONNECTION conn FOR KAFKA BROKER '{}'",
+        "CREATE CONNECTION conn TO KAFKA (BROKER '{}')",
         &*KAFKA_ADDRS,
     ))?;
 
@@ -171,6 +171,7 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         server.inner.http_local_addr()
     ))?;
 
+    #[derive(Debug)]
     struct TestCaseSimple {
         query: &'static str,
         status: StatusCode,
@@ -367,6 +368,21 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
             query: "subscribe (select * from t)",
             status: StatusCode::BAD_REQUEST,
             body: r#"unsupported via this API: SUBSCRIBE (SELECT * FROM t)"#,
+        },
+        TestCaseSimple {
+            query: "copy (select 1) to stdout",
+            status: StatusCode::BAD_REQUEST,
+            body: r#"unsupported via this API: COPY (SELECT 1) TO STDOUT"#,
+        },
+        TestCaseSimple {
+            query: "EXPLAIN SELECT 1",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[["Explained Query (fast path):\n  Constant\n    - (1)\n"]],"col_names":["Optimized Plan"],"notices":[]}]}"#,
+        },
+        TestCaseSimple {
+            query: "SHOW VIEWS",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[["v"]],"col_names":["name"],"notices":[]}]}"#,
         },
     ];
 
@@ -834,6 +850,33 @@ fn test_storage_usage_doesnt_update_between_restarts() -> Result<(), Box<dyn Err
 
         assert_eq!(initial_timestamp, updated_timestamp);
     }
+
+    Ok(())
+}
+
+#[test]
+fn test_storage_usage_collection_interval_timestamps() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let config =
+        util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(30));
+    let server = util::start_server(config)?;
+    let mut client = server.connect(postgres::NoTls)?;
+
+    // Retry because it may take some time for the initial snapshot to be taken.
+    Retry::default().max_duration(Duration::from_secs(10)).retry(|_| {
+        let rows = client
+            .query(
+                "SELECT collection_timestamp, SUM(size_bytes)::int8 FROM mz_catalog.mz_storage_usage GROUP BY collection_timestamp ORDER BY collection_timestamp;",
+                &[],
+            )
+            .map_err(|e| e.to_string())?;
+        if rows.len() == 1 {
+            Ok(())
+        } else {
+            Err(format!("expected a single timestamp, instead found {}", rows.len()))
+        }
+    })?;
 
     Ok(())
 }

@@ -277,14 +277,14 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 > CREATE TABLE tbl (a int, b text);
 > CREATE SECRET pass_secret AS 'pass';
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
 > CREATE MATERIALIZED VIEW mv AS SELECT (1);
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE source_data
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
@@ -305,7 +305,7 @@ v2          view
 tbl         table
 pass_secret secret
 kafka_conn  connection
-mv          "materialized view"
+mv          materialized-view
 source_data source
 snk         sink
 
@@ -315,7 +315,7 @@ type
 table
 source
 view
-"materialized view"
+materialized-view
 sink
 index
 connection
@@ -328,7 +328,7 @@ bool        type
 csr_conn    connection
 int_list    type
 kafka_conn  connection
-mv          "materialized view"
+mv          materialized-view
 pass_secret secret
 snk         sink
 source_data source
@@ -463,6 +463,7 @@ mz_cluster_replicas
 mz_columns
 mz_connections
 mz_databases
+mz_egress_ips
 mz_functions
 mz_index_columns
 mz_indexes
@@ -493,7 +494,7 @@ mz_storage_usage
 
 # The sources in the catalog depend on the number of replicas and computeds
 $ skip-if
-SELECT ${arg.replicas} > 1 OR ${arg.replica-size} > 1;
+SELECT ${arg.replicas} > 1 OR ${arg.size} > 1;
 
 > SHOW SOURCES FROM mz_internal
 name                                           type   size
@@ -656,6 +657,9 @@ mz_worker_compute_delays
 mz_worker_compute_delays_1
 mz_worker_compute_delays_2
 mz_worker_compute_delays_3
+mz_show_cluster_replicas
+mz_show_indexes
+mz_show_materialized_views
 
 > CREATE SCHEMA tester
 
@@ -668,7 +672,7 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-31
+32
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

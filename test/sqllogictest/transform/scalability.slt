@@ -21,7 +21,7 @@ create table origins(id int, category_id int);
 # Regression test for #8387
 # Ignoring the plan on purpose. We just want to check we can handle the query.
 statement ok
-EXPLAIN PLAN FOR
+EXPLAIN WITH(arity, join_impls)
 SELECT
     (SELECT max(timestamp_col)
        FROM events

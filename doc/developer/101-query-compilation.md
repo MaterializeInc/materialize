@@ -49,7 +49,7 @@ Transformations in the compile-time lifecycle of a dataflow.
       definition](https://github.com/MaterializeInc/materialize/blob/main/src/adapter/src/catalog.rs#L3325),
       run per-view logical optimizations against the SQL query. The catalog
       stores the result of transformations up to this point.
-    * [Construct a dataflow for the query](https://github.com/MaterializeInc/materialize/blob/main/src/adapter/src/coord/dataflow_builder.rs):
+    * [Construct a dataflow for the query](https://github.com/MaterializeInc/materialize/blob/main/src/adapter/src/coord/dataflows.rs):
         * If the query depends on not-materialized views, the definitions of the
           not-materialized views get inlined.
         * For each materialized view that a query depends on, import all of its
@@ -60,8 +60,8 @@ Transformations in the compile-time lifecycle of a dataflow.
         * [Cross-view logical](https://github.com/MaterializeInc/materialize/blob/main/src/transform/src/dataflow.rs#L31-L60).
             * Propagating source information up: optimize_dataflow_monotonic
             * Pushing optimizations down to sources: `LinearOperators`
-                * [CSV decoding](https://github.com/MaterializeInc/materialize/blob/main/src/dataflow/src/decode/csv.rs)
-                * [Upsert](https://github.com/MaterializeInc/materialize/blob/main/src/dataflow/src/render/upsert.rs)
+                * [CSV decoding](https://github.com/MaterializeInc/materialize/blob/main/src/storage/src/decode/csv.rs)
+                * [Upsert](https://github.com/MaterializeInc/materialize/blob/main/src/storage/src/render/upsert.rs)
             * View inlining.
             * Theoretically supports producing more than one index/sink in the same dataflow.
         * [Per-view logical](https://github.com/MaterializeInc/materialize/blob/main/src/transform/src/lib.rs#L281-L337) (second round).

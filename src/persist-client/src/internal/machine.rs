@@ -18,8 +18,10 @@ use std::time::{Duration, SystemTime};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
+use mz_ore::task::spawn;
 use timely::progress::{Antichain, Timestamp};
-use tracing::{debug, info, trace_span, Instrument};
+use tokio::task::JoinHandle;
+use tracing::{debug, info};
 
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
@@ -39,7 +41,7 @@ use crate::internal::state::{
 };
 use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::StateVersions;
-use crate::internal::trace::FueledMergeRes;
+use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::read::ReaderId;
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
@@ -268,7 +270,7 @@ where
         }
     }
 
-    pub async fn merge_res(&mut self, res: &FueledMergeRes<T>) -> bool {
+    pub async fn merge_res(&mut self, res: &FueledMergeRes<T>) -> ApplyMergeResult {
         let metrics = Arc::clone(&self.metrics);
 
         // SUBTLE! If Machine::merge_res returns false, the blobs referenced in
@@ -299,17 +301,19 @@ where
         // false negative (a blob we can never recover referenced by state). We
         // anyway need a mechanism to clean up leaked blobs because of process
         // crashes.
-        let mut applied_ever_true = false;
-        let (_seqno, _applied, _maintenance) = self
+        let mut merge_result_ever_applied = ApplyMergeResult::NotApplied;
+        let (_seqno, _apply_merge_result, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, state| {
                 let ret = state.apply_merge_res(res);
-                if let Continue(applied) = ret {
-                    applied_ever_true = applied_ever_true || applied;
+                if let Continue(result) = ret {
+                    if result.applied() {
+                        merge_result_ever_applied = result;
+                    }
                 }
                 ret
             })
             .await;
-        applied_ever_true
+        merge_result_ever_applied
     }
 
     pub async fn downgrade_since(
@@ -336,28 +340,60 @@ where
         &mut self,
         reader_id: &ReaderId,
         heartbeat_timestamp_ms: u64,
-    ) -> (SeqNo, RoutineMaintenance) {
+    ) -> (SeqNo, bool, RoutineMaintenance) {
         let metrics = Arc::clone(&self.metrics);
-        let (seqno, _existed, maintenance) = self
+        let (seqno, existed, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.heartbeat_reader, |_, state| {
                 state.heartbeat_reader(reader_id, heartbeat_timestamp_ms)
             })
             .await;
-        (seqno, maintenance)
+        (seqno, existed, maintenance)
+    }
+
+    pub async fn start_reader_heartbeat_task(self, reader_id: ReaderId) -> JoinHandle<()> {
+        let mut machine = self;
+        spawn(|| "persist::heartbeat_read", async move {
+            let sleep_duration = machine.cfg.reader_lease_duration / 2;
+            loop {
+                tokio::time::sleep(sleep_duration).await;
+                let (_seqno, existed, _maintenance) = machine
+                    .heartbeat_reader(&reader_id, (machine.cfg.now)())
+                    .await;
+                if !existed {
+                    return;
+                }
+            }
+        })
     }
 
     pub async fn heartbeat_writer(
         &mut self,
         writer_id: &WriterId,
         heartbeat_timestamp_ms: u64,
-    ) -> (SeqNo, RoutineMaintenance) {
+    ) -> (SeqNo, bool, RoutineMaintenance) {
         let metrics = Arc::clone(&self.metrics);
-        let (seqno, _existed, maintenance) = self
+        let (seqno, existed, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.heartbeat_writer, |_, state| {
                 state.heartbeat_writer(writer_id, heartbeat_timestamp_ms)
             })
             .await;
-        (seqno, maintenance)
+        (seqno, existed, maintenance)
+    }
+
+    pub async fn start_writer_heartbeat_task(self, writer_id: WriterId) -> JoinHandle<()> {
+        let mut machine = self;
+        spawn(|| "persist::heartbeat_write", async move {
+            let sleep_duration = machine.cfg.writer_lease_duration / 2;
+            loop {
+                tokio::time::sleep(sleep_duration).await;
+                let (_seqno, existed, _maintenance) = machine
+                    .heartbeat_writer(&writer_id, (machine.cfg.now)())
+                    .await;
+                if !existed {
+                    return;
+                }
+            }
+        })
     }
 
     pub async fn expire_reader(&mut self, reader_id: &ReaderId) -> SeqNo {
@@ -446,35 +482,8 @@ where
         }
     }
 
-    pub async fn next_listen_batch(&mut self, frontier: &Antichain<T>) -> HollowBatch<T> {
-        let mut retry: Option<MetricsRetryStream> = None;
-        loop {
-            if let Some(b) = self.state.next_listen_batch(frontier) {
-                return b;
-            }
-            // Only sleep after the first fetch, because the first time through
-            // maybe our state was just out of date.
-            retry = Some(match retry.take() {
-                None => self
-                    .metrics
-                    .retries
-                    .next_listen_batch
-                    .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream()),
-                Some(retry) => {
-                    // Wait a bit and try again. Intentionally don't ever log
-                    // this at info level.
-                    //
-                    // TODO: See if we can watch for changes in Consensus to be
-                    // more reactive here.
-                    debug!(
-                        "next_listen_batch didn't find new data, retrying in {:?}",
-                        retry.next_sleep()
-                    );
-                    retry.sleep().instrument(trace_span!("listen::sleep")).await
-                }
-            });
-            self.fetch_and_update_state().await;
-        }
+    pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Option<HollowBatch<T>> {
+        self.state.next_listen_batch(frontier)
     }
 
     async fn apply_unbatched_idempotent_cmd<
@@ -552,9 +561,7 @@ where
                 let diff = StateDiff::from_diff(&self.state, &new_state);
                 // Sanity check that our diff logic roundtrips and adds back up
                 // correctly.
-                //
-                // TODO: Re-enable this #14490.
-                #[cfg(all(TODO, any(test, debug_assertions)))]
+                #[cfg(any(test, debug_assertions))]
                 {
                     if let Err(err) =
                         StateDiff::validate_roundtrip(&self.metrics, &self.state, &diff, &new_state)
@@ -1325,11 +1332,15 @@ pub mod datadriven {
             .get(input)
             .expect("unknown batch")
             .clone();
-        let applied = datadriven
+        let merge_res = datadriven
             .machine
             .merge_res(&FueledMergeRes { output: batch })
             .await;
-        Ok(format!("{} {}\n", datadriven.machine.seqno(), applied))
+        Ok(format!(
+            "{} {}\n",
+            datadriven.machine.seqno(),
+            merge_res.applied()
+        ))
     }
 
     pub async fn perform_maintenance(

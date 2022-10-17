@@ -10,13 +10,14 @@
 # Test creating a Postgres source using SSH
 
 > CREATE SECRET pgpass AS 'postgres'
-> CREATE CONNECTION pg FOR POSTGRES
-  HOST postgres,
-  DATABASE postgres,
-  USER postgres,
-  PASSWORD SECRET pgpass,
-  SSL MODE require,
-  SSH TUNNEL thancred
+> CREATE CONNECTION pg TO POSTGRES (
+    HOST postgres,
+    DATABASE postgres,
+    USER postgres,
+    PASSWORD SECRET pgpass,
+    SSL MODE require,
+    SSH TUNNEL thancred
+  );
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER USER postgres WITH replication;

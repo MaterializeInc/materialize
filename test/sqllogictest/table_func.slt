@@ -88,16 +88,20 @@ SELECT generate_series FROM generate_series(2)
 query T multiline
 EXPLAIN RAW PLAN FOR SELECT generate_series FROM generate_series(-2, 2)
 ----
-%0 =
-| CallTable generate_series(-2, 2, 1)
+CallTable generate_series(-2, 2, 1)
 
 EOF
 
 query T multiline
-EXPLAIN PLAN FOR SELECT generate_series FROM generate_series(-2, 2)
+EXPLAIN WITH(arity, join_impls) SELECT generate_series FROM generate_series(-2, 2)
 ----
-%0 =
-| Constant (0) (1) (2) (-2) (-1)
+Explained Query (fast path):
+  Constant
+    - (0)
+    - (1)
+    - (2)
+    - (-2)
+    - (-1)
 
 EOF
 
@@ -181,139 +185,125 @@ SELECT * FROM x x1, x x2, generate_series(x1.a, x2.b) AS x3(b) WHERE x1.b = x2.b
 query T multiline
 EXPLAIN RAW PLAN FOR SELECT * FROM x, generate_series(1, a)
 ----
-%0 =
-| Get materialize.public.x (u2)
-
-%1 =
-| CallTable generate_series(1, #^0, 1)
-
-%2 =
-| InnerJoin %0 %1 on true
+CrossJoin
+  Get materialize.public.x
+  CallTable generate_series(1, #^0, 1)
 
 EOF
 
 query T multiline
 EXPLAIN RAW PLAN FOR SELECT * FROM x, generate_series(100::bigint, a)
 ----
-%0 =
-| Get materialize.public.x (u2)
-
-%1 =
-| CallTable generate_series(integer_to_bigint(100), integer_to_bigint(#^0), 1)
-
-%2 =
-| InnerJoin %0 %1 on true
+CrossJoin
+  Get materialize.public.x
+  CallTable generate_series(integer_to_bigint(100), integer_to_bigint(#^0), 1)
 
 EOF
 
 query T multiline
-EXPLAIN PLAN FOR SELECT * FROM x, generate_series(1, 10)
+EXPLAIN WITH(arity, join_impls) SELECT * FROM x, generate_series(1, 10)
 ----
-Source materialize.public.x (u2):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.x (u2)
-| ArrangeBy ()
-
-%1 =
-| Constant (1) (2) (3) (4) (5) (6) (7) (8) (9) (10)
-
-%2 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
+Explained Query:
+  CrossJoin type=differential // { arity: 3 }
+    implementation
+      %1 » %0[]
+    ArrangeBy keys=[[]] // { arity: 2 }
+      Get materialize.public.x // { arity: 2 }
+    Constant // { arity: 1 }
+      - (1)
+      - (2)
+      - (3)
+      - (4)
+      - (5)
+      - (6)
+      - (7)
+      - (8)
+      - (9)
+      - (10)
 
 EOF
 
 query T multiline
-EXPLAIN PLAN FOR SELECT * FROM x, generate_series(1, a)
+EXPLAIN WITH(arity, join_impls) SELECT * FROM x, generate_series(1, a)
 ----
-Source materialize.public.x (u2):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.x (u2)
-| FlatMap generate_series(1, #0, 1)
+Explained Query:
+  FlatMap generate_series(1, #0, 1) // { arity: 3 }
+    Get materialize.public.x // { arity: 2 }
 
 EOF
 
 query T multiline
-EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
+EXPLAIN WITH(arity, join_impls) SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
 ----
-Source materialize.public.x (u2):
-| Filter (#1) IS NOT NULL
-| Project (#0, #1)
+Explained Query:
+  Return // { arity: 5 }
+    Project (#0..=#2, #1, #3) // { arity: 5 }
+      FlatMap generate_series(#0, #2, 1) // { arity: 4 }
+        Project (#0..=#2) // { arity: 3 }
+          Join on=(#1 = #3) type=differential // { arity: 4 }
+            implementation
+              l0 » %0[#1]
+            ArrangeBy keys=[[#1]] // { arity: 2 }
+              Get l0 // { arity: 2 }
+            Get l0 // { arity: 2 }
+  With
+    cte l0 =
+      Filter (#1) IS NOT NULL // { arity: 2 }
+        Get materialize.public.x // { arity: 2 }
 
-Query:
-%0 = Let l0 =
-| Get materialize.public.x (u2)
-| Filter (#1) IS NOT NULL
-
-%1 =
-| Get %0 (l0)
-| ArrangeBy (#1)
-
-%2 =
-| Join %1 %0 (= #1 #3)
-| | implementation = Differential %0 %1.(#1)
-| Project (#0..=#2)
-| FlatMap generate_series(#0, #2, 1)
-| Project (#0..=#2, #1, #3)
+Source materialize.public.x
+  filter=((#1) IS NOT NULL)
 
 EOF
 
 query T multiline
-EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
+EXPLAIN WITH(arity, join_impls) SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
 ----
-Source materialize.public.x (u2):
-| Filter (#1) IS NOT NULL
-| Project (#0, #1)
+Explained Query:
+  Return // { arity: 5 }
+    Project (#0..=#2, #1, #3) // { arity: 5 }
+      FlatMap generate_series(#0, #2, 1) // { arity: 4 }
+        Project (#0..=#2) // { arity: 3 }
+          Join on=(#1 = #3) type=differential // { arity: 4 }
+            implementation
+              l0 » %0[#1]
+            ArrangeBy keys=[[#1]] // { arity: 2 }
+              Get l0 // { arity: 2 }
+            Get l0 // { arity: 2 }
+  With
+    cte l0 =
+      Filter (#1) IS NOT NULL // { arity: 2 }
+        Get materialize.public.x // { arity: 2 }
 
-Query:
-%0 = Let l0 =
-| Get materialize.public.x (u2)
-| Filter (#1) IS NOT NULL
-
-%1 =
-| Get %0 (l0)
-| ArrangeBy (#1)
-
-%2 =
-| Join %1 %0 (= #1 #3)
-| | implementation = Differential %0 %1.(#1)
-| Project (#0..=#2)
-| FlatMap generate_series(#0, #2, 1)
-| Project (#0..=#2, #1, #3)
+Source materialize.public.x
+  filter=((#1) IS NOT NULL)
 
 EOF
 
 # Regression test for #5520: crash when a filter references an output column of
 # a table function around a join
 query T multiline
-EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.b) AS x3(b) WHERE x1.b = x2.b AND x1.a = x3.b
+EXPLAIN WITH(arity, join_impls) SELECT * FROM x x1, x x2, generate_series(x1.a, x2.b) AS x3(b) WHERE x1.b = x2.b AND x1.a = x3.b
 ----
-Source materialize.public.x (u2):
-| Filter (#1) IS NOT NULL
-| Project (#0, #1)
+Explained Query:
+  Return // { arity: 5 }
+    Project (#0..=#2, #1, #3) // { arity: 5 }
+      Filter (#0 = #3) // { arity: 4 }
+        FlatMap generate_series(#0, #1, 1) // { arity: 4 }
+          Project (#0..=#2) // { arity: 3 }
+            Join on=(#1 = #3) type=differential // { arity: 4 }
+              implementation
+                l0 » %0[#1]
+              ArrangeBy keys=[[#1]] // { arity: 2 }
+                Get l0 // { arity: 2 }
+              Get l0 // { arity: 2 }
+  With
+    cte l0 =
+      Filter (#1) IS NOT NULL // { arity: 2 }
+        Get materialize.public.x // { arity: 2 }
 
-Query:
-%0 = Let l0 =
-| Get materialize.public.x (u2)
-| Filter (#1) IS NOT NULL
-
-%1 =
-| Get %0 (l0)
-| ArrangeBy (#1)
-
-%2 =
-| Join %1 %0 (= #1 #3)
-| | implementation = Differential %0 %1.(#1)
-| Project (#0..=#2)
-| FlatMap generate_series(#0, #1, 1)
-| Filter (#0 = #3)
-| Project (#0..=#2, #1, #3)
+Source materialize.public.x
+  filter=((#1) IS NOT NULL)
 
 EOF
 
@@ -443,32 +433,36 @@ SELECT generate_series FROM generate_series(1::bigint, null, 1::bigint)
 query T multiline
 EXPLAIN RAW PLAN FOR SELECT generate_series FROM generate_series(-2, 2, 1)
 ----
-%0 =
-| CallTable generate_series(-2, 2, 1)
+CallTable generate_series(-2, 2, 1)
 
 EOF
 
 query T multiline
 EXPLAIN RAW PLAN FOR SELECT generate_series FROM generate_series(-2::bigint, 2::bigint, 1::bigint)
 ----
-%0 =
-| CallTable generate_series(integer_to_bigint(-2), integer_to_bigint(2), integer_to_bigint(1))
+CallTable generate_series(integer_to_bigint(-2), integer_to_bigint(2), integer_to_bigint(1))
 
 EOF
 
 query T multiline
-EXPLAIN PLAN FOR SELECT generate_series FROM generate_series(-2, 2, 2)
+EXPLAIN WITH(arity, join_impls) SELECT generate_series FROM generate_series(-2, 2, 2)
 ----
-%0 =
-| Constant (0) (2) (-2)
+Explained Query (fast path):
+  Constant
+    - (0)
+    - (2)
+    - (-2)
 
 EOF
 
 query T multiline
-EXPLAIN PLAN FOR SELECT generate_series FROM generate_series(-2::bigint, 2::bigint, 2::bigint)
+EXPLAIN WITH(arity, join_impls) SELECT generate_series FROM generate_series(-2::bigint, 2::bigint, 2::bigint)
 ----
-%0 =
-| Constant (0) (2) (-2)
+Explained Query (fast path):
+  Constant
+    - (0)
+    - (2)
+    - (-2)
 
 EOF
 
@@ -1369,15 +1363,11 @@ WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), * FROM a ORDER BY genera
 # Plan should be just a simple FlatMap + Project
 # Regression test for #10801
 query T multiline
-EXPLAIN PLAN FOR SELECT jsonb_object_keys(a) FROM y;
+EXPLAIN WITH(arity, join_impls) SELECT jsonb_object_keys(a) FROM y;
 ----
-Source materialize.public.y (u1):
-| Project (#0)
-
-Query:
-%0 =
-| Get materialize.public.y (u1)
-| FlatMap jsonb_object_keys(#0)
-| Project (#1)
+Explained Query:
+  Project (#1) // { arity: 1 }
+    FlatMap jsonb_object_keys(#0) // { arity: 2 }
+      Get materialize.public.y // { arity: 1 }
 
 EOF

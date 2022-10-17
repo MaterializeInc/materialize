@@ -15,6 +15,7 @@ use std::time::SystemTime;
 
 use anyhow::{bail, Context};
 use md5::{Digest, Md5};
+use mz_sql::ast::ExplainStage;
 use postgres_array::Array;
 use regex::Regex;
 use tokio_postgres::error::DbError;
@@ -51,6 +52,7 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         // Do not retry FETCH statements as subsequent executions are likely
         // to return an empty result. The original result would thus be lost.
         Fetch(_) => false,
+        Explain(stmt) if stmt.stage != ExplainStage::Timestamp => false,
         // DDL statements should always provide the expected result on the first try
         CreateConnection(_)
         | CreateCluster(_)

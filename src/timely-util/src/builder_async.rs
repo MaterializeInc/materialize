@@ -53,11 +53,11 @@ struct TimelyWaker {
 
 impl ArcWake for TimelyWaker {
     fn wake_by_ref(arc_self: &Arc<Self>) {
+        arc_self.task_ready.store(true, Ordering::SeqCst);
         // Only activate the timely operator if it's not already active to avoid an infinite loop
         if !arc_self.active.load(Ordering::SeqCst) {
             arc_self.activator.activate().unwrap();
         }
-        arc_self.task_ready.store(true, Ordering::SeqCst);
     }
 }
 

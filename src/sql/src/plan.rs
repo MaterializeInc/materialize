@@ -48,9 +48,8 @@ use mz_storage::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage::types::sources::{SourceDesc, Timeline};
 
 use crate::ast::{
-    ExplainOptions, ExplainStageNew, ExplainStageOld, Expr, FetchDirection, IndexOptionName,
-    NoticeSeverity, ObjectType, Raw, SetVariableValue, Statement, StatementKind,
-    TransactionAccessMode,
+    ExplainStage, Expr, FetchDirection, IndexOptionName, NoticeSeverity, ObjectType, Raw,
+    SetVariableValue, Statement, StatementKind, TransactionAccessMode,
 };
 use crate::catalog::{CatalogType, IdReference};
 use crate::names::{
@@ -483,28 +482,13 @@ pub struct CopyFromPlan {
 }
 
 #[derive(Debug)]
-pub enum ExplainPlan {
-    New(ExplainPlanNew),
-    Old(ExplainPlanOld),
-}
-
-#[derive(Debug)]
-pub struct ExplainPlanNew {
+pub struct ExplainPlan {
     pub raw_plan: HirRelationExpr,
     pub row_set_finishing: Option<RowSetFinishing>,
-    pub stage: ExplainStageNew,
+    pub stage: ExplainStage,
     pub format: ExplainFormat,
     pub config: ExplainConfig,
     pub explainee: mz_repr::explain_new::Explainee,
-}
-
-#[derive(Debug)]
-pub struct ExplainPlanOld {
-    pub raw_plan: HirRelationExpr,
-    pub row_set_finishing: Option<RowSetFinishing>,
-    pub stage: ExplainStageOld,
-    pub options: ExplainOptions,
-    pub view_id: GlobalId,
 }
 
 #[derive(Debug)]

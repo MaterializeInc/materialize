@@ -67,6 +67,7 @@
 //!
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
 use std::ops::Neg;
 use std::sync::Arc;
@@ -126,6 +127,7 @@ use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, Session};
 use crate::subscribe::PendingSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter};
+use crate::AdapterNotice;
 
 pub(crate) mod id_bundle;
 pub(crate) mod peek;
@@ -228,6 +230,7 @@ pub struct Config<S> {
     pub dataflow_client: mz_controller::Controller,
     pub storage: storage::Connection<S>,
     pub unsafe_mode: bool,
+    pub persisted_introspection: bool,
     pub build_info: &'static BuildInfo,
     pub environment_id: String,
     pub metrics_registry: MetricsRegistry,
@@ -241,6 +244,7 @@ pub struct Config<S> {
     pub storage_usage_client: StorageUsageClient,
     pub storage_usage_collection_interval: Duration,
     pub segment_api_key: Option<String>,
+    pub egress_ips: Vec<Ipv4Addr>,
 }
 
 /// Soft-state metadata about a compute replica
@@ -264,6 +268,9 @@ struct ConnMeta {
     /// requests are required to authenticate with the secret of the connection
     /// that they are targeting.
     secret_key: u32,
+
+    /// Channel on which to send notices to a session.
+    notice_tx: mpsc::UnboundedSender<AdapterNotice>,
 }
 
 struct TxnReads {
@@ -383,7 +390,9 @@ impl<S: Append + 'static> Coordinator<S> {
         builtin_migration_metadata: BuiltinMigrationMetadata,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
-        let mut persisted_source_ids = vec![];
+        // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
+        let mut policies_to_set: CollectionIdBundle = Default::default();
+
         for instance in self.catalog.compute_instances() {
             self.controller.compute.create_instance(
                 instance.id,
@@ -407,7 +416,14 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
-                persisted_source_ids.extend(replica.config.logging.source_ids());
+                policies_to_set
+                    .compute_ids
+                    .entry(instance.id)
+                    .or_insert_with(BTreeSet::new)
+                    .extend(replica.config.logging.source_ids());
+                policies_to_set
+                    .storage_ids
+                    .extend(replica.config.logging.source_ids());
 
                 self.controller
                     .active_compute()
@@ -416,12 +432,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     .unwrap();
             }
         }
-
-        self.initialize_storage_read_policies(
-            persisted_source_ids,
-            DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
-        )
-        .await;
 
         // Migrate builtin objects.
         self.controller
@@ -453,9 +463,6 @@ impl<S: Append + 'static> Coordinator<S> {
         let logs: HashSet<_> = BUILTINS::logs()
             .map(|log| self.catalog.resolve_builtin_log(log))
             .collect();
-
-        // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
-        let mut policies_to_set: CollectionIdBundle = Default::default();
 
         // This is disabled for the moment because it has unusual upper
         // advancement behavior.
@@ -858,6 +865,7 @@ pub async fn serve<S: Append + 'static>(
         dataflow_client,
         storage,
         unsafe_mode,
+        persisted_introspection,
         build_info,
         environment_id,
         metrics_registry,
@@ -871,6 +879,7 @@ pub async fn serve<S: Append + 'static>(
         storage_usage_client,
         storage_usage_collection_interval,
         segment_api_key,
+        egress_ips,
     }: Config<S>,
 ) -> Result<(Handle, Client), AdapterError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -896,6 +905,7 @@ pub async fn serve<S: Append + 'static>(
         Catalog::open(catalog::Config {
             storage,
             unsafe_mode,
+            persisted_introspection,
             build_info,
             environment_id,
             now: now.clone(),
@@ -906,6 +916,7 @@ pub async fn serve<S: Append + 'static>(
             default_storage_host_size,
             availability_zones,
             secrets_reader: secrets_controller.reader(),
+            egress_ips,
         })
         .await?;
     let session_id = catalog.config().session_id;

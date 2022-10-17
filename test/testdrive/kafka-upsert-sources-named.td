@@ -35,7 +35,7 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
 {"key": "fish", "key2": "key2" } {"f1": "fishval", "f2": 1000}
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE avroavro
   FROM KAFKA CONNECTION kafka_conn (TOPIC

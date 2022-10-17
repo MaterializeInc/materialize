@@ -27,10 +27,22 @@ sed -i.bak \
     "s/^version = .*/version = \"$version\"/" \
     src/{compute,environmentd,storaged}/Cargo.toml
 
-if ! [[ "$version" = *dev || "$version" = *post ]]; then
+if ! [[ "$version" = *dev ]]; then
     sed -i.bak \
         "s/^Licensed Work:.*/Licensed Work:             Materialize Version v$version/" \
         LICENSE
+else
+    # Rename all upgrade tests that reference `current_source` to explicitly
+    # reference the version of the last release.
+    IFS='.' read -r -a parts <<< "$version"
+    ((parts[1]--))
+    last_version="${parts[0]}.${parts[1]}.0"
+    for file in test/upgrade/*current_source*; do
+        if [[ "$file" = *example* ]]; then
+            continue
+        fi
+        git mv "$file" "$(echo "$file" | sed "s/current_source/v$last_version/")"
+    done
 fi
 
 rm -f src/{compute,environmentd,storaged}/Cargo.toml.bak LICENSE.bak

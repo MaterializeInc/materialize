@@ -178,13 +178,14 @@ t1
 # mzcompose.py driver does) do not clash.
 # TODO: remove this once we add some form of nonce to the default progress
 # topic name.
-> CREATE CONNECTION IF NOT EXISTS kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}',
-  PROGRESS TOPIC 'testdrive-progress-${testdrive.seed}';
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (
+    BROKER '${testdrive.kafka-addr}',
+    PROGRESS TOPIC 'testdrive-progress-${testdrive.seed}'
+  );
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
 $ kafka-create-topic topic=source1 partitions=1
 $ kafka-ingest format=bytes topic=source1

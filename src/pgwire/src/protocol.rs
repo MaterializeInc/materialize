@@ -17,6 +17,7 @@ use std::mem;
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{pending, BoxFuture, FutureExt};
 use itertools::izip;
+use mz_adapter::AdapterNotice;
 use openssl::nid::Nid;
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest};
@@ -1056,45 +1057,59 @@ where
     }
 
     // Converts a RowsFuture to a stream while also checking for connection close.
-    fn row_future_to_stream(
-        &self,
-        parent: &tracing::Span,
-        rows: RowsFuture,
-    ) -> impl Future<Output = Result<RowBatchStream, io::Error>> + '_ {
-        let closed = async {
-            loop {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-
-                // We've been waiting for rows for a bit, and the client may have
-                // disconnected. Check whether the socket is no longer readable and error
-                // if so.
-                match self.conn.ready(Interest::READABLE).await {
-                    Ok(ready) => {
-                        if ready.is_read_closed() {
-                            return io::Error::new(io::ErrorKind::Other, "connection closed");
-                        }
-                    }
-                    Err(err) => return err,
-                }
-            }
-        };
+    async fn row_future_to_stream<'s, 'p>(
+        &'s mut self,
+        parent: &'p tracing::Span,
+        mut rows: RowsFuture,
+    ) -> Result<RowBatchStream, io::Error>
+    where
+        'p: 's,
+    {
         // Do not include self.adapter_client.canceled() here because cancel messages
         // will propagate through the PeekResponse. select is safe to use because if
         // close finishes, rows is canceled, which is the intended behavior.
         let span = tracing::debug_span!(parent: parent, "row_future_to_stream");
-        async {
-            tokio::select! {
-                err = closed => {
-                    Err(err)
-                },
-                rows = rows => {
-                    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-                    tx.send(rows).expect("send must succeed");
-                    Ok(rx)
+        let block = async move {
+            loop {
+                let closed = async {
+                    loop {
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+
+                        // We've been waiting for rows for a bit, and the client may have
+                        // disconnected. Check whether the socket is no longer readable and error
+                        // if so.
+                        match self.conn.ready(Interest::READABLE).await {
+                            Ok(ready) => {
+                                if ready.is_read_closed() {
+                                    return io::Error::new(
+                                        io::ErrorKind::Other,
+                                        "connection closed",
+                                    );
+                                }
+                            }
+                            Err(err) => return err,
+                        }
+                    }
+                };
+                tokio::select! {
+                    err = closed => {
+                        return Err(err);
+                    },
+                    rows = &mut rows => {
+                        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                        tx.send(rows).expect("send must succeed");
+                        return Ok(rx);
+                    }
+                    notice = self.adapter_client.session().recv_notice() => {
+                        self.send(ErrorResponse::from_adapter_notice(notice))
+                            .await?;
+                        self.conn.flush().await?;
+                    }
                 }
             }
         }
-        .instrument(span)
+        .instrument(span);
+        block.await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1162,11 +1177,11 @@ where
                     row_desc.expect("missing row description for ExecuteResponse::SendingRows");
 
                 let span = tracing::debug_span!(parent: &span, "send_execute_response");
-
+                let rows = self.row_future_to_stream(&span, rx).await?;
                 self.send_rows(
                     row_desc,
                     portal_name,
-                    InProgressRows::new(self.row_future_to_stream(&span, rx).await?),
+                    InProgressRows::new(rows),
                     max_rows,
                     get_response,
                     fetch_portal_name,
@@ -1226,7 +1241,7 @@ where
             ExecuteResponse::CopyTo { format, resp } => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::CopyTo");
-                let rows: RowBatchStream = match *resp {
+                let rows = match *resp {
                     ExecuteResponse::Subscribing { rx } => rx,
                     ExecuteResponse::SendingRows {
                         future: rows_rx,
@@ -1369,9 +1384,14 @@ where
             } else if want_rows == 0 {
                 FetchResult::Rows(None)
             } else {
+                let cancel_fut = self.adapter_client.canceled();
+                let notice_fut = self.adapter_client.session().recv_notice();
                 tokio::select! {
                     _ = time::sleep_until(deadline.unwrap_or_else(time::Instant::now)), if deadline.is_some() => FetchResult::Rows(None),
-                    _ = self.adapter_client.canceled() => FetchResult::Canceled,
+                    notice = notice_fut => {
+                        FetchResult::Notice(notice)
+                    }
+                    _ = cancel_fut => FetchResult::Canceled,
                     batch = rows.remaining.recv() => match batch {
                         None => FetchResult::Rows(None),
                         Some(PeekResponseUnary::Rows(rows)) => FetchResult::Rows(Some(rows)),
@@ -1442,6 +1462,11 @@ where
                         }
                         break;
                     }
+                    self.conn.flush().await?;
+                }
+                FetchResult::Notice(notice) => {
+                    self.send(ErrorResponse::from_adapter_notice(notice))
+                        .await?;
                     self.conn.flush().await?;
                 }
                 FetchResult::Error(text) => {
@@ -1585,6 +1610,11 @@ where
                         }
                     }
                 },
+                notice = self.adapter_client.session().recv_notice() => {
+                    self.send(ErrorResponse::from_adapter_notice(notice))
+                        .await?;
+                    self.conn.flush().await?;
+                }
             }
 
             self.conn.flush().await?;
@@ -1688,12 +1718,14 @@ where
     }
 
     async fn send_pending_notices(&mut self) -> Result<(), io::Error> {
-        let mut notices = vec![];
-        for notice in self.adapter_client.session().drain_notices() {
-            notices.push(BackendMessage::ErrorResponse(
-                ErrorResponse::from_adapter_notice(notice),
-            ));
-        }
+        let notices = self
+            .adapter_client
+            .session()
+            .drain_notices()
+            .into_iter()
+            .map(|notice| {
+                BackendMessage::ErrorResponse(ErrorResponse::from_adapter_notice(notice))
+            });
         self.send_all(notices).await?;
         Ok(())
     }
@@ -1845,4 +1877,5 @@ enum FetchResult {
     Rows(Option<Vec<Row>>),
     Canceled,
     Error(String),
+    Notice(AdapterNotice),
 }

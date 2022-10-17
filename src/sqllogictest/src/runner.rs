@@ -683,6 +683,7 @@ impl Runner {
             frontegg: None,
             cors_allowed_origin: AllowOrigin::list([]),
             unsafe_mode: true,
+            persisted_introspection: true,
             metrics_registry,
             now,
             environment_id: format!("environment-{}-0", Uuid::from_u128(0)),
@@ -698,6 +699,7 @@ impl Runner {
             tracing_target_callbacks: mz_ore::tracing::TracingTargetCallbacks::default(),
             storage_usage_collection_interval: Duration::from_secs(3600),
             segment_api_key: None,
+            egress_ips: vec![],
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned

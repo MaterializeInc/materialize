@@ -203,6 +203,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         tls: config.tls,
         frontegg: config.frontegg,
         unsafe_mode: config.unsafe_mode,
+        persisted_introspection: true,
         metrics_registry: metrics_registry.clone(),
         now: config.now,
         environment_id: format!("environment-{}-0", Uuid::from_u128(0)),
@@ -219,6 +220,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         tracing_target_callbacks: mz_ore::tracing::TracingTargetCallbacks::default(),
         storage_usage_collection_interval: config.storage_usage_collection_interval,
         segment_api_key: None,
+        egress_ips: vec![],
     }))?;
     let server = Server {
         inner,

@@ -230,41 +230,27 @@ CREATE TABLE date_trunc_timestamps (
 )
 
 query T multiline
-EXPLAIN PLAN FOR SELECT date_trunc('day', ts) FROM date_trunc_timestamps
+EXPLAIN WITH(arity, join_impls) SELECT date_trunc('day', ts) FROM date_trunc_timestamps
 ----
-Source materialize.public.date_trunc_timestamps (u2):
-| Project (#0)
-
-Query:
-%0 =
-| Get materialize.public.date_trunc_timestamps (u2)
-| Map date_trunc_day_ts(#0)
-| Project (#1)
+Explained Query:
+  Project (#1) // { arity: 1 }
+    Map (date_trunc_day_ts(#0)) // { arity: 2 }
+      Get materialize.public.date_trunc_timestamps // { arity: 1 }
 
 EOF
 
 query T multiline
-EXPLAIN PLAN FOR SELECT date_trunc(field, ts) FROM date_trunc_fields, date_trunc_timestamps
+EXPLAIN WITH(arity, join_impls) SELECT date_trunc(field, ts) FROM date_trunc_fields, date_trunc_timestamps
 ----
-Source materialize.public.date_trunc_fields (u1):
-| Project (#0)
-
-Source materialize.public.date_trunc_timestamps (u2):
-| Project (#0)
-
-Query:
-%0 =
-| Get materialize.public.date_trunc_fields (u1)
-| ArrangeBy ()
-
-%1 =
-| Get materialize.public.date_trunc_timestamps (u2)
-
-%2 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
-| Map date_truncts(#0, #1)
-| Project (#2)
+Explained Query:
+  Project (#2) // { arity: 1 }
+    Map (date_truncts(#0, #1)) // { arity: 3 }
+      CrossJoin type=differential // { arity: 2 }
+        implementation
+          materialize.public.date_trunc_timestamps » %0[]
+        ArrangeBy keys=[[]] // { arity: 1 }
+          Get materialize.public.date_trunc_fields // { arity: 1 }
+        Get materialize.public.date_trunc_timestamps // { arity: 1 }
 
 EOF
 
@@ -710,47 +696,44 @@ CREATE TABLE t (
 )
 
 query T multiline
-EXPLAIN PLAN FOR SELECT a IS NULL FROM t
+EXPLAIN WITH(arity, join_impls) SELECT a IS NULL FROM t
 ----
-Source materialize.public.t (u7):
-| Map dummy
-| Project (#0, #2)
+Explained Query:
+  Project (#2) // { arity: 1 }
+    Map ((#0) IS NULL) // { arity: 3 }
+      Get materialize.public.t // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.t (u7)
-| Map (#0) IS NULL
-| Project (#2)
+Source materialize.public.t
+  project=(#0, #2)
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN PLAN FOR SELECT a + a + a + a + a IS NULL FROM t
+EXPLAIN WITH(arity, join_impls) SELECT a + a + a + a + a IS NULL FROM t
 ----
-Source materialize.public.t (u7):
-| Map dummy
-| Project (#0, #2)
+Explained Query:
+  Project (#2) // { arity: 1 }
+    Map ((#0) IS NULL) // { arity: 3 }
+      Get materialize.public.t // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.t (u7)
-| Map (#0) IS NULL
-| Project (#2)
+Source materialize.public.t
+  project=(#0, #2)
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN PLAN FOR SELECT a + b IS NULL FROM t
+EXPLAIN WITH(arity, join_impls) SELECT a + b IS NULL FROM t
 ----
-Source materialize.public.t (u7):
-| Map dummy
-| Project (#0, #2)
+Explained Query:
+  Project (#2) // { arity: 1 }
+    Map ((#0) IS NULL) // { arity: 3 }
+      Get materialize.public.t // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.t (u7)
-| Map (#0) IS NULL
-| Project (#2)
+Source materialize.public.t
+  project=(#0, #2)
+  map=(dummy)
 
 EOF
 
@@ -759,16 +742,12 @@ EOF
 # exist, but we do not support them yet. Similarly for OR.
 
 query T multiline
-EXPLAIN PLAN FOR SELECT (a::bool AND b::bool) IS NULL FROM t
+EXPLAIN WITH(arity, join_impls) SELECT (a::bool AND b::bool) IS NULL FROM t
 ----
-Source materialize.public.t (u7):
-| Project (#0, #1)
-
-Query:
-%0 =
-| Get materialize.public.t (u7)
-| Map ((integer_to_boolean(#0) AND integer_to_boolean(#1))) IS NULL
-| Project (#2)
+Explained Query:
+  Project (#2) // { arity: 1 }
+    Map (((integer_to_boolean(#0) AND integer_to_boolean(#1))) IS NULL) // { arity: 3 }
+      Get materialize.public.t // { arity: 2 }
 
 EOF
 

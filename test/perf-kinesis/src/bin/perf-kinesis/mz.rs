@@ -36,10 +36,11 @@ pub async fn create_source_and_views(
         .context("Creating secret access key secret")?;
 
     let aws_connection = format!(
-        "CREATE CONNECTION kinesis_conn FOR AWS
+        "CREATE CONNECTION kinesis_conn TO AWS (
             ACCESS KEY ID = '{}',
             SECRET ACCESS KEY = SECRET aws_secret_access_key {}
-            {};",
+            {}
+        );",
         credentials.access_key_id(),
         match credentials.session_token() {
             Some(token) => format!(", TOKEN = '{}'", token),

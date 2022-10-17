@@ -1,4 +1,11 @@
 # dbt-materialize Changelog
+
+## Unreleased - 2022-10-16
+
+* Disallow the `cluster` option for `view` materializations. In the new
+  architecture, only materialized views and indexes are associated with a
+  cluster.
+
 ## 1.2.0 - 2022-08-31
 
 * Enable additional configuration for indexes created on view,

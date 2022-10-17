@@ -27,18 +27,18 @@ CREATE TABLE t2 (f1 INTEGER, f2 INTEGER);
 
 # no CSE detection here, no predicates in query
 query T multiline
-EXPLAIN SELECT * FROM t1 AS a1 , t1 AS a2;
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 AS a1 , t1 AS a2;
 ----
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy ()
+Explained Query:
+  CrossJoin type=differential // { arity: 4 }
+    implementation
+      materialize.public.t1 » %0[]
+    ArrangeBy keys=[[]] // { arity: 2 }
+      Get materialize.public.t1 // { arity: 2 }
+    Get materialize.public.t1 // { arity: 2 }
 
-%1 =
-| Get materialize.public.t1 (u1)
-
-%2 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
@@ -47,68 +47,76 @@ EOF
 #
 
 query T multiline
-EXPLAIN SELECT * FROM t1 AS a1 , t1 AS a2, t1 AS a3;
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 AS a1 , t1 AS a2, t1 AS a3;
 ----
-%0 = Let l0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy ()
+Explained Query:
+  Return // { arity: 6 }
+    CrossJoin type=differential // { arity: 6 }
+      implementation
+        materialize.public.t1 » l0[] » l0[]
+      Get l0 // { arity: 2 }
+      Get l0 // { arity: 2 }
+      Get materialize.public.t1 // { arity: 2 }
+  With
+    cte l0 =
+      ArrangeBy keys=[[]] // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
 
-%1 =
-| Get materialize.public.t1 (u1)
-
-%2 =
-| Join %0 %0 %1
-| | implementation = Differential %1 %0.() %0.()
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 query T multiline
-EXPLAIN SELECT * FROM t1 AS a1 , t1 AS a2 WHERE a1.f1 = 1 AND a2.f1 = 1;
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 AS a1 , t1 AS a2 WHERE a1.f1 = 1 AND a2.f1 = 1;
 ----
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 4 }
+    CrossJoin type=differential // { arity: 4 }
+      implementation
+        l0 » %0[]
+      ArrangeBy keys=[[]] // { arity: 2 }
+        Get l0 // { arity: 2 }
+      Get l0 // { arity: 2 }
+  With
+    cte l0 =
+      Project (#0, #1) // { arity: 2 }
+        Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Get materialize.public.t1 // { arity: 2 }
+          Constant // { arity: 1 }
+            - (1)
 
-%1 =
-| Constant (1)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-| Project (#0, #1)
-
-%3 =
-| Get %2 (l0)
-| ArrangeBy ()
-
-%4 =
-| Join %3 %2
-| | implementation = Differential %2 %3.()
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 query T multiline
-EXPLAIN SELECT * FROM t1 AS a1 , t1 AS a2, t1 AS a3 WHERE a1.f1 = 1 AND a2.f1 = 1 AND a3.f1 = 1;
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 AS a1 , t1 AS a2, t1 AS a3 WHERE a1.f1 = 1 AND a2.f1 = 1 AND a3.f1 = 1;
 ----
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 6 }
+    CrossJoin type=differential // { arity: 6 }
+      implementation
+        l0 » l1[] » l1[]
+      Get l1 // { arity: 2 }
+      Get l1 // { arity: 2 }
+      Get l0 // { arity: 2 }
+  With
+    cte l1 =
+      ArrangeBy keys=[[]] // { arity: 2 }
+        Get l0 // { arity: 2 }
+    cte l0 =
+      Project (#0, #1) // { arity: 2 }
+        Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Get materialize.public.t1 // { arity: 2 }
+          Constant // { arity: 1 }
+            - (1)
 
-%1 =
-| Constant (1)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-| Project (#0, #1)
-
-%3 = Let l1 =
-| Get %2 (l0)
-| ArrangeBy ()
-
-%4 =
-| Join %3 %3 %2
-| | implementation = Differential %2 %3.() %3.()
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
@@ -117,31 +125,28 @@ EOF
 #
 
 query T multiline
-EXPLAIN SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1) WHERE a1.f1 = 1 AND a2.f1 = 1;
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1) WHERE a1.f1 = 1 AND a2.f1 = 1;
 ----
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 3 }
+    CrossJoin type=differential // { arity: 3 }
+      implementation
+        %1 » %0[]
+      ArrangeBy keys=[[]] // { arity: 2 }
+        Project (#0, #1) // { arity: 2 }
+          Get l0 // { arity: 3 }
+      Project (#1) // { arity: 1 }
+        Get l0 // { arity: 3 }
+  With
+    cte l0 =
+      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Get materialize.public.t1 // { arity: 2 }
+        Constant // { arity: 1 }
+          - (1)
 
-%1 =
-| Constant (1)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-
-%3 =
-| Get %2 (l0)
-| Project (#0, #1)
-| ArrangeBy ()
-
-%4 =
-| Get %2 (l0)
-| Project (#1)
-
-%5 =
-| Join %3 %4
-| | implementation = Differential %4 %3.()
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
@@ -150,166 +155,142 @@ EOF
 #
 
 query T multiline
-EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) AND f2 = (SELECT f1 FROM t1);
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) AND f2 = (SELECT f1 FROM t1);
 ----
-%0 =
-| Get materialize.public.t1 (u1)
-| Filter (#0) IS NOT NULL
-| Project (#0)
+Explained Query:
+  Return // { arity: 2 }
+    Project (#0, #1) // { arity: 2 }
+      Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
+        implementation
+          l0 » %0[#1] » %1[#0]
+        ArrangeBy keys=[[#1]] // { arity: 2 }
+          Filter (#0) IS NOT NULL AND (#1) IS NOT NULL // { arity: 2 }
+            Get materialize.public.t1 // { arity: 2 }
+        ArrangeBy keys=[[#0]] // { arity: 1 }
+          Get l0 // { arity: 1 }
+        Get l0 // { arity: 1 }
+  With
+    cte l0 =
+      Union // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Filter (#0) IS NOT NULL // { arity: 2 }
+            Get materialize.public.t1 // { arity: 2 }
+        Map (error("more than one record produced in subquery")) // { arity: 1 }
+          Project () // { arity: 0 }
+            Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
+              Reduce aggregates=[count(true)] // { arity: 1 }
+                Project () // { arity: 0 }
+                  Get materialize.public.t1 // { arity: 2 }
 
-%1 =
-| Get materialize.public.t1 (u1)
-| Project ()
-| Reduce group=()
-| | agg count(true)
-| Filter (err: more than one record produced in subquery), (#0 > 1)
-| Project ()
-| Map (err: more than one record produced in subquery)
-
-%2 = Let l0 =
-| Union %0 %1
-
-%3 =
-| Get materialize.public.t1 (u1)
-| Filter (#0) IS NOT NULL, (#1) IS NOT NULL
-| ArrangeBy (#1)
-
-%4 =
-| Get %2 (l0)
-| ArrangeBy (#0)
-
-%5 =
-| Join %3 %4 %2 (= #0 #2) (= #1 #3)
-| | implementation = Differential %2 %3.(#1) %4.(#0)
-| Project (#0, #1)
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 query T multiline
-EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1 WHERE f1 = 1) AND f2 = (SELECT f1 FROM t1 WHERE f1 = 1);
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1 WHERE f1 = 1) AND f2 = (SELECT f1 FROM t1 WHERE f1 = 1);
 ----
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 2 }
+    Project (#0, #1) // { arity: 2 }
+      Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
+        implementation
+          l1 » %0[#1] » %1[#0]
+        ArrangeBy keys=[[#1]] // { arity: 2 }
+          Filter (#0) IS NOT NULL AND (#1) IS NOT NULL // { arity: 2 }
+            Get materialize.public.t1 // { arity: 2 }
+        ArrangeBy keys=[[#0]] // { arity: 1 }
+          Get l1 // { arity: 1 }
+        Get l1 // { arity: 1 }
+  With
+    cte l1 =
+      Union // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Get l0 // { arity: 3 }
+        Map (error("more than one record produced in subquery")) // { arity: 1 }
+          Project () // { arity: 0 }
+            Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
+              Reduce aggregates=[count(true)] // { arity: 1 }
+                Project () // { arity: 0 }
+                  Get l0 // { arity: 3 }
+    cte l0 =
+      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Get materialize.public.t1 // { arity: 2 }
+        Constant // { arity: 1 }
+          - (1)
 
-%1 =
-| Constant (1)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-
-%3 =
-| Get %2 (l0)
-| Project (#0)
-
-%4 =
-| Get %2 (l0)
-| Project ()
-| Reduce group=()
-| | agg count(true)
-| Filter (err: more than one record produced in subquery), (#0 > 1)
-| Project ()
-| Map (err: more than one record produced in subquery)
-
-%5 = Let l1 =
-| Union %3 %4
-
-%6 =
-| Get materialize.public.t1 (u1)
-| Filter (#0) IS NOT NULL, (#1) IS NOT NULL
-| ArrangeBy (#1)
-
-%7 =
-| Get %5 (l1)
-| ArrangeBy (#0)
-
-%8 =
-| Join %6 %7 %5 (= #0 #2) (= #1 #3)
-| | implementation = Differential %5 %6.(#1) %7.(#0)
-| Project (#0, #1)
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 query T multiline
-EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) AND EXISTS (SELECT f1 FROM t1);
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) AND EXISTS (SELECT f1 FROM t1);
 ----
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Project (#0, #1) // { arity: 2 }
+    Join on=(#0 = #2) type=differential // { arity: 3 }
+      implementation
+        %1 » %0[#0]
+      ArrangeBy keys=[[#0]] // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
+      Union // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Filter (#0) IS NOT NULL // { arity: 2 }
+            Get materialize.public.t1 // { arity: 2 }
+        Map (error("more than one record produced in subquery")) // { arity: 1 }
+          Project () // { arity: 0 }
+            Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
+              Reduce aggregates=[count(true)] // { arity: 1 }
+                Project () // { arity: 0 }
+                  Get materialize.public.t1 // { arity: 2 }
 
-%1 =
-| Get materialize.public.t1 (u1)
-| Filter (#0) IS NOT NULL
-| Project (#0)
-
-%2 =
-| Get materialize.public.t1 (u1)
-| Project ()
-| Reduce group=()
-| | agg count(true)
-| Filter (err: more than one record produced in subquery), (#0 > 1)
-| Project ()
-| Map (err: more than one record produced in subquery)
-
-%3 =
-| Union %1 %2
-
-%4 =
-| Join %0 %3 (= #0 #2)
-| | implementation = Differential %3 %0.(#0)
-| Project (#0, #1)
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 query T multiline
-EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) OR f2 = (SELECT f1 FROM t1);
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) OR f2 = (SELECT f1 FROM t1);
 ----
-%0 =
-| Get materialize.public.t1 (u1)
-| Project (#0)
+Explained Query:
+  Return // { arity: 2 }
+    Project (#0, #1) // { arity: 2 }
+      Filter ((#0 = #2) OR (#1 = #3)) // { arity: 4 }
+        CrossJoin type=differential // { arity: 4 }
+          implementation
+            l1 » %0[] » %1[]
+          ArrangeBy keys=[[]] // { arity: 2 }
+            Get materialize.public.t1 // { arity: 2 }
+          ArrangeBy keys=[[]] // { arity: 1 }
+            Get l1 // { arity: 1 }
+          Get l1 // { arity: 1 }
+  With
+    cte l1 =
+      Union // { arity: 1 }
+        Get l0 // { arity: 1 }
+        Map (null) // { arity: 1 }
+          Union // { arity: 0 }
+            Negate // { arity: 0 }
+              Distinct // { arity: 0 }
+                Project () // { arity: 0 }
+                  Get l0 // { arity: 1 }
+            Constant // { arity: 0 }
+              - ()
+    cte l0 =
+      Union // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Get materialize.public.t1 // { arity: 2 }
+        Map (error("more than one record produced in subquery")) // { arity: 1 }
+          Project () // { arity: 0 }
+            Filter (#0 > 1) // { arity: 1 }
+              Reduce aggregates=[count(true)] // { arity: 1 }
+                Project () // { arity: 0 }
+                  Get materialize.public.t1 // { arity: 2 }
 
-%1 =
-| Get materialize.public.t1 (u1)
-| Project ()
-| Reduce group=()
-| | agg count(true)
-| Filter (#0 > 1)
-| Project ()
-| Map (err: more than one record produced in subquery)
-
-%2 = Let l0 =
-| Union %0 %1
-
-%3 =
-| Get %2 (l0)
-| Project ()
-| Distinct group=()
-| Negate
-
-%4 =
-| Constant ()
-
-%5 =
-| Union %3 %4
-| Map null
-
-%6 = Let l1 =
-| Union %2 %5
-
-%7 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy ()
-
-%8 =
-| Get %6 (l1)
-| ArrangeBy ()
-
-%9 =
-| Join %7 %8 %6
-| | implementation = Differential %6 %7.() %8.()
-| Filter ((#0 = #2) OR (#1 = #3))
-| Project (#0, #1)
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
@@ -318,96 +299,93 @@ EOF
 #
 
 query T multiline
-EXPLAIN SELECT *
+EXPLAIN WITH(arity, join_impls) SELECT *
 FROM (SELECT * FROM t1 WHERE f1 = 1) AS a1
 JOIN (SELECT * FROM t1 WHERE f1 = 1) AS a2
 ON TRUE
 ----
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 4 }
+    CrossJoin type=differential // { arity: 4 }
+      implementation
+        l0 » %0[]
+      ArrangeBy keys=[[]] // { arity: 2 }
+        Get l0 // { arity: 2 }
+      Get l0 // { arity: 2 }
+  With
+    cte l0 =
+      Project (#0, #1) // { arity: 2 }
+        Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Get materialize.public.t1 // { arity: 2 }
+          Constant // { arity: 1 }
+            - (1)
 
-%1 =
-| Constant (1)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-| Project (#0, #1)
-
-%3 =
-| Get %2 (l0)
-| ArrangeBy ()
-
-%4 =
-| Join %3 %2
-| | implementation = Differential %2 %3.()
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 query T multiline
-EXPLAIN SELECT *
+EXPLAIN WITH(arity, join_impls) SELECT *
 FROM (SELECT * FROM t1 WHERE f1 = 1) AS a1
 , (SELECT * FROM t1 WHERE f1 = 1) AS a2
 WHERE a1.f2 = 2
 AND a2.f2 = 2
 ----
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 4 }
+    CrossJoin type=differential // { arity: 4 }
+      implementation
+        l0 » %0[]
+      ArrangeBy keys=[[]] // { arity: 2 }
+        Get l0 // { arity: 2 }
+      Get l0 // { arity: 2 }
+  With
+    cte l0 =
+      Project (#0, #1) // { arity: 2 }
+        Filter (#1 = 2) // { arity: 3 }
+          Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Get materialize.public.t1 // { arity: 2 }
+            Constant // { arity: 1 }
+              - (1)
 
-%1 =
-| Constant (1)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-| Filter (#1 = 2)
-| Project (#0, #1)
-
-%3 =
-| Get %2 (l0)
-| ArrangeBy ()
-
-%4 =
-| Join %3 %2
-| | implementation = Differential %2 %3.()
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 # No CSE with only partially-overlapping predicates
 query T multiline
-EXPLAIN SELECT *
+EXPLAIN WITH(arity, join_impls) SELECT *
 FROM (SELECT * FROM t1 WHERE f1 = 1) AS a1
 , (SELECT * FROM t1 WHERE f1 = 1) AS a2
 WHERE a1.f2 = 2
 AND a2.f2 = 3
 ----
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 4 }
+    CrossJoin type=differential // { arity: 4 }
+      implementation
+        %1 » %0[]
+      ArrangeBy keys=[[]] // { arity: 2 }
+        Project (#0, #1) // { arity: 2 }
+          Filter (#1 = 2) // { arity: 3 }
+            Get l0 // { arity: 3 }
+      Project (#0, #1) // { arity: 2 }
+        Filter (#1 = 3) // { arity: 3 }
+          Get l0 // { arity: 3 }
+  With
+    cte l0 =
+      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Get materialize.public.t1 // { arity: 2 }
+        Constant // { arity: 1 }
+          - (1)
 
-%1 =
-| Constant (1)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-
-%3 =
-| Get %2 (l0)
-| Filter (#1 = 2)
-| Project (#0, #1)
-| ArrangeBy ()
-
-%4 =
-| Get %2 (l0)
-| Filter (#1 = 3)
-| Project (#0, #1)
-
-%5 =
-| Join %3 %4
-| | implementation = Differential %4 %3.()
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
@@ -416,45 +394,51 @@ EOF
 #
 
 query T multiline
-EXPLAIN SELECT * FROM t1 WHERE f1 = 1 UNION ALL SELECT * FROM t1 WHERE f1 = 1 UNION ALL SELECT * FROM t1 WHERE f1 = 1;
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE f1 = 1 UNION ALL SELECT * FROM t1 WHERE f1 = 1 UNION ALL SELECT * FROM t1 WHERE f1 = 1;
 ----
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 2 }
+    Union // { arity: 2 }
+      Get l0 // { arity: 2 }
+      Get l0 // { arity: 2 }
+      Get l0 // { arity: 2 }
+  With
+    cte l0 =
+      Project (#0, #1) // { arity: 2 }
+        Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Get materialize.public.t1 // { arity: 2 }
+          Constant // { arity: 1 }
+            - (1)
 
-%1 =
-| Constant (1)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-| Project (#0, #1)
-
-%3 =
-| Union %2 %2 %2
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 query T multiline
-EXPLAIN SELECT * FROM t1 WHERE f1 = 1 UNION ALL SELECT * FROM t1 WHERE f1 = 1 UNION SELECT * FROM t1 WHERE f1 = 1;
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE f1 = 1 UNION ALL SELECT * FROM t1 WHERE f1 = 1 UNION SELECT * FROM t1 WHERE f1 = 1;
 ----
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 2 }
+    Project (#1, #0) // { arity: 2 }
+      Map (1) // { arity: 2 }
+        Distinct group_by=[#0] // { arity: 1 }
+          Union // { arity: 1 }
+            Get l0 // { arity: 1 }
+            Get l0 // { arity: 1 }
+            Get l0 // { arity: 1 }
+  With
+    cte l0 =
+      Project (#1) // { arity: 1 }
+        Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Get materialize.public.t1 // { arity: 2 }
+          Constant // { arity: 1 }
+            - (1)
 
-%1 =
-| Constant (1)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-| Project (#1)
-
-%3 =
-| Union %2 %2 %2
-| Distinct group=(#0)
-| Map 1
-| Project (#1, #0)
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
@@ -463,139 +447,106 @@ EOF
 #
 
 query T multiline
-EXPLAIN SELECT (SELECT f1 FROM t1 WHERE f1 = 1) , (SELECT f1 FROM t1 WHERE f1 = 1) FROM t1;
+EXPLAIN WITH(arity, join_impls) SELECT (SELECT f1 FROM t1 WHERE f1 = 1) , (SELECT f1 FROM t1 WHERE f1 = 1) FROM t1;
 ----
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 2 }
+    Project (#0, #0) // { arity: 2 }
+      CrossJoin type=differential // { arity: 1 }
+        implementation
+          %1 » %0[]
+        ArrangeBy keys=[[]] // { arity: 0 }
+          Project () // { arity: 0 }
+            Get materialize.public.t1 // { arity: 2 }
+        Union // { arity: 1 }
+          Get l1 // { arity: 1 }
+          Map (null) // { arity: 1 }
+            Union // { arity: 0 }
+              Negate // { arity: 0 }
+                Distinct // { arity: 0 }
+                  Project () // { arity: 0 }
+                    Get l1 // { arity: 1 }
+              Constant // { arity: 0 }
+                - ()
+  With
+    cte l1 =
+      Union // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Get l0 // { arity: 3 }
+        Map (error("more than one record produced in subquery")) // { arity: 1 }
+          Project () // { arity: 0 }
+            Filter (#0 > 1) // { arity: 1 }
+              Reduce aggregates=[count(true)] // { arity: 1 }
+                Project () // { arity: 0 }
+                  Get l0 // { arity: 3 }
+    cte l0 =
+      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Get materialize.public.t1 // { arity: 2 }
+        Constant // { arity: 1 }
+          - (1)
 
-%1 =
-| Constant (1)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-
-%3 =
-| Get %2 (l0)
-| Project (#0)
-
-%4 =
-| Get %2 (l0)
-| Project ()
-| Reduce group=()
-| | agg count(true)
-| Filter (#0 > 1)
-| Project ()
-| Map (err: more than one record produced in subquery)
-
-%5 = Let l1 =
-| Union %3 %4
-
-%6 =
-| Get materialize.public.t1 (u1)
-| Project ()
-| ArrangeBy ()
-
-%7 =
-| Get %5 (l1)
-| Project ()
-| Distinct group=()
-| Negate
-
-%8 =
-| Constant ()
-
-%9 =
-| Union %7 %8
-| Map null
-
-%10 =
-| Union %5 %9
-
-%11 =
-| Join %6 %10
-| | implementation = Differential %10 %6.()
-| Project (#0, #0)
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 query T multiline
-EXPLAIN SELECT MIN((SELECT f1 FROM t1 WHERE f1 = 1)), MAX((SELECT f1 FROM t1 WHERE f1 = 1)) FROM t1;
+EXPLAIN WITH(arity, join_impls) SELECT MIN((SELECT f1 FROM t1 WHERE f1 = 1)), MAX((SELECT f1 FROM t1 WHERE f1 = 1)) FROM t1;
 ----
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 2 }
+    Union // { arity: 2 }
+      Get l3 // { arity: 2 }
+      Map (null, null) // { arity: 2 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l3 // { arity: 2 }
+          Constant // { arity: 0 }
+            - ()
+  With
+    cte l3 =
+      Reduce aggregates=[min(#0), max(#1)] // { arity: 2 }
+        CrossJoin type=differential // { arity: 2 }
+          implementation
+            l2 » %0[] » %1[]
+          ArrangeBy keys=[[]] // { arity: 0 }
+            Project () // { arity: 0 }
+              Get materialize.public.t1 // { arity: 2 }
+          ArrangeBy keys=[[]] // { arity: 1 }
+            Get l2 // { arity: 1 }
+          Get l2 // { arity: 1 }
+    cte l2 =
+      Union // { arity: 1 }
+        Get l1 // { arity: 1 }
+        Map (null) // { arity: 1 }
+          Union // { arity: 0 }
+            Negate // { arity: 0 }
+              Distinct // { arity: 0 }
+                Project () // { arity: 0 }
+                  Get l1 // { arity: 1 }
+            Constant // { arity: 0 }
+              - ()
+    cte l1 =
+      Union // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Get l0 // { arity: 3 }
+        Map (error("more than one record produced in subquery")) // { arity: 1 }
+          Project () // { arity: 0 }
+            Filter (#0 > 1) // { arity: 1 }
+              Reduce aggregates=[count(true)] // { arity: 1 }
+                Project () // { arity: 0 }
+                  Get l0 // { arity: 3 }
+    cte l0 =
+      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Get materialize.public.t1 // { arity: 2 }
+        Constant // { arity: 1 }
+          - (1)
 
-%1 =
-| Constant (1)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-
-%3 =
-| Get %2 (l0)
-| Project (#0)
-
-%4 =
-| Get %2 (l0)
-| Project ()
-| Reduce group=()
-| | agg count(true)
-| Filter (#0 > 1)
-| Project ()
-| Map (err: more than one record produced in subquery)
-
-%5 = Let l1 =
-| Union %3 %4
-
-%6 =
-| Get %5 (l1)
-| Project ()
-| Distinct group=()
-| Negate
-
-%7 =
-| Constant ()
-
-%8 =
-| Union %6 %7
-| Map null
-
-%9 = Let l2 =
-| Union %5 %8
-
-%10 =
-| Get materialize.public.t1 (u1)
-| Project ()
-| ArrangeBy ()
-
-%11 =
-| Get %9 (l2)
-| ArrangeBy ()
-
-%12 = Let l3 =
-| Join %10 %11 %9
-| | implementation = Differential %9 %10.() %11.()
-| Reduce group=()
-| | agg min(#0)
-| | agg max(#1)
-
-%13 =
-| Get %12 (l3)
-| Project ()
-| Negate
-
-%14 =
-| Constant ()
-
-%15 =
-| Union %13 %14
-| Map null, null
-
-%16 =
-| Union %12 %15
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
@@ -604,129 +555,101 @@ EOF
 #
 
 query T multiline
-EXPLAIN SELECT (SELECT f1 FROM t1 WHERE f1 = 1) FROM t1 WHERE EXISTS (SELECT f1 FROM t1 WHERE f1 = 1);
+EXPLAIN WITH(arity, join_impls) SELECT (SELECT f1 FROM t1 WHERE f1 = 1) FROM t1 WHERE EXISTS (SELECT f1 FROM t1 WHERE f1 = 1);
 ----
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 1 }
+    CrossJoin type=differential // { arity: 1 }
+      implementation
+        %2 » %1[] » %0[]
+      ArrangeBy keys=[[]] // { arity: 0 }
+        Project () // { arity: 0 }
+          Get materialize.public.t1 // { arity: 2 }
+      ArrangeBy keys=[[]] // { arity: 0 }
+        Distinct // { arity: 0 }
+          Get l1 // { arity: 0 }
+      Union // { arity: 1 }
+        Get l2 // { arity: 1 }
+        Map (null) // { arity: 1 }
+          Union // { arity: 0 }
+            Negate // { arity: 0 }
+              Distinct // { arity: 0 }
+                Project () // { arity: 0 }
+                  Get l2 // { arity: 1 }
+            Constant // { arity: 0 }
+              - ()
+  With
+    cte l2 =
+      Union // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Get l0 // { arity: 3 }
+        Map (error("more than one record produced in subquery")) // { arity: 1 }
+          Project () // { arity: 0 }
+            Filter (#0 > 1) // { arity: 1 }
+              Reduce aggregates=[count(true)] // { arity: 1 }
+                Get l1 // { arity: 0 }
+    cte l1 =
+      Project () // { arity: 0 }
+        Get l0 // { arity: 3 }
+    cte l0 =
+      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Get materialize.public.t1 // { arity: 2 }
+        Constant // { arity: 1 }
+          - (1)
 
-%1 =
-| Constant (1)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-
-%3 = Let l1 =
-| Get %2 (l0)
-| Project ()
-
-%4 =
-| Get %2 (l0)
-| Project (#0)
-
-%5 =
-| Get %3 (l1)
-| Reduce group=()
-| | agg count(true)
-| Filter (#0 > 1)
-| Project ()
-| Map (err: more than one record produced in subquery)
-
-%6 = Let l2 =
-| Union %4 %5
-
-%7 =
-| Get materialize.public.t1 (u1)
-| Project ()
-| ArrangeBy ()
-
-%8 =
-| Get %3 (l1)
-| Distinct group=()
-| ArrangeBy ()
-
-%9 =
-| Get %6 (l2)
-| Project ()
-| Distinct group=()
-| Negate
-
-%10 =
-| Constant ()
-
-%11 =
-| Union %9 %10
-| Map null
-
-%12 =
-| Union %6 %11
-
-%13 =
-| Join %7 %8 %12
-| | implementation = Differential %12 %8.() %7.()
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 query T multiline
-EXPLAIN SELECT (SELECT f1 FROM t1 WHERE f1 = 1) FROM t1
+EXPLAIN WITH(arity, join_impls) SELECT (SELECT f1 FROM t1 WHERE f1 = 1) FROM t1
 UNION ALL
 SELECT f1 FROM t1 WHERE f1 = 1
 ----
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      CrossJoin type=differential // { arity: 1 }
+        implementation
+          %1 » %0[]
+        ArrangeBy keys=[[]] // { arity: 0 }
+          Project () // { arity: 0 }
+            Get materialize.public.t1 // { arity: 2 }
+        Union // { arity: 1 }
+          Get l2 // { arity: 1 }
+          Map (null) // { arity: 1 }
+            Union // { arity: 0 }
+              Negate // { arity: 0 }
+                Distinct // { arity: 0 }
+                  Project () // { arity: 0 }
+                    Get l2 // { arity: 1 }
+              Constant // { arity: 0 }
+                - ()
+      Get l1 // { arity: 1 }
+  With
+    cte l2 =
+      Union // { arity: 1 }
+        Get l1 // { arity: 1 }
+        Map (error("more than one record produced in subquery")) // { arity: 1 }
+          Project () // { arity: 0 }
+            Filter (#0 > 1) // { arity: 1 }
+              Reduce aggregates=[count(true)] // { arity: 1 }
+                Project () // { arity: 0 }
+                  Get l0 // { arity: 3 }
+    cte l1 =
+      Project (#0) // { arity: 1 }
+        Get l0 // { arity: 3 }
+    cte l0 =
+      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Get materialize.public.t1 // { arity: 2 }
+        Constant // { arity: 1 }
+          - (1)
 
-%1 =
-| Constant (1)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-
-%3 = Let l1 =
-| Get %2 (l0)
-| Project (#0)
-
-%4 =
-| Get %2 (l0)
-| Project ()
-| Reduce group=()
-| | agg count(true)
-| Filter (#0 > 1)
-| Project ()
-| Map (err: more than one record produced in subquery)
-
-%5 = Let l2 =
-| Union %3 %4
-
-%6 =
-| Get materialize.public.t1 (u1)
-| Project ()
-| ArrangeBy ()
-
-%7 =
-| Get %5 (l2)
-| Project ()
-| Distinct group=()
-| Negate
-
-%8 =
-| Constant ()
-
-%9 =
-| Union %7 %8
-| Map null
-
-%10 =
-| Union %5 %9
-
-%11 =
-| Join %6 %10
-| | implementation = Differential %10 %6.()
-
-%12 =
-| Union %11 %3
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
@@ -739,212 +662,199 @@ EOF
 #
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 SELECT * FROM t1 AS a1, t1 AS a2
 UNION ALL
 SELECT * FROM t1 AS a1, t1 AS a2
 ----
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy ()
+Explained Query:
+  Return // { arity: 4 }
+    Union // { arity: 4 }
+      Get l0 // { arity: 4 }
+      Get l0 // { arity: 4 }
+  With
+    cte l0 =
+      CrossJoin type=differential // { arity: 4 }
+        implementation
+          materialize.public.t1 » %0[]
+        ArrangeBy keys=[[]] // { arity: 2 }
+          Get materialize.public.t1 // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
 
-%1 =
-| Get materialize.public.t1 (u1)
-
-%2 = Let l0 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
-
-%3 =
-| Union %2 %2
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)
 UNION ALL
 SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)
 ----
-%0 = Let l0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 3 }
+    Union // { arity: 3 }
+      Get l1 // { arity: 3 }
+      Get l2 // { arity: 3 }
+      Get l1 // { arity: 3 }
+      Get l2 // { arity: 3 }
+  With
+    cte l2 =
+      Project (#0, #1, #4) // { arity: 3 }
+        Map (null) // { arity: 5 }
+          Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
+            implementation
+              materialize.public.t1 » %0[#0, #1]
+            ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+              Union // { arity: 2 }
+                Negate // { arity: 2 }
+                  Distinct group_by=[#0, #1] // { arity: 2 }
+                    Project (#0, #1) // { arity: 2 }
+                      Get l1 // { arity: 3 }
+                Distinct group_by=[#0, #1] // { arity: 2 }
+                  Get materialize.public.t1 // { arity: 2 }
+            Get materialize.public.t1 // { arity: 2 }
+    cte l1 =
+      Project (#0, #1, #3) // { arity: 3 }
+        Filter (#0) IS NOT NULL // { arity: 4 }
+          Join on=(#0 = #2) type=delta // { arity: 4 }
+            implementation
+              l0 » l0[#0]
+              l0 » l0[#0]
+            Get l0 // { arity: 2 }
+            Get l0 // { arity: 2 }
+    cte l0 =
+      ArrangeBy keys=[[#0]] // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
 
-%1 = Let l1 =
-| Join %0 %0 (= #0 #2)
-| | implementation = DeltaQuery
-| |   delta %0 %0.(#0)
-| |   delta %0 %0.(#0)
-| Filter (#0) IS NOT NULL
-| Project (#0, #1, #3)
-
-%2 =
-| Get %1 (l1)
-| Project (#0, #1)
-| Distinct group=(#0, #1)
-| Negate
-
-%3 =
-| Get materialize.public.t1 (u1)
-| Distinct group=(#0, #1)
-
-%4 =
-| Union %2 %3
-| ArrangeBy (#0, #1)
-
-%5 =
-| Get materialize.public.t1 (u1)
-
-%6 = Let l2 =
-| Join %4 %5 (= #0 #2) (= #1 #3)
-| | implementation = Differential %5 %4.(#0, #1)
-| Map null
-| Project (#0, #1, #4)
-
-%7 =
-| Union %1 %6 %1 %6
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 SELECT * FROM (SELECT a2.f1 AS f1 FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)) WHERE f1 = 1
 UNION ALL
 SELECT * FROM (SELECT a2.f1 AS f1 FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)) WHERE f1 = 2
 ----
-%0 = Let l0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      CrossJoin type=differential // { arity: 1 }
+        implementation
+          %1 » %0[]
+        ArrangeBy keys=[[]] // { arity: 0 }
+          Project () // { arity: 0 }
+            Get l1 // { arity: 3 }
+        Project (#0) // { arity: 1 }
+          Get l1 // { arity: 3 }
+      CrossJoin type=differential // { arity: 1 }
+        implementation
+          %1 » %0[]
+        ArrangeBy keys=[[]] // { arity: 0 }
+          Project () // { arity: 0 }
+            Get l2 // { arity: 3 }
+        Project (#0) // { arity: 1 }
+          Get l2 // { arity: 3 }
+  With
+    cte l2 =
+      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+        Get l0 // { arity: 2 }
+        Constant // { arity: 1 }
+          - (2)
+    cte l1 =
+      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+        Get l0 // { arity: 2 }
+        Constant // { arity: 1 }
+          - (1)
+    cte l0 =
+      ArrangeBy keys=[[#0]] // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
 
-%1 =
-| Constant (1)
-
-%2 = Let l1 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-
-%3 =
-| Constant (2)
-
-%4 = Let l2 =
-| Join %0 %3 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 2)
-
-%5 =
-| Get %2 (l1)
-| Project ()
-| ArrangeBy ()
-
-%6 =
-| Get %2 (l1)
-| Project (#0)
-
-%7 =
-| Join %5 %6
-| | implementation = Differential %6 %5.()
-
-%8 =
-| Get %4 (l2)
-| Project ()
-| ArrangeBy ()
-
-%9 =
-| Get %4 (l2)
-| Project (#0)
-
-%10 =
-| Join %8 %9
-| | implementation = Differential %9 %8.()
-
-%11 =
-| Union %7 %10
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 SELECT * FROM
 (SELECT a2.f1 AS f1 FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)) AS s1,
 (SELECT a2.f1 AS f1 FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)) AS s2
 WHERE s1.f1 = 1 AND s2.f1 = 1
 ----
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 2 }
+    CrossJoin type=differential // { arity: 2 }
+      implementation
+        l2 » l1[] » %1[] » l1[]
+      Get l1 // { arity: 1 }
+      ArrangeBy keys=[[]] // { arity: 0 }
+        Get l2 // { arity: 0 }
+      Get l1 // { arity: 1 }
+      Get l2 // { arity: 0 }
+  With
+    cte l2 =
+      Project () // { arity: 0 }
+        Get l0 // { arity: 3 }
+    cte l1 =
+      ArrangeBy keys=[[]] // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Get l0 // { arity: 3 }
+    cte l0 =
+      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Get materialize.public.t1 // { arity: 2 }
+        Constant // { arity: 1 }
+          - (1)
 
-%1 =
-| Constant (1)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-
-%3 = Let l1 =
-| Get %2 (l0)
-| Project (#0)
-| ArrangeBy ()
-
-%4 = Let l2 =
-| Get %2 (l0)
-| Project ()
-
-%5 =
-| Get %4 (l2)
-| ArrangeBy ()
-
-%6 =
-| Join %3 %5 %3 %4
-| | implementation = Differential %4 %3.() %5.() %3.()
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 SELECT * FROM
 (SELECT a2.f1 AS f1 FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)) AS s1,
 (SELECT a2.f1 AS f1 FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)) AS s2
 WHERE s1.f1 = 1 AND s2.f1 = 2
 ----
-%0 = Let l0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 2 }
+    CrossJoin type=differential // { arity: 2 }
+      implementation
+        %3 » %0[] » %1[] » %2[]
+      ArrangeBy keys=[[]] // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Get l1 // { arity: 3 }
+      ArrangeBy keys=[[]] // { arity: 0 }
+        Project () // { arity: 0 }
+          Get l1 // { arity: 3 }
+      ArrangeBy keys=[[]] // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Get l2 // { arity: 3 }
+      Project () // { arity: 0 }
+        Get l2 // { arity: 3 }
+  With
+    cte l2 =
+      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+        Get l0 // { arity: 2 }
+        Constant // { arity: 1 }
+          - (2)
+    cte l1 =
+      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+        Get l0 // { arity: 2 }
+        Constant // { arity: 1 }
+          - (1)
+    cte l0 =
+      ArrangeBy keys=[[#0]] // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
 
-%1 =
-| Constant (1)
-
-%2 = Let l1 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-
-%3 =
-| Constant (2)
-
-%4 = Let l2 =
-| Join %0 %3 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 2)
-
-%5 =
-| Get %2 (l1)
-| Project (#0)
-| ArrangeBy ()
-
-%6 =
-| Get %2 (l1)
-| Project ()
-| ArrangeBy ()
-
-%7 =
-| Get %4 (l2)
-| Project (#0)
-| ArrangeBy ()
-
-%8 =
-| Get %4 (l2)
-| Project ()
-
-%9 =
-| Join %5 %6 %7 %8
-| | implementation = Differential %8 %5.() %6.() %7.()
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
@@ -953,26 +863,28 @@ EOF
 #
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 SELECT * FROM t1 WHERE f1 = 1 AND f2 = 2
 UNION ALL
 SELECT * FROM t1 WHERE f1 = 1 AND f2 = 2
 ----
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 2 }
+    Union // { arity: 2 }
+      Get l0 // { arity: 2 }
+      Get l0 // { arity: 2 }
+  With
+    cte l0 =
+      Project (#0, #1) // { arity: 2 }
+        Filter (#1 = 2) // { arity: 3 }
+          Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Get materialize.public.t1 // { arity: 2 }
+            Constant // { arity: 1 }
+              - (1)
 
-%1 =
-| Constant (1)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-| Filter (#1 = 2)
-| Project (#0, #1)
-
-%3 =
-| Union %2 %2
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
@@ -981,25 +893,28 @@ EOF
 #
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 SELECT * FROM t1 WHERE f1 = 1 OR f1 = 2
 UNION ALL
 SELECT * FROM t1 WHERE f1 = 1 OR f1 = 2
 ----
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 2 }
+    Union // { arity: 2 }
+      Get l0 // { arity: 2 }
+      Get l0 // { arity: 2 }
+  With
+    cte l0 =
+      Project (#0, #1) // { arity: 2 }
+        Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Get materialize.public.t1 // { arity: 2 }
+          Constant // { arity: 1 }
+            - (1)
+            - (2)
 
-%1 =
-| Constant (1) (2)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1) OR (#0 = 2)
-| Project (#0, #1)
-
-%3 =
-| Union %2 %2
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
@@ -1008,77 +923,74 @@ EOF
 #
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1)
 UNION ALL
 SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1)
 ----
-%0 =
-| Get materialize.public.t1 (u1)
+Explained Query:
+  Return // { arity: 2 }
+    Union // { arity: 2 }
+      Get l0 // { arity: 2 }
+      Get l0 // { arity: 2 }
+  With
+    cte l0 =
+      CrossJoin type=differential // { arity: 2 }
+        implementation
+          materialize.public.t1 » %1[]
+        Get materialize.public.t1 // { arity: 2 }
+        ArrangeBy keys=[[]] // { arity: 0 }
+          Distinct // { arity: 0 }
+            Project () // { arity: 0 }
+              Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+                ArrangeBy keys=[[#0]] // { arity: 2 }
+                  Get materialize.public.t1 // { arity: 2 }
+                Constant // { arity: 1 }
+                  - (1)
 
-%1 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
-
-%2 =
-| Constant (1)
-
-%3 =
-| Join %1 %2 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-| Project ()
-| Distinct group=()
-| ArrangeBy ()
-
-%4 = Let l0 =
-| Join %0 %3
-| | implementation = Differential %0 %3.()
-
-%5 =
-| Union %4 %4
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1 WHERE f1 = 1)
 UNION ALL
 SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1 WHERE f1 = 1)
 ----
-%0 = Let l0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 2 }
+    Union // { arity: 2 }
+      Get l2 // { arity: 2 }
+      Get l2 // { arity: 2 }
+  With
+    cte l2 =
+      Project (#0, #1) // { arity: 2 }
+        Join on=(#0 = #2) type=differential // { arity: 3 }
+          implementation
+            %1 » l0[#0]
+          Get l0 // { arity: 2 }
+          Union // { arity: 1 }
+            Project (#0) // { arity: 1 }
+              Get l1 // { arity: 3 }
+            Map (error("more than one record produced in subquery")) // { arity: 1 }
+              Project () // { arity: 0 }
+                Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
+                  Reduce aggregates=[count(true)] // { arity: 1 }
+                    Project () // { arity: 0 }
+                      Get l1 // { arity: 3 }
+    cte l1 =
+      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+        Get l0 // { arity: 2 }
+        Constant // { arity: 1 }
+          - (1)
+    cte l0 =
+      ArrangeBy keys=[[#0]] // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
 
-%1 =
-| Constant (1)
-
-%2 = Let l1 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-
-%3 =
-| Get %2 (l1)
-| Project (#0)
-
-%4 =
-| Get %2 (l1)
-| Project ()
-| Reduce group=()
-| | agg count(true)
-| Filter (err: more than one record produced in subquery), (#0 > 1)
-| Project ()
-| Map (err: more than one record produced in subquery)
-
-%5 =
-| Union %3 %4
-
-%6 = Let l2 =
-| Join %0 %5 (= #0 #2)
-| | implementation = Differential %5 %0.(#0)
-| Project (#0, #1)
-
-%7 =
-| Union %6 %6
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
@@ -1087,18 +999,24 @@ EOF
 #
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 SELECT f1 + 1 FROM (SELECT f1 + 2 AS f1 FROM t1)
 UNION ALL
 SELECT f1 + 1 FROM (SELECT f1 + 2 AS f1 FROM t1)
 ----
-%0 = Let l0 =
-| Get materialize.public.t1 (u1)
-| Map ((#0 + 2) + 1)
-| Project (#2)
+Explained Query:
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l0 // { arity: 1 }
+      Get l0 // { arity: 1 }
+  With
+    cte l0 =
+      Project (#2) // { arity: 1 }
+        Map (((#0 + 2) + 1)) // { arity: 3 }
+          Get materialize.public.t1 // { arity: 2 }
 
-%1 =
-| Union %0 %0
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
@@ -1107,64 +1025,78 @@ EOF
 #
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 SELECT MIN(f1) FROM t1
 UNION ALL
 SELECT MIN(f1) FROM t1;
 ----
-%0 = Let l0 =
-| Get materialize.public.t1 (u1)
-| Project (#0)
-| Reduce group=()
-| | agg min(#0)
+Explained Query:
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l0 // { arity: 1 }
+      Get l1 // { arity: 1 }
+      Get l0 // { arity: 1 }
+      Get l1 // { arity: 1 }
+  With
+    cte l1 =
+      Map (null) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l0 // { arity: 1 }
+          Constant // { arity: 0 }
+            - ()
+    cte l0 =
+      Reduce aggregates=[min(#0)] // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Get materialize.public.t1 // { arity: 2 }
 
-%1 =
-| Get %0 (l0)
-| Project ()
-| Negate
-
-%2 =
-| Constant ()
-
-%3 = Let l1 =
-| Union %1 %2
-| Map null
-
-%4 =
-| Union %0 %3 %0 %3
-
-EOF
-
-query T multiline
-EXPLAIN
-SELECT DISTINCT f1 FROM t1
-UNION ALL
-SELECT DISTINCT f1 FROM t1
-----
-%0 = Let l0 =
-| Get materialize.public.t1 (u1)
-| Project (#0)
-| Distinct group=(#0)
-
-%1 =
-| Union %0 %0
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
+SELECT DISTINCT f1 FROM t1
+UNION ALL
+SELECT DISTINCT f1 FROM t1
+----
+Explained Query:
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l0 // { arity: 1 }
+      Get l0 // { arity: 1 }
+  With
+    cte l0 =
+      Distinct group_by=[#0] // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Get materialize.public.t1 // { arity: 2 }
+
+Used Indexes:
+  - materialize.public.i1
+
+EOF
+
+query T multiline
+EXPLAIN WITH(arity, join_impls)
 SELECT f1, COUNT(*) FROM t1 GROUP BY f1
 UNION ALL
 SELECT f1, COUNT(*) FROM t1 GROUP BY f1
 ----
-%0 = Let l0 =
-| Get materialize.public.t1 (u1)
-| Project (#0)
-| Reduce group=(#0)
-| | agg count(true)
+Explained Query:
+  Return // { arity: 2 }
+    Union // { arity: 2 }
+      Get l0 // { arity: 2 }
+      Get l0 // { arity: 2 }
+  With
+    cte l0 =
+      Reduce group_by=[#0] aggregates=[count(true)] // { arity: 2 }
+        Project (#0) // { arity: 1 }
+          Get materialize.public.t1 // { arity: 2 }
 
-%1 =
-| Union %0 %0
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
@@ -1172,34 +1104,46 @@ EOF
 # CSEs containing an expression / function
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 SELECT f1 + f1 + f1 + f1 FROM t1
 UNION ALL
 SELECT f1 + f1 + f1 + f1 FROM t1
 ----
-%0 = Let l0 =
-| Get materialize.public.t1 (u1)
-| Map (((#0 + #0) + #0) + #0)
-| Project (#2)
+Explained Query:
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l0 // { arity: 1 }
+      Get l0 // { arity: 1 }
+  With
+    cte l0 =
+      Project (#2) // { arity: 1 }
+        Map ((((#0 + #0) + #0) + #0)) // { arity: 3 }
+          Get materialize.public.t1 // { arity: 2 }
 
-%1 =
-| Union %0 %0
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 SELECT ABS(f1) FROM t1
 UNION ALL
 SELECT ABS(f1) FROM t1
 ----
-%0 = Let l0 =
-| Get materialize.public.t1 (u1)
-| Map abs(#0)
-| Project (#2)
+Explained Query:
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l0 // { arity: 1 }
+      Get l0 // { arity: 1 }
+  With
+    cte l0 =
+      Project (#2) // { arity: 1 }
+        Map (abs(#0)) // { arity: 3 }
+          Get materialize.public.t1 // { arity: 2 }
 
-%1 =
-| Union %0 %0
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
@@ -1208,57 +1152,60 @@ EOF
 ##
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 (SELECT * FROM t1 WHERE f1 = 1 UNION ALL SELECT * FROM t1 WHERE f1 = 1)
 UNION ALL
 (SELECT * FROM t1 WHERE f1 = 1 UNION ALL SELECT * FROM t1 WHERE f1 = 1)
 ----
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 2 }
+    Union // { arity: 2 }
+      Get l0 // { arity: 2 }
+      Get l0 // { arity: 2 }
+      Get l0 // { arity: 2 }
+      Get l0 // { arity: 2 }
+  With
+    cte l0 =
+      Project (#0, #1) // { arity: 2 }
+        Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Get materialize.public.t1 // { arity: 2 }
+          Constant // { arity: 1 }
+            - (1)
 
-%1 =
-| Constant (1)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-| Project (#0, #1)
-
-%3 =
-| Union %2 %2 %2 %2
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 (SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1))
 UNION ALL
 (SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1))
 ----
-%0 =
-| Get materialize.public.t1 (u1)
+Explained Query:
+  Return // { arity: 2 }
+    Union // { arity: 2 }
+      Get l0 // { arity: 2 }
+      Get l0 // { arity: 2 }
+  With
+    cte l0 =
+      CrossJoin type=differential // { arity: 2 }
+        implementation
+          materialize.public.t1 » %1[]
+        Get materialize.public.t1 // { arity: 2 }
+        ArrangeBy keys=[[]] // { arity: 0 }
+          Distinct // { arity: 0 }
+            Project () // { arity: 0 }
+              Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+                ArrangeBy keys=[[#0]] // { arity: 2 }
+                  Get materialize.public.t1 // { arity: 2 }
+                Constant // { arity: 1 }
+                  - (1)
 
-%1 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
-
-%2 =
-| Constant (1)
-
-%3 =
-| Join %1 %2 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-| Project ()
-| Distinct group=()
-| ArrangeBy ()
-
-%4 = Let l0 =
-| Join %0 %3
-| | implementation = Differential %0 %3.()
-
-%5 =
-| Union %4 %4
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
@@ -1267,158 +1214,130 @@ EOF
 ##
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 (SELECT f1 FROM t1 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1))
 UNION ALL
 (SELECT f2 FROM t1 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1))
 ----
-%0 =
-| Get materialize.public.t1 (u1)
+Explained Query:
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Project (#0) // { arity: 1 }
+        Get l0 // { arity: 2 }
+      Project (#1) // { arity: 1 }
+        Get l0 // { arity: 2 }
+  With
+    cte l0 =
+      CrossJoin type=differential // { arity: 2 }
+        implementation
+          materialize.public.t1 » %1[]
+        Get materialize.public.t1 // { arity: 2 }
+        ArrangeBy keys=[[]] // { arity: 0 }
+          Distinct // { arity: 0 }
+            Project () // { arity: 0 }
+              Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+                ArrangeBy keys=[[#0]] // { arity: 2 }
+                  Get materialize.public.t1 // { arity: 2 }
+                Constant // { arity: 1 }
+                  - (1)
 
-%1 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
-
-%2 =
-| Constant (1)
-
-%3 =
-| Join %1 %2 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-| Project ()
-| Distinct group=()
-| ArrangeBy ()
-
-%4 = Let l0 =
-| Join %0 %3
-| | implementation = Differential %0 %3.()
-
-%5 =
-| Get %4 (l0)
-| Project (#0)
-
-%6 =
-| Get %4 (l0)
-| Project (#1)
-
-%7 =
-| Union %5 %6
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 (SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1))
 UNION ALL
 (SELECT * FROM t2 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1))
 ----
-Source materialize.public.t2 (u3):
-| Project (#0, #1)
+Explained Query:
+  Return // { arity: 2 }
+    Union // { arity: 2 }
+      CrossJoin type=differential // { arity: 2 }
+        implementation
+          materialize.public.t1 » l0[]
+        Get materialize.public.t1 // { arity: 2 }
+        Get l0 // { arity: 0 }
+      CrossJoin type=differential // { arity: 2 }
+        implementation
+          materialize.public.t2 » l0[]
+        Get materialize.public.t2 // { arity: 2 }
+        Get l0 // { arity: 0 }
+  With
+    cte l0 =
+      ArrangeBy keys=[[]] // { arity: 0 }
+        Distinct // { arity: 0 }
+          Project () // { arity: 0 }
+            Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+              ArrangeBy keys=[[#0]] // { arity: 2 }
+                Get materialize.public.t1 // { arity: 2 }
+              Constant // { arity: 1 }
+                - (1)
 
-Query:
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
-
-%1 =
-| Constant (1)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-| Project ()
-| Distinct group=()
-| ArrangeBy ()
-
-%3 =
-| Get materialize.public.t1 (u1)
-
-%4 =
-| Join %3 %2
-| | implementation = Differential %3 %2.()
-
-%5 =
-| Get materialize.public.t2 (u3)
-
-%6 =
-| Join %5 %2
-| | implementation = Differential %5 %2.()
-
-%7 =
-| Union %4 %6
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 query T multiline
-EXPLAIN SELECT * FROM
+EXPLAIN WITH(arity, join_impls) SELECT * FROM
 (SELECT f1 FROM t2 UNION ALL SELECT f1 FROM t1 WHERE f1 = 1) ,
 (SELECT f2 FROM t2 UNION ALL SELECT f1 FROM t1 WHERE f1 = 1)
 ----
-Source materialize.public.t2 (u3):
-| Project (#0, #1)
+Explained Query:
+  Return // { arity: 2 }
+    CrossJoin type=differential // { arity: 2 }
+      implementation
+        %1 » %0[]
+      ArrangeBy keys=[[]] // { arity: 1 }
+        Union // { arity: 1 }
+          Project (#0) // { arity: 1 }
+            Get materialize.public.t2 // { arity: 2 }
+          Get l0 // { arity: 1 }
+      Union // { arity: 1 }
+        Project (#1) // { arity: 1 }
+          Get materialize.public.t2 // { arity: 2 }
+        Get l0 // { arity: 1 }
+  With
+    cte l0 =
+      Project (#0) // { arity: 1 }
+        Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Get materialize.public.t1 // { arity: 2 }
+          Constant // { arity: 1 }
+            - (1)
 
-Query:
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
-
-%1 =
-| Constant (1)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-| Project (#0)
-
-%3 =
-| Get materialize.public.t2 (u3)
-| Project (#0)
-
-%4 =
-| Union %3 %2
-| ArrangeBy ()
-
-%5 =
-| Get materialize.public.t2 (u3)
-| Project (#1)
-
-%6 =
-| Union %5 %2
-
-%7 =
-| Join %4 %6
-| | implementation = Differential %6 %4.()
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 # Same predicate, different projections
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 SELECT f1 FROM t1 WHERE f1 = 1
 UNION ALL
 SELECT f2 FROM t1 WHERE f1 = 1
 ----
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Project (#0) // { arity: 1 }
+        Get l0 // { arity: 3 }
+      Project (#1) // { arity: 1 }
+        Get l0 // { arity: 3 }
+  With
+    cte l0 =
+      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Get materialize.public.t1 // { arity: 2 }
+        Constant // { arity: 1 }
+          - (1)
 
-%1 =
-| Constant (1)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-
-%3 =
-| Get %2 (l0)
-| Project (#0)
-
-%4 =
-| Get %2 (l0)
-| Project (#1)
-
-%5 =
-| Union %3 %4
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
@@ -1428,213 +1347,185 @@ EOF
 
 #
 query T multiline
-EXPLAIN SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 = 1 AND a2.f1 = 2
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 = 1 AND a2.f1 = 2
 ----
-%0 = Let l0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 4 }
+    CrossJoin type=differential // { arity: 4 }
+      implementation
+        %1 » %0[]
+      ArrangeBy keys=[[]] // { arity: 2 }
+        Project (#0, #1) // { arity: 2 }
+          Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+            Get l0 // { arity: 2 }
+            Constant // { arity: 1 }
+              - (1)
+      Project (#0, #1) // { arity: 2 }
+        Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+          Get l0 // { arity: 2 }
+          Constant // { arity: 1 }
+            - (2)
+  With
+    cte l0 =
+      ArrangeBy keys=[[#0]] // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
 
-%1 =
-| Constant (1)
-
-%2 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-| Project (#0, #1)
-| ArrangeBy ()
-
-%3 =
-| Constant (2)
-
-%4 =
-| Join %0 %3 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 2)
-| Project (#0, #1)
-
-%5 =
-| Join %2 %4
-| | implementation = Differential %4 %2.()
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 SELECT * FROM (SELECT a2.f1 AS f1 FROM t1 AS a1 JOIN t1 AS a2 USING (f1)) WHERE f1 = 1
 UNION ALL
 SELECT * FROM (SELECT a2.f1 AS f1 FROM t1 AS a1 JOIN t1 AS a2 USING (f1)) WHERE f1 = 2
 ----
-%0 = Let l0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      CrossJoin type=differential // { arity: 1 }
+        implementation
+          %1 » %0[]
+        ArrangeBy keys=[[]] // { arity: 0 }
+          Project () // { arity: 0 }
+            Get l1 // { arity: 3 }
+        Project (#0) // { arity: 1 }
+          Get l1 // { arity: 3 }
+      CrossJoin type=differential // { arity: 1 }
+        implementation
+          %1 » %0[]
+        ArrangeBy keys=[[]] // { arity: 0 }
+          Project () // { arity: 0 }
+            Get l2 // { arity: 3 }
+        Project (#0) // { arity: 1 }
+          Get l2 // { arity: 3 }
+  With
+    cte l2 =
+      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+        Get l0 // { arity: 2 }
+        Constant // { arity: 1 }
+          - (2)
+    cte l1 =
+      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+        Get l0 // { arity: 2 }
+        Constant // { arity: 1 }
+          - (1)
+    cte l0 =
+      ArrangeBy keys=[[#0]] // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
 
-%1 =
-| Constant (1)
-
-%2 = Let l1 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-
-%3 =
-| Constant (2)
-
-%4 = Let l2 =
-| Join %0 %3 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 2)
-
-%5 =
-| Get %2 (l1)
-| Project ()
-| ArrangeBy ()
-
-%6 =
-| Get %2 (l1)
-| Project (#0)
-
-%7 =
-| Join %5 %6
-| | implementation = Differential %6 %5.()
-
-%8 =
-| Get %4 (l2)
-| Project ()
-| ArrangeBy ()
-
-%9 =
-| Get %4 (l2)
-| Project (#0)
-
-%10 =
-| Join %8 %9
-| | implementation = Differential %9 %8.()
-
-%11 =
-| Union %7 %10
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 SELECT * FROM t1 WHERE f1 = 1
 UNION ALL
 SELECT * FROM t1 WHERE f1 = 2
 ----
-%0 = Let l0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
+Explained Query:
+  Return // { arity: 2 }
+    Union // { arity: 2 }
+      Project (#0, #1) // { arity: 2 }
+        Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+          Get l0 // { arity: 2 }
+          Constant // { arity: 1 }
+            - (1)
+      Project (#0, #1) // { arity: 2 }
+        Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
+          Get l0 // { arity: 2 }
+          Constant // { arity: 1 }
+            - (2)
+  With
+    cte l0 =
+      ArrangeBy keys=[[#0]] // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
 
-%1 =
-| Constant (1)
-
-%2 =
-| Join %0 %1 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 1)
-| Project (#0, #1)
-
-%3 =
-| Constant (2)
-
-%4 =
-| Join %0 %3 (= #0 #2)
-| | implementation = IndexedFilter (#0 = 2)
-| Project (#0, #1)
-
-%5 =
-| Union %2 %4
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 SELECT MIN(f1) FROM t1
 UNION ALL
 SELECT MAX(f1) FROM t1
 ----
-%0 = Let l0 =
-| Get materialize.public.t1 (u1)
-| Project (#0)
+Explained Query:
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l1 // { arity: 1 }
+      Map (null) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l1 // { arity: 1 }
+          Constant // { arity: 0 }
+            - ()
+      Get l2 // { arity: 1 }
+      Map (null) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l2 // { arity: 1 }
+          Constant // { arity: 0 }
+            - ()
+  With
+    cte l2 =
+      Reduce aggregates=[max(#0)] // { arity: 1 }
+        Get l0 // { arity: 1 }
+    cte l1 =
+      Reduce aggregates=[min(#0)] // { arity: 1 }
+        Get l0 // { arity: 1 }
+    cte l0 =
+      Project (#0) // { arity: 1 }
+        Get materialize.public.t1 // { arity: 2 }
 
-%1 = Let l1 =
-| Get %0 (l0)
-| Reduce group=()
-| | agg min(#0)
-
-%2 = Let l2 =
-| Get %0 (l0)
-| Reduce group=()
-| | agg max(#0)
-
-%3 =
-| Get %1 (l1)
-| Project ()
-| Negate
-
-%4 =
-| Constant ()
-
-%5 =
-| Union %3 %4
-| Map null
-
-%6 =
-| Get %2 (l2)
-| Project ()
-| Negate
-
-%7 =
-| Constant ()
-
-%8 =
-| Union %6 %7
-| Map null
-
-%9 =
-| Union %1 %5 %2 %8
+Used Indexes:
+  - materialize.public.i1
 
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN WITH(arity, join_impls)
 SELECT MIN(f1) FROM t1
 UNION ALL
 SELECT MIN(f2) FROM t1
 ----
-%0 = Let l0 =
-| Get materialize.public.t1 (u1)
-| Project (#0)
-| Reduce group=()
-| | agg min(#0)
+Explained Query:
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l0 // { arity: 1 }
+      Map (null) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l0 // { arity: 1 }
+          Constant // { arity: 0 }
+            - ()
+      Get l1 // { arity: 1 }
+      Map (null) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l1 // { arity: 1 }
+          Constant // { arity: 0 }
+            - ()
+  With
+    cte l1 =
+      Reduce aggregates=[min(#0)] // { arity: 1 }
+        Project (#1) // { arity: 1 }
+          Get materialize.public.t1 // { arity: 2 }
+    cte l0 =
+      Reduce aggregates=[min(#0)] // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Get materialize.public.t1 // { arity: 2 }
 
-%1 = Let l1 =
-| Get materialize.public.t1 (u1)
-| Project (#1)
-| Reduce group=()
-| | agg min(#0)
-
-%2 =
-| Get %0 (l0)
-| Project ()
-| Negate
-
-%3 =
-| Constant ()
-
-%4 =
-| Union %2 %3
-| Map null
-
-%5 =
-| Get %1 (l1)
-| Project ()
-| Negate
-
-%6 =
-| Constant ()
-
-%7 =
-| Union %5 %6
-| Map null
-
-%8 =
-| Union %0 %4 %1 %7
+Used Indexes:
+  - materialize.public.i1
 
 EOF
