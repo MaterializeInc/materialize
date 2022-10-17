@@ -230,6 +230,7 @@ pub struct Config<S> {
     pub dataflow_client: mz_controller::Controller,
     pub storage: storage::Connection<S>,
     pub unsafe_mode: bool,
+    pub persisted_introspection: bool,
     pub build_info: &'static BuildInfo,
     pub environment_id: String,
     pub metrics_registry: MetricsRegistry,
@@ -864,6 +865,7 @@ pub async fn serve<S: Append + 'static>(
         dataflow_client,
         storage,
         unsafe_mode,
+        persisted_introspection,
         build_info,
         environment_id,
         metrics_registry,
@@ -903,6 +905,7 @@ pub async fn serve<S: Append + 'static>(
         Catalog::open(catalog::Config {
             storage,
             unsafe_mode,
+            persisted_introspection,
             build_info,
             environment_id,
             now: now.clone(),

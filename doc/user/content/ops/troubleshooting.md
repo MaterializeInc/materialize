@@ -30,27 +30,10 @@ is issued, all subsequent `SELECT` queries, for introspection sources or not, wi
 be directed to the targeted replica. The latter selection can be cancelled by
 issuing the command `RESET cluster_replica`.
 
-Materialize also directly exposes replica-specific introspection sources by
-suffixing the respective catalog relation names with a replica ID that is unique
-across clusters. For example, `mz_internal.mz_compute_frontiers_1` corresponds to
-the introspection source `mz_internal.mz_compute_frontiers` in the replica with
-the unique ID of `1`. A mapping of replica IDs to clusters and replica names is
-provided by the [`mz_cluster_replicas`] system table.
-
 As a consequence of the above, you should expect the answers to the queries below
 to vary dependending on which cluster you are working in. In particular, indexes
 and dataflows are local to a cluster, so their introspection information will
 vary across clusters.
-
-It is often useful to monitor changes in the output to the below queries
-via [`SUBSCRIBE`](/sql/subscribe), e.g. via
-`COPY (SUBSCRIBE (<query>)) TO stdout`. Be mindful of the following two caveats:
-
-  * The `SUBSCRIBE` query itself may affect performance.
-  * `SUBSCRIBE` can only be used with replica-specific introspection sources
-    (i.e., the relations that are suffixed with replica IDs). You'll need to
-    rewrite the queries below to use the suffixed relations for the particular
-    replica you wish to target.
 
 ## How fast are my sources loading data?
 
