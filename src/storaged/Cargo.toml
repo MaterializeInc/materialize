@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.65"
 axum = "0.5.16"
-clap = { version = "3.2.20", features = ["derive", "env"] }
+clap = { version = "4.0.15", features = ["derive", "env"] }
 fail = { version = "0.5.1", features = ["failpoints"] }
 mz-build-info = { path = "../build-info" }
 mz-http-util = { path = "../http-util" }

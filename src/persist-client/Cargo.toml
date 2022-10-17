@@ -59,7 +59,7 @@ tokio-console = ["mz-ore/tokio-console"]
 [dev-dependencies]
 async-trait = "0.1.57"
 axum = "0.5.16"
-clap = { version = "3.2.20", features = ["derive", "env"] }
+clap = { version = "4.0.15", features = ["derive", "env"] }
 criterion = { version = "0.4.0", features = ["html_reports"] }
 datadriven = { version = "0.6.0", features = ["async"] }
 futures-task = "0.3.21"
