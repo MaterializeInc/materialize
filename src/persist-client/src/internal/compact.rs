@@ -33,7 +33,7 @@ use timely::PartialOrder;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot, TryAcquireError};
 use tracing::log::warn;
-use tracing::{debug, debug_span, info, Instrument, Span};
+use tracing::{debug, debug_span, info, trace, Instrument, Span};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::batch::BatchParts;
@@ -41,7 +41,7 @@ use crate::fetch::fetch_batch_part;
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::state::{HollowBatch, HollowBatchPart};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
-use crate::{Metrics, PersistConfig, ShardId, WriterId};
+use crate::{Metrics, PersistConfig, ShardId, WriterId, MB};
 
 /// A request for compaction.
 ///
@@ -142,10 +142,32 @@ where
                     metrics.compaction.started.inc();
                     let start = Instant::now();
 
-                    // Compaction is cpu intensive, so be polite and spawn it on the CPU heavy runtime.
+                    // pick a timeout for our compaction request proportional to the amount
+                    // of data that must be read (with a minimum set by PersistConfig)
+                    let total_input_bytes = req
+                        .inputs
+                        .iter()
+                        .flat_map(|batch| batch.parts.iter())
+                        .map(|parts| parts.encoded_size_bytes)
+                        .sum::<usize>();
+                    let timeout = Duration::max(
+                        // either our minimum timeout
+                        cfg.compaction_minimum_timeout,
+                        // or 1s per MB of input data
+                        Duration::from_secs(u64::cast_from(total_input_bytes / MB)),
+                    );
+
+                    trace!(
+                        "compaction request for {}MBs ({} bytes), with timeout of {}s.",
+                        total_input_bytes / MB,
+                        total_input_bytes,
+                        timeout.as_secs_f64()
+                    );
+
                     let compact_span = debug_span!("compact::consolidate");
                     let res = tokio::time::timeout(
-                        Duration::from_secs(60 * 10),
+                        timeout,
+                        // Compaction is cpu intensive, so be polite and spawn it on the CPU heavy runtime.
                         cpu_heavy_runtime
                             .spawn_named(
                                 || "persist::compact::consolidate",
@@ -161,18 +183,23 @@ where
                             )
                             .map_err(|e| anyhow!(e)),
                     )
-                    .await
-                    .map_err(|e| anyhow!(e));
+                    .await;
 
-                    let elapsed = start.elapsed().as_secs_f64();
-                    metrics.compaction.seconds.inc_by(elapsed);
-                    if elapsed > 180.0 {
-                        debug!("compaction request took {}s", elapsed);
-                        metrics.compaction.very_slow_requests.inc();
-                    }
+                    let res = match res {
+                        Ok(res) => res,
+                        Err(err) => {
+                            metrics.compaction.timed_out.inc();
+                            Err(anyhow!(err))
+                        }
+                    };
+
+                    metrics
+                        .compaction
+                        .seconds
+                        .inc_by(start.elapsed().as_secs_f64());
 
                     match res {
-                        Ok(Ok(Ok(res))) => {
+                        Ok(Ok(res)) => {
                             let res = FueledMergeRes { output: res.output };
                             match machine.merge_res(&res).await {
                                 ApplyMergeResult::AppliedExact => {
@@ -198,7 +225,7 @@ where
                                 }
                             }
                         }
-                        Ok(Ok(Err(err))) | Ok(Err(err)) | Err(err) => {
+                        Ok(Err(err)) | Err(err) => {
                             metrics.compaction.failed.inc();
                             debug!("compaction for {} failed: {:#}", machine.shard_id(), err);
                         }
