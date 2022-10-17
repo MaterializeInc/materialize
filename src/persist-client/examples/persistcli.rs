@@ -16,6 +16,7 @@
 
 //! Persist command-line utilities
 
+use mz_build_info::DUMMY_BUILD_INFO;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::task::RuntimeExt;
@@ -61,6 +62,11 @@ fn main() {
         .block_on(mz_ore::tracing::configure(
             "persist-open-loop",
             TracingConfig::from(&args.tracing),
+            (
+                DUMMY_BUILD_INFO.version,
+                DUMMY_BUILD_INFO.sha,
+                DUMMY_BUILD_INFO.time,
+            ),
         ))
         .expect("failed to init tracing");
 
