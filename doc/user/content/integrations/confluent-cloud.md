@@ -54,10 +54,10 @@ The process to connect Materialize to a Confluent Cloud Kafka cluster consists o
 
     c. Copy the URL under **Bootstrap server**. This will be your `<broker-url>` going forward
 
-    d. From the _psql_ terminal, run the following command. Replace `<confluent_cloud>` with whatever you want to name your source. The broker URL is what you copied in step c of this subsection. The `<topic-name>` is the name of the topic you created in Step 4. The `<your-username>` and `<your-password>` are from the _Create an API Key_ step.
+    d. From the _psql_ terminal, run the following command. Replace `<confluent_cloud>` with whatever you want to name your source. The broker URL is what you copied in step c of this subsection. The `<topic-name>` is the name of the topic you created in Step 4. The `<your-api-key>` and `<your-api-secret>` are from the _Create an API Key_ step.
     ```sql
-      CREATE SECRET confluent_username AS '<your-username>';
-      CREATE SECRET confluent_password AS '<your-password>';
+      CREATE SECRET confluent_username AS '<your-api-key>';
+      CREATE SECRET confluent_password AS '<your-api-secret>';
       CREATE CONNECTION <confluent_cloud> TO KAFKA (
         BROKER '<confluent-broker-url>',
         SASL MECHANISMS = 'PLAIN',
