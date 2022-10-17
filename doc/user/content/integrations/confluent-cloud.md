@@ -65,7 +65,7 @@ The process to connect Materialize to a Confluent Cloud Kafka cluster consists o
           SASL USERNAME = SECRET confluent_username,
           SASL PASSWORD = SECRET confluent_password;
       CREATE SOURCE <topic-name>
-        FROM KAFKA CONNECTION confluent_cloud TOPIC '<topic-name>'
+        FROM KAFKA CONNECTION confluent_cloud (TOPIC '<topic-name>')
         FORMAT BYTES;
     ```
 
