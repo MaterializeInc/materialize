@@ -31,10 +31,6 @@ use crate::types::sources::SourceData;
 pub struct Healthchecker {
     /// Internal ID of the source (e.g. s1)
     source_id: GlobalId,
-    /// The ID of the Timely worker on which this operator is executing
-    worker_id: usize,
-    /// The total count of Timely workers
-    worker_count: usize,
     /// Whether this is an active Timely worker or not
     active: bool,
     /// Current status of this source
@@ -54,8 +50,6 @@ pub struct Healthchecker {
 impl Healthchecker {
     pub async fn new(
         source_id: GlobalId,
-        worker_id: usize,
-        worker_count: usize,
         active: bool,
         persist_clients: &Arc<Mutex<PersistClientCache>>,
         storage_metadata: &CollectionMetadata,
@@ -85,8 +79,6 @@ impl Healthchecker {
             .expect("since <= as_of asserted");
 
         let mut healthchecker = Self {
-            worker_id,
-            worker_count,
             source_id,
             current_status: SourceStatus::Starting,
             active,
@@ -223,12 +215,9 @@ impl Healthchecker {
                 .expect("status collection should not have errors");
             let row_vec = row.unpack();
             let row_source_id = row_vec[1].unwrap_str();
-            let row_worker_id = row_vec[2].unwrap_int64();
-            let row_status = row_vec[4].unwrap_str();
+            let row_status = row_vec[2].unwrap_str();
 
-            if self.source_id.to_string() == row_source_id
-                && self.worker_id == row_worker_id as usize
-            {
+            if self.source_id.to_string() == row_source_id {
                 self.current_status = SourceStatus::try_from(row_status).expect("invalid status");
             }
         }
@@ -254,23 +243,10 @@ impl Healthchecker {
         );
         let source_id = self.source_id.to_string();
         let source_id = Datum::String(&source_id);
-        let worker_id =
-            Datum::Int64(i64::try_from(self.worker_id).expect("worker_id does not fit into i64"));
-        let worker_count = Datum::Int64(
-            i64::try_from(self.worker_count).expect("worker_count does not fit into i64"),
-        );
         let status = Datum::String(status_update.status.name());
         let error = status_update.error.as_deref().into();
         let metadata = Datum::Null;
-        let row = Row::pack_slice(&[
-            timestamp,
-            source_id,
-            worker_id,
-            worker_count,
-            status,
-            error,
-            metadata,
-        ]);
+        let row = Row::pack_slice(&[timestamp, source_id, status, error, metadata]);
 
         vec![(
             (SourceData(Ok(row)), ()),
@@ -553,7 +529,7 @@ mod tests {
             .await
             .into_iter()
             .find_map(|row| {
-                let error = row.unpack()[5];
+                let error = row.unpack()[3];
                 if !error.is_null() {
                     Some(error.unwrap_str().to_string())
                 } else {
@@ -671,8 +647,6 @@ mod tests {
     async fn new_healthchecker(
         status_shard_id: ShardId,
         source_id: GlobalId,
-        worker_id: usize,
-        worker_count: usize,
         active: bool,
         persist_clients: &Arc<Mutex<PersistClientCache>>,
     ) -> Healthchecker {
@@ -688,8 +662,6 @@ mod tests {
 
         Healthchecker::new(
             source_id,
-            worker_id,
-            worker_count,
             active,
             persist_clients,
             &storage_metadata,
@@ -707,8 +679,6 @@ mod tests {
         new_healthchecker(
             status_shard_id,
             GlobalId::User(source_id),
-            1,
-            1,
             true,
             &Arc::clone(persist_clients),
         )

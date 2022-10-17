@@ -252,16 +252,8 @@ where
     } = config;
     Box::pin(async_stream::stream!({
         let mut healthchecker = if storage_metadata.status_shard.is_some() {
-            match Healthchecker::new(
-                id,
-                worker_id,
-                worker_count,
-                true,
-                &persist_clients,
-                &storage_metadata,
-                now.clone(),
-            )
-            .await
+            match Healthchecker::new(id, true, &persist_clients, &storage_metadata, now.clone())
+                .await
             {
                 Ok(h) => Some(h),
                 Err(e) => {
