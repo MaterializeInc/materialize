@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::{cmp, time::Duration};
@@ -289,6 +289,11 @@ impl Postgres {
                 .await?
                 .get(0);
             if !fence_exists {
+                if self.readonly {
+                    return Err(
+                        "stash tables do not exist; will not create in readonly mode".into(),
+                    );
+                }
                 tx.batch_execute(SCHEMA).await?;
             }
             // Bump the epoch, which will cause any previous connection to fail. Add a
@@ -748,6 +753,18 @@ impl Stash for Postgres {
             })
         })
         .await
+    }
+
+    async fn collections(&mut self) -> Result<BTreeSet<String>, StashError> {
+        let names = self
+            .transact(move |_stmts, tx| {
+                Box::pin(async move {
+                    let rows = tx.query("SELECT name FROM collections", &[]).await?;
+                    Ok(rows.into_iter().map(|row| row.get(0)))
+                })
+            })
+            .await?;
+        Ok(BTreeSet::from_iter(names))
     }
 
     async fn iter<K, V>(

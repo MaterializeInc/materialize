@@ -9,7 +9,7 @@
 
 //! Durable metadata storage.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::error::Error;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
@@ -74,6 +74,9 @@ pub trait Stash: std::fmt::Debug + Send {
     where
         K: Data,
         V: Data;
+
+    /// Returns the names of the collections in the stash.
+    async fn collections(&mut self) -> Result<BTreeSet<String>, StashError>;
 
     /// Iterates over all entries in the stash.
     ///
@@ -612,6 +615,10 @@ impl<K, V> TypedCollection<K, V> {
             typ: PhantomData,
         }
     }
+
+    pub const fn name(&self) -> &'static str {
+        self.name
+    }
 }
 
 impl<K, V> TypedCollection<K, V>
@@ -626,6 +633,14 @@ where
     pub async fn upper(&self, stash: &mut impl Stash) -> Result<Antichain<Timestamp>, StashError> {
         let collection = self.get(stash).await?;
         stash.upper(collection).await
+    }
+
+    pub async fn iter(
+        &self,
+        stash: &mut impl Stash,
+    ) -> Result<Vec<((K, V), Timestamp, Diff)>, StashError> {
+        let collection = self.get(stash).await?;
+        stash.iter(collection).await
     }
 
     pub async fn peek_one<S>(&self, stash: &mut S) -> Result<BTreeMap<K, V>, StashError>

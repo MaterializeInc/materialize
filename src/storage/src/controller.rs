@@ -69,11 +69,13 @@ mod rehydration;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage.controller.rs"));
 
-static METADATA_COLLECTION: TypedCollection<GlobalId, DurableCollectionMetadata> =
+pub static METADATA_COLLECTION: TypedCollection<GlobalId, DurableCollectionMetadata> =
     TypedCollection::new("storage-collection-metadata");
 
-static METADATA_EXPORT: TypedCollection<GlobalId, DurableExportMetadata<mz_repr::Timestamp>> =
+pub static METADATA_EXPORT: TypedCollection<GlobalId, DurableExportMetadata<mz_repr::Timestamp>> =
     TypedCollection::new("storage-export-metadata-u64");
+
+pub static ALL_COLLECTIONS: &[&str] = &[METADATA_COLLECTION.name(), METADATA_EXPORT.name()];
 
 // Do this dance so that we keep the storaged controller expressed in terms of a generic timestamp `T`.
 struct MetadataExportFetcher;
