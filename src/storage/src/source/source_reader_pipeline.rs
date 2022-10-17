@@ -1263,16 +1263,15 @@ where
             let global_batch_lower = batch_capabilities.frontier();
             let bounded_source_upper = global_source_upper.bounded(&global_batch_lower);
 
-
             if let Ok(new_ts_upper) = timestamper.reclock_frontier(&bounded_source_upper) {
-                if id.is_user() {
-                    tracing::info!(
-                        "global_batch_lower: {:?}, global_source_upper: {:?}, bounded_source_upper: {:?}",
-                        global_batch_lower,
-                        global_source_upper,
-                        bounded_source_upper
-                    );
-                }
+                tracing::trace!(
+                    "reclock({id}) {worker_id}/{worker_count}: \
+                        global_batch_lower: {:?}, global_source_upper: \
+                        {:?}, bounded_source_upper: {:?}",
+                    global_batch_lower,
+                    global_source_upper,
+                    bounded_source_upper,
+                );
 
                 let ts = new_ts_upper.as_option().cloned().unwrap_or(Timestamp::MAX);
 
