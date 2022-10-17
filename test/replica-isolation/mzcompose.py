@@ -94,7 +94,7 @@ class AllowCompactionCheck:
     @staticmethod
     def all_checks(replica: str, host: str) -> list["AllowCompactionCheck"]:
         return [
-            # PersistedIntro(replica, host),
+            PersistedIntro(replica, host),
             MaterializedView(replica, host),
             ArrangedIntro(replica, host),
             ArrangedIndex(replica, host),
