@@ -3537,7 +3537,7 @@ impl<S: Append> Catalog<S> {
             UpdateComputeInstanceStatus {
                 event: ComputeInstanceEvent,
             },
-            UpdateSysytemConfiguration {
+            UpdateSystemConfiguration {
                 name: String,
                 value: String,
             },
@@ -4487,7 +4487,7 @@ impl<S: Append> Catalog<S> {
                     catalog_action(
                         state,
                         builtin_table_updates,
-                        Action::UpdateSysytemConfiguration { name, value },
+                        Action::UpdateSystemConfiguration { name, value },
                     )?;
                 }
                 Op::ResetSystemConfiguration { name } => {
@@ -4766,7 +4766,7 @@ impl<S: Append> Catalog<S> {
                         ));
                     }
                 }
-                Action::UpdateSysytemConfiguration { name, value } => {
+                Action::UpdateSystemConfiguration { name, value } => {
                     state.insert_system_configuration(&name, &value)?;
                 }
                 Action::ResetSystemConfiguration { name } => {
