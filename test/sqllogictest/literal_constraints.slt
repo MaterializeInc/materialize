@@ -729,6 +729,236 @@ WHERE
 ----
 2  l2  32
 
+# Implicit casts between literals and indexed column types shouldn't prevent index access
+
+statement ok
+CREATE TABLE foo(a SMALLINT, b INT, c BIGINT, v VARCHAR);
+
+statement ok
+CREATE DEFAULT INDEX ON foo;
+
+statement ok
+INSERT INTO foo VALUES (0, 1, 2, 'xxx'), (3, 4, 5, 'yyy');
+
+query T multiline
+EXPLAIN SELECT * FROM foo
+WHERE a = 0 AND b = 1 AND c = 2 AND v = 'xxx';
+----
+Explained Query (fast path):
+  Project (#0..=#3)
+    ReadExistingIndex materialize.public.foo_primary_idx lookup value (0, 1, 2, "xxx")
+
+Used Indexes:
+  - materialize.public.foo_primary_idx
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM foo
+WHERE 0 = a AND 1 = b AND 2 = c AND 'xxx' = v;
+----
+Explained Query (fast path):
+  Project (#0..=#3)
+    ReadExistingIndex materialize.public.foo_primary_idx lookup value (0, 1, 2, "xxx")
+
+Used Indexes:
+  - materialize.public.foo_primary_idx
+
+EOF
+
+query IIIT rowsort
+SELECT * FROM foo
+WHERE a = 0 AND b = 1 AND c = 2 AND v = 'xxx';
+----
+0  1  2  xxx
+
+statement ok
+CREATE INDEX idx_foo_a ON foo(a);
+
+# Check that the deduplication in `remove_impossible_or_args` treats `a = 0` and `a = 0::SMALLINT` the same
+
+query T multiline
+EXPLAIN SELECT a FROM foo
+WHERE a = 0 AND a = 0::SMALLINT;
+----
+Explained Query (fast path):
+  Project (#0)
+    ReadExistingIndex materialize.public.idx_foo_a lookup value (0)
+
+Used Indexes:
+  - materialize.public.idx_foo_a
+
+EOF
+
+query I rowsort
+SELECT a FROM foo
+WHERE a = 0 AND a = 0::SMALLINT;
+----
+0
+
+# Check that `remove_impossible_or_args` recognizes that `a = 0 AND a = 2::SMALLINT` is impossible.
+# For this, `any_expr_eq_literal` should peel off the cast in the returned expression.
+
+query T multiline
+EXPLAIN SELECT a FROM foo
+WHERE (a = 0 AND a = 2::SMALLINT) OR a = 3;
+----
+Explained Query (fast path):
+  Project (#0)
+    ReadExistingIndex materialize.public.idx_foo_a lookup value (3)
+
+Used Indexes:
+  - materialize.public.idx_foo_a
+
+EOF
+
+query I rowsort
+SELECT a FROM foo
+WHERE (a = 0 AND a = 2::SMALLINT) OR a = 3;
+----
+3
+
+# The (not-anymore-needed) workaround of explicitly casting the literal to the smaller type should still work for
+# SMALLINT. (It never worked for VARCHAR.)
+
+query T multiline
+EXPLAIN SELECT a FROM foo
+WHERE a = 3::SMALLINT;
+----
+Explained Query (fast path):
+  Project (#0)
+    ReadExistingIndex materialize.public.idx_foo_a lookup value (3)
+
+Used Indexes:
+  - materialize.public.idx_foo_a
+
+EOF
+
+query I rowsort
+SELECT a FROM foo
+WHERE a = 3::SMALLINT;
+----
+3
+
+# The (not-anymore-needed) workaround of adding an explicit cast at index creation should still work for SMALLINT
+
+statement ok
+DROP INDEX idx_foo_a;
+
+statement ok
+CREATE INDEX idx_foo_a_cast ON foo(a::INTEGER);
+
+query T multiline
+EXPLAIN SELECT * FROM foo
+WHERE a = 0;
+----
+Explained Query (fast path):
+  Project (#1..=#4)
+    ReadExistingIndex materialize.public.idx_foo_a_cast lookup value (0)
+
+Used Indexes:
+  - materialize.public.idx_foo_a_cast
+
+EOF
+
+query IIIT rowsort
+SELECT * FROM foo
+WHERE a = 0;
+----
+0  1  2  xxx
+
+# The (not-anymore-needed) workaround of adding an explicit cast at index creation should still work for VARCHAR
+
+statement ok
+CREATE INDEX idx_foo_v_cast ON foo(v::TEXT);
+
+query T multiline
+EXPLAIN SELECT * FROM foo
+WHERE v = 'xxx';
+----
+Explained Query (fast path):
+  Project (#1..=#4)
+    ReadExistingIndex materialize.public.idx_foo_v_cast lookup value ("xxx")
+
+Used Indexes:
+  - materialize.public.idx_foo_v_cast
+
+EOF
+
+query IIIT rowsort
+SELECT * FROM foo
+WHERE v = 'xxx';
+----
+0  1  2  xxx
+
+# When both an explicitly cast and a raw index are present, we should choose the raw one by performing the inverse cast.
+# SMALLINT
+
+statement ok
+CREATE INDEX idx_foo_a ON foo(a);
+
+query T multiline
+EXPLAIN SELECT * FROM foo
+WHERE a = 0;
+----
+Explained Query (fast path):
+  Project (#0..=#3)
+    ReadExistingIndex materialize.public.idx_foo_a lookup value (0)
+
+Used Indexes:
+  - materialize.public.idx_foo_a
+
+EOF
+
+query IIIT rowsort
+SELECT * FROM foo
+WHERE a = 0;
+----
+0  1  2  xxx
+
+# When both an explicitly cast and a raw index are present, we should choose the raw one by performing the inverse cast.
+# VARCHAR
+
+statement ok
+CREATE INDEX idx_foo_v ON foo(v);
+
+query T multiline
+EXPLAIN SELECT * FROM foo
+WHERE v = 'xxx';
+----
+Explained Query (fast path):
+  Project (#1..=#3, #0)
+    ReadExistingIndex materialize.public.idx_foo_v lookup value ("xxx")
+
+Used Indexes:
+  - materialize.public.idx_foo_v
+
+EOF
+
+query IIIT rowsort
+SELECT * FROM foo
+WHERE v = 'xxx';
+----
+0  1  2  xxx
+
+# Literal equalities with a cast where the inverse cast on the literal errors out should be detected as impossible.
+# See `MirScalarExpr::impossible_literal_equality_because_types`.
+
+query T multiline
+EXPLAIN SELECT * FROM foo
+WHERE a = 1000000;
+----
+Explained Query (fast path):
+  Constant
+
+EOF
+
+query IIIT rowsort
+SELECT * FROM foo
+WHERE a = 1000000;
+----
+
+
 # In the following query, we would be able to detect literal constraints if we called `canonicalize_equivalences`
 
 query T multiline
