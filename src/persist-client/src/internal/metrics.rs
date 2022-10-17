@@ -604,6 +604,9 @@ pub struct CompactionMetrics {
     pub(crate) runs_compacted: IntCounter,
     pub(crate) chunks_compacted: IntCounter,
 
+    pub(crate) applied_exact_match: IntCounter,
+    pub(crate) applied_subset_match: IntCounter,
+
     pub(crate) batch: BatchWriteMetrics,
     pub(crate) steps: CompactionStepTimings,
 
@@ -662,6 +665,14 @@ impl CompactionMetrics {
             chunks_compacted: registry.register(metric!(
                 name: "mz_persist_compaction_chunks_compacted",
                 help: "count of run chunks compacted",
+            )),
+            applied_exact_match: registry.register(metric!(
+                name: "mz_persist_compaction_applied_exact_match",
+                help: "count of merge results that exactly replaced a SpineBatch",
+            )),
+            applied_subset_match: registry.register(metric!(
+                name: "mz_persist_compaction_applied_subset_match",
+                help: "count of merge results that replaced a subset of a SpineBatch",
             )),
             batch: BatchWriteMetrics::new(registry, "compaction"),
             steps: CompactionStepTimings::new(step_timings.clone()),

@@ -41,7 +41,7 @@ use crate::internal::state::{
 };
 use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::StateVersions;
-use crate::internal::trace::FueledMergeRes;
+use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::read::ReaderId;
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
@@ -270,7 +270,7 @@ where
         }
     }
 
-    pub async fn merge_res(&mut self, res: &FueledMergeRes<T>) -> bool {
+    pub async fn merge_res(&mut self, res: &FueledMergeRes<T>) -> ApplyMergeResult {
         let metrics = Arc::clone(&self.metrics);
 
         // SUBTLE! If Machine::merge_res returns false, the blobs referenced in
@@ -301,17 +301,19 @@ where
         // false negative (a blob we can never recover referenced by state). We
         // anyway need a mechanism to clean up leaked blobs because of process
         // crashes.
-        let mut applied_ever_true = false;
-        let (_seqno, _applied, _maintenance) = self
+        let mut merge_result_ever_applied = ApplyMergeResult::NotApplied;
+        let (_seqno, _apply_merge_result, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, state| {
                 let ret = state.apply_merge_res(res);
-                if let Continue(applied) = ret {
-                    applied_ever_true = applied_ever_true || applied;
+                if let Continue(result) = ret {
+                    if result.applied() {
+                        merge_result_ever_applied = result;
+                    }
                 }
                 ret
             })
             .await;
-        applied_ever_true
+        merge_result_ever_applied
     }
 
     pub async fn downgrade_since(
@@ -1330,11 +1332,15 @@ pub mod datadriven {
             .get(input)
             .expect("unknown batch")
             .clone();
-        let applied = datadriven
+        let merge_res = datadriven
             .machine
             .merge_res(&FueledMergeRes { output: batch })
             .await;
-        Ok(format!("{} {}\n", datadriven.machine.seqno(), applied))
+        Ok(format!(
+            "{} {}\n",
+            datadriven.machine.seqno(),
+            merge_res.applied()
+        ))
     }
 
     pub async fn perform_maintenance(

@@ -39,7 +39,7 @@ use crate::batch::BatchParts;
 use crate::fetch::fetch_batch_part;
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::state::{HollowBatch, HollowBatchPart};
-use crate::internal::trace::FueledMergeRes;
+use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::{Metrics, PersistConfig, ShardId, WriterId};
 
 /// A request for compaction.
@@ -167,19 +167,27 @@ where
                     match res {
                         Ok(Ok(res)) => {
                             let res = FueledMergeRes { output: res.output };
-                            let applied = machine.merge_res(&res).await;
-                            if applied {
-                                metrics.compaction.applied.inc();
-                                machine.shard_metrics.compaction_applied.inc();
-                            } else {
-                                metrics.compaction.noop.inc();
-                                for part in res.output.parts {
-                                    let key = part.key.complete(&machine.shard_id());
-                                    retry_external(
-                                        &metrics.retries.external.compaction_noop_delete,
-                                        || blob.delete(&key),
-                                    )
-                                    .await;
+                            match machine.merge_res(&res).await {
+                                ApplyMergeResult::AppliedExact => {
+                                    metrics.compaction.applied.inc();
+                                    metrics.compaction.applied_exact_match.inc();
+                                    machine.shard_metrics.compaction_applied.inc();
+                                }
+                                ApplyMergeResult::AppliedSubset => {
+                                    metrics.compaction.applied.inc();
+                                    metrics.compaction.applied_subset_match.inc();
+                                    machine.shard_metrics.compaction_applied.inc();
+                                }
+                                ApplyMergeResult::NotApplied => {
+                                    metrics.compaction.noop.inc();
+                                    for part in res.output.parts {
+                                        let key = part.key.complete(&machine.shard_id());
+                                        retry_external(
+                                            &metrics.retries.external.compaction_noop_delete,
+                                            || blob.delete(&key),
+                                        )
+                                        .await;
+                                    }
                                 }
                             }
                         }

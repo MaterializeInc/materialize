@@ -192,40 +192,43 @@ impl<T: Timestamp + Lattice> Trace<T> {
         Self::remove_redundant_merge_reqs(merge_reqs)
     }
 
-    pub fn apply_merge_res(&mut self, res: &FueledMergeRes<T>) -> bool {
-        let mut applied = false;
+    pub fn apply_merge_res(&mut self, res: &FueledMergeRes<T>) -> ApplyMergeResult {
         for batch in self.spine.merging.iter_mut().rev() {
-            if applied {
-                break;
-            }
             match batch {
                 MergeState::Double(MergeVariant::InProgress(batch1, batch2, m)) => {
-                    if batch1.maybe_replace(res) {
-                        applied = true;
+                    let result = batch1.maybe_replace(res);
+                    if result.applied() {
                         // There's a second copy here as m.b1, which is what
                         // actually gets used when FuelingMerge::done gets
                         // called, so update this one too.
-                        assert!(m.b1.maybe_replace(res));
+                        assert!(m.b1.maybe_replace(res).applied());
+                        return result;
                     }
-                    if batch2.maybe_replace(res) {
-                        applied = true;
+                    let result = batch2.maybe_replace(res);
+                    if result.applied() {
                         // There's a second copy here as m.b2, which is what
                         // actually gets used when FuelingMerge::done gets
                         // called, so update this one too.
-                        assert!(m.b2.maybe_replace(res));
+                        assert!(m.b2.maybe_replace(res).applied());
+                        return result;
                     }
                 }
                 MergeState::Double(MergeVariant::Complete(Some((batch, _)))) => {
-                    applied = applied || batch.maybe_replace(res);
+                    let result = batch.maybe_replace(res);
+                    if result.applied() {
+                        return result;
+                    }
                 }
                 MergeState::Single(Some(batch)) => {
-                    applied = applied || batch.maybe_replace(res);
+                    let result = batch.maybe_replace(res);
+                    if result.applied() {
+                        return result;
+                    }
                 }
                 _ => {}
             }
         }
-
-        applied
+        ApplyMergeResult::NotApplied
     }
 
     // This is only called with the results of one `insert` and so the length of
@@ -270,6 +273,22 @@ enum SpineBatch<T> {
         desc: Description<T>,
         parts: Vec<HollowBatch<T>>,
     },
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum ApplyMergeResult {
+    NotApplied,
+    AppliedExact,
+    AppliedSubset,
+}
+
+impl ApplyMergeResult {
+    pub fn applied(&self) -> bool {
+        match self {
+            ApplyMergeResult::NotApplied => false,
+            ApplyMergeResult::AppliedExact | ApplyMergeResult::AppliedSubset => true,
+        }
+    }
 }
 
 impl<T: Timestamp + Lattice> SpineBatch<T> {
@@ -324,34 +343,75 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
         }
     }
 
-    fn maybe_replace(&mut self, res: &FueledMergeRes<T>) -> bool {
-        // We could perhaps be more lenient here and swap out a subset of the
-        // parts of a Fueled if they happen to match this Res. E.g. if the res
-        // is for `[1,3)` and the parts are `[0,1),[1,2),[2,3),[3,4)`, we could
-        // swap out the middle two parts for this res. This situation could
-        // happen if we generate a merge req and then, before we get a res,
-        // merge that batch again. See if this matters in practice before we add
-        // the complexity.
-        //
-        // It is perfectly safe, however, if the sinces don't match, as long as
-        // Spine metadata's since is in advance of the one in the compaction
-        // result. This mismatch can happen when the Spine has to be reloaded
-        // from state (because of a compare_and_set mismatch).
-        let matches = res.output.desc.lower() == self.desc().lower()
-            && res.output.desc.upper() == self.desc().upper()
-            && PartialOrder::less_equal(res.output.desc.since(), self.desc().since());
-        if !matches {
-            return false;
+    fn maybe_replace(&mut self, res: &FueledMergeRes<T>) -> ApplyMergeResult {
+        // The spine's and merge res's sinces don't need to match (which could occur if Spine
+        // has been reloaded from state due to compare_and_set mismatch), but if so, the Spine
+        // since must be in advance of the merge res since.
+        if !PartialOrder::less_equal(res.output.desc.since(), self.desc().since()) {
+            return ApplyMergeResult::NotApplied;
         }
-        // Spine internally has an invariant about a batch being at some level
-        // or higher based on the len. We could end up violating this invariant
-        // if we increased the length of the batch. Compaction should never
-        // increase the length, so we'll only hit this assert if there's a bug
-        // somewhere.
-        assert!(self.len() >= res.output.len);
 
-        *self = SpineBatch::Merged(res.output.clone());
-        true
+        // If our merge result exactly matches a spine batch, we can swap it in directly
+        let exact_match = res.output.desc.lower() == self.desc().lower()
+            && res.output.desc.upper() == self.desc().upper();
+        if exact_match {
+            // Spine internally has an invariant about a batch being at some level
+            // or higher based on the len. We could end up violating this invariant
+            // if we increased the length of the batch. Compaction should never
+            // increase the length, so we'll only hit this assert if there's a bug
+            // somewhere.
+            assert!(self.len() >= res.output.len);
+            *self = SpineBatch::Merged(res.output.clone());
+            return ApplyMergeResult::AppliedExact;
+        }
+
+        // It is possible the structure of the spine has changed since the merge res
+        // was created, such that it no longer exactly matches the description of a
+        // spine batch. This can happen if another merge has happened in the interim,
+        // or if spine needed to be rebuilt from state.
+        //
+        // When this occurs, we can still attempt to slot the merge res in to replace
+        // the parts of a fueled merge. e.g. if the res is for `[1,3)` and the parts
+        // are `[0,1),[1,2),[2,3),[3,4)`, we can swap out the middle two parts for res.
+        let initial_len = self.len();
+        match self {
+            SpineBatch::Fueled {
+                ref parts,
+                ref desc,
+            } => {
+                // first, determine if a subset of parts can be cleanly replaced by the merge res
+                let mut lower = None;
+                let mut upper = None;
+                for (i, batch) in parts.iter().enumerate() {
+                    if batch.desc.lower() == res.output.desc.lower() {
+                        lower = Some(i);
+                    }
+                    if batch.desc.upper() == res.output.desc.upper() {
+                        upper = Some(i);
+                    }
+                    if lower.is_some() && upper.is_some() {
+                        break;
+                    }
+                }
+                // next, replace parts with the merge res batch if we can
+                match (lower, upper) {
+                    (Some(lower), Some(upper)) => {
+                        let mut new_parts = vec![];
+                        new_parts.extend_from_slice(&parts[..lower]);
+                        new_parts.push(res.output.clone());
+                        new_parts.extend_from_slice(&parts[upper + 1..]);
+                        *self = SpineBatch::Fueled {
+                            parts: new_parts,
+                            desc: desc.to_owned(),
+                        };
+                        assert!(initial_len >= self.len());
+                        ApplyMergeResult::AppliedSubset
+                    }
+                    _ => ApplyMergeResult::NotApplied,
+                }
+            }
+            _ => ApplyMergeResult::NotApplied,
+        }
     }
 }
 
@@ -1193,10 +1253,10 @@ pub mod datadriven {
         let res = FueledMergeRes {
             output: DirectiveArgs::parse_hollow_batch(args.input),
         };
-        if datadriven.trace.apply_merge_res(&res) {
-            Ok("applied\n".into())
-        } else {
-            Ok("no-op\n".into())
+        match datadriven.trace.apply_merge_res(&res) {
+            ApplyMergeResult::NotApplied => Ok("no-op\n".into()),
+            ApplyMergeResult::AppliedExact => Ok("applied exact\n".into()),
+            ApplyMergeResult::AppliedSubset => Ok("applied subset\n".into()),
         }
     }
 }
