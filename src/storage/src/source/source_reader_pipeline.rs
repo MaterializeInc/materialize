@@ -60,6 +60,7 @@ use mz_repr::{GlobalId, Timestamp};
 use mz_timely_util::operator::StreamExt as _;
 
 use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
+use crate::source::antichain::MutableOffsetAntichain;
 use crate::source::antichain::OffsetAntichain;
 use crate::source::healthcheck::Healthchecker;
 use crate::source::metrics::SourceBaseMetrics;
@@ -128,8 +129,8 @@ struct SourceMessageBatch<Key, Value, Diff> {
     /// The current upper of the `SourceReader`, at the time this batch was
     /// emitted. Source uppers emitted via batches must never regress.
     source_upper: OffsetAntichain,
-    /// The timestamp/offset upper of messages contained in _this_ batch.
-    batch_upper: OffsetAntichain,
+    /// The timestamp/offset lower of messages contained in _this_ batch.
+    batch_lower: OffsetAntichain,
 }
 
 /// The batch upper of the most recently emitted batch batch. This contains only
@@ -672,11 +673,23 @@ where
                         })
                         .collect_vec();
 
+                    let mut batch_lower = OffsetAntichain::new();
+
+                    for (pid, messages) in &messages {
+                        let min_offset = messages
+                            .iter()
+                            .map(|(_message, offset)| offset)
+                            .min()
+                            .expect("missing messages");
+
+                        batch_lower.insert(pid.clone(), *min_offset);
+                    }
+
                     let message_batch = SourceMessageBatch {
                         messages,
                         non_definite_errors,
                         source_upper: extended_source_upper,
-                        batch_upper: batch_upper.clone(),
+                        batch_lower,
                     };
                     // Wrap in an Rc to avoid cloning when sending it on.
                     let message_batch = Rc::new(RefCell::new(Some(message_batch)));
@@ -1053,7 +1066,17 @@ where
         // of the timestamp that drives forward the ingestion pipeline) anymore.
         let mut source_upper_updates = Vec::new();
 
+        // Stash of batches that have not yet been timestamped.
         let mut untimestamped_batches = VecDeque::new();
+
+        // We keep track of the lower of all stashed batches. We add the lower
+        // here when we receive a batch and stash it and we remove it when we
+        // have succesfully reclocked and emitted it.
+        //
+        // These batch lowers are an analog to "Capabilities" in timely. We use
+        // the lower to hold back on downgrading our output Capability, which we
+        // need when we can finally emit a reclocked batch.
+        let mut batch_capabilities = MutableOffsetAntichain::new();
 
         move |frontiers| {
             batch_input.for_each(|cap, data| {
@@ -1069,6 +1092,13 @@ where
                         stashing update for global_source_upper: {:?}",
                         batch.source_upper,
                     );
+
+                    assert!(
+                        global_source_upper.less_equal(&batch.batch_lower),
+                        "global source upper already advanced to far"
+                    );
+
+                    batch_capabilities.add(&batch.batch_lower);
 
                     for (pid, offset) in batch.source_upper.iter() {
                         source_upper_updates.push((*cap.time(), (pid.clone(), *offset)));
@@ -1107,6 +1137,7 @@ where
                 // This scope is necessary to convince rustc that `untimestamped_batches` is unused
                 // when we pop from the front at the bottom of this loop.
                 {
+                    // TODO(guswynn&aljoscha): Calculate batch_upper once. :D
                     let reclocked = match timestamper.reclock(&mut untimestamped_batch.messages) {
                         Ok(reclocked) => reclocked,
                         Err((pid, offset)) => panic!("failed to reclock {} @ {}", pid, offset),
@@ -1117,9 +1148,9 @@ where
                         None => {
                             trace!(
                                 "reclock({id}) {worker_id}/{worker_count}: \
-                                cannot yet reclock batch with batch_upper {:?} \
+                                cannot yet reclock batch with batch_lower {:?} \
                                 reclock.source_frontier: {:?}",
-                                untimestamped_batch.batch_upper,
+                                untimestamped_batch.batch_lower,
                                 timestamper.source_upper()
                             );
                             // We keep batches in the order they arrive from the
@@ -1170,6 +1201,8 @@ where
                         session.give_iterator(errors);
                     }
                 }
+
+                batch_capabilities.subtract(&untimestamped_batch.batch_lower);
 
                 // Pop off the processed batch.
                 untimestamped_batches.pop_front();
@@ -1222,7 +1255,25 @@ where
             // Note that this even if the `global_source_upper` has advanced past
             // the remap input, this holds back capability downgrades until
             // they match.
-            if let Ok(new_ts_upper) = timestamper.reclock_frontier(&global_source_upper) {
+            //
+            // We "meet" the _source upper_ and the _lower_ of batches that we
+            // have stashed. We cannot downgrade our capability beyond the
+            // frontier that corresponds to that lower, otherwise we would not
+            // be able to emit batches once we succesfully reclock them.
+            let global_batch_lower = batch_capabilities.frontier();
+            let bounded_source_upper = global_source_upper.bounded(&global_batch_lower);
+
+
+            if let Ok(new_ts_upper) = timestamper.reclock_frontier(&bounded_source_upper) {
+                if id.is_user() {
+                    tracing::info!(
+                        "global_batch_lower: {:?}, global_source_upper: {:?}, bounded_source_upper: {:?}",
+                        global_batch_lower,
+                        global_source_upper,
+                        bounded_source_upper
+                    );
+                }
+
                 let ts = new_ts_upper.as_option().cloned().unwrap_or(Timestamp::MAX);
 
                 // TODO(aljoscha&guswynn): will these be overwritten with multi-worker
@@ -1234,9 +1285,11 @@ where
                     trace!(
                         "reclock({id}) {worker_id}/{worker_count}: \
                         downgrading to {:?} \
-                        global_source_upper {:?}",
+                        global_source_upper {:?}, \
+                        global_batch_lower {:?}",
                         new_ts_upper,
-                        global_source_upper
+                        global_source_upper,
+                        global_batch_lower
                     );
 
                     cap_set

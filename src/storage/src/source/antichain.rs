@@ -128,6 +128,41 @@ impl OffsetAntichain {
         *self.inner.entry(pid).or_default() += diff;
     }
 
+    /// Returns `true` iff this [`OffsetAntichain`] is `<=` `other`.
+    pub fn less_equal(&self, other: &OffsetAntichain) -> bool {
+        for (pid, offset) in other.iter() {
+            let self_offset = self.inner.get(pid);
+            if let Some(self_offset) = self_offset {
+                if self_offset > offset {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Creates a new [`OffsetAntichain`] that starts out as a copy of `self`
+    /// but where each offset is upper bounded by the corresponding offset from
+    /// `other`, if there is one.
+    ///
+    /// NOTE: This is not an equivalent of `meet`, as known from timely
+    /// `Antichain`. This operation is asymmetric: we want partitions in the
+    /// result only if they exist in `self`, we don't want partitions in the
+    /// result that only exist in `other. If we did the latter, this could mean
+    /// that we advance a frontier further than the original `self` would have.
+    pub fn bounded(&self, other: &OffsetAntichain) -> OffsetAntichain {
+        let mut result = self.clone();
+
+        for (pid, offset) in other.iter() {
+            result
+                .inner
+                .entry(pid.clone())
+                .and_modify(|prev| *prev = std::cmp::min(*prev, *offset));
+        }
+
+        result
+    }
+
     // Read Api's
 
     /// Attempt to the the `MzOffset` value for `pid`'s frontier
@@ -344,6 +379,31 @@ mod tests {
 
         let frontier = mutable_antichain.frontier();
         assert_eq!(frontier, OffsetAntichain::new());
+    }
+
+    #[test]
+    fn antichain_bound_basic_usage() {
+        let offset_antichain_a = OffsetAntichain::from_iter([
+            (pid(0), 5.into()),
+            (pid(1), 10.into()),
+            (pid(3), 11.into()),
+        ]);
+
+        let offset_antichain_b = OffsetAntichain::from_iter([
+            (pid(0), 10.into()),
+            (pid(1), 5.into()),
+            (pid(4), 11.into()),
+        ]);
+
+        let bounded = offset_antichain_a.bounded(&offset_antichain_b);
+
+        let expected_bounded = OffsetAntichain::from_iter([
+            (pid(0), 5.into()),
+            (pid(1), 5.into()),
+            (pid(3), 11.into()),
+        ]);
+
+        assert_eq!(bounded, expected_bounded);
     }
 
     /// Testing helper.
