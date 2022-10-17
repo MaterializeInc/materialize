@@ -318,6 +318,14 @@ impl mz_persist_types::Codec64 for Timestamp {
     }
 }
 
+impl mz_persist_types::ListenTimestampBandAid for Timestamp {
+    fn saturating_sub(&self, x: &Self) -> Self {
+        Self {
+            internal: self.internal.saturating_sub(x.internal),
+        }
+    }
+}
+
 impl std::fmt::Display for Timestamp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.internal, f)

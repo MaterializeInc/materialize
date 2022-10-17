@@ -456,10 +456,13 @@ impl ReclockOperator {
             "invalid as_of: upper({upper:?}) <= as_of({as_of:?})",
         );
 
+        // WIP what should this be?
+        let since_delay = Timestamp::minimum();
+
         let listener = read_handle
             .clone()
             .await
-            .listen(as_of.clone())
+            .listen_with_since_delay_band_aid(as_of.clone(), since_delay)
             .await
             .expect("since <= as_of asserted");
 

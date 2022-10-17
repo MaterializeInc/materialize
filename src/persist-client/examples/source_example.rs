@@ -387,7 +387,7 @@ mod types {
     use serde::{Deserialize, Serialize};
     use timely::progress::PathSummary;
 
-    use mz_persist_types::{Codec, Codec64};
+    use mz_persist_types::{Codec, Codec64, ListenTimestampBandAid};
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
     pub struct PartitionOffset {
@@ -534,6 +534,12 @@ mod types {
 
         fn meet(&self, other: &Self) -> Self {
             std::cmp::min(*self, *other)
+        }
+    }
+
+    impl ListenTimestampBandAid for Timestamp {
+        fn saturating_sub(&self, x: &Self) -> Self {
+            Self(self.0.saturating_sub(x.0))
         }
     }
 
@@ -1358,7 +1364,7 @@ mod reader {
     use timely::PartialOrder;
 
     use mz_persist_client::read::{ListenEvent, ReadHandle};
-    use mz_persist_types::{Codec, Codec64};
+    use mz_persist_types::{Codec, Codec64, ListenTimestampBandAid};
 
     /// Spawns a persist consumer that reads from the given `ReadHandle`.
     pub async fn spawn_reader_pipeline<K, V, T>(
@@ -1369,7 +1375,7 @@ mod reader {
     where
         K: Codec + Debug + Send + Sync,
         V: Codec + Debug + Send + Sync,
-        T: timely::progress::Timestamp + Lattice + Codec64 + Send + Sync,
+        T: timely::progress::Timestamp + Lattice + Codec64 + Send + Sync + ListenTimestampBandAid,
     {
         let reader_task = mz_ore::task::spawn(|| "reader", async move {
             // Cannot snapshot at `[0]` if that's not ready.

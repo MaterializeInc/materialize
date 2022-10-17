@@ -76,3 +76,15 @@ pub trait Codec64: Sized + 'static {
     /// handle bytes output by all previous versions of encode.
     fn decode(buf: [u8; 8]) -> Self;
 }
+
+/// Trait to allow us to apply a temporary band-aid for #15402
+pub trait ListenTimestampBandAid {
+    /// Computes `self - x`, saturating at `Timestamp::minimum()`.
+    fn saturating_sub(&self, x: &Self) -> Self;
+}
+
+impl ListenTimestampBandAid for u64 {
+    fn saturating_sub(&self, x: &Self) -> Self {
+        u64::saturating_sub(*self, *x)
+    }
+}

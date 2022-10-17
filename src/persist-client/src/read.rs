@@ -21,7 +21,7 @@ use mz_ore::now::EpochMillis;
 use mz_ore::task::RuntimeExt;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist::retry::Retry;
-use mz_persist_types::{Codec, Codec64};
+use mz_persist_types::{Codec, Codec64, ListenTimestampBandAid};
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -90,7 +90,7 @@ impl ReaderId {
 #[derive(Debug)]
 pub struct Subscribe<K, V, T, D>
 where
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + ListenTimestampBandAid,
     // These are only here so we can use them in the auto-expiring `Drop` impl.
     K: Debug + Codec,
     V: Debug + Codec,
@@ -104,7 +104,7 @@ impl<K, V, T, D> Subscribe<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + ListenTimestampBandAid,
     D: Semigroup + Codec64 + Send + Sync,
 {
     fn new(
@@ -147,7 +147,7 @@ impl<K, V, T, D> Drop for Subscribe<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + ListenTimestampBandAid,
     D: Semigroup + Codec64 + Send + Sync,
 {
     fn drop(&mut self) {
@@ -177,7 +177,7 @@ pub enum ListenEvent<K, V, T, D> {
 #[derive(Debug)]
 pub struct Listen<K, V, T, D>
 where
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + ListenTimestampBandAid,
     // These are only here so we can use them in the auto-expiring `Drop` impl.
     K: Debug + Codec,
     V: Debug + Codec,
@@ -188,16 +188,18 @@ where
     as_of: Antichain<T>,
     since: Antichain<T>,
     frontier: Antichain<T>,
+
+    since_delay: T,
 }
 
 impl<K, V, T, D> Listen<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + ListenTimestampBandAid,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    async fn new(mut handle: ReadHandle<K, V, T, D>, as_of: Antichain<T>) -> Self {
+    async fn new(mut handle: ReadHandle<K, V, T, D>, as_of: Antichain<T>, since_delay: T) -> Self {
         let since = as_of.clone();
         // This listen only needs to distinguish things after its frontier
         // (initially as_of although the frontier is inclusive and the as_of
@@ -209,6 +211,7 @@ where
             since,
             frontier: as_of.clone(),
             as_of,
+            since_delay,
         }
     }
 
@@ -292,7 +295,23 @@ where
                 self.since.join_assign(&Antichain::from_elem(x.clone()));
             }
         }
-        self.handle.maybe_downgrade_since(&self.since).await;
+        // Attempt to band-aid #15402 by always holding back our since
+        // capability by some delay. In practice, the ReadHandle storaged
+        // computes since updates as `upper - <some window>`. Since the above
+        // code guarantees that this since is less_than upper, if we also
+        // subtract the same window here, we should be guaranteed that a Listen
+        // can't cause the shard-global since to advance past what storaged
+        // wants it to be, even if storaged has lost its lease.
+        //
+        // NB: Remove this allocation when we remove the since_delay band-aid.
+        let delayed_since = Antichain::from(
+            self.since
+                .elements()
+                .iter()
+                .map(|x| x.saturating_sub(&self.since_delay))
+                .collect::<Vec<_>>(),
+        );
+        self.handle.maybe_downgrade_since(&delayed_since).await;
 
         let metadata = SerdeLeasedBatchPartMetadata::Listen {
             as_of: self.as_of.iter().map(T::encode).collect(),
@@ -507,9 +526,31 @@ where
     /// (the caller has out of date information) and includes the smallest
     /// `as_of` that would have been accepted.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
-    pub async fn listen(self, as_of: Antichain<T>) -> Result<Listen<K, V, T, D>, Since<T>> {
+    pub async fn listen(self, as_of: Antichain<T>) -> Result<Listen<K, V, T, D>, Since<T>>
+    where
+        T: ListenTimestampBandAid,
+    {
+        // Default to no delay.
+        let since_delay = T::minimum();
+        self.listen_with_since_delay_band_aid(as_of, since_delay)
+            .await
+    }
+
+    /// The same as [Self::listen] but with a band-aid for #15402 that holds
+    /// back the internal since capability updates by some delay.
+    ///
+    /// See the comment inside the Listen impl for details.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
+    pub async fn listen_with_since_delay_band_aid(
+        self,
+        as_of: Antichain<T>,
+        since_delay: T,
+    ) -> Result<Listen<K, V, T, D>, Since<T>>
+    where
+        T: ListenTimestampBandAid,
+    {
         let () = self.machine.verify_listen(&as_of)?;
-        Ok(Listen::new(self, as_of).await)
+        Ok(Listen::new(self, as_of, since_delay).await)
     }
 
     /// Returns a [`BatchFetcher`], which does not hold since or seqno
@@ -583,10 +624,10 @@ where
     /// For more details on this operation's semantics, see [Self::snapshot] and
     /// [Self::listen].
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
-    pub async fn subscribe(
-        mut self,
-        as_of: Antichain<T>,
-    ) -> Result<Subscribe<K, V, T, D>, Since<T>> {
+    pub async fn subscribe(mut self, as_of: Antichain<T>) -> Result<Subscribe<K, V, T, D>, Since<T>>
+    where
+        T: ListenTimestampBandAid,
+    {
         let snapshot_parts = self.snapshot(as_of.clone()).await?;
         let listen = self.listen(as_of.clone()).await?;
         Ok(Subscribe::new(snapshot_parts, as_of, listen))
@@ -773,7 +814,10 @@ where
     /// Test helper for a [Self::listen] call that is expected to succeed.
     #[cfg(test)]
     #[track_caller]
-    pub async fn expect_listen(self, as_of: T) -> Listen<K, V, T, D> {
+    pub async fn expect_listen(self, as_of: T) -> Listen<K, V, T, D>
+    where
+        T: ListenTimestampBandAid,
+    {
         self.listen(Antichain::from_elem(as_of))
             .await
             .expect("cannot serve requested as_of")

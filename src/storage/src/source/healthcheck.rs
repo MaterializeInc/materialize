@@ -85,11 +85,14 @@ impl Healthchecker {
 
         let (since, upper) = (read_handle.since().clone(), write_handle.upper().clone());
 
+        // WIP does this one need to be delayed, too?
+        let since_delay = Timestamp::minimum();
+
         // More details on why the listener starts at `since` instead of `upper` in the docstring for [`bootstrap_state`]
         let listener = read_handle
             .clone()
             .await
-            .listen(since.clone())
+            .listen_with_since_delay_band_aid(since.clone(), since_delay)
             .await
             .expect("since <= as_of asserted");
 
