@@ -920,8 +920,7 @@ mod tests {
     use std::time::Duration;
 
     use mz_build_info::DUMMY_BUILD_INFO;
-    use mz_ore::now::SYSTEM_TIME;
-    use once_cell::sync::Lazy;
+    use mz_ore::now::{EpochMillis, SYSTEM_TIME};
 
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist_client::{PersistConfig, PersistLocation, ShardId};
@@ -929,21 +928,61 @@ mod tests {
     // 15 minutes
     static PERSIST_READER_LEASE_TIMEOUT_MS: Duration = Duration::from_secs(60 * 15);
 
-    static PERSIST_CACHE: Lazy<Arc<Mutex<PersistClientCache>>> = Lazy::new(|| {
+    fn persist_cache(now_fn: NowFn) -> Arc<Mutex<PersistClientCache>> {
         let mut persistcfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
 
         persistcfg.reader_lease_duration = PERSIST_READER_LEASE_TIMEOUT_MS;
-        persistcfg.now = now_fn();
+        persistcfg.now = now_fn;
 
         Arc::new(Mutex::new(PersistClientCache::new(
             persistcfg,
             &MetricsRegistry::new(),
         )))
-    });
+    }
+
+    /// Helper for a [`NowFn`] that can be explicitly controlled.
+    struct TestNowFn {
+        now: Arc<std::sync::Mutex<EpochMillis>>,
+    }
+
+    impl TestNowFn {
+        /// Creates a new [`TestNowFn`] that starts at timestamp `0`.
+        fn new() -> Self {
+            TestNowFn {
+                now: Arc::new(std::sync::Mutex::new(0)),
+            }
+        }
+
+        /// Advance a timestamp forward by the given `amount`. Panic if unable to do so.
+        fn advance(&self, amount: Duration) {
+            let mut now = self.now.lock().expect("lock poisoned");
+            match now.checked_add(
+                amount
+                    .as_millis()
+                    .try_into()
+                    .expect("does not fit into u64"),
+            ) {
+                Some(ts) => {
+                    *now = ts;
+                }
+                None => panic!("could not step forward"),
+            }
+        }
+
+        /// Creates a [`NowFn`] that reports back the timestamp that this
+        /// [`TestNowFn`] maintains.
+        fn now_fn(&self) -> NowFn {
+            let now_clone = Arc::clone(&self.now);
+            let now_fn = NowFn::from(move || *now_clone.lock().expect("lock poisoned"));
+            now_fn
+        }
+    }
 
     async fn make_test_operator(
         shard: ShardId,
         as_of: Antichain<Timestamp>,
+        persist_cache: &Arc<Mutex<PersistClientCache>>,
+        now_fn: &TestNowFn,
     ) -> (ReclockOperator, ReclockFollower) {
         let metadata = CollectionMetadata {
             persist_location: PersistLocation {
@@ -956,9 +995,9 @@ mod tests {
         };
 
         let operator = ReclockOperator::new(
-            Arc::clone(&*PERSIST_CACHE),
+            Arc::clone(persist_cache),
             metadata,
-            now_fn(),
+            now_fn.now_fn(),
             Duration::from_secs(1),
             as_of.clone(),
         )
@@ -972,15 +1011,6 @@ mod tests {
         follower.push_trace_updates(operator.remap_trace().into_iter());
 
         (operator, follower)
-    }
-
-    /// A `NowFn` that uses `tokio::time::Instant::now()`, so that we can
-    /// control time in tests.
-    fn now_fn() -> NowFn {
-        let start = tokio::time::Instant::now();
-        let now_fn = NowFn::from(move || start.elapsed().as_millis().try_into().unwrap());
-
-        now_fn
     }
 
     async fn mint_and_follow(
@@ -998,12 +1028,20 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn test_basic_usage() {
+        let now_fn = TestNowFn::new();
+        let persist_cache = persist_cache(now_fn.now_fn());
+
         const PART_ID: PartitionId = PartitionId::None;
-        let (mut operator, mut follower) =
-            make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
+        let (mut operator, mut follower) = make_test_operator(
+            ShardId::new(),
+            Antichain::from_elem(0.into()),
+            &persist_cache,
+            &now_fn,
+        )
+        .await;
         let mut source_upper = OffsetAntichain::new();
 
-        tokio::time::advance(Duration::from_secs(1)).await;
+        now_fn.advance(Duration::from_secs(1));
 
         let mut batch = HashMap::new();
 
@@ -1063,19 +1101,27 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn test_next_mint_timestamp() {
-        let (mut operator, _follower) =
-            make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
+        let now_fn = TestNowFn::new();
+        let persist_cache = persist_cache(now_fn.now_fn());
+
+        let (mut operator, _follower) = make_test_operator(
+            ShardId::new(),
+            Antichain::from_elem(0.into()),
+            &persist_cache,
+            &now_fn,
+        )
+        .await;
 
         // Test ceiling of timestamps works as expected
         assert_eq!(operator.next_mint_timestamp(), Ok(0.into()));
 
-        tokio::time::advance(Duration::from_millis(1)).await;
+        now_fn.advance(Duration::from_millis(1));
         assert_eq!(operator.next_mint_timestamp(), Ok(1000.into()));
 
-        tokio::time::advance(Duration::from_millis(999)).await;
+        now_fn.advance(Duration::from_millis(999));
         assert_eq!(operator.next_mint_timestamp(), Ok(1000.into()));
 
-        tokio::time::advance(Duration::from_millis(125)).await;
+        now_fn.advance(Duration::from_millis(125));
         assert_eq!(operator.next_mint_timestamp(), Ok(2000.into()));
 
         // Advance the upper frontier to 2001
@@ -1086,17 +1132,25 @@ mod tests {
         assert_eq!(sleep_duration, Duration::from_millis(2001 - 1125));
 
         // Test that if we wait the indicated amount we indeed manage to get a timestamp
-        tokio::time::advance(sleep_duration).await;
+        now_fn.advance(sleep_duration);
         assert_eq!(operator.next_mint_timestamp(), Ok(3000.into()));
     }
 
     #[tokio::test(start_paused = true)]
     async fn test_reclock_frontier() {
+        let now_fn = TestNowFn::new();
+        let persist_cache = persist_cache(now_fn.now_fn());
+
         const PART1: PartitionId = PartitionId::Kafka(1);
         const PART2: PartitionId = PartitionId::Kafka(2);
 
-        let (mut operator, _follower) =
-            make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
+        let (mut operator, _follower) = make_test_operator(
+            ShardId::new(),
+            Antichain::from_elem(0.into()),
+            &persist_cache,
+            &now_fn,
+        )
+        .await;
 
         let query = OffsetAntichain::new();
         // This is the initial source frontier so we should get the initial ts upper
@@ -1105,12 +1159,13 @@ mod tests {
             operator.reclock_frontier(&query)
         );
 
-        tokio::time::advance(Duration::from_secs(1)).await;
-
         // Mint a couple of bindings for multiple partitions
+        now_fn.advance(Duration::from_secs(1));
         operator
             .mint(&OffsetAntichain::from_iter([(PART1, MzOffset::from(10))]))
             .await;
+
+        now_fn.advance(Duration::from_secs(1));
         operator
             .mint(&OffsetAntichain::from_iter([(PART2, MzOffset::from(10))]))
             .await;
@@ -1150,7 +1205,7 @@ mod tests {
         );
 
         // Advance the operator and confirm that we get to the next timestamp
-        tokio::time::advance(Duration::from_secs(1)).await;
+        now_fn.advance(Duration::from_secs(1));
         operator.advance().await;
         let query =
             OffsetAntichain::from_iter([(PART1, MzOffset::from(10)), (PART2, MzOffset::from(10))]);
@@ -1183,10 +1238,18 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn test_reclock() {
+        let now_fn = TestNowFn::new();
+        let persist_cache = persist_cache(now_fn.now_fn());
+
         const PART_ID: PartitionId = PartitionId::None;
 
-        let (mut operator, mut follower) =
-            make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
+        let (mut operator, mut follower) = make_test_operator(
+            ShardId::new(),
+            Antichain::from_elem(0.into()),
+            &persist_cache,
+            &now_fn,
+        )
+        .await;
 
         let mut batch = HashMap::new();
         let mut source_upper = OffsetAntichain::new();
@@ -1214,6 +1277,7 @@ mod tests {
         );
         source_upper.insert(PART_ID, MzOffset::from(5));
 
+        now_fn.advance(Duration::from_millis(1000));
         mint_and_follow(&mut operator, &mut follower, &mut source_upper).await;
         let reclocked_msgs = follower
             .reclock(&mut batch)
@@ -1291,18 +1355,25 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn test_compaction() {
+        let now_fn = TestNowFn::new();
+        let persist_cache = persist_cache(now_fn.now_fn());
+
         let binding_shard = ShardId::new();
 
         const PART_ID: PartitionId = PartitionId::None;
-        let (mut operator, mut follower) =
-            make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
+        let (mut operator, mut follower) = make_test_operator(
+            binding_shard,
+            Antichain::from_elem(0.into()),
+            &persist_cache,
+            &now_fn,
+        )
+        .await;
 
         let mut batch = HashMap::new();
         let mut source_upper = OffsetAntichain::new();
 
-        tokio::time::advance(Duration::from_secs(1)).await;
-
         // Reclock offsets 1 and 2 to timestamp 1000
+        now_fn.advance(Duration::from_secs(1));
         batch.insert(
             PART_ID,
             vec![(1, MzOffset::from(1)), (2, MzOffset::from(2))],
@@ -1319,6 +1390,7 @@ mod tests {
         assert!(batch[&PART_ID].is_empty());
 
         // Reclock offsets 3 and 4 to timestamp 2000
+        now_fn.advance(Duration::from_secs(1));
         batch.insert(
             PART_ID,
             vec![(3, MzOffset::from(3)), (4, MzOffset::from(4))],
@@ -1359,8 +1431,13 @@ mod tests {
         );
 
         // Starting a new operator with an `as_of` is the same as having compacted
-        let (_operator, follower) =
-            make_test_operator(binding_shard, Antichain::from_elem(1000.into())).await;
+        let (_operator, follower) = make_test_operator(
+            binding_shard,
+            Antichain::from_elem(1000.into()),
+            &persist_cache,
+            &now_fn,
+        )
+        .await;
 
         // Reclocking offsets 3 and 4 should succeed
         batch.insert(
@@ -1385,20 +1462,33 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn test_concurrency() {
+        let now_fn = TestNowFn::new();
+        let persist_cache = persist_cache(now_fn.now_fn());
+
         const PART_ID: PartitionId = PartitionId::None;
 
         // Create two operators pointing to the same shard
         let shared_shard = ShardId::new();
-        let (mut op_a, mut follower_a) =
-            make_test_operator(shared_shard, Antichain::from_elem(0.into())).await;
-        let (mut op_b, mut follower_b) =
-            make_test_operator(shared_shard, Antichain::from_elem(0.into())).await;
+        let (mut op_a, mut follower_a) = make_test_operator(
+            shared_shard,
+            Antichain::from_elem(0.into()),
+            &persist_cache,
+            &now_fn,
+        )
+        .await;
+        let (mut op_b, mut follower_b) = make_test_operator(
+            shared_shard,
+            Antichain::from_elem(0.into()),
+            &persist_cache,
+            &now_fn,
+        )
+        .await;
 
         // Reclock a batch from one of the operators
         let mut batch = HashMap::new();
         let mut source_upper = OffsetAntichain::new();
 
-        tokio::time::advance(Duration::from_secs(1)).await;
+        now_fn.advance(Duration::from_secs(1));
 
         // Reclock offsets 1 and 2 to timestamp 1000 from operator A
         batch.insert(
@@ -1421,7 +1511,7 @@ mod tests {
         follower_a.compact(Antichain::from_elem(1000.into()));
 
         // Advance the time by a lot
-        tokio::time::advance(Duration::from_secs(10)).await;
+        now_fn.advance(Duration::from_secs(10));
 
         // Reclock a batch that includes messages from the bindings already minted
         batch.insert(
@@ -1456,19 +1546,26 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn test_inversion() {
+        let now_fn = TestNowFn::new();
+        let persist_cache = persist_cache(now_fn.now_fn());
+
         let binding_shard = ShardId::new();
 
         const PART_ID: PartitionId = PartitionId::None;
-        let (mut operator, mut follower) =
-            make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
+        let (mut operator, mut follower) = make_test_operator(
+            binding_shard,
+            Antichain::from_elem(0.into()),
+            &persist_cache,
+            &now_fn,
+        )
+        .await;
 
         let mut batch = HashMap::new();
         let mut source_upper = OffsetAntichain::new();
 
-        tokio::time::advance(Duration::from_secs(1)).await;
-
         // SETUP
         // Reclock offsets 1 and 2 to timestamp 1000
+        now_fn.advance(Duration::from_secs(1));
         batch.insert(
             PART_ID,
             vec![(1, MzOffset::from(1)), (2, MzOffset::from(2))],
@@ -1482,7 +1579,9 @@ mod tests {
             .consume_all();
         assert_eq!(reclocked_msgs, &[(1, 1000.into()), (2, 1000.into())]);
         assert!(batch[&PART_ID].is_empty());
+
         // Reclock offsets 3 and 4 to timestamp 2000
+        now_fn.advance(Duration::from_secs(1));
         batch.insert(
             PART_ID,
             vec![(3, MzOffset::from(3)), (4, MzOffset::from(4))],
@@ -1496,7 +1595,9 @@ mod tests {
             .consume_all();
         assert_eq!(reclocked_msgs, &[(3, 2000.into()), (4, 2000.into())]);
         assert!(batch[&PART_ID].is_empty());
+
         // Reclock offsets 5 and 6 to timestamp 3000
+        now_fn.advance(Duration::from_secs(1));
         batch.insert(
             PART_ID,
             vec![(5, MzOffset::from(5)), (6, MzOffset::from(6))],
@@ -1605,11 +1706,19 @@ mod tests {
     // https://github.com/MaterializeInc/materialize/issues/14740.
     #[tokio::test(start_paused = true)]
     async fn test_since_hold() {
+        let now_fn = TestNowFn::new();
+        let persist_cache = persist_cache(now_fn.now_fn());
+
         let binding_shard = ShardId::new();
 
         const PART_ID: PartitionId = PartitionId::None;
-        let (mut operator, _follower) =
-            make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
+        let (mut operator, _follower) = make_test_operator(
+            binding_shard,
+            Antichain::from_elem(0.into()),
+            &persist_cache,
+            &now_fn,
+        )
+        .await;
 
         let mut source_upper = OffsetAntichain::new();
 
@@ -1622,11 +1731,11 @@ mod tests {
         // between so that the "listen handle" will not timeout but the internal
         // handle used for holding back the since will timeout.
 
-        tokio::time::advance(PERSIST_READER_LEASE_TIMEOUT_MS / 2 + Duration::from_millis(1)).await;
+        now_fn.advance(PERSIST_READER_LEASE_TIMEOUT_MS / 2 + Duration::from_millis(1));
         source_upper.insert(PART_ID, MzOffset::from(3));
         let _ = operator.mint(&source_upper).await;
 
-        tokio::time::advance(PERSIST_READER_LEASE_TIMEOUT_MS / 2 + Duration::from_millis(1)).await;
+        now_fn.advance(PERSIST_READER_LEASE_TIMEOUT_MS / 2 + Duration::from_millis(1));
         source_upper.insert(PART_ID, MzOffset::from(5));
         let _ = operator.mint(&source_upper).await;
 
@@ -1637,8 +1746,13 @@ mod tests {
 
         // Starting a new operator with an `as_of` of `0`, to verify that
         // holding back the `since` of the remap shard works as expected.
-        let (_operator, _follower) =
-            make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
+        let (_operator, _follower) = make_test_operator(
+            binding_shard,
+            Antichain::from_elem(0.into()),
+            &persist_cache,
+            &now_fn,
+        )
+        .await;
 
         // Also manually assert the since of the remap shard.
         let persist_location = PersistLocation {
@@ -1646,7 +1760,7 @@ mod tests {
             consensus_uri: "mem://".to_owned(),
         };
 
-        let mut persist_clients = PERSIST_CACHE.lock().await;
+        let mut persist_clients = persist_cache.lock().await;
         let persist_client = persist_clients
             .open(persist_location)
             .await
