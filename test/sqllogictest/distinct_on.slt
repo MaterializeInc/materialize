@@ -37,32 +37,26 @@ CREATE TABLE abc (
 )
 
 query T multiline
-EXPLAIN SELECT DISTINCT ON (c) a FROM abc
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT ON (c) a FROM abc
 ----
-Source materialize.public.abc (u1):
-| Map dummy
-| Project (#0, #3, #2)
+Explained Query:
+  Project (#0) // { arity: 1 }
+    TopK group_by=[#1] limit=1 monotonic=false // { arity: 2 }
+      Project (#0, #2) // { arity: 2 }
+        Get materialize.public.abc // { arity: 3 }
 
-Query:
-%0 =
-| Get materialize.public.abc (u1)
-| Project (#0, #2)
-| TopK group=(#1) order=() limit=1 offset=0
-| Project (#0)
+Source materialize.public.abc
+  project=(#0, #3, #2)
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN SELECT DISTINCT ON (c) a FROM abc ORDER BY c, b
+EXPLAIN WITH(arity, join_impls) SELECT DISTINCT ON (c) a FROM abc ORDER BY c, b
 ----
-Source materialize.public.abc (u1):
-| Project (#0..=#2)
-
-Query:
-%0 =
-| Get materialize.public.abc (u1)
-| TopK group=(#2) order=(#1 asc nulls_last) limit=1 offset=0
-
-Finish order_by=(#2 asc nulls_last, #1 asc nulls_last) limit=none offset=0 project=(#0)
+Explained Query:
+  Finish order_by=[#2 asc nulls_last, #1 asc nulls_last] output=[#0]
+    TopK group_by=[#2] order_by=[#1 asc nulls_last] limit=1 monotonic=false // { arity: 3 }
+      Get materialize.public.abc // { arity: 3 }
 
 EOF

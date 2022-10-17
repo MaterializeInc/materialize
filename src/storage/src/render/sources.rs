@@ -61,8 +61,7 @@ enum SourceType<Delimited, ByteStream, RowSource> {
 /// alive as long as it is not dropped.
 ///
 /// This function is intended to implement the recipe described here:
-/// <https://github.com/MaterializeInc/materialize/pull/12109>
-// TODO(guswynn): Link to merged document
+/// <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/platform/architecture-storage.md#source-ingestion>
 pub fn render_source<G>(
     scope: &mut G,
     dataflow_debug_name: &String,

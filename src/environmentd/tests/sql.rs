@@ -102,7 +102,7 @@ fn test_no_block() -> Result<(), anyhow::Error> {
 
     // This is better than relying on CI to time out, because an actual failure
     // (as opposed to a CI timeout) causes `services.log` to be uploaded.
-    mz_ore::test::timeout(Duration::from_secs(30), || {
+    mz_ore::test::timeout(Duration::from_secs(60), || {
         info!("test_no_block: starting server");
         let server = util::start_server(util::Config::default())?;
 
@@ -117,7 +117,7 @@ fn test_no_block() -> Result<(), anyhow::Error> {
                 info!("test_no_block: in thread; executing create source");
                 let result = client
                 .batch_execute(&format!(
-                    "CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL 'http://{}';",
+                    "CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL 'http://{}');",
                     schema_registry_server.addr,
                 ))
                 .await;
@@ -126,7 +126,7 @@ fn test_no_block() -> Result<(), anyhow::Error> {
 
                 let result = client
                     .batch_execute(&format!(
-                        "CREATE CONNECTION kafka_conn FOR KAFKA BROKER '{}'",
+                        "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}')",
                         &*KAFKA_ADDRS,
                     ))
                     .await;
@@ -192,13 +192,13 @@ fn test_drop_connection_race() -> Result<(), anyhow::Error> {
         let (client, _conn) = server.connect_async(postgres::NoTls).await?;
         client
             .batch_execute(&format!(
-                "CREATE CONNECTION conn FOR CONFLUENT SCHEMA REGISTRY URL 'http://{}'",
+                "CREATE CONNECTION conn TO CONFLUENT SCHEMA REGISTRY (URL 'http://{}')",
                 schema_registry_server.addr,
             ))
             .await?;
         client
             .batch_execute(&format!(
-                "CREATE CONNECTION kafka_conn FOR KAFKA BROKER '{}'",
+                "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}')",
                 &*KAFKA_ADDRS,
             ))
             .await?;
@@ -1407,6 +1407,12 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
     // equal timestamp in strict serializable mode.
     assert!(join_ts >= view_ts);
 
+    mz_client.batch_execute("SET transaction_isolation = serializable")?;
+    let view_ts = get_explain_timestamp(view_name, &mut mz_client);
+    let join_ts = get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
+    // If we go back to serializable, then timestamps can revert again.
+    assert!(join_ts < view_ts);
+
     cleanup_fn(&mut mz_client, &mut pg_client, &server.runtime)?;
 
     Ok(())
@@ -1699,7 +1705,7 @@ fn create_postgres_source_with_table(
         connection_str = format!("{connection_str}, PASSWORD SECRET s");
     }
     mz_client.batch_execute(&format!(
-        "CREATE CONNECTION pgconn FOR POSTGRES {connection_str}"
+        "CREATE CONNECTION pgconn TO POSTGRES ({connection_str})"
     ))?;
     mz_client.batch_execute(&format!(
         "CREATE SOURCE {source_name}
@@ -1731,22 +1737,29 @@ fn wait_for_view_population(
     view_name: &str,
     source_rows: i64,
 ) -> Result<(), Box<dyn Error>> {
-    let mut rows = 0;
-    while rows != source_rows {
-        thread::sleep(Duration::from_millis(1));
-        // This is a bit hacky. We have no way of getting the freshest data in the view, without
-        // also advancing every other object in the time domain, which we usually want to avoid in
-        // these tests. Instead we query the view using AS OF a value close to the current system
-        // clock and hope it gives us fresh enough data.
-        let now = ((SYSTEM_TIME.as_secs() as EpochMillis) * 1_000) - 100;
-        rows = mz_client
-            .query_one(
-                &format!("SELECT COUNT(*) FROM {view_name} AS OF {now};"),
-                &[],
-            )
-            .map(|row| row.get::<_, i64>(0))
-            .unwrap_or(0);
-    }
+    let current_isolation = mz_client
+        .query_one("SHOW transaction_isolation", &[])?
+        .get::<_, String>(0);
+    mz_client.batch_execute("SET transaction_isolation = SERIALIZABLE")?;
+    Retry::default()
+        .max_duration(Duration::from_secs(10))
+        .retry(|_| {
+            let rows = mz_client
+                .query_one(&format!("SELECT COUNT(*) FROM {view_name};"), &[])
+                .unwrap()
+                .get::<_, i64>(0);
+            if rows == source_rows {
+                Ok(())
+            } else {
+                Err(format!(
+                    "Waiting for {source_rows} row to be ingested. Currently at {rows}."
+                ))
+            }
+        })
+        .unwrap();
+    mz_client.batch_execute(&format!(
+        "SET transaction_isolation = '{current_isolation}'"
+    ))?;
     Ok(())
 }
 

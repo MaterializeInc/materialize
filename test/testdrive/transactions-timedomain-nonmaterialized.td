@@ -16,7 +16,7 @@ $ kafka-ingest topic=static format=bytes
 4
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE indexed (c)
   FROM KAFKA CONNECTION kafka_conn

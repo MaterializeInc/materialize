@@ -82,7 +82,6 @@ impl<T: TimestampManipulation> ComputeInstanceIndexOracle<'_, T> {
                     CatalogItem::Source(_)
                     | CatalogItem::Table(_)
                     | CatalogItem::MaterializedView(_)
-                    | CatalogItem::StorageManagedTable(_)
                     | CatalogItem::Log(Log {
                         has_storage_collection: true,
                         ..

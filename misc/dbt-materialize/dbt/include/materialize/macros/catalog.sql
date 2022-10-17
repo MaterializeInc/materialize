@@ -24,7 +24,7 @@
             d.name as table_database,
             s.name as table_schema,
             o.name as table_name,
-            case when o.type = 'materialized view' then 'materializedview' else o.type end as table_type,
+            case when o.type = 'materialized-view' then 'materializedview' else o.type end as table_type,
             '' as table_comment,
             c.name as column_name,
             c.position as column_index,

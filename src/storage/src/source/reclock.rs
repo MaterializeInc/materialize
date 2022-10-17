@@ -30,12 +30,12 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::Upper;
-use mz_repr::Timestamp;
+use mz_repr::{Datum, Diff, Row, Timestamp};
 use tracing::trace;
 
 use crate::controller::CollectionMetadata;
 use crate::source::antichain::OffsetAntichain;
-use crate::types::sources::MzOffset;
+use crate::types::sources::{MzOffset, SourceData};
 
 /// A "follower" for the ReclockOperator, that maintains
 /// a trace based on the results of reclocking and data from
@@ -45,6 +45,92 @@ use crate::types::sources::MzOffset;
 /// Shareable with `.share()`
 pub struct ReclockFollower {
     inner: Rc<RefCell<ReclockFollowerInner>>,
+}
+
+/// Packs a binding into a Row.
+///
+/// A binding of None partition is encoded as a single datum containing the offset.
+///
+/// A binding of a Kafka partition is encoded as the partition datum followed by the offset datum.
+fn pack_binding(pid: PartitionId, offset: MzOffset) -> SourceData {
+    let mut row = Row::with_capacity(2);
+    let mut packer = row.packer();
+    match pid {
+        PartitionId::None => {}
+        PartitionId::Kafka(pid) => packer.push(Datum::Int32(pid)),
+    }
+    packer.push(Datum::UInt64(offset.offset));
+    SourceData(Ok(row))
+}
+
+/// Unpacks a binding from a Row
+/// See documentation of [pack_binding] for the encoded format
+fn unpack_binding(data: SourceData) -> (PartitionId, MzOffset) {
+    let row = data.0.expect("invalid binding");
+    let mut datums = row.iter();
+    let (pid, offset) = match (datums.next(), datums.next()) {
+        (Some(Datum::Int32(p)), Some(Datum::UInt64(offset))) => (PartitionId::Kafka(p), offset),
+        (Some(Datum::UInt64(offset)), None) => (PartitionId::None, offset),
+        _ => panic!("invalid binding"),
+    };
+
+    (pid, MzOffset::from(offset))
+}
+
+/// Drains the provided vector of updates containing insertions and retractions of full offset
+/// statements and differentiates them into updates containing the change in offset in the diff
+/// field.
+///
+/// It effectively turns pairs of source_upper retractions + insertions (placed next to each other
+/// in the stream by integrate into MzOffset diffs
+fn differentiate(
+    updates: &mut Vec<((PartitionId, MzOffset), Timestamp, Diff)>,
+) -> impl Iterator<Item = (PartitionId, Timestamp, MzOffset)> + '_ {
+    // Ensure that the updates are sorted to have updates for the same partition next to each other
+    // and in ascending offset order
+    consolidation::consolidate_updates(updates);
+    let mut prev_update = None;
+    updates
+        .drain(..)
+        .filter_map(move |((pid, offset), ts, diff)| match diff {
+            -1 => {
+                prev_update = Some((pid, offset, ts));
+                None
+            }
+            1 => {
+                let prev_offset = match prev_update.take() {
+                    Some((prev_pid, prev_offset, prev_ts)) => {
+                        assert_eq!(prev_pid, pid, "invalid bindings");
+                        assert_eq!(prev_ts, ts, "invalid bindings");
+                        prev_offset
+                    }
+                    None => MzOffset::from(0),
+                };
+                offset
+                    .checked_sub(prev_offset)
+                    .map(move |diff| (pid, ts, diff))
+            }
+            _ => panic!("invalid binding"),
+        })
+}
+
+/// Integrates the provided updates containing the change of offset in the diff field into updates
+/// containing insertions and retractions of full offset statements.
+fn integrate<'a>(
+    prev_state: &'a HashMap<PartitionId, MzOffset>,
+    updates: &'a [(PartitionId, MzOffset)],
+) -> impl Iterator<Item = ((PartitionId, MzOffset), Diff)> + 'a {
+    updates.into_iter().flat_map(|(pid, diff)| {
+        let (retraction, prev_offset) = match prev_state.get(pid).copied() {
+            Some(prev_offset) => (Some(((pid.clone(), prev_offset), -1)), prev_offset),
+            None => (None, MzOffset::from(0)),
+        };
+
+        let next_offset = prev_offset + *diff;
+        retraction
+            .into_iter()
+            .chain([((pid.clone(), next_offset), 1)])
+    })
 }
 
 struct ReclockFollowerInner {
@@ -323,14 +409,14 @@ pub struct ReclockOperator {
     source_upper: HashMap<PartitionId, MzOffset>,
 
     /// Write handle of the remap persist shard
-    write_handle: WriteHandle<(), PartitionId, Timestamp, MzOffset>,
+    write_handle: WriteHandle<SourceData, (), Timestamp, Diff>,
     /// Read handle of the remap persist shard
     ///
     /// NB: Until #13534 is addressed, this intentionally holds back the since
     /// of the remap shard indefinitely.
-    read_handle: ReadHandle<(), PartitionId, Timestamp, MzOffset>,
+    read_handle: ReadHandle<SourceData, (), Timestamp, Diff>,
     /// A listener to tail the remap shard for new updates
-    listener: Listen<(), PartitionId, Timestamp, MzOffset>,
+    listener: Listen<SourceData, (), Timestamp, Diff>,
     /// The function that should be used to get the current time when minting new bindings
     now: NowFn,
     /// Values of current time will be rounded to be multiples of this duration in milliseconds
@@ -506,14 +592,15 @@ impl ReclockOperator {
         // If this is the first sync and the collection is non-empty load the initial snapshot
         let first_sync = self.upper.elements() == [Timestamp::minimum()];
         if first_sync && PartialOrder::less_than(&self.upper, target_upper) {
-            for ((_, pid), ts, diff) in self
+            for ((source_data, _), ts, diff) in self
                 .read_handle
                 .snapshot_and_fetch(self.since.clone())
                 .await
                 .expect("local since is not beyond read handle's since")
             {
-                let pid = pid.expect("failed to decode partition");
-                pending_batch.push((pid, ts, diff));
+                let source_data = source_data.expect("failed to decode binding");
+                let binding = unpack_binding(source_data);
+                pending_batch.push((binding, ts, diff));
             }
         }
 
@@ -523,8 +610,7 @@ impl ReclockOperator {
             for event in self.listener.next().await {
                 match event {
                     ListenEvent::Progress(new_upper) => {
-                        consolidation::consolidate_updates(&mut pending_batch);
-                        for (pid, ts, diff) in pending_batch.drain(..) {
+                        for (pid, ts, diff) in differentiate(&mut pending_batch) {
                             let bindings = self.remap_trace.entry(pid.clone()).or_default();
                             bindings.push((ts, diff));
 
@@ -537,9 +623,10 @@ impl ReclockOperator {
                         self.upper = new_upper;
                     }
                     ListenEvent::Updates(updates) => {
-                        for ((_, pid), ts, diff) in updates {
-                            let pid = pid.expect("failed to decode partition");
-                            pending_batch.push((pid, ts, diff));
+                        for ((source_data, _), ts, diff) in updates {
+                            let source_data = source_data.expect("failed to decode binding");
+                            let binding = unpack_binding(source_data);
+                            pending_batch.push((binding, ts, diff));
                         }
                     }
                 }
@@ -614,13 +701,10 @@ impl ReclockOperator {
     /// bindings concurrently then the current global upper will be returned as an error. This is
     /// the frontier that this operator must be synced to for a future append attempt to have any
     /// chance of success.
-    async fn append<P>(
+    async fn append(
         &mut self,
-        updates: &[(P, MzOffset)],
-    ) -> Result<Vec<(PartitionId, Vec<(Timestamp, MzOffset)>)>, Upper<Timestamp>>
-    where
-        P: Borrow<PartitionId>,
-    {
+        updates: &[(PartitionId, MzOffset)],
+    ) -> Result<Vec<(PartitionId, Vec<(Timestamp, MzOffset)>)>, Upper<Timestamp>> {
         let next_ts = loop {
             match self.next_mint_timestamp() {
                 Ok(ts) => break ts,
@@ -631,9 +715,8 @@ impl ReclockOperator {
         loop {
             let upper = self.upper.clone();
             let new_upper = new_upper.clone();
-            let updates = updates
-                .iter()
-                .map(|(pid, diff)| (((), pid.borrow()), next_ts, diff));
+            let updates = integrate(&self.source_upper, updates)
+                .map(|((pid, offset), diff)| ((pack_binding(pid, offset), ()), next_ts, diff));
             match self
                 .write_handle
                 .compare_and_append(updates, upper, new_upper)
@@ -1571,7 +1654,7 @@ mod tests {
         drop(persist_clients);
 
         let read_handle = persist_client
-            .open_reader::<(), PartitionId, Timestamp, MzOffset>(binding_shard)
+            .open_reader::<SourceData, (), Timestamp, Diff>(binding_shard)
             .await
             .expect("error opening persist shard");
 

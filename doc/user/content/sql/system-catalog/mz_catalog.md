@@ -29,9 +29,9 @@ other objects in the system catalog.
 Field           | Type                         | Meaning
 ----------------|------------------------------|--------
 `id  `          | [`uint8`]                    | Materialize's unique, monotonically increasing ID for the event.
-`event_type`    | [`text`]                     | The type of the event: `create`, `drop`, `alter`, or `rename`.
-`object_type`   | [`text`]                     | The type of the affected object: `cluster`, `cluster-replica`, `connection`, `index`, `materialized-view`, `sink`, `source`, `table`, or `view`.
-`event_details` | [`jsonb`]                    | Additional details about the event. The shape of the details varies based on `event_type` and `object_type`.
+`event_type`    | [`text`]                     | The type of the event: `create`, `drop`, or `alter`.
+`object_type`   | [`text`]                     | The type of the affected object: `cluster`, `cluster-replica`, `connection`, `database`, `function`, `index`, `materialized-view`, `role`, `schema`, `secret`, `sink`, `source`, `table`, `type`, or `view`.
+`details`       | [`jsonb`]                    | Additional details about the event. The shape of the details varies based on `event_type` and `object_type`.
 `user`          | [`text`]                     | The user who triggered the event, or `NULL` if triggered by the system.
 `occurred_at`   | [`timestamp with time zone`] | The time at which the event occurred.
 
@@ -47,13 +47,13 @@ Field          | Type       | Meaning
 
 The `mz_cluster_replicas` table contains a row for each cluster replica in the system.
 
-Field               | Type       | Meaning
---------------------|------------|--------
-`id`                | [`uint8`]  | Materialize's unique ID for the cluster replica.
-`name`              | [`text`]   | The name of the cluster replica.
-`cluster_id`        | [`uint8`]  | The ID of the cluster to which the replica belongs.
-`size`              | [`text`]   | The cluster replica's size, selected during creation.
-`availability_zone` | [`text`]   | The availability zone in which the cluster is running.
+Field               | Type      | Meaning
+--------------------|-----------|--------
+`id`                | [`uint8`] | Materialize's unique ID for the cluster replica.
+`name`              | [`text`]  | The name of the cluster replica.
+`cluster_id`        | [`text`]  | The ID of the cluster to which the replica belongs.
+`size`              | [`text`]  | The cluster replica's size, selected during creation.
+`availability_zone` | [`text`]  | The availability zone in which the cluster is running.
 
 ### `mz_clusters`
 
@@ -100,6 +100,15 @@ Field  | Type       | Meaning
 `id`   | [`uint8`]  | Materialize's unique ID for the database.
 `oid`  | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the database.
 `name` | [`text`]   | The name of the database.
+
+### `mz_egress_ips`
+
+The `mz_egress_ips` table contains a row for each potential IP address that the
+system may connect to external systems from.
+
+Field       | Type     | Meaning
+------------|----------|--------
+`egress_ip` | [`text`] | The IP address.
 
 ### `mz_functions`
 
@@ -187,14 +196,14 @@ Field          | Type       | Meaning
 
 The `mz_materialized_views` table contains a row for each materialized view in the system.
 
-Field          | Type        | Meaning
----------------|-------------|----------
-`id`           | [`text`]    | Materialize's unique ID for the materialized view.
-`oid`          | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the materialized view.
-`schema_id`    | [`uint8`]   | The ID of the schema to which the materialized view belongs.
-`name`         | [`text`]    | The name of the materialized view.
-`cluster_id`   | [`uint8`]   | The ID of the cluster maintaining the materialized view.
-`definition`   | [`text`]    | The materialized view definition (a `SELECT` query).
+Field          | Type      | Meaning
+---------------|-----------|----------
+`id`           | [`text`]  | Materialize's unique ID for the materialized view.
+`oid`          | [`oid`]   | A [PostgreSQL-compatible OID][oid] for the materialized view.
+`schema_id`    | [`uint8`] | The ID of the schema to which the materialized view belongs.
+`name`         | [`text`]  | The name of the materialized view.
+`cluster_id`   | [`text`]  | The ID of the cluster maintaining the materialized view.
+`definition`   | [`text`]  | The materialized view definition (a `SELECT` query).
 
 ### `mz_objects`
 

@@ -14,7 +14,7 @@ statement ok
 create table t(f1 int, f2 int);
 
 query T multiline
-EXPLAIN QUERY GRAPH FOR
+EXPLAIN QUERY GRAPH AS DOT FOR
 SELECT * FROM t;
 ----
 digraph G {

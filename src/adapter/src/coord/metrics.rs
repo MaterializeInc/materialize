@@ -68,6 +68,7 @@ where
         StatementKind::AlterObjectRename => "alter_object_rename",
         StatementKind::AlterIndex => "alter_index",
         StatementKind::AlterSecret => "alter_secret",
+        StatementKind::AlterSink => "alter_sink",
         StatementKind::AlterSource => "alter_source",
         StatementKind::AlterSystemSet => "alter_system_set",
         StatementKind::AlterSystemReset => "alter_system_reset",

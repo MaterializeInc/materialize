@@ -15,11 +15,11 @@ jack,jill
 goofus,gallant
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
 > CREATE SOURCE src (a, b)
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-test-${testdrive.seed}')
@@ -46,7 +46,7 @@ goofus,gallant
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
   WITH (badoption=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-contains:Expected one of SIZE or SNAPSHOT
+contains:Expected one of REMOTE or SIZE or SNAPSHOT
 
 > SHOW SINKS
 name               type   size
@@ -106,12 +106,16 @@ name               type   size
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
+$ set-regex match=\d replacement=<D>
+
 > SHOW SINKS
 name               type   size
 ------------------------------
-snk1               kafka  1
-snk2               kafka  1
-snk3               kafka  1
+snk<D>             kafka  <D>
+snk<D>             kafka  <D>
+snk<D>             kafka  <D>
+
+$ unset-regex
 
 $ kafka-verify-data format=avro sink=materialize.public.snk1 sort-messages=true
 {"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": [0, 0, 0, 0, 0, 0, 0, 1]}}}
@@ -200,18 +204,22 @@ $ kafka-verify-data format=avro sink=materialize.public.snk8 sort-messages=true
 {"before": null, "after": {"row":{"column1": 2}}}
 {"before": null, "after": {"row":{"column1": 3}}}
 
+$ set-regex match=\d replacement=<D>
+
 > SHOW SINKS
 name               type   size
 ------------------------------
-snk1               kafka  1
-snk2               kafka  1
-snk3               kafka  1
-snk4               kafka  1
-snk5               kafka  1
-snk6               kafka  1
-snk7               kafka  1
-snk8               kafka  1
-snk_unsigned       kafka  1
+snk<D>             kafka  <D>
+snk<D>             kafka  <D>
+snk<D>             kafka  <D>
+snk<D>             kafka  <D>
+snk<D>             kafka  <D>
+snk<D>             kafka  <D>
+snk<D>             kafka  <D>
+snk<D>             kafka  <D>
+snk_unsigned       kafka  <D>
+
+$ unset-regex
 
 # test explicit partition count
 > CREATE SINK snk9 FROM foo
@@ -263,7 +271,10 @@ snk_unsigned       kafka  1
 
 # Including for sinks with default size
 > SELECT size FROM mz_sinks WHERE name = 'snk13'
-1
+"${arg.size}"
+
+$ skip-if
+SELECT ${arg.size} != 1
 
 # Check that SHOW SINKS shows the size correctly
 > SHOW SINKS

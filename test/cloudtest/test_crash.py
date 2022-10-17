@@ -27,7 +27,7 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
 
             > INSERT INTO t1 VALUES (234);
 
-            > CREATE CONNECTION kafka FOR KAFKA BROKER '${testdrive.kafka-addr}'
+            > CREATE CONNECTION kafka TO KAFKA (BROKER '${testdrive.kafka-addr}')
 
             > CREATE SOURCE s1
               FROM KAFKA CONNECTION kafka

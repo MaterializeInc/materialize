@@ -477,16 +477,7 @@ ReadyForQuery {"status":"I"}
 # Verify implicit transactions are properly upgraded
 send
 Query {"query": "CREATE TABLE t (a INT)"}
-Parse {"query": "INSERT INTO t VALUES (1)"}
-Bind
-Execute
-Parse {"query": "BEGIN"}
-Bind
-Execute
-Parse {"query": "COMMIT"}
-Bind
-Execute
-Sync
+Query {"query": "INSERT INTO t VALUES (1); BEGIN; COMMIT;"}
 Parse {"query": "SELECT a FROM t"}
 Bind
 Execute
@@ -500,14 +491,8 @@ ReadyForQuery
 ----
 CommandComplete {"tag":"CREATE TABLE"}
 ReadyForQuery {"status":"I"}
-ParseComplete
-BindComplete
 CommandComplete {"tag":"INSERT 0 1"}
-ParseComplete
-BindComplete
 CommandComplete {"tag":"BEGIN"}
-ParseComplete
-BindComplete
 CommandComplete {"tag":"COMMIT"}
 ReadyForQuery {"status":"I"}
 ParseComplete
@@ -519,16 +504,7 @@ ReadyForQuery {"status":"I"}
 # Verify implicit transactions are properly upgraded, and share fate
 # with upgraded txn; the insert of 2 should get discarded
 send
-Parse {"query": "INSERT INTO t VALUES (2)"}
-Bind
-Execute
-Parse {"query": "BEGIN"}
-Bind
-Execute
-Parse {"query": "SELECT 0/0"}
-Bind
-Execute
-Sync
+Query {"query": "INSERT INTO t VALUES (2); BEGIN; SELECT 0/0;"}
 Parse {"query": "COMMIT"}
 Bind
 Execute
@@ -544,14 +520,8 @@ ReadyForQuery
 ReadyForQuery
 ReadyForQuery
 ----
-ParseComplete
-BindComplete
 CommandComplete {"tag":"INSERT 0 1"}
-ParseComplete
-BindComplete
 CommandComplete {"tag":"BEGIN"}
-ParseComplete
-BindComplete
 ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
 ReadyForQuery {"status":"E"}
 ParseComplete
@@ -567,16 +537,7 @@ ReadyForQuery {"status":"I"}
 # PG permits starting a read only txn with writes blended into its ops;
 # evidence of this behavior by an errored txn does not commit write.
 send
-Parse {"query": "INSERT INTO t VALUES (2)"}
-Bind
-Execute
-Parse {"query": "BEGIN READ ONLY"}
-Bind
-Execute
-Parse {"query": "SELECT 0/0"}
-Bind
-Execute
-Sync
+Query {"query": "INSERT INTO t VALUES (2); BEGIN READ ONLY; SELECT 0/0;"}
 Parse {"query": "COMMIT"}
 Bind
 Execute
@@ -592,14 +553,8 @@ ReadyForQuery
 ReadyForQuery
 ReadyForQuery
 ----
-ParseComplete
-BindComplete
 CommandComplete {"tag":"INSERT 0 1"}
-ParseComplete
-BindComplete
 CommandComplete {"tag":"BEGIN"}
-ParseComplete
-BindComplete
 ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
 ReadyForQuery {"status":"E"}
 ParseComplete

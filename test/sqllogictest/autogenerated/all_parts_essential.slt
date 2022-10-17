@@ -184,7 +184,7 @@ WHERE l_quantity = 24
 
 
 query T multiline
-EXPLAIN SELECT o_orderkey,
+EXPLAIN WITH(arity, join_impls) SELECT o_orderkey,
        l_suppkey
 FROM lineitem
 JOIN orders ON (l_orderkey = o_orderkey)
@@ -192,21 +192,21 @@ WHERE l_quantity = 24
   OR l_linenumber = 6
   AND l_quantity BETWEEN 3 AND 2 + 2
 ----
-%0 =
-| Get materialize.public.lineitem (u7)
-| ArrangeBy (#0)
+Explained Query:
+  Project (#0, #2) // { arity: 2 }
+    Filter ((#4 = 24) OR ((#3 = 6) AND (#4 <= 4) AND (#4 >= 3))) // { arity: 25 }
+      Join on=(#0 = #16) type=delta // { arity: 25 }
+        implementation
+          %0 » %1[#0]
+          %1 » %0[#0]
+        ArrangeBy keys=[[#0]] // { arity: 16 }
+          Get materialize.public.lineitem // { arity: 16 }
+        ArrangeBy keys=[[#0]] // { arity: 9 }
+          Get materialize.public.orders // { arity: 9 }
 
-%1 =
-| Get materialize.public.orders (u4)
-| ArrangeBy (#0)
-
-%2 =
-| Join %0 %1 (= #0 #16)
-| | implementation = DeltaQuery
-| |   delta %0 %1.(#0)
-| |   delta %1 %0.(#0)
-| Filter ((#4 = 24) OR ((#3 = 6) AND (#4 <= 4) AND (#4 >= 3)))
-| Project (#0, #2)
+Used Indexes:
+  - materialize.public.pk_orders_orderkey
+  - materialize.public.fk_lineitem_orderkey
 
 EOF
 
@@ -227,7 +227,7 @@ WHERE c_acctbal >= o_totalprice
 
 
 query T multiline
-EXPLAIN SELECT o_orderkey,
+EXPLAIN WITH(arity, join_impls) SELECT o_orderkey,
        l_quantity,
        o_custkey,
        c_nationkey
@@ -238,26 +238,26 @@ WHERE c_acctbal >= o_totalprice
   AND l_commitDATE > o_orderdate
   AND l_shipDATE >= o_orderdate
 ----
-%0 =
-| Get materialize.public.lineitem (u7)
-| ArrangeBy (#0)
+Explained Query:
+  Project (#0, #4, #17, #28) // { arity: 4 }
+    Filter (#11 > #20) AND (#10 >= #20) AND (#30 >= #19) // { arity: 33 }
+      Join on=(#0 = #16 AND #17 = #25) type=delta // { arity: 33 }
+        implementation
+          %0 » %1[#0] » %2[#0]
+          %1 » %0[#0] » %2[#0]
+          %2 » %1[#1] » %0[#0]
+        ArrangeBy keys=[[#0]] // { arity: 16 }
+          Get materialize.public.lineitem // { arity: 16 }
+        ArrangeBy keys=[[#0], [#1]] // { arity: 9 }
+          Get materialize.public.orders // { arity: 9 }
+        ArrangeBy keys=[[#0]] // { arity: 8 }
+          Get materialize.public.customer // { arity: 8 }
 
-%1 =
-| Get materialize.public.orders (u4)
-| ArrangeBy (#0) (#1)
-
-%2 =
-| Get materialize.public.customer (u1)
-| ArrangeBy (#0)
-
-%3 =
-| Join %0 %1 %2 (= #0 #16) (= #17 #25)
-| | implementation = DeltaQuery
-| |   delta %0 %1.(#0) %2.(#0)
-| |   delta %1 %0.(#0) %2.(#0)
-| |   delta %2 %1.(#1) %0.(#0)
-| Filter (#11 > #20), (#10 >= #20), (#30 >= #19)
-| Project (#0, #4, #17, #28)
+Used Indexes:
+  - materialize.public.pk_customer_custkey
+  - materialize.public.pk_orders_orderkey
+  - materialize.public.fk_orders_custkey
+  - materialize.public.fk_lineitem_orderkey
 
 EOF
 
@@ -282,7 +282,7 @@ GROUP BY 1,
 
 
 query T multiline
-EXPLAIN SELECT l_partkey,
+EXPLAIN WITH(arity, join_impls) SELECT l_partkey,
        c_nationkey,
        COUNT(c_nationkey),
        MIN(c_nationkey),
@@ -297,31 +297,28 @@ WHERE l_shipDATE BETWEEN '1995-04-19' AND '1995-11-14'
 GROUP BY 1,
          2
 ----
-%0 =
-| Get materialize.public.lineitem (u7)
-| ArrangeBy (#0)
+Explained Query:
+  Project (#0..=#4, #3) // { arity: 6 }
+    Reduce group_by=[#1, #2] aggregates=[count(true), min(#2), min(#0)] // { arity: 5 }
+      Project (#0, #1, #28) // { arity: 3 }
+        Filter (#10 <= 1995-11-14) AND (#30 <= 12907776) AND (#10 >= 1995-04-19) AND (#30 >= #5) // { arity: 33 }
+          Join on=(#0 = #16 AND #17 = #25) type=delta // { arity: 33 }
+            implementation
+              %0 » %1[#0] » %2[#0]
+              %1 » %0[#0] » %2[#0]
+              %2 » %1[#1] » %0[#0]
+            ArrangeBy keys=[[#0]] // { arity: 16 }
+              Get materialize.public.lineitem // { arity: 16 }
+            ArrangeBy keys=[[#0], [#1]] // { arity: 9 }
+              Get materialize.public.orders // { arity: 9 }
+            ArrangeBy keys=[[#0]] // { arity: 8 }
+              Get materialize.public.customer // { arity: 8 }
 
-%1 =
-| Get materialize.public.orders (u4)
-| ArrangeBy (#0) (#1)
-
-%2 =
-| Get materialize.public.customer (u1)
-| ArrangeBy (#0)
-
-%3 =
-| Join %0 %1 %2 (= #0 #16) (= #17 #25)
-| | implementation = DeltaQuery
-| |   delta %0 %1.(#0) %2.(#0)
-| |   delta %1 %0.(#0) %2.(#0)
-| |   delta %2 %1.(#1) %0.(#0)
-| Filter (#10 <= 1995-11-14), (#30 <= 12907776), (#10 >= 1995-04-19), (#30 >= #5)
-| Project (#0, #1, #28)
-| Reduce group=(#1, #2)
-| | agg count(true)
-| | agg min(#2)
-| | agg min(#0)
-| Project (#0..=#4, #3)
+Used Indexes:
+  - materialize.public.pk_customer_custkey
+  - materialize.public.pk_orders_orderkey
+  - materialize.public.fk_orders_custkey
+  - materialize.public.fk_lineitem_orderkey
 
 EOF
 
@@ -346,7 +343,7 @@ GROUP BY 1,
 
 
 query T multiline
-EXPLAIN SELECT l_quantity * l_extendedprice,
+EXPLAIN WITH(arity, join_impls) SELECT l_quantity * l_extendedprice,
        c_nationkey,
        MAX(l_linenumber),
        MAX(l_suppkey)
@@ -361,28 +358,26 @@ WHERE c_acctbal <= l_extendedprice
 GROUP BY 1,
          2
 ----
-%0 =
-| Get materialize.public.lineitem (u7)
-| Filter (#3 != 1), (#3 != 2), (#3 != 6)
-| Project (#2..=#5, #12)
-| ArrangeBy (#4)
+Explained Query:
+  Reduce group_by=[(#2 * #3), #4] aggregates=[max(#1), max(#0)] // { arity: 4 }
+    Project (#0..=#3, #17) // { arity: 5 }
+      Filter (#19 < #8) AND (#19 <= #3) // { arity: 22 }
+        Join on=(#4 = #9 AND #6 = #14) type=differential // { arity: 22 }
+          implementation
+            %2 » %1[#1] » %0[#4]
+          ArrangeBy keys=[[#4]] // { arity: 5 }
+            Project (#2..=#5, #12) // { arity: 5 }
+              Filter (#3 != 1) AND (#3 != 2) AND (#3 != 6) // { arity: 16 }
+                Get materialize.public.lineitem // { arity: 16 }
+          ArrangeBy keys=[[#1]] // { arity: 9 }
+            Get materialize.public.orders // { arity: 9 }
+          ArrangeBy keys=[[#0]] // { arity: 8 }
+            Get materialize.public.customer // { arity: 8 }
 
-%1 =
-| Get materialize.public.orders (u4)
-| ArrangeBy (#1)
-
-%2 =
-| Get materialize.public.customer (u1)
-| ArrangeBy (#0)
-
-%3 =
-| Join %0 %1 %2 (= #4 #9) (= #6 #14)
-| | implementation = Differential %2.(#0) %1.(#1) %0.(#4)
-| Filter (#19 < #8), (#19 <= #3)
-| Project (#0..=#3, #17)
-| Reduce group=((#2 * #3), #4)
-| | agg max(#1)
-| | agg max(#0)
+Used Indexes:
+  - materialize.public.pk_customer_custkey
+  - materialize.public.fk_orders_custkey
+  - materialize.public.pk_lineitem_orderkey_linenumber
 
 EOF
 
@@ -400,7 +395,7 @@ WHERE l_commitDATE >= '1998-03-22'
 
 
 query T multiline
-EXPLAIN SELECT o_orderkey,
+EXPLAIN WITH(arity, join_impls) SELECT o_orderkey,
        l_quantity
 FROM lineitem
 LEFT JOIN orders ON (l_commitDATE = o_orderdate)
@@ -408,56 +403,46 @@ WHERE l_commitDATE >= '1998-03-22'
   AND l_orderkey BETWEEN 59 AND 95 + 5
   OR l_receiptDATE = o_orderdate
 ----
-%0 =
-| Get materialize.public.lineitem (u7)
-| Project (#0, #4, #11, #12)
-| ArrangeBy (#2)
+Explained Query:
+  Return // { arity: 2 }
+    Union // { arity: 2 }
+      Project (#1, #0) // { arity: 2 }
+        Map (null) // { arity: 2 }
+          Union // { arity: 1 }
+            Negate // { arity: 1 }
+              Project (#0) // { arity: 1 }
+                Join on=(#1 = #2) type=differential // { arity: 3 }
+                  implementation
+                    %0 » %1[#0]
+                  Project (#4, #11) // { arity: 2 }
+                    Get l1 // { arity: 16 }
+                  ArrangeBy keys=[[#0]] // { arity: 1 }
+                    Distinct group_by=[#0] // { arity: 1 }
+                      Project (#2) // { arity: 1 }
+                        Get l0 // { arity: 5 }
+            Project (#4) // { arity: 1 }
+              Get l1 // { arity: 16 }
+      Project (#4, #1) // { arity: 2 }
+        Filter ((#2 = #3) OR ((#0 <= 100) AND (#0 >= 59) AND (#2 >= 1998-03-22))) // { arity: 5 }
+          Get l0 // { arity: 5 }
+  With
+    cte l1 =
+      Filter (null OR ((#0 <= 100) AND (#0 >= 59) AND (#11 >= 1998-03-22))) // { arity: 16 }
+        Get materialize.public.lineitem // { arity: 16 }
+    cte l0 =
+      Project (#0..=#4) // { arity: 5 }
+        Join on=(#2 = #5) type=differential // { arity: 6 }
+          implementation
+            %1 » %0[#2]
+          ArrangeBy keys=[[#2]] // { arity: 4 }
+            Project (#0, #4, #11, #12) // { arity: 4 }
+              Get materialize.public.lineitem // { arity: 16 }
+          Project (#0, #4) // { arity: 2 }
+            Get materialize.public.orders // { arity: 9 }
 
-%1 =
-| Get materialize.public.orders (u4)
-| Project (#0, #4)
-
-%2 = Let l0 =
-| Join %0 %1 (= #2 #5)
-| | implementation = Differential %1 %0.(#2)
-| Project (#0..=#4)
-
-%3 = Let l1 =
-| Get materialize.public.lineitem (u7)
-| Filter (null OR ((#0 <= 100) AND (#0 >= 59) AND (#11 >= 1998-03-22)))
-
-%4 =
-| Get %3 (l1)
-| Project (#4, #11)
-
-%5 =
-| Get %2 (l0)
-| Project (#2)
-| Distinct group=(#0)
-| ArrangeBy (#0)
-
-%6 =
-| Join %4 %5 (= #1 #2)
-| | implementation = Differential %4 %5.(#0)
-| Project (#0)
-| Negate
-
-%7 =
-| Get %3 (l1)
-| Project (#4)
-
-%8 =
-| Union %6 %7
-| Map null
-| Project (#1, #0)
-
-%9 =
-| Get %2 (l0)
-| Filter ((#2 = #3) OR ((#0 <= 100) AND (#0 >= 59) AND (#2 >= 1998-03-22)))
-| Project (#4, #1)
-
-%10 =
-| Union %8 %9
+Used Indexes:
+  - materialize.public.pk_orders_orderkey
+  - materialize.public.pk_lineitem_orderkey_linenumber
 
 EOF
 
@@ -477,7 +462,7 @@ WHERE l_quantity = 17
 
 
 query T multiline
-EXPLAIN SELECT c_custkey,
+EXPLAIN WITH(arity, join_impls) SELECT c_custkey,
        o_custkey
 FROM lineitem
 JOIN orders ON (l_orderkey = o_orderkey)
@@ -487,25 +472,25 @@ WHERE l_quantity = 17
   OR l_quantity IN (7,
                     33)
 ----
-%0 =
-| Get materialize.public.lineitem (u7)
-| Filter ((#4 = 7) OR (#4 = 17) OR (#4 = 33))
-| Project (#0, #4)
-| ArrangeBy ()
+Explained Query:
+  Project (#11, #3) // { arity: 2 }
+    Filter (#12 <= #5) AND ((#1 = 7) OR (#1 = 33) OR ((#1 = 17) AND (#13 <= "x") AND (#13 >= "s"))) // { arity: 14 }
+      Join on=(#0 = #2) type=differential // { arity: 14 }
+        implementation
+          %2 » %0[] » %1[#0]
+        ArrangeBy keys=[[]] // { arity: 2 }
+          Project (#0, #4) // { arity: 2 }
+            Filter ((#4 = 7) OR (#4 = 17) OR (#4 = 33)) // { arity: 16 }
+              Get materialize.public.lineitem // { arity: 16 }
+        ArrangeBy keys=[[#0]] // { arity: 9 }
+          Get materialize.public.orders // { arity: 9 }
+        Project (#0, #5, #7) // { arity: 3 }
+          Get materialize.public.customer // { arity: 8 }
 
-%1 =
-| Get materialize.public.orders (u4)
-| ArrangeBy (#0)
-
-%2 =
-| Get materialize.public.customer (u1)
-| Project (#0, #5, #7)
-
-%3 =
-| Join %0 %1 %2 (= #0 #2)
-| | implementation = Differential %2 %0.() %1.(#0)
-| Filter (#12 <= #5), ((#1 = 7) OR (#1 = 33) OR ((#1 = 17) AND (#13 <= "x") AND (#13 >= "s")))
-| Project (#11, #3)
+Used Indexes:
+  - materialize.public.pk_customer_custkey
+  - materialize.public.pk_orders_orderkey
+  - materialize.public.pk_lineitem_orderkey_linenumber
 
 EOF
 
@@ -526,7 +511,7 @@ GROUP BY 1
 
 
 query T multiline
-EXPLAIN SELECT o_orderkey,
+EXPLAIN WITH(arity, join_impls) SELECT o_orderkey,
        COUNT(o_orderkey),
        COUNT(DISTINCT c_custkey)
 FROM lineitem
@@ -537,29 +522,27 @@ WHERE l_receiptDATE BETWEEN '1992-06-21' AND '1992-11-22'
   AND l_quantity BETWEEN 1 AND 21 + 9
 GROUP BY 1
 ----
-%0 =
-| Get materialize.public.lineitem (u7)
-| ArrangeBy (#0)
+Explained Query:
+  Reduce group_by=[#0] aggregates=[count(true), count(distinct #1)] // { arity: 3 }
+    Project (#0, #17) // { arity: 2 }
+      Filter (#4 <= 30) AND (#12 <= 1998-11-27) AND (#12 <= 1992-11-22) AND (#4 >= 1) AND (#12 >= 1992-06-21) AND (#12 >= 1992-07-13) // { arity: 33 }
+        Join on=(#0 = #16 AND #17 = #25) type=delta // { arity: 33 }
+          implementation
+            %0 » %1[#0] » %2[#0]
+            %1 » %0[#0] » %2[#0]
+            %2 » %1[#1] » %0[#0]
+          ArrangeBy keys=[[#0]] // { arity: 16 }
+            Get materialize.public.lineitem // { arity: 16 }
+          ArrangeBy keys=[[#0], [#1]] // { arity: 9 }
+            Get materialize.public.orders // { arity: 9 }
+          ArrangeBy keys=[[#0]] // { arity: 8 }
+            Get materialize.public.customer // { arity: 8 }
 
-%1 =
-| Get materialize.public.orders (u4)
-| ArrangeBy (#0) (#1)
-
-%2 =
-| Get materialize.public.customer (u1)
-| ArrangeBy (#0)
-
-%3 =
-| Join %0 %1 %2 (= #0 #16) (= #17 #25)
-| | implementation = DeltaQuery
-| |   delta %0 %1.(#0) %2.(#0)
-| |   delta %1 %0.(#0) %2.(#0)
-| |   delta %2 %1.(#1) %0.(#0)
-| Filter (#4 <= 30), (#12 <= 1998-11-27), (#12 <= 1992-11-22), (#4 >= 1), (#12 >= 1992-06-21), (#12 >= 1992-07-13)
-| Project (#0, #17)
-| Reduce group=(#0)
-| | agg count(true)
-| | agg count(distinct #1)
+Used Indexes:
+  - materialize.public.pk_customer_custkey
+  - materialize.public.pk_orders_orderkey
+  - materialize.public.fk_orders_custkey
+  - materialize.public.fk_lineitem_orderkey
 
 EOF
 
@@ -582,7 +565,7 @@ GROUP BY 1,
 
 
 query T multiline
-EXPLAIN SELECT o_custkey,
+EXPLAIN WITH(arity, join_impls) SELECT o_custkey,
        c_custkey,
        MIN(o_orderkey),
        COUNT(c_nationkey)
@@ -595,29 +578,27 @@ WHERE c_acctbal > o_totalprice
 GROUP BY 1,
          2
 ----
-%0 =
-| Get materialize.public.lineitem (u7)
-| Filter (#3 != 4)
-| Project (#5, #10)
-| ArrangeBy ()
+Explained Query:
+  Project (#0, #0..=#2) // { arity: 4 }
+    Reduce group_by=[#1] aggregates=[min(#0), count(true)] // { arity: 3 }
+      Project (#2, #3) // { arity: 2 }
+        Filter (#1 < #6) AND (#16 > #5) AND (#16 >= #0) // { arity: 19 }
+          Join on=(#3 = #11) type=differential // { arity: 19 }
+            implementation
+              %1 » %2[#0] » %0[]
+            ArrangeBy keys=[[]] // { arity: 2 }
+              Project (#5, #10) // { arity: 2 }
+                Filter (#3 != 4) // { arity: 16 }
+                  Get materialize.public.lineitem // { arity: 16 }
+            ArrangeBy keys=[[#1]] // { arity: 9 }
+              Get materialize.public.orders // { arity: 9 }
+            ArrangeBy keys=[[#0]] // { arity: 8 }
+              Get materialize.public.customer // { arity: 8 }
 
-%1 =
-| Get materialize.public.orders (u4)
-| ArrangeBy (#1)
-
-%2 =
-| Get materialize.public.customer (u1)
-| ArrangeBy (#0)
-
-%3 =
-| Join %0 %1 %2 (= #3 #11)
-| | implementation = Differential %1.(#1) %2.(#0) %0.()
-| Filter (#1 < #6), (#16 > #5), (#16 >= #0)
-| Project (#2, #3)
-| Reduce group=(#1)
-| | agg min(#0)
-| | agg count(true)
-| Project (#0, #0..=#2)
+Used Indexes:
+  - materialize.public.pk_customer_custkey
+  - materialize.public.fk_orders_custkey
+  - materialize.public.pk_lineitem_orderkey_linenumber
 
 EOF
 
@@ -638,7 +619,7 @@ GROUP BY 1
 
 
 query T multiline
-EXPLAIN SELECT c_nationkey,
+EXPLAIN WITH(arity, join_impls) SELECT c_nationkey,
        MAX(l_suppkey),
        MAX(o_orderkey)
 FROM lineitem
@@ -649,29 +630,27 @@ WHERE o_orderkey BETWEEN 117 AND 165 + 124
   AND l_orderkey BETWEEN 62 AND 126 + 154
 GROUP BY 1
 ----
-%0 =
-| Get materialize.public.lineitem (u7)
-| ArrangeBy (#0)
+Explained Query:
+  Reduce group_by=[#2] aggregates=[max(#1), max(#0)] // { arity: 3 }
+    Project (#0, #2, #28) // { arity: 3 }
+      Filter (#0 <= 280) AND (#0 <= 289) AND (#0 >= 62) AND (#0 >= 117) AND (#10 > #20) // { arity: 33 }
+        Join on=(#0 = #16 AND #17 = #25) type=delta // { arity: 33 }
+          implementation
+            %0 » %1[#0] » %2[#0]
+            %1 » %0[#0] » %2[#0]
+            %2 » %1[#1] » %0[#0]
+          ArrangeBy keys=[[#0]] // { arity: 16 }
+            Get materialize.public.lineitem // { arity: 16 }
+          ArrangeBy keys=[[#0], [#1]] // { arity: 9 }
+            Get materialize.public.orders // { arity: 9 }
+          ArrangeBy keys=[[#0]] // { arity: 8 }
+            Get materialize.public.customer // { arity: 8 }
 
-%1 =
-| Get materialize.public.orders (u4)
-| ArrangeBy (#0) (#1)
-
-%2 =
-| Get materialize.public.customer (u1)
-| ArrangeBy (#0)
-
-%3 =
-| Join %0 %1 %2 (= #0 #16) (= #17 #25)
-| | implementation = DeltaQuery
-| |   delta %0 %1.(#0) %2.(#0)
-| |   delta %1 %0.(#0) %2.(#0)
-| |   delta %2 %1.(#1) %0.(#0)
-| Filter (#0 <= 280), (#0 <= 289), (#0 >= 62), (#0 >= 117), (#10 > #20)
-| Project (#0, #2, #28)
-| Reduce group=(#2)
-| | agg max(#1)
-| | agg max(#0)
+Used Indexes:
+  - materialize.public.pk_customer_custkey
+  - materialize.public.pk_orders_orderkey
+  - materialize.public.fk_orders_custkey
+  - materialize.public.fk_lineitem_orderkey
 
 EOF
 
@@ -692,7 +671,7 @@ GROUP BY 1
 
 
 query T multiline
-EXPLAIN SELECT c_custkey,
+EXPLAIN WITH(arity, join_impls) SELECT c_custkey,
        COUNT(l_commitDATE),
        COUNT(DISTINCT c_custkey)
 FROM lineitem
@@ -703,27 +682,25 @@ WHERE l_extendedprice < o_totalprice
   AND o_orderkey >= 53
 GROUP BY 1
 ----
-%0 =
-| Get materialize.public.lineitem (u7)
-| Filter (#10 <= 1994-03-17), (#0 >= 53)
-| Project (#0, #5)
-| ArrangeBy ()
+Explained Query:
+  Reduce group_by=[#0] aggregates=[count(true), count(distinct #0)] // { arity: 3 }
+    Project (#11) // { arity: 1 }
+      Filter (#0 >= 53) AND (#1 < #5) AND (#12 < #5) // { arity: 13 }
+        Join on=(#0 = #2) type=differential // { arity: 13 }
+          implementation
+            %2 » %0[] » %1[#0]
+          ArrangeBy keys=[[]] // { arity: 2 }
+            Project (#0, #5) // { arity: 2 }
+              Filter (#10 <= 1994-03-17) AND (#0 >= 53) // { arity: 16 }
+                Get materialize.public.lineitem // { arity: 16 }
+          ArrangeBy keys=[[#0]] // { arity: 9 }
+            Get materialize.public.orders // { arity: 9 }
+          Project (#0, #5) // { arity: 2 }
+            Get materialize.public.customer // { arity: 8 }
 
-%1 =
-| Get materialize.public.orders (u4)
-| ArrangeBy (#0)
-
-%2 =
-| Get materialize.public.customer (u1)
-| Project (#0, #5)
-
-%3 =
-| Join %0 %1 %2 (= #0 #2)
-| | implementation = Differential %2 %0.() %1.(#0)
-| Filter (#0 >= 53), (#1 < #5), (#12 < #5)
-| Project (#11)
-| Reduce group=(#0)
-| | agg count(true)
-| | agg count(distinct #0)
+Used Indexes:
+  - materialize.public.pk_customer_custkey
+  - materialize.public.pk_orders_orderkey
+  - materialize.public.pk_lineitem_orderkey_linenumber
 
 EOF

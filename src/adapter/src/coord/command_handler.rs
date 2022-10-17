@@ -207,6 +207,7 @@ impl<S: Append + 'static> Coordinator<S> {
             ConnMeta {
                 cancel_tx,
                 secret_key,
+                notice_tx: session.retain_notice_transmitter(),
             },
         );
 
@@ -350,6 +351,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     Statement::AlterConnection(_)
                     | Statement::AlterIndex(_)
                     | Statement::AlterSecret(_)
+                    | Statement::AlterSink(_)
                     | Statement::AlterSource(_)
                     | Statement::AlterObjectRename(_)
                     | Statement::AlterSystemSet(_)

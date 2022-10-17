@@ -24,7 +24,7 @@ class DropDefaultReplica(Action):
         return {MzIsRunning}
 
     def run(self, c: Composition) -> None:
-        c.testdrive("> DROP CLUSTER REPLICA default.default_replica;")
+        c.testdrive("> DROP CLUSTER REPLICA default.r1;")
 
 
 class CreateReplica(Action):

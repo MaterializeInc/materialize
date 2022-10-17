@@ -51,7 +51,7 @@ class RenameIndex(Check):
         return Testdrive(
             dedent(
                 """
-                > SHOW INDEXES FROM rename_index_table;
+                > SHOW INDEXES ON rename_index_table;
                 rename_index_index2 rename_index_table default {f2}
                 rename_index_index3 rename_index_table default {f2}
 

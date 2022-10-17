@@ -202,6 +202,11 @@ where
         self.update_lower_bound()
     }
 
+    /// Return whether the given replica's frontiers are tracked.
+    fn tracks_replica(&self, id: ReplicaId) -> bool {
+        self.per_replica.contains_key(&id)
+    }
+
     /// Apply a frontier update from a single replica.
     ///
     /// Returns `true` iff the update caused a change in any of the two bounds.
@@ -266,11 +271,15 @@ struct ActiveReplicationState<T> {
     subscribes: BTreeSet<GlobalId>,
     /// Reported upper frontiers for replicated collections and in-progress subscribes.
     uppers: HashMap<GlobalId, ReportedUppers<T>>,
-    /// Reported upper frontiers for log collections.
+    /// Reported upper frontiers for arranged log collections.
     ///
-    /// Log collections are special in that they are replica-specific. We therefore track their
-    /// frontiers separately from those of replicated collections.
-    log_uppers: HashMap<GlobalId, Antichain<T>>,
+    /// Arranged log collections are special in that their IDs are shared between replicas, but
+    /// only exist on replicas that have introspection enabled.
+    index_log_uppers: HashMap<GlobalId, ReportedUppers<T>>,
+    /// Reported upper frontiers for persisted log collections.
+    ///
+    /// Persisted log collections are special in that they are replica-specific.
+    sink_log_uppers: HashMap<GlobalId, Antichain<T>>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
     history: ComputeCommandHistory<T>,
     /// Responses that should be emitted on the next `recv` call.
@@ -295,11 +304,16 @@ where
     fn remove_replica(&mut self, id: ReplicaId) {
         self.replica_ids.remove(&id);
 
-        // Removing a replica might have elicit changes to collection frontiers, which we must
+        // Removing a replica might elicit changes to collection frontiers, which we must
         // report up the chain.
         let mut new_uppers = Vec::new();
         for (collection_id, uppers) in self.uppers.iter_mut() {
             if uppers.remove_replica(id) {
+                new_uppers.push((*collection_id, uppers.bounds.clone()));
+            }
+        }
+        for (collection_id, uppers) in self.index_log_uppers.iter_mut() {
+            if uppers.tracks_replica(id) && uppers.remove_replica(id) {
                 new_uppers.push((*collection_id, uppers.bounds.clone()));
             }
         }
@@ -425,7 +439,11 @@ where
                 if reported.update(replica_id, new_upper) {
                     new_uppers.push((id, reported.bounds.clone()));
                 }
-            } else if let Some(reported) = self.log_uppers.get_mut(&id) {
+            } else if let Some(reported) = self.index_log_uppers.get_mut(&id) {
+                if reported.update(replica_id, new_upper) {
+                    new_uppers.push((id, reported.bounds.clone()));
+                }
+            } else if let Some(reported) = self.sink_log_uppers.get_mut(&id) {
                 if PartialOrder::less_than(reported, &new_upper) {
                     reported.clone_from(&new_upper);
                     new_uppers.push((
@@ -536,7 +554,8 @@ impl<T> ActiveReplication<T> {
                 peeks: Default::default(),
                 subscribes: Default::default(),
                 uppers: Default::default(),
-                log_uppers: Default::default(),
+                index_log_uppers: Default::default(),
+                sink_log_uppers: Default::default(),
                 history: Default::default(),
                 pending_response: Default::default(),
             },
@@ -641,12 +660,21 @@ where
             }
         }
 
-        // Start tracking frontiers of persisted log collections.
         if let Some(logging) = &replica_state.logging_config {
-            for (id, _) in logging.sink_logs.values() {
+            // Start tracking frontiers of persisted log collections.
+            for (collection_id, _) in logging.sink_logs.values() {
                 let frontier = Antichain::from_elem(Timestamp::minimum());
-                let previous = self.state.log_uppers.insert(*id, frontier);
+                let previous = self.state.sink_log_uppers.insert(*collection_id, frontier);
                 assert!(previous.is_none());
+            }
+
+            // Start tracking frontiers of arranged log collections.
+            for collection_id in logging.active_logs.values() {
+                self.state
+                    .index_log_uppers
+                    .entry(*collection_id)
+                    .and_modify(|reported| reported.add_replica(id))
+                    .or_insert_with(|| ReportedUppers::new(&[id].into()));
             }
         }
 
@@ -665,10 +693,10 @@ where
         self.state.remove_replica(id);
         let replica_state = self.replicas.remove(&id).expect("replica not found");
 
-        // Cease tracking frontiers of persisted_logs collections.
+        // Cease tracking frontiers of persisted log collections.
         if let Some(logging) = &replica_state.logging_config {
-            for (id, _) in logging.sink_logs.values() {
-                let previous = self.state.log_uppers.remove(id);
+            for (collection_id, _) in logging.sink_logs.values() {
+                let previous = self.state.sink_log_uppers.remove(collection_id);
                 assert!(previous.is_some());
             }
         }

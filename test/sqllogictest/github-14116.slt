@@ -28,57 +28,42 @@ statement error more than one record produced in subquery
 select a, b, ( select c from test3 where a = test3.a and b = test3.b) from test1;
 
 query T multiline
-explain select a, b, ( select c from test3 where a = test3.a and b = test3.b) from test1;
+explain with(arity, join_impls) select a, b, ( select c from test3 where a = test3.a and b = test3.b) from test1;
 ----
-Source materialize.public.test1 (u1):
-| Project (#0, #1)
+Explained Query:
+  Return // { arity: 3 }
+    CrossJoin type=differential // { arity: 3 }
+      implementation
+        %1 » %0[]
+      ArrangeBy keys=[[]] // { arity: 2 }
+        Get materialize.public.test1 // { arity: 2 }
+      Union // { arity: 1 }
+        Get l1 // { arity: 1 }
+        Map (null) // { arity: 1 }
+          Union // { arity: 0 }
+            Negate // { arity: 0 }
+              Distinct // { arity: 0 }
+                Project () // { arity: 0 }
+                  Get l1 // { arity: 1 }
+            Constant // { arity: 0 }
+              - ()
+  With
+    cte l1 =
+      Union // { arity: 1 }
+        Get l0 // { arity: 1 }
+        Map (error("more than one record produced in subquery")) // { arity: 1 }
+          Project () // { arity: 0 }
+            Filter (#0 > 1) // { arity: 1 }
+              Reduce aggregates=[count(true)] // { arity: 1 }
+                Project () // { arity: 0 }
+                  Get l0 // { arity: 1 }
+    cte l0 =
+      Project (#2) // { arity: 1 }
+        Reduce group_by=[#0, #1] aggregates=[count(true)] // { arity: 3 }
+          Filter (#0 = #0) AND (#1 = #1) // { arity: 2 }
+            Get materialize.public.test2 // { arity: 2 }
 
-Source materialize.public.test2 (u2):
-| Filter (#0 = #0), (#1 = #1)
-| Project (#0, #1)
-
-Query:
-%0 = Let l0 =
-| Get materialize.public.test2 (u2)
-| Filter (#0 = #0), (#1 = #1)
-| Reduce group=(#0, #1)
-| | agg count(true)
-| Project (#2)
-
-%1 =
-| Get %0 (l0)
-| Project ()
-| Reduce group=()
-| | agg count(true)
-| Filter (#0 > 1)
-| Project ()
-| Map (err: more than one record produced in subquery)
-
-%2 = Let l1 =
-| Union %0 %1
-
-%3 =
-| Get materialize.public.test1 (u1)
-| ArrangeBy ()
-
-%4 =
-| Get %2 (l1)
-| Project ()
-| Distinct group=()
-| Negate
-
-%5 =
-| Constant ()
-
-%6 =
-| Union %4 %5
-| Map null
-
-%7 =
-| Union %2 %6
-
-%8 =
-| Join %3 %7
-| | implementation = Differential %7 %3.()
+Source materialize.public.test2
+  filter=((#0 = #0) AND (#1 = #1))
 
 EOF

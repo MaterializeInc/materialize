@@ -54,11 +54,11 @@ t
 name    type  size
 ------------------
 
-> SHOW INDEXES FROM t;
+> SHOW INDEXES ON t;
 
 > CREATE DEFAULT INDEX on t
 
-> SHOW INDEXES FROM t
+> SHOW INDEXES ON t
 name            on          cluster         key
 -----------------------------------------------------------------------------------
 t_primary_idx   t           <CLUSTER_NAME>  {a,b}
@@ -100,7 +100,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"id": "valid1", "a": 2, "b": 1}
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE data
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
@@ -114,9 +114,8 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 # rather than e.g. blocking forever, or producing an error about being
 # unable to select a timestamp.
 
-# log sources require a single replica
-$ skip-if
-SELECT ${arg.replicas} > 1
+# In case the environment has other replicas
+> SET cluster_replica = r1
 
 > SELECT * FROM t CROSS JOIN mz_internal.mz_dataflow_operators LIMIT 0
 
@@ -216,7 +215,7 @@ contains:cannot materialize call to mz_version
 ! SELECT * from t;
 contains:unknown catalog item 't'
 
-! SHOW INDEXES FROM t;
+! SHOW INDEXES ON t;
 contains:unknown catalog item 't'
 
 > SHOW TABLES;

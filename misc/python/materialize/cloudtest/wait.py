@@ -9,13 +9,19 @@
 
 
 import subprocess
+from typing import Optional
 
 from materialize import ui
 from materialize.ui import UIError
 
 
 def wait(
-    condition: str, resource: str, timeout_secs: int = 300, context: str = "kind-kind"
+    condition: str,
+    resource: str,
+    timeout_secs: int = 300,
+    context: str = "kind-kind",
+    *,
+    label: Optional[str] = None,
 ) -> None:
     cmd = [
         "kubectl",
@@ -28,6 +34,10 @@ def wait(
         "--context",
         context,
     ]
+
+    if label is not None:
+        cmd.extend(["--selector", label])
+
     ui.progress(f'waiting for {" ".join(cmd)} ... ')
 
     error = None

@@ -35,10 +35,10 @@ use mz_repr::strconv;
 use mz_repr::{ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
-    AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
-    AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
-    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, SetVariableValue,
-    SshConnectionOption,
+    AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceStatement,
+    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
+    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
+    SetVariableValue, SshConnectionOption,
 };
 use mz_storage::source::generator::as_generator;
 use mz_storage::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
@@ -101,8 +101,8 @@ use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
-    AlterNoopPlan, AlterSecretPlan, AlterSourceItem, AlterSourcePlan, AlterSystemResetAllPlan,
-    AlterSystemResetPlan, AlterSystemSetPlan, ComputeReplicaConfig,
+    AlterNoopPlan, AlterOptionParameter, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan,
+    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, ComputeReplicaConfig,
     ComputeReplicaIntrospectionConfig, CreateComputeInstancePlan, CreateComputeReplicaPlan,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
@@ -695,32 +695,11 @@ pub fn plan_create_source(
             (connection, encoding, Some(available_subsources))
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
-            use mz_storage::types::sources::LoadGenerator;
-
-            let load_generator = match generator {
-                mz_sql_parser::ast::LoadGenerator::Auction => LoadGenerator::Auction,
-                mz_sql_parser::ast::LoadGenerator::Counter => LoadGenerator::Counter,
-            };
+            let (load_generator, available_subsources) =
+                load_generator_ast_to_generator(generator, options)?;
+            let available_subsources = available_subsources
+                .map(|a| HashMap::from_iter(a.into_iter().map(|(k, v)| (k, v.0))));
             let generator = as_generator(&load_generator);
-
-            let mut available_subsources = HashMap::new();
-            for (i, (name, _)) in generator.views().iter().enumerate() {
-                let name = FullObjectName {
-                    database: RawDatabaseSpecifier::Name("mz_loadgenerator".to_owned()),
-                    schema: "public".to_owned(),
-                    item: name.to_string(),
-                };
-                // The zero-th output is the main output
-                // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
-                // to handle the main source and the subsources uniformly
-                available_subsources.insert(name, i + 1);
-            }
-
-            let available_subsources = if available_subsources.is_empty() {
-                None
-            } else {
-                Some(available_subsources)
-            };
 
             let LoadGeneratorOptionExtracted { tick_interval, .. } = options.clone().try_into()?;
             let tick_micros = match tick_interval {
@@ -851,12 +830,7 @@ pub fn plan_create_source(
         }
     }
 
-    let host_config = match (remote, size) {
-        (None, None) => StorageHostConfig::Undefined,
-        (None, Some(size)) => StorageHostConfig::Managed { size },
-        (Some(addr), None) => StorageHostConfig::Remote { addr },
-        (Some(_), Some(_)) => sql_bail!("only one of REMOTE and SIZE can be set"),
-    };
+    let host_config = host_config(remote, size)?;
 
     let timestamp_interval = match timestamp_interval {
         Some(timestamp_interval) => timestamp_interval.duration()?,
@@ -1068,6 +1042,52 @@ pub fn plan_create_subsource(
 
 generate_extracted_config!(LoadGeneratorOption, (TickInterval, Interval));
 
+pub(crate) fn load_generator_ast_to_generator(
+    loadgen: &mz_sql_parser::ast::LoadGenerator,
+    _options: &[LoadGeneratorOption<Aug>],
+) -> Result<
+    (
+        mz_storage::types::sources::LoadGenerator,
+        Option<HashMap<FullObjectName, (usize, RelationDesc)>>,
+    ),
+    PlanError,
+> {
+    let load_generator = match loadgen {
+        mz_sql_parser::ast::LoadGenerator::Auction => {
+            mz_storage::types::sources::LoadGenerator::Auction
+        }
+        mz_sql_parser::ast::LoadGenerator::Counter => {
+            mz_storage::types::sources::LoadGenerator::Counter
+        }
+    };
+
+    let mut available_subsources = HashMap::new();
+    let generator = as_generator(&load_generator);
+    for (i, (name, desc)) in generator.views().iter().enumerate() {
+        let name = FullObjectName {
+            database: RawDatabaseSpecifier::Name("mz_load_generators".to_owned()),
+            schema: match loadgen {
+                mz_sql_parser::ast::LoadGenerator::Counter => "counter".into(),
+                mz_sql_parser::ast::LoadGenerator::Auction => "auction".into(),
+                // Please use `snake_case` for any multi-word load generators
+                // that you add.
+            },
+            item: name.to_string(),
+        };
+        // The zero-th output is the main output
+        // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
+        // to handle the main source and the subsources uniformly
+        available_subsources.insert(name, (i + 1, desc.clone()));
+    }
+    let available_subsources = if available_subsources.is_empty() {
+        None
+    } else {
+        Some(available_subsources)
+    };
+
+    Ok((load_generator, available_subsources))
+}
+
 fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(usize, usize), PlanError> {
     let (before_idx, before_ty) = value_desc
         .get_by_name(&"before".into())
@@ -1120,6 +1140,18 @@ fn get_encoding(
     };
 
     Ok(encoding)
+}
+
+fn host_config(
+    remote: Option<String>,
+    size: Option<String>,
+) -> Result<StorageHostConfig, PlanError> {
+    match (remote, size) {
+        (None, None) => Ok(StorageHostConfig::Undefined),
+        (None, Some(size)) => Ok(StorageHostConfig::Managed { size }),
+        (Some(addr), None) => Ok(StorageHostConfig::Remote { addr }),
+        (Some(_), Some(_)) => sql_bail!("only one of REMOTE and SIZE can be set"),
+    }
 }
 
 generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default(true)));
@@ -1550,8 +1582,9 @@ pub fn describe_create_sink(
 
 generate_extracted_config!(
     CreateSinkOption,
+    (Remote, String),
     (Size, String),
-    (Snapshot, bool, Default(true))
+    (Snapshot, bool)
 );
 
 pub fn plan_create_sink(
@@ -1568,6 +1601,19 @@ pub fn plan_create_sink(
         if_not_exists,
         with_options,
     } = stmt;
+
+    const SAFE_WITH_OPTIONS: &[CreateSinkOptionName] =
+        &[CreateSinkOptionName::Size, CreateSinkOptionName::Snapshot];
+
+    if with_options
+        .iter()
+        .any(|op| !SAFE_WITH_OPTIONS.contains(&op.name))
+    {
+        scx.require_unsafe_mode(&format!(
+            "creating sinks with WITH options other than {}",
+            comma_separated(SAFE_WITH_OPTIONS)
+        ))?;
+    }
 
     let envelope = match envelope {
         None => sql_bail!("ENVELOPE clause is required"),
@@ -1659,15 +1705,16 @@ pub fn plan_create_sink(
     };
 
     let CreateSinkOptionExtracted {
+        remote,
         size,
         snapshot,
         seen: _,
     } = with_options.try_into()?;
 
-    let host_config = match size {
-        None => StorageHostConfig::Undefined,
-        Some(size) => StorageHostConfig::Managed { size },
-    };
+    let host_config = host_config(remote, size)?;
+
+    // WITH SNAPSHOT defaults to true
+    let with_snapshot = snapshot.unwrap_or(true);
 
     Ok(Plan::CreateSink(CreateSinkPlan {
         name,
@@ -1677,7 +1724,7 @@ pub fn plan_create_sink(
             connection_builder,
             envelope,
         },
-        with_snapshot: snapshot,
+        with_snapshot,
         if_not_exists,
         host_config,
     }))
@@ -3287,6 +3334,83 @@ pub fn plan_alter_secret(
     Ok(Plan::AlterSecret(AlterSecretPlan { id, secret_as }))
 }
 
+pub fn describe_alter_sink(
+    _: &StatementContext,
+    _: AlterSinkStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_sink(
+    scx: &StatementContext,
+    stmt: AlterSinkStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let AlterSinkStatement {
+        sink_name,
+        if_exists,
+        action,
+    } = stmt;
+
+    let sink_name = normalize::unresolved_object_name(sink_name)?;
+    let entry = match scx.catalog.resolve_item(&sink_name) {
+        Ok(sink) => sink,
+        Err(_) if if_exists => {
+            return Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::Sink,
+            }));
+        }
+        Err(e) => return Err(e.into()),
+    };
+    if entry.item_type() != CatalogItemType::Sink {
+        sql_bail!(
+            "{} is a {} not a sink",
+            scx.catalog.resolve_full_name(entry.name()),
+            entry.item_type()
+        )
+    }
+    let id = entry.id();
+
+    let mut size = AlterOptionParameter::Unchanged;
+    let mut remote = AlterOptionParameter::Unchanged;
+    match action {
+        AlterSinkAction::SetOptions(options) => {
+            let CreateSinkOptionExtracted {
+                remote: remote_opt,
+                size: size_opt,
+                snapshot,
+                seen: _,
+            } = options.try_into()?;
+
+            if let Some(value) = remote_opt {
+                remote = AlterOptionParameter::Set(value);
+            }
+            if let Some(value) = size_opt {
+                size = AlterOptionParameter::Set(value);
+            }
+            if let Some(_) = snapshot {
+                sql_bail!("Cannot modify the SNAPSHOT of a SINK.");
+            }
+        }
+        AlterSinkAction::ResetOptions(reset) => {
+            for name in reset {
+                match name {
+                    CreateSinkOptionName::Remote => {
+                        remote = AlterOptionParameter::Reset;
+                    }
+                    CreateSinkOptionName::Size => {
+                        size = AlterOptionParameter::Reset;
+                    }
+                    CreateSinkOptionName::Snapshot => {
+                        sql_bail!("Cannot modify the SNAPSHOT of a SINK.");
+                    }
+                }
+            }
+        }
+    };
+
+    Ok(Plan::AlterSink(AlterSinkPlan { id, size, remote }))
+}
+
 pub fn describe_alter_source(
     _: &StatementContext,
     _: AlterSourceStatement<Aug>,
@@ -3330,8 +3454,8 @@ pub fn plan_alter_source(
     }
     let id = entry.id();
 
-    let mut size = AlterSourceItem::Unchanged;
-    let mut remote = AlterSourceItem::Unchanged;
+    let mut size = AlterOptionParameter::Unchanged;
+    let mut remote = AlterOptionParameter::Unchanged;
     match action {
         AlterSourceAction::SetOptions(options) => {
             let CreateSourceOptionExtracted {
@@ -3344,10 +3468,10 @@ pub fn plan_alter_source(
             } = CreateSourceOptionExtracted::try_from(options)?;
 
             if let Some(value) = remote_opt {
-                remote = AlterSourceItem::Set(value);
+                remote = AlterOptionParameter::Set(value);
             }
             if let Some(value) = size_opt {
-                size = AlterSourceItem::Set(value);
+                size = AlterOptionParameter::Set(value);
             }
             if let Some(_) = timeline_opt {
                 sql_bail!("Cannot modify the TIMELINE of a SOURCE.");
@@ -3363,10 +3487,10 @@ pub fn plan_alter_source(
             for name in reset {
                 match name {
                     CreateSourceOptionName::Remote => {
-                        remote = AlterSourceItem::Reset;
+                        remote = AlterOptionParameter::Reset;
                     }
                     CreateSourceOptionName::Size => {
-                        size = AlterSourceItem::Reset;
+                        size = AlterOptionParameter::Reset;
                     }
                     CreateSourceOptionName::Timeline => {
                         sql_bail!("Cannot modify the TIMELINE of a SOURCE.");

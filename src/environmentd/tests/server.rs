@@ -19,7 +19,7 @@ use reqwest::{blocking::Client, StatusCode, Url};
 use serde_json::json;
 use tokio_postgres::types::{FromSql, Type};
 
-use crate::util::KAFKA_ADDRS;
+use crate::util::{PostgresErrorExt, KAFKA_ADDRS};
 
 pub mod util;
 
@@ -53,7 +53,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
         let server = util::start_server(config.clone())?;
         let mut client = server.connect(postgres::NoTls)?;
         client.batch_execute(&format!(
-            "CREATE CONNECTION kafka_conn FOR KAFKA BROKER '{}'",
+            "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}')",
             &*KAFKA_ADDRS,
         ))?;
         client.batch_execute(
@@ -81,7 +81,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
     );
     assert_eq!(
         client
-            .query_one("SHOW INDEXES FROM mat", &[])?
+            .query_one("SHOW INDEXES ON mat", &[])?
             .get::<_, Vec<String>>("key"),
         &["a", "a_data", "c", "c_data"],
     );
@@ -110,6 +110,57 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+// Test that sources and sinks require an explicit `SIZE` parameter outside of
+// unsafe mode.
+#[test]
+fn test_source_sink_size_required() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let server = util::start_server(util::Config::default())?;
+    let mut client = server.connect(postgres::NoTls)?;
+
+    // Sources bail without an explicit size.
+    let result = client.batch_execute("CREATE SOURCE lg FROM LOAD GENERATOR COUNTER");
+    assert_eq!(
+        result.unwrap_err().unwrap_db_error().message(),
+        "size option is required"
+    );
+
+    // Sources work with an explicit size.
+    client.batch_execute("CREATE SOURCE lg FROM LOAD GENERATOR COUNTER WITH (SIZE '1')")?;
+
+    // `ALTER SOURCE ... RESET SIZE` is banned.
+    let result = client.batch_execute("ALTER SOURCE lg RESET (SIZE)");
+    assert_eq!(
+        result.unwrap_err().unwrap_db_error().message(),
+        "size option is required"
+    );
+
+    client.batch_execute(&format!(
+        "CREATE CONNECTION conn TO KAFKA (BROKER '{}')",
+        &*KAFKA_ADDRS,
+    ))?;
+
+    // Sinks bail without an explicit size.
+    let result = client.batch_execute("CREATE SINK snk FROM mz_sources INTO KAFKA CONNECTION conn (TOPIC 'foo') FORMAT JSON ENVELOPE DEBEZIUM");
+    assert_eq!(
+        result.unwrap_err().unwrap_db_error().message(),
+        "size option is required"
+    );
+
+    // Sinks work with an explicit size.
+    client.batch_execute("CREATE SINK snk FROM mz_sources INTO KAFKA CONNECTION conn (TOPIC 'foo') FORMAT JSON ENVELOPE DEBEZIUM WITH (SIZE '1')").unwrap();
+
+    // `ALTER SINK ... RESET SIZE` is banned.
+    let result = client.batch_execute("ALTER SINK snk RESET (SIZE)");
+    assert_eq!(
+        result.unwrap_err().unwrap_db_error().message(),
+        "size option is required"
+    );
+
+    Ok(())
+}
+
 // Test the /sql POST endpoint of the HTTP server.
 #[test]
 fn test_http_sql() -> Result<(), Box<dyn Error>> {
@@ -120,6 +171,7 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         server.inner.http_local_addr()
     ))?;
 
+    #[derive(Debug)]
     struct TestCaseSimple {
         query: &'static str,
         status: StatusCode,
@@ -316,6 +368,21 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
             query: "subscribe (select * from t)",
             status: StatusCode::BAD_REQUEST,
             body: r#"unsupported via this API: SUBSCRIBE (SELECT * FROM t)"#,
+        },
+        TestCaseSimple {
+            query: "copy (select 1) to stdout",
+            status: StatusCode::BAD_REQUEST,
+            body: r#"unsupported via this API: COPY (SELECT 1) TO STDOUT"#,
+        },
+        TestCaseSimple {
+            query: "EXPLAIN SELECT 1",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[["Explained Query (fast path):\n  Constant\n    - (1)\n"]],"col_names":["Optimized Plan"],"notices":[]}]}"#,
+        },
+        TestCaseSimple {
+            query: "SHOW VIEWS",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[["v"]],"col_names":["name"],"notices":[]}]}"#,
         },
     ];
 

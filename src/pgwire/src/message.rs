@@ -360,6 +360,7 @@ impl ErrorResponse {
             AdapterError::InvalidClusterReplicaAz { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidClusterReplicaSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidStorageHostSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::StorageHostSizeRequired { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidTableMutationSelection => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::ConstraintViolation(NotNullViolation(_)) => SqlState::NOT_NULL_VIOLATION,
             AdapterError::NoClusterReplicasAvailable(_) => SqlState::FEATURE_NOT_SUPPORTED,
@@ -422,6 +423,7 @@ impl ErrorResponse {
                 SqlState::NO_ACTIVE_SQL_TRANSACTION
             }
             AdapterNotice::UserRequested { .. } => SqlState::WARNING,
+            AdapterNotice::ClusterReplicaStatusChanged { .. } => SqlState::WARNING,
         };
         ErrorResponse {
             severity: Severity::for_adapter_notice(&notice),
@@ -568,6 +570,7 @@ impl Severity {
                 NoticeSeverity::Notice => Severity::Notice,
                 NoticeSeverity::Warning => Severity::Warning,
             },
+            AdapterNotice::ClusterReplicaStatusChanged { .. } => Severity::Notice,
         }
     }
 }

@@ -30,8 +30,8 @@ count
 ----
 1
 
-> EXPLAIN VIEW delta_join;
-"%0 =| Get t1| ArrangeBy (#0)%1 =| Get t2| ArrangeBy (#0)%2 =| Join %0 %1 (= #0 #2)| | implementation = DeltaQuery| |   delta %0 %1.(#0)| |   delta %1 %0.(#0)| Filter (#0) IS NOT NULL| Project (#0, #1, #0, #3)"
+> EXPLAIN WITH(join_impls) VIEW delta_join;
+"Explained Query:  Project (#0, #1, #0, #3)    Filter (#0) IS NOT NULL      Join on=(#0 = #2) type=delta        implementation          %0 » %1[#0]          %1 » %0[#0]        ArrangeBy keys=[[#0]]          Get t1        ArrangeBy keys=[[#0]]          Get t2Used Indexes:  - i1  - i2"
 
 > SELECT count(*) AS count FROM delta_join;
 count
@@ -44,9 +44,8 @@ count
 # threshold since the actual number of messages sent depends on the number of
 # workers.
 
-# log sources require a single replica
-$ skip-if
-SELECT ${arg.replicas} > 1
+# In case the environment has other replicas
+> SET cluster_replica = r1
 
 > SELECT
     sum(sent) as sent

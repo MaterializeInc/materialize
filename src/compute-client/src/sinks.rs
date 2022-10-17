@@ -88,6 +88,15 @@ impl<S> ComputeSinkConnection<S> {
             ComputeSinkConnection::Persist(_) => "persist",
         }
     }
+
+    /// True if the sink is a subscribe, which is differently recoverable than other sinks.
+    pub fn is_subscribe(&self) -> bool {
+        if let ComputeSinkConnection::Subscribe(_) = self {
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl RustType<ProtoComputeSinkConnection> for ComputeSinkConnection<CollectionMetadata> {

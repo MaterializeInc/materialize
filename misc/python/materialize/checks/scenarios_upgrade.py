@@ -17,6 +17,7 @@
 
 from typing import List
 
+from materialize import util
 from materialize.checks.actions import Action, Initialize, Manipulate, Sleep, Validate
 from materialize.checks.mzcompose_actions import (
     KillComputed,
@@ -27,7 +28,7 @@ from materialize.checks.mzcompose_actions import (
 )
 from materialize.checks.scenarios import Scenario
 
-LAST_RELEASED_VERSION = "v0.27.0-alpha.23"
+LAST_RELEASED_VERSION = f"v{util.released_materialize_versions()[0]}"
 
 
 class UpgradeEntireMz(Scenario):

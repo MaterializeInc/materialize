@@ -12,17 +12,18 @@
 > DROP CONNECTION IF EXISTS pg CASCADE;
 
 > CREATE SECRET pgpass AS 'postgres'
-> CREATE CONNECTION pg FOR POSTGRES
-  HOST postgres,
-  DATABASE postgres,
-  USER postgres,
-  PASSWORD SECRET pgpass
+> CREATE CONNECTION pg TO POSTGRES (
+    HOST postgres,
+    DATABASE postgres,
+    USER postgres,
+    PASSWORD SECRET pgpass
+  )
 
 > CREATE SOURCE mz_source
   FROM POSTGRES
   CONNECTION pg
   (PUBLICATION 'mz_source')
+  FOR ALL TABLES
   WITH (
     REMOTE = 'storaged:2100'
-  )
-  FOR ALL TABLES;
+  );

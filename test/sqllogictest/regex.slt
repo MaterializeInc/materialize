@@ -52,30 +52,22 @@ mode standard
 
 # Check that literal regexes are pre-compiled...
 query T multiline
-EXPLAIN PLAN FOR SELECT input ~ 'foo?' FROM data
+EXPLAIN WITH(arity, join_impls) SELECT input ~ 'foo?' FROM data
 ----
-Source materialize.public.data (u1):
-| Project (#0)
-
-Query:
-%0 =
-| Get materialize.public.data (u1)
-| Map "foo?" ~(#0)
-| Project (#1)
+Explained Query:
+  Project (#1) // { arity: 1 }
+    Map ("foo?" ~(#0)) // { arity: 2 }
+      Get materialize.public.data // { arity: 1 }
 
 EOF
 
 # ...but not variable regexes.
 query T multiline
-EXPLAIN PLAN FOR SELECT input ~ input FROM data
+EXPLAIN WITH(arity, join_impls) SELECT input ~ input FROM data
 ----
-Source materialize.public.data (u1):
-| Project (#0)
-
-Query:
-%0 =
-| Get materialize.public.data (u1)
-| Map (#0 ~ #0)
-| Project (#1)
+Explained Query:
+  Project (#1) // { arity: 1 }
+    Map ((#0 ~ #0)) // { arity: 2 }
+      Get materialize.public.data // { arity: 1 }
 
 EOF

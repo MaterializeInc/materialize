@@ -12,18 +12,20 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::Stream;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::RuntimeExt;
+use mz_persist::retry::Retry;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
-use tracing::{debug_span, instrument, warn, Instrument};
+use tracing::log::debug;
+use tracing::{debug_span, instrument, trace_span, warn, Instrument};
 use uuid::Uuid;
 
 use mz_persist::location::{Blob, SeqNo};
@@ -33,7 +35,7 @@ use crate::fetch::{
     fetch_leased_part, BatchFetcher, LeasedBatchPart, SerdeLeasedBatchPartMetadata,
 };
 use crate::internal::machine::Machine;
-use crate::internal::metrics::Metrics;
+use crate::internal::metrics::{Metrics, MetricsRetryStream};
 use crate::internal::state::{HollowBatch, Since};
 use crate::{parse_id, GarbageCollector, PersistConfig};
 
@@ -235,12 +237,7 @@ where
     /// The returned `Antichain` represents the subscription progress as it will
     /// be _after_ the returned parts are fetched.
     pub async fn next_parts(&mut self) -> (Vec<LeasedBatchPart<T>>, Antichain<T>) {
-        // We might also want to call maybe_heartbeat_reader in the
-        // `next_listen_batch` loop so that we can heartbeat even when batches
-        // aren't incoming. At the moment, the ownership would be weird and we
-        // should always have batches incoming regularly, so maybe it isn't
-        // actually necessary.
-        let batch = self.handle.machine.next_listen_batch(&self.frontier).await;
+        let batch = self.handle.next_listen_batch(&self.frontier).await;
 
         // A lot of things across mz have to line up to hold the following
         // invariant and violations only show up as subtle correctness errors,
@@ -702,6 +699,47 @@ where
         self.explicitly_expired = true;
     }
 
+    async fn next_listen_batch(&mut self, frontier: &Antichain<T>) -> HollowBatch<T> {
+        let mut retry: Option<MetricsRetryStream> = None;
+        loop {
+            if let Some(b) = self.machine.next_listen_batch(frontier) {
+                return b;
+            }
+            // Only sleep after the first fetch, because the first time through
+            // maybe our state was just out of date.
+            retry = Some(match retry.take() {
+                None => self
+                    .metrics
+                    .retries
+                    .next_listen_batch
+                    .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream()),
+                Some(retry) => {
+                    // Wait a bit and try again. Intentionally don't ever log
+                    // this at info level.
+                    //
+                    // TODO: See if we can watch for changes in Consensus to be
+                    // more reactive here.
+                    debug!(
+                        "next_listen_batch didn't find new data, retrying in {:?}",
+                        retry.next_sleep()
+                    );
+                    let retry = retry.sleep().instrument(trace_span!("listen::sleep")).await;
+
+                    // There might be some holdup in the next batch being
+                    // produced. Perhaps we've quiesced a table or maybe a
+                    // dataflow is taking a long time to start up because it has
+                    // to read a lot of data. Heartbeat ourself so we don't
+                    // accidentally lose our lease while we wait for things to
+                    // resume.
+                    self.maybe_heartbeat_reader().await;
+
+                    retry
+                }
+            });
+            self.machine.fetch_and_update_state().await;
+        }
+    }
+
     /// Test helper for a [Self::listen] call that is expected to succeed.
     #[cfg(test)]
     #[track_caller]
@@ -776,11 +814,22 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::tests::new_test_client;
-    use crate::ReaderId;
+    use mz_build_info::DUMMY_BUILD_INFO;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_ore::now::SYSTEM_TIME;
+    use mz_persist::location::Consensus;
+    use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
+    use mz_persist::unreliable::{UnreliableConsensus, UnreliableHandle};
     use serde::{Deserialize, Serialize};
     use serde_json::json;
     use std::str::FromStr;
+
+    use crate::async_runtime::CpuHeavyRuntime;
+    use crate::internal::metrics::Metrics;
+    use crate::tests::{all_ok, new_test_client};
+    use crate::{PersistClient, PersistConfig, ShardId};
+
+    use super::*;
 
     // Verifies `Subscribe` can be dropped while holding snapshot batches.
     #[tokio::test]
@@ -979,25 +1028,6 @@ mod tests {
         let container: Container = serde_json::from_value(json).expect("deserializable");
         assert_eq!(container.reader_id, id);
     }
-}
-
-// WIP the way skip_consensus_fetch_optimization works is pretty fundamentally
-// incompatible with maintaining a lease
-#[cfg(test)]
-#[cfg(WIP)]
-mod tests {
-    use mz_ore::metrics::MetricsRegistry;
-    use mz_ore::now::SYSTEM_TIME;
-    use mz_persist::location::Consensus;
-    use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
-    use mz_persist::unreliable::{UnreliableConsensus, UnreliableHandle};
-    use timely::ExchangeData;
-
-    use crate::internal::metrics::Metrics;
-    use crate::tests::all_ok;
-    use crate::{PersistClient, PersistConfig};
-
-    use super::*;
 
     // Verifies performance optimizations where a Listener doesn't fetch the
     // latest Consensus state if the one it currently has can serve the next
@@ -1011,20 +1041,21 @@ mod tests {
             (("2".to_owned(), "two".to_owned()), 2, 1),
         ];
 
+        let cfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
         let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
         let consensus = Arc::new(MemConsensus::default());
         let unreliable = UnreliableHandle::default();
         unreliable.totally_available();
         let consensus = Arc::new(UnreliableConsensus::new(consensus, unreliable.clone()))
             as Arc<dyn Consensus + Send + Sync>;
-        let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+        let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
         let (mut write, mut read) = PersistClient::new(
-            PersistConfig::new(SYSTEM_TIME.clone()),
+            cfg,
             blob,
             consensus,
             metrics,
+            Arc::new(CpuHeavyRuntime::new()),
         )
-        .await
         .expect("client construction failed")
         .expect_open::<String, String, u64, i64>(ShardId::new())
         .await;
@@ -1033,7 +1064,7 @@ mod tests {
         write.expect_compare_and_append(&data[1..2], 1, 2).await;
         write.expect_compare_and_append(&data[2..3], 2, 3).await;
 
-        let mut snapshot = read.expect_snapshot_and_fetch(2).await;
+        let snapshot = read.expect_snapshot_and_fetch(2).await;
         let mut listen = read.expect_listen(0).await;
 
         // Manually advance the listener's machine so that it has the latest

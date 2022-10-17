@@ -9,16 +9,19 @@
 
 > CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
-> SHOW SOURCES
-accounts      subsource      1
-auction_house load-generator 1
-auctions      subsource      1
-bids          subsource      1
-organizations subsource      1
-users         subsource      1
+$ set-regex match=\d replacement=<SIZE>
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+> SHOW SOURCES
+accounts      subsource      <null>
+auction_house load-generator <SIZE>
+auctions      subsource      <null>
+bids          subsource      <null>
+organizations subsource      <null>
+users         subsource      <null>
+
+$ unset-regex
+
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 # Validate that the ID column of the load generator data is usable as a key.
 > CREATE SINK accounts_sink FROM accounts

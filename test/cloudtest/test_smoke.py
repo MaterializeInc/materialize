@@ -14,7 +14,7 @@ from materialize.cloudtest.wait import wait
 
 
 def test_wait(mz: MaterializeApplication) -> None:
-    wait(condition="condition=Ready", resource="pod/compute-cluster-1-replica-1-0")
+    wait(condition="condition=Ready", resource="pod/compute-cluster-u1-replica-1-0")
 
 
 def test_sql(mz: MaterializeApplication) -> None:
@@ -43,7 +43,7 @@ def test_testdrive(mz: MaterializeApplication) -> None:
                 > CREATE CLUSTER c1 REPLICAS (r1 (SIZE '1'), r2 (SIZE '2-2'));
                 > SET cluster=c1
 
-                > CREATE CONNECTION kafka FOR KAFKA BROKER '${testdrive.kafka-addr}'
+                > CREATE CONNECTION kafka TO KAFKA (BROKER '${testdrive.kafka-addr}')
 
                 > CREATE SOURCE s1
                   FROM KAFKA CONNECTION kafka

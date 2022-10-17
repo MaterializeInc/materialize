@@ -18,12 +18,8 @@
 -- See: https://github.com/dbt-labs/dbt-core/blob/13b18654f/plugins/postgres/dbt/include/postgres/macros/adapters.sql
 
 {% macro materialize__create_view_as(relation, sql) -%}
-  {%- set cluster = config.get('cluster', None) -%}
 
   create view {{ relation }}
-  {% if cluster %}
-    in cluster {{ cluster }}
-  {% endif %}
   as (
     {{ sql }}
   );
@@ -100,11 +96,11 @@
         d.name as database,
         s.name as schema,
         o.name,
-        case when o.type = 'materialized view' then 'materializedview' else o.type end as type
+        case when o.type = 'materialized-view' then 'materializedview' else o.type end as type
     from mz_objects o
     join mz_schemas s on o.schema_id = s.id and s.name = '{{ schema_relation.schema }}'
     join mz_databases d on s.database_id = d.id and d.name = '{{ schema_relation.database }}'
-    where type in ('table', 'source', 'view', 'materialized view', 'index', 'sink')
+    where type in ('table', 'source', 'view', 'materialized-view', 'index', 'sink')
   {% endcall %}
   {{ return(load_result('list_relations_without_caching').table) }}
 {% endmacro %}

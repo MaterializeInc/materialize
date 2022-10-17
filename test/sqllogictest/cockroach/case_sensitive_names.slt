@@ -49,7 +49,7 @@ statement error pgcode 42P01 unknown catalog item 'A'
 SHOW COLUMNS FROM "A"
 
 statement error pgcode 42P01 unknown catalog item 'A'
-SHOW INDEXES FROM "A"
+SHOW INDEXES ON "A"
 
 # statement error pgcode 42P01 catalog item '"A"' does not exist
 # SHOW CREATE TABLE "A"
@@ -85,7 +85,7 @@ statement ok
 SHOW COLUMNS FROM a
 
 statement ok
-SHOW INDEXES FROM a
+SHOW INDEXES ON a
 
 # statement ok
 # SHOW CREATE TABLE a
@@ -121,7 +121,7 @@ statement error pgcode 42P01 unknown catalog item 'b'
 SHOW COLUMNS FROM B
 
 statement error pgcode 42P01 unknown catalog item 'b'
-SHOW INDEXES FROM B
+SHOW INDEXES ON B
 
 # statement error pgcode 42P01 catalog item 'b' does not exist
 # SHOW CREATE TABLE B
@@ -157,7 +157,7 @@ statement ok
 SHOW COLUMNS FROM "B"
 
 statement ok
-SHOW INDEXES FROM "B"
+SHOW INDEXES ON "B"
 
 # statement ok
 # SHOW CREATE TABLE "B"

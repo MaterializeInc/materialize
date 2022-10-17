@@ -47,7 +47,7 @@ pub static KAFKA_ADDRS: Lazy<mz_kafka_util::KafkaAddrs> =
     });
 // Port 2181 is used by ZooKeeper.
 static PORT_ALLOCATOR: Lazy<Arc<PortAllocator>> =
-    Lazy::new(|| Arc::new(PortAllocator::new_with_filter(2100, 2200, &[2181])));
+    Lazy::new(|| Arc::new(PortAllocator::new_with_filter(2100, 2600, &[2181])));
 
 #[derive(Clone)]
 pub struct Config {
@@ -203,12 +203,14 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         tls: config.tls,
         frontegg: config.frontegg,
         unsafe_mode: config.unsafe_mode,
+        persisted_introspection: true,
         metrics_registry: metrics_registry.clone(),
         now: config.now,
         environment_id: format!("environment-{}-0", Uuid::from_u128(0)),
         cors_allowed_origin: AllowOrigin::list([]),
         cluster_replica_sizes: Default::default(),
         bootstrap_default_cluster_replica_size: "1".into(),
+        bootstrap_builtin_cluster_replica_size: "1".into(),
         storage_host_sizes: Default::default(),
         default_storage_host_size: None,
         availability_zones: Default::default(),
@@ -218,6 +220,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         tracing_target_callbacks: mz_ore::tracing::TracingTargetCallbacks::default(),
         storage_usage_collection_interval: config.storage_usage_collection_interval,
         segment_api_key: None,
+        egress_ips: vec![],
     }))?;
     let server = Server {
         inner,

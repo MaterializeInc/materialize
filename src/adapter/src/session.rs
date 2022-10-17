@@ -17,7 +17,7 @@ use std::mem;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::OwnedMutexGuard;
 use uuid::Uuid;
 
@@ -79,7 +79,8 @@ pub struct Session<T = mz_repr::Timestamp> {
     user: User,
     vars: SessionVars,
     drop_sinks: Vec<ComputeSinkId>,
-    notices: Vec<AdapterNotice>,
+    notices_tx: mpsc::UnboundedSender<AdapterNotice>,
+    notices_rx: mpsc::UnboundedReceiver<AdapterNotice>,
 }
 
 impl<T: TimestampManipulation> Session<T> {
@@ -98,6 +99,7 @@ impl<T: TimestampManipulation> Session<T> {
     }
 
     fn new_internal(conn_id: ConnectionId, user: User) -> Session<T> {
+        let (notices_tx, notices_rx) = mpsc::unbounded_channel();
         Session {
             conn_id,
             transaction: TransactionStatus::Default,
@@ -107,7 +109,8 @@ impl<T: TimestampManipulation> Session<T> {
             user,
             vars: SessionVars::default(),
             drop_sinks: vec![],
-            notices: vec![],
+            notices_tx,
+            notices_rx,
         }
     }
 
@@ -307,14 +310,43 @@ impl<T: TimestampManipulation> Session<T> {
         self.drop_sinks.push(id)
     }
 
+    /// Returns a channel on which to send notices to the session.
+    pub fn retain_notice_transmitter(&self) -> UnboundedSender<AdapterNotice> {
+        self.notices_tx.clone()
+    }
+
     /// Adds a notice to the session.
     pub fn add_notice(&mut self, notice: AdapterNotice) {
-        self.notices.push(notice)
+        let _ = self.notices_tx.send(notice);
+    }
+
+    /// Awaits a possible notice.
+    ///
+    /// This method is cancel safe.
+    pub async fn recv_notice(&mut self) -> AdapterNotice {
+        // Unwrap is safe because the Session also holds a sender, so recv won't
+        // ever return None.
+        //
+        // This method is cancel safe because recv is cancel safe.
+        loop {
+            let notice = self.notices_rx.recv().await.unwrap();
+            // Filter out notices for other clusters.
+            if let AdapterNotice::ClusterReplicaStatusChanged { cluster, .. } = &notice {
+                if cluster != self.vars.cluster() {
+                    continue;
+                }
+            }
+            return notice;
+        }
     }
 
     /// Returns a draining iterator over the notices attached to the session.
-    pub fn drain_notices(&mut self) -> impl Iterator<Item = AdapterNotice> + '_ {
-        self.notices.drain(..)
+    pub fn drain_notices(&mut self) -> Vec<AdapterNotice> {
+        let mut notices = Vec::new();
+        while let Ok(notice) = self.notices_rx.try_recv() {
+            notices.push(notice);
+        }
+        notices
     }
 
     /// Sets the transaction ops to `TransactionOps::None`. Must only be used after
@@ -616,11 +648,15 @@ pub type RowBatchStream = UnboundedReceiver<PeekResponseUnary>;
 pub enum TransactionStatus<T> {
     /// Idle. Matches `TBLOCK_DEFAULT`.
     Default,
-    /// Running a possibly single-query transaction. Matches
-    /// `TBLOCK_STARTED`. WARNING: This might not actually be
-    /// a single statement due to the extended protocol. Thus,
-    /// we should not perform optimizations based on this.
-    /// See: <https://git.postgresql.org/gitweb/?p=postgresql.git&a=commitdiff&h=f92944137>.
+    /// Running a single-query transaction. Matches
+    /// `TBLOCK_STARTED`. In PostgreSQL, when using the extended query protocol, this
+    /// may be upgraded into multi-statement implicit query (see [`Self::InTransactionImplicit`]).
+    /// Additionally, some statements may trigger an eager commit of the implicit transaction,
+    /// see: <https://git.postgresql.org/gitweb/?p=postgresql.git&a=commitdiff&h=f92944137>. In
+    /// Materialize however, we eagerly commit all statements outside of an explicit transaction
+    /// when using the extended query protocol. Therefore, we can guarantee that this state will
+    /// always be a single-query transaction and never be upgraded into a multi-statement implicit
+    /// query.
     Started(Transaction<T>),
     /// Currently in a transaction issued from a `BEGIN`. Matches `TBLOCK_INPROGRESS`.
     InTransaction(Transaction<T>),
@@ -675,6 +711,18 @@ impl<T> TransactionStatus<T> {
             TransactionStatus::Started(_) | TransactionStatus::InTransactionImplicit(_) => true,
             TransactionStatus::Default
             | TransactionStatus::InTransaction(_)
+            | TransactionStatus::Failed(_) => false,
+        }
+    }
+
+    /// Whether the transaction may contain multiple statements.
+    pub fn is_in_multi_statement_transaction(&self) -> bool {
+        match self {
+            TransactionStatus::InTransaction(_) | TransactionStatus::InTransactionImplicit(_) => {
+                true
+            }
+            TransactionStatus::Default
+            | TransactionStatus::Started(_)
             | TransactionStatus::Failed(_) => false,
         }
     }

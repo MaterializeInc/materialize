@@ -37,7 +37,6 @@ use mz_sql_parser::ast::{
     KafkaConnection, KafkaSourceConnection, PgConfigOption, PgConfigOptionName,
     ReaderSchemaSelectionStrategy, TableConstraint, UnresolvedObjectName,
 };
-use mz_storage::source::generator::as_generator;
 use mz_storage::types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
 use mz_storage::types::connections::{Connection, ConnectionContext};
 use mz_storage::types::sources::PostgresSourceDetails;
@@ -50,8 +49,9 @@ use crate::ast::{
 use crate::catalog::SessionCatalog;
 use crate::kafka_util;
 use crate::kafka_util::KafkaConfigOptionExtracted;
-use crate::names::{Aug, FullObjectName, RawDatabaseSpecifier, ResolvedObjectName};
+use crate::names::{Aug, RawDatabaseSpecifier, ResolvedObjectName};
 use crate::normalize;
+use crate::plan::statement::ddl::load_generator_ast_to_generator;
 use crate::plan::StatementContext;
 
 fn subsource_gen<'a, T>(
@@ -393,33 +393,11 @@ pub async fn purify_create_source(
                 )))),
             })
         }
-        CreateSourceConnection::LoadGenerator {
-            generator,
-            options: _,
-        } => {
-            use mz_storage::types::sources::LoadGenerator;
-
+        CreateSourceConnection::LoadGenerator { generator, options } => {
             let scx = StatementContext::new(None, &*catalog);
 
-            let available_subsources = match generator {
-                mz_sql_parser::ast::LoadGenerator::Auction => {
-                    let mut available_subsources = HashMap::new();
-                    let generator = as_generator(&LoadGenerator::Auction);
-                    for (i, (name, desc)) in generator.views().iter().enumerate() {
-                        let name = FullObjectName {
-                            database: RawDatabaseSpecifier::Name("mz_loadgenerator".to_owned()),
-                            schema: "public".to_owned(),
-                            item: name.to_string(),
-                        };
-                        // The zero-th output is the main output
-                        // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
-                        // to handle the main source and the subsources uniformly
-                        available_subsources.insert(name, (i + 1, desc.clone()));
-                    }
-                    Some(available_subsources)
-                }
-                mz_sql_parser::ast::LoadGenerator::Counter => None,
-            };
+            let (_load_generator, available_subsources) =
+                load_generator_ast_to_generator(generator, options)?;
 
             let mut targeted_subsources = vec![];
 

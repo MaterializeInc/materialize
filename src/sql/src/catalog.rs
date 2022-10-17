@@ -212,6 +212,8 @@ pub struct CatalogConfig {
     pub session_id: Uuid,
     /// Whether the server is running in unsafe mode.
     pub unsafe_mode: bool,
+    /// Whether persisted introspection sources are enabled.
+    pub persisted_introspection: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
     /// Default timestamp interval.
@@ -619,6 +621,7 @@ static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
     environment_id: format!("environment-{}-0", Uuid::from_u128(0)),
     session_id: Uuid::from_u128(0),
     unsafe_mode: true,
+    persisted_introspection: true,
     build_info: &DUMMY_BUILD_INFO,
     timestamp_interval: Duration::from_secs(1),
     now: NOW_ZERO.clone(),

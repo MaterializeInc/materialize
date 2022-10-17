@@ -14,7 +14,7 @@ $ set schema={}
 $ kafka-create-topic topic=headers_src
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 ! CREATE SOURCE headers_src
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -58,12 +58,13 @@ $ s3-put-object bucket=test key=static.csv
 
 > CREATE SECRET s3_conn_secret_access_key AS '${testdrive.aws-secret-access-key}';
 
-> CREATE CONNECTION s3_conn FOR AWS
-  ACCESS KEY ID = '${testdrive.aws-access-key-id}',
-  SECRET ACCESS KEY = SECRET s3_conn_secret_access_key,
-  TOKEN = '${testdrive.aws-token}',
-  REGION = '${testdrive.aws-region}',
-  ENDPOINT = '${testdrive.aws-endpoint}';
+> CREATE CONNECTION s3_conn TO AWS (
+    ACCESS KEY ID = '${testdrive.aws-access-key-id}',
+    SECRET ACCESS KEY = SECRET s3_conn_secret_access_key,
+    TOKEN = '${testdrive.aws-token}',
+    REGION = '${testdrive.aws-region}',
+    ENDPOINT = '${testdrive.aws-endpoint}'
+  );
 
 ! CREATE SOURCE headers_src
   FROM S3 CONNECTION s3_conn

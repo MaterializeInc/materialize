@@ -14,7 +14,7 @@
 //! [timely dataflow]: ../timely/index.html
 
 use std::env;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -52,6 +52,8 @@ pub struct Config {
     // === Special modes. ===
     /// Whether to permit usage of unsafe features.
     pub unsafe_mode: bool,
+    /// Whether to enable persisted introspection sources.
+    pub persisted_introspection: bool,
 
     // === Connection options. ===
     /// The IP address and port to listen for pgwire connections on.
@@ -97,6 +99,8 @@ pub struct Config {
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     /// The size of the default cluster replica if bootstrapping.
     pub bootstrap_default_cluster_replica_size: String,
+    /// The size of the builtin cluster replicas if bootstrapping.
+    pub bootstrap_builtin_cluster_replica_size: String,
     /// A map from size name to resource allocations for storage hosts.
     pub storage_host_sizes: StorageHostSizeMap,
     /// Default storage host size, should be a key from storage_host_sizes.
@@ -105,6 +109,8 @@ pub struct Config {
     pub storage_usage_collection_interval: Duration,
     /// An API key for Segment. Enables export of audit events to Segment.
     pub segment_api_key: Option<String>,
+    /// IP Addresses which will be used for egress.
+    pub egress_ips: Vec<Ipv4Addr>,
 
     // === Tracing options. ===
     /// The metrics registry to use.
@@ -235,6 +241,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         &BootstrapArgs {
             now: (config.now)(),
             default_cluster_replica_size: config.bootstrap_default_cluster_replica_size,
+            builtin_cluster_replica_size: config.bootstrap_builtin_cluster_replica_size,
             // TODO(benesch, brennan): remove this after v0.27.0-alpha.4 has
             // shipped to cloud since all clusters will have had a default
             // availability zone installed.
@@ -263,6 +270,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         dataflow_client: controller,
         storage: adapter_storage,
         unsafe_mode: config.unsafe_mode,
+        persisted_introspection: config.persisted_introspection,
         build_info: &BUILD_INFO,
         environment_id: config.environment_id,
         metrics_registry: config.metrics_registry.clone(),
@@ -276,6 +284,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         storage_usage_client,
         storage_usage_collection_interval: config.storage_usage_collection_interval,
         segment_api_key: config.segment_api_key,
+        egress_ips: config.egress_ips,
     })
     .await?;
 

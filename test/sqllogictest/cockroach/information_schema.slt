@@ -188,7 +188,7 @@ is_insertable_into  STRING     false        NULL            ·                  
 version             INT8       true         NULL            ·                      {}       false
 
 query TTBITTBB colnames
-SHOW INDEXES FROM information_schema.tables
+SHOW INDEXES ON information_schema.tables
 ----
 table_name  index_name  non_unique  seq_in_index  column_name  direction  storing  implicit
 

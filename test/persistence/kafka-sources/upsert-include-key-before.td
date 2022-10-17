@@ -33,12 +33,11 @@ $ kafka-create-topic topic=include-key
 $ kafka-ingest format=avro topic=include-key key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": ${kafka-ingest.iteration}, "key2": 1} {"f2": ${kafka-ingest.iteration}}
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE include_key
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-include-key-${testdrive.seed}')

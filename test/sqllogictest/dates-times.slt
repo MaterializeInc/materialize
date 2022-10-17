@@ -10,19 +10,6 @@
 mode cockroach
 
 statement ok
-CREATE VIEW logical_timestamp_view AS SELECT mz_now()
-
-# Equivalent to running `SELECT mz_now()` directly IF AND ONLY IF
-# there are no other objects in the same time domain, and has the same somewhat
-# confusing output when there are no dependencies on any views. If there are
-# other objects in the same time domain as the view, they will dictate what is
-# returned.
-query T
-SELECT * FROM logical_timestamp_view
-----
-18446744073709551615
-
-statement ok
 CREATE TABLE dateish (
     a DATE
 )
@@ -772,6 +759,19 @@ query B
 SELECT current_timestamp > TIMESTAMP '2016-06-13 00:00:00'
 ----
 true
+
+statement ok
+CREATE VIEW logical_timestamp_view AS SELECT mz_now()
+
+# Equivalent to running `SELECT mz_now()` directly IF AND ONLY IF
+# there are no other objects in the same time domain, and has the same somewhat
+# confusing output when there are no dependencies on any views. If there are
+# other objects in the same time domain as the view, they will dictate what is
+# returned.
+query T
+SELECT * FROM logical_timestamp_view
+----
+18446744073709551615
 
 statement ok
 CREATE VIEW now_view AS SELECT now() AS ts

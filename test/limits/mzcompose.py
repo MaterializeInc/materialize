@@ -149,7 +149,7 @@ class KafkaTopics(Generator):
 
         print(
             f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn
-            FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+            TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
             """
         )
 
@@ -203,7 +203,7 @@ class KafkaSourcesSameTopic(Generator):
 
         print(
             f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn
-            FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+            TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
             """
         )
 
@@ -255,7 +255,7 @@ class KafkaPartitions(Generator):
 
         print(
             f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn
-            FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+            TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
             """
         )
 
@@ -311,7 +311,7 @@ class KafkaRecordsEnvelopeNone(Generator):
 
         print(
             f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn
-            FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+            TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
             """
         )
 
@@ -360,7 +360,7 @@ class KafkaRecordsEnvelopeUpsertSameValue(Generator):
 
         print(
             f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn
-            FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+            TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
             """
         )
 
@@ -412,7 +412,7 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
 
         print(
             f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn
-            FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+            TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
             """
         )
 
@@ -464,8 +464,8 @@ class KafkaSinks(Generator):
             print(
                 dedent(
                     f"""
-                     > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
-                     > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
+                     > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+                     > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
                      > CREATE SINK s{i} FROM v{i}
                        INTO KAFKA CONNECTION kafka_conn (TOPIC 'kafka-sink-{i}')
                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -499,18 +499,18 @@ class KafkaSinksSameSource(Generator):
         )
         print("> CREATE MATERIALIZED VIEW v1 (f1) AS VALUES (123)")
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}';"""
+            f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');"""
         )
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';"""
+            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');"""
         )
 
         for i in cls.all():
             print(
                 dedent(
                     f"""
-                     > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
-                     > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
+                     > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+                     > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
                      > CREATE SINK s{i} FROM v1
                        INTO KAFKA CONNECTION kafka_conn (TOPIC 'kafka-sink-same-source-{i}')
                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -1350,7 +1350,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
         for replica_id in range(0, args.replicas):
             nodes = []
             for node_id in range(0, args.nodes):
-                node_name = f"computed_{cluster_id}_{replica_id}_{node_id}"
+                node_name = f"computed_u{cluster_id}_{replica_id}_{node_id}"
                 nodes.append(node_name)
 
             for node_id in range(0, args.nodes):
@@ -1405,10 +1405,10 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                 for replica_id in range(0, args.replicas):
                     nodes = []
                     for node_id in range(0, args.nodes):
-                        node_name = f"computed_{cluster_id}_{replica_id}_{node_id}"
+                        node_name = f"computed_u{cluster_id}_{replica_id}_{node_id}"
                         nodes.append(node_name)
 
-                    replica_name = f"replica_{cluster_id}_{replica_id}"
+                    replica_name = f"replica_u{cluster_id}_{replica_id}"
 
                     replica_definitions.append(
                         f"{replica_name} (REMOTE ["
@@ -1419,14 +1419,14 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                     )
 
                 c.sql(
-                    f"CREATE CLUSTER cluster_{cluster_id} REPLICAS ("
+                    f"CREATE CLUSTER cluster_u{cluster_id} REPLICAS ("
                     + ",".join(replica_definitions)
                     + ")"
                 )
 
             # Construct some dataflows in each cluster
             for cluster_id in range(0, args.clusters):
-                cluster_name = f"cluster_{cluster_id}"
+                cluster_name = f"cluster_u{cluster_id}"
 
                 c.testdrive(
                     dedent(
@@ -1439,7 +1439,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                            SELECT COUNT(*) AS c1 FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4;
 
                          > CREATE CONNECTION IF NOT EXISTS kafka_conn
-                           FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+                           TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
 
                          > CREATE CONNECTION IF NOT EXISTS csr_conn
                            FOR CONFLUENT SCHEMA REGISTRY
@@ -1456,7 +1456,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
 
             # Validate that each individual cluster is operating properly
             for cluster_id in range(0, args.clusters):
-                cluster_name = f"cluster_{cluster_id}"
+                cluster_name = f"cluster_u{cluster_id}"
 
                 c.testdrive(
                     dedent(

@@ -29,10 +29,12 @@
 //! from compacting beyond the allowed compaction of each of its outputs, ensuring that we can
 //! recover each dataflow to its current state in case of failure or other reconfiguration.
 
+use anyhow::anyhow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::num::NonZeroUsize;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -70,7 +72,48 @@ mod replicated;
 pub use mz_orchestrator::ServiceStatus as ComputeInstanceStatus;
 
 /// An abstraction allowing us to name different compute instances.
-pub type ComputeInstanceId = u64;
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum ComputeInstanceId {
+    System(u64),
+    User(u64),
+}
+
+impl ComputeInstanceId {
+    pub fn inner_id(&self) -> u64 {
+        match self {
+            ComputeInstanceId::System(id) | ComputeInstanceId::User(id) => *id,
+        }
+    }
+
+    pub fn is_user(&self) -> bool {
+        matches!(self, Self::User(_))
+    }
+}
+
+impl FromStr for ComputeInstanceId {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.len() < 2 {
+            return Err(anyhow!("couldn't parse compute instance id {}", s));
+        }
+        let val: u64 = s[1..].parse()?;
+        match s.chars().next().unwrap() {
+            's' => Ok(Self::System(val)),
+            'u' => Ok(Self::User(val)),
+            _ => Err(anyhow!("couldn't parse role id {}", s)),
+        }
+    }
+}
+
+impl fmt::Display for ComputeInstanceId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::System(id) => write!(f, "s{}", id),
+            Self::User(id) => write!(f, "u{}", id),
+        }
+    }
+}
 
 /// An event describing a change in status of a compute process.
 #[derive(Debug, Clone, Serialize)]

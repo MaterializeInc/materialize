@@ -22,11 +22,11 @@ $ set schema={
 $ kafka-create-topic topic=data
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
 > CREATE SOURCE data
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
@@ -164,8 +164,8 @@ contains:test5 is a view, which cannot be exported as a sink
 
 $ set-regex match=(\s\(u\d+\)|\n) replacement=
 
-> EXPLAIN SELECT * FROM test5
-"%0 =| ReadExistingIndex materialize.public.test5_primary_idx"
+> EXPLAIN SELECT * FROM test5;
+"Explained Query (fast path):  ReadExistingIndex materialize.public.test5_primary_idxUsed Indexes:  - materialize.public.test5_primary_idx"
 
 > SELECT * FROM test5
 b  c
@@ -187,7 +187,7 @@ contains:catalog item 'materialize.public.idx1' is an index and so cannot be dep
 > DROP INDEX test5_primary_idx
 
 > EXPLAIN SELECT * FROM test5
-"%0 =| ReadExistingIndex materialize.public.idx1| Project (#1, #0)"
+"Explained Query (fast path):  Project (#1, #0)    ReadExistingIndex materialize.public.idx1Used Indexes:  - materialize.public.idx1"
 
 > SELECT * from test5
 b  c
@@ -334,11 +334,15 @@ a  b
 3  4
 1  2
 
+$ set-regex match=\d replacement=<SIZE>
+
 > SHOW SOURCES
 name     type    size
 ---------------------
-data     kafka   1
-mat_data kafka   1
+data     kafka   <SIZE>
+mat_data kafka   <SIZE>
+
+$ unset-regex
 
 # If there exists another index, dropping the primary index will not #
 # unmaterialize the source. This also tests creating a default index when the

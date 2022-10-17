@@ -11,7 +11,7 @@ chrono = { version = "0.4.22", default-features = false, features = ["serde", "s
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
-proc-macro2 = "1.0.43"
+proc-macro2 = "1.0.47"
 
 [dev-dependencies]
 datadriven = "0.6.0"

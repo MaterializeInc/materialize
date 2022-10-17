@@ -22,7 +22,7 @@ message Maps {
 $ protobuf-compile-descriptors inputs=maps.proto output=maps.pb set-var=maps-schema
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 ! CREATE SOURCE maps FROM
   KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-maps-${testdrive.seed}')

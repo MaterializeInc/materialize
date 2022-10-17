@@ -10,6 +10,9 @@
 # Verify that the data ingested while `storaged` was down eventually appears,
 # then try ingesting new data.
 
+# Increased from the default because of CI flakiness.
+$ set-sql-timeout duration=180s
+
 > SELECT * from remote1
 one
 two

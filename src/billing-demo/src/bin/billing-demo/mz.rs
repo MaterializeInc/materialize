@@ -34,7 +34,7 @@ pub async fn create_proto_source(
     };
 
     let query =
-        format!("CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '{kafka_url}'");
+        format!("CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '{kafka_url}')");
 
     debug!("creating kafka connection=> {}", query);
 
@@ -64,8 +64,7 @@ pub async fn create_kafka_sink(
     schema_registry_url: &str,
 ) -> Result<()> {
     let query = format!(
-        "CREATE CONNECTION IF NOT EXISTS {sink}_kafka_conn
-            FOR KAFKA BROKER '{kafka_url}'",
+        "CREATE CONNECTION IF NOT EXISTS {sink}_kafka_conn TO KAFKA (BROKER '{kafka_url}')",
         sink = sink_name,
         kafka_url = kafka_url,
     );
@@ -74,9 +73,7 @@ pub async fn create_kafka_sink(
     mz_client::execute(mz_client, &query).await?;
 
     let query = format!(
-        "CREATE CONNECTION IF NOT EXISTS {sink}_csr_conn
-            FOR CONFLUENT SCHEMA REGISTRY
-            URL '{schema_registry_url}'",
+        "CREATE CONNECTION IF NOT EXISTS {sink}_csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '{schema_registry_url}')",
         sink = sink_name,
         schema_registry_url = schema_registry_url,
     );
@@ -140,8 +137,7 @@ pub async fn reingest_sink(
 ) -> Result<()> {
     let query = format!(
         "CREATE CONNECTION IF NOT EXISTS {source}_csr_conn
-            FOR CONFLUENT SCHEMA REGISTRY
-            URL '{schema_registry_url}'",
+            TO CONFLUENT SCHEMA REGISTRY (URL '{schema_registry_url}')",
         source = source_name,
         schema_registry_url = schema_registry_url,
     );
@@ -150,7 +146,7 @@ pub async fn reingest_sink(
     mz_client::execute(mz_client, &query).await?;
 
     let query =
-        format!("CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '{kafka_url}'");
+        format!("CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '{kafka_url}')");
     debug!("creating kafka connection=> {}", query);
     mz_client::execute(mz_client, &query).await?;
 

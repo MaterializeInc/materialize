@@ -31,8 +31,8 @@ use mz_storage::types::sinks::{SinkAsOf, StorageSinkConnection};
 use mz_storage::types::sources::{PostgresSourceConnection, SourceConnection, Timeline};
 
 use crate::catalog::{
-    CatalogItem, CatalogState, Op, Sink, StorageSinkConnectionState, TransactionResult,
-    SYSTEM_CONN_ID,
+    CatalogItem, CatalogState, DataSourceDesc, Op, Sink, StorageSinkConnectionState,
+    TransactionResult, SYSTEM_CONN_ID,
 };
 use crate::client::ConnectionId;
 use crate::coord::appends::BuiltinTableUpdateSource;
@@ -72,6 +72,7 @@ impl<S: Append + 'static> Coordinator<S> {
         event!(Level::TRACE, ops = format!("{:?}", ops));
 
         let mut sources_to_drop = vec![];
+        let mut log_sources_to_drop = vec![];
         let mut tables_to_drop = vec![];
         let mut storage_sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
@@ -88,7 +89,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                     CatalogItem::Source(source) => {
                         sources_to_drop.push(*id);
-                        if let Some(ingestion) = &source.ingestion {
+                        if let DataSourceDesc::Ingestion(ingestion) = &source.data_source {
                             match &ingestion.desc.connection {
                                 SourceConnection::Postgres(PostgresSourceConnection {
                                     connection,
@@ -143,9 +144,12 @@ impl<S: Append + 'static> Coordinator<S> {
                 let id = instance.id;
 
                 // Drop the introspection sources
-                for replica in instance.replicas_by_id.values() {
-                    sources_to_drop.extend(replica.config.logging.source_ids());
-                }
+                let replica_logs = instance
+                    .replicas_by_id
+                    .values()
+                    .flat_map(|replica| replica.config.logging.source_ids())
+                    .map(|log_id| (id, log_id));
+                log_sources_to_drop.extend(replica_logs);
 
                 // Drop timelines
                 timelines_to_drop.extend(self.remove_compute_instance_from_timeline(id));
@@ -155,7 +159,12 @@ impl<S: Append + 'static> Coordinator<S> {
                 let replica = &compute_instance.replicas_by_id[replica_id];
 
                 // Drop the introspection sources
-                sources_to_drop.extend(replica.config.logging.source_ids());
+                let replica_logs = replica
+                    .config
+                    .logging
+                    .source_ids()
+                    .map(|log_id| (compute_instance.id, log_id));
+                log_sources_to_drop.extend(replica_logs);
             }
         }
 
@@ -165,6 +174,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .chain(storage_sinks_to_drop.iter())
                 .chain(tables_to_drop.iter())
                 .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
+                .chain(log_sources_to_drop.iter().map(|(_, id)| id))
                 .cloned(),
         );
         timelines_to_drop.extend(
@@ -172,6 +182,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 indexes_to_drop
                     .iter()
                     .chain(materialized_views_to_drop.iter())
+                    .chain(log_sources_to_drop.iter())
                     .cloned(),
             ),
         );
@@ -207,6 +218,10 @@ impl<S: Append + 'static> Coordinator<S> {
 
             if !sources_to_drop.is_empty() {
                 self.drop_sources(sources_to_drop).await;
+            }
+            if !log_sources_to_drop.is_empty() {
+                self.drop_sources(log_sources_to_drop.into_iter().map(|(_, id)| id).collect())
+                    .await;
             }
             if !tables_to_drop.is_empty() {
                 self.drop_sources(tables_to_drop).await;
@@ -270,7 +285,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     event_type,
                     json!({
                         "event_source": "environmentd",
-                        "details": event.event_details.as_json(),
+                        "details": event.details.as_json(),
                     }),
                     Some(json!({
                         "groupId": user_metadata.group_id,
@@ -570,8 +585,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         | CatalogItem::Index(_)
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
-                        | CatalogItem::Connection(_)
-                        | CatalogItem::StorageManagedTable(_) => {}
+                        | CatalogItem::Connection(_) => {}
                     }
                 }
                 Op::DropDatabase { .. } => {
@@ -616,11 +630,11 @@ impl<S: Append + 'static> Coordinator<S> {
                         | CatalogItem::Index(_)
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
-                        | CatalogItem::Connection(_)
-                        | CatalogItem::StorageManagedTable(_) => {}
+                        | CatalogItem::Connection(_) => {}
                     }
                 }
-                Op::AlterSource { .. }
+                Op::AlterSink { .. }
+                | Op::AlterSource { .. }
                 | Op::DropTimeline(_)
                 | Op::RenameItem { .. }
                 | Op::UpdateComputeInstanceStatus { .. }
@@ -658,7 +672,7 @@ impl<S: Append + 'static> Coordinator<S> {
             "Materialized view",
         )?;
         self.validate_resource_limit(
-            self.catalog.compute_instances().count(),
+            self.catalog.user_compute_instances().count(),
             new_clusters,
             SystemVars::max_clusters,
             "Cluster",

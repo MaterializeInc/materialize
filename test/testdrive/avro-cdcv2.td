@@ -9,9 +9,6 @@
 
 # Test support for Avro sources without using the Confluent Schema Registry.
 
-$ skip-if
-SELECT ${arg.replicas} > 1 OR ${arg.replica-size} > 1;
-
 $ set schema=[
   {
     "type": "array",
@@ -104,7 +101,7 @@ $ kafka-ingest format=avro topic=data schema=${schema}
 # Create a source using an inline schema.
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE data_schema_inline
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
@@ -155,7 +152,7 @@ id price
 
 # The ouput of SUBSCRIBE is dependent on the replica size
 $ skip-if
-SELECT ${arg.replica-size} > 1;
+SELECT ${arg.size} > 1;
 
 > BEGIN
 

@@ -19,8 +19,7 @@ $ kafka-ingest topic=input format=bytes
 Rochester,NY,14618
 New York,NY,10004
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 # The source intentionally does not go through toxiproxy.
 > CREATE SOURCE input (city, state, zip)
@@ -28,9 +27,9 @@ New York,NY,10004
   FORMAT CSV WITH 3 COLUMNS
   INCLUDE OFFSET
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
 > CREATE SINK output FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-byo-sink-${testdrive.seed}')

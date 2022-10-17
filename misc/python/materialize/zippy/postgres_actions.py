@@ -71,7 +71,8 @@ class CreatePostgresTable(Action):
 
         if len(existing_postgres_tables) == 0:
             self.new_postgres_table = True
-            this_postgres_table.has_pk = random.choice([True, False])
+            # A PK is now required for Debezium
+            this_postgres_table.has_pk = True
 
             self.postgres_table = this_postgres_table
         elif len(existing_postgres_tables) == 1:

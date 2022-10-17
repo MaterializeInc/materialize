@@ -74,7 +74,7 @@
 ### query T
 ### SELECT COUNT(*) FROM mz_sources WHERE name LIKE 'mz_active_peeks_%';
 ### ----
-### 1
+### 3
 ### """)
 ###
 ### print(stmt_ok("CREATE CLUSTER c1 REPLICAS (r (SIZE '1'))"))
@@ -82,7 +82,7 @@
 ### query T
 ### SELECT COUNT(*) FROM mz_sources WHERE name LIKE 'mz_active_peeks_%';
 ### ----
-### 2
+### 4
 ### """)
 ### print(stmt_ok("CREATE TABLE t1(f1 int, f2 int)"))
 ### print(stmt_ok("INSERT INTO t1 VALUES (1,1),(2,3),(4,5)"))
@@ -91,26 +91,26 @@
 ###
 ### print(stmt_ok("SET CLUSTER TO c1"))
 ### print(stmt_ok("CREATE MATERIALIZED VIEW ma2 AS SELECT COUNT(*) FROM t1"))
-### print(equal("2"))
+### print(equal("4"))
 ###
 ### print(stmt_ok("CREATE CLUSTER c2 REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'))"))
 ### print("""
 ### query T
 ### SELECT COUNT(*) FROM mz_sources WHERE name LIKE 'mz_active_peeks_%';
 ### ----
-### 4
+### 6
 ### """)
 ###
 ### print(stmt_ok("set cluster = c2"))
 ### print(stmt_ok("set cluster_replica = r1"))
-### print(equal("3"))
+### print(equal("5"))
 
 
 # Check that no log source has been created initially
 query T
 SELECT COUNT(*) FROM mz_sources WHERE name LIKE 'mz_active_peeks_%';
 ----
-1
+3
 
 statement ok
 CREATE CLUSTER c1 REPLICAS (r (SIZE '1'));
@@ -120,7 +120,7 @@ CREATE CLUSTER c1 REPLICAS (r (SIZE '1'));
 query T
 SELECT COUNT(*) FROM mz_sources WHERE name LIKE 'mz_active_peeks_%';
 ----
-2
+4
 
 statement ok
 CREATE TABLE t1(f1 int, f2 int);
@@ -432,291 +432,291 @@ CREATE MATERIALIZED VIEW ma2 AS SELECT COUNT(*) FROM t1;
 
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_batches_internal) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_batches_internal_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_batches_internal) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_batches_internal_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_batches_internal_2) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_batches_internal));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_batches_internal_4) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_batches_internal));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_records_internal) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_records_internal_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_records_internal) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_records_internal_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_records_internal_2) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_records_internal));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_records_internal_4) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_records_internal));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sharing_internal) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sharing_internal_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sharing_internal) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sharing_internal_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sharing_internal_2) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sharing_internal));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sharing_internal_4) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sharing_internal));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_channels) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_channels_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_channels) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_channels_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_channels_2) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_channels));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_channels_4) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_channels));
 ----
 
 query T
-SELECT id,worker_id FROM ((SELECT id,worker_id FROM mz_internal.mz_dataflow_addresses) EXCEPT (SELECT id,worker_id FROM mz_internal.mz_dataflow_addresses_2));
+SELECT id,worker_id FROM ((SELECT id,worker_id FROM mz_internal.mz_dataflow_addresses) EXCEPT (SELECT id,worker_id FROM mz_internal.mz_dataflow_addresses_4));
 ----
 
 query T
-SELECT id,worker_id FROM ((SELECT id,worker_id FROM mz_internal.mz_dataflow_addresses_2) EXCEPT (SELECT id,worker_id FROM mz_internal.mz_dataflow_addresses));
+SELECT id,worker_id FROM ((SELECT id,worker_id FROM mz_internal.mz_dataflow_addresses_4) EXCEPT (SELECT id,worker_id FROM mz_internal.mz_dataflow_addresses));
 ----
 
 query T
-SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability_internal) EXCEPT (SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability_internal_2));
+SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability_internal) EXCEPT (SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability_internal_4));
 ----
 
 query T
-SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability_internal_2) EXCEPT (SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability_internal));
+SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability_internal_4) EXCEPT (SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability_internal));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_operators) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_operators_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_operators) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_operators_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_operators_2) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_operators));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_operators_4) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_operators));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports_2) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports_4) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies_2) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies_4) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_received_internal) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_received_internal_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_received_internal) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_received_internal_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_received_internal_2) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_received_internal));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_received_internal_4) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_received_internal));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_sent_internal) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_sent_internal_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_sent_internal) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_sent_internal_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_sent_internal_2) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_sent_internal));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_sent_internal_4) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_sent_internal));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_active_peeks) EXCEPT (SELECT * FROM mz_internal.mz_active_peeks_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_active_peeks) EXCEPT (SELECT * FROM mz_internal.mz_active_peeks_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_active_peeks_2) EXCEPT (SELECT * FROM mz_internal.mz_active_peeks));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_active_peeks_4) EXCEPT (SELECT * FROM mz_internal.mz_active_peeks));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_peek_durations) EXCEPT (SELECT * FROM mz_internal.mz_raw_peek_durations_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_peek_durations) EXCEPT (SELECT * FROM mz_internal.mz_raw_peek_durations_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_peek_durations_2) EXCEPT (SELECT * FROM mz_internal.mz_raw_peek_durations));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_peek_durations_4) EXCEPT (SELECT * FROM mz_internal.mz_raw_peek_durations));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_durations) EXCEPT (SELECT * FROM mz_internal.mz_peek_durations_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_durations) EXCEPT (SELECT * FROM mz_internal.mz_peek_durations_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_durations_2) EXCEPT (SELECT * FROM mz_internal.mz_peek_durations));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_durations_4) EXCEPT (SELECT * FROM mz_internal.mz_peek_durations));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_elapsed_internal) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_elapsed_internal_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_elapsed_internal) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_elapsed_internal_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_elapsed_internal_2) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_elapsed_internal));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_elapsed_internal_4) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_elapsed_internal));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_2) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_4) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_2) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_4) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks_internal) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_parks_internal_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks_internal) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_parks_internal_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks_internal_2) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_parks_internal));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks_internal_4) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_parks_internal));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_worker_compute_delays) EXCEPT (SELECT * FROM mz_internal.mz_raw_worker_compute_delays_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_worker_compute_delays) EXCEPT (SELECT * FROM mz_internal.mz_raw_worker_compute_delays_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_worker_compute_delays_2) EXCEPT (SELECT * FROM mz_internal.mz_raw_worker_compute_delays));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_worker_compute_delays_4) EXCEPT (SELECT * FROM mz_internal.mz_raw_worker_compute_delays));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_delays) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_delays_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_delays) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_delays_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_delays_2) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_delays));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_delays_4) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_delays));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_frontiers_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_frontiers_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_frontiers_2) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_frontiers_4) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_frontiers));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_import_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_import_frontiers_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_import_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_import_frontiers_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_import_frontiers_2) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_import_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_import_frontiers_4) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_import_frontiers));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sharing) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sharing_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sharing) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sharing_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sharing_2) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sharing));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sharing_4) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sharing));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sizes) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sizes_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sizes) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sizes_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sizes_2) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sizes));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sizes_4) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sizes));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflows) EXCEPT (SELECT * FROM mz_internal.mz_dataflows_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflows) EXCEPT (SELECT * FROM mz_internal.mz_dataflows_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflows_2) EXCEPT (SELECT * FROM mz_internal.mz_dataflows));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflows_4) EXCEPT (SELECT * FROM mz_internal.mz_dataflows));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_operator_dataflows) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_operator_dataflows_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_operator_dataflows) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_operator_dataflows_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_operator_dataflows_2) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_operator_dataflows));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_operator_dataflows_4) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_operator_dataflows));
 ----
 
 query T
-SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability) EXCEPT (SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability_2));
+SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability) EXCEPT (SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability_4));
 ----
 
 query T
-SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability_2) EXCEPT (SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability));
+SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability_4) EXCEPT (SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_compute_frontiers_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_compute_frontiers_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_frontiers_2) EXCEPT (SELECT * FROM mz_internal.mz_compute_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_frontiers_4) EXCEPT (SELECT * FROM mz_internal.mz_compute_frontiers));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_import_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_compute_import_frontiers_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_import_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_compute_import_frontiers_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_import_frontiers_2) EXCEPT (SELECT * FROM mz_internal.mz_compute_import_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_import_frontiers_4) EXCEPT (SELECT * FROM mz_internal.mz_compute_import_frontiers));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_2) EXCEPT (SELECT * FROM mz_internal.mz_message_counts));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_4) EXCEPT (SELECT * FROM mz_internal.mz_message_counts));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow_2) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow_4) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow_global) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow_global_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow_global) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow_global_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow_global_2) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow_global));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow_global_4) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow_global));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow_operator) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow_operator_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow_operator) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow_operator_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow_operator_2) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow_operator));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow_operator_4) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow_operator));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_elapsed) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_elapsed_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_elapsed) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_elapsed_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_elapsed_2) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_elapsed));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_elapsed_4) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_elapsed));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_2) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_4) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_parks_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_parks_4));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks_2) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_parks));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks_4) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_parks));
 ----
 
 
@@ -728,7 +728,7 @@ CREATE CLUSTER c2 REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'));
 query T
 SELECT COUNT(*) FROM mz_sources WHERE name LIKE 'mz_active_peeks_%';
 ----
-4
+6
 
 statement ok
 set cluster = c2;
@@ -739,289 +739,289 @@ set cluster_replica = r1;
 
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_batches_internal) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_batches_internal_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_batches_internal) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_batches_internal_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_batches_internal_3) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_batches_internal));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_batches_internal_5) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_batches_internal));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_records_internal) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_records_internal_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_records_internal) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_records_internal_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_records_internal_3) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_records_internal));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_records_internal_5) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_records_internal));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sharing_internal) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sharing_internal_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sharing_internal) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sharing_internal_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sharing_internal_3) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sharing_internal));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sharing_internal_5) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sharing_internal));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_channels) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_channels_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_channels) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_channels_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_channels_3) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_channels));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_channels_5) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_channels));
 ----
 
 query T
-SELECT id,worker_id FROM ((SELECT id,worker_id FROM mz_internal.mz_dataflow_addresses) EXCEPT (SELECT id,worker_id FROM mz_internal.mz_dataflow_addresses_3));
+SELECT id,worker_id FROM ((SELECT id,worker_id FROM mz_internal.mz_dataflow_addresses) EXCEPT (SELECT id,worker_id FROM mz_internal.mz_dataflow_addresses_5));
 ----
 
 query T
-SELECT id,worker_id FROM ((SELECT id,worker_id FROM mz_internal.mz_dataflow_addresses_3) EXCEPT (SELECT id,worker_id FROM mz_internal.mz_dataflow_addresses));
+SELECT id,worker_id FROM ((SELECT id,worker_id FROM mz_internal.mz_dataflow_addresses_5) EXCEPT (SELECT id,worker_id FROM mz_internal.mz_dataflow_addresses));
 ----
 
 query T
-SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability_internal) EXCEPT (SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability_internal_3));
+SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability_internal) EXCEPT (SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability_internal_5));
 ----
 
 query T
-SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability_internal_3) EXCEPT (SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability_internal));
+SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability_internal_5) EXCEPT (SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability_internal));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_operators) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_operators_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_operators) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_operators_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_operators_3) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_operators));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_operators_5) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_operators));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports_3) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports_5) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies_3) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies_5) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_received_internal) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_received_internal_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_received_internal) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_received_internal_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_received_internal_3) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_received_internal));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_received_internal_5) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_received_internal));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_sent_internal) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_sent_internal_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_sent_internal) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_sent_internal_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_sent_internal_3) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_sent_internal));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_sent_internal_5) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_sent_internal));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_active_peeks) EXCEPT (SELECT * FROM mz_internal.mz_active_peeks_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_active_peeks) EXCEPT (SELECT * FROM mz_internal.mz_active_peeks_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_active_peeks_3) EXCEPT (SELECT * FROM mz_internal.mz_active_peeks));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_active_peeks_5) EXCEPT (SELECT * FROM mz_internal.mz_active_peeks));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_peek_durations) EXCEPT (SELECT * FROM mz_internal.mz_raw_peek_durations_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_peek_durations) EXCEPT (SELECT * FROM mz_internal.mz_raw_peek_durations_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_peek_durations_3) EXCEPT (SELECT * FROM mz_internal.mz_raw_peek_durations));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_peek_durations_5) EXCEPT (SELECT * FROM mz_internal.mz_raw_peek_durations));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_durations) EXCEPT (SELECT * FROM mz_internal.mz_peek_durations_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_durations) EXCEPT (SELECT * FROM mz_internal.mz_peek_durations_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_durations_3) EXCEPT (SELECT * FROM mz_internal.mz_peek_durations));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_durations_5) EXCEPT (SELECT * FROM mz_internal.mz_peek_durations));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_elapsed_internal) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_elapsed_internal_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_elapsed_internal) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_elapsed_internal_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_elapsed_internal_3) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_elapsed_internal));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_elapsed_internal_5) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_elapsed_internal));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_3) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_5) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_3) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_5) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks_internal) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_parks_internal_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks_internal) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_parks_internal_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks_internal_3) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_parks_internal));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks_internal_5) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_parks_internal));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_worker_compute_delays) EXCEPT (SELECT * FROM mz_internal.mz_raw_worker_compute_delays_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_worker_compute_delays) EXCEPT (SELECT * FROM mz_internal.mz_raw_worker_compute_delays_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_worker_compute_delays_3) EXCEPT (SELECT * FROM mz_internal.mz_raw_worker_compute_delays));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_worker_compute_delays_5) EXCEPT (SELECT * FROM mz_internal.mz_raw_worker_compute_delays));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_delays) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_delays_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_delays) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_delays_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_delays_3) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_delays));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_delays_5) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_delays));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_frontiers_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_frontiers_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_frontiers_3) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_frontiers_5) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_frontiers));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_import_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_import_frontiers_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_import_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_import_frontiers_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_import_frontiers_3) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_import_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_import_frontiers_5) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_import_frontiers));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sharing) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sharing_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sharing) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sharing_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sharing_3) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sharing));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sharing_5) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sharing));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sizes) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sizes_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sizes) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sizes_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sizes_3) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sizes));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sizes_5) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sizes));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflows) EXCEPT (SELECT * FROM mz_internal.mz_dataflows_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflows) EXCEPT (SELECT * FROM mz_internal.mz_dataflows_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflows_3) EXCEPT (SELECT * FROM mz_internal.mz_dataflows));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflows_5) EXCEPT (SELECT * FROM mz_internal.mz_dataflows));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_operator_dataflows) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_operator_dataflows_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_operator_dataflows) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_operator_dataflows_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_operator_dataflows_3) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_operator_dataflows));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_operator_dataflows_5) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_operator_dataflows));
 ----
 
 query T
-SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability) EXCEPT (SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability_3));
+SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability) EXCEPT (SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability_5));
 ----
 
 query T
-SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability_3) EXCEPT (SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability));
+SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability_5) EXCEPT (SELECT port,worker_id,update_type FROM mz_internal.mz_dataflow_operator_reachability));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_compute_frontiers_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_compute_frontiers_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_frontiers_3) EXCEPT (SELECT * FROM mz_internal.mz_compute_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_frontiers_5) EXCEPT (SELECT * FROM mz_internal.mz_compute_frontiers));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_import_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_compute_import_frontiers_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_import_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_compute_import_frontiers_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_import_frontiers_3) EXCEPT (SELECT * FROM mz_internal.mz_compute_import_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_import_frontiers_5) EXCEPT (SELECT * FROM mz_internal.mz_compute_import_frontiers));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_3) EXCEPT (SELECT * FROM mz_internal.mz_message_counts));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_5) EXCEPT (SELECT * FROM mz_internal.mz_message_counts));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow_3) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow_5) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow_global) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow_global_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow_global) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow_global_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow_global_3) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow_global));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow_global_5) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow_global));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow_operator) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow_operator_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow_operator) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow_operator_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow_operator_3) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow_operator));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow_operator_5) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow_operator));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_elapsed) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_elapsed_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_elapsed) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_elapsed_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_elapsed_3) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_elapsed));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_elapsed_5) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_elapsed));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_3) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_5) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_parks_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_parks_5));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks_3) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_parks));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks_5) EXCEPT (SELECT * FROM mz_internal.mz_scheduling_parks));
 ----

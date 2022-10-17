@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use itertools::Itertools;
 
 use mz_expr::visit::Visit;
+use mz_expr::JoinImplementation::IndexedFilter;
 use mz_expr::{func, EvalError, MirRelationExpr, MirScalarExpr, UnaryFunc, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::{ColumnType, RelationType, ScalarType};
@@ -204,6 +205,7 @@ impl ColumnKnowledge {
                 MirRelationExpr::Join {
                     inputs,
                     equivalences,
+                    implementation,
                     ..
                 } => {
                     // Aggregate column knowledge from each input into one `Vec`.
@@ -235,12 +237,14 @@ impl ColumnKnowledge {
 
                         // We can produce composite knowledge for everything in the equivalence class.
                         for expr in equivalence.iter_mut() {
-                            optimize(
-                                expr,
-                                &folded_inputs_typ.column_types,
-                                &knowledges,
-                                knowledge_stack,
-                            )?;
+                            if !matches!(implementation, IndexedFilter(..)) {
+                                optimize(
+                                    expr,
+                                    &folded_inputs_typ.column_types,
+                                    &knowledges,
+                                    knowledge_stack,
+                                )?;
+                            }
                             if let MirScalarExpr::Column(c) = expr {
                                 knowledge.absorb(&knowledges[*c]);
                             }
@@ -435,7 +439,7 @@ pub fn optimize(
     // Post-order traversal means that if a node has `n` children, the top `n`
     // `DatumKnowledge` in the stack are the `DatumKnowledge` corresponding to
     // the children.
-
+    assert!(knowledge_stack.is_empty());
     #[allow(deprecated)]
     expr.visit_mut_pre_post(
         &mut |e| {
@@ -475,13 +479,18 @@ pub fn optimize(
                 } => {
                     let knowledge2 = knowledge_stack.pop().unwrap();
                     let knowledge1 = knowledge_stack.pop().unwrap();
-                    if knowledge1.value.is_some() && knowledge2.value.is_some() {
+                    if knowledge1.value.is_some() || knowledge2.value.is_some() {
                         e.reduce(column_types);
                     }
                     DatumKnowledge::from(&*e)
                 }
                 MirScalarExpr::CallVariadic { func: _, exprs } => {
-                    if (0..exprs.len()).all(|_| knowledge_stack.pop().unwrap().value.is_some()) {
+                    // Drain the last `exprs.len()` knowledge, and reduce if any is `Some(_)`.
+                    assert!(knowledge_stack.len() >= exprs.len());
+                    if knowledge_stack
+                        .drain(knowledge_stack.len() - exprs.len()..)
+                        .any(|k| k.value.is_some())
+                    {
                         e.reduce(column_types);
                     }
                     DatumKnowledge::from(&*e)
@@ -508,6 +517,7 @@ pub fn optimize(
         },
     )?;
     let knowledge_datum = knowledge_stack.pop();
+    assert!(knowledge_stack.is_empty());
     knowledge_datum.ok_or_else(|| {
         TransformError::Internal(String::from("unexpectedly empty stack in optimize"))
     })

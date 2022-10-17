@@ -27,8 +27,8 @@
 # fetching from the catalog tables. Our code previously made assumptions that
 # transactions in the TBLOCK_STARTED were always single statement, and would
 # thus skip some work. However it is possible that there are other stataments
-# issued in that block, so we should instead never perform those kinds of
-# optimizations because they are not in fact safe.
+# issued in that block, so we eagerly commit all statements after receiving an
+# Execute message.
 #
 # The bug motivating this test was caused by sequence_peek adding a
 # second transaction operation at a different timestamp to an existing

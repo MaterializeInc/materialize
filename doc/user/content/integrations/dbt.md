@@ -84,7 +84,10 @@ dbt manages all your connection configurations (or, profiles) in a file called [
           pass: <password>
           database: materialize
           schema: public
-          cluster: default
+          # optionally use the cluster connection
+          # parameter to specify the default cluster
+          # for the connection
+          cluster: <prod_cluster>
           sslmode: require
         dev:
           type: materialize
@@ -139,7 +142,8 @@ Create a [Kafka source](/sql/create-source/kafka/).
 
 CREATE SOURCE IF NOT EXISTS {{ this }}
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'topic_a')
-  FORMAT TEXT
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  WITH (SIZE = '3xsmall')
 ```
 
 {{< /tab >}} {{< tab "PostgreSQL">}}
@@ -147,13 +151,12 @@ Create a [PostgreSQL source](/sql/create-source/postgres/).
 
 **Filename:** sources/postgres.sql
 ```sql
-{{ config(materialized='source',
-    post_hook="CREATE VIEWS FROM SOURCE {{ this }} (
-                table_a as {{ this.database }}.{{ this.schema }}.table_a,
-                table_b as {{ this.database }}.{{ this.schema }}.table_b, ...)") }}
+{{ config(materialized='source') }}
 
 CREATE SOURCE IF NOT EXISTS {{ this }}
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
+  FOR ALL TABLES
+  WITH (SIZE = '3xsmall')
 ```
 
 The [pre-hook](https://docs.getdbt.com/reference/resource-configs/pre-hook-post-hook) defined above is used to create the replication views that reproduce the publication's original tables.
@@ -203,7 +206,7 @@ FROM {{ source('kafka','kafka_topic_a') }}
 ```
 
 The model above would be compiled to `database.schema.view_a`.
-One thing to note here is that the model depends on the Kafka source defined above. To express this dependency and track the **lineage** of your project, you can use the dbt [source()](https://docs.getdbt.com/reference/dbt-jinja-functions/source) function.
+One thing to note here is that the model depends on the Kafka source defined above. To express this dependency and track the **lineage** of your project, you can use the dbt [`source()`](https://docs.getdbt.com/reference/dbt-jinja-functions/source) function.
 
 #### Materialized views
 
@@ -223,26 +226,36 @@ Here, the model depends on the view defined above, and is referenced as such via
 
 ### Configuration
 
-`source`, `view`, and `materialized view` materializations accept the following additional configuration options.
+#### Clusters
 
-#### cluster
-
-Use the [cluster](/sql/create-cluster/) option to specify the cluster in which the materialization is created. If unspecified, the default cluster for the connection is used.
+Use the [cluster](/sql/create-cluster/) option to specify the cluster in which a `materialized view` is created. If unspecified, the default cluster for the connection is used.
 
 ```sql
 {{ config(materialized='materializedview', cluster='cluster_a') }}
 ```
 
-#### indexes
+#### Indexes
 
-Use the indexes option to define a list of [indexes](/sql/create-index/) on a materialization. Each Materialize index can have three components:
-- columns (list, required): one or more columns on which the index is defined
-- name (string, optional): the name for the index. If unspecified, Materialize will use the materialization name and column names provided.
-- cluster (string, optional): the cluster to use to create the index. If unspecified, indexes will be created in the cluster used to create the materialization.
+Use the indexes option to define a list of [indexes](/sql/create-index/) on `source`, `view`, or `materialized view` materializations. Each Materialize index can have the following components:
 
+Component                            | Value     | Description
+-------------------------------------|-----------|--------------------------------------------------
+`columns`                            | `list`    | One or more columns on which the index is defined. To create an index that uses _all_ columns, use the `default` component instead.
+`name`                               | `string`  | The name for the index. If unspecified, Materialize will use the materialization name and column names provided.
+`cluster`                            | `string`  | The cluster to use to create the index. If unspecified, indexes will be created in the cluster used to create the materialization.
+`default`                            | `bool`    | Default: `False`. If set to `True`, creates a default index that uses all columns.
+
+##### Creating a multi-column index
 ```sql
 {{ config(materialized='view',
           indexes=[{'columns': ['col_a'], 'cluster': 'cluster_a'}]) }}
+```
+
+##### Creating a default index
+
+```sql
+{{ config(materialized='view',
+    indexes=[{'default': True}]) }}
 ```
 
 ## Build and run dbt

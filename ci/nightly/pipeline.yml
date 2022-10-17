@@ -22,15 +22,12 @@ steps:
           - { value: kafka-multi-broker }
           - { value: redpanda-testdrive }
 #         - { value: redpanda-testdrive-aarch64 }
-          - { value: upgrade }
           - { value: limits }
           - { value: cluster-limits }
           - { value: limits-instance-size }
-          - { value: testdrive-workers-1 }
-          - { value: testdrive-workers-32 }
           - { value: testdrive-partitions-5 }
           - { value: testdrive-replicas-4}
-          - { value: testdrive-replica-size-4}
+          - { value: testdrive-size-4}
           - { value: testdrive-in-cloudtest}
 #          - { value: feature-benchmark-single-node }
 #          - { value: feature-benchmark-cluster }
@@ -46,6 +43,7 @@ steps:
           - { value: checks-oneatatime-restart-environmentd-storaged }
           - { value: checks-oneatatime-kill-storaged }
           - { value: checks-oneatatime-restart-postgres-backend }
+          - { value: checks-oneatatime-restart-redpanda }
           - { value: checks-upgrade-entire-mz }
           - { value: checks-upgrade-computed-first }
           - { value: checks-upgrade-computed-last }
@@ -155,15 +153,6 @@ steps:
 #          composition: testdrive
 #          args: [--redpanda, --aws-region=us-east-2]
 
-  - id: upgrade
-    label: "Upgrade testing"
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: upgrade
-          args: [--most-recent, "0"]
-
   - id: limits
     label: "Product limits"
     agents:
@@ -193,31 +182,6 @@ steps:
           run: instance-size
     timeout_in_minutes: 50
 
-  - id: testdrive-workers-1
-    label: ":racing_car: testdrive with --workers 1"
-    timeout_in_minutes: 600
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/scratch-aws-access: ~
-      - ./ci/plugins/mzcompose:
-          composition: testdrive
-          # TODO(benesch): set --workers=1 again.
-          args: [--aws-region=us-east-2]
-
-  # TODO(benesch): reenable.
-  # - id: testdrive-workers-32
-  #   label: ":racing_car: testdrive with --workers 32"
-  #   depends_on: build-x86_64
-  #   timeout_in_minutes: 600
-  #   plugins:
-  #     - ./ci/plugins/scratch-aws-access: ~
-  #     - ./ci/plugins/mzcompose:
-  #         composition: testdrive
-  #         args: [--aws-region=us-east-2, --workers=32]
-  #   agents:
-  #     queue: linux-x86_64-large
-
   - id: testdrive-partitions-5
     label: ":racing_car: testdrive with --kafka-default-partitions 5"
     timeout_in_minutes: 600
@@ -240,8 +204,8 @@ steps:
           composition: testdrive
           args: [--aws-region=us-east-2, --replicas=4]
 
-  - id: testdrive-replica-size-4
-    label: ":racing_car: testdrive replica SIZE 4"
+  - id: testdrive-size-4
+    label: ":racing_car: testdrive with SIZE 4"
     timeout_in_minutes: 600
     agents:
       queue: linux-x86_64
@@ -249,7 +213,7 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          args: [--aws-region=us-east-2, --replica-size=4]
+          args: [--aws-region=us-east-2, --size=4]
 
   - id: testdrive-in-cloudtest
     label: Full Testdrive in Cloudtest (K8s)
@@ -259,7 +223,7 @@ steps:
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
-          args: [-m=long, test/cloudtest/test_full_testdrive.py]
+          args: [-m=long, --aws-region=us-east-2, test/cloudtest/test_full_testdrive.py]
 
   - id: persistence-testdrive
     label: ":racing_car: testdrive with --persistent-user-tables"
@@ -392,8 +356,18 @@ steps:
           composition: platform-checks
           args: [--scenario=RestartPostgresBackend, --execution-mode=oneatatime]
 
+  - id: checks-oneatatime-restart-redpanda
+    label: "Checks oneatatime + restart Redpanda"
+    timeout_in_minutes: 300
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=RestartRedpanda, --execution-mode=oneatatime]
+
   - id: checks-upgrade-entire-mz
-    label: "Upgrade entire Mz from v0.27.0-alpha.23"
+    label: "Platform checks upgrade, whole-Mz restart"
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -403,7 +377,7 @@ steps:
           args: [--scenario=UpgradeEntireMz]
 
   - id: checks-upgrade-computed-first
-    label: "Upgrade computed from v0.27.0-alpha.23 first"
+    label: "Platform checks upgrade, restarting computed first"
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -413,7 +387,7 @@ steps:
           args: [--scenario=UpgradeComputedFirst]
 
   - id: checks-upgrade-computed-last
-    label: "Upgrade computed from v0.27.0-alpha.23 last"
+    label: "Platform checks upgrade, restarting computed last"
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -423,18 +397,15 @@ steps:
           args: [--scenario=UpgradeComputedLast]
 
   - id: cloudtest-upgrade
-    label: "Cloudtest upgrade from main to main"
+    label: "Platform checks upgrade in Cloudtest/K8s"
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=UpgradeComputedLast]
     artifact_paths: junit_cloudtest_*.xml
     plugins:
+      - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
-          args: [-m=long, test/cloudtest/test_upgrade.py]
+          args: [-m=long,  --aws-region=us-east-2, test/cloudtest/test_upgrade.py]
 
   - id: persist-maelstrom-single-node
     label: Long single-node Maelstrom coverage of persist

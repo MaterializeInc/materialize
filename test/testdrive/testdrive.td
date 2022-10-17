@@ -45,21 +45,12 @@ row 2
 $ set-regex match=u\d+ replacement=UID
 
 ? EXPLAIN SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 IS NOT NULL;
-Source materialize.public.t1 (UID):
-| Project (#0..=#2)
-
-Query:
-%0 =
-| Get materialize.public.t1 (UID)
-| Filter (#0) IS NOT NULL
-| ArrangeBy ()
-
-%1 =
-| Get materialize.public.t1 (UID)
-
-%2 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
+Explained Query:
+  CrossJoin type=differential
+    ArrangeBy keys=[[]]
+      Filter (#0) IS NOT NULL
+        Get materialize.public.t1
+    Get materialize.public.t1
 
 ! SELECT * FROM u1234;
 contains:unknown catalog item 'UID'
@@ -84,11 +75,11 @@ contains:unknown catalog item 'UID'
 
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
 > CREATE MATERIALIZED VIEW sort_messages (a) AS VALUES (2),(1),(3);
 

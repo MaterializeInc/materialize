@@ -63,11 +63,12 @@ class CreatePostgresCdcTable(Action):
 
 
                     > CREATE SECRET {name}_password AS 'postgres';
-                    > CREATE CONNECTION {name}_connection FOR POSTGRES
-                      HOST postgres,
-                      DATABASE postgres,
-                      USER postgres,
-                      PASSWORD SECRET {name}_password
+                    > CREATE CONNECTION {name}_connection TO POSTGRES (
+                        HOST postgres,
+                        DATABASE postgres,
+                        USER postgres,
+                        PASSWORD SECRET {name}_password
+                      );
 
                     > CREATE SOURCE {name}_source
                       FROM POSTGRES CONNECTION {name}_connection (PUBLICATION '{name}_publication')

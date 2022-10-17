@@ -25,13 +25,13 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 > CREATE SECRET sasl_password AS 'sekurity'
 
 # Ensure that connectors work with SSL basic_auth
-> CREATE CONNECTION kafka_sasl
-  FOR KAFKA
+> CREATE CONNECTION kafka_sasl TO KAFKA (
     BROKER 'kafka:9092',
     SASL MECHANISMS = 'PLAIN',
     SASL USERNAME = 'materialize',
     SASL PASSWORD = SECRET sasl_password,
-    SSL CERTIFICATE AUTHORITY = '${arg.ca}';
+    SSL CERTIFICATE AUTHORITY = '${arg.ca}'
+  );
 
 > CREATE CONNECTION csr_sasl
   FOR CONFLUENT SCHEMA REGISTRY
@@ -67,12 +67,12 @@ $ kafka-verify-data format=avro sink=materialize.public.data_snk sort-messages=t
 {"before": null, "after": {"row": {"a": 2}}}
 
 # Ensure that connectors do not require the certificate authority
-> CREATE CONNECTION kafka_sasl_no_ca
-  FOR KAFKA
+> CREATE CONNECTION kafka_sasl_no_ca TO KAFKA (
     BROKER 'kafka:9092',
     SASL MECHANISMS = 'PLAIN',
     SASL USERNAME = 'materialize',
-    SASL PASSWORD = SECRET sasl_password;
+    SASL PASSWORD = SECRET sasl_password
+  );
 
 # This ensures that the error is not that the CA was required, but simply that
 # not providing it prohibits connecting.

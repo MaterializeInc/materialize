@@ -5,6 +5,8 @@ alter_index ::=
   'ALTER' 'INDEX' name 'SET' 'ENABLED'
 alter_secret ::=
   'ALTER' 'SECRET' 'IF EXISTS'? name AS value
+alter_sink ::=
+  'ALTER' 'SINK' 'IF EXISTS'? name 'SET' '(' 'SIZE' value ')'
 alter_source ::=
   'ALTER' 'SOURCE' 'IF EXISTS'? name 'SET' '(' 'SIZE' value ')'
 array_agg ::=
@@ -33,22 +35,19 @@ create_cluster ::=
     'REPLICAS' '(' (replica_definition (',' replica_definition)*)? ')'
   )?
 cluster_replica_def ::=
-  replica_name '(' replica_option ( ',' replica_option )* ')'
+  replica_name '(' replica_option '=' value ( ',' replica_option '=' value )* ')'
 create_cluster_replica ::=
-  'CREATE' 'CLUSTER' 'REPLICA' cluster_name '.' replica_name replica_option ( ',' replica_option )*
-replica_option ::=
-    'SIZE' size |
-    'AVAILABILITY' 'ZONE' az
+  'CREATE' 'CLUSTER' 'REPLICA' cluster_name '.' replica_name (option '=' value ( ',' option '=' value )*)?
 create_connection ::=
-  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'FOR'
+  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO'
   ( 'KAFKA' | 'CONFLUENT' 'SCHEMA' 'REGISTRY' | 'POSTGRES' | 'SSH' 'TUNNEL' )
-  field '='? val ( ',' field '='? val )*
+  '(' field '='? val ( ',' field '='? val )* ')'
 create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
 create_index ::=
     'CREATE' (
-        'INDEX' index_name 'ON' obj_name ('IN' 'CLUSTER' cluster_name)? ('USING' method)? '(' ( ( col_expr ) ( ( ',' col_expr ) )* ) ')'
-        | 'DEFAULT INDEX ON' obj_name ('IN' 'CLUSTER' cluster_name)? ('USING' method)?
+        'INDEX' index_name ('IN' 'CLUSTER' cluster_name)? 'ON' obj_name ('USING' method)? '(' ( ( col_expr ) ( ( ',' col_expr ) )* ) ')'
+        | 'DEFAULT INDEX' ('IN' 'CLUSTER' cluster_name)? 'ON' obj_name ('USING' method)?
     )
 create_materialized_view ::=
   'CREATE' 'MATERIALIZED VIEW' 'IF NOT EXISTS'?
@@ -95,6 +94,7 @@ create_source_load_generator ::=
   ('(' (col_name) ( ( ',' col_name ) )*)?
   'FROM LOAD GENERATOR' ('AUCTION' | 'COUNTER')
   ('(' (load_generator_option) ( ( ',' load_generator_option ) )* ')')?
+  ('FOR ALL TABLES' | 'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')')
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 load_generator_option ::=
     'TICK INTERVAL' interval
@@ -102,6 +102,7 @@ create_source_postgres ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   'FROM' 'POSTGRES' 'CONNECTION' connection_name
   '(' 'PUBLICATION' publication_name ')'
+  ('FOR ALL TABLES' | 'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')')
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_source_s3 ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
@@ -184,7 +185,10 @@ execute ::=
   'EXECUTE' name   ('(' (parameter_value) ( ',' parameter_value )* ')')?
 explain ::=
   'EXPLAIN'
-  'TYPED'? ( ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' )? 'PLAN FOR' )?
+  ( ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' | 'PHYSICAL' ) 'PLAN' )?
+  ( 'WITH (' ( output_modifier (',' output_modifier )* ) ')' )?
+  ( 'AS' ( 'TEXT' | 'JSON' ) )?
+  'FOR'?
   (
     select_stmt |
     'VIEW' view_name |
@@ -326,8 +330,8 @@ show_databases ::=
     'SHOW' 'DATABASES' ('LIKE' 'pattern' | 'WHERE' expr)?
 show_indexes ::=
     'SHOW' 'INDEXES'
-    ((('FROM' | 'ON') on_name) | ('FROM SCHEMA' schema_name))?
-    ('IN' 'CLUSTER' cluster_name)?
+    ((('ON') on_name) | ('FROM' schema_name))?
+    ('IN CLUSTER' cluster_name)?
     ('LIKE' 'pattern' | 'WHERE' expr)
 show_materialized_views ::=
     'SHOW' 'MATERIALIZED VIEWS' ('FROM' schema_name)? ('IN CLUSTER' cluster_name)?

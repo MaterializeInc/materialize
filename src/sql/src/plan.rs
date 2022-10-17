@@ -48,9 +48,8 @@ use mz_storage::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage::types::sources::{SourceDesc, Timeline};
 
 use crate::ast::{
-    ExplainOptions, ExplainStageNew, ExplainStageOld, Expr, FetchDirection, IndexOptionName,
-    NoticeSeverity, ObjectType, Raw, SetVariableValue, Statement, StatementKind,
-    TransactionAccessMode,
+    ExplainStage, Expr, FetchDirection, IndexOptionName, NoticeSeverity, ObjectType, Raw,
+    SetVariableValue, Statement, StatementKind, TransactionAccessMode,
 };
 use crate::catalog::{CatalogType, IdReference};
 use crate::names::{
@@ -125,6 +124,7 @@ pub enum Plan {
     AlterNoop(AlterNoopPlan),
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
+    AlterSink(AlterSinkPlan),
     AlterSource(AlterSourcePlan),
     AlterItemRename(AlterItemRenamePlan),
     AlterSecret(AlterSecretPlan),
@@ -157,6 +157,7 @@ impl Plan {
                 vec![PlanKind::AlterItemRename, PlanKind::AlterNoop]
             }
             StatementKind::AlterSecret => vec![PlanKind::AlterNoop, PlanKind::AlterSecret],
+            StatementKind::AlterSink => vec![PlanKind::AlterNoop, PlanKind::AlterSink],
             StatementKind::AlterSource => vec![PlanKind::AlterNoop, PlanKind::AlterSource],
             StatementKind::AlterSystemReset => {
                 vec![PlanKind::AlterNoop, PlanKind::AlterSystemReset]
@@ -481,28 +482,13 @@ pub struct CopyFromPlan {
 }
 
 #[derive(Debug)]
-pub enum ExplainPlan {
-    New(ExplainPlanNew),
-    Old(ExplainPlanOld),
-}
-
-#[derive(Debug)]
-pub struct ExplainPlanNew {
+pub struct ExplainPlan {
     pub raw_plan: HirRelationExpr,
     pub row_set_finishing: Option<RowSetFinishing>,
-    pub stage: ExplainStageNew,
+    pub stage: ExplainStage,
     pub format: ExplainFormat,
     pub config: ExplainConfig,
     pub explainee: mz_repr::explain_new::Explainee,
-}
-
-#[derive(Debug)]
-pub struct ExplainPlanOld {
-    pub raw_plan: HirRelationExpr,
-    pub row_set_finishing: Option<RowSetFinishing>,
-    pub stage: ExplainStageOld,
-    pub options: ExplainOptions,
-    pub view_id: GlobalId,
 }
 
 #[derive(Debug)]
@@ -549,17 +535,25 @@ pub struct AlterIndexResetOptionsPlan {
 }
 
 #[derive(Debug, Clone)]
-pub enum AlterSourceItem {
+
+pub enum AlterOptionParameter {
     Set(String),
     Reset,
     Unchanged,
 }
 
 #[derive(Debug)]
+pub struct AlterSinkPlan {
+    pub id: GlobalId,
+    pub size: AlterOptionParameter,
+    pub remote: AlterOptionParameter,
+}
+
+#[derive(Debug)]
 pub struct AlterSourcePlan {
     pub id: GlobalId,
-    pub size: AlterSourceItem,
-    pub remote: AlterSourceItem,
+    pub size: AlterOptionParameter,
+    pub remote: AlterOptionParameter,
 }
 
 #[derive(Debug)]

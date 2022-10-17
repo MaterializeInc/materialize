@@ -16,7 +16,7 @@ use std::cmp;
 use std::env;
 use std::ffi::CStr;
 use std::iter;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::process;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -101,6 +101,17 @@ pub struct Args {
     ///     legitimate security risk if used in Materialize Cloud.
     #[clap(long, env = "UNSAFE_MODE")]
     unsafe_mode: bool,
+    /// Enable persisted introspection sources.
+    ///
+    /// These sources are temporarily disabled because they put significant
+    /// pressure on persist compaction, which is currently affected by some
+    /// known bugs. Once these are resolved, the plan is to enable persisted
+    /// introspection sources by default again.
+    ///
+    /// See <https://github.com/MaterializeInc/materialize/issues/15415>
+    /// for context.
+    #[clap(long, env = "PERSISTED_INTROSPECTION")]
+    persisted_introspection: bool,
 
     // === Connection options. ===
     /// The address on which to listen for untrusted SQL connections.
@@ -355,15 +366,18 @@ pub struct Args {
         default_value = "1"
     )]
     bootstrap_default_cluster_replica_size: String,
+    /// The size of the builtin cluster replicas if bootstrapping.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_BUILTIN_CLUSTER_REPLICA_SIZE",
+        default_value = "1"
+    )]
+    bootstrap_builtin_cluster_replica_size: String,
     /// A map from size name to resource allocations for storage hosts.
     #[clap(long, env = "STORAGE_HOST_SIZES")]
     storage_host_sizes: Option<String>,
-    /// Default storage host size, should be a key from storage_host_sizes.
-    #[clap(
-        long,
-        env = "DEFAULT_STORAGE_HOST_SIZE",
-        requires = "storage-host-sizes"
-    )]
+    /// Default storage host size
+    #[clap(long, env = "DEFAULT_STORAGE_HOST_SIZE")]
     default_storage_host_size: Option<String>,
     /// The interval in seconds at which to collect storage usage information.
     #[clap(
@@ -376,6 +390,15 @@ pub struct Args {
     /// An API key for Segment. Enables export of audit events to Segment.
     #[clap(long, env = "SEGMENT_API_KEY")]
     segment_api_key: Option<String>,
+    /// Public IP addresses which the cloud environment has configured for
+    /// egress
+    #[clap(
+        long,
+        env = "ANNOUNCE_EGRESS_IP",
+        multiple = true,
+        use_delimiter = true
+    )]
+    announce_egress_ip: Vec<Ipv4Addr>,
 
     // === Tracing options. ===
     #[clap(flatten)]
@@ -689,11 +712,13 @@ max log level: {max_log_level}",
         controller,
         secrets_controller,
         unsafe_mode: args.unsafe_mode,
+        persisted_introspection: args.persisted_introspection,
         metrics_registry,
         now,
         environment_id: args.environment_id,
         cluster_replica_sizes,
         bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
+        bootstrap_builtin_cluster_replica_size: args.bootstrap_builtin_cluster_replica_size,
         storage_host_sizes,
         default_storage_host_size: args.default_storage_host_size,
         availability_zones: args.availability_zone,
@@ -705,6 +730,7 @@ max log level: {max_log_level}",
         tracing_target_callbacks,
         storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
         segment_api_key: args.segment_api_key,
+        egress_ips: args.announce_egress_ip,
     }))?;
 
     println!(

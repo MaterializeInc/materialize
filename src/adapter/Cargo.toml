@@ -10,7 +10,7 @@ publish = false
 anyhow = "1.0.65"
 bytes = "1.2.1"
 chrono = { version = "0.4.22", default-features = false, features = ["std"] }
-const_format = "0.2.28"
+const_format = "0.2.30"
 dec = "0.4.8"
 derivative = "2.2.0"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
@@ -18,7 +18,7 @@ enum-kinds = "0.5.1"
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.24"
 itertools = "0.10.5"
-once_cell = "1.14.0"
+once_cell = "1.15.0"
 maplit = "1.0.2"
 mz-audit-log = { path = "../audit-log" }
 mz-build-info = { path = "../build-info" }
@@ -54,7 +54,7 @@ serde_json = "1.0.86"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.20.2", features = ["rt", "time"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
-tokio-stream = "0.1.10"
+tokio-stream = "0.1.11"
 tracing = "0.1.36"
 tracing-subscriber = "0.3.16"
 thiserror = "1.0.37"

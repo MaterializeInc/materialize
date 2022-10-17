@@ -95,7 +95,7 @@ id username  species
 
 # Renaming a column updates the column names in an index.
 query TTBITTBB colnames
-SHOW INDEXES FROM users
+SHOW INDEXES ON users
 ----
 table_name  index_name  non_unique  seq_in_index  column_name  direction  storing  implicit
 users       primary     false       1             id           ASC        false    false

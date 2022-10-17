@@ -157,7 +157,7 @@ impl Healthchecker {
                         }
                     }
                     Ok(Err(invalid_use)) => panic!("compare_and_append failed: {invalid_use}"),
-                    // An external error means that the operation might have suceeded or failed but we
+                    // An external error means that the operation might have succeeded or failed but we
                     // don't know. In either case it is safe to retry because:
                     // * If it succeeded, then on retry we'll get an `Upper(_)` error as if some other
                     //   process raced us. This is safe and will just cause the healthchecker to sync

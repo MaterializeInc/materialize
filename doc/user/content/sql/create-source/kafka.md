@@ -63,7 +63,7 @@ Field                                | Value     | Description
 
 Field                                | Value     | Description
 -------------------------------------|-----------|-------------------------------------
-`SIZE`                               | `text`    | Default: `3xsmall`. The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`.
+`SIZE`                               | `text`    | **Required.** The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`.
 
 ## Supported formats
 
@@ -89,7 +89,8 @@ To create a source that uses the standard key-value convention to support insert
 CREATE SOURCE current_predictions
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'events')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-  ENVELOPE UPSERT;
+  ENVELOPE UPSERT
+  WITH (SIZE = '3xsmall');
 ```
 
 Note that:
@@ -114,7 +115,8 @@ Materialize provides a dedicated envelope (`ENVELOPE DEBEZIUM`) to decode Kafka 
 CREATE SOURCE kafka_repl
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'pg_repl.public.table1')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-  ENVELOPE DEBEZIUM;
+  ENVELOPE DEBEZIUM
+  WITH (SIZE = '3xsmall');
 ```
 
 Any materialized view defined on top of this source will be incrementally updated as new change events stream in through Kafka, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original database.
@@ -134,7 +136,8 @@ CREATE SOURCE kafka_metadata
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   KEY FORMAT TEXT
   VALUE FORMAT TEXT
-  INCLUDE KEY AS renamed_id;
+  INCLUDE KEY AS renamed_id
+  WITH (SIZE = '3xsmall');
 ```
 
 Note that:
@@ -154,7 +157,8 @@ CREATE SOURCE kafka_metadata
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   INCLUDE HEADERS
-  ENVELOPE NONE;
+  ENVELOPE NONE
+  WITH (SIZE = '3xsmall');
 ```
 
 To retrieve the headers in a message, you can unpack the value:
@@ -206,7 +210,8 @@ CREATE SOURCE kafka_metadata
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   INCLUDE PARTITION, OFFSET, TIMESTAMP AS ts
-  ENVELOPE NONE;
+  ENVELOPE NONE
+  WITH (SIZE = '3xsmall');
 ```
 
 ```sql
@@ -228,7 +233,8 @@ CREATE SOURCE kafka_offset
   -- Start reading from the earliest offset in the first partition,
   -- the second partition at 10, and the third partition at 100
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'data', START OFFSET=[0,10,100])
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  WITH (SIZE = '3xsmall');
 ```
 
 Note that:
@@ -274,11 +280,11 @@ Once created, a connection is **reusable** across multiple `CREATE SOURCE` state
 CREATE SECRET kafka_ssl_key AS '<BROKER_SSL_KEY>';
 CREATE SECRET kafka_ssl_crt AS '<BROKER_SSL_CRT>';
 
-CREATE CONNECTION kafka_connection
-  FOR KAFKA
+CREATE CONNECTION kafka_connection TO KAFKA (
     BROKER 'rp-f00000bar.data.vectorized.cloud:30365',
     SSL KEY = SECRET kafka_ssl_key,
-    SSL CERTIFICATE = SECRET kafka_ssl_crt;
+    SSL CERTIFICATE = SECRET kafka_ssl_crt
+);
 ```
 {{< /tab >}}
 {{< tab "SASL">}}
@@ -286,12 +292,12 @@ CREATE CONNECTION kafka_connection
 ```sql
 CREATE SECRET kafka_password AS '<BROKER_PASSWORD>';
 
-CREATE CONNECTION kafka_connection
-  FOR KAFKA
+CREATE CONNECTION kafka_connection TO KAFKA (
     BROKER 'unique-jellyfish-0000-kafka.upstash.io:9092',
     SASL MECHANISMS = 'SCRAM-SHA-256',
     SASL USERNAME = 'foo',
-    SASL PASSWORD = SECRET kafka_password;
+    SASL PASSWORD = SECRET kafka_password
+);
 ```
 {{< /tab >}}
 {{< /tabs >}}
@@ -305,13 +311,13 @@ CREATE SECRET csr_ssl_crt AS '<CSR_SSL_CRT>';
 CREATE SECRET csr_ssl_key AS '<CSR_SSL_KEY>';
 CREATE SECRET csr_password AS '<CSR_PASSWORD>';
 
-CREATE CONNECTION csr_ssl
-  FOR CONFLUENT SCHEMA REGISTRY
-    URL 'rp-f00000bar.data.vectorized.cloud:30993',
+CREATE CONNECTION csr_ssl TO CONFLUENT SCHEMA REGISTRY (
+    URL 'https://rp-f00000bar.data.vectorized.cloud:30993',
     SSL KEY = SECRET csr_ssl_key,
     SSL CERTIFICATE = SECRET csr_ssl_crt,
     USERNAME = 'foo',
-    PASSWORD = SECRET csr_password;
+    PASSWORD = SECRET csr_password
+);
 ```
 {{< /tab >}}
 {{< /tabs >}}
@@ -323,9 +329,9 @@ CREATE CONNECTION csr_ssl
 
 ```sql
 CREATE SOURCE avro_source
-  FROM KAFKA
-    CONNECTION kafka_connection (TOPIC 'test_topic')
-    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  WITH (SIZE = '3xsmall');
 ```
 
 {{< /tab >}}
@@ -334,7 +340,8 @@ CREATE SOURCE avro_source
 ```sql
 CREATE SOURCE json_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  FORMAT BYTES;
+  FORMAT BYTES
+  WITH (SIZE = '3xsmall');
 ```
 
 
@@ -353,7 +360,8 @@ CREATE VIEW jsonified_kafka_source AS
 ```sql
 CREATE SOURCE proto_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
+  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  WITH (SIZE = '3xsmall');
 ```
 
 {{< /tab >}}
@@ -363,7 +371,8 @@ CREATE SOURCE proto_source
 CREATE SOURCE text_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT TEXT
-  ENVELOPE UPSERT;
+  ENVELOPE UPSERT
+  WITH (SIZE = '3xsmall');
 ```
 
 {{< /tab >}}
@@ -372,7 +381,8 @@ CREATE SOURCE text_source
 ```sql
 CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  FORMAT CSV WITH 3 COLUMNS;
+  FORMAT CSV WITH 3 COLUMNS
+  WITH (SIZE = '3xsmall');
 ```
 
 {{< /tab >}}
@@ -384,10 +394,9 @@ To provision a specific amount of CPU and memory to a source on creation, use th
 
 ```sql
 CREATE SOURCE avro_source
-  FROM KAFKA
-    CONNECTION kafka_connection (TOPIC 'test_topic')
-    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-    WITH (SIZE = 'xsmall');
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  WITH (SIZE = '3xsmall');
 ```
 
 To resize the source after creation:
@@ -396,7 +405,7 @@ To resize the source after creation:
 ALTER SOURCE avro_source SET (SIZE = 'large');
 ```
 
-By default, sources are provisioned using the smallest size (`3xsmall`). For more details on sizing sources, check the [`CREATE SOURCE`](../) documentation page.
+The smallest source size (`3xsmall`) is a resonable default to get started. For more details on sizing sources, check the [`CREATE SOURCE`](../#sizing-a-source) documentation page.
 
 ## Related pages
 

@@ -129,12 +129,13 @@ def main() -> None:
     cur = conn.cursor()
     cur.execute(
         f"""CREATE CONNECTION IF NOT EXISTS csr_conn
-        FOR CONFLUENT SCHEMA REGISTRY
-        URL 'http://{args.confluent_host}:8081'"""
+        TO CONFLUENT SCHEMA REGISTRY (
+            URL 'http://{args.confluent_host}:8081'
+        )"""
     )
     cur.execute(
         f"""CREATE CONNECTION kafka_conn
-        FROM KAFKA BROKER '{args.confluent_host}:9092'"""
+        TO KAFKA (BROKER '{args.confluent_host}:9092')"""
     )
     cur.execute(
         f"""CREATE SOURCE src

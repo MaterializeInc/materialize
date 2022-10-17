@@ -74,7 +74,7 @@ $ kafka-ingest format=avro topic=real-time schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": 1, "b": 2}}}
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE real_time_src
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-real-time-${testdrive.seed}')

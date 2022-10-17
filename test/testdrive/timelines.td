@@ -12,7 +12,7 @@
 $ kafka-create-topic topic=input-system
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE source_system
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-system-${testdrive.seed}')
@@ -156,6 +156,9 @@ contains:multiple timelines within one dataflow are not supported
 > CREATE VIEW values_system_user_view AS SELECT * FROM input_values_view, source_system_user;
 > CREATE VIEW values_cdcv2_view AS SELECT * FROM input_values_view, source_cdcv2;
 > CREATE VIEW values_mz_catalog_view (a, b, c, d, e, f, g, h, i, j, k) AS SELECT * FROM mz_relations, input_values_view, mz_views;
+
+# In case the environment has other replicas
+> SET cluster_replica = r1
 
 > SELECT count(*) FROM (SELECT count(*) FROM input_values_view, mz_internal.mz_dataflow_operators);
 1

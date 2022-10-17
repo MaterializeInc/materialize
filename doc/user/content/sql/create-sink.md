@@ -49,22 +49,23 @@ _item&lowbar;name_ | The name of the source or view you want to send to the sink
 
 ### `CONNECTION` options
 
-Field                | Value type | Description
----------------------|------------|------------
-`TOPIC`              | `text`     | The prefix used to generate the Kafka topic name to create and write to.
+Field                | Value  | Description
+---------------------|--------|------------
+`TOPIC`              | `text` | The prefix used to generate the Kafka topic name to create and write to.
 
 ### CSR `CONNECTION` options
 
-Field                | Value type | Description
----------------------|------------|------------
-`AVRO KEY FULLNAME`  | `text`     | Sets the Avro fullname on the generated key schema, if a `KEY` is specified. When used, a value must be specified for `AVRO VALUE FULLNAME`. The default fullname is `row`.
-`AVRO VALUE FULLNAME`| `text`     | Default: `envelope`. Sets the Avro fullname on the generated value schema. When `KEY` is specified, `AVRO KEY FULLNAME` must additionally be specified.
+Field                | Value  | Description
+---------------------|--------|------------
+`AVRO KEY FULLNAME`  | `text` | Sets the Avro fullname on the generated key schema, if a `KEY` is specified. When used, a value must be specified for `AVRO VALUE FULLNAME`. The default fullname is `row`.
+`AVRO VALUE FULLNAME`| `text` | Default: `envelope`. Sets the Avro fullname on the generated value schema. When `KEY` is specified, `AVRO KEY FULLNAME` must additionally be specified.
 
-### `WITH SNAPSHOT` or `WITHOUT SNAPSHOT`
+### `WITH` options
 
-By default, each `SINK` is created with a `SNAPSHOT` which contains the consolidated results of the
-query before the sink was created. Any further updates to these results are produced at the time when
-they occur. To only see results after the sink is created, specify `WITHOUT SNAPSHOT`.
+Field                | Value  | Description
+---------------------|--------|------------
+`SNAPSHOT`           | `bool` | Default: `true`. Whether to emit the consolidated results of the query before the sink was created at the start of the sink. To see only results after the sink is created, specify `WITH (SNAPSHOT = false)`.
+`SIZE`               | `text`    | **Required.** The [size](#sizing-a-sink) for the sink. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`.
 
 ## Detail
 
@@ -147,39 +148,39 @@ To achieve its exactly-once processing guarantees, Materialize needs to store so
 
 ```sql
 CREATE SOURCE quotes
-FROM KAFKA CONNECTION kafka_connection (TOPIC 'quotes')
-FORMAT AVRO USING
-    CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'quotes')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  WITH (SIZE = '3xsmall');
 ```
 ```sql
 CREATE SINK quotes_sink
-FROM quotes
-INTO KAFKA CONNECTION kafka_connection (TOPIC 'quotes-sink')
-FORMAT AVRO USING
-    CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-ENVELOPE DEBEZIUM;
+  FROM quotes
+  INTO KAFKA CONNECTION kafka_connection (TOPIC 'quotes-sink')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  ENVELOPE DEBEZIUM
+  WITH (SIZE = '3xsmall');
 ```
 
 #### From materialized views
 
 ```sql
 CREATE SOURCE quotes
-FROM KAFKA CONNECTION kafka_connection (TOPIC 'quotes')
-FORMAT AVRO USING
-    CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'quotes')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  WITH (SIZE = '3xsmall');
 ```
 ```sql
 CREATE MATERIALIZED VIEW frank_quotes AS
-    SELECT * FROM quotes
-    WHERE attributed_to = 'Frank McSherry';
+  SELECT * FROM quotes
+  WHERE attributed_to = 'Frank McSherry';
 ```
 ```sql
 CREATE SINK frank_quotes_sink
-FROM frank_quotes
-INTO KAFKA CONNECTION kafka_connection (TOPIC 'frank-quotes-sink')
-FORMAT AVRO USING
-    CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-ENVELOPE DEBEZIUM;
+  FROM frank_quotes
+  INTO KAFKA CONNECTION kafka_connection (TOPIC 'frank-quotes-sink')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  ENVELOPE DEBEZIUM
+  WITH (SIZE = '3xsmall');
 ```
 
 #### Get Kafka topic names
@@ -197,43 +198,66 @@ JOIN mz_kafka_sinks USING (id);
  u6        | materialize.public.frank_quotes_sink | frank-quotes
 ```
 
+#### Sizing a sink
+
+To provision a specific amount of CPU and memory to a sink on creation, use the `SIZE` option:
+
+```sql
+CREATE SINK snk FROM src
+  INTO KAFKA CONNECTION kafka_connection (TOPIC 'snk')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  ENVELOPE DEBEZIUM
+  WITH (SIZE = '3xsmall');
+```
+
+To resize the sink after creation:
+
+```sql
+ALTER SINK snk SET (SIZE = 'large');
+```
+
+The smallest sink size (`3xsmall`) is a resonable default to get started.
+
 ### JSON sinks
 
 #### From sources
 
 ```sql
 CREATE SOURCE quotes
-FROM KAFKA CONNECTION kafka_connection (TOPIC 'quotes')
-FORMAT AVRO USING
-    CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'quotes')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  WITH (SIZE = '3xsmall');
 ```
 ```sql
 CREATE SINK quotes_sink
-FROM quotes
-INTO KAFKA CONNECTION kafka_connection (TOPIC 'quotes-sink')
-FORMAT JSON
-ENVELOPE DEBEZIUM;
+  FROM quotes
+  INTO KAFKA CONNECTION kafka_connection (TOPIC 'quotes-sink')
+  FORMAT JSON
+  ENVELOPE DEBEZIUM
+  WITH (SIZE = '3xsmall');
 ```
 
 #### From materialized views
 
 ```sql
 CREATE SOURCE quotes
-FROM KAFKA CONNECTION kafka_connection (TOPIC 'quotes')
-FORMAT AVRO USING
-    CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'quotes')
+  FORMAT AVRO USING
+  CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  WITH (SIZE = '3xsmall');
 ```
 ```sql
 CREATE MATERIALIZED VIEW frank_quotes AS
-    SELECT * FROM quotes
-    WHERE attributed_to = 'Frank McSherry';
+  SELECT * FROM quotes
+  WHERE attributed_to = 'Frank McSherry';
 ```
 ```sql
 CREATE SINK frank_quotes_sink
-FROM frank_quotes
-INTO KAFKA CONNECTION kafka_connection (TOPIC 'frank-quotes-sink')
-FORMAT JSON
-ENVELOPE DEBEZIUM;
+  FROM frank_quotes
+  INTO KAFKA CONNECTION kafka_connection (TOPIC 'frank-quotes-sink')
+  FORMAT JSON
+  ENVELOPE DEBEZIUM
+  WITH (SIZE = '3xsmall');
 ```
 
 ## Related pages

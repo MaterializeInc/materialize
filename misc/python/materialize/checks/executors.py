@@ -15,6 +15,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import random
+
 from materialize.cloudtest.application import MaterializeApplication
 from materialize.mzcompose import Composition
 
@@ -48,9 +50,10 @@ class MzcomposeExecutor(Executor):
 class CloudtestExecutor(Executor):
     def __init__(self, application: MaterializeApplication) -> None:
         self.application = application
+        self.seed = random.getrandbits(32)
 
     def cloudtest_application(self) -> MaterializeApplication:
         return self.application
 
     def testdrive(self, input: str) -> None:
-        self.application.testdrive.run(input=input, no_reset=True, seed=1)
+        self.application.testdrive.run(input=input, no_reset=True, seed=self.seed)

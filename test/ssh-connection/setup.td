@@ -10,8 +10,8 @@
 # Basic connection setup for most workflows.
 # Done here instead of in the workflow to ensure the state is reset.
 
-> CREATE CONNECTION IF NOT EXISTS thancred
-    FOR SSH TUNNEL
-        HOST 'ssh-bastion-host',
-        USER 'mz',
-        PORT 22;
+> CREATE CONNECTION IF NOT EXISTS thancred TO SSH TUNNEL (
+    HOST 'ssh-bastion-host',
+    USER 'mz',
+    PORT 22
+  );

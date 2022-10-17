@@ -85,7 +85,7 @@ CREATE TABLE c (
 )
 
 query TTBITTBB colnames
-SHOW INDEXES FROM c
+SHOW INDEXES ON c
 ----
 table_name  index_name     non_unique  seq_in_index  column_name  direction  storing  implicit
 c           primary        false       1             id           ASC        false    false
@@ -159,10 +159,10 @@ query error pgcode 42P01 relation "test.users" does not exist
 SHOW COLUMNS FROM test.users
 
 query error pgcode 42P01 relation "users" does not exist
-SHOW INDEXES FROM users
+SHOW INDEXES ON users
 
 query error pgcode 42P01 relation "test.users" does not exist
-SHOW INDEXES FROM test.users
+SHOW INDEXES ON test.users
 
 statement ok
 CREATE TABLE test.users (
@@ -182,7 +182,7 @@ CREATE TABLE test.users (
 )
 
 query TTBTTTB colnames
-SHOW COLUMNS FROM test.users
+SHOW COLUMNS ON test.users
 ----
 column_name  data_type     is_nullable  column_default  generation_expression  indices            is_hidden
 id           INT8          false        NULL            ·                      {primary,foo,bar}  false
@@ -193,7 +193,7 @@ username     STRING(10)    true         NULL            ·                      
 email        VARCHAR(100)  true         NULL            ·                      {}                 false
 
 query TTBITTBB colnames
-SHOW INDEXES FROM test.users
+SHOW INDEXES ON test.users
 ----
 table_name  index_name  non_unique  seq_in_index  column_name  direction  storing  implicit
 users       primary     false       1             id           ASC        false    false

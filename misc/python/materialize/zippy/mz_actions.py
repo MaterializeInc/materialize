@@ -20,7 +20,8 @@ class MzStart(Action):
 
     def run(self, c: Composition) -> None:
         c.up("materialized")
-        c.wait_for_materialized()
+        # Loaded Mz environments take a while to start up
+        c.wait_for_materialized(timeout_secs=300)
 
     def provides(self) -> List[Capability]:
         return [MzIsRunning()]

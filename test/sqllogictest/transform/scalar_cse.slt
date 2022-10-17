@@ -13,91 +13,86 @@ statement ok
 CREATE TABLE x (a string, b int not null)
 
 query T multiline
-EXPLAIN PLAN FOR SELECT b*b*b, b*b FROM x
+EXPLAIN WITH(arity, join_impls) SELECT b*b*b, b*b FROM x
 ----
-Source materialize.public.x (u1):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Project (#3, #2) // { arity: 2 }
+    Map ((#1 * #1), (#2 * #1)) // { arity: 4 }
+      Get materialize.public.x // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.x (u1)
-| Map (#1 * #1), (#2 * #1)
-| Project (#3, #2)
+Source materialize.public.x
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN PLAN FOR SELECT b*b*b, b*b+1 FROM x
+EXPLAIN WITH(arity, join_impls) SELECT b*b*b, b*b+1 FROM x
 ----
-Source materialize.public.x (u1):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Project (#3, #4) // { arity: 2 }
+    Map ((#1 * #1), (#2 * #1), (#2 + 1)) // { arity: 5 }
+      Get materialize.public.x // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.x (u1)
-| Map (#1 * #1), (#2 * #1), (#2 + 1)
-| Project (#3, #4)
+Source materialize.public.x
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN PLAN FOR SELECT
+EXPLAIN WITH(arity, join_impls) SELECT
     a::json->'Field1',
     a::json->'Field2',
     a::json->'Field3'
 FROM x
 ----
-Source materialize.public.x (u1):
-| Map dummy
-| Project (#0, #2)
+Explained Query:
+  Project (#3..=#5) // { arity: 3 }
+    Map (text_to_jsonb(#0), (#2 -> "Field1"), (#2 -> "Field2"), (#2 -> "Field3")) // { arity: 6 }
+      Get materialize.public.x // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.x (u1)
-| Map text_to_jsonb(#0), (#2 -> "Field1"), (#2 -> "Field2"), (#2 -> "Field3")
-| Project (#3..=#5)
+Source materialize.public.x
+  project=(#0, #2)
+  map=(dummy)
 
 EOF
 
 query T multiline
-EXPLAIN PLAN FOR SELECT
+EXPLAIN WITH(arity, join_impls) SELECT
     a::json->'Field1'->'Foo',
     a::json->'Field1'->'Bar',
     a::json->'Field2'->'Baz',
     a::json->'Field2'->'Quux'->'Zorb'
 FROM x
 ----
-Source materialize.public.x (u1):
-| Map dummy
-| Project (#0, #2)
+Explained Query:
+  Project (#4, #5, #7, #8) // { arity: 4 }
+    Map (text_to_jsonb(#0), (#2 -> "Field1"), (#3 -> "Foo"), (#3 -> "Bar"), (#2 -> "Field2"), (#6 -> "Baz"), ((#6 -> "Quux") -> "Zorb")) // { arity: 9 }
+      Get materialize.public.x // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.x (u1)
-| Map text_to_jsonb(#0), (#2 -> "Field1"), (#3 -> "Foo"), (#3 -> "Bar"), (#2 -> "Field2"), (#6 -> "Baz"), ((#6 -> "Quux") -> "Zorb")
-| Project (#4, #5, #7, #8)
+Source materialize.public.x
+  project=(#0, #2)
+  map=(dummy)
 
 EOF
 
 
 # Ensure we don't inline if-guarded expressions
 query T multiline
-EXPLAIN PLAN FOR SELECT
+EXPLAIN WITH(arity, join_impls) SELECT
     CASE WHEN b = 0 THEN 0 ELSE 1/b END,
     CASE WHEN b != 0 THEN 1/b ELSE 0 END
 FROM x
 ----
-Source materialize.public.x (u1):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Project (#2, #3) // { arity: 2 }
+    Map (case when (#1 = 0) then 0 else (1 / #1) end, case when (#1 != 0) then (1 / #1) else 0 end) // { arity: 4 }
+      Get materialize.public.x // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.x (u1)
-| Map if (#1 = 0) then {0} else {(1 / #1)}, if (#1 != 0) then {(1 / #1)} else {0}
-| Project (#2, #3)
+Source materialize.public.x
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
 
@@ -105,21 +100,20 @@ EOF
 
 # Ensure we update columns references in if-guarded expressions
 query T multiline
-EXPLAIN PLAN FOR SELECT
+EXPLAIN WITH(arity, join_impls) SELECT
     CASE WHEN b = 0 THEN 0 ELSE 1/b END,
     CASE WHEN b != 0 THEN 1/b ELSE 0 END
 FROM
     (SELECT b/2 as b FROM x)
 
 ----
-Source materialize.public.x (u1):
-| Map dummy
-| Project (#2, #1)
+Explained Query:
+  Project (#3, #4) // { arity: 2 }
+    Map ((#1 / 2), case when (#2 = 0) then 0 else (1 / #2) end, case when (#2 != 0) then (1 / #2) else 0 end) // { arity: 5 }
+      Get materialize.public.x // { arity: 2 }
 
-Query:
-%0 =
-| Get materialize.public.x (u1)
-| Map (#1 / 2), if (#2 = 0) then {0} else {(1 / #2)}, if (#2 != 0) then {(1 / #2)} else {0}
-| Project (#3, #4)
+Source materialize.public.x
+  project=(#2, #1)
+  map=(dummy)
 
 EOF
