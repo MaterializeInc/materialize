@@ -1,0 +1,24 @@
+[package]
+name = "mz-lowertest-fuzz"
+version = "0.0.0"
+authors = ["Automatically generated"]
+publish = false
+edition = "2018"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.mz-lowertest]
+path = ".."
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_tokenize"
+path = "fuzz_targets/tokenize.rs"
+test = false
+doc = false

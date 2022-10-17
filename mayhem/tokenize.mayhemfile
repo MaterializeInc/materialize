@@ -1,0 +1,5 @@
+project: materialize
+target: tokenize
+
+cmds:
+  - cmd: /fuzzers/fuzz_tokenize
