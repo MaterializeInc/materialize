@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 //! Drivers for upstream commit
+use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use mz_expr::PartitionId;
@@ -129,6 +130,8 @@ impl OffsetAntichain {
     }
 
     /// Returns `true` iff this [`OffsetAntichain`] is `<=` `other`.
+    /// This requires that for all partitions tracked in `other`,
+    /// the offset in `self` is <= or absent.
     pub fn less_equal(&self, other: &OffsetAntichain) -> bool {
         for (pid, offset) in other.iter() {
             let self_offset = self.inner.get(pid);
@@ -257,6 +260,8 @@ impl MutableOffsetAntichain {
     ///
     /// In laymans terms, this returns an [`OffsetAntichain`] that contains all
     /// partitions with positive counts, and their respective minimal offset.
+    ///
+    // TODO(guswynn): remove this extra allocation.
     pub fn frontier(&self) -> OffsetAntichain {
         let mut result = OffsetAntichain::new();
 
@@ -268,9 +273,7 @@ impl MutableOffsetAntichain {
     }
 }
 
-// NOTE: Ord is only required as an implementation detail of `MutableAntichain`,
-// but it feels iffy.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct PartitionOffset {
     partition: PartitionId,
     offset: MzOffset,
@@ -284,11 +287,34 @@ impl PartitionOffset {
 
 impl PartialOrder for PartitionOffset {
     fn less_equal(&self, other: &Self) -> bool {
+        self.partial_cmp(other)
+            .map(|ord| ord.is_le())
+            .unwrap_or(false)
+    }
+}
+
+// We manually implement `Ord` and `PartialOrd` to show that
+// they are compatible with the `PartialOrder` implementation.
+
+impl PartialOrd for PartitionOffset {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         // Only offsets for the same partition are comparable!
         if self.partition != other.partition {
-            false
+            None
         } else {
-            self.offset <= other.offset
+            Some(self.offset.cmp(&other.offset))
+        }
+    }
+}
+
+// NOTE: Ord is only required as an implementation detail of `MutableAntichain`,
+// but it feels iffy.
+impl Ord for PartitionOffset {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.partition.cmp(&other.partition) {
+            Ordering::Equal => self.offset.cmp(&other.offset),
+            Ordering::Less => Ordering::Less,
+            Ordering::Greater => Ordering::Greater,
         }
     }
 }

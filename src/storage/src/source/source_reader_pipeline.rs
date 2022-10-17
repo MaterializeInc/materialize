@@ -125,6 +125,11 @@ struct SourceMessageBatch<Key, Value, Diff> {
     /// The current upper of the `SourceReader`, at the time this batch was
     /// emitted. Source uppers emitted via batches must never regress.
     source_upper: OffsetAntichain,
+    /// The timestamp/offset upper of messages contained in _this_ batch.
+    ///
+    /// This is here because it improves some tracing logs later in the pipeline,
+    /// and is easily available during batch construction.
+    batch_upper: OffsetAntichain,
     /// The timestamp/offset lower of messages contained in _this_ batch.
     batch_lower: OffsetAntichain,
 }
@@ -662,19 +667,16 @@ where
                     let mut batch_lower = OffsetAntichain::new();
 
                     for (pid, messages) in &messages {
-                        let min_offset = messages
-                            .iter()
-                            .map(|(_message, offset)| offset)
-                            .min()
-                            .expect("missing messages");
-
-                        batch_lower.insert(pid.clone(), *min_offset);
+                        // source readers are required to produce messages in order.
+                        batch_lower
+                            .insert(pid.clone(), messages.first().expect("non-empty messages").1);
                     }
 
                     let message_batch = SourceMessageBatch {
                         messages,
                         non_definite_errors,
                         source_upper: extended_source_upper,
+                        batch_upper: batch_upper.clone(),
                         batch_lower,
                     };
                     // Wrap in an Rc to avoid cloning when sending it on.
@@ -1111,6 +1113,19 @@ where
                         batch.source_upper,
                     );
 
+                    // This should always be true:
+                    // we only advance the `global_source_upper` PAST
+                    // a batch when that batch is fully processed. Offsets are required
+                    // (and in fact, we assert this above) to increase or stay the same
+                    // as we produce batches and a batch upper is always exactly 1
+                    // greater than the maximum offset in that batch. These
+                    // combined mean that the upper of one batch can never be greater
+                    // than the lower of the next.
+                    //
+                    // Our use of `source_upper_updates` ensures the `global_source_upper`
+                    // is only advanced after batches with a lower frontier are obtained,
+                    // which, combined with the above fact, means this assert should
+                    // always be true.
                     assert!(
                         global_source_upper.less_equal(&batch.batch_lower),
                         "global source upper already advanced to far"
@@ -1166,8 +1181,11 @@ where
                         None => {
                             trace!(
                                 "reclock({id}) {worker_id}/{worker_count}: \
-                                cannot yet reclock batch with batch_lower {:?} \
+                                cannot yet reclock batch with \
+                                batch_upper: {:?} \
+                                batch_lower: {:?} \
                                 reclock.source_frontier: {:?}",
+                                untimestamped_batch.batch_upper,
                                 untimestamped_batch.batch_lower,
                                 timestamper.source_upper()
                             );
@@ -1278,6 +1296,12 @@ where
             // have stashed. We cannot downgrade our capability beyond the
             // frontier that corresponds to that lower, otherwise we would not
             // be able to emit batches once we succesfully reclock them.
+            //
+            // Note that `bounded` is not commutative, but we want to ensure that
+            // if the `source_upper` has some offset for a partition not yet in
+            // the lower, we consider that partition when reclocking that frontier,
+            // as that partition's timestamp may be behind the timestamps
+            // of the partitions in the current batch lower.
             let global_batch_lower = batch_capabilities.frontier();
             let bounded_source_upper = global_source_upper.bounded(&global_batch_lower);
 
