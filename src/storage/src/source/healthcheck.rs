@@ -10,6 +10,7 @@
 //! Healthchecks for sources
 use anyhow::Context;
 use chrono::NaiveDateTime;
+use differential_dataflow::lattice::Lattice;
 use std::fmt::Display;
 use std::sync::Arc;
 use timely::progress::{Antichain, Timestamp as _};
@@ -203,15 +204,41 @@ impl Healthchecker {
     ) {
         let since = read_handle.since().clone();
         trace!("Bootstrapping state as of {:?}!", since);
-        // Ensure the collection is readable at `since`
-        if PartialOrder::less_than(&since, &self.upper) {
-            let updates = read_handle
-                .snapshot_and_fetch(since.clone())
-                .await
-                .expect("local since is not beyond read handle's since");
-            self.process_collection_updates(updates);
-        };
-        self.sync(upper).await;
+
+        let mut safe_upper: Antichain<_> =
+            since.elements().iter().map(|t| t.step_forward()).collect();
+        safe_upper.join_assign(upper);
+        if PartialOrder::less_than(upper, &safe_upper) {
+            // It's important that the healthchecker reads the existing state of the collection;
+            // otherwise, we may not be able to initialize the healthchecker with the right status.
+            // However, the collection might not always be immediately readable at all, if `upper <= since`.
+            // Let's advance our upper, and assume that other writers will eventually also do so
+            // so we can eventually make progress.
+            loop {
+                let no_updates: &[((SourceData, ()), Timestamp, i64)] = &[];
+                let advance_result = self
+                    .write_handle
+                    .compare_and_append(no_updates, upper.clone(), safe_upper.clone())
+                    .await;
+
+                match advance_result {
+                    Ok(Ok(Ok(_))) => break,
+                    Ok(Ok(Err(_upper))) => break, // someone else is advancing the upper
+                    Ok(Err(usage)) => panic!("Programmer error while advancing upper: {usage:?}"),
+                    Err(indeterminate) => {
+                        trace!("Indeterminate error while advancing upper: {indeterminate:?}");
+                        continue;
+                    }
+                }
+            }
+        }
+
+        let updates = read_handle
+            .snapshot_and_fetch(since.clone())
+            .await
+            .expect("local since is not beyond read handle's since");
+        self.process_collection_updates(updates);
+        self.sync(&safe_upper).await;
         trace!("State bootstrapped as of {since:?}!");
     }
 
