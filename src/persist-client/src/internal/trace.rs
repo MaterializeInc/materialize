@@ -316,6 +316,13 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        match self {
+            SpineBatch::Merged(HollowBatch { len, .. }) => *len == 0,
+            SpineBatch::Fueled { parts, .. } => parts.iter().all(|b| b.len == 0),
+        }
+    }
+
     pub fn empty(lower: Antichain<T>, upper: Antichain<T>, since: Antichain<T>) -> Self {
         SpineBatch::Merged(HollowBatch {
             desc: Description::new(lower, upper, since),
@@ -445,7 +452,7 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
         let since = self.since;
 
         // Special case empty batches.
-        if self.b1.len() == 0 && self.b2.len() == 0 {
+        if self.b1.is_empty() && self.b2.is_empty() {
             return SpineBatch::empty(lower, upper, since);
         }
 
@@ -606,9 +613,9 @@ impl<T: Timestamp + Lattice> Spine<T> {
         // we can just fuse them. We can also replace a structurally empty
         // batch with this empty batch, preserving the apparent record count
         // but now with non-trivial lower and upper bounds.
-        if batch.len() == 0 {
+        if batch.is_empty() {
             if let Some(position) = self.merging.iter().position(|m| !m.is_vacant()) {
-                if self.merging[position].is_single() && self.merging[position].len() == 0 {
+                if self.merging[position].is_single() && self.merging[position].is_empty() {
                     self.insert_at(Some(batch), position);
                     let merged = self.complete_at(position, merge_reqs);
                     self.merging[position] = MergeState::Single(merged);
@@ -659,7 +666,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
             if self.merging[index].is_double() {
                 return false;
             }
-            if self.merging[index].len() > 0 {
+            if !self.merging[index].is_empty() {
                 non_empty += 1;
             }
             if non_empty > 1 {
@@ -975,6 +982,18 @@ impl<T: Timestamp + Lattice> MergeState<T> {
             MergeState::Double(MergeVariant::InProgress(b1, b2, _)) => b1.len() + b2.len(),
             MergeState::Double(MergeVariant::Complete(Some((b, _)))) => b.len(),
             _ => 0,
+        }
+    }
+
+    /// True if this merge state contains no updates.
+    fn is_empty(&self) -> bool {
+        match self {
+            MergeState::Single(Some(b)) => b.is_empty(),
+            MergeState::Double(MergeVariant::InProgress(b1, b2, _)) => {
+                b1.is_empty() && b2.is_empty()
+            }
+            MergeState::Double(MergeVariant::Complete(Some((b, _)))) => b.is_empty(),
+            _ => true,
         }
     }
 
