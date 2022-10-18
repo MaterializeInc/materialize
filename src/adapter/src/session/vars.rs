@@ -331,6 +331,16 @@ impl Default for SessionVars {
 }
 
 impl SessionVars {
+    /// Returns a new SessionVars with the cluster variable set to `cluster`.
+    pub fn for_cluster(cluster_name: &str) -> Self {
+        let mut cluster = SessionVar::new(&CLUSTER);
+        cluster.session_value = Some(cluster_name.into());
+        Self {
+            cluster,
+            ..Default::default()
+        }
+    }
+
     /// Returns an iterator over the configuration parameters and their current
     /// values for this session.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {

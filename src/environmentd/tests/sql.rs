@@ -1444,6 +1444,26 @@ fn test_system_user() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[test]
+fn test_system_user_cluster() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let config = util::Config::default();
+    let server = util::start_server(config)?;
+
+    let mut internal_client = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)?;
+
+    let cluster = internal_client
+        .query_one("SHOW CLUSTER", &[])?
+        .get::<_, String>(0);
+    assert_eq!(SYSTEM_USER.name, cluster);
+
+    Ok(())
+}
+
 // Tests that you can have simultaneous connections on the internal and external ports without
 // crashing
 #[test]

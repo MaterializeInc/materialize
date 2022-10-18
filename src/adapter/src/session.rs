@@ -100,6 +100,11 @@ impl<T: TimestampManipulation> Session<T> {
 
     fn new_internal(conn_id: ConnectionId, user: User) -> Session<T> {
         let (notices_tx, notices_rx) = mpsc::unbounded_channel();
+        let vars = if user == *SYSTEM_USER {
+            SessionVars::for_cluster(&SYSTEM_USER.name)
+        } else {
+            SessionVars::default()
+        };
         Session {
             conn_id,
             transaction: TransactionStatus::Default,
@@ -107,7 +112,7 @@ impl<T: TimestampManipulation> Session<T> {
             prepared_statements: HashMap::new(),
             portals: HashMap::new(),
             user,
-            vars: SessionVars::default(),
+            vars,
             drop_sinks: vec![],
             notices_tx,
             notices_rx,
