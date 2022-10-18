@@ -1057,6 +1057,11 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
     ) -> mz_sql_parser::ast::WithOptionValue<Aug> {
         use mz_sql_parser::ast::WithOptionValue::*;
         match node {
+            Sequence(vs) => Sequence(
+                vs.into_iter()
+                    .map(|v| self.fold_with_option_value(v))
+                    .collect(),
+            ),
             Value(v) => Value(self.fold_value(v)),
             Ident(i) => Ident(self.fold_ident(i)),
             DataType(dt) => DataType(self.fold_data_type(dt)),

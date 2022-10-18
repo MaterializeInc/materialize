@@ -2136,11 +2136,17 @@ pub enum WithOptionValue<T: AstInfo> {
     DataType(T::DataType),
     Secret(T::ObjectName),
     Object(T::ObjectName),
+    Sequence(Vec<WithOptionValue<T>>),
 }
 
 impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
+            WithOptionValue::Sequence(values) => {
+                f.write_str("(");
+                f.write_node(&display::comma_separated(values));
+                f.write_str(")");
+            }
             WithOptionValue::Value(value) => f.write_node(value),
             WithOptionValue::Ident(id) => f.write_node(id),
             WithOptionValue::DataType(typ) => f.write_node(typ),

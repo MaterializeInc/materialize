@@ -216,12 +216,14 @@ pub async fn purify_create_source(
                         info!("add start_offset {:?}", start_offsets);
                         base_with_options.push(KafkaConfigOption {
                             name: KafkaConfigOptionName::StartOffset,
-                            value: Some(WithOptionValue::Value(Value::Array(
+                            value: Some(WithOptionValue::Sequence(
                                 start_offsets
                                     .iter()
-                                    .map(|offset| Value::Number(offset.to_string()))
+                                    .map(|offset| {
+                                        WithOptionValue::Value(Value::Number(offset.to_string()))
+                                    })
                                     .collect(),
-                            ))),
+                            )),
                         });
                     }
                     None => {}
