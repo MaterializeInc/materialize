@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import random
+from textwrap import dedent
 from typing import List, Optional, Set, Type
 
 from materialize.mzcompose import Composition
@@ -35,7 +36,7 @@ class CreateReplica(Action):
         return {MzIsRunning}
 
     def __init__(self, capabilities: Capabilities) -> None:
-        this_replica = ReplicaExists(name="replica" + str(random.randint(1, 3)))
+        this_replica = ReplicaExists(name="replica" + str(random.randint(1, 4)))
 
         existing_replicas = [
             t for t in capabilities.get(ReplicaExists) if t.name == this_replica.name
@@ -44,9 +45,11 @@ class CreateReplica(Action):
         if len(existing_replicas) == 0:
             self.new_replica = True
 
-            size = str(random.choice([1, 2, 4, 8]))
-            size_type = random.choice([ReplicaSizeType.Nodes, ReplicaSizeType.Workers])
+            size_types = [ReplicaSizeType.Nodes, ReplicaSizeType.Workers]
+            type_weights = [0.75, 0.25]
+            size_type = random.choices(size_types, weights=type_weights, k=1)[0]
 
+            size = str(random.choice([2, 4]))
             if size_type is ReplicaSizeType.Nodes:
                 this_replica.size = size + "-1"
             elif size_type is ReplicaSizeType.Workers:
@@ -95,3 +98,34 @@ class DropReplica(Action):
     def run(self, c: Composition) -> None:
         if self.replica is not None:
             c.testdrive(f"> DROP CLUSTER REPLICA IF EXISTS default.{self.replica.name}")
+
+
+class KillReplica(Action):
+    """Kills a single replica using mz_panic()"""
+
+    replica: Optional[ReplicaExists]
+
+    @classmethod
+    def requires(self) -> Set[Type[Capability]]:
+        return {MzIsRunning, ReplicaExists}
+
+    def __init__(self, capabilities: Capabilities) -> None:
+        existing_replicas = capabilities.get(ReplicaExists)
+        self.replica = random.choice(existing_replicas)
+
+    def run(self, c: Composition) -> None:
+        if self.replica is not None:
+            c.testdrive(
+                dedent(
+                    f"""
+                > DROP TABLE IF EXISTS panic_table;
+                > CREATE TABLE panic_table (f1 TEXT);
+                > INSERT INTO panic_table VALUES ('Zippy killing replica {self.replica.name}');
+
+                > SET statement_timeout='1s'
+                > SET cluster_replica = {self.replica.name}
+                ! INSERT INTO panic_table SELECT mz_internal.mz_panic(f1) FROM panic_table;
+                contains: statement timeout
+                """
+                )
+            )
