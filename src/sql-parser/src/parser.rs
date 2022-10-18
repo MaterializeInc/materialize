@@ -3305,13 +3305,29 @@ impl<'a> Parser<'a> {
         // means there's no value, anything else means we expect a valid value.
         match self.peek_token() {
             Some(Token::RParen) | Some(Token::Comma) | Some(Token::Semicolon) | None => Ok(None),
-            _ => Ok(Some(self.parse_option_value()?)),
+            _ => {
+                let _ = self.consume_token(&Token::Eq);
+                Ok(Some(self.parse_option_value()?))
+            }
         }
     }
 
     fn parse_option_value(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
-        let _ = self.consume_token(&Token::Eq);
-        if self.parse_keyword(SECRET) {
+        if self.consume_token(&Token::LParen) {
+            if self.consume_token(&Token::RParen) {
+                return Ok(WithOptionValue::Sequence(vec![]));
+            }
+            let options = self.parse_comma_separated(Parser::parse_option_value)?;
+            self.expect_token(&Token::RParen)?;
+            Ok(WithOptionValue::Sequence(options))
+        } else if self.consume_token(&Token::LBracket) {
+            if self.consume_token(&Token::RBracket) {
+                return Ok(WithOptionValue::Sequence(vec![]));
+            }
+            let options = self.parse_comma_separated(Parser::parse_option_value)?;
+            self.expect_token(&Token::RBracket)?;
+            Ok(WithOptionValue::Sequence(options))
+        } else if self.parse_keyword(SECRET) {
             if let Some(secret) = self.maybe_parse(Parser::parse_raw_name) {
                 Ok(WithOptionValue::Secret(secret))
             } else {
@@ -3673,7 +3689,6 @@ impl<'a> Parser<'a> {
                 Token::Number(ref n) => Ok(Value::Number(n.to_string())),
                 Token::String(ref s) => Ok(Value::String(s.to_string())),
                 Token::HexString(ref s) => Ok(Value::HexString(s.to_string())),
-                Token::LBracket => self.parse_value_array(),
                 _ => parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -3686,21 +3701,6 @@ impl<'a> Parser<'a> {
                 "Expecting a value, but found EOF"
             ),
         }
-    }
-
-    fn parse_value_array(&mut self) -> Result<Value, ParserError> {
-        let mut values = vec![];
-        loop {
-            if let Some(Token::RBracket) = self.peek_token() {
-                break;
-            }
-            values.push(self.parse_value()?);
-            if !self.consume_token(&Token::Comma) {
-                break;
-            }
-        }
-        self.expect_token(&Token::RBracket)?;
-        Ok(Value::Array(values))
     }
 
     fn parse_array(&mut self) -> Result<Expr<Raw>, ParserError> {

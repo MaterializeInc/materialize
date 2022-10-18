@@ -975,37 +975,37 @@ CREATE CLUSTER cluster REPLICAS (), BADOPT
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1']))
 ----
-CREATE CLUSTER cluster REPLICAS (a (REMOTE = ['host1']))
+CREATE CLUSTER cluster REPLICAS (a (REMOTE = ('host1')))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Value(Array([String("host1")]))) }] }])] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Sequence([Value(String("host1"))])) }] }])] })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1']), b (SIZE '1'))
 ----
-CREATE CLUSTER cluster REPLICAS (a (REMOTE = ['host1']), b (SIZE = '1'))
+CREATE CLUSTER cluster REPLICAS (a (REMOTE = ('host1')), b (SIZE = '1'))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Value(Array([String("host1")]))) }] }, ReplicaDefinition { name: Ident("b"), options: [ReplicaOption { name: Size, value: Some(Value(String("1"))) }] }])] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Sequence([Value(String("host1"))])) }] }, ReplicaDefinition { name: Ident("b"), options: [ReplicaOption { name: Size, value: Some(Value(String("1"))) }] }])] })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1'], INTROSPECTION INTERVAL '1s', INTROSPECTION DEBUGGING true), b (SIZE '1', INTROSPECTION INTERVAL 0))
 ----
-CREATE CLUSTER cluster REPLICAS (a (REMOTE = ['host1'], INTROSPECTION INTERVAL = '1s', INTROSPECTION DEBUGGING = true), b (SIZE = '1', INTROSPECTION INTERVAL = 0))
+CREATE CLUSTER cluster REPLICAS (a (REMOTE = ('host1'), INTROSPECTION INTERVAL = '1s', INTROSPECTION DEBUGGING = true), b (SIZE = '1', INTROSPECTION INTERVAL = 0))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Value(Array([String("host1")]))) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(String("1s"))) }, ReplicaOption { name: IntrospectionDebugging, value: Some(Value(Boolean(true))) }] }, ReplicaDefinition { name: Ident("b"), options: [ReplicaOption { name: Size, value: Some(Value(String("1"))) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(Number("0"))) }] }])] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Sequence([Value(String("host1"))])) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(String("1s"))) }, ReplicaOption { name: IntrospectionDebugging, value: Some(Value(Boolean(true))) }] }, ReplicaDefinition { name: Ident("b"), options: [ReplicaOption { name: Size, value: Some(Value(String("1"))) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(Number("0"))) }] }])] })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1'], SIZE '1'))
 ----
-CREATE CLUSTER cluster REPLICAS (a (REMOTE = ['host1'], SIZE = '1'))
+CREATE CLUSTER cluster REPLICAS (a (REMOTE = ('host1'), SIZE = '1'))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Value(Array([String("host1")]))) }, ReplicaOption { name: Size, value: Some(Value(String("1"))) }] }])] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Sequence([Value(String("host1"))])) }, ReplicaOption { name: Size, value: Some(Value(String("1"))) }] }])] })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1:2400', 'host2:2400'], COMPUTE ['host1:2401', 'host2:2401'], WORKERS '1'))
 ----
-CREATE CLUSTER cluster REPLICAS (a (REMOTE = ['host1:2400', 'host2:2400'], COMPUTE = ['host1:2401', 'host2:2401'], WORKERS = '1'))
+CREATE CLUSTER cluster REPLICAS (a (REMOTE = ('host1:2400', 'host2:2400'), COMPUTE = ('host1:2401', 'host2:2401'), WORKERS = '1'))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Value(Array([String("host1:2400"), String("host2:2400")]))) }, ReplicaOption { name: Compute, value: Some(Value(Array([String("host1:2401"), String("host2:2401")]))) }, ReplicaOption { name: Workers, value: Some(Value(String("1"))) }] }])] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Sequence([Value(String("host1:2400")), Value(String("host2:2400"))])) }, ReplicaOption { name: Compute, value: Some(Sequence([Value(String("host1:2401")), Value(String("host2:2401"))])) }, ReplicaOption { name: Workers, value: Some(Value(String("1"))) }] }])] })
 
 parse-statement
 CREATE CLUSTER REPLICA replica REMOTE ['host1']
@@ -1052,9 +1052,9 @@ CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"
 parse-statement
 CREATE CLUSTER REPLICA default.replica REMOTE ['host1'], AVAILABILITY ZONE 'a'
 ----
-CREATE CLUSTER REPLICA default.replica REMOTE = ['host1'], AVAILABILITY ZONE = 'a'
+CREATE CLUSTER REPLICA default.replica REMOTE = ('host1'), AVAILABILITY ZONE = 'a'
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Remote, value: Some(Value(Array([String("host1")]))) }, ReplicaOption { name: AvailabilityZone, value: Some(Value(String("a"))) }] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Remote, value: Some(Sequence([Value(String("host1"))])) }, ReplicaOption { name: AvailabilityZone, value: Some(Value(String("a"))) }] } })
 
 parse-statement
 CREATE CLUSTER REPLICA default.replica SIZE 'small', INTROSPECTION INTERVAL '1s', INTROSPECTION DEBUGGING = false
@@ -1073,9 +1073,9 @@ CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"
 parse-statement
 CREATE CLUSTER REPLICA default.replica REMOTE ['host1'], INTROSPECTION INTERVAL NULL
 ----
-CREATE CLUSTER REPLICA default.replica REMOTE = ['host1'], INTROSPECTION INTERVAL = NULL
+CREATE CLUSTER REPLICA default.replica REMOTE = ('host1'), INTROSPECTION INTERVAL = NULL
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Remote, value: Some(Value(Array([String("host1")]))) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(Null)) }] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Remote, value: Some(Sequence([Value(String("host1"))])) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(Null)) }] } })
 
 parse-statement
 DROP CLUSTER cluster
@@ -1388,9 +1388,9 @@ AlterSystemSet(AlterSystemSetStatement { name: Ident("log_connections"), value: 
 parse-statement
 ALTER SYSTEM SET some_array_key = [667, 668]
 ----
+error: Expected variable value, found left square bracket
 ALTER SYSTEM SET some_array_key = [667, 668]
-=>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("some_array_key"), value: Literal(Array([Number("667"), Number("668")])) })
+                                   ^
 
 parse-statement
 ALTER SYSTEM SET quantum_enabled = true

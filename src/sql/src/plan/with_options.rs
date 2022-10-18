@@ -296,10 +296,14 @@ impl ImpliedValue for u64 {
     }
 }
 
-impl<V: TryFromValue<Value>> TryFromValue<Value> for Vec<V> {
-    fn try_from_value(v: Value) -> Result<Self, PlanError> {
+impl<T, V> TryFromValue<WithOptionValue<T>> for Vec<V>
+where
+    T: AstInfo,
+    V: TryFromValue<WithOptionValue<T>>,
+{
+    fn try_from_value(v: WithOptionValue<T>) -> Result<Self, PlanError> {
         match v {
-            Value::Array(a) => {
+            WithOptionValue::Sequence(a) => {
                 let mut out = Vec::with_capacity(a.len());
                 for i in a {
                     out.push(
@@ -346,11 +350,13 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
         match v {
             WithOptionValue::Value(v) => V::try_from_value(v),
             WithOptionValue::Ident(i) => V::try_from_value(Value::String(i.to_string())),
-            WithOptionValue::Object(_)
+            WithOptionValue::Sequence(_)
+            | WithOptionValue::Object(_)
             | WithOptionValue::Secret(_)
             | WithOptionValue::DataType(_) => sql_bail!(
                 "incompatible value types: cannot convert {} to {}",
                 match v {
+                    WithOptionValue::Sequence(_) => "sequences",
                     WithOptionValue::Object(_) => "object references",
                     WithOptionValue::Secret(_) => "secrets",
                     WithOptionValue::DataType(_) => "data types",
