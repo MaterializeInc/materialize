@@ -201,26 +201,29 @@ impl<K, V, T: Timestamp + Lattice + Codec64, D> State<K, V, T, D> {
             state_seqno = diff.seqno_to;
             Some(diff)
         });
-        self.apply_diffs(metrics, diffs)
-            .expect("state diff should apply cleanly");
+        self.apply_diffs(metrics, diffs);
     }
 }
 
 impl<K, V, T: Timestamp + Lattice, D> State<K, V, T, D> {
-    // This might leave state in an invalid (umm) state when returning an error.
-    // The caller is responsible for handling this.
     pub fn apply_diffs<I: IntoIterator<Item = StateDiff<T>>>(
         &mut self,
         metrics: &Metrics,
         diffs: I,
-    ) -> Result<(), String> {
+    ) {
         for diff in diffs {
             // TODO: This could special-case batch apply for diffs where it's
             // more efficient (in particular, spine batches that hit the slow
             // path).
-            self.apply_diff(metrics, diff)?;
+            let pretty_diff = format!("{:?}", diff);
+            match self.apply_diff(metrics, diff) {
+                Ok(()) => {}
+                Err(err) => panic!(
+                    "state diff should apply cleanly: {} diff {} state {:?}",
+                    err, pretty_diff, self
+                ),
+            }
         }
-        Ok(())
     }
 
     // Intentionally not even pub(crate) because all callers should use
