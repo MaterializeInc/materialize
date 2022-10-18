@@ -308,10 +308,10 @@ Materialize's goal is to physically store only the update-set representation of
 a pTVC, and for that pTVC to be an accurate view into the time-function and
 update-set representations of the corresponding TVC. To do this, we need to
 ensure each update-set pTVC maintains the correctness invariant: `read(ptvc, t)
-= read(tvc, t)` so long as `t` is at least `since` and not later than `upper`.
+= read(tvc, t)` so long as `t` is at least `since` and less than `upper`.
 
 First, consider the empty pTVC `ptvc0 = [timeline, {}, {t0}, {t0}]`. `ptvc0` is
-trivially correct since there are no times not later than than the upper
+trivially correct since there are no times not later than the upper
 frontier `{t0}`.
 
 Next we consider two ways a pTVC could evolve, and wave our hands frantically
@@ -421,7 +421,7 @@ This allows us to fold updates to the same data together after sliding updates
 forward to the same time. Where `diff1 + diff2 = 0`, we can discard `u1` and
 `u2` altogether.
 
-In summary: `compact(ptvc, since') advances `ptvc`'s `since` to `since'`,
+In summary: `compact(ptvc, since')` advances `ptvc`'s `since` to `since'`,
 slides some of `ptvc`'s updates forward to new times (when doing so would not
 affect the computes states at or after `since`), and merges some those updates
 together by summing `diff`s for the same `data` and `time`. The resulting pTVC
