@@ -411,9 +411,6 @@ pub struct ReclockOperator {
     /// Write handle of the remap persist shard
     write_handle: WriteHandle<SourceData, (), Timestamp, Diff>,
     /// Read handle of the remap persist shard
-    ///
-    /// NB: Until #13534 is addressed, this intentionally holds back the since
-    /// of the remap shard indefinitely.
     read_handle: ReadHandle<SourceData, (), Timestamp, Diff>,
     /// A listener to tail the remap shard for new updates
     listener: Listen<SourceData, (), Timestamp, Diff>,
@@ -446,6 +443,12 @@ impl ReclockOperator {
 
         let (since, upper) = (read_handle.since(), write_handle.upper().clone());
 
+        // NOTE: We only use the `as_of` to assert that what is requested from
+        // us is possible with the current `since` of the shard, that is that we
+        // haven't compacted away resolution. We don't need to start our listen
+        // from the `as_of` or do the initial snapshot in `sync` from the
+        // `as_of`. Using the `since` is just as valid and using it to
+        // initialize our `self.since` is a more conservative option.
         assert!(
             PartialOrder::less_equal(since, &as_of),
             "invalid as_of: as_of({as_of:?}) < since({since:?})"
@@ -459,13 +462,13 @@ impl ReclockOperator {
         let listener = read_handle
             .clone()
             .await
-            .listen(as_of.clone())
+            .listen(since.clone())
             .await
             .expect("since <= as_of asserted");
 
         let mut operator = Self {
             remap_trace: HashMap::new(),
-            since: as_of.clone(),
+            since: since.clone(),
             upper: Antichain::from_elem(Timestamp::minimum()),
             source_upper: HashMap::new(),
             write_handle,
