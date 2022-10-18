@@ -10,6 +10,7 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
+use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
 use std::time::Duration;
@@ -434,7 +435,6 @@ where
 }
 
 // TODO: Document invariants.
-#[derive(Debug)]
 pub struct State<K, V, T, D> {
     pub(crate) applier_version: semver::Version,
     pub(crate) shard_id: ShardId,
@@ -461,6 +461,27 @@ impl<K, V, T: Clone, D> State<K, V, T, D> {
             collections: self.collections.clone(),
             _phantom: self._phantom.clone(),
         }
+    }
+}
+
+impl<K, V, T: Debug, D> Debug for State<K, V, T, D> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // Deconstruct self so we get a compile failure if new fields
+        // are added.
+        let State {
+            applier_version,
+            shard_id,
+            seqno,
+            collections,
+            _phantom,
+        } = self;
+        f.debug_struct("State")
+            .field("applier_version", applier_version)
+            .field("shard_id", shard_id)
+            .field("seqno", seqno)
+            .field("collections", collections)
+            .field("_phantom", _phantom)
+            .finish()
     }
 }
 
