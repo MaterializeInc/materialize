@@ -127,7 +127,12 @@ fn create_timely_config(args: &Args) -> Result<timely::Config, anyhow::Error> {
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::set_abort_on_panic();
-    let tracing_target_callbacks = mz_ore::tracing::configure("storaged", &args.tracing).await?;
+    let (tracing_target_callbacks, _sentry_guard) = mz_ore::tracing::configure(
+        "storaged",
+        &args.tracing,
+        (BUILD_INFO.version, BUILD_INFO.sha, BUILD_INFO.time),
+    )
+    .await?;
 
     let mut _pid_file = None;
     if let Some(pid_file_location) = &args.pid_file_location {

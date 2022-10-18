@@ -40,7 +40,7 @@ use uuid::Uuid;
 
 use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageHostSizeMap};
 use mz_controller::ControllerConfig;
-use mz_environmentd::{TlsConfig, TlsMode};
+use mz_environmentd::{TlsConfig, TlsMode, BUILD_INFO};
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
 use mz_orchestrator::Orchestrator;
 use mz_orchestrator_kubernetes::{
@@ -457,8 +457,12 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     } else {
         None
     };
-    let tracing_target_callbacks =
-        runtime.block_on(mz_ore::tracing::configure("environmentd", &args.tracing))?;
+    let (tracing_target_callbacks, _sentry_guard) =
+        runtime.block_on(mz_ore::tracing::configure(
+            "environmentd",
+            &args.tracing,
+            (BUILD_INFO.version, BUILD_INFO.sha, BUILD_INFO.time),
+        ))?;
 
     // Initialize fail crate for failpoint support
     let _failpoint_scenario = FailScenario::setup();

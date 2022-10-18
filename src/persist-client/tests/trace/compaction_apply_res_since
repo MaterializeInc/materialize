@@ -49,7 +49,7 @@ no-op
 apply-merge-res
 [0][4][3] 2 k0-4
 ----
-applied
+applied exact
 
 spine-batches
 ----

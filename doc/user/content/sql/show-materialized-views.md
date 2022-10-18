@@ -6,6 +6,8 @@ menu:
     parent: commands
 ---
 
+{{< show-command-note >}}
+
 `SHOW MATERIALIZED VIEWS` returns a list of materialized views being maintained
 in Materialize.
 

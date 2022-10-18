@@ -7,9 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import time
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import Callable
+from typing import Callable, Optional
 
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
@@ -32,6 +33,175 @@ SERVICES = [
 ]
 
 
+class AllowCompactionCheck:
+    # replica: a string describing the SQL accessible name of the replica. Example: "cluster1.replica1"
+    # host: docker container name from which to check the log. Example: "computed_1_1"
+    def __init__(self, replica: str, host: str):
+        assert "." in replica
+        self.replica = replica
+        self.host = host
+        self.ids: Optional[list[str]] = None
+        self.satisfied = False
+
+    def find_ids(self, c: Composition) -> None:
+        assert False
+
+    def print_error(self) -> None:
+        assert False
+
+    def check_log(self, c: Composition) -> None:
+        self.find_ids(c)
+        assert self.ids is not None
+        log: str = c.invoke("logs", self.host, capture=True).stdout
+        self.satisfied = all([self._log_contains_id(log, x) for x in self.ids])
+
+    def replica_id(self, c: Composition) -> str:
+        cursor = c.sql_cursor()
+        (cluster, replica) = self.replica.split(".")
+        cursor.execute(
+            f"""
+                SELECT mz_cluster_replicas.id FROM mz_clusters, mz_cluster_replicas
+                WHERE cluster_id = mz_clusters.id AND mz_clusters.name = '{cluster}'
+                AND mz_cluster_replicas.name = '{replica}'""",
+        )
+        return str(cursor.fetchone()[0])
+
+    def cluster_id(self, c: Composition) -> str:
+        cursor = c.sql_cursor()
+        cluster = self.replica.split(".")[0]
+        cursor.execute(
+            f"SELECT id FROM mz_clusters WHERE mz_clusters.name = '{cluster}'",
+        )
+        return str(cursor.fetchone()[0])
+
+    @staticmethod
+    def _log_contains_id(log: str, the_id: str) -> bool:
+        for line in [
+            x for x in log.splitlines() if "ClusterClient send=AllowCompaction" in x
+        ]:
+            if the_id in line:
+                return True
+        return False
+
+    @staticmethod
+    def _format_id(iid: str) -> str:
+        if iid.startswith("s"):
+            return "System(" + iid[1:] + ")"
+        if iid.startswith("u"):
+            return "User(" + iid[1:] + ")"
+        assert False
+
+    @staticmethod
+    def all_checks(replica: str, host: str) -> list["AllowCompactionCheck"]:
+        return [
+            PersistedIntro(replica, host),
+            MaterializedView(replica, host),
+            ArrangedIntro(replica, host),
+            ArrangedIndex(replica, host),
+        ]
+
+
+class PersistedIntro(AllowCompactionCheck):
+    """
+    Checks that computed receives AllowCompaction commands for persisted
+    introspection data, such as mz_internal.mz_scheduling_elapsed_internal_1.
+
+    This should not be influenced by other failing replicas.
+    """
+
+    # TODO: AllowCompactions are currently not sent for persisted introspection. Its unclear
+    # if they should arrive or not
+    # This test is disabled.
+    def find_ids(self, c: Composition) -> None:
+        cursor = c.sql_cursor()
+        replica_id = self.replica_id(c)
+
+        # Get a persisted introspection id
+        cursor.execute(
+            f"""
+                SELECT id,shard_id from mz_internal.mz_storage_shards,mz_catalog.mz_sources
+                WHERE object_id = id AND name LIKE '%_{replica_id}'
+            """
+        )
+        self.ids = [self._format_id(x[0]) for x in cursor.fetchall()]
+
+    def print_error(self) -> None:
+        print(
+            f"!! AllowCompaction not found for persisted introspection with ids {self.ids}"
+        )
+
+
+class MaterializedView(AllowCompactionCheck):
+    """
+    Checks that computed receives AllowCompaction commands for materialized views.
+
+    For materialized views we hold back compaction until slow replicas have caught
+    up. Hence we dont expect these messages if there is another failing replica in
+    the cluster.
+    """
+
+    def find_ids(self, c: Composition) -> None:
+        cursor = c.sql_cursor()
+        cursor.execute(
+            """
+                SELECT id,shard_id from mz_internal.mz_storage_shards, mz_catalog.mz_materialized_views
+                WHERE object_id = id AND name = 'v3';
+            """
+        )
+        self.ids = [self._format_id(cursor.fetchone()[0])]
+
+    def print_error(self) -> None:
+        print(f"!! AllowCompaction not found for materialized view with id {self.ids}")
+
+
+class ArrangedIntro(AllowCompactionCheck):
+    """
+    Checks that computed receives AllowCompaction commands for arranged introspection.
+
+    This is purely per replica property. Other failing replicas in the same cluster should
+    not influence the result of this test.
+    """
+
+    def find_ids(self, c: Composition) -> None:
+        # Get the arranged introspection id, no shard id for those
+        cluster_id = self.cluster_id(c)
+        cursor = c.sql_cursor()
+        cursor.execute(
+            f"""
+                SELECT idx.id from mz_catalog.mz_sources AS src, mz_catalog.mz_indexes AS idx
+                WHERE src.id = idx.on_id AND idx.cluster_id = '{cluster_id}'"""
+        )
+        self.ids = [self._format_id(x[0]) for x in cursor.fetchall()]
+
+    def print_error(self) -> None:
+        print(
+            f"!! AllowCompaction not found for arranged introspection with ids {self.ids}"
+        )
+
+
+class ArrangedIndex(AllowCompactionCheck):
+    """
+    Checks that the arrangement of an index receive AllowCompaction.
+
+    For arrangements, we hold back compaction until all replicas have caught up. Thus, a failing
+    replica will not guarantee these messages anymore.
+    """
+
+    def find_ids(self, c: Composition) -> None:
+        # Get the arranged introspection id, no shard id for those
+        cursor = c.sql_cursor()
+        cursor.execute(
+            f"""
+                SELECT idx.id FROM mz_catalog.mz_views AS views, mz_catalog.mz_indexes AS idx
+                WHERE views.name = 'ct1' AND views.id = idx.on_id
+            """
+        )
+        self.ids = [self._format_id(x[0]) for x in cursor.fetchall()]
+
+    def print_error(self) -> None:
+        print(f"!! AllowCompaction not found for index arrangement with id {self.ids}")
+
+
 def populate(c: Composition) -> None:
     # Create some database objects
     c.testdrive(
@@ -39,6 +209,8 @@ def populate(c: Composition) -> None:
             """
             > CREATE TABLE t1 (f1 INTEGER);
             > INSERT INTO t1 SELECT * FROM generate_series(1, 10);
+            > CREATE VIEW ct1 AS SELECT COUNT(*) AS c1 FROM t1;
+            > CREATE DEFAULT INDEX ON ct1;
             > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) AS c1 FROM t1;
             > CREATE TABLE ten (f1 INTEGER);
             > INSERT INTO ten SELECT * FROM generate_series(1, 10);
@@ -67,6 +239,11 @@ def populate(c: Composition) -> None:
 def restart_replica(c: Composition) -> None:
     c.kill("computed_1_1", "computed_1_2")
     c.up("computed_1_1", "computed_1_2")
+
+
+def restart_environmentd(c: Composition) -> None:
+    c.kill("materialized")
+    c.up("materialized")
 
 
 def drop_create_replica(c: Composition) -> None:
@@ -100,7 +277,8 @@ def validate(c: Composition) -> None:
         dedent(
             """
             # Dataflows
-
+            > SELECT * FROM ct1;
+            10
             > SELECT * FROM v1;
             10
 
@@ -112,6 +290,8 @@ def validate(c: Composition) -> None:
 
             # Existing tables
             > INSERT INTO t1 VALUES (20);
+            > SELECT * FROM ct1;
+            11
             > SELECT * FROM v1;
             11
 
@@ -140,36 +320,99 @@ def validate(c: Composition) -> None:
     )
 
 
+def validate_introspection_compaction(
+    c: Composition, checks: list[AllowCompactionCheck]
+) -> None:
+    # Validate that the AllowCompaction commands arrive at the corresponding replicas.
+    # Allow up to 10 seconds for the compaction the command to appear
+    start = time.time()
+    while time.time() < start + 5:
+        for check in checks:
+            check.check_log(c)
+
+        if all([check.satisfied for check in checks]):
+            return
+
+    for check in checks:
+        if not check.satisfied:
+            check.print_error()
+    assert all([check.satisfied for check in checks])
+
+
 @dataclass
 class Disruption:
     name: str
     disruption: Callable
+    compaction_checks: list[AllowCompactionCheck]
 
 
 disruptions = [
     Disruption(
+        name="none",
+        disruption=lambda c: None,
+        compaction_checks=AllowCompactionCheck.all_checks(
+            "cluster1.replica1", "computed_1_1"
+        )
+        + AllowCompactionCheck.all_checks("cluster1.replica2", "computed_2_1"),
+    ),
+    Disruption(
         name="drop-create-replica",
         disruption=lambda c: drop_create_replica(c),
+        # With a disfunctional replica, we don't expect AllowCompactions for materialized views.
+        compaction_checks=[
+            # PersistedIntro("cluster1.replica2", "computed_2_1"),
+            ArrangedIntro("cluster1.replica2", "computed_2_1"),
+        ],
     ),
     Disruption(
         name="create-invalid-replica",
         disruption=lambda c: create_invalid_replica(c),
+        # With a disfunctional replica, we don't expect AllowCompactions for materialized views.
+        compaction_checks=[
+            # PersistedIntro("cluster1.replica2", "computed_2_1"),
+            ArrangedIntro("cluster1.replica2", "computed_2_1"),
+        ],
     ),
     Disruption(
         name="restart-replica",
         disruption=lambda c: restart_replica(c),
+        compaction_checks=AllowCompactionCheck.all_checks(
+            "cluster1.replica1", "computed_1_1"
+        )
+        + AllowCompactionCheck.all_checks("cluster1.replica2", "computed_2_1"),
     ),
     Disruption(
         name="pause-one-computed",
         disruption=lambda c: c.pause("computed_1_1"),
+        # With a disfunctional replica, we don't expect AllowCompactions for materialized views.
+        compaction_checks=[
+            # PersistedIntro("cluster1.replica2", "computed_2_1"),
+            ArrangedIntro("cluster1.replica2", "computed_2_1"),
+        ],
     ),
     Disruption(
         name="kill-replica",
         disruption=lambda c: c.kill("computed_1_1", "computed_1_2"),
+        # With a disfunctional replica, we don't expect AllowCompactions for materialized views.
+        compaction_checks=[
+            # PersistedIntro("cluster1.replica2", "computed_2_1"),
+            ArrangedIntro("cluster1.replica2", "computed_2_1"),
+        ],
     ),
     Disruption(
         name="drop-replica",
         disruption=lambda c: c.testdrive("> DROP CLUSTER REPLICA cluster1.replica1"),
+        compaction_checks=AllowCompactionCheck.all_checks(
+            "cluster1.replica2", "computed_2_1"
+        ),
+    ),
+    Disruption(
+        name="restart-environmentd",
+        disruption=restart_environmentd,
+        compaction_checks=AllowCompactionCheck.all_checks(
+            "cluster1.replica1", "computed_1_1"
+        )
+        + AllowCompactionCheck.all_checks("cluster1.replica2", "computed_2_1"),
     ),
 ]
 
@@ -191,11 +434,12 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
 
     c.up("testdrive", persistent=True)
 
+    logging_env = ["COMPUTED_LOG_FILTER=mz_compute::server=debug,info"]
     nodes = [
-        Computed(name="computed_1_1"),
-        Computed(name="computed_1_2"),
-        Computed(name="computed_2_1"),
-        Computed(name="computed_2_2"),
+        Computed(name="computed_1_1", environment=logging_env),
+        Computed(name="computed_1_2", environment=logging_env),
+        Computed(name="computed_2_1", environment=logging_env),
+        Computed(name="computed_2_2", environment=logging_env),
     ]
 
     with c.override(*nodes):
@@ -231,6 +475,8 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             disruption.disruption(c)
 
             validate(c)
+
+            validate_introspection_compaction(c, disruption.compaction_checks)
 
         cleanup_list = ["materialized", "testdrive", *[n.name for n in nodes]]
         c.kill(*cleanup_list)

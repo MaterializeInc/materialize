@@ -24,6 +24,7 @@ from materialize.zippy.replica_actions import (
     CreateReplica,
     DropDefaultReplica,
     DropReplica,
+    KillReplica,
 )
 from materialize.zippy.sink_actions import CreateSink
 from materialize.zippy.source_actions import CreateSource
@@ -110,7 +111,7 @@ class PostgresCdc(Scenario):
 
 
 class ClusterReplicas(Scenario):
-    """A Zippy test that uses CREATE / DROP REPLICA."""
+    """A Zippy test that uses CREATE / DROP REPLICA and random killing."""
 
     def bootstrap(self) -> List[Type[Action]]:
         return [KafkaStart, MzStart, DropDefaultReplica, CreateReplica]
@@ -120,14 +121,15 @@ class ClusterReplicas(Scenario):
         return {
             KillStoraged: 10,
             KillComputed: 10,
-            CreateReplica: 20,
-            DropReplica: 20,
+            CreateReplica: 30,
+            KillReplica: 10,
+            DropReplica: 10,
             CreateTopic: 10,
             CreateSource: 10,
             CreateTable: 10,
-            CreateView: 10,
+            CreateView: 20,
             CreateSink: 10,
-            ValidateView: 10,
+            ValidateView: 20,
             Ingest: 25,
             DML: 25,
         }

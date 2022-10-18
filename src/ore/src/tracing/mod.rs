@@ -19,6 +19,7 @@
 //!  * The **[`OpenTelemetryContext`]** type, which carries a tracing span
 //!    across thread or task boundaries within a process.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io;
 #[cfg(feature = "tokio-console")]
@@ -66,6 +67,17 @@ pub struct TracingConfig {
     #[cfg_attr(nightly_doc_features, doc(cfg(feature = "tokio-console")))]
     #[cfg(feature = "tokio-console")]
     pub tokio_console: Option<TokioConsoleConfig>,
+    /// Optional Sentry configuration.
+    pub sentry: Option<SentryConfig>,
+}
+
+/// Configures Sentry reporting.
+#[derive(Debug, Clone)]
+pub struct SentryConfig {
+    /// Sentry data source name to submit events to.
+    pub dsn: String,
+    /// Additional tags to include on each Sentry event/exception.
+    pub tags: HashMap<String, String>,
 }
 
 /// Configures the stderr log.
@@ -193,7 +205,8 @@ pub struct TokioConsoleConfig {
 pub async fn configure<C>(
     service_name: &str,
     config: C,
-) -> Result<TracingTargetCallbacks, anyhow::Error>
+    (build_version, build_sha, build_time): (&str, &str, &str),
+) -> Result<(TracingTargetCallbacks, Option<sentry::ClientInitGuard>), anyhow::Error>
 where
     C: Into<TracingConfig>,
 {
@@ -256,7 +269,7 @@ where
                 trace::config().with_resource(
                     // The latter resources wins, so if the user specifies `service.name` on the
                     // cli, it wins
-                    Resource::new([KeyValue::new("service.name", service_name)])
+                    Resource::new([KeyValue::new("service.name", service_name.clone())])
                         .merge(&otel_config.resource),
                 ),
             )
@@ -303,11 +316,32 @@ where
         None
     };
 
+    let sentry_guard = if let Some(sentry_config) = config.sentry {
+        let mut sentry_client_options = sentry::ClientOptions::default();
+        sentry_client_options.release = Some(Cow::Owned(build_version.to_string()));
+
+        let guard = sentry::init((sentry_config.dsn, sentry_client_options));
+
+        sentry::configure_scope(|scope| {
+            scope.set_tag("service_name", service_name);
+            scope.set_tag("build_sha", build_sha.to_string());
+            scope.set_tag("build_time", build_time.to_string());
+            for (k, v) in sentry_config.tags {
+                scope.set_tag(&k, v);
+            }
+        });
+
+        Some(guard)
+    } else {
+        None
+    };
+
     let stack = tracing_subscriber::registry();
     let stack = stack.with(stderr_log_layer);
     let stack = stack.with(otel_layer);
     #[cfg(feature = "tokio-console")]
     let stack = stack.with(tokio_console_layer);
+    let stack = stack.with(sentry_tracing::layer());
     stack.init();
 
     #[cfg(feature = "tokio-console")]
@@ -318,10 +352,13 @@ where
         );
     }
 
-    Ok(TracingTargetCallbacks {
-        tracing: otel_reloader,
-        stderr: stderr_callback,
-    })
+    Ok((
+        TracingTargetCallbacks {
+            tracing: otel_reloader,
+            stderr: stderr_callback,
+        },
+        sentry_guard,
+    ))
 }
 
 /// Shutdown any tracing infra, if any.
