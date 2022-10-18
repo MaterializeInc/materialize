@@ -21,6 +21,8 @@ use crate::EvalError;
 
 sqlfunc!(
     #[sqlname = "-"]
+    #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(NegInt32)]
     fn neg_int32(a: i32) -> Result<i32, EvalError> {
         a.checked_neg().ok_or(EvalError::Int32OutOfRange)
     }
@@ -28,6 +30,8 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "~"]
+    #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(BitNotInt32)]
     fn bit_not_int32(a: i32) -> i32 {
         !a
     }
@@ -42,6 +46,8 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "integer_to_boolean"]
+    #[preserves_uniqueness = false]
+    #[right_inverse = to_unary!(super::CastBoolToInt32)]
     fn cast_int32_to_bool(a: i32) -> bool {
         a != 0
     }
@@ -49,6 +55,8 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "integer_to_real"]
+    #[preserves_uniqueness = false]
+    #[right_inverse = to_unary!(super::CastFloat32ToInt32)]
     fn cast_int32_to_float32(a: i32) -> f32 {
         a as f32
     }
@@ -57,6 +65,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "integer_to_double"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastFloat64ToInt32)]
     fn cast_int32_to_float64(a: i32) -> f64 {
         f64::from(a)
     }
@@ -65,6 +74,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "integer_to_smallint"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastInt16ToInt32)]
     fn cast_int32_to_int16(a: i32) -> Result<i16, EvalError> {
         i16::try_from(a).or(Err(EvalError::Int16OutOfRange))
     }
@@ -73,6 +83,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "integer_to_bigint"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastInt64ToInt32)]
     fn cast_int32_to_int64(a: i32) -> i64 {
         i64::from(a)
     }
@@ -81,6 +92,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "integer_to_text"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastStringToInt32)]
     fn cast_int32_to_string(a: i32) -> String {
         let mut buf = String::new();
         strconv::format_int32(&mut buf, a);
@@ -91,6 +103,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "integer_to_uint2"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastUint16ToInt32)]
     fn cast_int32_to_uint16(a: i32) -> Result<u16, EvalError> {
         u16::try_from(a).or(Err(EvalError::UInt16OutOfRange))
     }
@@ -99,6 +112,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "integer_to_uint4"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastUint32ToInt32)]
     fn cast_int32_to_uint32(a: i32) -> Result<u32, EvalError> {
         u32::try_from(a).or(Err(EvalError::UInt32OutOfRange))
     }
@@ -107,6 +121,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "integer_to_uint8"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastUint64ToInt32)]
     fn cast_int32_to_uint64(a: i32) -> Result<u64, EvalError> {
         u64::try_from(a).or(Err(EvalError::UInt64OutOfRange))
     }
@@ -133,6 +148,10 @@ impl<'a> EagerUnaryFunc<'a> for CastInt32ToNumeric {
     fn output_type(&self, input: ColumnType) -> ColumnType {
         ScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
     }
+
+    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+        to_unary!(super::CastNumericToInt32)
+    }
 }
 
 impl fmt::Display for CastInt32ToNumeric {
@@ -144,6 +163,7 @@ impl fmt::Display for CastInt32ToNumeric {
 sqlfunc!(
     #[sqlname = "integer_to_oid"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastOidToInt32)]
     fn cast_int32_to_oid(a: i32) -> Oid {
         // For historical reasons in PostgreSQL, the bytes of the `i32` are
         // reinterpreted as a `u32` without bounds checks, so negative `i32`s
@@ -159,6 +179,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "integer_to_\"char\""]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastPgLegacyCharToInt32)]
     fn cast_int32_to_pg_legacy_char(a: i32) -> Result<PgLegacyChar, EvalError> {
         // Per PostgreSQL, casts to `PgLegacyChar` are performed as if
         // `PgLegacyChar` is signed.

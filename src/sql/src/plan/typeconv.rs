@@ -140,6 +140,7 @@ static VALID_CASTS: Lazy<HashMap<(ScalarBaseType, ScalarBaseType), CastImpl>> = 
     casts! {
         // BOOL
         (Bool, Int32) => Explicit: CastBoolToInt32(func::CastBoolToInt32),
+        (Bool, Int64) => Explicit: CastBoolToInt64(func::CastBoolToInt64),
         (Bool, String) => Assignment: CastBoolToString(func::CastBoolToString),
 
         //INT16
@@ -235,6 +236,7 @@ static VALID_CASTS: Lazy<HashMap<(ScalarBaseType, ScalarBaseType), CastImpl>> = 
         // UINT16
         (UInt16, UInt32) => Implicit: CastUint16ToUint32(func::CastUint16ToUint32),
         (UInt16, UInt64) => Implicit: CastUint16ToUint64(func::CastUint16ToUint64),
+        (UInt16, Int16) => Implicit: CastUint16ToInt16(func::CastUint16ToInt16),
         (UInt16, Int32) => Implicit: CastUint16ToInt32(func::CastUint16ToInt32),
         (UInt16, Int64) => Implicit: CastUint16ToInt64(func::CastUint16ToInt64),
         (UInt16, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
@@ -248,6 +250,7 @@ static VALID_CASTS: Lazy<HashMap<(ScalarBaseType, ScalarBaseType), CastImpl>> = 
         // UINT32
         (UInt32, UInt16) => Assignment: CastUint32ToUint16(func::CastUint32ToUint16),
         (UInt32, UInt64) => Implicit: CastUint32ToUint64(func::CastUint32ToUint64),
+        (UInt32, Int16) => Assignment: CastUint32ToInt16(func::CastUint32ToInt16),
         (UInt32, Int32) => Assignment: CastUint32ToInt32(func::CastUint32ToInt32),
         (UInt32, Int64) => Implicit: CastUint32ToInt64(func::CastUint32ToInt64),
         (UInt32, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
@@ -261,6 +264,7 @@ static VALID_CASTS: Lazy<HashMap<(ScalarBaseType, ScalarBaseType), CastImpl>> = 
         // UINT64
         (UInt64, UInt16) => Assignment: CastUint64ToUint16(func::CastUint64ToUint16),
         (UInt64, UInt32) => Assignment: CastUint64ToUint32(func::CastUint64ToUint32),
+        (UInt64, Int16) => Assignment: CastUint64ToInt16(func::CastUint64ToInt16),
         (UInt64, Int32) => Assignment: CastUint64ToInt32(func::CastUint64ToInt32),
         (UInt64, Int64) => Assignment: CastUint64ToInt64(func::CastUint64ToInt64),
         (UInt64, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {

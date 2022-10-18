@@ -22,6 +22,7 @@ use crate::EvalError;
 sqlfunc!(
     #[sqlname = "-"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(NegInt64)]
     fn neg_int64(a: i64) -> Result<i64, EvalError> {
         a.checked_neg().ok_or(EvalError::Int64OutOfRange)
     }
@@ -30,6 +31,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "~"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(BitNotInt64)]
     fn bit_not_int64(a: i64) -> i64 {
         !a
     }
@@ -44,6 +46,8 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "bigint_to_boolean"]
+    #[preserves_uniqueness = false]
+    #[right_inverse = to_unary!(super::CastBoolToInt64)]
     fn cast_int64_to_bool(a: i64) -> bool {
         a != 0
     }
@@ -52,6 +56,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "bigint_to_smallint"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastInt16ToInt64)]
     fn cast_int64_to_int16(a: i64) -> Result<i16, EvalError> {
         i16::try_from(a).or(Err(EvalError::Int16OutOfRange))
     }
@@ -60,6 +65,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "bigint_to_integer"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastInt32ToInt64)]
     fn cast_int64_to_int32(a: i64) -> Result<i32, EvalError> {
         i32::try_from(a).or(Err(EvalError::Int32OutOfRange))
     }
@@ -68,6 +74,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "bigint_to_oid"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastOidToInt64)]
     fn cast_int64_to_oid(a: i64) -> Result<Oid, EvalError> {
         // Unlike casting a 16-bit or 32-bit integers to OID, casting a 64-bit
         // integers to an OID rejects negative values.
@@ -78,6 +85,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "bigint_to_uint2"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastUint16ToInt64)]
     fn cast_int64_to_uint16(a: i64) -> Result<u16, EvalError> {
         u16::try_from(a).or(Err(EvalError::UInt16OutOfRange))
     }
@@ -86,6 +94,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "bigint_to_uint4"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastUint32ToInt64)]
     fn cast_int64_to_uint32(a: i64) -> Result<u32, EvalError> {
         u32::try_from(a).or(Err(EvalError::UInt32OutOfRange))
     }
@@ -94,6 +103,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "bigint_to_uint8"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastUint64ToInt64)]
     fn cast_int64_to_uint64(a: i64) -> Result<u64, EvalError> {
         u64::try_from(a).or(Err(EvalError::UInt64OutOfRange))
     }
@@ -120,6 +130,10 @@ impl<'a> EagerUnaryFunc<'a> for CastInt64ToNumeric {
     fn output_type(&self, input: ColumnType) -> ColumnType {
         ScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
     }
+
+    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+        to_unary!(super::CastNumericToInt64)
+    }
 }
 
 impl fmt::Display for CastInt64ToNumeric {
@@ -130,6 +144,8 @@ impl fmt::Display for CastInt64ToNumeric {
 
 sqlfunc!(
     #[sqlname = "bigint_to_real"]
+    #[preserves_uniqueness = false]
+    #[right_inverse = to_unary!(super::CastFloat32ToInt64)]
     fn cast_int64_to_float32(a: i64) -> f32 {
         a as f32
     }
@@ -137,6 +153,8 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "bigint_to_double"]
+    #[preserves_uniqueness = false]
+    #[right_inverse = to_unary!(super::CastFloat64ToInt64)]
     fn cast_int64_to_float64(a: i64) -> f64 {
         a as f64
     }
@@ -145,6 +163,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "bigint_to_text"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastStringToInt64)]
     fn cast_int64_to_string(a: i64) -> String {
         let mut buf = String::new();
         strconv::format_int64(&mut buf, a);

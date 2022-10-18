@@ -35,6 +35,7 @@ where
 sqlfunc!(
     #[sqlname = "\"char\"_to_text"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastStringToPgLegacyChar)]
     fn cast_pg_legacy_char_to_string(a: PgLegacyChar) -> Result<String, EvalError> {
         let mut buf = String::new();
         format_pg_legacy_char(&mut buf, a.0)?;
@@ -45,6 +46,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "\"char\"_to_integer"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastInt32ToPgLegacyChar)]
     fn cast_pg_legacy_char_to_int32(a: PgLegacyChar) -> i32 {
         // Per PostgreSQL, casts to `i32` are performed as if `PgLegacyChar` is
         // signed.

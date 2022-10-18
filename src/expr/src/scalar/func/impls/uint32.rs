@@ -20,6 +20,8 @@ use crate::EvalError;
 
 sqlfunc!(
     #[sqlname = "~"]
+    #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::BitNotUint32)]
     fn bit_not_uint32(a: u32) -> u32 {
         !a
     }
@@ -27,6 +29,8 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "uint4_to_real"]
+    #[preserves_uniqueness = false]
+    #[right_inverse = to_unary!(super::CastFloat32ToUint32)]
     fn cast_uint32_to_float32(a: u32) -> f32 {
         a as f32
     }
@@ -35,6 +39,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "uint4_to_double"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastFloat64ToUint32)]
     fn cast_uint32_to_float64(a: u32) -> f64 {
         f64::from(a)
     }
@@ -43,14 +48,34 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "uint4_to_uint2"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastUint16ToUint32)]
     fn cast_uint32_to_uint16(a: u32) -> Result<u16, EvalError> {
         u16::try_from(a).or(Err(EvalError::UInt16OutOfRange))
     }
 );
 
 sqlfunc!(
+    #[sqlname = "uint4_to_uint8"]
+    #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastUint64ToUint32)]
+    fn cast_uint32_to_uint64(a: u32) -> u64 {
+        u64::from(a)
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "uint4_to_smallint"]
+    #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastInt16ToUint32)]
+    fn cast_uint32_to_int16(a: u32) -> Result<i16, EvalError> {
+        i16::try_from(a).or(Err(EvalError::Int16OutOfRange))
+    }
+);
+
+sqlfunc!(
     #[sqlname = "uint4_to_integer"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastInt32ToUint32)]
     fn cast_uint32_to_int32(a: u32) -> Result<i32, EvalError> {
         i32::try_from(a).or(Err(EvalError::Int32OutOfRange))
     }
@@ -59,22 +84,16 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "uint4_to_bigint"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastInt64ToUint32)]
     fn cast_uint32_to_int64(a: u32) -> i64 {
         i64::from(a)
     }
 );
 
 sqlfunc!(
-    #[sqlname = "uint4_to_uint8"]
-    #[preserves_uniqueness = true]
-    fn cast_uint32_to_uint64(a: u32) -> u64 {
-        u64::from(a)
-    }
-);
-
-sqlfunc!(
     #[sqlname = "uint4_to_text"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastStringToUint32)]
     fn cast_uint32_to_string(a: u32) -> String {
         let mut buf = String::new();
         strconv::format_uint32(&mut buf, a);
@@ -102,6 +121,10 @@ impl<'a> EagerUnaryFunc<'a> for CastUint32ToNumeric {
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
         ScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
+    }
+
+    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+        to_unary!(super::CastNumericToUint32)
     }
 }
 
