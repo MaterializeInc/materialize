@@ -147,37 +147,6 @@ You must parse the results to understand which statements ultimately reflect
 the resultant state.
 
 ## Examples
-
-### Run a query
-
-Use the [simple input format](#simple) to run a query:
-```bash
-curl 'https://<MZ host address>/api/sql' \
-    --header 'Content-Type: application/json' \
-    --user '<username>:<passsword>' \
-    --data '{
-        "query": "SELECT t.a + s.a AS cross_add FROM t CROSS JOIN s; SELECT a FROM t WHERE a IS NOT NULL;"
-    }'
-```
-
-Response:
-```json
-{
-  "results": [
-    {
-        "rows": [[null],[null],[109],[209]],
-        "col_names": ["cross_add"],
-        "notices": []
-    },
-    {
-        "rows":[[100],[200]],
-        "col_names":["a"],
-        "notices": []
-    }
-  ]
-}
-```
-
 ### Run a transaction
 
 Use the [extended input format](#extended) to run a transaction:
@@ -214,6 +183,37 @@ Response:
   ]
 }
 ```
+
+### Run a query
+
+Use the [simple input format](#simple) to run a query:
+```bash
+curl 'https://<MZ host address>/api/sql' \
+    --header 'Content-Type: application/json' \
+    --user '<username>:<passsword>' \
+    --data '{
+        "query": "SELECT t.a + s.a AS cross_add FROM t CROSS JOIN s; SELECT a FROM t WHERE a IS NOT NULL;"
+    }'
+```
+
+Response:
+```json
+{
+  "results": [
+    {
+        "rows": [[null],[null],[109],[209]],
+        "col_names": ["cross_add"],
+        "notices": []
+    },
+    {
+        "rows":[[100],[200]],
+        "col_names":["a"],
+        "notices": []
+    }
+  ]
+}
+```
+
 
 ## See also
 - [SQL Clients](../sql-clients)
