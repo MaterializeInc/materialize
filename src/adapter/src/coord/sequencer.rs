@@ -613,7 +613,7 @@ impl<S: Append + 'static> Coordinator<S> {
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
                 ..
-            })) => Ok(ExecuteResponse::CreatedConnection),
+            })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedConnection),
             Err(err) => Err(err),
         }
     }
