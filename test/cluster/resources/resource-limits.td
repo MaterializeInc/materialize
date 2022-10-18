@@ -23,14 +23,14 @@ ALTER SYSTEM SET max_tables = 2
 > CREATE TABLE t2 (a INT)
 
 ! CREATE TABLE t3 (a INT)
-contains:Table resource limit of 2 cannot be exceeded. Current amount is 2.
+contains:Table resource limit of 2 cannot be exceeded. Current amount is 2 instances, tried to create 1 new instances.
 
 > DROP TABLE t2;
 
 > CREATE TABLE t3 (a INT)
 
 ! CREATE TABLE t4 (a INT)
-contains:Table resource limit of 2 cannot be exceeded. Current amount is 2.
+contains:Table resource limit of 2 cannot be exceeded. Current amount is 2 instances, tried to create 1 new instances.
 
 
 $ postgres-execute connection=mz_system
@@ -48,19 +48,19 @@ ALTER SYSTEM SET max_objects_per_schema = 2
 2
 
 ! CREATE TABLE t4 (a INT)
-contains:Objects per schema resource limit of 2 cannot be exceeded. Current amount is 3.
+contains:Objects per schema resource limit of 2 cannot be exceeded. Current amount is 3 instances, tried to create 1 new instances.
 
 ! CREATE VIEW v as SELECT 1
-contains:Objects per schema resource limit of 2 cannot be exceeded. Current amount is 3.
+contains:Objects per schema resource limit of 2 cannot be exceeded. Current amount is 3 instances, tried to create 1 new instances.
 
 ! CREATE INDEX ind on t1 (a)
-contains:Objects per schema resource limit of 2 cannot be exceeded. Current amount is 3.
+contains:Objects per schema resource limit of 2 cannot be exceeded. Current amount is 3 instances, tried to create 1 new instances.
 
 ! CREATE TYPE t AS (a float8)
-contains:Objects per schema resource limit of 2 cannot be exceeded. Current amount is 3.
+contains:Objects per schema resource limit of 2 cannot be exceeded. Current amount is 3 instances, tried to create 1 new instances.
 
 ! CREATE TABLE t4 (a INT)
-contains:Objects per schema resource limit of 2 cannot be exceeded. Current amount is 3.
+contains:Objects per schema resource limit of 2 cannot be exceeded. Current amount is 3 instances, tried to create 1 new instances.
 
 > CREATE SCHEMA s1;
 
@@ -85,14 +85,14 @@ ALTER SYSTEM SET max_clusters = 3
 > CREATE CLUSTER c2 REPLICAS (r (SIZE '1'));
 
 ! CREATE CLUSTER c3 REPLICAS (r (SIZE '1'));
-contains:Cluster resource limit of 3 cannot be exceeded. Current amount is 3.
+contains:Cluster resource limit of 3 cannot be exceeded. Current amount is 3 instances, tried to create 1 new instances.
 
 > DROP CLUSTER c2 CASCADE;
 
 > CREATE CLUSTER c3 REPLICAS (r (SIZE '1'));
 
 ! CREATE CLUSTER c4 REPLICAS (r (SIZE '1'));
-contains:Cluster resource limit of 3 cannot be exceeded. Current amount is 3.
+contains:Cluster resource limit of 3 cannot be exceeded. Current amount is 3 instances, tried to create 1 new instances.
 
 
 $ postgres-execute connection=mz_system
@@ -110,7 +110,7 @@ ALTER SYSTEM SET max_replicas_per_cluster = 1
 1
 
 ! CREATE CLUSTER REPLICA c1.r2 SIZE '1'
-contains:Replicas per cluster resource limit of 1 cannot be exceeded. Current amount is 1.
+contains:Replicas per cluster resource limit of 1 cannot be exceeded. Current amount is 1 instances, tried to create 1 new instances.
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_replicas_per_cluster = 100
@@ -127,7 +127,7 @@ ALTER SYSTEM SET max_databases = 1
 1
 
 ! CREATE DATABASE d1
-contains:Database resource limit of 1 cannot be exceeded. Current amount is 1.
+contains:Database resource limit of 1 cannot be exceeded. Current amount is 1 instances, tried to create 1 new instances.
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_databases = 42
@@ -144,7 +144,7 @@ ALTER SYSTEM SET max_schemas_per_database = 2
 2
 
 ! CREATE SCHEMA s2
-contains:Schemas per database resource limit of 2 cannot be exceeded. Current amount is 2.
+contains:Schemas per database resource limit of 2 cannot be exceeded. Current amount is 2 instances, tried to create 1 new instances.
 
 > CREATE SCHEMA d1.s2
 
@@ -165,7 +165,7 @@ ALTER SYSTEM SET max_roles = 2;
 > CREATE ROLE joe LOGIN SUPERUSER
 
 ! CREATE ROLE mike LOGIN SUPERUSER
-contains:Role resource limit of 2 cannot be exceeded. Current amount is 2.
+contains:Role resource limit of 2 cannot be exceeded. Current amount is 2 instances, tried to create 1 new instances.
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_roles = 3;
@@ -184,7 +184,7 @@ ALTER SYSTEM SET max_secrets = 1
 > CREATE SECRET secret AS 'secure_password'
 
 ! CREATE SECRET password AS 'pass'
-contains:Secret resource limit of 1 cannot be exceeded. Current amount is 1.
+contains:Secret resource limit of 1 cannot be exceeded. Current amount is 1 instances, tried to create 1 new instances.
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_secrets = 50000
@@ -203,7 +203,7 @@ ALTER SYSTEM SET max_materialized_views = 1
 > CREATE MATERIALIZED VIEW mv1 AS SELECT 1
 
 ! CREATE MATERIALIZED VIEW mv2 AS SELECT 2
-contains:Materialized view resource limit of 1 cannot be exceeded. Current amount is 1.
+contains:Materialized view resource limit of 1 cannot be exceeded. Current amount is 1 instances, tried to create 1 new instances.
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_materialized_views = 2
@@ -250,3 +250,46 @@ ALTER SYSTEM RESET ALL
 > DROP CLUSTER c3 CASCADE
 
 > DROP CLUSTER c4 CASCADE
+
+# Test sub-sources are excluded from source counts
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_sources = 1
+
+# Insert Postgres data
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER USER postgres WITH replication;
+DROP SCHEMA IF EXISTS public CASCADE;
+DROP PUBLICATION IF EXISTS mz_source;
+
+CREATE SCHEMA public;
+
+CREATE TABLE t1 (a INT);
+ALTER TABLE t1 REPLICA IDENTITY FULL;
+CREATE TABLE t2 (b INT);
+ALTER TABLE t2 REPLICA IDENTITY FULL;
+
+INSERT INTO t1 VALUES (1);
+INSERT INTO t2 VALUES (2)
+
+CREATE PUBLICATION mz_source FOR ALL TABLES;
+
+> CREATE SECRET pgpass AS 'postgres'
+> CREATE CONNECTION pg TO POSTGRES (
+    HOST postgres,
+    DATABASE postgres,
+    USER postgres,
+    PASSWORD SECRET pgpass
+  )
+> CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR ALL TABLES;
+
+> SELECT * FROM t1
+1
+
+> SELECT * FROM t2
+2
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET ALL

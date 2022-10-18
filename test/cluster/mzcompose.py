@@ -284,10 +284,16 @@ def workflow_test_resource_limits(c: Composition) -> None:
 
     with c.override(
         Testdrive(),
+        Postgres(),
         Materialized(),
     ):
-        c.up("materialized")
-        c.wait_for_materialized()
+        dependencies = [
+            "materialized",
+            "postgres",
+        ]
+        c.start_and_wait_for_tcp(
+            services=dependencies,
+        )
 
         c.run("testdrive", "resources/resource-limits.td")
 
