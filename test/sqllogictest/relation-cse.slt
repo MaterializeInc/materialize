@@ -81,11 +81,7 @@ Explained Query:
   With
     cte l0 =
       Project (#0, #1) // { arity: 2 }
-        Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Get materialize.public.t1 // { arity: 2 }
-          Constant // { arity: 1 }
-            - (1)
+        ReadExistingIndex materialize.public.t1 lookup_value=(1)
 
 Used Indexes:
   - materialize.public.i1
@@ -109,11 +105,7 @@ Explained Query:
         Get l0 // { arity: 2 }
     cte l0 =
       Project (#0, #1) // { arity: 2 }
-        Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Get materialize.public.t1 // { arity: 2 }
-          Constant // { arity: 1 }
-            - (1)
+        ReadExistingIndex materialize.public.t1 lookup_value=(1)
 
 Used Indexes:
   - materialize.public.i1
@@ -139,11 +131,7 @@ Explained Query:
         Get l0 // { arity: 3 }
   With
     cte l0 =
-      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Get materialize.public.t1 // { arity: 2 }
-        Constant // { arity: 1 }
-          - (1)
+      ReadExistingIndex materialize.public.t1 lookup_value=(1)
 
 Used Indexes:
   - materialize.public.i1
@@ -214,11 +202,7 @@ Explained Query:
                 Project () // { arity: 0 }
                   Get l0 // { arity: 3 }
     cte l0 =
-      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Get materialize.public.t1 // { arity: 2 }
-        Constant // { arity: 1 }
-          - (1)
+      ReadExistingIndex materialize.public.t1 lookup_value=(1)
 
 Used Indexes:
   - materialize.public.i1
@@ -315,11 +299,7 @@ Explained Query:
   With
     cte l0 =
       Project (#0, #1) // { arity: 2 }
-        Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Get materialize.public.t1 // { arity: 2 }
-          Constant // { arity: 1 }
-            - (1)
+        ReadExistingIndex materialize.public.t1 lookup_value=(1)
 
 Used Indexes:
   - materialize.public.i1
@@ -345,11 +325,7 @@ Explained Query:
     cte l0 =
       Project (#0, #1) // { arity: 2 }
         Filter (#1 = 2) // { arity: 3 }
-          Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-            ArrangeBy keys=[[#0]] // { arity: 2 }
-              Get materialize.public.t1 // { arity: 2 }
-            Constant // { arity: 1 }
-              - (1)
+          ReadExistingIndex materialize.public.t1 lookup_value=(1)
 
 Used Indexes:
   - materialize.public.i1
@@ -378,11 +354,7 @@ Explained Query:
           Get l0 // { arity: 3 }
   With
     cte l0 =
-      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Get materialize.public.t1 // { arity: 2 }
-        Constant // { arity: 1 }
-          - (1)
+      ReadExistingIndex materialize.public.t1 lookup_value=(1)
 
 Used Indexes:
   - materialize.public.i1
@@ -405,11 +377,7 @@ Explained Query:
   With
     cte l0 =
       Project (#0, #1) // { arity: 2 }
-        Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Get materialize.public.t1 // { arity: 2 }
-          Constant // { arity: 1 }
-            - (1)
+        ReadExistingIndex materialize.public.t1 lookup_value=(1)
 
 Used Indexes:
   - materialize.public.i1
@@ -431,11 +399,7 @@ Explained Query:
   With
     cte l0 =
       Project (#1) // { arity: 1 }
-        Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Get materialize.public.t1 // { arity: 2 }
-          Constant // { arity: 1 }
-            - (1)
+        ReadExistingIndex materialize.public.t1 lookup_value=(1)
 
 Used Indexes:
   - materialize.public.i1
@@ -480,11 +444,7 @@ Explained Query:
                 Project () // { arity: 0 }
                   Get l0 // { arity: 3 }
     cte l0 =
-      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Get materialize.public.t1 // { arity: 2 }
-        Constant // { arity: 1 }
-          - (1)
+      ReadExistingIndex materialize.public.t1 lookup_value=(1)
 
 Used Indexes:
   - materialize.public.i1
@@ -539,11 +499,7 @@ Explained Query:
                 Project () // { arity: 0 }
                   Get l0 // { arity: 3 }
     cte l0 =
-      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Get materialize.public.t1 // { arity: 2 }
-        Constant // { arity: 1 }
-          - (1)
+      ReadExistingIndex materialize.public.t1 lookup_value=(1)
 
 Used Indexes:
   - materialize.public.i1
@@ -592,11 +548,7 @@ Explained Query:
       Project () // { arity: 0 }
         Get l0 // { arity: 3 }
     cte l0 =
-      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Get materialize.public.t1 // { arity: 2 }
-        Constant // { arity: 1 }
-          - (1)
+      ReadExistingIndex materialize.public.t1 lookup_value=(1)
 
 Used Indexes:
   - materialize.public.i1
@@ -642,11 +594,7 @@ Explained Query:
       Project (#0) // { arity: 1 }
         Get l0 // { arity: 3 }
     cte l0 =
-      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Get materialize.public.t1 // { arity: 2 }
-        Constant // { arity: 1 }
-          - (1)
+      ReadExistingIndex materialize.public.t1 lookup_value=(1)
 
 Used Indexes:
   - materialize.public.i1
@@ -760,15 +708,9 @@ Explained Query:
           Get l2 // { arity: 3 }
   With
     cte l2 =
-      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-        Get l0 // { arity: 2 }
-        Constant // { arity: 1 }
-          - (2)
+      ReadExistingIndex materialize.public.t1 lookup_value=(2)
     cte l1 =
-      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-        Get l0 // { arity: 2 }
-        Constant // { arity: 1 }
-          - (1)
+      ReadExistingIndex materialize.public.t1 lookup_value=(1)
     cte l0 =
       ArrangeBy keys=[[#0]] // { arity: 2 }
         Get materialize.public.t1 // { arity: 2 }
@@ -804,11 +746,7 @@ Explained Query:
         Project (#0) // { arity: 1 }
           Get l0 // { arity: 3 }
     cte l0 =
-      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Get materialize.public.t1 // { arity: 2 }
-        Constant // { arity: 1 }
-          - (1)
+      ReadExistingIndex materialize.public.t1 lookup_value=(1)
 
 Used Indexes:
   - materialize.public.i1
@@ -840,15 +778,9 @@ Explained Query:
         Get l2 // { arity: 3 }
   With
     cte l2 =
-      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-        Get l0 // { arity: 2 }
-        Constant // { arity: 1 }
-          - (2)
+      ReadExistingIndex materialize.public.t1 lookup_value=(2)
     cte l1 =
-      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-        Get l0 // { arity: 2 }
-        Constant // { arity: 1 }
-          - (1)
+      ReadExistingIndex materialize.public.t1 lookup_value=(1)
     cte l0 =
       ArrangeBy keys=[[#0]] // { arity: 2 }
         Get materialize.public.t1 // { arity: 2 }
@@ -877,11 +809,7 @@ Explained Query:
     cte l0 =
       Project (#0, #1) // { arity: 2 }
         Filter (#1 = 2) // { arity: 3 }
-          Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-            ArrangeBy keys=[[#0]] // { arity: 2 }
-              Get materialize.public.t1 // { arity: 2 }
-            Constant // { arity: 1 }
-              - (1)
+          ReadExistingIndex materialize.public.t1 lookup_value=(1)
 
 Used Indexes:
   - materialize.public.i1
@@ -906,12 +834,7 @@ Explained Query:
   With
     cte l0 =
       Project (#0, #1) // { arity: 2 }
-        Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Get materialize.public.t1 // { arity: 2 }
-          Constant // { arity: 1 }
-            - (1)
-            - (2)
+        ReadExistingIndex materialize.public.t1 lookup_values=[(1); (2)]
 
 Used Indexes:
   - materialize.public.i1
@@ -942,11 +865,7 @@ Explained Query:
         ArrangeBy keys=[[]] // { arity: 0 }
           Distinct // { arity: 0 }
             Project () // { arity: 0 }
-              Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-                ArrangeBy keys=[[#0]] // { arity: 2 }
-                  Get materialize.public.t1 // { arity: 2 }
-                Constant // { arity: 1 }
-                  - (1)
+              ReadExistingIndex materialize.public.t1 lookup_value=(1)
 
 Used Indexes:
   - materialize.public.i1
@@ -981,10 +900,7 @@ Explained Query:
                     Project () // { arity: 0 }
                       Get l1 // { arity: 3 }
     cte l1 =
-      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-        Get l0 // { arity: 2 }
-        Constant // { arity: 1 }
-          - (1)
+      ReadExistingIndex materialize.public.t1 lookup_value=(1)
     cte l0 =
       ArrangeBy keys=[[#0]] // { arity: 2 }
         Get materialize.public.t1 // { arity: 2 }
@@ -1167,11 +1083,7 @@ Explained Query:
   With
     cte l0 =
       Project (#0, #1) // { arity: 2 }
-        Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Get materialize.public.t1 // { arity: 2 }
-          Constant // { arity: 1 }
-            - (1)
+        ReadExistingIndex materialize.public.t1 lookup_value=(1)
 
 Used Indexes:
   - materialize.public.i1
@@ -1198,11 +1110,7 @@ Explained Query:
         ArrangeBy keys=[[]] // { arity: 0 }
           Distinct // { arity: 0 }
             Project () // { arity: 0 }
-              Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-                ArrangeBy keys=[[#0]] // { arity: 2 }
-                  Get materialize.public.t1 // { arity: 2 }
-                Constant // { arity: 1 }
-                  - (1)
+              ReadExistingIndex materialize.public.t1 lookup_value=(1)
 
 Used Indexes:
   - materialize.public.i1
@@ -1235,11 +1143,7 @@ Explained Query:
         ArrangeBy keys=[[]] // { arity: 0 }
           Distinct // { arity: 0 }
             Project () // { arity: 0 }
-              Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-                ArrangeBy keys=[[#0]] // { arity: 2 }
-                  Get materialize.public.t1 // { arity: 2 }
-                Constant // { arity: 1 }
-                  - (1)
+              ReadExistingIndex materialize.public.t1 lookup_value=(1)
 
 Used Indexes:
   - materialize.public.i1
@@ -1270,11 +1174,7 @@ Explained Query:
       ArrangeBy keys=[[]] // { arity: 0 }
         Distinct // { arity: 0 }
           Project () // { arity: 0 }
-            Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-              ArrangeBy keys=[[#0]] // { arity: 2 }
-                Get materialize.public.t1 // { arity: 2 }
-              Constant // { arity: 1 }
-                - (1)
+            ReadExistingIndex materialize.public.t1 lookup_value=(1)
 
 Used Indexes:
   - materialize.public.i1
@@ -1303,11 +1203,7 @@ Explained Query:
   With
     cte l0 =
       Project (#0) // { arity: 1 }
-        Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Get materialize.public.t1 // { arity: 2 }
-          Constant // { arity: 1 }
-            - (1)
+        ReadExistingIndex materialize.public.t1 lookup_value=(1)
 
 Used Indexes:
   - materialize.public.i1
@@ -1330,11 +1226,7 @@ Explained Query:
         Get l0 // { arity: 3 }
   With
     cte l0 =
-      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Get materialize.public.t1 // { arity: 2 }
-        Constant // { arity: 1 }
-          - (1)
+      ReadExistingIndex materialize.public.t1 lookup_value=(1)
 
 Used Indexes:
   - materialize.public.i1
@@ -1356,15 +1248,9 @@ Explained Query:
         %1:t1 » %0:t1[×]Ae
       ArrangeBy keys=[[]] // { arity: 2 }
         Project (#0, #1) // { arity: 2 }
-          Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-            Get l0 // { arity: 2 }
-            Constant // { arity: 1 }
-              - (1)
+          ReadExistingIndex materialize.public.t1 lookup_value=(1)
       Project (#0, #1) // { arity: 2 }
-        Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-          Get l0 // { arity: 2 }
-          Constant // { arity: 1 }
-            - (2)
+        ReadExistingIndex materialize.public.t1 lookup_value=(2)
   With
     cte l0 =
       ArrangeBy keys=[[#0]] // { arity: 2 }
@@ -1402,15 +1288,9 @@ Explained Query:
           Get l2 // { arity: 3 }
   With
     cte l2 =
-      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-        Get l0 // { arity: 2 }
-        Constant // { arity: 1 }
-          - (2)
+      ReadExistingIndex materialize.public.t1 lookup_value=(2)
     cte l1 =
-      Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-        Get l0 // { arity: 2 }
-        Constant // { arity: 1 }
-          - (1)
+      ReadExistingIndex materialize.public.t1 lookup_value=(1)
     cte l0 =
       ArrangeBy keys=[[#0]] // { arity: 2 }
         Get materialize.public.t1 // { arity: 2 }
@@ -1430,15 +1310,9 @@ Explained Query:
   Return // { arity: 2 }
     Union // { arity: 2 }
       Project (#0, #1) // { arity: 2 }
-        Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-          Get l0 // { arity: 2 }
-          Constant // { arity: 1 }
-            - (1)
+        ReadExistingIndex materialize.public.t1 lookup_value=(1)
       Project (#0, #1) // { arity: 2 }
-        Join on=(#0 = #2) type=indexed_filter // { arity: 3 }
-          Get l0 // { arity: 2 }
-          Constant // { arity: 1 }
-            - (2)
+        ReadExistingIndex materialize.public.t1 lookup_value=(2)
   With
     cte l0 =
       ArrangeBy keys=[[#0]] // { arity: 2 }
