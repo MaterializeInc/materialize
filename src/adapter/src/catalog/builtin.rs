@@ -2330,8 +2330,7 @@ FROM
             LEFT JOIN mz_columns obj_cols ON
                 idxs.on_id = obj_cols.id AND idx_cols.on_position = obj_cols.position
         GROUP BY idxs.id) AS keys
-    ON idxs.id = keys.id
-WHERE idxs.on_id NOT LIKE 's%'",
+    ON idxs.id = keys.id",
 };
 
 pub const MZ_SHOW_CLUSTER_REPLICAS: BuiltinView = BuiltinView {

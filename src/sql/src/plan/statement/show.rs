@@ -456,6 +456,10 @@ pub fn show_indexes<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let mut query_filter = Vec::new();
 
+    if on_object.is_none() && from_schema.is_none() {
+        query_filter.push("on_id NOT LIKE 's%'".into());
+    }
+
     if let Some(on_object) = on_object {
         let on_item = scx.get_item_by_resolved_name(&on_object)?;
         if on_item.item_type() != CatalogItemType::View
