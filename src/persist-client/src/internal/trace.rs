@@ -607,6 +607,8 @@ impl<T: Timestamp + Lattice> Spine<T> {
         assert!(batch.lower() != batch.upper());
         assert_eq!(batch.lower(), &self.upper);
 
+        assert!(!batch.upper().is_empty(), "empty upper in Spine::insert");
+
         self.upper.clone_from(batch.upper());
 
         // If `batch` and the most recently inserted batch are both empty,
