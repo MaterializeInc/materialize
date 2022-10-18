@@ -139,19 +139,22 @@ The process to connect Materialize to Amazon MSK consists of the following steps
     d. From a `psql` terminal, connect to Materialize.
 
     e. Create a source using the command below. Replace `<source-name>` with whatever you want to name your source. The broker url is what you copied in step c of this subsection. The `<topic-name>` is the name of the topic you created in Step 4. The `<your-username>` and `<your-password>` is from _Store a new secret_ under Step 2.
-    ```
+
+      ```sql
       CREATE SECRET msk_password AS '<your-password>';
 
-      CREATE CONNECTION kafka_connection FOR KAFKA
+      CREATE CONNECTION kafka_connection TO KAFKA (
           BROKER '<broker-url>',
           SASL MECHANISMS = 'SCRAM-SHA-512',
           SASL USERNAME = '<your-username>',
-          SASL PASSWORD = SECRET msk_password;
+          SASL PASSWORD = SECRET msk_password
+        );
 
       CREATE SOURCE <source-name>
-      FROM KAFKA CONNECTION kafka_connection (TOPIC '<topic-name>')
-      FORMAT text;
-    ```
+        FROM KAFKA CONNECTION kafka_connection (TOPIC '<topic-name>')
+        FORMAT text
+        WITH (SIZE = '3xsmall');
+      ```
 
     f. If the command executes without an error and outputs _CREATE SOURCE_, it means that you have successfully connected Materialize to your MSK cluster.
 

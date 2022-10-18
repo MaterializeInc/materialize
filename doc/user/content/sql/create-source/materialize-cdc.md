@@ -142,9 +142,10 @@ You specify the use of the Materialize CDC format in the [Avro schema](/sql/crea
   CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'kafka_url:9092');
 
   CREATE SOURCE name_of_source
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'name_of_kafka_topic')
-  FORMAT AVRO USING SCHEMA '<schema goes here>'
-  ENVELOPE MATERIALIZE
+    FROM KAFKA CONNECTION kafka_conn (TOPIC 'name_of_kafka_topic')
+    FORMAT AVRO USING SCHEMA '<schema goes here>'
+    ENVELOPE MATERIALIZE
+    WITH (SIZE = '3xsmall');
 ```
 
 The following example schema specifies that records will consist of `id` and `price` fields. Note that `price` object supports multiple datatypes: It can be `null` or `int`.
