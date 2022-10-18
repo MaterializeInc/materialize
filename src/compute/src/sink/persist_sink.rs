@@ -319,6 +319,12 @@ where
                 }
 
                 let empty_updates: &[((SourceData, ()), Timestamp, Diff)] = &[];
+
+                assert!(
+                    !write_lower_bound.is_empty(),
+                    "write_lower_bound is empty, in mint_batch_descriptions"
+                );
+
                 // It's fine if we don't succeed here. This just means that
                 // someone else already advanced the persist frontier further,
                 // which is great!
