@@ -26,8 +26,8 @@ use mz_compute_client::controller::ComputeInstanceId;
 use mz_compute_client::response::PeekResponse;
 use mz_expr::explain::Indices;
 use mz_expr::{EvalError, Id, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_ore::str::Indent;
 use mz_ore::str::StrExt;
-use mz_ore::str::{separated, Indent};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText, ExprHumanizer};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
@@ -118,25 +118,7 @@ where
                     writeln!(f, "{}Map ({})", ctx.as_mut(), scalars)?;
                     *ctx.as_mut() += 1;
                 }
-                let humanized_index = ctx
-                    .as_ref()
-                    .humanize_id(*id)
-                    .unwrap_or_else(|| id.to_string());
-                if let Some(literal_constraints) = literal_constraints {
-                    write!(
-                        f,
-                        "{}ReadExistingIndex {} lookup ",
-                        ctx.as_mut(),
-                        humanized_index
-                    )?;
-                    if literal_constraints.len() == 1 {
-                        writeln!(f, "value {}", literal_constraints.get(0).unwrap())?;
-                    } else {
-                        writeln!(f, "values [{}]", separated("; ", literal_constraints))?;
-                    }
-                } else {
-                    writeln!(f, "{}ReadExistingIndex {}", ctx.as_mut(), humanized_index)?;
-                }
+                Displayable::fmt_indexed_filter(f, ctx, id, literal_constraints.clone())?;
                 ctx.as_mut().reset();
                 Ok(())
             }
@@ -598,7 +580,7 @@ mod tests {
 
         let constant_err_exp = "Error \"division by zero\"\n";
         let no_lookup_exp = "Project (#1, #4)\n  Map ((#0 OR #2))\n    ReadExistingIndex u10\n";
-        let lookup_exp = "Filter (#0) IS NULL\n  ReadExistingIndex u11 lookup value (5)\n";
+        let lookup_exp = "Filter (#0) IS NULL\n  ReadExistingIndex u11 lookup_value=(5)\n";
 
         assert_eq!(text_string_at(&constant_err, ctx_gen), constant_err_exp);
         assert_eq!(text_string_at(&no_lookup, ctx_gen), no_lookup_exp);

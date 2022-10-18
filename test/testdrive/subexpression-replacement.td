@@ -28,11 +28,11 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 "Explained Query (fast path):  Filter (#0) IS NULL AND (#1 = 5)    ReadExistingIndex t1_primary_idxUsed Indexes:  - t1_primary_idx"
 
 > EXPLAIN SELECT * FROM t1 WHERE col_not_null = 1 AND (col_not_null = 1 AND col_null = 5);
-"Explained Query (fast path):  Project (#0, #1)    ReadExistingIndex t1_primary_idx lookup value (5, 1)Used Indexes:  - t1_primary_idx"
+"Explained Query (fast path):  Project (#0, #1)    ReadExistingIndex t1_primary_idx lookup_value=(5, 1)Used Indexes:  - t1_primary_idx"
 
 # NULL-able expressions are dedupped
 > EXPLAIN SELECT * FROM t1 WHERE col_null = 1 AND (col_null = 1 AND col_not_null = 5);
-"Explained Query (fast path):  Project (#0, #1)    ReadExistingIndex t1_primary_idx lookup value (1, 5)Used Indexes:  - t1_primary_idx"
+"Explained Query (fast path):  Project (#0, #1)    ReadExistingIndex t1_primary_idx lookup_value=(1, 5)Used Indexes:  - t1_primary_idx"
 
 # OR/disjunction at the top level
 

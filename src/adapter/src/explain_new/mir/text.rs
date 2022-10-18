@@ -29,7 +29,7 @@ use mz_expr::{
 use mz_ore::soft_assert;
 use mz_ore::str::{bracketed, separated, IndentLike, StrExt};
 use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText, ExprHumanizer};
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, Row};
 
 use crate::explain_new::{Displayable, PlanRenderingContext};
 
@@ -197,7 +197,10 @@ impl<'a> Displayable<'a, MirRelationExpr> {
             Join {
                 inputs,
                 equivalences,
-                implementation,
+                implementation:
+                    implementation @ (JoinImplementation::Differential(..)
+                    | JoinImplementation::DeltaQuery(..)
+                    | JoinImplementation::Unimplemented),
             } => {
                 let has_equivalences = !equivalences.is_empty();
                 let equivalences = separated(
@@ -303,7 +306,9 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                                     Ok(())
                                 })?;
                             }
-                            JoinImplementation::IndexedFilter(_, _, _) => {}
+                            JoinImplementation::IndexedFilter(_, _, _) => {
+                                unreachable!() // because above we matched the other implementations
+                            }
                             JoinImplementation::Unimplemented => {}
                         }
                         Ok(())
@@ -316,6 +321,12 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                     }
                     Ok(())
                 })?;
+            }
+            Join {
+                implementation: JoinImplementation::IndexedFilter(id, _key, literal_constraints),
+                ..
+            } => {
+                Self::fmt_indexed_filter(f, ctx, id, Some(literal_constraints.clone()))?;
             }
             Reduce {
                 group_key,
@@ -459,6 +470,37 @@ impl<'a> Displayable<'a, MirRelationExpr> {
         } else {
             writeln!(f)
         }
+    }
+
+    pub fn fmt_indexed_filter<'b, C>(
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut C,
+        id: &GlobalId,               // The id of the index
+        constants: Option<Vec<Row>>, // The values that we are looking up
+    ) -> fmt::Result
+    where
+        C: AsMut<mz_ore::str::Indent> + AsRef<&'b dyn mz_repr::explain_new::ExprHumanizer>,
+    {
+        let humanized_index = ctx
+            .as_ref()
+            .humanize_id(*id)
+            .unwrap_or_else(|| id.to_string());
+        if let Some(constants) = constants {
+            write!(
+                f,
+                "{}ReadExistingIndex {} lookup_",
+                ctx.as_mut(),
+                humanized_index
+            )?;
+            if constants.len() == 1 {
+                writeln!(f, "value={}", constants.get(0).unwrap())?;
+            } else {
+                writeln!(f, "values=[{}]", separated("; ", constants))?;
+            }
+        } else {
+            writeln!(f, "{}ReadExistingIndex {}", ctx.as_mut(), humanized_index)?;
+        }
+        Ok(())
     }
 }
 

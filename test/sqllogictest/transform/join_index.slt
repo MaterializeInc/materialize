@@ -663,11 +663,7 @@ Explained Query:
         ArrangeBy keys=[[#0]] // { arity: 14 }
           Get materialize.public.big // { arity: 14 }
         ArrangeBy keys=[[#1]] // { arity: 15 }
-          Join on=(#12 = #14) type=indexed_filter // { arity: 15 }
-            ArrangeBy keys=[[#12]] // { arity: 14 }
-              Get materialize.public.big // { arity: 14 }
-            Constant // { arity: 1 }
-              - (42)
+          ReadExistingIndex materialize.public.big lookup_value=(42)
         ArrangeBy keys=[[#2]] // { arity: 14 }
           Get materialize.public.big // { arity: 14 }
 
