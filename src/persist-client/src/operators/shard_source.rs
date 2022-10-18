@@ -11,34 +11,34 @@
 
 use std::any::Any;
 use std::convert::Infallible;
+use std::fmt::Debug;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
+use differential_dataflow::difference::Semigroup;
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
 use futures::StreamExt;
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::vec::VecExt;
+use mz_persist::location::ExternalError;
+use mz_persist_types::{Codec, Codec64};
+use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{CapabilitySet, OkErr};
+use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
+use timely::order::TotalOrder;
+use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::sync::{mpsc, Mutex};
 use tracing::trace;
 
-use mz_expr::MfpPlan;
-use mz_ore::cast::CastFrom;
-use mz_persist::location::ExternalError;
-use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::fetch::SerdeLeasedBatchPart;
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
-
-use crate::controller::CollectionMetadata;
-use crate::types::errors::DataflowError;
-use crate::types::sources::SourceData;
+use crate::cache::PersistClientCache;
+use crate::fetch::{FetchedPart, SerdeLeasedBatchPart};
+use crate::{PersistLocation, ShardId};
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -62,77 +62,26 @@ use crate::types::sources::SourceData;
 /// using [`timely::dataflow::operators::generic::operator::empty`].
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn persist_source<G, YFn>(
+pub fn shard_source<K, V, D, G>(
     scope: &G,
-    source_id: GlobalId,
-    persist_clients: Arc<Mutex<PersistClientCache>>,
-    metadata: CollectionMetadata,
-    as_of: Option<Antichain<Timestamp>>,
-    until: Antichain<Timestamp>,
-    map_filter_project: Option<&mut MfpPlan>,
+    name: &str,
+    clients: Arc<Mutex<PersistClientCache>>,
+    location: PersistLocation,
+    shard_id: ShardId,
+    as_of: Option<Antichain<G::Timestamp>>,
+    until: Antichain<G::Timestamp>,
     // Use Infallible to statically ensure that no data can ever be sent. TODO:
     // Replace Infallible with `!` once the latter is stabilized.
     flow_control_input: &Stream<G, Infallible>,
     flow_control_max_inflight_bytes: usize,
-    yield_fn: YFn,
-) -> (
-    Stream<G, (Row, Timestamp, Diff)>,
-    Stream<G, (DataflowError, Timestamp, Diff)>,
-    Rc<dyn Any>,
-)
+) -> (Stream<G, FetchedPart<K, V, G::Timestamp, D>>, Rc<dyn Any>)
 where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-    YFn: Fn(Instant, usize) -> bool + 'static,
-{
-    let (stream, token) = persist_source_core(
-        scope,
-        source_id,
-        persist_clients,
-        metadata,
-        as_of,
-        until,
-        map_filter_project,
-        flow_control_input,
-        flow_control_max_inflight_bytes,
-        yield_fn,
-    );
-    let (ok_stream, err_stream) = stream.ok_err(|(d, t, r)| match d {
-        Ok(row) => Ok((row, t, r)),
-        Err(err) => Err((err, t, r)),
-    });
-    (ok_stream, err_stream, token)
-}
-
-/// Informs a `persist_source` to skip flow control on its output
-pub const NO_FLOW_CONTROL: usize = usize::MAX;
-
-/// Creates a new source that reads from a persist shard, distributing the work
-/// of reading data to all timely workers.
-///
-/// All times emitted will have been [advanced by] the given `as_of` frontier.
-///
-/// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-#[allow(clippy::needless_borrow)]
-pub fn persist_source_core<G, YFn>(
-    scope: &G,
-    source_id: GlobalId,
-    persist_clients: Arc<Mutex<PersistClientCache>>,
-    metadata: CollectionMetadata,
-    as_of: Option<Antichain<Timestamp>>,
-    until: Antichain<Timestamp>,
-    mut map_filter_project: Option<&mut MfpPlan>,
-    // Use Infallible to statically ensure that no data can ever be sent. TODO:
-    // Replace Infallible with `!` once the latter is stabilized.
-    flow_control_input: &Stream<G, Infallible>,
-    flow_control_max_inflight_bytes: usize,
-    yield_fn: YFn,
-) -> (
-    Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
-    Rc<dyn Any>,
-)
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-    YFn: Fn(Instant, usize) -> bool + 'static,
+    K: Debug + Codec,
+    V: Debug + Codec,
+    D: Semigroup + Codec64 + Send + Sync,
+    G: Scope,
+    // TODO: Figure out how to get rid of the TotalOrder bound :(.
+    G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
 {
     // WARNING! If emulating any of this code, you should read the doc string on
     // [`LeasedBatchPart`] and [`Subscribe`] or will likely run into intentional
@@ -151,26 +100,62 @@ where
     // 4. Consumed part collector: A timely operator running only on the
     //    original worker that collects workers' `LeasedBatchPart`s. Internally,
     //    this drops the part's SeqNo lease, allowing GC to occur.
-    let worker_index = scope.index();
-    let peers = scope.peers();
-    let chosen_worker = usize::cast_from(source_id.hashed()) % peers;
-
-    // Extract the MFP if it exists; leave behind an identity MFP in that case.
-    let mut map_filter_project = map_filter_project.as_mut().map(|mfp| mfp.take());
-
-    // All of these need to be cloned out here because they're moved into the
-    // `try_stream!` generator.
-    let persist_clients_stream = Arc::<Mutex<PersistClientCache>>::clone(&persist_clients);
-    let persist_location_stream = metadata.persist_location.clone();
-    let data_shard = metadata.data_shard.clone();
-    let as_of_stream = as_of;
 
     // Connects the consumed part collector operator with the part-issuing
     // Subscribe.
-    let (consumed_part_tx, mut consumed_part_rx): (
+    let (consumed_part_tx, consumed_part_rx): (
         mpsc::UnboundedSender<SerdeLeasedBatchPart>,
         mpsc::UnboundedReceiver<SerdeLeasedBatchPart>,
     ) = mpsc::unbounded_channel();
+
+    let chosen_worker = usize::cast_from(name.hashed()) % scope.peers();
+    let (descs, token) = shard_source_descs::<K, V, D, G>(
+        scope,
+        name,
+        Arc::clone(&clients),
+        location.clone(),
+        shard_id.clone(),
+        as_of,
+        until,
+        flow_control_input,
+        flow_control_max_inflight_bytes,
+        consumed_part_rx,
+        chosen_worker,
+    );
+    let (parts, tokens) = shard_source_fetch(&descs, name, clients, location, shard_id);
+    shard_source_tokens(&tokens, name, consumed_part_tx, chosen_worker);
+
+    (parts, token)
+}
+
+/// Informs a `persist_source` to skip flow control on its output
+pub const NO_FLOW_CONTROL: usize = usize::MAX;
+
+pub(crate) fn shard_source_descs<K, V, D, G>(
+    scope: &G,
+    name: &str,
+    clients: Arc<Mutex<PersistClientCache>>,
+    location: PersistLocation,
+    shard_id: ShardId,
+    as_of: Option<Antichain<G::Timestamp>>,
+    until: Antichain<G::Timestamp>,
+    // Use Infallible to statically ensure that no data can ever be sent. TODO:
+    // Replace Infallible with `!` once the latter is stabilized.
+    flow_control_input: &Stream<G, Infallible>,
+    flow_control_max_inflight_bytes: usize,
+    mut consumed_part_rx: mpsc::UnboundedReceiver<SerdeLeasedBatchPart>,
+    chosen_worker: usize,
+) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, Rc<dyn Any>)
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    D: Semigroup + Codec64 + Send + Sync,
+    G: Scope,
+    // TODO: Figure out how to get rid of the TotalOrder bound :(.
+    G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
+{
+    let worker_index = scope.index();
+    let num_workers = scope.peers();
 
     // We want our async task to notice if we have dropped the token, as we may have reported
     // the dataflow complete and advanced the read frontier of the persist collection, making
@@ -184,9 +169,9 @@ where
     // return an error. Before the drop occurs the receiver will never return from await.
     let (drop_tx, drop_rx) = tokio::sync::oneshot::channel::<()>();
 
-    let until_clone = until.clone();
     // This is a generator that sets up an async `Stream` that can be continuously polled to get the
     // values that are `yield`-ed from it's body.
+    let name_owned = name.to_owned();
     let async_stream = async_stream::try_stream!({
         // Only one worker is responsible for distributing parts
         if worker_index != chosen_worker {
@@ -198,8 +183,8 @@ where
         }
 
         let read = {
-            let mut persist_clients = persist_clients_stream.lock().await;
-            persist_clients.open(persist_location_stream).await
+            let mut persist_clients = clients.lock().await;
+            persist_clients.open(location).await
         };
 
         // This is a moment where we may have dropped our source if our token
@@ -209,10 +194,10 @@ where
         }
 
         let read = read
-            .expect("could not open persist client")
-            .open_leased_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(
-                data_shard,
-                &format!("persist_source data {}", source_id),
+            .expect("location should be valid")
+            .open_leased_reader::<K, V, G::Timestamp, D>(
+                shard_id,
+                &format!("shard_source({})", name_owned),
             )
             .await;
 
@@ -224,7 +209,7 @@ where
 
         let read = read.expect("could not open persist shard");
 
-        let as_of_stream = as_of_stream.unwrap_or_else(|| read.since().clone());
+        let as_of = as_of.unwrap_or_else(|| read.since().clone());
 
         // Eagerly yield the initial as_of. This makes sure that the output
         // frontier of the `persist_source` closely tracks the `upper` frontier
@@ -234,18 +219,18 @@ where
         //
         // Downstream consumers might rely on close frontier tracking for making
         // progress. For example, the `persist_sink` needs to know the
-        // up-to-date uppper of the output shard to make progress because it
+        // up-to-date upper of the output shard to make progress because it
         // will only write out new data once it knows that earlier writes went
         // through, including the initial downgrade of the shard upper to the
         // `as_of`.
-        yield (Vec::new(), as_of_stream.clone(), 0);
+        yield (Vec::new(), as_of.clone(), 0);
 
         // Always poll drop_rx first. drop_rx returns only if drop_tx has been dropped.
         // In this case, we deliberately do not continue on the subscribe. but terminate this task
         let subscription = tokio::select! {
             biased;
             _ = drop_rx => None,
-            x = read.subscribe(as_of_stream.clone()) => Some(x),
+            x = read.subscribe(as_of.clone()) => Some(x),
         };
 
         // This is a moment where we may have let persist compact if our token
@@ -255,14 +240,14 @@ where
         }
 
         // We get here only when the token is still present, hence the subscription select
-        // must have returned from the subscribe and hence we can be sure that subscripbtion
+        // must have returned from the subscribe and hence we can be sure that subscription
         // is Some.
         let subscription = subscription.unwrap();
 
         let mut subscription = subscription.unwrap_or_else(|e| {
             panic!(
-                "{source_id}: {} cannot serve requested as_of {:?}: {:?}",
-                data_shard, as_of_stream, e
+                "{}: {} cannot serve requested as_of {:?}: {:?}",
+                name_owned, shard_id, as_of, e
             )
         });
 
@@ -277,7 +262,7 @@ where
             // If `until.less_equal(progress)`, it means that all subsequent batches will
             // contain only times greater or equal to `until`, which means they can be dropped
             // in their entirety. The current batch must be emitted, but we can stop afterwards.
-            if PartialOrder::less_equal(&until_clone, &progress) {
+            if PartialOrder::less_equal(&until, &progress) {
                 done = true;
             }
 
@@ -285,8 +270,13 @@ where
             yield (parts, progress, parts_size_bytes);
         }
 
-        // Rather than simply end, we spawn a task that can continue to return leases.
-        // This keeps the `ReadHandle` alive until we have confirmed each lease as read.
+        // Rather than simply end, we spawn a task that can continue to return
+        // leases. This keeps the `ReadHandle` alive until we have confirmed
+        // each lease as read.
+        //
+        // TODO: Replace the channel, this task, and the shard_source_tokens
+        // operator with a timely edge between the shard_source_fetch output and
+        // an input exchanging to the chosen worker for shard_source_descs.
         mz_ore::task::spawn(|| "LeaseReturner", async move {
             while let Some(leased_part) = consumed_part_rx.recv().await {
                 subscription
@@ -295,20 +285,23 @@ where
         });
     });
 
+    // TODO: Now that this operator is async AND the pinned stream does not
+    // participate in a select! call, which means its methods never get
+    // cancelled, we can get rid of the whole async_stream! macro machinery and
+    // just get the value directly with a function call.
     let mut pinned_stream = Box::pin(async_stream);
 
-    let mut builder_dist = AsyncOperatorBuilder::new(
-        format!("persist_source {}: part distribution", source_id),
-        scope.clone(),
-    );
-    let mut flow_control_input = builder_dist.new_input(flow_control_input, Pipeline);
-    let (mut parts_output, parts_stream) = builder_dist.new_output();
-    let shutdown_button = builder_dist.build(move |caps| async move {
+    let mut builder =
+        AsyncOperatorBuilder::new(format!("shard_source_descs({})", name), scope.clone());
+    let mut flow_control_input = builder.new_input(flow_control_input, Pipeline);
+    let (mut descs_output, descs_stream) = builder.new_output();
+
+    let shutdown_button = builder.build(move |caps| async move {
         let mut cap_set = CapabilitySet::from_elem(caps.into_element());
 
         let mut current_ts = timely::progress::Timestamp::minimum();
         let mut inflight_bytes = 0;
-        let mut inflight_parts: Vec<(Antichain<Timestamp>, usize)> = Vec::new();
+        let mut inflight_parts: Vec<(Antichain<G::Timestamp>, usize)> = Vec::new();
 
         loop {
             // While we have budget left for fetching more parts, read from the
@@ -317,25 +310,32 @@ where
                 match pinned_stream.next().await {
                     Some(Ok((parts, progress, size_in_bytes))) => {
                         let session_cap = cap_set.delayed(&current_ts);
-                        let mut parts_output = parts_output.activate();
-                        let mut session = parts_output.session(&session_cap);
+                        let mut descs_output = descs_output.activate();
+                        let mut descs_session = descs_output.session(&session_cap);
 
                         if size_in_bytes > 0 {
                             inflight_parts.push((progress.clone(), size_in_bytes));
                             inflight_bytes += size_in_bytes;
                             trace!(
                                 "shard {} putting {} bytes inflight. total: {}. batch frontier {:?}",
-                                data_shard,
+                                shard_id,
                                 size_in_bytes,
                                 inflight_bytes,
                                 progress,
                             );
                         }
 
-                        for part in parts {
-                            // Give the part to a random worker.
-                            let worker_idx = usize::cast_from(Instant::now().hashed()) % peers;
-                            session.give((worker_idx, part.into_exchangeable_part()));
+                        for part_desc in parts {
+                            // Give the part to a random worker. This isn't
+                            // round robin in an attempt to avoid skew issues:
+                            // if your parts alternate size large, small, then
+                            // you'll end up only using half of your workers.
+                            //
+                            // There's certainly some other things we could be
+                            // doing instead here, but this has seemed to work
+                            // okay so far. Continue to revisit as necessary.
+                            let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
+                            descs_session.give((worker_idx, part_desc.into_exchangeable_part()));
                         }
 
                         cap_set.downgrade(progress.iter());
@@ -384,7 +384,7 @@ where
                     inflight_bytes -= size_in_bytes;
                     trace!(
                         "shard {} returning {} bytes. total: {}. batch frontier {:?} less_equal to {:?}",
-                        data_shard,
+                        shard_id,
                         size_in_bytes,
                         inflight_bytes,
                         _upper,
@@ -395,187 +395,122 @@ where
         }
     });
 
-    let mut fetcher_builder = AsyncOperatorBuilder::new(
-        format!("persist_source {}: part fetcher", source_id),
-        scope.clone(),
-    );
+    let last_token = Rc::new(shutdown_button.press_on_drop());
+    let token = Rc::clone(&last_token);
+    let token = Rc::new((token, handle_creation_token, drop_tx));
 
-    let mut fetcher_input = fetcher_builder.new_input(
-        &parts_stream,
+    (descs_stream, token)
+}
+
+pub(crate) fn shard_source_fetch<K, V, T, D, G>(
+    descs: &Stream<G, (usize, SerdeLeasedBatchPart)>,
+    name: &str,
+    clients: Arc<Mutex<PersistClientCache>>,
+    location: PersistLocation,
+    shard_id: ShardId,
+) -> (
+    Stream<G, FetchedPart<K, V, T, D>>,
+    Stream<G, SerdeLeasedBatchPart>,
+)
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+    G: Scope<Timestamp = T>,
+{
+    let mut builder =
+        AsyncOperatorBuilder::new(format!("shard_source_fetch({})", name), descs.scope());
+    let mut descs_input = builder.new_input(
+        descs,
         Exchange::new(|&(i, _): &(usize, _)| u64::cast_from(i)),
     );
-    let (mut update_output, update_output_stream) = fetcher_builder.new_output();
-    let (mut consumed_part_output, consumed_part_output_stream) = fetcher_builder.new_output();
+    let (mut fetched_output, fetched_stream) = builder.new_output();
+    let (mut tokens_output, tokens_stream) = builder.new_output();
 
-    // Re-used state for processing and building rows.
-    let mut datum_vec = mz_repr::DatumVec::new();
-    let mut row_builder = Row::default();
-
-    fetcher_builder.build(move |_capabilities| async move {
+    builder.build(move |_capabilities| async move {
         let fetcher = {
-            let mut persist_clients = persist_clients.lock().await;
+            let mut clients = clients.lock().await;
 
-            let persist_client = persist_clients
-                .open(metadata.persist_location.clone())
+            let client = clients
+                .open(location.clone())
                 .await
-                .expect("could not open persist client");
+                .expect("location should be valid");
 
             // Unlock the client cache before we do any async work.
-            std::mem::drop(persist_clients);
+            std::mem::drop(clients);
 
-            persist_client
-                .create_batch_fetcher::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(
-                    data_shard,
-                )
-                .await
+            client.create_batch_fetcher::<K, V, T, D>(shard_id).await
         };
 
         let mut buffer = Vec::new();
 
-        while let Some(event) = fetcher_input.next().await {
+        while let Some(event) = descs_input.next().await {
             if let Event::Data(cap, data) = event {
                 // `LeasedBatchPart`es cannot be dropped at this point w/o
                 // panicking, so swap them to an owned version.
                 data.swap(&mut buffer);
 
                 for (_idx, part) in buffer.drain(..) {
-                    let (consumed_part, fetched_part) = fetcher
+                    let (token, fetched) = fetcher
                         .fetch_leased_part(fetcher.leased_part_from_exchangeable(part))
                         .await;
-                    let fetched_part = fetched_part
-                        .expect("shard_id generated for sources must match across all workers");
-                    // SUBTLE: This operator yields back to timely whenever an await returns a
-                    // Pending result from the overall async/await state machine `poll`. Since
-                    // this is fetching from remote storage, it will yield and thus we can reset
-                    // our yield counters here.
-                    let mut decode_start = Instant::now();
-
-                    // Apply as much logic to `updates` as we can, before we emit anything.
-                    let (updates_size_hint_min, updates_size_hint_max) = fetched_part.size_hint();
-                    let mut updates =
-                        Vec::with_capacity(updates_size_hint_max.unwrap_or(updates_size_hint_min));
-                    for ((key, val), time, diff) in fetched_part {
-                        if !until.less_equal(&time) {
-                            match (key, val) {
-                                (Ok(SourceData(Ok(row))), Ok(())) => {
-                                    if let Some(mfp) = &mut map_filter_project {
-                                        let arena = mz_repr::RowArena::new();
-                                        let mut datums_local = datum_vec.borrow_with(&row);
-                                        for result in mfp.evaluate(
-                                            &mut datums_local,
-                                            &arena,
-                                            time,
-                                            diff,
-                                            |time| !until.less_equal(time),
-                                            &mut row_builder,
-                                        ) {
-                                            match result {
-                                                Ok((row, time, diff)) => {
-                                                    // Additional `until` filtering due to temporal filters.
-                                                    if !until.less_equal(&time) {
-                                                        updates.push((Ok(row), time, diff));
-                                                    }
-                                                }
-                                                Err((err, time, diff)) => {
-                                                    // Additional `until` filtering due to temporal filters.
-                                                    if !until.less_equal(&time) {
-                                                        updates.push((Err(err), time, diff));
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    } else {
-                                        updates.push((Ok(row), time, diff));
-                                    }
-                                }
-                                (Ok(SourceData(Err(err))), Ok(())) => {
-                                    updates.push((Err(err), time, diff));
-                                }
-                                // TODO(petrosagg): error handling
-                                (Err(_), Ok(_)) | (Ok(_), Err(_)) | (Err(_), Err(_)) => {
-                                    panic!("decoding failed")
-                                }
-                            }
-                        }
-                        if yield_fn(decode_start, updates.len()) {
-                            // A large part of the point of yielding is to let later operators
-                            // reduce down the data, so emit what we have. Note that this means
-                            // we don't get to consolidate everything, but that's part of the
-                            // tradeoff in tuning yield_fn.
-                            differential_dataflow::consolidation::consolidate_updates(&mut updates);
-
-                            {
-                                // Do very fine-grained output activation/session
-                                // creation to ensure that we don't hold activated
-                                // outputs or sessions across await points, which
-                                // would prevent messages from being flushed from
-                                // the shared timely output buffer.
-                                let mut output_handle = update_output.activate();
-                                let mut update_session = output_handle.session(&cap);
-
-                                update_session.give_vec(&mut updates);
-                            }
-
-                            // Force a yield to give back the timely thread, reactivating on our
-                            // way out.
-                            tokio::task::yield_now().await;
-                            decode_start = Instant::now();
-                        }
+                    let fetched = fetched.expect("shard_id should match across all workers");
+                    {
+                        // Do very fine-grained output activation/session
+                        // creation to ensure that we don't hold activated
+                        // outputs or sessions across await points, which
+                        // would prevent messages from being flushed from
+                        // the shared timely output buffer.
+                        let mut fetched_output = fetched_output.activate();
+                        let mut tokens_output = tokens_output.activate();
+                        fetched_output.session(&cap).give(fetched);
+                        tokens_output
+                            .session(&cap)
+                            .give(token.into_exchangeable_part());
                     }
-                    differential_dataflow::consolidation::consolidate_updates(&mut updates);
-
-                    // Do very fine-grained output activation/session creation
-                    // to ensure that we don't hold activated outputs or
-                    // sessions across await points, which would prevent
-                    // messages from being flushed from the shared timely output
-                    // buffer.
-                    let mut output_handle = update_output.activate();
-                    let mut update_session = output_handle.session(&cap);
-                    update_session.give_vec(&mut updates);
-
-                    // Do very fine-grained output activation/session creation
-                    // to ensure that we don't hold activated outputs or
-                    // sessions across await points, which would prevent
-                    // messages from being flushed from the shared timely output
-                    // buffer.
-                    let mut consumed_part_output_handle = consumed_part_output.activate();
-                    let mut consumed_part_session = consumed_part_output_handle.session(&cap);
-                    consumed_part_session.give(consumed_part.into_exchangeable_part());
                 }
             }
         }
     });
 
+    (fetched_stream, tokens_stream)
+}
+
+pub(crate) fn shard_source_tokens<T, G>(
+    tokens: &Stream<G, SerdeLeasedBatchPart>,
+    name: &str,
+    consumed_part_tx: mpsc::UnboundedSender<SerdeLeasedBatchPart>,
+    chosen_worker: usize,
+) where
+    T: Timestamp + Lattice + Codec64,
+    G: Scope<Timestamp = T>,
+{
+    let worker_index = tokens.scope().index();
+
     // This operator is meant to only run on the chosen worker. All workers will
     // exchange their fetched ("consumed") parts back to the leasor.
-    let mut consumed_part_builder = OperatorBuilder::new(
-        format!("persist_source {}: consumed part collector", source_id),
-        scope.clone(),
-    );
+    let mut builder =
+        OperatorBuilder::new(format!("shard_source_tokens({})", name), tokens.scope());
 
     // Exchange all "consumed" parts back to the chosen worker/leasor.
-    let mut consumed_part_input = consumed_part_builder.new_input(
-        &consumed_part_output_stream,
+    let mut tokens_input = builder.new_input(
+        tokens,
         Exchange::new(move |_| u64::cast_from(chosen_worker)),
     );
 
-    let last_token = Rc::new(shutdown_button.press_on_drop());
-    let token = Rc::clone(&last_token);
-
-    consumed_part_builder.build(|_initial_capabilities| {
+    let name = name.to_owned();
+    builder.build(|_initial_capabilities| {
         let mut buffer = Vec::new();
 
         move |_frontiers| {
             // The chosen worker is the leasor because it issues batches.
             if worker_index != chosen_worker {
-                trace!(
-                    "We are not the batch leasor for {:?}, exiting...",
-                    source_id
-                );
+                trace!("We are not the batch leasor for {:?}, exiting...", name);
                 return;
             }
 
-            while let Some((_cap, data)) = consumed_part_input.next() {
+            while let Some((_cap, data)) = tokens_input.next() {
                 data.swap(&mut buffer);
 
                 for part in buffer.drain(..) {
@@ -591,8 +526,4 @@ where
             }
         }
     });
-
-    let token = Rc::new((token, handle_creation_token, drop_tx));
-
-    (update_output_stream, token)
 }

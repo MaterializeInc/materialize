@@ -4127,6 +4127,7 @@ dependencies = [
  "mz-persist",
  "mz-persist-types",
  "mz-proto",
+ "mz-timely-util",
  "num_cpus",
  "num_enum",
  "prometheus",
