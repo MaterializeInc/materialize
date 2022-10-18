@@ -596,6 +596,7 @@ pub struct CompactionMetrics {
     pub(crate) skipped: IntCounter,
     pub(crate) started: IntCounter,
     pub(crate) applied: IntCounter,
+    pub(crate) timed_out: IntCounter,
     pub(crate) failed: IntCounter,
     pub(crate) noop: IntCounter,
     pub(crate) seconds: Counter,
@@ -641,6 +642,10 @@ impl CompactionMetrics {
             applied: registry.register(metric!(
                 name: "mz_persist_compaction_applied",
                 help: "count of compactions applied to state",
+            )),
+            timed_out: registry.register(metric!(
+                name: "mz_persist_compaction_timed_out",
+                help: "count of compactions that timed out",
             )),
             noop: registry.register(metric!(
                 name: "mz_persist_compaction_noop",
