@@ -73,6 +73,10 @@ impl LazyUnaryFunc for CastArrayToListOneDim {
     fn preserves_uniqueness(&self) -> bool {
         true
     }
+
+    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+        None
+    }
 }
 
 impl fmt::Display for CastArrayToListOneDim {
@@ -118,6 +122,12 @@ impl LazyUnaryFunc for CastArrayToString {
 
     fn preserves_uniqueness(&self) -> bool {
         true
+    }
+
+    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+        // TODO? If we moved typeconv into `expr` we could determine the right
+        // inverse of this.
+        None
     }
 }
 

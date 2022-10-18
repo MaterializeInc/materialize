@@ -7,6 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// Convenience macro for generating `right_inverse` values.
+macro_rules! to_unary {
+    ($f:expr) => {
+        Some(crate::UnaryFunc::from($f))
+    };
+}
+
 macro_rules! sqlfunc {
     // Expand the function name into an attribute if it was omitted
     (
@@ -18,7 +25,7 @@ macro_rules! sqlfunc {
         );
     };
 
-    // Add the uniqueness attribute if it was omitted
+    // Add both uniqueness + right_inverse attributes if they were omitted
     (
         #[sqlname = $name:expr]
         fn $fn_name:ident $($tail:tt)*
@@ -26,6 +33,21 @@ macro_rules! sqlfunc {
         sqlfunc!(
             #[sqlname = $name]
             #[preserves_uniqueness = false]
+            #[right_inverse = None]
+            fn $fn_name $($tail)*
+        );
+    };
+
+    // Add the right_inverse attribute if it was omitted
+    (
+        #[sqlname = $name:expr]
+        #[preserves_uniqueness = $preserves_uniqueness:expr]
+        fn $fn_name:ident $($tail:tt)*
+    ) => {
+        sqlfunc!(
+            #[sqlname = $name]
+            #[preserves_uniqueness = $preserves_uniqueness]
+            #[right_inverse = None]
             fn $fn_name $($tail)*
         );
     };
@@ -34,11 +56,13 @@ macro_rules! sqlfunc {
     (
         #[sqlname = $name:expr]
         #[preserves_uniqueness = $preserves_uniqueness:expr]
+        #[right_inverse = $right_inverse:expr]
         fn $fn_name:ident ($($params:tt)*) $($tail:tt)*
     ) => {
         sqlfunc!(
             #[sqlname = $name]
             #[preserves_uniqueness = $preserves_uniqueness]
+            #[right_inverse = $right_inverse]
             fn $fn_name<'a>($($params)*) $($tail)*
         );
     };
@@ -47,12 +71,14 @@ macro_rules! sqlfunc {
     (
         #[sqlname = $name:expr]
         #[preserves_uniqueness = $preserves_uniqueness:expr]
+        #[right_inverse = $right_inverse:expr]
         fn $fn_name:ident<$lt:lifetime>(mut $param_name:ident: $input_ty:ty $(,)?) -> $output_ty:ty
             $body:block
     ) => {
         sqlfunc!(
             #[sqlname = $name]
             #[preserves_uniqueness = $preserves_uniqueness]
+            #[right_inverse = $right_inverse]
             fn $fn_name<$lt>($param_name: $input_ty) -> $output_ty {
                 let mut $param_name = $param_name;
                 $body
@@ -63,6 +89,7 @@ macro_rules! sqlfunc {
     (
         #[sqlname = $name:expr]
         #[preserves_uniqueness = $preserves_uniqueness:expr]
+        #[right_inverse = $right_inverse:expr]
         fn $fn_name:ident<$lt:lifetime>($param_name:ident: $input_ty:ty $(,)?) -> $output_ty:ty
             $body:block
     ) => {
@@ -90,6 +117,10 @@ macro_rules! sqlfunc {
 
                 fn preserves_uniqueness(&self) -> bool {
                     $preserves_uniqueness
+                }
+
+                fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+                    $right_inverse
                 }
             }
 
@@ -277,6 +308,11 @@ macro_rules! derive_unary {
             pub fn preserves_uniqueness(&self) -> bool {
                 match self {
                     $(Self::$name(f) => LazyUnaryFunc::preserves_uniqueness(f),)*
+                }
+            }
+            pub fn right_inverse(&self) -> Option<UnaryFunc> {
+                match self {
+                    $(Self::$name(f) => LazyUnaryFunc::right_inverse(f),)*
                 }
             }
         }

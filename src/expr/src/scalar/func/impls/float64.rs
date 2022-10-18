@@ -22,6 +22,8 @@ use crate::{scalar::DomainLimit, EvalError};
 
 sqlfunc!(
     #[sqlname = "-"]
+    #[preserves_uniqueness = false]
+    #[right_inverse = to_unary!(NegFloat64)]
     fn neg_float64(a: f64) -> f64 {
         -a
     }
@@ -70,6 +72,8 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "double_to_smallint"]
+    #[preserves_uniqueness = false]
+    #[right_inverse = to_unary!(super::CastInt16ToFloat64)]
     fn cast_float64_to_int16(a: f64) -> Result<i16, EvalError> {
         let f = round_float64(a);
         if (f >= (i16::MIN as f64)) && (f < -(i16::MIN as f64)) {
@@ -82,6 +86,8 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "double_to_integer"]
+    #[preserves_uniqueness = false]
+    #[right_inverse = to_unary!(super::CastInt32ToFloat64)]
     fn cast_float64_to_int32(a: f64) -> Result<i32, EvalError> {
         let f = round_float64(a);
         // This condition is delicate because i32::MIN can be represented exactly by
@@ -98,6 +104,8 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "f64toi64"]
+    #[preserves_uniqueness = false]
+    #[right_inverse = to_unary!(super::CastInt64ToFloat64)]
     fn cast_float64_to_int64(a: f64) -> Result<i64, EvalError> {
         let f = round_float64(a);
         // This condition is delicate because i64::MIN can be represented exactly by
@@ -114,6 +122,8 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "double_to_real"]
+    #[preserves_uniqueness = false]
+    #[right_inverse = to_unary!(super::CastFloat32ToFloat64)]
     fn cast_float64_to_float32(a: f64) -> Result<f32, EvalError> {
         let result = a as f32;
         if result.is_infinite() && !a.is_infinite() {
@@ -128,6 +138,8 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "double_to_text"]
+    #[preserves_uniqueness = false]
+    #[right_inverse = to_unary!(super::CastStringToFloat64)]
     fn cast_float64_to_string(a: f64) -> String {
         let mut s = String::new();
         strconv::format_float64(&mut s, a);
@@ -137,6 +149,8 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "double_to_uint2"]
+    #[preserves_uniqueness = false]
+    #[right_inverse = to_unary!(super::CastUint16ToFloat64)]
     fn cast_float64_to_uint16(a: f64) -> Result<u16, EvalError> {
         let f = round_float64(a);
         if (f >= 0.0) && (f <= (u16::MAX as f64)) {
@@ -149,6 +163,8 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "double_to_uint4"]
+    #[preserves_uniqueness = false]
+    #[right_inverse = to_unary!(super::CastUint32ToFloat64)]
     fn cast_float64_to_uint32(a: f64) -> Result<u32, EvalError> {
         let f = round_float64(a);
         if (f >= 0.0) && (f <= (u32::MAX as f64)) {
@@ -161,6 +177,8 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "double_to_uint8"]
+    #[preserves_uniqueness = false]
+    #[right_inverse = to_unary!(super::CastUint64ToFloat64)]
     fn cast_float64_to_uint64(a: f64) -> Result<u64, EvalError> {
         let f = round_float64(a);
         if (f >= 0.0) && (f <= (u64::MAX as f64)) {
@@ -198,6 +216,10 @@ impl<'a> EagerUnaryFunc<'a> for CastFloat64ToNumeric {
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
         ScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
+    }
+
+    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+        to_unary!(super::CastNumericToFloat64)
     }
 }
 

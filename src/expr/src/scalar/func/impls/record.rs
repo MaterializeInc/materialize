@@ -57,6 +57,11 @@ impl LazyUnaryFunc for CastRecordToString {
     fn preserves_uniqueness(&self) -> bool {
         true
     }
+
+    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+        // TODO? if we moved typeconv into expr, we could evaluate this
+        None
+    }
 }
 
 impl fmt::Display for CastRecordToString {
@@ -108,6 +113,11 @@ impl LazyUnaryFunc for CastRecord1ToRecord2 {
     fn preserves_uniqueness(&self) -> bool {
         false
     }
+
+    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+        // TODO: we could determine Record1's type from `cast_exprs`
+        None
+    }
 }
 
 impl fmt::Display for CastRecord1ToRecord2 {
@@ -157,6 +167,10 @@ impl LazyUnaryFunc for RecordGet {
 
     fn preserves_uniqueness(&self) -> bool {
         false
+    }
+
+    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+        None
     }
 }
 

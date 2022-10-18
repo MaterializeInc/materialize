@@ -3404,6 +3404,24 @@ trait LazyUnaryFunc {
     /// Functions should conservatively return `false` unless they are certain
     /// the above property is true.
     fn preserves_uniqueness(&self) -> bool;
+
+    /// The [right inverse] of this function, if it has one and we have
+    /// determined it.
+    ///
+    /// The optimizer can use this information when selecting indexes, e.g. an
+    /// indexed column has a cast applied to it, by moving the right inverse of
+    /// the cast to another value, we can select the indexed column.
+    ///
+    /// Note that a value of `None` does not imply that the right inverse does
+    /// not exist; it could also mean we have not yet invested the energy in
+    /// representing it. For example, in the case of complex casts, such as
+    /// between two list types, we could determine the right inverse, but doing
+    /// so is not immediately necessary as this information is only used by the
+    /// optimizer.
+    ///
+    /// [right inverse]:
+    ///     https://en.wikipedia.org/wiki/Inverse_function#Left_and_right_inverses
+    fn right_inverse(&self) -> Option<crate::UnaryFunc>;
 }
 
 /// A description of an SQL unary function that operates on eagerly evaluated expressions
@@ -3431,6 +3449,10 @@ trait EagerUnaryFunc<'a> {
     /// Whether this function preserves uniqueness
     fn preserves_uniqueness(&self) -> bool {
         false
+    }
+
+    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+        None
     }
 }
 
@@ -3466,6 +3488,10 @@ impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
     fn preserves_uniqueness(&self) -> bool {
         self.preserves_uniqueness()
     }
+
+    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+        self.right_inverse()
+    }
 }
 
 use proptest::{prelude::*, strategy::*};
@@ -3500,6 +3526,7 @@ derive_unary!(
     CastBoolToString,
     CastBoolToStringNonstandard,
     CastBoolToInt32,
+    CastBoolToInt64,
     CastInt16ToFloat32,
     CastInt16ToFloat64,
     CastInt16ToInt32,
@@ -3544,6 +3571,7 @@ derive_unary!(
     CastInt64ToString,
     CastUint16ToUint32,
     CastUint16ToUint64,
+    CastUint16ToInt16,
     CastUint16ToInt32,
     CastUint16ToInt64,
     CastUint16ToNumeric,
@@ -3552,6 +3580,7 @@ derive_unary!(
     CastUint16ToString,
     CastUint32ToUint16,
     CastUint32ToUint64,
+    CastUint32ToInt16,
     CastUint32ToInt32,
     CastUint32ToInt64,
     CastUint32ToNumeric,
@@ -3560,6 +3589,7 @@ derive_unary!(
     CastUint32ToString,
     CastUint64ToUint16,
     CastUint64ToUint32,
+    CastUint64ToInt16,
     CastUint64ToInt32,
     CastUint64ToInt64,
     CastUint64ToNumeric,
@@ -3862,6 +3892,7 @@ impl Arbitrary for UnaryFunc {
             CastBoolToString::arbitrary().prop_map_into(),
             CastBoolToStringNonstandard::arbitrary().prop_map_into(),
             CastBoolToInt32::arbitrary().prop_map_into(),
+            CastBoolToInt64::arbitrary().prop_map_into(),
             CastInt16ToFloat32::arbitrary().prop_map_into(),
             CastInt16ToFloat64::arbitrary().prop_map_into(),
             CastInt16ToInt32::arbitrary().prop_map_into(),
@@ -3909,6 +3940,7 @@ impl Arbitrary for UnaryFunc {
             CastInt64ToString::arbitrary().prop_map_into(),
             CastUint16ToUint32::arbitrary().prop_map_into(),
             CastUint16ToUint64::arbitrary().prop_map_into(),
+            CastUint16ToInt16::arbitrary().prop_map_into(),
             CastUint16ToInt32::arbitrary().prop_map_into(),
             CastUint16ToInt64::arbitrary().prop_map_into(),
             any::<Option<NumericMaxScale>>()
@@ -4175,6 +4207,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::CastBoolToString(_) => CastBoolToString(()),
             UnaryFunc::CastBoolToStringNonstandard(_) => CastBoolToStringNonstandard(()),
             UnaryFunc::CastBoolToInt32(_) => CastBoolToInt32(()),
+            UnaryFunc::CastBoolToInt64(_) => CastBoolToInt64(()),
             UnaryFunc::CastInt16ToFloat32(_) => CastInt16ToFloat32(()),
             UnaryFunc::CastInt16ToFloat64(_) => CastInt16ToFloat64(()),
             UnaryFunc::CastInt16ToInt32(_) => CastInt16ToInt32(()),
@@ -4219,6 +4252,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::CastInt64ToString(_) => CastInt64ToString(()),
             UnaryFunc::CastUint16ToUint32(_) => CastUint16ToUint32(()),
             UnaryFunc::CastUint16ToUint64(_) => CastUint16ToUint64(()),
+            UnaryFunc::CastUint16ToInt16(_) => CastUint16ToInt16(()),
             UnaryFunc::CastUint16ToInt32(_) => CastUint16ToInt32(()),
             UnaryFunc::CastUint16ToInt64(_) => CastUint16ToInt64(()),
             UnaryFunc::CastUint16ToNumeric(func) => CastUint16ToNumeric(func.0.into_proto()),
@@ -4227,6 +4261,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::CastUint16ToString(_) => CastUint16ToString(()),
             UnaryFunc::CastUint32ToUint16(_) => CastUint32ToUint16(()),
             UnaryFunc::CastUint32ToUint64(_) => CastUint32ToUint64(()),
+            UnaryFunc::CastUint32ToInt16(_) => CastUint32ToInt16(()),
             UnaryFunc::CastUint32ToInt32(_) => CastUint32ToInt32(()),
             UnaryFunc::CastUint32ToInt64(_) => CastUint32ToInt64(()),
             UnaryFunc::CastUint32ToNumeric(func) => CastUint32ToNumeric(func.0.into_proto()),
@@ -4235,6 +4270,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::CastUint32ToString(_) => CastUint32ToString(()),
             UnaryFunc::CastUint64ToUint16(_) => CastUint64ToUint16(()),
             UnaryFunc::CastUint64ToUint32(_) => CastUint64ToUint32(()),
+            UnaryFunc::CastUint64ToInt16(_) => CastUint64ToInt16(()),
             UnaryFunc::CastUint64ToInt32(_) => CastUint64ToInt32(()),
             UnaryFunc::CastUint64ToInt64(_) => CastUint64ToInt64(()),
             UnaryFunc::CastUint64ToNumeric(func) => CastUint64ToNumeric(func.0.into_proto()),
@@ -4495,6 +4531,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 CastBoolToString(()) => Ok(impls::CastBoolToString.into()),
                 CastBoolToStringNonstandard(()) => Ok(impls::CastBoolToStringNonstandard.into()),
                 CastBoolToInt32(()) => Ok(impls::CastBoolToInt32.into()),
+                CastBoolToInt64(()) => Ok(impls::CastBoolToInt64.into()),
                 CastInt16ToFloat32(()) => Ok(impls::CastInt16ToFloat32.into()),
                 CastInt16ToFloat64(()) => Ok(impls::CastInt16ToFloat64.into()),
                 CastInt16ToInt32(()) => Ok(impls::CastInt16ToInt32.into()),
@@ -4545,6 +4582,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 CastInt64ToString(()) => Ok(impls::CastInt64ToString.into()),
                 CastUint16ToUint32(()) => Ok(impls::CastUint16ToUint32.into()),
                 CastUint16ToUint64(()) => Ok(impls::CastUint16ToUint64.into()),
+                CastUint16ToInt16(()) => Ok(impls::CastUint16ToInt16.into()),
                 CastUint16ToInt32(()) => Ok(impls::CastUint16ToInt32.into()),
                 CastUint16ToInt64(()) => Ok(impls::CastUint16ToInt64.into()),
                 CastUint16ToNumeric(max_scale) => {
@@ -4555,6 +4593,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 CastUint16ToString(()) => Ok(impls::CastUint16ToString.into()),
                 CastUint32ToUint16(()) => Ok(impls::CastUint32ToUint16.into()),
                 CastUint32ToUint64(()) => Ok(impls::CastUint32ToUint64.into()),
+                CastUint32ToInt16(()) => Ok(impls::CastUint32ToInt16.into()),
                 CastUint32ToInt32(()) => Ok(impls::CastUint32ToInt32.into()),
                 CastUint32ToInt64(()) => Ok(impls::CastUint32ToInt64.into()),
                 CastUint32ToNumeric(max_scale) => {
@@ -4565,6 +4604,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 CastUint32ToString(()) => Ok(impls::CastUint32ToString.into()),
                 CastUint64ToUint16(()) => Ok(impls::CastUint64ToUint16.into()),
                 CastUint64ToUint32(()) => Ok(impls::CastUint64ToUint32.into()),
+                CastUint64ToInt16(()) => Ok(impls::CastUint64ToInt16.into()),
                 CastUint64ToInt32(()) => Ok(impls::CastUint64ToInt32.into()),
                 CastUint64ToInt64(()) => Ok(impls::CastUint64ToInt64.into()),
                 CastUint64ToNumeric(max_scale) => {

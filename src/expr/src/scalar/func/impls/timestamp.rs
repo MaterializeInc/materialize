@@ -28,6 +28,7 @@ use crate::EvalError;
 sqlfunc!(
     #[sqlname = "timestamp_to_text"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastStringToTimestamp)]
     fn cast_timestamp_to_string(a: CheckedTimestamp<NaiveDateTime>) -> String {
         let mut buf = String::new();
         strconv::format_timestamp(&mut buf, &a);
@@ -38,6 +39,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "timestamp_with_time_zone_to_text"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastStringToTimestampTz)]
     fn cast_timestamp_tz_to_string(a: CheckedTimestamp<DateTime<Utc>>) -> String {
         let mut buf = String::new();
         strconv::format_timestamptz(&mut buf, &a);
@@ -47,6 +49,8 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "timestamp_to_date"]
+    #[preserves_uniqueness = false]
+    #[right_inverse = to_unary!(super::CastDateToTimestamp)]
     fn cast_timestamp_to_date(a: CheckedTimestamp<NaiveDateTime>) -> Result<Date, EvalError> {
         Ok(a.date().try_into()?)
     }
@@ -54,6 +58,8 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "timestamp_with_time_zone_to_date"]
+    #[preserves_uniqueness = false]
+    #[right_inverse = to_unary!(super::CastDateToTimestampTz)]
     fn cast_timestamp_tz_to_date(a: CheckedTimestamp<DateTime<Utc>>) -> Result<Date, EvalError> {
         Ok(a.naive_utc().date().try_into()?)
     }
@@ -62,6 +68,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "timestamp_to_timestamp_with_time_zone"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastTimestampTzToTimestamp)]
     fn cast_timestamp_to_timestamp_tz(
         a: CheckedTimestamp<NaiveDateTime>,
     ) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
@@ -73,6 +80,8 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "timestamp_with_time_zone_to_timestamp"]
+    #[preserves_uniqueness = false]
+    #[right_inverse = to_unary!(super::CastTimestampToTimestampTz)]
     fn cast_timestamp_tz_to_timestamp(
         a: CheckedTimestamp<DateTime<Utc>>,
     ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
@@ -82,6 +91,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "timestamp_to_time"]
+    #[preserves_uniqueness = false]
     fn cast_timestamp_to_time(a: CheckedTimestamp<NaiveDateTime>) -> NaiveTime {
         a.time()
     }
@@ -89,6 +99,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "timestamp_with_time_zone_to_time"]
+    #[preserves_uniqueness = false]
     fn cast_timestamp_tz_to_time(a: CheckedTimestamp<DateTime<Utc>>) -> NaiveTime {
         a.naive_utc().time()
     }

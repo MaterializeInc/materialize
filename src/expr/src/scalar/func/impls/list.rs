@@ -56,6 +56,11 @@ impl LazyUnaryFunc for CastListToString {
     fn preserves_uniqueness(&self) -> bool {
         true
     }
+
+    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+        // TODO? if typeconv was in expr, we could determine this
+        None
+    }
 }
 
 impl fmt::Display for CastListToString {
@@ -113,6 +118,11 @@ impl LazyUnaryFunc for CastList1ToList2 {
     fn preserves_uniqueness(&self) -> bool {
         false
     }
+
+    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+        // TODO: this could be figured out--might be easier after enum dispatch?
+        None
+    }
 }
 
 impl fmt::Display for CastList1ToList2 {
@@ -157,6 +167,10 @@ impl LazyUnaryFunc for ListLength {
 
     fn preserves_uniqueness(&self) -> bool {
         false
+    }
+
+    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+        None
     }
 }
 

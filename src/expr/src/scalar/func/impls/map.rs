@@ -56,6 +56,11 @@ impl LazyUnaryFunc for CastMapToString {
     fn preserves_uniqueness(&self) -> bool {
         true
     }
+
+    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+        // TODO? If we moved typeconv into expr, we could evaluate this
+        None
+    }
 }
 
 impl fmt::Display for CastMapToString {
@@ -100,6 +105,10 @@ impl LazyUnaryFunc for MapLength {
 
     fn preserves_uniqueness(&self) -> bool {
         false
+    }
+
+    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+        None
     }
 }
 

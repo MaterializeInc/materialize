@@ -26,6 +26,7 @@ use crate::EvalError;
 sqlfunc!(
     #[sqlname = "date_to_text"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastStringToDate)]
     fn cast_date_to_string(a: Date) -> String {
         let mut buf = String::new();
         strconv::format_date(&mut buf, a);
@@ -36,6 +37,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "date_to_timestamp"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastTimestampToDate)]
     fn cast_date_to_timestamp(a: Date) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
         Ok(CheckedTimestamp::from_timestamplike(
             NaiveDate::from(a).and_hms(0, 0, 0),
@@ -46,6 +48,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "date_to_timestamp_with_timezone"]
     #[preserves_uniqueness = true]
+    #[right_inverse = to_unary!(super::CastTimestampTzToDate)]
     fn cast_date_to_timestamp_tz(a: Date) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
         Ok(CheckedTimestamp::from_timestamplike(
             DateTime::<Utc>::from_utc(NaiveDate::from(a).and_hms(0, 0, 0), Utc),
