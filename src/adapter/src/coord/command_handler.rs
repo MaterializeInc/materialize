@@ -522,9 +522,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 conn_id: _,
             } in self.cancel_pending_peeks(conn_id).await
             {
-                rows_tx
-                    .send(PeekResponse::Canceled)
-                    .expect("Peek endpoint terminated prematurely");
+                // Cancel messages can be sent after the connection has hung
+                // up, but before the connection's state has been cleaned up.
+                // So we ignore errors when sending the response.
+                let _ = rows_tx.send(PeekResponse::Canceled);
             }
         }
     }

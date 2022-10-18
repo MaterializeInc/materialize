@@ -1822,3 +1822,22 @@ fn test_load_generator() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
+
+#[test]
+fn test_cancel_on_closed_connection() -> Result<(), anyhow::Error> {
+    mz_ore::test::init_logging();
+
+    let server = util::start_server(util::Config::default().unsafe_mode())?;
+
+    server.runtime.block_on(async {
+        let cancel_token = {
+            let (client, _conn) = server.connect_async(postgres::NoTls).await.unwrap();
+            let cancel_token = client.cancel_token();
+            let _fut = client.batch_execute("SELECT mz_internal.mz_sleep(10)");
+            cancel_token
+        };
+        cancel_token.cancel_query(postgres::NoTls).await.unwrap();
+    });
+
+    Ok(())
+}
