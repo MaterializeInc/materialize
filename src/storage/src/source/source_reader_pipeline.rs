@@ -49,7 +49,7 @@ use timely::PartialOrder;
 use tokio::sync::Mutex;
 use tokio::time::MissedTickBehavior;
 use tokio_stream::{Stream, StreamExt};
-use tracing::trace;
+use tracing::{info, trace};
 
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
@@ -183,7 +183,7 @@ where
         SourceReaderStreams {
             batches,
             batch_upper_summaries,
-            health_stream: _,
+            health_stream,
         },
         source_reader_token,
     ) = source_reader_operator::<G, S>(
@@ -198,10 +198,17 @@ where
     let (remap_stream, remap_token) =
         remap_operator::<G, S>(scope, config.clone(), batch_upper_summaries, &resume_stream);
 
-    let ((reclocked_stream, reclocked_err_stream), _reclock_token) =
-        reclock_operator::<G, S>(scope, config, reclock_follower, batches, remap_stream);
+    let ((reclocked_stream, reclocked_err_stream), _reclock_token) = reclock_operator::<G, S>(
+        scope,
+        config.clone(),
+        reclock_follower,
+        batches,
+        remap_stream,
+    );
 
-    let token = Rc::new((source_reader_token, remap_token, resume_token));
+    let health_token = health_operator(scope, config, health_stream);
+
+    let token = Rc::new((source_reader_token, remap_token, resume_token, health_token));
 
     ((reclocked_stream, reclocked_err_stream), Some(token))
 }
@@ -425,7 +432,7 @@ where
     }))
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum HealthEvent {
     StalledWithError,
     Running,
@@ -772,6 +779,61 @@ where
         },
         Some(capability),
     )
+}
+
+/// Mints new contents for the remap shard based on summaries about the source
+/// upper it receives from the raw reader operators.
+///
+/// Only one worker will be active and write to the remap shard. All source
+/// upper summaries will be exchanged to it.
+fn health_operator<G>(
+    scope: &G,
+    config: RawSourceCreationConfig,
+    health_stream: timely::dataflow::Stream<G, (usize, HealthEvent)>,
+) -> Rc<dyn Any>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    let RawSourceCreationConfig {
+        worker_id,
+        worker_count,
+        ..
+    } = config;
+
+    let chosen_worker = 0;
+    let active_worker = chosen_worker == worker_id;
+
+    let mut healths = vec![None; worker_count];
+
+    let operator_name = format!("healthcheck({})", worker_id);
+    let mut health_op = OperatorBuilder::new(operator_name, scope.clone());
+
+    let mut input = health_op.new_input_connection(
+        &health_stream,
+        Exchange::new(move |_| chosen_worker as u64),
+        vec![],
+    );
+
+    health_op.build_async(
+        scope.clone(),
+        move |mut _capabilities, frontiers, scheduler| async move {
+            let mut buffer = Vec::new();
+
+            info!("Let's roll!");
+
+            while scheduler.notified().await {
+                input.for_each(|_cap, rows| {
+                    rows.swap(&mut buffer);
+                    for (worker_id, health_event) in buffer.drain(..) {
+                        info!("Health update for {worker_id}: {health_event:?}");
+                        healths[worker_id] = Some(health_event);
+                    }
+                })
+            }
+        },
+    );
+
+    Rc::new(())
 }
 
 /// Mints new contents for the remap shard based on summaries about the source
