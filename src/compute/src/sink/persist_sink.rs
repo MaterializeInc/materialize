@@ -380,6 +380,11 @@ where
                 let desired_frontier = &frontiers[0];
                 let persist_frontier = &frontiers[1];
 
+                assert!(
+                    !desired_frontier.is_empty(),
+                    "desired frontier is empty, in mint_batch_descriptions"
+                );
+
                 if PartialOrder::less_than(&*shared_frontier.borrow(), persist_frontier) {
                     if sink_id.is_user() {
                         trace!(
@@ -1049,6 +1054,11 @@ where
                     let (batch_lower, batch_upper) = done_batch_metadata;
 
                     let mut to_append = batches.iter_mut().collect::<Vec<_>>();
+
+                    assert!(
+                        !batch_upper.is_empty(),
+                        "batch upper is empty, in append_batches"
+                    );
 
                     let result = write
                         .compare_and_append_batch(
