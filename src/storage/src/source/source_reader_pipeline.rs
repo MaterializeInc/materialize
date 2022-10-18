@@ -183,6 +183,7 @@ where
         SourceReaderStreams {
             batches,
             batch_upper_summaries,
+            health_stream: _,
         },
         source_reader_token,
     ) = source_reader_operator::<G, S>(
@@ -424,12 +425,19 @@ where
     }))
 }
 
+#[derive(Clone)]
+pub enum HealthEvent {
+    StalledWithError,
+    Running,
+}
+
 struct SourceReaderStreams<G: Scope<Timestamp = Timestamp>, S: SourceReader> {
     batches: timely::dataflow::Stream<
         G,
         Rc<RefCell<Option<SourceMessageBatch<S::Key, S::Value, S::Diff>>>>,
     >,
     batch_upper_summaries: timely::dataflow::Stream<G, BatchUpperSummary>,
+    health_stream: timely::dataflow::Stream<G, (usize, HealthEvent)>,
 }
 
 /// Reads from a [`SourceReader`] and returns a stream of "un-timestamped"
@@ -714,6 +722,7 @@ where
     let mut input = demux_op.new_input(&stream, Pipeline);
     let (mut batch_output, batch_stream) = demux_op.new_output();
     let (mut summary_output, summary_stream) = demux_op.new_output();
+    let (mut health_output, health_stream) = demux_op.new_output();
     let summary_output_port = summary_stream.name().port;
 
     demux_op.build(move |_caps| {
@@ -725,8 +734,25 @@ where
 
                 let mut batch_output = batch_output.activate();
                 let mut summary_output = summary_output.activate();
+                let mut health_output = health_output.activate();
 
                 for (message_batch, source_upper) in buffer.drain(..) {
+                    if let Some(batch) = &*message_batch.borrow() {
+                        let has_errors = !batch.non_definite_errors.is_empty();
+                        let has_messages = batch.messages.values().any(|vs| !vs.is_empty());
+
+                        let maybe_health = match (has_errors, has_messages) {
+                            (true, _) => Some(HealthEvent::StalledWithError),
+                            (_, true) => Some(HealthEvent::Running),
+                            (false, false) => None,
+                        };
+
+                        if let Some(health) = maybe_health {
+                            let mut session = health_output.session(&cap);
+                            session.give((config.worker_id, health));
+                        }
+                    }
+
                     let mut session = batch_output.session(&cap);
                     session.give(message_batch);
 
@@ -742,6 +768,7 @@ where
         SourceReaderStreams {
             batches: batch_stream,
             batch_upper_summaries: summary_stream,
+            health_stream,
         },
         Some(capability),
     )
