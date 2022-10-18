@@ -138,11 +138,27 @@ where
     }
 }
 
-/// Additional information to store with pening peeks.
+/// Additional information to store with pending peeks.
 #[derive(Debug)]
 struct PendingPeek {
+    /// Replicas that have yet to respond to this peek.
+    unfinished: BTreeSet<ReplicaId>,
     /// The OpenTelemetry context for this peek.
-    otel_ctx: OpenTelemetryContext,
+    ///
+    /// This value is `Some` as long as we have not yet passed a response up the chain, and `None`
+    /// afterwards.
+    otel_ctx: Option<OpenTelemetryContext>,
+}
+
+impl PendingPeek {
+    /// Return whether this peek is finished and can be cleaned up.
+    fn is_finished(&self) -> bool {
+        // If we have not yet emitted a response for the peek, the peek is not finished, even if
+        // the set of replicas we are waiting for is currently empty. It might be that the cluster
+        // has no replicas or all replicas have been temporarily removed for re-hydration. In this
+        // case, we wait for new replicas to be added to eventually serve the peek.
+        self.otel_ctx.is_none() && self.unfinished.is_empty()
+    }
 }
 
 /// Reported upper frontiers for a single compute collection.
@@ -265,7 +281,7 @@ where
 struct ActiveReplicationState<T> {
     /// IDs of connected replicas.
     replica_ids: BTreeSet<ReplicaId>,
-    /// Outstanding peek identifiers, to guide responses (and which to suppress).
+    /// Outstanding peeks, to guide responses (and which to suppress).
     peeks: HashMap<uuid::Uuid, PendingPeek>,
     /// IDs of in-progress subscribes, to guide responses (and which to suppress).
     subscribes: BTreeSet<GlobalId>,
@@ -299,6 +315,9 @@ where
         for uppers in self.uppers.values_mut() {
             uppers.add_replica(id);
         }
+        for peek in self.peeks.values_mut() {
+            peek.unfinished.insert(id);
+        }
     }
 
     fn remove_replica(&mut self, id: ReplicaId) {
@@ -317,41 +336,63 @@ where
                 new_uppers.push((*collection_id, uppers.bounds.clone()));
             }
         }
-
         if !new_uppers.is_empty() {
             self.pending_response
                 .push_back(ActiveReplicationResponse::FrontierUppers(new_uppers));
         }
+
+        // Removing a replica might implicitly finish a peek, which we must report up the chain.
+        self.peeks.retain(|uuid, peek| {
+            peek.unfinished.remove(&id);
+            let finished = peek.is_finished();
+            if finished {
+                self.pending_response
+                    .push_back(ActiveReplicationResponse::PeekFinished(uuid.clone()));
+            }
+            !finished
+        });
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
     fn handle_command(&mut self, cmd: &ComputeCommand<T>) {
         // Update our tracking of peek and subscribe commands.
         match &cmd {
-            ComputeCommand::Peek(Peek { uuid, otel_ctx, .. }) => {
+            ComputeCommand::Peek(Peek { uuid, otel_ctx, target_replica, .. }) => {
+                let unfinished = match target_replica {
+                    Some(target) => [*target].into(),
+                    None => self.replica_ids.clone(),
+                };
                 self.peeks.insert(
                     *uuid,
                     PendingPeek {
+                        unfinished,
                         // TODO(guswynn): can we just hold the `tracing::Span`
                         // here instead?
-                        otel_ctx: otel_ctx.clone(),
+                        otel_ctx: Some(otel_ctx.clone()),
                     },
                 );
             }
             ComputeCommand::CancelPeeks { uuids } => {
                 // Enqueue the response to the cancelation.
-                self.pending_response.extend(uuids.iter().map(|uuid| {
-                    // Canceled peeks should not be further responded to.
+                for uuid in uuids {
                     let otel_ctx = self
                         .peeks
-                        .remove(uuid)
-                        .map(|pending| pending.otel_ctx)
+                        .get_mut(uuid)
+                        // Canceled peeks should not be further responded to.
+                        .map(|pending| pending.otel_ctx.take())
                         .unwrap_or_else(|| {
                             tracing::warn!("did not find pending peek for {}", uuid);
-                            OpenTelemetryContext::empty()
+                            None
                         });
-                    ActiveReplicationResponse::PeekResponse(*uuid, PeekResponse::Canceled, otel_ctx)
-                }));
+                    if let Some(ctx) = otel_ctx {
+                        self.pending_response
+                            .push_back(ActiveReplicationResponse::PeekResponse(
+                                *uuid,
+                                PeekResponse::Canceled,
+                                ctx,
+                            ));
+                    }
+                }
             }
             ComputeCommand::CreateDataflows(dataflows) => {
                 let subscribe_ids = dataflows.iter().flat_map(|df| df.subscribe_ids());
@@ -406,19 +447,44 @@ where
             ));
         match message {
             ComputeResponse::PeekResponse(uuid, response, otel_ctx) => {
+                let mut peek = match self.peeks.remove(&uuid) {
+                    Some(peek) => peek,
+                    None => {
+                        tracing::warn!("did not find pending peek for {}", uuid);
+                        return None;
+                    }
+                };
+
                 // If this is the first response, forward it; otherwise do not.
                 // TODO: we could collect the other responses to assert equivalence?
                 // Trades resources (memory) for reassurances; idk which is best.
                 //
                 // NOTE: we use the `otel_ctx` from the response, not the
                 // pending peek, because we currently want the parent
-                // to be whatever the compute worker did with this peek.
+                // to be whatever the compute worker did with this peek. We
+                // still `take` the pending peek's `otel_ctx` to mark it as
+                // served.
                 //
                 // Additionally, we just use the `otel_ctx` from the first worker to
                 // respond.
-                self.peeks
-                    .remove(&uuid)
-                    .map(|_| ActiveReplicationResponse::PeekResponse(uuid, response, otel_ctx))
+                if peek.otel_ctx.take().is_some() {
+                    self.pending_response
+                        .push_back(ActiveReplicationResponse::PeekResponse(
+                            uuid, response, otel_ctx,
+                        ));
+                }
+
+                // Update the per-replica tracking and draw appropriate consequences.
+                peek.unfinished.remove(&replica_id);
+                if peek.is_finished() {
+                    self.pending_response
+                        .push_back(ActiveReplicationResponse::PeekFinished(uuid));
+                } else {
+                    // Put the pending peek back, to await further responses.
+                    self.peeks.insert(uuid, peek);
+                }
+
+                self.pending_response.pop_front()
             }
             ComputeResponse::FrontierUppers(list) => self.handle_frontier_uppers(list, replica_id),
             ComputeResponse::SubscribeResponse(id, response) => {
@@ -783,6 +849,12 @@ pub(super) enum ActiveReplicationResponse<T = mz_repr::Timestamp> {
     FrontierUppers(Vec<(GlobalId, FrontierBounds<T>)>),
     /// The compute instance's response to the specified peek.
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
+    /// A notification that all replicas have finished processing the specified peek.
+    ///
+    /// This is different from `PeekResponse`, because we respond to a peek immediately upon seeing
+    /// the first response for it. `PeekFinished` reports that it is now allowed to release any
+    /// read holds installed for the peek.
+    PeekFinished(Uuid),
     /// The compute instance's next response to the specified subscribe.
     SubscribeResponse(GlobalId, SubscribeResponse<T>),
     /// A notification that we heard a response from the given replica at the
