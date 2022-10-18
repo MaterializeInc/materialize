@@ -8,8 +8,11 @@ menu:
     name: "HTTP API"
 ---
 
-You can access Materialize through its "session-less" HTTP API, reachable at
-`https://<MZ host address>/api/sql`.
+You can access Materialize through its "session-less" HTTP API endpoint:
+
+```bash
+https://<MZ host address>/api/sql
+```
 
 ## Details
 
@@ -55,7 +58,10 @@ The HTTP API provides two modes with slightly different transactional semantics 
 https://<MZ host address>/api/sql
 ```
 
-Accessing the endpoint requires username + password authentication.
+Accessing the endpoint requires [basic authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme). Reuse the same credentials as with `psql`:
+
+* **User ID:** Your email to access Materialize.
+* **Password:** Your app password.
 
 ### Input format
 
@@ -142,46 +148,19 @@ the resultant state.
 
 ## Examples
 
-```bash
-curl https://<MZ host address>/api/sql \
-    --header "Content-Type: application/json" \
-    --user <username>:<passsword> \
-    --data '{
-        "queries": [
-            { "query": "CREATE TABLE IF NOT EXISTS t (a int);" },
-            { "query": "CREATE TABLE IF NOT EXISTS s (a int);" },
-            { "query": "BEGIN;" },
-            { "query": "INSERT INTO t VALUES ($1), ($2)", "params": ["100", "200"] },
-            { "query": "COMMIT;" },
-            { "query": "BEGIN;" },
-            { "query": "INSERT INTO s VALUES ($1), ($2)", "params": ["9", null] },
-            { "query": "COMMIT;" }
-        ]
-    }'
-```
-```json
-{
-  "results": [
-    {"ok": "CREATE TABLE", "notices": []},
-    {"ok": "CREATE TABLE", "notices": []},
-    {"ok": "BEGIN", "notices": []},
-    {"ok": "INSERT 0 2", "notices": []},
-    {"ok": "COMMIT", "notices": []},
-    {"ok": "BEGIN", "notices": []},
-    {"ok": "INSERT 0 2", "notices": []},
-    {"ok": "COMMIT", "notices": []}
-  ]
-}
-```
+### Run a query
 
+Use the [simple input format](#simple) to run a query:
 ```bash
-curl https://<MZ host address>/api/sql \
-    --header "Content-Type: application/json" \
-    --user <username>:<passsword> \
+curl 'https://<MZ host address>/api/sql' \
+    --header 'Content-Type: application/json' \
+    --user '<username>:<passsword>' \
     --data '{
         "query": "SELECT t.a + s.a AS cross_add FROM t CROSS JOIN s; SELECT a FROM t WHERE a IS NOT NULL;"
     }'
 ```
+
+Response:
 ```json
 {
   "results": [
@@ -195,6 +174,43 @@ curl https://<MZ host address>/api/sql \
         "col_names":["a"],
         "notices": []
     }
+  ]
+}
+```
+
+### Run a transaction
+
+Use the [extended input format](#extended) to run a transaction:
+```bash
+curl 'https://<MZ host address>/api/sql' \
+    --header 'Content-Type: application/json' \
+    --user '<username>:<passsword>' \
+    --data '{
+        "queries": [
+            { "query": "CREATE TABLE IF NOT EXISTS t (a int);" },
+            { "query": "CREATE TABLE IF NOT EXISTS s (a int);" },
+            { "query": "BEGIN;" },
+            { "query": "INSERT INTO t VALUES ($1), ($2)", "params": ["100", "200"] },
+            { "query": "COMMIT;" },
+            { "query": "BEGIN;" },
+            { "query": "INSERT INTO s VALUES ($1), ($2)", "params": ["9", null] },
+            { "query": "COMMIT;" }
+        ]
+    }'
+```
+
+Response:
+```json
+{
+  "results": [
+    {"ok": "CREATE TABLE", "notices": []},
+    {"ok": "CREATE TABLE", "notices": []},
+    {"ok": "BEGIN", "notices": []},
+    {"ok": "INSERT 0 2", "notices": []},
+    {"ok": "COMMIT", "notices": []},
+    {"ok": "BEGIN", "notices": []},
+    {"ok": "INSERT 0 2", "notices": []},
+    {"ok": "COMMIT", "notices": []}
   ]
 }
 ```
