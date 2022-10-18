@@ -9,7 +9,7 @@
 
 //! Healthchecks for sources
 use anyhow::Context;
-use chrono::NaiveDateTime;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use std::fmt::Display;
 use std::sync::Arc;
 use timely::progress::{Antichain, Timestamp as _};
@@ -29,18 +29,8 @@ use crate::types::sources::SourceData;
 /// of a Timely worker for a source, as well as updating the relevant
 /// state collection based on it.
 pub struct Healthchecker {
-    /// Name of the source (e.g. kafka-s1)
-    source_name: String,
-    /// Name of the upstream resource, if any (e.g. Kafka topic, file path)
-    upstream_name: Option<String>,
     /// Internal ID of the source (e.g. s1)
     source_id: GlobalId,
-    /// Type of the source, from SourceConnection::name
-    source_type: &'static str,
-    /// The ID of the Timely worker on which this operator is executing
-    worker_id: usize,
-    /// The total count of Timely workers
-    worker_count: usize,
     /// Whether this is an active Timely worker or not
     active: bool,
     /// Current status of this source
@@ -59,18 +49,13 @@ pub struct Healthchecker {
 
 impl Healthchecker {
     pub async fn new(
-        source_name: String,
-        upstream_name: Option<String>,
         source_id: GlobalId,
-        source_type: &'static str,
-        worker_id: usize,
-        worker_count: usize,
         active: bool,
         persist_clients: &Arc<Mutex<PersistClientCache>>,
         storage_metadata: &CollectionMetadata,
         now: NowFn,
     ) -> anyhow::Result<Self> {
-        trace!("Initializing healthchecker for source {source_name}");
+        trace!("Initializing healthchecker for source {source_id}");
         let mut persist_clients = persist_clients.lock().await;
         let persist_client = persist_clients
             .open(storage_metadata.persist_location.clone())
@@ -94,12 +79,7 @@ impl Healthchecker {
             .expect("since <= as_of asserted");
 
         let mut healthchecker = Self {
-            worker_id,
-            worker_count,
-            source_type,
-            source_name,
             source_id,
-            upstream_name,
             current_status: SourceStatus::Starting,
             active,
             upper: Antichain::from_elem(Timestamp::minimum()),
@@ -112,7 +92,7 @@ impl Healthchecker {
         healthchecker.bootstrap_state(read_handle, &upper).await;
         tracing::trace!(
             "Healthchecker for source {} at status {} finished bootstrapping!",
-            &healthchecker.source_name,
+            &healthchecker.source_id,
             &healthchecker.current_status
         );
 
@@ -234,13 +214,10 @@ impl Healthchecker {
                 .0
                 .expect("status collection should not have errors");
             let row_vec = row.unpack();
-            let row_source_id = row_vec[2].unwrap_str();
-            let row_worker_id = row_vec[5].unwrap_int64();
-            let row_status = row_vec[7].unwrap_str();
+            let row_source_id = row_vec[1].unwrap_str();
+            let row_status = row_vec[2].unwrap_str();
 
-            if self.source_id.to_string() == row_source_id
-                && self.worker_id == row_worker_id as usize
-            {
+            if self.source_id.to_string() == row_source_id {
                 self.current_status = SourceStatus::try_from(row_status).expect("invalid status");
             }
         }
@@ -258,34 +235,18 @@ impl Healthchecker {
             (ts % 1000 * 1_000_000)
                 .try_into()
                 .expect("timestamp millis does not fit into a u32"),
-        )
-        .try_into()
-        .expect("timestamp does not fit");
-        let source_id = self.source_id.to_string();
-        let source_name = Datum::String(&self.source_name);
-        let source_id = Datum::String(&source_id);
-        let source_type: Datum = self.source_type.into();
-        let upstream_name: Datum = self.upstream_name.as_deref().into();
-        let worker_id =
-            Datum::Int64(i64::try_from(self.worker_id).expect("worker_id does not fit into i64"));
-        let worker_count = Datum::Int64(
-            i64::try_from(self.worker_count).expect("worker_count does not fit into i64"),
         );
+        let timestamp = Datum::TimestampTz(
+            DateTime::from_utc(timestamp, Utc)
+                .try_into()
+                .expect("must fit"),
+        );
+        let source_id = self.source_id.to_string();
+        let source_id = Datum::String(&source_id);
         let status = Datum::String(status_update.status.name());
         let error = status_update.error.as_deref().into();
         let metadata = Datum::Null;
-        let row = Row::pack_slice(&[
-            timestamp,
-            source_name,
-            source_id,
-            source_type,
-            upstream_name,
-            worker_id,
-            worker_count,
-            status,
-            error,
-            metadata,
-        ]);
+        let row = Row::pack_slice(&[timestamp, source_id, status, error, metadata]);
 
         vec![(
             (SourceData(Ok(row)), ()),
@@ -568,7 +529,7 @@ mod tests {
             .await
             .into_iter()
             .find_map(|row| {
-                let error = row.unpack()[8];
+                let error = row.unpack()[3];
                 if !error.is_null() {
                     Some(error.unwrap_str().to_string())
                 } else {
@@ -685,12 +646,7 @@ mod tests {
 
     async fn new_healthchecker(
         status_shard_id: ShardId,
-        source_name: String,
         source_id: GlobalId,
-        source_type: &'static str,
-        upstream_name: Option<String>,
-        worker_id: usize,
-        worker_count: usize,
         active: bool,
         persist_clients: &Arc<Mutex<PersistClientCache>>,
     ) -> Healthchecker {
@@ -705,12 +661,7 @@ mod tests {
         };
 
         Healthchecker::new(
-            source_name,
-            upstream_name,
             source_id,
-            source_type,
-            worker_id,
-            worker_count,
             active,
             persist_clients,
             &storage_metadata,
@@ -727,12 +678,7 @@ mod tests {
     ) -> Healthchecker {
         new_healthchecker(
             status_shard_id,
-            "source".to_string(),
             GlobalId::User(source_id),
-            "kafka",
-            Some("sample-topic".to_string()),
-            1,
-            1,
             true,
             &Arc::clone(persist_clients),
         )

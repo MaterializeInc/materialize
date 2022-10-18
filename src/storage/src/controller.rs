@@ -94,6 +94,9 @@ impl MetadataExport<mz_repr::Timestamp> for MetadataExportFetcher {
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub enum IntrospectionType {
+    /// We're not responsible for appending to this collection automatically, but we should
+    /// automatically bump the write frontier from time to time.
+    SourceStatusHistory,
     ShardMapping,
 }
 
@@ -103,7 +106,7 @@ pub enum DataSource {
     /// Ingest data from some external source.
     Ingestion(IngestionDescription),
     /// Data comes from introspection sources, which the controller itself is
-    /// responisble for generating.
+    /// responsible for generating.
     Introspection(IntrospectionType),
     /// This source's data is does not need to be managed by the storage
     /// controller, e.g. it's a materialized view, table, or subsource.
@@ -945,6 +948,9 @@ where
                             self.truncate_managed_collection(id).await;
                             self.initialize_shard_mapping().await;
                         }
+                        IntrospectionType::SourceStatusHistory => {
+                            // nothing to do: only storaged writes rows to the collection
+                        }
                     }
                 }
                 DataSource::Other => {}
@@ -1423,7 +1429,7 @@ where
         //
         // The write frontier that sinks communicate back to the controller indicates that all further writes will
         // happen at a time `t` such that `!timely::ParitalOrder::less_than(&t, &write_frontier)` is true.  On restart,
-        // the sink will receive an SinkAsOf from this controller indicating that it should ignore everthing at or
+        // the sink will receive an SinkAsOf from this controller indicating that it should ignore everything at or
         // before the `since` of the from collection.  This will not miss any records because, if there were records not
         // yet written out that have an uncompacted time of `since`, the write frontier previously reported from the
         // sink must be less than `since` so we would not have compacted up to `since`!  This is tested by the kafka

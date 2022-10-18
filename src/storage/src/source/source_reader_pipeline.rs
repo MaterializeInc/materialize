@@ -11,7 +11,7 @@
 //!
 //! Raw sources are streams (currently, Timely streams) of data directly produced by the
 //! upstream service. The main export of this module is [`create_raw_source`],
-//! which turns [`RawSourceCreationConfig`]s, [`SourceConnection`]s,
+//! which turns [`RawSourceCreationConfig`]s, [`SourceReader::Connection`]s,
 //! and [`SourceReader`] implementations into the aforementioned streams.
 //!
 //! The full source, which is the _differential_ stream that represents the actual object
@@ -66,7 +66,6 @@ use crate::source::healthcheck::Healthchecker;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::ReclockFollower;
 use crate::source::reclock::ReclockOperator;
-use crate::source::types::SourceConnection;
 use crate::source::types::SourceOutput;
 use crate::source::types::SourceReaderError;
 use crate::source::types::{
@@ -88,9 +87,6 @@ const YIELD_INTERVAL: Duration = Duration::from_millis(10);
 pub struct RawSourceCreationConfig {
     /// The name to attach to the underlying timely operator.
     pub name: String,
-    /// The name of the upstream resource this source corresponds to
-    /// (For example, a Kafka topic)
-    pub upstream_name: Option<String>,
     /// The ID of this instantiation of this source.
     pub id: GlobalId,
     /// The number of expected outputs from this ingestion
@@ -230,7 +226,6 @@ struct SourceReaderOperatorOutput<S: SourceReader> {
 fn build_source_reader_stream<G, S>(
     source_reader: S,
     config: RawSourceCreationConfig,
-    source_connection: S::Connection,
     initial_source_upper: OffsetAntichain,
     mut source_upper: OffsetAntichain,
 ) -> Pin<
@@ -243,7 +238,6 @@ where
 {
     let RawSourceCreationConfig {
         name,
-        upstream_name,
         id,
         num_outputs: _,
         worker_id,
@@ -258,19 +252,8 @@ where
     } = config;
     Box::pin(async_stream::stream!({
         let mut healthchecker = if storage_metadata.status_shard.is_some() {
-            match Healthchecker::new(
-                name.clone(),
-                upstream_name,
-                id,
-                source_connection.name(),
-                worker_id,
-                worker_count,
-                true,
-                &persist_clients,
-                &storage_metadata,
-                now.clone(),
-            )
-            .await
+            match Healthchecker::new(id, true, &persist_clients, &storage_metadata, now.clone())
+                .await
             {
                 Ok(h) => Some(h),
                 Err(e) => {
@@ -465,7 +448,6 @@ where
     let sub_config = config.clone();
     let RawSourceCreationConfig {
         name,
-        upstream_name: _,
         id,
         num_outputs: _,
         worker_id,
@@ -543,7 +525,6 @@ where
                 let mut source_reader = build_source_reader_stream::<G, S>(
                     source_reader,
                     sub_config,
-                    source_connection,
                     initial_source_upper,
                     source_upper,
                 );
@@ -783,7 +764,6 @@ where
 {
     let RawSourceCreationConfig {
         name,
-        upstream_name: _,
         id,
         num_outputs: _,
         worker_id,
@@ -1049,7 +1029,6 @@ where
 {
     let RawSourceCreationConfig {
         name,
-        upstream_name,
         id,
         num_outputs,
         worker_id,
@@ -1084,9 +1063,8 @@ where
     reclock_op.build(move |mut capabilities| {
         capabilities.clear();
 
-        let metrics_name = upstream_name.clone().unwrap_or_else(|| name.clone());
         let mut source_metrics =
-            SourceMetrics::new(&base_metrics, &metrics_name, id, &worker_id.to_string());
+            SourceMetrics::new(&base_metrics, &name, id, &worker_id.to_string());
 
         source_metrics
             .resume_upper

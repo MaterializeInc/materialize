@@ -1406,19 +1406,14 @@ pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 
 pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_source_status_history",
-    schema: MZ_CATALOG_SCHEMA,
-    data_source: None,
+    schema: MZ_INTERNAL_SCHEMA,
+    data_source: Some(IntrospectionType::SourceStatusHistory),
     desc: RelationDesc::empty()
-        .with_column("timestamp", ScalarType::Timestamp.nullable(false))
-        .with_column("source_name", ScalarType::String.nullable(false))
+        .with_column("occurred_at", ScalarType::TimestampTz.nullable(false))
         .with_column("source_id", ScalarType::String.nullable(false))
-        .with_column("source_type", ScalarType::String.nullable(false))
-        .with_column("upstream_name", ScalarType::String.nullable(true))
-        .with_column("worker_id", ScalarType::Int64.nullable(false))
-        .with_column("worker_count", ScalarType::Int64.nullable(false))
         .with_column("status", ScalarType::String.nullable(false))
         .with_column("error", ScalarType::String.nullable(true))
-        .with_column("metadata", ScalarType::Jsonb.nullable(true)),
+        .with_column("details", ScalarType::Jsonb.nullable(true)),
 });
 
 pub static MZ_STORAGE_USAGE_BY_SHARD: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2681,10 +2676,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_INHERITS),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
-        // This is disabled for the moment because it has unusual upper
-        // advancement behavior.
-        // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
-        // Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),
+        Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),
         Builtin::Source(&MZ_STORAGE_SHARDS),
         Builtin::View(&MZ_STORAGE_USAGE),
         Builtin::Index(&MZ_SHOW_DATABASES_IND),

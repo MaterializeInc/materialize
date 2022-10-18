@@ -89,7 +89,6 @@ where
     let source_name = format!("{}-{}", connection.name(), id);
     let base_source_config = RawSourceCreationConfig {
         name: source_name,
-        upstream_name: connection.upstream_name().map(ToOwned::to_owned),
         id,
         num_outputs: description.desc.num_outputs(),
         timestamp_interval: description.desc.timestamp_interval.clone(),
