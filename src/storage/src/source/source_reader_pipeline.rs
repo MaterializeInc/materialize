@@ -839,10 +839,15 @@ where
             capabilities.clear();
 
             let upper_ts = resume_upper.as_option().copied().unwrap();
-            let as_of = Antichain::from_elem(upper_ts.saturating_sub(
-                // 3 day in milliseconds
-                1000 * 60 * 24 * 3,
-            ));
+
+            // NOTE: Below, we allow compaction only up to around 3 days before
+            // the resumption frontier. We still restart from right before the
+            // upper which is a) perfectly safe to do, and b) will make extra
+            // certain that the `as_of` is valid with regards to the since. If
+            // we pick the same time that we compact up to, we might run into
+            // the same (alleged/potential) off-by-one bug that this
+            // three-day-bandaid below is trying to paper over.
+            let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
             let mut timestamper = match ReclockOperator::new(
                 Arc::clone(&persist_clients),
                 storage_metadata.clone(),
@@ -923,8 +928,9 @@ where
                 // progress does not drive this operator forward, only source upper updates
                 // from the source_reader_operator does.
                 //
-                // Note that we are able to compact to WELL before the resumption frontier,
-                // to paper over some subtle `as_of` < `since` bugs we are seeing.
+                // Note that we choose to compact to WELL before the resumption
+                // frontier, to paper over some subtle `as_of` < `since` bugs we
+                // are seeing.
                 // TODO(guswynn|aljoscha): figure out what is going on here.
                 //
                 // Also note this can happen BEFORE we inspect the input. This is somewhat
@@ -948,7 +954,7 @@ where
                     upper_ts
                 } {
                     let compaction_since = Antichain::from_elem(upper_ts.saturating_sub(
-                        // 3 day in milliseconds
+                        // 3 days in milliseconds
                         1000 * 60 * 24 * 3,
                     ));
                     if PartialOrder::less_than(&last_compaction_since, &compaction_since) {
