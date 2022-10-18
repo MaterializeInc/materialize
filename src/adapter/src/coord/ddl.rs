@@ -570,8 +570,13 @@ impl<S: Append + 'static> Coordinator<S> {
                         CatalogItem::Table(_) => {
                             new_tables += 1;
                         }
-                        CatalogItem::Source(_) => {
-                            new_sources += 1;
+                        CatalogItem::Source(source) => {
+                            match source.data_source {
+                                // Only sources that ingest data from an external system count
+                                // towards resource limits.
+                                DataSourceDesc::Ingestion(_) => new_sources += 1,
+                                DataSourceDesc::Source | DataSourceDesc::Introspection(_) => {}
+                            }
                         }
                         CatalogItem::Sink(_) => new_sinks += 1,
                         CatalogItem::MaterializedView(_) => {
@@ -615,8 +620,13 @@ impl<S: Append + 'static> Coordinator<S> {
                         CatalogItem::Table(_) => {
                             new_tables -= 1;
                         }
-                        CatalogItem::Source(_) => {
-                            new_sources -= 1;
+                        CatalogItem::Source(source) => {
+                            match source.data_source {
+                                // Only sources that ingest data from an external system count
+                                // towards resource limits.
+                                DataSourceDesc::Ingestion(_) => new_sources -= 1,
+                                DataSourceDesc::Source | DataSourceDesc::Introspection(_) => {}
+                            }
                         }
                         CatalogItem::Sink(_) => new_sinks -= 1,
                         CatalogItem::MaterializedView(_) => {
@@ -762,6 +772,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 resource_type: resource_type.to_string(),
                 limit,
                 current_amount,
+                new_instances,
             })
         } else {
             Ok(())
