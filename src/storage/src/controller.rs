@@ -2106,6 +2106,7 @@ mod persist_write_handles {
 
                                             futs.push(async move {
                                                 let persist_upper = persist_upper.clone();
+                                                assert!(!new_upper.is_empty(), "new_upper is empty in controller::append");
                                                 let mut result =
                                                 write
                                                     .compare_and_append(
@@ -2127,6 +2128,7 @@ mod persist_write_handles {
                                                     if write.upper() == &persist_upper {
                                                         // If the upper frontier is the prior frontier, the commit
                                                         // did not happen and we should retry it.
+                                                        assert!(!new_upper.is_empty(), "new_upper is empty in controller::append");
                                                         result =
                                                         write
                                                             .compare_and_append(
