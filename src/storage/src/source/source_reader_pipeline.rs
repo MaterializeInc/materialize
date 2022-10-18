@@ -179,7 +179,13 @@ where
         ReclockFollower::new(as_of)
     };
 
-    let ((batches, batch_upper_summaries), source_reader_token) = source_reader_operator::<G, S>(
+    let (
+        SourceReaderStreams {
+            batches,
+            batch_upper_summaries,
+        },
+        source_reader_token,
+    ) = source_reader_operator::<G, S>(
         scope,
         config.clone(),
         source_connection,
@@ -418,6 +424,14 @@ where
     }))
 }
 
+struct SourceReaderStreams<G: Scope<Timestamp = Timestamp>, S: SourceReader> {
+    batches: timely::dataflow::Stream<
+        G,
+        Rc<RefCell<Option<SourceMessageBatch<S::Key, S::Value, S::Diff>>>>,
+    >,
+    batch_upper_summaries: timely::dataflow::Stream<G, BatchUpperSummary>,
+}
+
 /// Reads from a [`SourceReader`] and returns a stream of "un-timestamped"
 /// [`SourceMessageBatch`]. Also returns a second stream that can be used to
 /// learn about the `source_upper` that all the source reader instances now
@@ -430,16 +444,7 @@ fn source_reader_operator<G, S: 'static>(
     connection_context: ConnectionContext,
     reclock_follower: ReclockFollower,
     resume_stream: &timely::dataflow::Stream<G, ()>,
-) -> (
-    (
-        timely::dataflow::Stream<
-            G,
-            Rc<RefCell<Option<SourceMessageBatch<S::Key, S::Value, S::Diff>>>>,
-        >,
-        timely::dataflow::Stream<G, BatchUpperSummary>,
-    ),
-    Option<AsyncSourceToken>,
-)
+) -> (SourceReaderStreams<G, S>, Option<AsyncSourceToken>)
 where
     G: Scope<Timestamp = Timestamp>,
     S: SourceReader,
@@ -733,7 +738,13 @@ where
         }
     });
 
-    ((batch_stream, summary_stream), Some(capability))
+    (
+        SourceReaderStreams {
+            batches: batch_stream,
+            batch_upper_summaries: summary_stream,
+        },
+        Some(capability),
+    )
 }
 
 /// Mints new contents for the remap shard based on summaries about the source
