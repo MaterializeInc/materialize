@@ -452,7 +452,7 @@ impl MirScalarExpr {
             expr: inner_expr,
         } = expr
         {
-            if let Some(inverse_func) = func.invert() {
+            if let Some(inverse_func) = func.right_inverse() {
                 // We don't want to insert a function call that doesn't preserve
                 // uniqueness. E.g., if `a` has an integer type, we don't want to do
                 // a surprise rounding for `WHERE a = 3.14`.
@@ -506,7 +506,7 @@ impl MirScalarExpr {
         };
 
         if let MirScalarExpr::CallUnary { func, .. } = other_side {
-            if let Some(inverse_func) = func.invert() {
+            if let Some(inverse_func) = func.right_inverse() {
                 if inverse_func.preserves_uniqueness()
                     && eval(&MirScalarExpr::CallUnary {
                         func: inverse_func,
