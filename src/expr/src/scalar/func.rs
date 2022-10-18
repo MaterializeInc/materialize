@@ -3799,55 +3799,6 @@ impl UnaryFunc {
             _ => true,
         }
     }
-
-    /// If the function is invertible, it returns the inverse.
-    /// Note that this cannot generally be used to transform `f_inv(f(x))` to `x`, because of range
-    /// issues when e.g. `f` is a narrowing conversion.
-    pub fn invert(&self) -> Option<Self> {
-        // TODO: Make this more general, and move it to the function-defining macro.
-        match self {
-            // VarChar <-> String
-            UnaryFunc::CastVarCharToString(_) => {
-                Some(UnaryFunc::CastStringToVarChar(CastStringToVarChar {
-                    length: None,
-                    fail_on_len: false,
-                }))
-            }
-            UnaryFunc::CastStringToVarChar(_) => {
-                Some(UnaryFunc::CastVarCharToString(CastVarCharToString))
-            }
-
-            // IntXX
-            UnaryFunc::CastInt64ToInt32(_) => Some(UnaryFunc::CastInt32ToInt64(CastInt32ToInt64)),
-            UnaryFunc::CastInt64ToInt16(_) => Some(UnaryFunc::CastInt16ToInt64(CastInt16ToInt64)),
-            UnaryFunc::CastInt32ToInt64(_) => Some(UnaryFunc::CastInt64ToInt32(CastInt64ToInt32)),
-            UnaryFunc::CastInt32ToInt16(_) => Some(UnaryFunc::CastInt16ToInt32(CastInt16ToInt32)),
-            UnaryFunc::CastInt16ToInt64(_) => Some(UnaryFunc::CastInt64ToInt16(CastInt64ToInt16)),
-            UnaryFunc::CastInt16ToInt32(_) => Some(UnaryFunc::CastInt32ToInt16(CastInt32ToInt16)),
-
-            // Int32 <-> UintX
-            UnaryFunc::CastInt32ToUint64(_) => {
-                Some(UnaryFunc::CastUint64ToInt32(CastUint64ToInt32))
-            }
-            UnaryFunc::CastInt32ToUint32(_) => {
-                Some(UnaryFunc::CastUint32ToInt32(CastUint32ToInt32))
-            }
-            UnaryFunc::CastInt32ToUint16(_) => {
-                Some(UnaryFunc::CastUint16ToInt32(CastUint16ToInt32))
-            }
-            UnaryFunc::CastUint64ToInt32(_) => {
-                Some(UnaryFunc::CastInt32ToUint64(CastInt32ToUint64))
-            }
-            UnaryFunc::CastUint32ToInt32(_) => {
-                Some(UnaryFunc::CastInt32ToUint32(CastInt32ToUint32))
-            }
-            UnaryFunc::CastUint16ToInt32(_) => {
-                Some(UnaryFunc::CastInt32ToUint16(CastInt32ToUint16))
-            }
-
-            _ => None,
-        }
-    }
 }
 
 /// An explicit [`Arbitrary`] implementation needed here because of a known
