@@ -9,6 +9,7 @@
 
 //! Moving data to external systems
 
+mod healthcheck;
 mod kafka;
 mod metrics;
 mod sink_connection;
