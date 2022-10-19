@@ -725,6 +725,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
                                     // and compact its outputs to the dataflow's `as_of`.
                                     old_dataflows.remove(&export_ids);
                                     for id in export_ids.iter() {
+                                        if id.is_user()
+                                            && dataflow.as_of.as_ref().unwrap().is_empty()
+                                        {
+                                            tracing::info!("for {id}, dataflow.as_of inserted into old_compaction is empty");
+                                        }
                                         old_compaction.insert(*id, dataflow.as_of.clone().unwrap());
                                     }
                                     retain_ids.extend(export_ids);
@@ -764,6 +769,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     // We want to drop anything that has not yet been dropped,
                     // and nothing that has already been dropped.
                     if old_frontiers.get(&id) != Some(&&timely::progress::Antichain::default()) {
+                        if id.is_user() {
+                            tracing::info!(
+                                "for {id}, inserting empty frontier into old_compaction to drop it"
+                            );
+                        }
                         old_compaction.insert(id, timely::progress::Antichain::default());
                     }
                 }
