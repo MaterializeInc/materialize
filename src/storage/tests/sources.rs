@@ -9,56 +9,56 @@
 
 //! Basic unit tests for sources.
 
-use mz_repr::{Datum, Row};
+use std::collections::HashMap;
+
 use mz_storage::source::testscript::ScriptCommand;
-use mz_storage::types::sources::{
-    encoding::{DataEncoding, DataEncodingInner, SourceDataEncoding},
-    KeyEnvelope, NoneEnvelope, SourceData, SourceEnvelope,
-};
+use mz_storage::types::sources::{encoding::SourceDataEncoding, SourceEnvelope};
 
 mod setup;
 
 #[test]
-fn test_basic() -> Result<(), anyhow::Error> {
-    let script = vec![ScriptCommand::Emit {
-        value: "gus".to_string(),
-        key: None,
-        offset: 0,
-    }];
+fn test_datadriven() {
+    datadriven::walk("tests/datadriven", |f| {
+        let mut sources: HashMap<String, (Vec<ScriptCommand>, SourceDataEncoding, SourceEnvelope)> =
+            HashMap::new();
 
-    setup::assert_source_results_in(
-        script,
-        SourceDataEncoding::Single(DataEncoding {
-            force_nullable_columns: false,
-            inner: DataEncodingInner::Bytes,
-        }),
-        SourceEnvelope::None(NoneEnvelope {
-            key_envelope: KeyEnvelope::None,
-            key_arity: 0,
-        }),
-        vec![SourceData(Ok(Row::pack([Datum::Bytes(b"gus")])))],
-    )
-}
+        // Note we unwrap and panic liberally here as we
+        // expect tests to be properly written.
+        f.run(move |tc| -> String {
+            match tc.directive.as_str() {
+                "register-source" => {
+                    // we just use the serde json representations.
+                    let source: serde_json::Value = serde_json::from_str(&tc.input).unwrap();
+                    let source = source.as_object().unwrap();
+                    sources.insert(
+                        tc.args["name"][0].clone(),
+                        (
+                            serde_json::from_value(source["script"].clone()).unwrap(),
+                            serde_json::from_value(source["encoding"].clone()).unwrap(),
+                            serde_json::from_value(source["envelope"].clone()).unwrap(),
+                        ),
+                    );
 
-#[test]
-fn test_basic_failing() {
-    let script = vec![ScriptCommand::Emit {
-        value: "gus".to_string(),
-        key: None,
-        offset: 0,
-    }];
+                    "<empty>\n".to_string()
+                }
+                "run-source" => {
+                    let (script, encoding, envelope) = sources[&tc.args["name"][0]].clone();
 
-    assert!(setup::assert_source_results_in(
-        script,
-        SourceDataEncoding::Single(DataEncoding {
-            force_nullable_columns: false,
-            inner: DataEncodingInner::Bytes,
-        }),
-        SourceEnvelope::None(NoneEnvelope {
-            key_envelope: KeyEnvelope::None,
-            key_arity: 0,
-        }),
-        vec![SourceData(Ok(Row::pack([Datum::Bytes(b"gus2")])))],
-    )
-    .is_err())
+                    // We just use the `Debug` representation here.
+                    // REWRITE=true makes this reasonable!
+                    format!(
+                        "{:#?}\n",
+                        setup::run_script_source(
+                            script,
+                            encoding,
+                            envelope,
+                            tc.args["expected_len"][0].parse().unwrap(),
+                        )
+                        .unwrap()
+                    )
+                }
+                _ => panic!("unknown directive {:?}", tc),
+            }
+        })
+    });
 }

@@ -21,7 +21,7 @@ use crate::types::connections::ConnectionContext;
 use crate::types::sources::encoding::SourceDataEncoding;
 use crate::types::sources::{MzOffset, TestScriptSourceConnection};
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 #[serde(tag = "command")]
 #[serde(rename_all = "lowercase")]
 pub enum ScriptCommand {

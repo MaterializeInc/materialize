@@ -4241,6 +4241,7 @@ dependencies = [
  "chrono",
  "crossbeam-channel",
  "csv-core",
+ "datadriven",
  "dec",
  "derivative",
  "differential-dataflow",
