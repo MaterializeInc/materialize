@@ -432,12 +432,14 @@ where
     }))
 }
 
+/// NB: we derive Ord here, so the enum order matters. Generally, statuses later in the list
+/// take precedence over earlier ones: so if one worker is stalled, we'll consider the entire
+/// source to be stalled.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum HealthStatus {
     Starting,
     Running,
     StalledWithError(String),
-    FailedWithError(String),
 }
 
 struct SourceReaderStreams<G: Scope<Timestamp = Timestamp>, S: SourceReader> {
