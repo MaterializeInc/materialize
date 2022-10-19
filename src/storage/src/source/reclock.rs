@@ -324,6 +324,13 @@ impl ReclockFollowerInner {
             // As long as the assertion about `as_of` and `since` on creation
             // are correct, it is fine to ignore these compaction requests if
             // they don't advance the since.
+            tracing::error!(
+                ?new_since,
+                ?self.since,
+                "We are forced to skip the compaction in \
+                the _ReclockFollower_ because the `new_since` >= the `since`. \
+                This is a bug that should be fixed."
+            );
             return;
         }
 
@@ -544,6 +551,13 @@ impl ReclockOperator {
             // As long as the assertion about `as_of` and `since` on creation are
             // correct, it is fine to ignore these compaction requests if they
             // don't advance the since.
+            tracing::error!(
+                ?new_since,
+                ?self.since,
+                "We are forced to skip the compaction in \
+                the _ReclockOperator_ because the `new_since` >= the `since`. \
+                This is a bug that should be fixed."
+            );
             return;
         }
 
