@@ -547,7 +547,8 @@ pub fn show_cluster_replicas<'a>(
     scx: &'a StatementContext<'a>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
-    let query = "SELECT cluster, replica FROM mz_internal.mz_show_cluster_replicas".to_string();
+    let query =
+        "SELECT cluster, replica, size FROM mz_internal.mz_show_cluster_replicas".to_string();
 
     ShowSelect::new(scx, query, filter, None, None)
 }

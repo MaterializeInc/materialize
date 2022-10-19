@@ -2334,7 +2334,8 @@ pub const MZ_SHOW_CLUSTER_REPLICAS: BuiltinView = BuiltinView {
     sql: r#"CREATE VIEW mz_internal.mz_show_cluster_replicas
 AS SELECT
     mz_catalog.mz_clusters.name AS cluster,
-    mz_catalog.mz_cluster_replicas.name AS replica
+    mz_catalog.mz_cluster_replicas.name AS replica,
+    mz_catalog.mz_cluster_replicas.size AS size
 FROM
     mz_catalog.mz_cluster_replicas
     JOIN mz_catalog.mz_clusters ON
@@ -2452,7 +2453,7 @@ pub const MZ_SHOW_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_show_cluster_replicas_ind
 IN CLUSTER mz_introspection
-ON mz_internal.mz_show_cluster_replicas (cluster, replica)",
+ON mz_internal.mz_show_cluster_replicas (cluster, replica, size)",
 };
 
 pub const MZ_SHOW_SECRETS_IND: BuiltinIndex = BuiltinIndex {
