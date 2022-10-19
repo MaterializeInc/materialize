@@ -357,7 +357,12 @@ where
     fn handle_command(&mut self, cmd: &ComputeCommand<T>) {
         // Update our tracking of peek and subscribe commands.
         match &cmd {
-            ComputeCommand::Peek(Peek { uuid, otel_ctx, target_replica, .. }) => {
+            ComputeCommand::Peek(Peek {
+                uuid,
+                otel_ctx,
+                target_replica,
+                ..
+            }) => {
                 let unfinished = match target_replica {
                     Some(target) => [*target].into(),
                     None => self.replica_ids.clone(),
@@ -447,50 +452,60 @@ where
             ));
         match message {
             ComputeResponse::PeekResponse(uuid, response, otel_ctx) => {
-                let mut peek = match self.peeks.remove(&uuid) {
-                    Some(peek) => peek,
-                    None => {
-                        tracing::warn!("did not find pending peek for {}", uuid);
-                        return None;
-                    }
-                };
-
-                // If this is the first response, forward it; otherwise do not.
-                // TODO: we could collect the other responses to assert equivalence?
-                // Trades resources (memory) for reassurances; idk which is best.
-                //
-                // NOTE: we use the `otel_ctx` from the response, not the
-                // pending peek, because we currently want the parent
-                // to be whatever the compute worker did with this peek. We
-                // still `take` the pending peek's `otel_ctx` to mark it as
-                // served.
-                //
-                // Additionally, we just use the `otel_ctx` from the first worker to
-                // respond.
-                if peek.otel_ctx.take().is_some() {
-                    self.pending_response
-                        .push_back(ActiveReplicationResponse::PeekResponse(
-                            uuid, response, otel_ctx,
-                        ));
-                }
-
-                // Update the per-replica tracking and draw appropriate consequences.
-                peek.unfinished.remove(&replica_id);
-                if peek.is_finished() {
-                    self.pending_response
-                        .push_back(ActiveReplicationResponse::PeekFinished(uuid));
-                } else {
-                    // Put the pending peek back, to await further responses.
-                    self.peeks.insert(uuid, peek);
-                }
-
-                self.pending_response.pop_front()
+                self.handle_peek_response(uuid, response, otel_ctx, replica_id)
             }
             ComputeResponse::FrontierUppers(list) => self.handle_frontier_uppers(list, replica_id),
             ComputeResponse::SubscribeResponse(id, response) => {
                 self.handle_subscribe_response(id, response, replica_id)
             }
         }
+    }
+
+    fn handle_peek_response(
+        &mut self,
+        uuid: Uuid,
+        response: PeekResponse,
+        otel_ctx: OpenTelemetryContext,
+        replica_id: ReplicaId,
+    ) -> Option<ActiveReplicationResponse<T>> {
+        let mut peek = match self.peeks.remove(&uuid) {
+            Some(peek) => peek,
+            None => {
+                tracing::warn!("did not find pending peek for {}", uuid);
+                return None;
+            }
+        };
+
+        // If this is the first response, forward it; otherwise do not.
+        // TODO: we could collect the other responses to assert equivalence?
+        // Trades resources (memory) for reassurances; idk which is best.
+        //
+        // NOTE: we use the `otel_ctx` from the response, not the
+        // pending peek, because we currently want the parent
+        // to be whatever the compute worker did with this peek. We
+        // still `take` the pending peek's `otel_ctx` to mark it as
+        // served.
+        //
+        // Additionally, we just use the `otel_ctx` from the first worker to
+        // respond.
+        if peek.otel_ctx.take().is_some() {
+            self.pending_response
+                .push_back(ActiveReplicationResponse::PeekResponse(
+                    uuid, response, otel_ctx,
+                ));
+        }
+
+        // Update the per-replica tracking and draw appropriate consequences.
+        peek.unfinished.remove(&replica_id);
+        if peek.is_finished() {
+            self.pending_response
+                .push_back(ActiveReplicationResponse::PeekFinished(uuid));
+        } else {
+            // Put the pending peek back, to await further responses.
+            self.peeks.insert(uuid, peek);
+        }
+
+        self.pending_response.pop_front()
     }
 
     fn handle_frontier_uppers(
