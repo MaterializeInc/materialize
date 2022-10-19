@@ -220,6 +220,11 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         }
 
         if !final_uppers.is_empty() {
+            for (id, frontier_update) in final_uppers.iter() {
+                if id.is_user() && frontier_update.is_empty() {
+                    panic!("ActiveComputeState::handle_allow_compaction: frontier update for {id} is empty");
+                }
+            }
             self.send_compute_response(ComputeResponse::FrontierUppers(final_uppers));
         }
     }
@@ -600,6 +605,11 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         }
 
         if !new_uppers.is_empty() {
+            for (id, frontier_update) in new_uppers.iter() {
+                if id.is_user() && frontier_update.is_empty() {
+                    panic!("ActiveComputeState::report_compute_frontier: frontier update for {id} is empty");
+                }
+            }
             self.send_compute_response(ComputeResponse::FrontierUppers(new_uppers));
         }
     }

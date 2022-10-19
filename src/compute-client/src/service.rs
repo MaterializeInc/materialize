@@ -237,6 +237,11 @@ where
                 if new_uppers.is_empty() {
                     None
                 } else {
+                    for (id, frontier_update) in new_uppers.iter() {
+                        if id.is_user() && frontier_update.is_empty() {
+                            panic!("PartitionedState::absorb_response: frontier update for {id} is empty");
+                        }
+                    }
                     Some(Ok(ComputeResponse::FrontierUppers(new_uppers)))
                 }
             }
