@@ -733,6 +733,23 @@ where
     where
         S: Append,
     {
+        let (prev, ids) = self.upsert_key_no_consolidate(stash, key, value).await?;
+        stash.consolidate_batch(&ids).await?;
+        Ok(prev)
+    }
+
+    /// Same as `upsert_key`, but doesn't consolidate. Returns ids needing
+    /// consolidation.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn upsert_key_no_consolidate<S>(
+        &self,
+        stash: &mut S,
+        key: &K,
+        value: &V,
+    ) -> Result<(Option<V>, Vec<Id>), StashError>
+    where
+        S: Append,
+    {
         let collection = self.get(stash).await?;
         let mut batch = collection.make_batch(stash).await?;
         let prev = match stash.peek_key_one(collection, key).await {
@@ -752,8 +769,8 @@ where
             collection.append_to_batch(&mut batch, key, prev, -1);
         }
         collection.append_to_batch(&mut batch, key, value, 1);
-        stash.append(&[batch]).await?;
-        Ok(prev)
+        stash.append_batch(&[batch]).await?;
+        Ok((prev, vec![collection.id]))
     }
 
     /// Sets the given key value pairs, removing existing entries match any key.

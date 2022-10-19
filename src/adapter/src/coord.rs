@@ -245,6 +245,8 @@ pub struct Config<S> {
     pub storage_usage_collection_interval: Duration,
     pub segment_api_key: Option<String>,
     pub egress_ips: Vec<Ipv4Addr>,
+    pub consolidations_tx: mpsc::UnboundedSender<Vec<mz_stash::Id>>,
+    pub consolidations_rx: mpsc::UnboundedReceiver<Vec<mz_stash::Id>>,
 }
 
 /// Soft-state metadata about a compute replica
@@ -880,12 +882,13 @@ pub async fn serve<S: Append + 'static>(
         storage_usage_collection_interval,
         segment_api_key,
         egress_ips,
+        consolidations_tx,
+        consolidations_rx,
     }: Config<S>,
 ) -> Result<(Handle, Client), AdapterError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
     let (strict_serializable_reads_tx, strict_serializable_reads_rx) = mpsc::unbounded_channel();
-    let (consolidations_tx, consolidations_rx) = mpsc::unbounded_channel();
 
     // Validate and process availability zones.
     if !availability_zones.iter().all_unique() {
