@@ -101,6 +101,18 @@ pub static SYSTEM_USER: Lazy<User> = Lazy::new(|| User {
     external_metadata: None,
 });
 
+pub static INTROSPECTION_USER: Lazy<User> = Lazy::new(|| User {
+    name: "mz_introspection".into(),
+    external_metadata: None,
+});
+
+pub static INTERNAL_USER_NAMES: Lazy<BTreeSet<String>> = Lazy::new(|| {
+    [&SYSTEM_USER, &INTROSPECTION_USER]
+        .into_iter()
+        .map(|user| user.name.clone())
+        .collect()
+});
+
 pub static HTTP_DEFAULT_USER: Lazy<User> = Lazy::new(|| User {
     name: "anonymous_http_user".into(),
     external_metadata: None,

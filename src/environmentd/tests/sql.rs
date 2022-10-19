@@ -35,7 +35,7 @@ use tokio_postgres::config::Host;
 use tokio_postgres::Client;
 use tracing::info;
 
-use mz_adapter::catalog::SYSTEM_USER;
+use mz_adapter::catalog::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_ore::assert_contains;
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO, SYSTEM_TIME};
 use mz_ore::retry::Retry;
@@ -1419,7 +1419,7 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-fn test_system_user() -> Result<(), Box<dyn Error>> {
+fn test_internal_users() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
     let config = util::Config::default();
@@ -1433,6 +1433,11 @@ fn test_system_user() -> Result<(), Box<dyn Error>> {
     assert!(server
         .pg_config_internal()
         .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .is_ok());
+    assert!(server
+        .pg_config_internal()
+        .user(&INTROSPECTION_USER.name)
         .connect(postgres::NoTls)
         .is_ok());
     assert!(server
