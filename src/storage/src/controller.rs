@@ -1229,6 +1229,11 @@ where
                 .generate_new_capability_for_collection(id, |c| {
                     if let Some(new_upper) = new_upper {
                         c.write_frontier.join_assign(new_upper);
+                        assert!(
+                            !c.write_frontier.is_empty(),
+                            "c.write_frontier is empty in update_write_frontiers, new_upper: {:?}",
+                            new_upper
+                        );
                     }
                 })
                 .expect("Collection previously validated to exist");
@@ -1490,6 +1495,10 @@ impl<T: Timestamp> CollectionState<T> {
     ) -> Self {
         let mut read_capabilities = MutableAntichain::new();
         read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
+        assert!(
+            !write_frontier.is_empty(),
+            "write_frontier is empty in CollectionState::new",
+        );
         Self {
             description,
             read_capabilities,

@@ -139,15 +139,17 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut since = Antichain::new();
         {
             for id in id_bundle.storage_ids.iter() {
-                since.extend(
-                    self.controller
-                        .storage
-                        .collection(*id)
-                        .unwrap()
-                        .write_frontier
-                        .iter()
-                        .cloned(),
+                let write_frontier = &self
+                    .controller
+                    .storage
+                    .collection(*id)
+                    .unwrap()
+                    .write_frontier;
+                assert!(
+                    !write_frontier.is_empty(),
+                    "write_frontier is empty in least_valid_write"
                 );
+                since.extend(write_frontier.iter().cloned());
             }
         }
         {
