@@ -1,7 +1,7 @@
 ---
 title: "CREATE MATERIALIZED VIEW"
 description: "`CREATE MATERIALIZED VIEW` defines a view that is persisted in durable storage and incrementally updated as new data arrives."
-pagerank: 10
+pagerank: 40
 menu:
   main:
     parent: 'commands'

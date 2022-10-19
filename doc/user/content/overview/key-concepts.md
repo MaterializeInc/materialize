@@ -1,7 +1,7 @@
 ---
 title: "Key concepts"
 description: "Understand Materialize's architecture."
-pagerank: 5
+pagerank: 30
 menu:
   main:
     parent: 'overview'
