@@ -1226,6 +1226,13 @@ where
             .filter(|(id, _)| self.storage_controller.collection(*id).is_ok())
             .map(|(id, bounds)| (*id, bounds.upper.clone()))
             .collect();
+
+        for (id, frontier_update) in storage_updates.iter() {
+            if id.is_user() && frontier_update.is_empty() {
+                panic!("ActiveInstate::update_write_frontiers: frontier update for {id} is empty");
+            }
+        }
+
         self.storage_controller
             .update_write_frontiers(&storage_updates)
             .await?;

@@ -1225,6 +1225,11 @@ where
         }
 
         for (id, new_upper) in collections {
+            if let Some(new_upper) = new_upper.as_ref() {
+                if id.is_user() && new_upper.is_empty() {
+                    panic!("StorageController::update_write_frontiers: frontier update for {id} is empty");
+                }
+            }
             let mut update = self
                 .generate_new_capability_for_collection(id, |c| {
                     if let Some(new_upper) = new_upper {
