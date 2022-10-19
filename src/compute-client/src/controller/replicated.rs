@@ -141,6 +141,10 @@ where
 /// Additional information to store with pending peeks.
 #[derive(Debug)]
 struct PendingPeek {
+    /// For replica-targeted peeks, this specifies the replica whose response we should pass on.
+    ///
+    /// If this value is `None`, we pass on the first response.
+    target_replica: Option<ReplicaId>,
     /// Replicas that have yet to respond to this peek.
     unfinished: BTreeSet<ReplicaId>,
     /// The OpenTelemetry context for this peek.
@@ -363,14 +367,11 @@ where
                 target_replica,
                 ..
             }) => {
-                let unfinished = match target_replica {
-                    Some(target) => [*target].into(),
-                    None => self.replica_ids.clone(),
-                };
                 self.peeks.insert(
                     *uuid,
                     PendingPeek {
-                        unfinished,
+                        target_replica: *target_replica,
+                        unfinished: self.replica_ids.clone(),
                         // TODO(guswynn): can we just hold the `tracing::Span`
                         // here instead?
                         otel_ctx: Some(otel_ctx.clone()),
@@ -476,7 +477,9 @@ where
             }
         };
 
-        // If this is the first response, forward it; otherwise do not.
+        // Forward the peek response, if we didn't already forward a response
+        // to this peek previously. If the peek is targeting a replica, only
+        // forward the response of that replica.
         // TODO: we could collect the other responses to assert equivalence?
         // Trades resources (memory) for reassurances; idk which is best.
         //
@@ -488,7 +491,8 @@ where
         //
         // Additionally, we just use the `otel_ctx` from the first worker to
         // respond.
-        if peek.otel_ctx.take().is_some() {
+        let serving_replica = peek.target_replica.unwrap_or(replica_id);
+        if replica_id == serving_replica && peek.otel_ctx.take().is_some() {
             self.pending_response
                 .push_back(ActiveReplicationResponse::PeekResponse(
                     uuid, response, otel_ctx,

@@ -226,13 +226,6 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
     #[tracing::instrument(level = "debug", skip(self))]
     fn handle_peek(&mut self, peek: Peek) {
-        // Only handle peeks that are not targeted at a different replica.
-        if let Some(target) = peek.target_replica {
-            if target != self.compute_state.replica_id {
-                return;
-            }
-        }
-
         // Acquire a copy of the trace suitable for fulfilling the peek.
         let mut trace_bundle = self.compute_state.traces.get(&peek.id).unwrap().clone();
         let timestamp_frontier = Antichain::from_elem(peek.timestamp);

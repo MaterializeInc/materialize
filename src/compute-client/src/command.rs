@@ -928,6 +928,9 @@ pub struct Peek<T = mz_repr::Timestamp> {
     ///
     /// If `Some`, the peek is only handled by the given replica.
     /// If `None`, the peek is handled by all replicas.
+    ///
+    /// TODO(teskje): Now that this is handled in `ActiveReplication`, we should remove this field
+    /// from the compute command and pass it only to `ActiveReplication`, not to compute instances.
     pub target_replica: Option<ReplicaId>,
     /// An `OpenTelemetryContext` to forward trace information along
     /// to the compute worker to allow associating traces between
