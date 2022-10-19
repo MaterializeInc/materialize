@@ -69,6 +69,9 @@ statement ok
 DROP SOURCE s;
 
 statement ok
+CREATE SOURCE multiplex FROM LOAD GENERATOR AUCTION FOR ALL TABLES WITH (SIZE '1');
+
+statement ok
 DROP CLUSTER REPLICA foo.r;
 
 statement ok
@@ -107,5 +110,11 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 28  create  source  {"database":"materialize","id":"u7","item":"s","schema":"public","size":"1"}  materialize
 29  alter  source  {"database":"materialize","id":"u7","item":"s","new_size":"2","old_size":"1","schema":"public"}  materialize
 30  drop  source  {"database":"materialize","id":"u7","item":"s","schema":"public"}  materialize
-31  drop  cluster-replica  {"cluster_id":"u2","cluster_name":"foo","replica_name":"r"}  materialize
-32  drop  cluster  {"id":"u2","name":"foo"}  materialize
+31  create  source  {"database":"materialize","id":"u8","item":"accounts","schema":"public","size":null}  materialize
+32  create  source  {"database":"materialize","id":"u9","item":"auctions","schema":"public","size":null}  materialize
+33  create  source  {"database":"materialize","id":"u10","item":"bids","schema":"public","size":null}  materialize
+34  create  source  {"database":"materialize","id":"u11","item":"organizations","schema":"public","size":null}  materialize
+35  create  source  {"database":"materialize","id":"u12","item":"users","schema":"public","size":null}  materialize
+36  create  source  {"database":"materialize","id":"u13","item":"multiplex","schema":"public","size":"1"}  materialize
+37  drop  cluster-replica  {"cluster_id":"u2","cluster_name":"foo","replica_name":"r"}  materialize
+38  drop  cluster  {"id":"u2","name":"foo"}  materialize

@@ -39,7 +39,7 @@ _src_name_  | The name for the source.
 
 Field                                | Value     | Description
 -------------------------------------|-----------|-------------------------------------
-`SIZE`                               | `text`    | Default: `3xsmall`. The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`.
+`SIZE`                               | `text`    | **Required.** The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`.
 
 ## Description
 
@@ -158,12 +158,12 @@ SHOW SOURCES;
 ```nofmt
      name      |      type      |  size
 ---------------+----------------+---------
- accounts      | subsource      | 3xsmall
+ accounts      | subsource      |
  auction_house | load-generator | 3xsmall
- auctions      | subsource      | 3xsmall
- bids          | subsource      | 3xsmall
- organizations | subsource      | 3xsmall
- users         | subsource      | 3xsmall
+ auctions      | subsource      |
+ bids          | subsource      |
+ organizations | subsource      |
+ users         | subsource      |
 ```
 
 To examine the simulated bids:
