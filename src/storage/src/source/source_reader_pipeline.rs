@@ -49,7 +49,7 @@ use timely::PartialOrder;
 use tokio::sync::Mutex;
 use tokio::time::MissedTickBehavior;
 use tokio_stream::{Stream, StreamExt};
-use tracing::{info, trace};
+use tracing::{info, trace, warn};
 
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
@@ -807,12 +807,13 @@ where
     let RawSourceCreationConfig {
         worker_id,
         worker_count,
+        id: source_id,
         ..
     } = config;
 
     // We'll route all the work to a single arbitrary worker;
     // there's not much to do, and we need a global view.
-    let chosen_worker = 0;
+    let chosen_worker_id = 0;
 
     let mut healths = vec![HealthStatus::Starting; worker_count];
 
@@ -821,7 +822,7 @@ where
 
     let mut input = health_op.new_input_connection(
         &health_stream,
-        Exchange::new(move |_| chosen_worker as u64),
+        Exchange::new(move |_| chosen_worker_id as u64),
         vec![],
     );
 
@@ -835,20 +836,20 @@ where
         scope.clone(),
         move |mut _capabilities, _frontiers, scheduler| async move {
             let mut buffer = Vec::new();
-
-            info!("Let's roll!");
-
+            info!("Health for source {source_id} initialized to: {last_reported_status:?}");
             while scheduler.notified().await {
                 input.for_each(|_cap, rows| {
                     rows.swap(&mut buffer);
                     for (worker_id, health_event) in buffer.drain(..) {
+                        if worker_id != chosen_worker_id {
+                            warn!("Health messages for source {source_id} passed to an unexpected worker id: {worker_id}")
+                        }
                         let prev_health = &healths[worker_id];
                         if prev_health != &health_event {
-                            info!("Health transition for worker {worker_id}: {prev_health:?} -> {health_event:?}");
                             healths[worker_id] = health_event;
                             let new_status = overall_status(&healths);
                             if &last_reported_status != new_status {
-                                info!("Health transition for the source: {last_reported_status:?} -> {new_status:?}");
+                                info!("Health transition for source {source_id}: {last_reported_status:?} -> {new_status:?}");
                                 last_reported_status = new_status.clone();
                             }
                         }
