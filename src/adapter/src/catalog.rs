@@ -107,7 +107,7 @@ pub static INTROSPECTION_USER: Lazy<User> = Lazy::new(|| User {
 });
 
 pub static INTERNAL_USER_NAMES: Lazy<BTreeSet<String>> = Lazy::new(|| {
-    vec![&SYSTEM_USER, &INTROSPECTION_USER]
+    [&SYSTEM_USER, &INTROSPECTION_USER]
         .into_iter()
         .map(|user| user.name.clone())
         .collect()
