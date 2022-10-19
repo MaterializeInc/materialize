@@ -64,7 +64,7 @@ with several additional columns that describe the nature of the update:
 <tbody>
   <tr>
     <td><code>mz_timestamp</code></td>
-    <td><code>numeric</code></td>
+    <td><code>mz_timestamp</code></td>
     <td>
       Materialize's internal logical timestamp. This will never be less than any
       timestamp previously emitted by the same <code>SUBSCRIBE</code> operation.
