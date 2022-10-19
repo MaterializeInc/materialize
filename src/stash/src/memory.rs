@@ -136,7 +136,39 @@ impl<S: Stash> Stash for Memory<S> {
         K: Data,
         V: Data,
     {
-        self.stash.iter_key(collection, key).await
+        Ok(match self.entries.entry(collection.id) {
+            Entry::Occupied(entry) => entry
+                .get()
+                .iter()
+                .filter_map(|((k, v), ts, diff)| {
+                    let k: K = serde_json::from_slice(k).expect("must deserialize");
+                    if &k == key {
+                        let v: V = serde_json::from_slice(v).expect("must deserialize");
+                        Some((v, *ts, *diff))
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+            Entry::Vacant(_) => {
+                // If vacant, do a full `iter` to correctly populate the cache
+                // (`entries`, if present, must contain all keys in the source
+                // collection).
+                let entries = self.iter(collection).await?;
+                entries
+                    .into_iter()
+                    .filter_map(
+                        |((k, v), ts, diff)| {
+                            if &k == key {
+                                Some((v, ts, diff))
+                            } else {
+                                None
+                            }
+                        },
+                    )
+                    .collect()
+            }
+        })
     }
 
     async fn update_many<K, V, I>(
@@ -280,7 +312,7 @@ impl<S: Stash> Stash for Memory<S> {
 #[async_trait]
 impl<S: Append> Append for Memory<S> {
     async fn append_batch(&mut self, batches: &[AppendBatch]) -> Result<(), StashError> {
-        self.stash.append(batches).await?;
+        self.stash.append_batch(batches).await?;
         for batch in batches {
             self.uppers.insert(batch.collection_id, batch.upper.clone());
             self.sinces

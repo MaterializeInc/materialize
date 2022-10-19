@@ -313,16 +313,17 @@ where
     stash
         .update(orders, ("wombats".into(), "2".into()), 1, 2)
         .await?;
+    // Move this before iter to better test the memory stash's iter_key.
+    assert_eq!(
+        stash.iter_key(orders, &"widgets".to_string()).await?,
+        &[("1".into(), 1, 1)]
+    );
     assert_eq!(
         stash.iter(orders).await?,
         &[
             (("widgets".into(), "1".into()), 1, 1),
             (("wombats".into(), "2".into()), 1, 2),
         ]
-    );
-    assert_eq!(
-        stash.iter_key(orders, &"widgets".to_string()).await?,
-        &[("1".into(), 1, 1)]
     );
     assert_eq!(
         stash.iter_key(orders, &"wombats".to_string()).await?,
