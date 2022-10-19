@@ -349,6 +349,12 @@ async fn migrate<S: Append>(
                 .insert(USER_VERSION.to_string(), ConfigValue { value: 0 })?;
             Ok(())
         },
+        // These three migrations were removed, but we need to keep empty migrations because the
+        // user version depends on the length of this array. New migrations should still go after
+        // these empty migrations.
+        |_, _| {},
+        |_, _| {},
+        |_, _| {},
         // Add new migrations above.
         //
         // Migrations should be preceded with a comment of the following form:
