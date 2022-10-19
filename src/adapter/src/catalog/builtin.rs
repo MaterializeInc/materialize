@@ -34,7 +34,7 @@ use mz_sql::catalog::{
 };
 use mz_storage::controller::IntrospectionType;
 
-use crate::catalog::{DEFAULT_CLUSTER_REPLICA_NAME, INTROSPECTION_USER, SYSTEM_USER};
+use crate::catalog::{DEFAULT_CLUSTER_REPLICA_NAME, INTROSPECTION_USER_NAME, SYSTEM_USER_NAME};
 
 pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
 pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
@@ -2465,16 +2465,16 @@ ON mz_catalog.mz_secrets (schema_id)",
 };
 
 pub static MZ_SYSTEM_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
-    name: &*SYSTEM_USER.name,
+    name: &*SYSTEM_USER_NAME,
 });
 
 pub static MZ_INTROSPECTION_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
-    name: &*INTROSPECTION_USER.name,
+    name: &*INTROSPECTION_USER_NAME,
 });
 
 pub static MZ_SYSTEM_COMPUTE_INSTANCE: Lazy<BuiltinComputeInstance> =
     Lazy::new(|| BuiltinComputeInstance {
-        name: &*SYSTEM_USER.name,
+        name: &*SYSTEM_USER_NAME,
     });
 
 pub static MZ_SYSTEM_COMPUTE_REPLICA: Lazy<BuiltinComputeReplica> =
@@ -2485,7 +2485,7 @@ pub static MZ_SYSTEM_COMPUTE_REPLICA: Lazy<BuiltinComputeReplica> =
 
 pub static MZ_INTROSPECTION_COMPUTE_INSTANCE: Lazy<BuiltinComputeInstance> =
     Lazy::new(|| BuiltinComputeInstance {
-        name: &*INTROSPECTION_USER.name,
+        name: &*INTROSPECTION_USER_NAME,
     });
 
 pub static MZ_INTROSPECTION_COMPUTE_REPLICA: Lazy<BuiltinComputeReplica> =

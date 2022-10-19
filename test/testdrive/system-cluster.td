@@ -45,10 +45,10 @@ contains:system cluster 'mz_introspection' cannot be modified
 > SET CLUSTER TO mz_system
 
 ! SHOW MATERIALIZED VIEWS
-contains:system cluster 'mz_system' cannot execute user queries
+contains:unauthorized: user 'materialize' is unauthorized to use cluster mz_system
 
 ! CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
-contains:system cluster 'mz_system' cannot be modified
+contains:unauthorized: user 'materialize' is unauthorized to use cluster mz_system
 
 > SET CLUSTER TO default
 

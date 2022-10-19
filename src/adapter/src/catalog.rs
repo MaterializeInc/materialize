@@ -73,13 +73,15 @@ use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{
     Builtin, BuiltinLog, BuiltinTable, BuiltinType, Fingerprint, BUILTINS, BUILTIN_PREFIXES,
-    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
+    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_INTROSPECTION_COMPUTE_INSTANCE,
+    MZ_SYSTEM_COMPUTE_INSTANCE, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::{ClusterReplicaSizeMap, Config, StorageHostSizeMap};
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::catalog::storage::{BootstrapArgs, Transaction};
 use crate::client::ConnectionId;
+use crate::session::permissions::{Permissions, UserAction, UserPermissions};
 use crate::session::vars::SystemVars;
 use crate::session::{PreparedStatement, Session, User, DEFAULT_DATABASE_NAME};
 use crate::util::index_sql;
@@ -97,19 +99,46 @@ pub mod storage;
 
 pub const SYSTEM_CONN_ID: ConnectionId = 0;
 
+pub const SYSTEM_USER_NAME: &str = "mz_system";
+
 pub static SYSTEM_USER: Lazy<User> = Lazy::new(|| User {
-    name: "mz_system".into(),
+    name: SYSTEM_USER_NAME.into(),
     external_metadata: None,
+    permissions: UserPermissions::All,
 });
+
+pub const INTROSPECTION_USER_NAME: &str = "mz_introspection";
 
 pub static INTROSPECTION_USER: Lazy<User> = Lazy::new(|| User {
-    name: "mz_introspection".into(),
+    name: INTROSPECTION_USER_NAME.into(),
     external_metadata: None,
+    permissions: UserPermissions::AllowList(Permissions {
+        compute_instances: HashSet::from_iter([
+            MZ_SYSTEM_COMPUTE_INSTANCE.name.to_string(),
+            MZ_INTROSPECTION_COMPUTE_INSTANCE.name.to_string(),
+        ]),
+        schemas: [
+            (
+                RawDatabaseSpecifier::Ambient,
+                MZ_INTERNAL_SCHEMA.to_string(),
+            ),
+            (RawDatabaseSpecifier::Ambient, MZ_CATALOG_SCHEMA.to_string()),
+            (RawDatabaseSpecifier::Ambient, PG_CATALOG_SCHEMA.to_string()),
+        ]
+        .into_iter()
+        .fold(HashMap::new(), |mut map, (database, schema)| {
+            map.entry(database).or_default().insert(schema);
+            map
+        }),
+        action: HashSet::from_iter([UserAction::Read, UserAction::Show, UserAction::Set]),
+    }),
 });
 
-pub static INTERNAL_USER_NAMES: Lazy<BTreeSet<String>> = Lazy::new(|| {
-    [&SYSTEM_USER, &INTROSPECTION_USER]
-        .into_iter()
+pub static INTERNAL_USERS: Lazy<Vec<&User>> = Lazy::new(|| vec![&SYSTEM_USER, &INTROSPECTION_USER]);
+
+pub static INTERNAL_USER_NAMES: Lazy<Vec<String>> = Lazy::new(|| {
+    INTERNAL_USERS
+        .iter()
         .map(|user| user.name.clone())
         .collect()
 });
@@ -117,6 +146,7 @@ pub static INTERNAL_USER_NAMES: Lazy<BTreeSet<String>> = Lazy::new(|| {
 pub static HTTP_DEFAULT_USER: Lazy<User> = Lazy::new(|| User {
     name: "anonymous_http_user".into(),
     external_metadata: None,
+    permissions: UserPermissions::All,
 });
 
 const CREATE_SQL_TODO: &str = "TODO";
@@ -303,6 +333,18 @@ impl CatalogState {
         }
     }
 
+    pub fn resolve_raw_database_specifier(
+        &self,
+        database: &ResolvedDatabaseSpecifier,
+    ) -> RawDatabaseSpecifier {
+        match database {
+            ResolvedDatabaseSpecifier::Ambient => RawDatabaseSpecifier::Ambient,
+            ResolvedDatabaseSpecifier::Id(id) => {
+                RawDatabaseSpecifier::Name(self.get_database(id).name().to_string())
+            }
+        }
+    }
+
     pub fn resolve_full_name(
         &self,
         name: &QualifiedObjectName,
@@ -310,12 +352,7 @@ impl CatalogState {
     ) -> FullObjectName {
         let conn_id = conn_id.unwrap_or(SYSTEM_CONN_ID);
 
-        let database = match &name.qualifiers.database_spec {
-            ResolvedDatabaseSpecifier::Ambient => RawDatabaseSpecifier::Ambient,
-            ResolvedDatabaseSpecifier::Id(id) => {
-                RawDatabaseSpecifier::Name(self.get_database(id).name().to_string())
-            }
-        };
+        let database = self.resolve_raw_database_specifier(&name.qualifiers.database_spec);
         let schema = self
             .get_schema(
                 &name.qualifiers.database_spec,
@@ -3108,20 +3145,18 @@ impl<S: Append> Catalog<S> {
         &self,
         session: &Session,
     ) -> Result<&ComputeInstance, AdapterError> {
-        // TODO(benesch): this check here is not sufficiently protective. It'd
-        // be very easy for a code path to accidentally avoid this check by
-        // calling `resolve_compute_instance(session.vars().cluster()`.
-        if session.user().name != SYSTEM_USER.name && session.vars().cluster() == SYSTEM_USER.name {
-            coord_bail!(
-                "system cluster '{}' cannot execute user queries",
-                SYSTEM_USER.name
-            );
-        }
         Ok(self.resolve_compute_instance(session.vars().cluster())?)
     }
 
     pub fn state(&self) -> &CatalogState {
         &self.state
+    }
+
+    pub fn resolve_raw_database_specifier(
+        &self,
+        database: &ResolvedDatabaseSpecifier,
+    ) -> RawDatabaseSpecifier {
+        self.state.resolve_raw_database_specifier(database)
     }
 
     pub fn resolve_full_name(

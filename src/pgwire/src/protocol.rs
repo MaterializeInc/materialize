@@ -26,6 +26,7 @@ use tokio::time::{self, Duration, Instant};
 use tracing::{debug, warn, Instrument};
 
 use mz_adapter::catalog::INTERNAL_USER_NAMES;
+
 use mz_adapter::session::User;
 use mz_adapter::session::{
     EndTransactionAction, ExternalUserMetadata, InProgressRows, Portal, PortalState,
@@ -224,13 +225,7 @@ where
     };
 
     // Construct session.
-    let mut session = Session::new(
-        conn.id(),
-        User {
-            name: user,
-            external_metadata,
-        },
-    );
+    let mut session = Session::new(conn.id(), User::new(user, external_metadata));
     for (name, value) in params {
         let local = false;
         let _ = session.vars_mut().set(&name, &value, local);

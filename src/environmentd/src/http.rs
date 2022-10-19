@@ -43,6 +43,7 @@ use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
 use mz_adapter::catalog::{HTTP_DEFAULT_USER, SYSTEM_USER};
+
 use mz_adapter::session::{ExternalUserMetadata, Session, User};
 use mz_adapter::SessionClient;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
@@ -356,10 +357,10 @@ async fn auth<B>(
     let user = match frontegg {
         // If no Frontegg authentication, we can use the cert's username if
         // present, otherwise the default HTTP user.
-        None => User {
-            name: user.unwrap_or_else(|| HTTP_DEFAULT_USER.name.to_string()),
-            external_metadata: None,
-        },
+        None => User::new(
+            user.unwrap_or_else(|| HTTP_DEFAULT_USER.name.to_string()),
+            None,
+        ),
         // If we require Frontegg auth, fetch credentials from the HTTP auth
         // header. Basic auth comes with a username/password, where the password
         // is the client+secret pair. Bearer auth is an existing JWT that must
@@ -385,13 +386,14 @@ async fn auth<B>(
                 return Err(AuthError::MissingHttpAuthentication);
             };
             let claims = frontegg.validate_access_token(&token, user.as_deref())?;
-            User {
-                external_metadata: Some(ExternalUserMetadata {
-                    user_id: claims.best_user_id(),
+            let user_id = claims.best_user_id();
+            User::new(
+                claims.email,
+                Some(ExternalUserMetadata {
+                    user_id,
                     group_id: claims.tenant_id,
                 }),
-                name: claims.email,
-            }
+            )
         }
     };
 

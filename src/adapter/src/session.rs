@@ -27,10 +27,11 @@ use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, StatementDesc};
 use mz_sql_parser::ast::TransactionIsolationLevel;
 
-use crate::catalog::{INTERNAL_USER_NAMES, SYSTEM_USER};
+use crate::catalog::{INTERNAL_USERS, INTERNAL_USER_NAMES, SYSTEM_USER};
 use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
 use crate::error::AdapterError;
+use crate::session::permissions::UserPermissions;
 use crate::session::vars::IsolationLevel;
 use crate::util::ComputeSinkId;
 use crate::AdapterNotice;
@@ -40,6 +41,7 @@ pub use self::vars::{
     SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
 };
 
+pub(crate) mod permissions;
 pub(crate) mod vars;
 
 const DUMMY_CONNECTION_ID: ConnectionId = 0;
@@ -51,6 +53,8 @@ pub struct User {
     pub name: String,
     /// Metadata about this user in an external system.
     pub external_metadata: Option<ExternalUserMetadata>,
+    /// User permissions.
+    pub permissions: UserPermissions,
 }
 
 /// Metadata about a [`User`] in an external system.
@@ -69,6 +73,21 @@ impl PartialEq for User {
 }
 
 impl User {
+    /// Constructs a new [`User`] object.
+    pub fn new(name: String, external_metadata: Option<ExternalUserMetadata>) -> Self {
+        let permissions = INTERNAL_USERS
+            .iter()
+            .find(|internal_user| internal_user.name == name)
+            .map(|internal_user| internal_user.permissions.clone())
+            .unwrap_or_default();
+
+        User {
+            name,
+            external_metadata,
+            permissions,
+        }
+    }
+
     /// Returns whether this is an internal user.
     pub fn is_internal(&self) -> bool {
         INTERNAL_USER_NAMES.contains(&self.name)

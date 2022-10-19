@@ -14,6 +14,7 @@ use std::num::{NonZeroI64, NonZeroUsize};
 use std::time::Duration;
 
 use anyhow::anyhow;
+
 use maplit::btreeset;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, OwnedMutexGuard};
@@ -36,7 +37,10 @@ use mz_ore::task;
 use mz_repr::explain_new::Explainee;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, ScalarType, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
-use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails};
+use mz_sql::catalog::{
+    CatalogComputeInstance, CatalogError, CatalogItemType, CatalogSchema, CatalogTypeDetails,
+    SessionCatalog,
+};
 use mz_sql::names::QualifiedObjectName;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
@@ -51,6 +55,7 @@ use mz_sql::plan::{
     ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
     SubscribeFrom, SubscribePlan, View,
 };
+
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage::types::sinks::StorageSinkConnectionBuilder;
@@ -72,8 +77,8 @@ use crate::explain_new::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
 use crate::session::vars::IsolationLevel;
 use crate::session::{
-    EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, Var,
-    WriteOp,
+    permissions, EndTransactionAction, PreparedStatement, Session, TransactionOps,
+    TransactionStatus, Var, WriteOp,
 };
 use crate::subscribe::PendingSubscribe;
 use crate::util::{send_immediate_rows, ClientTransmitter, ComputeSinkId};
@@ -91,6 +96,10 @@ impl<S: Append + 'static> Coordinator<S> {
         event!(Level::TRACE, plan = format!("{:?}", plan));
         let responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
         tx.set_allowed(responses);
+
+        if let Err(e) = self.check_user_permissions(&session, &plan, &depends_on) {
+            return tx.send(Err(e), session);
+        }
 
         match plan {
             Plan::CreateSource(plan) => {
@@ -430,6 +439,88 @@ impl<S: Append + 'static> Coordinator<S> {
                 tx.send(self.sequence_rotate_keys(&session, id).await, session);
             }
         }
+    }
+
+    fn check_user_permissions(
+        &self,
+        session: &Session,
+        plan: &Plan,
+        depends_on: &Vec<GlobalId>,
+    ) -> Result<(), AdapterError> {
+        let permissions = &session.user().permissions;
+        if permissions.is_all() {
+            return Ok(());
+        }
+
+        if !permissions.is_allowed_plan(plan) {
+            return Err(AdapterError::Unauthorized(format!(
+                "user '{}' is unauthorized to perform this action",
+                &session.user().name,
+            )));
+        }
+
+        if let Ok(active_compute_instance) = self.catalog.active_compute_instance(session) {
+            let active_compute_instance = active_compute_instance.name();
+            if permissions::uses_compute_instance(plan)
+                && !permissions.is_allowed_compute_instance(active_compute_instance)
+            {
+                return Err(AdapterError::Unauthorized(format!(
+                    "user '{}' is unauthorized to use cluster {active_compute_instance}",
+                    &session.user().name,
+                )));
+            }
+        }
+
+        if let Some(compute_instance_id) = permissions::extract_target_compute_instance(plan) {
+            let conn_catalog = self.catalog.for_session(session);
+            let compute_instance = conn_catalog
+                .get_compute_instance(*compute_instance_id)
+                .name();
+            if !permissions.is_allowed_compute_instance(compute_instance) {
+                return Err(AdapterError::Unauthorized(format!(
+                    "user '{}' is unauthorized to use cluster {compute_instance}",
+                    &session.user().name,
+                )));
+            }
+        }
+
+        for id in depends_on {
+            let entry = self.catalog.get_entry(id);
+            let full_name = self
+                .catalog
+                .resolve_full_name(entry.name(), Some(session.conn_id()));
+            if !permissions.is_allowed_schema(&full_name.database, &full_name.schema) {
+                return Err(AdapterError::Unauthorized(format!(
+                    "user '{}' is unauthorized to interact with object {full_name}",
+                    &session.user().name,
+                )));
+            }
+        }
+
+        if let Some(qualifiers) = permissions::extract_target_schema(plan, &self.catalog) {
+            for qualifier in qualifiers {
+                let database = self
+                    .catalog
+                    .resolve_raw_database_specifier(&qualifier.database_spec);
+                let schema = &self
+                    .catalog
+                    .get_schema(
+                        &qualifier.database_spec,
+                        &qualifier.schema_spec,
+                        session.conn_id(),
+                    )
+                    .name()
+                    .schema;
+                if !permissions.is_allowed_schema(&database, schema) {
+                    return Err(AdapterError::Unauthorized(format!(
+                        "user '{}' is unauthorized to interact with schema {database}.{schema}",
+                        &session.user().name,
+                    )));
+                }
+            }
+        }
+
+        Ok(())
     }
 
     pub(crate) async fn sequence_create_source(
