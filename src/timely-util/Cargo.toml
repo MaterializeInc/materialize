@@ -10,7 +10,8 @@ publish = false
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures-util = "0.3.24"
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
+serde = { version = "1.0.144", features = ["derive"] }
 
 [dev-dependencies]
 tokio = { version = "1.20.2", features = ["macros", "rt-multi-thread", "time"] }

@@ -4396,6 +4396,7 @@ dependencies = [
  "differential-dataflow",
  "futures-util",
  "proptest",
+ "serde",
  "timely",
  "tokio",
 ]
