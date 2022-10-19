@@ -1004,6 +1004,37 @@ impl<T: AstInfo> AstDisplay for CreateTypeStatement<T> {
 }
 impl_display_t!(CreateTypeStatement);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ClusterOptionName {
+    /// The `REPLICAS` option.
+    Replicas,
+}
+
+impl AstDisplay for ClusterOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ClusterOptionName::Replicas => f.write_str("REPLICAS"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// An option in a `CREATE CLUSTER` ostatement.
+pub struct ClusterOption<T: AstInfo> {
+    pub name: ClusterOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for ClusterOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" ");
+            f.write_node(v);
+        }
+    }
+}
+
 /// `CREATE CLUSTER ..`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateClusterStatement<T: AstInfo> {
@@ -1024,25 +1055,6 @@ impl<T: AstInfo> AstDisplay for CreateClusterStatement<T> {
     }
 }
 impl_display_t!(CreateClusterStatement);
-
-/// An option in a `CREATE CLUSTER` statement.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ClusterOption<T: AstInfo> {
-    /// The `REPLICAS` option.
-    Replicas(Vec<ReplicaDefinition<T>>),
-}
-
-impl<T: AstInfo> AstDisplay for ClusterOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            ClusterOption::Replicas(replicas) => {
-                f.write_str("REPLICAS (");
-                f.write_node(&display::comma_separated(replicas));
-                f.write_str(")");
-            }
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ReplicaDefinition<T: AstInfo> {
@@ -1118,7 +1130,7 @@ impl AstDisplay for ReplicaOptionName {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-/// An option in a `CREATE CLUSTER` or `CREATE CLUSTER REPLICA` statement.
+/// An option in a `CREATE CLUSTER REPLICA` statement.
 pub struct ReplicaOption<T: AstInfo> {
     pub name: ReplicaOptionName,
     pub value: Option<WithOptionValue<T>>,
@@ -2137,6 +2149,8 @@ pub enum WithOptionValue<T: AstInfo> {
     Secret(T::ObjectName),
     Object(T::ObjectName),
     Sequence(Vec<WithOptionValue<T>>),
+    // Special cases.
+    ClusterReplicas(Vec<ReplicaDefinition<T>>),
 }
 
 impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
@@ -2155,6 +2169,11 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 f.write_node(name)
             }
             WithOptionValue::Object(obj) => f.write_node(obj),
+            WithOptionValue::ClusterReplicas(replicas) => {
+                f.write_str("(");
+                f.write_node(&display::comma_separated(replicas));
+                f.write_str(")");
+            }
         }
     }
 }

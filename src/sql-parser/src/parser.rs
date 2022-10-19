@@ -2876,31 +2876,33 @@ impl<'a> Parser<'a> {
 
     fn parse_create_cluster(&mut self) -> Result<Statement<Raw>, ParserError> {
         let name = self.parse_identifier()?;
-
-        let mut options = Vec::new();
-        if self.parse_keyword(REPLICAS) {
-            self.expect_token(&Token::LParen)?;
-
-            let replicas = if self.peek_token() == Some(Token::RParen) {
-                vec![]
-            } else {
-                self.parse_comma_separated(|parser| {
-                    let name = parser.parse_identifier()?;
-                    parser.expect_token(&Token::LParen)?;
-                    let options = parser.parse_comma_separated(Parser::parse_replica_option)?;
-                    parser.expect_token(&Token::RParen)?;
-                    Ok(ReplicaDefinition { name, options })
-                })?
-            };
-
-            self.expect_token(&Token::RParen)?;
-            options.push(ClusterOption::Replicas(replicas));
-        }
-
+        let options = self.parse_comma_separated(Parser::parse_cluster_option)?;
         Ok(Statement::CreateCluster(CreateClusterStatement {
             name,
             options,
         }))
+    }
+
+    fn parse_cluster_option(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
+        self.expect_keyword(REPLICAS)?;
+        self.expect_token(&Token::LParen)?;
+        let replicas = if self.consume_token(&Token::RParen) {
+            vec![]
+        } else {
+            let replicas = self.parse_comma_separated(|parser| {
+                let name = parser.parse_identifier()?;
+                parser.expect_token(&Token::LParen)?;
+                let options = parser.parse_comma_separated(Parser::parse_replica_option)?;
+                parser.expect_token(&Token::RParen)?;
+                Ok(ReplicaDefinition { name, options })
+            })?;
+            self.expect_token(&Token::RParen)?;
+            replicas
+        };
+        Ok(ClusterOption {
+            name: ClusterOptionName::Replicas,
+            value: Some(WithOptionValue::ClusterReplicas(replicas)),
+        })
     }
 
     fn parse_replica_option(&mut self) -> Result<ReplicaOption<Raw>, ParserError> {
