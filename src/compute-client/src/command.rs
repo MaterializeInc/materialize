@@ -1153,6 +1153,13 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         }
         // Allow compaction only after emmitting peek commands.
         if !final_frontiers.is_empty() {
+            for (id, compaction_update) in final_frontiers.iter() {
+                if id.is_user() && compaction_update.is_empty() {
+                    panic!(
+                        "ComputeCommandHistory::reduce: final compaction update for {id} is empty"
+                    );
+                }
+            }
             self.commands.push(ComputeCommand::AllowCompaction(
                 final_frontiers.into_iter().collect(),
             ));

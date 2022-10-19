@@ -1292,6 +1292,13 @@ where
             }
         }
         if !compaction_commands.is_empty() {
+            for (id, compaction_update) in compaction_commands.iter() {
+                if id.is_user() && compaction_update.is_empty() {
+                    panic!(
+                        "ActiveInstance::update_read_capabilities: compaction update for {id} is empty"
+                    );
+                }
+            }
             self.compute
                 .replicas
                 .send(ComputeCommand::AllowCompaction(compaction_commands));

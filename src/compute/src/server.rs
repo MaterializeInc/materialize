@@ -769,6 +769,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 }
             }
             if !old_compaction.is_empty() {
+                for (id, compaction_update) in old_compaction.iter() {
+                    if id.is_user() && compaction_update.is_empty() {
+                        panic!("Worker::reconcile: old compaction update for {id} is empty");
+                    }
+                }
                 todo_commands.insert(
                     0,
                     ComputeCommand::AllowCompaction(old_compaction.into_iter().collect::<Vec<_>>()),
