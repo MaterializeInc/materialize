@@ -319,6 +319,14 @@ where
         }
 
         if !new_uppers.is_empty() {
+            for (id, frontier_update) in new_uppers.iter() {
+                if id.is_user() && frontier_update.upper.is_empty() {
+                    panic!(
+                        "ActiveReplicationState::remove_replica: frontier update for {id} is empty, uppers: {:?}", self.uppers
+                    );
+                }
+            }
+
             self.pending_response
                 .push_back(ActiveReplicationResponse::FrontierUppers(new_uppers));
         }
@@ -458,6 +466,12 @@ where
         }
 
         if !new_uppers.is_empty() {
+            for (id, frontier_update) in new_uppers.iter() {
+                if id.is_user() && frontier_update.upper.is_empty() {
+                    panic!("ActiveReplicationState::handle_frontier_uppers: frontier update for {id} is empty, uppers: {:?}", self.uppers);
+                }
+            }
+
             Some(ActiveReplicationResponse::FrontierUppers(new_uppers))
         } else {
             None
@@ -510,6 +524,12 @@ where
                 }
 
                 let frontier_updates = vec![(subscribe_id, entry.bounds.clone())];
+
+                for (id, frontier_update) in frontier_updates.iter() {
+                    if id.is_user() && frontier_update.upper.is_empty() {
+                        panic!("ActiveReplicationState::handle_subscribe_response: frontier update for {id} is empty, uppers: {:?}", self.uppers);
+                    }
+                }
                 self.pending_response
                     .push_back(ActiveReplicationResponse::FrontierUppers(frontier_updates));
 
