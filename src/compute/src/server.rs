@@ -774,7 +774,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                                 "for {id}, inserting empty frontier into old_compaction to drop it"
                             );
                         }
-                        old_compaction.insert(id, timely::progress::Antichain::default());
+                        // old_compaction.insert(id, timely::progress::Antichain::default());
                     }
                 }
             }
