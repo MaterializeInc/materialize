@@ -320,12 +320,12 @@ CREATE CONNECTION csr_ssl TO CONFLUENT SCHEMA REGISTRY (
 );
 ```
 {{< /tab >}}
-{{< tab "Basic Authentication">}}
+{{< tab "Basic HTTP Authentication">}}
 ```sql
 CREATE SECRET IF NOT EXISTS csr_username AS '<CSR_USERNAME>';
 CREATE SECRET IF NOT EXISTS csr_password AS '<CSR_PASSWORD>';
 
-CREATE CONNECTION csr_sasl
+CREATE CONNECTION csr_basic_http
   FOR CONFLUENT SCHEMA REGISTRY
   URL '<CONFLUENT_REGISTRY_URL>',
   USERNAME = SECRET csr_username,
