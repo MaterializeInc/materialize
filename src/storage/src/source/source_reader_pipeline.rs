@@ -432,10 +432,12 @@ where
     }))
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum HealthEvent {
-    StalledWithError,
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HealthStatus {
+    Starting,
     Running,
+    StalledWithError(String),
+    FailedWithError(String),
 }
 
 struct SourceReaderStreams<G: Scope<Timestamp = Timestamp>, S: SourceReader> {
@@ -444,7 +446,7 @@ struct SourceReaderStreams<G: Scope<Timestamp = Timestamp>, S: SourceReader> {
         Rc<RefCell<Option<SourceMessageBatch<S::Key, S::Value, S::Diff>>>>,
     >,
     batch_upper_summaries: timely::dataflow::Stream<G, BatchUpperSummary>,
-    health_stream: timely::dataflow::Stream<G, (usize, HealthEvent)>,
+    health_stream: timely::dataflow::Stream<G, (usize, HealthStatus)>,
 }
 
 /// Reads from a [`SourceReader`] and returns a stream of "un-timestamped"
@@ -745,13 +747,19 @@ where
 
                 for (message_batch, source_upper) in buffer.drain(..) {
                     if let Some(batch) = &*message_batch.borrow() {
-                        let has_errors = !batch.non_definite_errors.is_empty();
+                        let has_errors = batch.non_definite_errors.first();
                         let has_messages = batch.messages.values().any(|vs| !vs.is_empty());
 
                         let maybe_health = match (has_errors, has_messages) {
-                            (true, _) => Some(HealthEvent::StalledWithError),
-                            (_, true) => Some(HealthEvent::Running),
-                            (false, false) => None,
+                            (Some(error), _) => {
+                                // Arguably this case should be "failed", since generally a source
+                                // cannot recover by the time an error reaches this far down the pipe.
+                                // However, we don't actually shut down the source on error yet, so
+                                // treating this as a possibly-temporary stall for now.
+                                Some(HealthStatus::StalledWithError(error.error.to_string()))
+                            }
+                            (_, true) => Some(HealthStatus::Running),
+                            (None, false) => None,
                         };
 
                         if let Some(health) = maybe_health {
@@ -789,7 +797,7 @@ where
 fn health_operator<G>(
     scope: &G,
     config: RawSourceCreationConfig,
-    health_stream: timely::dataflow::Stream<G, (usize, HealthEvent)>,
+    health_stream: timely::dataflow::Stream<G, (usize, HealthStatus)>,
 ) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -800,10 +808,11 @@ where
         ..
     } = config;
 
+    // We'll route all the work to a single arbitrary worker;
+    // there's not much to do, and we need a global view.
     let chosen_worker = 0;
-    let active_worker = chosen_worker == worker_id;
 
-    let mut healths = vec![None; worker_count];
+    let mut healths = vec![HealthStatus::Starting; worker_count];
 
     let operator_name = format!("healthcheck({})", worker_id);
     let mut health_op = OperatorBuilder::new(operator_name, scope.clone());
@@ -814,9 +823,15 @@ where
         vec![],
     );
 
+    fn overall_status(healths: &[HealthStatus]) -> &HealthStatus {
+        healths.iter().max().unwrap_or(&HealthStatus::Starting)
+    }
+
+    let mut last_reported_status = overall_status(&healths).clone();
+
     health_op.build_async(
         scope.clone(),
-        move |mut _capabilities, frontiers, scheduler| async move {
+        move |mut _capabilities, _frontiers, scheduler| async move {
             let mut buffer = Vec::new();
 
             info!("Let's roll!");
@@ -825,8 +840,16 @@ where
                 input.for_each(|_cap, rows| {
                     rows.swap(&mut buffer);
                     for (worker_id, health_event) in buffer.drain(..) {
-                        info!("Health update for {worker_id}: {health_event:?}");
-                        healths[worker_id] = Some(health_event);
+                        let prev_health = &healths[worker_id];
+                        if prev_health != &health_event {
+                            info!("Health transition for worker {worker_id}: {prev_health:?} -> {health_event:?}");
+                            healths[worker_id] = health_event;
+                            let new_status = overall_status(&healths);
+                            if &last_reported_status != new_status {
+                                info!("Health transition for the source: {last_reported_status:?} -> {new_status:?}");
+                                last_reported_status = new_status.clone();
+                            }
+                        }
                     }
                 })
             }
