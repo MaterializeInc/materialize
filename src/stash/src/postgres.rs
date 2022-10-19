@@ -86,22 +86,29 @@ struct PreparedStatements {
 struct CountedStatements<'a> {
     stmts: &'a PreparedStatements,
     // Due to our use of try_join and futures, this needs to be an Arc Mutex.
-    // Use a BTreeMap for deterministic debug printing.
-    counts: Arc<Mutex<BTreeMap<&'static str, usize>>>,
+    // Use a BTreeMap for deterministic debug printing. Use an Option to avoid
+    // allocating an Arc when unused.
+    counts: Option<Arc<Mutex<BTreeMap<&'static str, usize>>>>,
 }
 
 impl<'a> CountedStatements<'a> {
     fn from(stmts: &'a PreparedStatements) -> Self {
         Self {
             stmts,
-            counts: Arc::new(Mutex::new(BTreeMap::new())),
+            counts: if tracing::enabled!(Level::DEBUG) {
+                Some(Arc::new(Mutex::new(BTreeMap::new())))
+            } else {
+                None
+            },
         }
     }
 
     fn inc(&self, name: &'static str) {
-        let mut map = self.counts.lock().unwrap();
-        *map.entry(name).or_default() += 1;
-        *map.entry("_total").or_default() += 1;
+        if let Some(counts) = &self.counts {
+            let mut map = counts.lock().unwrap();
+            *map.entry(name).or_default() += 1;
+            *map.entry("_total").or_default() += 1;
+        }
     }
 
     fn select_epoch(&self) -> &Statement {
@@ -436,10 +443,12 @@ impl Postgres {
         if current_nonce != self.nonce {
             return Err(InternalStashError::Fence("unexpected fence nonce".into()).into());
         }
-        event!(
-            Level::DEBUG,
-            stmt_counts = format!("{:?}", stmts.counts.lock().unwrap())
-        );
+        if let Some(counts) = stmts.counts {
+            event!(
+                Level::DEBUG,
+                counts = format!("{:?}", counts.lock().unwrap()),
+            );
+        }
         tx.commit().await?;
         Ok(res)
     }
