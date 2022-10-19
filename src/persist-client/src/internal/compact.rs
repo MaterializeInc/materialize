@@ -201,7 +201,8 @@ where
                     match res {
                         Ok(Ok(res)) => {
                             let res = FueledMergeRes { output: res.output };
-                            match machine.merge_res(&res).await {
+                            let apply_merge_result = machine.merge_res(&res).await;
+                            match &apply_merge_result {
                                 ApplyMergeResult::AppliedExact => {
                                     metrics.compaction.applied.inc();
                                     metrics.compaction.applied_exact_match.inc();
@@ -212,7 +213,14 @@ where
                                     metrics.compaction.applied_subset_match.inc();
                                     machine.shard_metrics.compaction_applied.inc();
                                 }
-                                ApplyMergeResult::NotApplied => {
+                                ApplyMergeResult::NotAppliedNoMatch
+                                | ApplyMergeResult::NotAppliedInvalidSince
+                                | ApplyMergeResult::NotAppliedTooManyUpdates => {
+                                    if let ApplyMergeResult::NotAppliedTooManyUpdates =
+                                        &apply_merge_result
+                                    {
+                                        metrics.compaction.not_applied_too_many_updates.inc();
+                                    }
                                     metrics.compaction.noop.inc();
                                     for part in res.output.parts {
                                         let key = part.key.complete(&machine.shard_id());

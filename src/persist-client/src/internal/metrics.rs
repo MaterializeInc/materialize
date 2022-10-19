@@ -607,6 +607,7 @@ pub struct CompactionMetrics {
 
     pub(crate) applied_exact_match: IntCounter,
     pub(crate) applied_subset_match: IntCounter,
+    pub(crate) not_applied_too_many_updates: IntCounter,
 
     pub(crate) batch: BatchWriteMetrics,
     pub(crate) steps: CompactionStepTimings,
@@ -678,6 +679,10 @@ impl CompactionMetrics {
             applied_subset_match: registry.register(metric!(
                 name: "mz_persist_compaction_applied_subset_match",
                 help: "count of merge results that replaced a subset of a SpineBatch",
+            )),
+            not_applied_too_many_updates: registry.register(metric!(
+                name: "mz_persist_compaction_not_applied_too_many_updates",
+                help: "count of merge results that did not apply due to too many updates",
             )),
             batch: BatchWriteMetrics::new(registry, "compaction"),
             steps: CompactionStepTimings::new(step_timings.clone()),

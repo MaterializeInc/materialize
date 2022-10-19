@@ -77,6 +77,18 @@ apply-merge-res
 ----
 no-op
 
+# cannot apply batch with more updates than entire spine batch
+apply-merge-res
+[0][16][0] 9 nope
+----
+no-op too many updates
+
+# cannot apply batch with more updates than a subset of fueled merge
+apply-merge-res
+[0][4][0] 3 nope
+----
+no-op too many updates
+
 # perform a merge res at the start of the fueled merge
 apply-merge-res
 [0][4][0] 2 k0-4
