@@ -222,7 +222,7 @@ pub enum SourceMessageType<Key, Value, Diff> {
 
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SourceMessage<Key, Value, Diff> {
     /// The output stream this message belongs to. Later in the pipeline the stream is partitioned
     /// based on this value and is fed to the appropriate source exports
