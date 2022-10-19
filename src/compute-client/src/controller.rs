@@ -704,13 +704,12 @@ where
                 instance.update_write_frontiers(&updates).await?;
                 Ok(None)
             }
-            ActiveReplicationResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
+            ActiveReplicationResponse::PeekResponse(uuid, peek_response, otel_ctx) => Ok(Some(
+                ComputeControllerResponse::PeekResponse(uuid, peek_response, otel_ctx),
+            )),
+            ActiveReplicationResponse::PeekFinished(uuid) => {
                 instance.remove_peeks(&[uuid].into()).await?;
-                Ok(Some(ComputeControllerResponse::PeekResponse(
-                    uuid,
-                    peek_response,
-                    otel_ctx,
-                )))
+                Ok(None)
             }
             ActiveReplicationResponse::SubscribeResponse(global_id, response) => {
                 if let SubscribeResponse::Batch(SubscribeBatch { lower, .. }) = &response {
