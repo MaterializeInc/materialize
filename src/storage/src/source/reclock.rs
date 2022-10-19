@@ -320,7 +320,20 @@ impl ReclockFollower {
 
 impl ReclockFollowerInner {
     pub fn compact(&mut self, new_since: Antichain<Timestamp>) {
-        assert!(PartialOrder::less_equal(&self.since, &new_since));
+        if PartialOrder::less_equal(&new_since, &self.since) {
+            // As long as the assertion about `as_of` and `since` on creation
+            // are correct, it is fine to ignore these compaction requests if
+            // they don't advance the since.
+            tracing::error!(
+                ?new_since,
+                ?self.since,
+                "We are forced to skip the compaction in \
+                the _ReclockFollower_ because the `new_since` >= the `since`. \
+                This is a bug that should be fixed."
+            );
+            return;
+        }
+
         for bindings in self.remap_trace.values_mut() {
             // Compact the remap trace according to the computed frontier
             for (timestamp, _) in bindings.iter_mut() {
@@ -534,7 +547,20 @@ impl ReclockOperator {
 
     /// Compacts the internal state
     pub async fn compact(&mut self, new_since: Antichain<Timestamp>) {
-        assert!(PartialOrder::less_equal(&self.since, &new_since));
+        if PartialOrder::less_equal(&new_since, &self.since) {
+            // As long as the assertion about `as_of` and `since` on creation are
+            // correct, it is fine to ignore these compaction requests if they
+            // don't advance the since.
+            tracing::error!(
+                ?new_since,
+                ?self.since,
+                "We are forced to skip the compaction in \
+                the _ReclockOperator_ because the `new_since` >= the `since`. \
+                This is a bug that should be fixed."
+            );
+            return;
+        }
+
         for bindings in self.remap_trace.values_mut() {
             // Compact the remap trace according to the computed frontier
             for (timestamp, _) in bindings.iter_mut() {
