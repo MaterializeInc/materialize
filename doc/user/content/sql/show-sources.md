@@ -33,8 +33,8 @@ _schema&lowbar;name_ | The schema to show sources from. Defaults to `public` in 
 
 Field | Meaning
 ------|--------
-**name** | The name of the source
-**type** | The type of the source: `kafka`, `postgres`, or `load-generator`
+**name** | The name of the source.
+**type** | The type of the source: `kafka`, `postgres`, `load-generator`, or `subsource`.
 **size** | The [size](/sql/create-source/#sizing-a-source) of the source.
 
 ### Internal statistic sources
