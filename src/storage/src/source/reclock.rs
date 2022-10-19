@@ -320,15 +320,17 @@ impl ReclockFollower {
 
 impl ReclockFollowerInner {
     pub fn compact(&mut self, new_since: Antichain<Timestamp>) {
-        if PartialOrder::less_equal(&new_since, &self.since) {
+        if !PartialOrder::less_equal(&self.since, &new_since) {
             // As long as the assertion about `as_of` and `since` on creation
             // are correct, it is fine to ignore these compaction requests if
-            // they don't advance the since.
+            // they don't advance the since. Note that if the `new_since` and
+            // old `since` are equal, we still attempt to compact the
+            // in-memory trace.
             tracing::error!(
                 ?new_since,
                 ?self.since,
                 "We are forced to skip the compaction in \
-                the _ReclockFollower_ because the `new_since` >= the `since`. \
+                the _ReclockFollower_ because the `new_since` was not beyond the `since`. \
                 This is a bug that should be fixed."
             );
             return;
@@ -547,15 +549,17 @@ impl ReclockOperator {
 
     /// Compacts the internal state
     pub async fn compact(&mut self, new_since: Antichain<Timestamp>) {
-        if PartialOrder::less_equal(&new_since, &self.since) {
-            // As long as the assertion about `as_of` and `since` on creation are
-            // correct, it is fine to ignore these compaction requests if they
-            // don't advance the since.
+        if !PartialOrder::less_equal(&self.since, &new_since) {
+            // As long as the assertion about `as_of` and `since` on creation
+            // are correct, it is fine to ignore these compaction requests if
+            // they don't advance the since. Note that if the `new_since` and
+            // old `since` are equal, we still attempt to compact the
+            // in-memory trace.
             tracing::error!(
                 ?new_since,
                 ?self.since,
                 "We are forced to skip the compaction in \
-                the _ReclockOperator_ because the `new_since` >= the `since`. \
+                the _ReclockFollower_ because the `new_since` was not beyond the `since`. \
                 This is a bug that should be fixed."
             );
             return;
