@@ -312,7 +312,7 @@ impl<S: Stash> Stash for Memory<S> {
 #[async_trait]
 impl<S: Append> Append for Memory<S> {
     async fn append_batch(&mut self, batches: &[AppendBatch]) -> Result<(), StashError> {
-        self.stash.append(batches).await?;
+        self.stash.append_batch(batches).await?;
         for batch in batches {
             self.uppers.insert(batch.collection_id, batch.upper.clone());
             self.sinces
