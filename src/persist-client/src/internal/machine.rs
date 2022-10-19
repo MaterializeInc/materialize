@@ -301,12 +301,19 @@ where
         // false negative (a blob we can never recover referenced by state). We
         // anyway need a mechanism to clean up leaked blobs because of process
         // crashes.
-        let mut merge_result_ever_applied = ApplyMergeResult::NotApplied;
+        let mut merge_result_ever_applied = ApplyMergeResult::NotAppliedNoMatch;
         let (_seqno, _apply_merge_result, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, state| {
                 let ret = state.apply_merge_res(res);
                 if let Continue(result) = ret {
+                    // record if we've ever applied the merge
                     if result.applied() {
+                        merge_result_ever_applied = result;
+                    }
+                    // otherwise record the most granular reason for _not_
+                    // applying the merge when there was a matching batch
+                    if result.matched() && !result.applied() && !merge_result_ever_applied.applied()
+                    {
                         merge_result_ever_applied = result;
                     }
                 }
