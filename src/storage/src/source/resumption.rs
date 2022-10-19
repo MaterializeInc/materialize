@@ -12,10 +12,10 @@
 //!
 //! TODO(guswynn): link to design doc when its merged
 
+use std::any::Any;
+use std::rc::Rc;
+
 use differential_dataflow::Hashable;
-use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::feedback::Feedback;
-use timely::dataflow::operators::feedback::Handle;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::Scope;
@@ -41,7 +41,7 @@ pub fn resumption_operator<G, R>(
     scope: &G,
     config: RawSourceCreationConfig,
     calc: R,
-) -> (timely::dataflow::Stream<G, ()>, Handle<G, ()>)
+) -> (timely::dataflow::Stream<G, ()>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp> + Clone,
     R: ResumptionFrontierCalculator<Timestamp> + 'static,
@@ -55,14 +55,6 @@ where
         ..
     } = config;
 
-    // Note the `summary` doesn't really matter here, as we only ever inspect the frontier
-    // of this input, to compare it to the empty frontier.
-    //
-    // TODO(guswynn): remove this clone, `Feedback::feedback` erroneously requires `&mut Scope`,
-    // but only needs to clone the scope.
-    let (source_reader_feedback_handle, source_reader_feedback_stream) =
-        scope.clone().feedback(Timestamp::new(1));
-
     let chosen_worker = (source_id.hashed() % worker_count as u64) as usize;
     let active_worker = chosen_worker == worker_id;
 
@@ -72,20 +64,13 @@ where
     // don't produce any real data.
     let (_resume_output, resume_stream) = resume_op.new_output();
 
-    // For now, we never actually read any data from this stream, just inspect its frontier.
-    let _feedback = resume_op.new_input_connection(
-        &source_reader_feedback_stream,
-        Pipeline,
-        // Our progress tracking should not depend on a downstream source, especially as this input is only
-        // used for shutdown.
-        vec![Antichain::new()],
-    );
-
     let mut upper = Antichain::from_elem(Timestamp::minimum());
 
+    let token = Rc::new(());
+    let token_weak = Rc::downgrade(&token);
     resume_op.build_async(
         scope.clone(),
-        move |mut capabilities, frontiers, scheduler| async move {
+        move |mut capabilities, _frontiers, scheduler| async move {
             let mut cap_set = if active_worker {
                 CapabilitySet::from_elem(capabilities.pop().expect("missing capability"))
             } else {
@@ -104,12 +89,8 @@ where
             };
 
             while scheduler.notified().await {
-                // If the downstream source has finished, we exit early.
-                {
-                    let source_reader_feedback_frontier = &frontiers.borrow()[0];
-                    if source_reader_feedback_frontier.elements().is_empty() {
-                        return;
-                    }
+                if token_weak.upgrade().is_none() {
+                    return;
                 }
 
                 if !active_worker {
@@ -138,5 +119,5 @@ where
         },
     );
 
-    (resume_stream, source_reader_feedback_handle)
+    (resume_stream, token)
 }
