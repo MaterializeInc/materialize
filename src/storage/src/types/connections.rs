@@ -147,6 +147,13 @@ pub enum Connection {
     Postgres(PostgresConnection),
     Ssh(SshConnection),
     Aws(AwsConfig),
+    AwsPrivateLink(AwsPrivateLinkConnection),
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct AwsPrivateLinkConnection {
+    pub service_name: String,
+    pub availability_zones: Vec<String>,
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]

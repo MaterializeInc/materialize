@@ -375,6 +375,13 @@ CREATE MATERIALIZED VIEW v IN CLUSTER [1] AS SELECT 1
 CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedObjectName([Ident("v")]), columns: [], in_cluster: Some(Resolved("1")), query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
 
 parse-statement
+CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES ('use1-az1', 'use1-az4'))
+----
+CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES('use1-az1', 'use1-az4'))
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("privatelinkconn")]), connection: AwsPrivateLink { with_options: [AwsPrivateLinkConnectionOption { name: ServiceName, value: Value(String("com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc")) }, AwsPrivateLinkConnectionOption { name: AvailabilityZones, value: Sequence([Value(String("use1-az1")), Value(String("use1-az4"))]) }] }, if_not_exists: false })
+
+parse-statement
 CREATE CONNECTION pgconn FOR postgres HOST foo, PORT 1234, SSL CERTIFICATE AUTHORITY 'foo', SSH TUNNEL tun
 ----
 CREATE CONNECTION pgconn TO POSTGRES (HOST = foo, PORT = 1234, SSL CERTIFICATE AUTHORITY = 'foo', SSH TUNNEL = tun)

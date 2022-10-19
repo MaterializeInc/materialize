@@ -44,8 +44,8 @@ use mz_sql_parser::ast::{
 use mz_storage::source::generator::as_generator;
 use mz_storage::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
 use mz_storage::types::connections::{
-    Connection, CsrConnectionHttpAuth, KafkaConnection, KafkaSecurity, KafkaTlsConfig, SaslConfig,
-    StringOrSecret, TlsIdentity,
+    AwsPrivateLinkConnection, Connection, CsrConnectionHttpAuth, KafkaConnection, KafkaSecurity,
+    KafkaTlsConfig, SaslConfig, StringOrSecret, TlsIdentity,
 };
 use mz_storage::types::sinks::{
     KafkaConsistencyConfig, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
@@ -66,17 +66,17 @@ use crate::ast::display::AstDisplay;
 use crate::ast::{
     AlterConnectionStatement, AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement,
     AlterSecretStatement, AvroSchema, AvroSchemaOption, AvroSchemaOptionName, AwsConnectionOption,
-    AwsConnectionOptionName, ClusterOption, ClusterOptionName, ColumnOption, Compression,
-    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnection,
-    CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement,
-    CreateMaterializedViewStatement, CreateReferencedSubsources, CreateRoleOption,
-    CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection,
-    CreateSinkOption, CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection,
-    CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, CreateSourceStatement,
-    CreateSubsourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
-    CreateViewStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection, CsrConnectionAvro,
-    CsrConnectionOption, CsrConnectionOptionName, CsrConnectionProtobuf, CsrSeedProtobuf,
-    CsvColumns, DbzMode, DropClusterReplicasStatement, DropClustersStatement,
+    AwsConnectionOptionName, AwsPrivateLinkConnectionOption, AwsPrivateLinkConnectionOptionName,
+    ClusterOption, ClusterOptionName, ColumnOption, Compression, CreateClusterReplicaStatement,
+    CreateClusterStatement, CreateConnection, CreateConnectionStatement, CreateDatabaseStatement,
+    CreateIndexStatement, CreateMaterializedViewStatement, CreateReferencedSubsources,
+    CreateRoleOption, CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement,
+    CreateSinkConnection, CreateSinkOption, CreateSinkOptionName, CreateSinkStatement,
+    CreateSourceConnection, CreateSourceFormat, CreateSourceOption, CreateSourceOptionName,
+    CreateSourceStatement, CreateSubsourceStatement, CreateTableStatement, CreateTypeAs,
+    CreateTypeStatement, CreateViewStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
+    CsrConnectionAvro, CsrConnectionOption, CsrConnectionOptionName, CsrConnectionProtobuf,
+    CsrSeedProtobuf, CsvColumns, DbzMode, DropClusterReplicasStatement, DropClustersStatement,
     DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
     Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConfigOptionName,
     KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint, LoadGeneratorOption,
@@ -2813,6 +2813,27 @@ impl TryFrom<AwsConnectionOptionExtracted> for AwsConfig {
     }
 }
 
+generate_extracted_config!(
+    AwsPrivateLinkConnectionOption,
+    (ServiceName, String),
+    (AvailabilityZones, Vec<String>)
+);
+
+impl TryFrom<AwsPrivateLinkConnectionOptionExtracted> for AwsPrivateLinkConnection {
+    type Error = PlanError;
+
+    fn try_from(options: AwsPrivateLinkConnectionOptionExtracted) -> Result<Self, Self::Error> {
+        Ok(AwsPrivateLinkConnection {
+            service_name: options
+                .service_name
+                .ok_or_else(|| sql_err!("SERVICE NAME option is required"))?,
+            availability_zones: options
+                .availability_zones
+                .ok_or_else(|| sql_err!("AVAILABILITY ZONES option is required"))?,
+        })
+    }
+}
+
 pub fn plan_create_connection(
     scx: &StatementContext,
     stmt: CreateConnectionStatement<Aug>,
@@ -2842,6 +2863,11 @@ pub fn plan_create_connection(
             let c = AwsConnectionOptionExtracted::try_from(with_options)?;
             let connection = AwsConfig::try_from(c)?;
             Connection::Aws(connection)
+        }
+        CreateConnection::AwsPrivateLink { with_options } => {
+            let c = AwsPrivateLinkConnectionOptionExtracted::try_from(with_options)?;
+            let connection = AwsPrivateLinkConnection::try_from(c)?;
+            Connection::AwsPrivateLink(connection)
         }
         CreateConnection::Ssh { with_options } => {
             let c = SshConnectionOptionExtracted::try_from(with_options)?;

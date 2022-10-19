@@ -80,6 +80,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut replication_slots_to_drop: Vec<(mz_postgres_util::Config, String)> = vec![];
         let mut secrets_to_drop = vec![];
         let mut timelines_to_drop = vec![];
+        let mut vpc_endpoints_to_drop = vec![];
 
         for op in &ops {
             if let catalog::Op::DropItem(id) = op {
@@ -129,12 +130,17 @@ impl<S: Append + 'static> Coordinator<S> {
                         secrets_to_drop.push(*id);
                     }
                     CatalogItem::Connection(catalog::Connection { connection, .. }) => {
-                        // SSH connections have an associated secret that should be dropped
                         match connection {
+                            // SSH connections have an associated secret that should be dropped
                             mz_storage::types::connections::Connection::Ssh(_) => {
                                 secrets_to_drop.push(*id);
                             }
-                            _ => {}
+                            // PrivateLink connections have an associated VpcEndpoint K8S resource
+                            // that should be dropped
+                            mz_storage::types::connections::Connection::AwsPrivateLink(_) => {
+                                vpc_endpoints_to_drop.push(*id);
+                            }
+                            _ => (),
                         }
                     }
                     _ => (),
@@ -238,6 +244,9 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             if !secrets_to_drop.is_empty() {
                 self.drop_secrets(secrets_to_drop).await;
+            }
+            if !vpc_endpoints_to_drop.is_empty() {
+                self.drop_vpc_endpoints(vpc_endpoints_to_drop).await;
             }
 
             // We don't want to block the coordinator on an external postgres server, so
@@ -394,6 +403,21 @@ impl<S: Append + 'static> Coordinator<S> {
         for secret in secrets {
             if let Err(e) = self.secrets_controller.delete(secret).await {
                 warn!("Dropping secrets has encountered an error: {}", e);
+            }
+        }
+    }
+
+    async fn drop_vpc_endpoints(&mut self, vpc_endpoints: Vec<GlobalId>) {
+        for vpc_endpoint in vpc_endpoints {
+            if let Err(e) = self
+                .cloud_resource_controller
+                .as_ref()
+                .expect("PrivateLink connections are only allowed in cloud.")
+                .delete_vpc_endpoint(vpc_endpoint)
+                .await
+            {
+                warn!("Dropping VPC Endpoints has encountered an error: {}", e);
+                // TODO reschedule this?
             }
         }
     }
