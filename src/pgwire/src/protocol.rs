@@ -25,7 +25,7 @@ use tokio::select;
 use tokio::time::{self, Duration, Instant};
 use tracing::{debug, warn, Instrument};
 
-use mz_adapter::catalog::SYSTEM_USER;
+use mz_adapter::catalog::INTERNAL_USER_NAMES;
 use mz_adapter::session::User;
 use mz_adapter::session::{
     EndTransactionAction, ExternalUserMetadata, InProgressRows, Portal, PortalState,
@@ -124,8 +124,8 @@ where
     let user = params.remove("user").unwrap_or_else(String::new);
 
     if internal {
-        // The internal server can only be used to connect to the system user.
-        if user != SYSTEM_USER.name {
+        // The internal server can only be used to connect to the internal users.
+        if !INTERNAL_USER_NAMES.contains(&user) {
             let msg = format!("unauthorized login to user '{user}'");
             return conn
                 .send(ErrorResponse::fatal(SqlState::INSUFFICIENT_PRIVILEGE, msg))

@@ -349,13 +349,6 @@ async fn migrate<S: Append>(
                 .insert(USER_VERSION.to_string(), ConfigValue { value: 0 })?;
             Ok(())
         },
-        |txn: &mut Transaction<'_, S>, _bootstrap_args| add_new_builtin_roles_migration(txn),
-        |txn: &mut Transaction<'_, S>, _bootstrap_args| {
-            add_new_builtin_compute_instances_migration(txn)
-        },
-        |txn: &mut Transaction<'_, S>, bootstrap_args| {
-            add_new_builtin_compute_replicas_migration(txn, bootstrap_args)
-        },
         // Add new migrations above.
         //
         // Migrations should be preceded with a comment of the following form:
@@ -384,6 +377,9 @@ async fn migrate<S: Append>(
         (migration)(&mut txn, bootstrap_args)?;
         txn.update_user_version(u64::cast_from(i))?;
     }
+    add_new_builtin_roles_migration(&mut txn)?;
+    add_new_builtin_compute_instances_migration(&mut txn)?;
+    add_new_builtin_compute_replicas_migration(&mut txn, bootstrap_args)?;
     txn.commit().await?;
     Ok(())
 }

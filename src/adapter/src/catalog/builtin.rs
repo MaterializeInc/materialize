@@ -34,7 +34,7 @@ use mz_sql::catalog::{
 };
 use mz_storage::controller::IntrospectionType;
 
-use crate::catalog::{DEFAULT_CLUSTER_REPLICA_NAME, SYSTEM_USER};
+use crate::catalog::{DEFAULT_CLUSTER_REPLICA_NAME, INTROSPECTION_USER, SYSTEM_USER};
 
 pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
 pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
@@ -2468,6 +2468,10 @@ pub static MZ_SYSTEM_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*SYSTEM_USER.name,
 });
 
+pub static MZ_INTROSPECTION_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
+    name: &*INTROSPECTION_USER.name,
+});
+
 pub static MZ_SYSTEM_COMPUTE_INSTANCE: Lazy<BuiltinComputeInstance> =
     Lazy::new(|| BuiltinComputeInstance {
         name: &*SYSTEM_USER.name,
@@ -2479,14 +2483,15 @@ pub static MZ_SYSTEM_COMPUTE_REPLICA: Lazy<BuiltinComputeReplica> =
         compute_instance_name: MZ_SYSTEM_COMPUTE_INSTANCE.name,
     });
 
-pub static MZ_INTROSPECTION: Lazy<BuiltinComputeInstance> = Lazy::new(|| BuiltinComputeInstance {
-    name: "mz_introspection",
-});
+pub static MZ_INTROSPECTION_COMPUTE_INSTANCE: Lazy<BuiltinComputeInstance> =
+    Lazy::new(|| BuiltinComputeInstance {
+        name: &*INTROSPECTION_USER.name,
+    });
 
-pub static MZ_INTROSPECTION_REPLICA: Lazy<BuiltinComputeReplica> =
+pub static MZ_INTROSPECTION_COMPUTE_REPLICA: Lazy<BuiltinComputeReplica> =
     Lazy::new(|| BuiltinComputeReplica {
         name: DEFAULT_CLUSTER_REPLICA_NAME,
-        compute_instance_name: MZ_INTROSPECTION.name,
+        compute_instance_name: MZ_INTROSPECTION_COMPUTE_INSTANCE.name,
     });
 
 /// List of all builtin objects sorted topologically by dependency.
@@ -2699,11 +2704,20 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
 
     builtins
 });
-pub static BUILTIN_ROLES: Lazy<Vec<&BuiltinRole>> = Lazy::new(|| vec![&*MZ_SYSTEM_ROLE]);
-pub static BUILTIN_COMPUTE_INSTANCES: Lazy<Vec<&BuiltinComputeInstance>> =
-    Lazy::new(|| vec![&*MZ_SYSTEM_COMPUTE_INSTANCE, &*MZ_INTROSPECTION]);
-pub static BUILTIN_COMPUTE_REPLICAS: Lazy<Vec<&BuiltinComputeReplica>> =
-    Lazy::new(|| vec![&*MZ_SYSTEM_COMPUTE_REPLICA, &*MZ_INTROSPECTION_REPLICA]);
+pub static BUILTIN_ROLES: Lazy<Vec<&BuiltinRole>> =
+    Lazy::new(|| vec![&*MZ_SYSTEM_ROLE, &*MZ_INTROSPECTION_ROLE]);
+pub static BUILTIN_COMPUTE_INSTANCES: Lazy<Vec<&BuiltinComputeInstance>> = Lazy::new(|| {
+    vec![
+        &*MZ_SYSTEM_COMPUTE_INSTANCE,
+        &*MZ_INTROSPECTION_COMPUTE_INSTANCE,
+    ]
+});
+pub static BUILTIN_COMPUTE_REPLICAS: Lazy<Vec<&BuiltinComputeReplica>> = Lazy::new(|| {
+    vec![
+        &*MZ_SYSTEM_COMPUTE_REPLICA,
+        &*MZ_INTROSPECTION_COMPUTE_REPLICA,
+    ]
+});
 
 #[allow(non_snake_case)]
 pub mod BUILTINS {
