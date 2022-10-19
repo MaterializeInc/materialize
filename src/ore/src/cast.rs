@@ -79,3 +79,36 @@ cast_from!(isize, i64);
 
 #[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
 cast_from!(isize, i128);
+
+/// Returns `Some` if `f` can losslessly be converted to an i64.
+pub fn f64_to_i64(f: f64) -> Option<i64> {
+    let i = f as i64;
+    let i_as_f = i as f64;
+    if f == i_as_f {
+        Some(i)
+    } else {
+        None
+    }
+}
+
+#[test]
+fn test_f64_to_i64() {
+    let cases = vec![
+        (0.0, Some(0)),
+        (1.0, Some(1)),
+        (1.5, None),
+        (f64::INFINITY, None),
+        (f64::NAN, None),
+        (f64::EPSILON, None),
+        (f64::MAX, None),
+        (f64::MIN, None),
+        (9223372036854775807f64, Some(i64::MAX)),
+        (-9223372036854775808f64, Some(i64::MIN)),
+        (9223372036854775807f64 + 10_000f64, None),
+        (-9223372036854775808f64 - 10_000f64, None),
+    ];
+    for (f, expect) in cases {
+        let r = f64_to_i64(f);
+        assert_eq!(r, expect, "input: {f}");
+    }
+}

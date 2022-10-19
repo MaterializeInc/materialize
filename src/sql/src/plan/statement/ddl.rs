@@ -20,6 +20,7 @@ use std::str::FromStr;
 use aws_arn::ResourceName as AmazonResourceName;
 use globset::GlobBuilder;
 use itertools::Itertools;
+use mz_ore::cast::f64_to_i64;
 use prost::Message;
 use regex::Regex;
 use tracing::warn;
@@ -1049,11 +1050,15 @@ pub fn plan_create_subsource(
     }))
 }
 
-generate_extracted_config!(LoadGeneratorOption, (TickInterval, Interval));
+generate_extracted_config!(
+    LoadGeneratorOption,
+    (TickInterval, Interval),
+    (ScaleFactor, f64)
+);
 
 pub(crate) fn load_generator_ast_to_generator(
     loadgen: &mz_sql_parser::ast::LoadGenerator,
-    _options: &[LoadGeneratorOption<Aug>],
+    options: &[LoadGeneratorOption<Aug>],
 ) -> Result<
     (
         mz_storage::types::sources::LoadGenerator,
@@ -1068,6 +1073,41 @@ pub(crate) fn load_generator_ast_to_generator(
         mz_sql_parser::ast::LoadGenerator::Counter => {
             mz_storage::types::sources::LoadGenerator::Counter
         }
+        mz_sql_parser::ast::LoadGenerator::Tpch => {
+            let LoadGeneratorOptionExtracted { scale_factor, .. } = options.to_vec().try_into()?;
+
+            // Default to 0.01 scale factor (=10MB).
+            let sf: f64 = scale_factor.unwrap_or(0.01);
+            if !sf.is_finite() || sf < 0.0 {
+                sql_bail!("unsupported scale factor {sf}");
+            }
+
+            let f_to_i = |multiplier: f64| -> Result<i64, PlanError> {
+                let total = (sf * multiplier).floor();
+                let mut i =
+                    f64_to_i64(total).ok_or_else(|| sql_err!("unsupported scale factor {sf}"))?;
+                if i < 1 {
+                    i = 1;
+                }
+                Ok(i)
+            };
+
+            // The multiplications here are safely unchecked because they will
+            // overflow to infinity, which will be caught by f64_to_i64.
+            let count_supplier = f_to_i(10_000f64)?;
+            let count_part = f_to_i(200_000f64)?;
+            let count_customer = f_to_i(150_000f64)?;
+            let count_orders = f_to_i(150_000f64 * 10f64)?;
+            let count_clerk = f_to_i(1_000f64)?;
+
+            mz_storage::types::sources::LoadGenerator::Tpch {
+                count_supplier,
+                count_part,
+                count_customer,
+                count_orders,
+                count_clerk,
+            }
+        }
     };
 
     let mut available_subsources = HashMap::new();
@@ -1078,6 +1118,7 @@ pub(crate) fn load_generator_ast_to_generator(
             schema: match loadgen {
                 mz_sql_parser::ast::LoadGenerator::Counter => "counter".into(),
                 mz_sql_parser::ast::LoadGenerator::Auction => "auction".into(),
+                mz_sql_parser::ast::LoadGenerator::Tpch => "tpch".into(),
                 // Please use `snake_case` for any multi-word load generators
                 // that you add.
             },

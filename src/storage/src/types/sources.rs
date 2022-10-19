@@ -1777,6 +1777,13 @@ impl crate::source::types::SourceConnection for LoadGeneratorSourceConnection {
 pub enum LoadGenerator {
     Auction,
     Counter,
+    Tpch {
+        count_supplier: i64,
+        count_part: i64,
+        count_customer: i64,
+        count_orders: i64,
+        count_clerk: i64,
+    },
 }
 
 pub trait Generator {
@@ -1804,9 +1811,22 @@ pub enum GeneratorMessageType {
 impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnection {
     fn into_proto(&self) -> ProtoLoadGeneratorSourceConnection {
         ProtoLoadGeneratorSourceConnection {
-            generator: Some(match self.load_generator {
+            generator: Some(match &self.load_generator {
                 LoadGenerator::Auction => ProtoGenerator::Auction(()),
                 LoadGenerator::Counter => ProtoGenerator::Counter(()),
+                LoadGenerator::Tpch {
+                    count_supplier,
+                    count_part,
+                    count_customer,
+                    count_orders,
+                    count_clerk,
+                } => ProtoGenerator::Tpch(ProtoTpchLoadGenerator {
+                    count_supplier: *count_supplier,
+                    count_part: *count_part,
+                    count_customer: *count_customer,
+                    count_orders: *count_orders,
+                    count_clerk: *count_clerk,
+                }),
             }),
             tick_micros: self.tick_micros,
         }
@@ -1820,6 +1840,19 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
             load_generator: match generator {
                 ProtoGenerator::Auction(()) => LoadGenerator::Auction,
                 ProtoGenerator::Counter(()) => LoadGenerator::Counter,
+                ProtoGenerator::Tpch(ProtoTpchLoadGenerator {
+                    count_supplier,
+                    count_part,
+                    count_customer,
+                    count_orders,
+                    count_clerk,
+                }) => LoadGenerator::Tpch {
+                    count_supplier,
+                    count_part,
+                    count_customer,
+                    count_orders,
+                    count_clerk,
+                },
             },
             tick_micros: proto.tick_micros,
         })

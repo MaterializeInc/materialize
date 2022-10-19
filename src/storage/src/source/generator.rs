@@ -26,14 +26,29 @@ use crate::types::sources::{
 
 mod auction;
 mod counter;
+mod tpch;
 
 pub use auction::Auction;
 pub use counter::Counter;
+pub use tpch::Tpch;
 
 pub fn as_generator(g: &LoadGenerator) -> Box<dyn Generator> {
     match g {
         LoadGenerator::Auction => Box::new(Auction {}),
         LoadGenerator::Counter => Box::new(Counter {}),
+        LoadGenerator::Tpch {
+            count_supplier,
+            count_part,
+            count_customer,
+            count_orders,
+            count_clerk,
+        } => Box::new(Tpch {
+            count_supplier: *count_supplier,
+            count_part: *count_part,
+            count_customer: *count_customer,
+            count_orders: *count_orders,
+            count_clerk: *count_clerk,
+        }),
     }
 }
 

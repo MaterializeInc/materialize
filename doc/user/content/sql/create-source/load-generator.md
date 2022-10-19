@@ -28,8 +28,10 @@ Field | Use
 _src_name_  | The name for the source.
 **COUNTER** | Use the [counter](#counter) load generator.
 **AUCTION** | Use the [auction](#auction) load generator.
+| **TPCH** | Use the [tpch](#tpch) load generator.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists.
 **TICK INTERVAL**  | The interval at which the next datum should be emitted. Defaults to one second.
+**SCALE FACTOR**  | The scale factor for the `TPCH` generator. Defaults to `0.01` (~ 10MB).
 **FOR ALL TABLES** | Creates subsources for all tables in the load generator.
 **FOR TABLES** _table_name_ | Creates subsources for specific tables in the load generator.
 
@@ -104,6 +106,11 @@ create the following subsources:
 The organizations, users, and accounts are fixed at the time the source
 is created. Each tick interval, either a new auction is started, or a new bid
 is placed in the currently ongoing auction.
+
+### TPCH
+
+The TPCH load generator implements the TPC-H benchmark specification.
+The TPCH source must be used with `FOR ALL TABLES`, which will create the standard TPCH relations.
 
 ## Examples
 

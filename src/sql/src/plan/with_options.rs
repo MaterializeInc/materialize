@@ -216,6 +216,27 @@ impl ImpliedValue for bool {
     }
 }
 
+impl TryFromValue<Value> for f64 {
+    fn try_from_value(v: Value) -> Result<Self, PlanError> {
+        match v {
+            Value::Number(v) => v
+                .parse::<f64>()
+                .map_err(|e| sql_err!("invalid numeric value: {e}")),
+            _ => sql_bail!("cannot use value as number"),
+        }
+    }
+
+    fn name() -> String {
+        "float8".to_string()
+    }
+}
+
+impl ImpliedValue for f64 {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a float value")
+    }
+}
+
 impl TryFromValue<Value> for i32 {
     fn try_from_value(v: Value) -> Result<Self, PlanError> {
         match v {

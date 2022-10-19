@@ -108,6 +108,16 @@ impl Date {
         // result of this.
         self.days + Self::UNIX_EPOCH_TO_PG_EPOCH
     }
+
+    /// Returns this date with `days` added to it.
+    pub fn checked_add(self, days: i32) -> Result<Date, DateError> {
+        let days = if let Some(days) = self.days.checked_add(days) {
+            days
+        } else {
+            return Err(DateError::OutOfRange);
+        };
+        Self::from_pg_epoch(days)
+    }
 }
 
 impl Sub for Date {
