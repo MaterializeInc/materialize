@@ -2242,7 +2242,9 @@ impl_display!(TransactionIsolationLevel);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SetVariableValue {
     Ident(Ident),
+    Idents(Vec<Ident>),
     Literal(Value),
+    Literals(Vec<Value>),
     Default,
 }
 
@@ -2251,7 +2253,9 @@ impl AstDisplay for SetVariableValue {
         use SetVariableValue::*;
         match self {
             Ident(ident) => f.write_node(ident),
+            Idents(idents) => f.write_node(&display::separated(idents, ", ")),
             Literal(literal) => f.write_node(literal),
+            Literals(literals) => f.write_node(&display::separated(literals, ", ")),
             Default => f.write_str("DEFAULT"),
         }
     }

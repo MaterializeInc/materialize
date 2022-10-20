@@ -1884,10 +1884,10 @@ impl<S: Append + 'static> Coordinator<S> {
         let vars = session.vars_mut();
         let (name, local) = (plan.name, plan.local);
         match plan.value {
-            SetVariableValue::Literal(Value::String(s)) => vars.set(&name, &s, local)?,
-            SetVariableValue::Literal(lit) => vars.set(&name, &lit.to_string(), local)?,
-            SetVariableValue::Ident(ident) => vars.set(&name, &ident.into_string(), local)?,
             SetVariableValue::Default => vars.reset(&name, local)?,
+            SetVariableValue::Literal(Value::String(s)) => vars.set(&name, &s, local)?, // pass-through unquoted strings
+            SetVariableValue::Ident(ident) => vars.set(&name, &ident.into_string(), local)?, // pass-through unquoted idents
+            value => vars.set(&name, &value.to_string(), local)?, // or else use the AstDisplay for SetVariableValue
         }
 
         Ok(ExecuteResponse::SetVariable { name, reset: false })
@@ -3288,18 +3288,18 @@ impl<S: Append + 'static> Coordinator<S> {
         use mz_sql::ast::{SetVariableValue, Value};
         let update_max_result_size = name == session::vars::MAX_RESULT_SIZE.name();
         let op = match value {
+            SetVariableValue::Default => catalog::Op::ResetSystemConfiguration { name },
             SetVariableValue::Literal(Value::String(value)) => {
                 catalog::Op::UpdateSystemConfiguration { name, value }
             }
-            SetVariableValue::Literal(value) => catalog::Op::UpdateSystemConfiguration {
+            SetVariableValue::Ident(ident) => catalog::Op::UpdateSystemConfiguration {
+                name,
+                value: ident.into_string(),
+            },
+            value => catalog::Op::UpdateSystemConfiguration {
                 name,
                 value: value.to_string(),
             },
-            SetVariableValue::Ident(value) => catalog::Op::UpdateSystemConfiguration {
-                name,
-                value: value.to_string(),
-            },
-            SetVariableValue::Default => catalog::Op::ResetSystemConfiguration { name },
         };
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
