@@ -3584,7 +3584,7 @@ impl<'a> Parser<'a> {
                 let to_item_name = self.parse_identifier()?;
 
                 Statement::AlterObjectRename(AlterObjectRenameStatement {
-                    object_type: ObjectType::Secret,
+                    object_type: ObjectType::Connection,
                     if_exists,
                     name,
                     to_item_name,
