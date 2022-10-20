@@ -88,6 +88,10 @@ impl ComputeInstanceId {
     pub fn is_user(&self) -> bool {
         matches!(self, Self::User(_))
     }
+
+    pub fn is_system(&self) -> bool {
+        matches!(self, Self::System(_))
+    }
 }
 
 impl FromStr for ComputeInstanceId {
