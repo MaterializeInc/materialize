@@ -44,7 +44,7 @@ use timely::dataflow::operators::generic::OperatorInfo;
 use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::operators::{Broadcast, CapabilitySet, Partition};
 use timely::dataflow::Scope;
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
 use tokio::sync::Mutex;
 use tokio::time::MissedTickBehavior;
@@ -168,6 +168,14 @@ where
     S: SourceReader,
     R: ResumptionFrontierCalculator<Timestamp> + 'static,
 {
+    info!(
+        resume_upper = ?config.resume_upper,
+        "create_raw_source({}) {}/{}: \
+        building source pipeline",
+        config.id,
+        config.worker_id,
+        config.worker_count,
+    );
     let (resume_stream, resume_token) =
         super::resumption::resumption_operator(scope, config.clone(), calc);
 
@@ -481,13 +489,12 @@ where
         timestamp_interval: _,
         encoding,
         storage_metadata: _,
-        resume_upper: initial_resume_upper,
+        resume_upper,
         base_metrics,
         now: now_fn,
         persist_clients: _,
     } = config;
 
-    let resume_upper = initial_resume_upper.clone();
     let (stream, capability) = async_source(
         scope,
         name.clone(),
@@ -504,7 +511,7 @@ where
                 // Required to build the initial source_upper and to ensure the offset committer
                 // operator works correctly.
                 reclock_follower
-                    .ensure_initialized_to(initial_resume_upper.borrow())
+                    .ensure_initialized_to(resume_upper.borrow())
                     .await;
 
                 let mut source_upper = reclock_follower
@@ -572,6 +579,9 @@ where
                 // right now.
                 let mut emit_ts = Timestamp::from((*now_fn)());
 
+                // The last frontier we compacted the remap trace to, starting at [0].
+                let mut last_compaction_since = Antichain::from_elem(Timestamp::minimum());
+
                 loop {
                     let srnf = source_reader.next();
                     tokio::pin!(srnf);
@@ -590,34 +600,44 @@ where
                             // Additionally, the empty
                             // `resumption_frontier` currently has no meaningful mapping, and
                             // occurs only when a source is terminating.
-                            if PartialOrder::less_equal(
-                                &resume_frontier_update,
-                                &initial_resume_upper,
-                            ) || resume_frontier_update.elements().is_empty()
+                            if PartialOrder::less_equal(&resume_frontier_update, &resume_upper)
+                                || resume_frontier_update.elements().is_empty()
                             {
                                 continue;
                             }
-                            tracing::trace!(
-                                %id,
-                                resumption_frontier = ?resume_frontier_update,
-                                "received new resumption frontier"
-                            );
+
                             let mut offset_upper = reclock_follower
                                 .source_upper_at_frontier(resume_frontier_update.borrow())
                                 .unwrap();
                             offset_upper.filter_by_partition(|pid| {
                                 crate::source::responsible_for(&id, worker_id, worker_count, pid)
                             });
+
+                            info!(
+                                resumption_frontier = ?resume_frontier_update,
+                                ?offset_upper,
+                                "reclock({id}) {worker_id}/{worker_count}: \
+                                calculated offset \
+                                commit frontier for resumption frontier update",
+                            );
+
                             offset_commit_handle.commit_offsets(offset_upper.as_data_offsets());
 
                             // Compact the in-memory remap trace shared between this
                             // operator and the reclock operator. We do this here for convenience! The
-                            // ordering doesn't really matter. `unwrap` is fine
-                            // because the `resumption_frontier` never goes to
-                            // `[]` currently.
-                            let upper_ts = resume_upper.as_option().copied().unwrap();
-                            let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
-                            reclock_follower.compact(as_of);
+                            // ordering doesn't really matter.
+                            if let Some(new_compaction_since) = derive_new_compaction_since(
+                                resume_frontier_update,
+                                &last_compaction_since,
+                                1,
+                                id,
+                                "reclock",
+                                worker_id,
+                                worker_count,
+                            ) {
+                                reclock_follower.compact(new_compaction_since.clone());
+                                last_compaction_since = new_compaction_since;
+                            }
                             continue;
                         }
                         _ => {
@@ -964,6 +984,10 @@ where
                 now.clone(),
                 timestamp_interval.clone(),
                 as_of,
+                id,
+                "remap",
+                worker_id,
+                worker_count,
             )
             .await
             {
@@ -1004,7 +1028,7 @@ where
             }
 
             // The last frontier we compacted the remap shard to, starting at [0].
-            let mut last_compaction_since = Antichain::from_elem(Timestamp::default());
+            let mut last_compaction_since = Antichain::from_elem(Timestamp::minimum());
 
             while scheduler.notified().await {
                 if token_weak.upgrade().is_none() {
@@ -1049,33 +1073,24 @@ where
                 // been downgraded (which drives the data shard upper), AND the
                 // remap shard has been advanced below.
                 //
-                // Additionally, the empty
-                // `resumption_frontier` currently occurs only when a source is terminating,
-                // and we avoid compacting when this happens, as reclocking does not support
-                // empty frontiers.
-                //
-                // TODO(guswynn|petrosagg): support compaction to the empty frontier.
-                //
                 // This extra block is necessary to avoid holding a `RefCell` across an await,
                 // or at least convincing clippy of this fact.
-                if let Some(upper_ts) = {
+                let resumption_frontier: Antichain<Timestamp> = {
                     let f = frontiers.borrow();
-                    let upper_ts: Option<Timestamp> = f[1].as_option().copied();
-                    upper_ts
-                } {
-                    let compaction_since = Antichain::from_elem(upper_ts.saturating_sub(
-                        // 3 days in milliseconds
-                        1000 * 60 * 24 * 3,
-                    ));
-                    if PartialOrder::less_than(&last_compaction_since, &compaction_since) {
-                        trace!(
-                            "remap({id}) {worker_id}/{worker_count}: compacting remap \
-                        shard to: {:?}",
-                            compaction_since,
-                        );
-                        timestamper.compact(compaction_since.clone()).await;
-                        last_compaction_since = compaction_since;
-                    }
+                    f[1].clone()
+                };
+                if let Some(new_compaction_since) = derive_new_compaction_since(
+                    resumption_frontier,
+                    &last_compaction_since,
+                    // 3 days in milliseconds
+                    1000 * 60 * 24 * 3,
+                    id,
+                    "remap",
+                    worker_id,
+                    worker_count,
+                ) {
+                    timestamper.compact(new_compaction_since.clone()).await;
+                    last_compaction_since = new_compaction_since;
                 }
 
                 input.for_each(|_cap, data| {
@@ -1541,4 +1556,40 @@ fn handle_message<S: SourceReader>(
             entry.insert((offset, ts, 1));
         }
     }
+}
+
+/// Given a `resumption_frontier`, calculate a compaction `since` that
+/// is delayed `set_back_by_ms` milliseconds, if possible. If such a `since`
+/// is produced, then `info!` log about it. A `since` is not produced
+/// if its not past the `last_compaction_since`.
+///
+/// The empty `resumption_frontier` currently occurs only when a source is terminating,
+/// and we avoid producing a compaction since, as reclocking does not support
+/// empty frontiers.
+///
+/// TODO(guswynn|petrosagg): support compaction to the empty frontier.
+fn derive_new_compaction_since(
+    resumption_frontier: Antichain<Timestamp>,
+    last_compaction_since: &Antichain<Timestamp>,
+    set_back_by_ms: u64,
+    id: GlobalId,
+    operator: &str,
+    worker_id: usize,
+    worker_count: usize,
+) -> Option<Antichain<Timestamp>> {
+    let upper_ts: Option<Timestamp> = resumption_frontier.as_option().copied();
+    if let Some(upper_ts) = upper_ts {
+        let compaction_since = Antichain::from_elem(upper_ts.saturating_sub(set_back_by_ms));
+        if PartialOrder::less_than(last_compaction_since, &compaction_since) {
+            info!(
+                ?compaction_since,
+                ?resumption_frontier,
+                "{0}({id}) {worker_id}/{worker_count}: produced new compaction \
+                since for the {0} operator",
+                operator
+            );
+            return Some(compaction_since);
+        }
+    }
+    None
 }

@@ -46,7 +46,7 @@ where
     R: ResumptionFrontierCalculator<Timestamp> + 'static,
 {
     let RawSourceCreationConfig {
-        id: source_id,
+        id,
         worker_count,
         worker_id,
         storage_metadata: _,
@@ -54,10 +54,10 @@ where
         ..
     } = config;
 
-    let chosen_worker = (source_id.hashed() % worker_count as u64) as usize;
+    let chosen_worker = (id.hashed() % worker_count as u64) as usize;
     let active_worker = chosen_worker == worker_id;
 
-    let operator_name = format!("resumption({})", source_id);
+    let operator_name = format!("resumption({})", id);
     let mut resume_op = OperatorBuilder::new(operator_name, scope.clone());
     // We just downgrade the capability to communicate the frontier, and
     // don't produce any real data.
@@ -77,6 +77,9 @@ where
         // TODO: determine what interval we want here.
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Clear the first instantaneous tick
+        // See <https://docs.rs/tokio/latest/tokio/time/struct.Interval.html#method.tick>
+        interval.tick().await;
 
         let mut calc_state = {
             // The lock MUST be dropped before we enter the main loop.
@@ -97,10 +100,10 @@ where
                     let new_upper = calc.calculate_resumption_frontier(&mut calc_state).await;
 
                     if PartialOrder::less_than(&upper, &new_upper) {
-                        tracing::trace!(
-                            %source_id,
-                            ?new_upper,
-                            "read new resumption frontier from persist",
+                        tracing::info!(
+                            resumption_frontier = ?new_upper,
+                            "resumption({id}) {worker_id}/{worker_count}: calculated \
+                            new resumption frontier",
                         );
 
                         cap_set.downgrade(&*new_upper);
