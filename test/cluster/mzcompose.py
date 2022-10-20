@@ -394,3 +394,41 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
                 services=["storaged"],
             )
             c.run("testdrive", "pg-snapshot-resumption/04-verify-data.td")
+
+
+def workflow_test_bootstrap_vars(c: Composition) -> None:
+    """Test default system vars values passed with a CLI option."""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Testdrive(no_reset=True),
+        Materialized(
+            options="--bootstrap-system-vars=\"allowed_cluster_replica_sizes='1', '2', 'oops'\"",
+        ),
+    ):
+        dependencies = [
+            "materialized",
+        ]
+        c.start_and_wait_for_tcp(
+            services=dependencies,
+        )
+
+        c.run("testdrive", "resources/bootstrapped-system-vars.td")
+
+    with c.override(
+        Testdrive(no_reset=True),
+        Materialized(
+            environment_extra=[
+                """ MZ_BOOTSTRAP_SYSTEM_VARS=allowed_cluster_replica_sizes='1', '2', 'oops'""".strip()
+            ],
+        ),
+    ):
+        dependencies = [
+            "materialized",
+        ]
+        c.start_and_wait_for_tcp(
+            services=dependencies,
+        )
+
+        c.run("testdrive", "resources/bootstrapped-system-vars.td")
