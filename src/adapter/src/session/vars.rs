@@ -12,6 +12,7 @@ use std::fmt;
 use std::time::Duration;
 
 use const_format::concatcp;
+use mz_sql::ast::{Ident, SetVariableValue, Value as AstValue};
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use uncased::UncasedStr;
@@ -19,6 +20,7 @@ use uncased::UncasedStr;
 use mz_ore::cast;
 use mz_sql::DEFAULT_SCHEMA;
 use mz_sql_parser::ast::TransactionIsolationLevel;
+use mz_sql_parser::parser::parse_set_variable_value;
 
 use crate::error::AdapterError;
 use crate::session::EndTransactionAction;
@@ -250,6 +252,13 @@ pub const MAX_RESULT_SIZE: ServerVar<u32> = ServerVar {
     value: &1_073_741_824,
     description: "The maximum size in bytes for a single query's result (Materialize).",
 };
+
+static DEFAULT_ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<Vec<String>> = Lazy::new(Vec::new);
+static ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<ServerVar<Vec<String>>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("allowed_cluster_replica_sizes"),
+    value: &DEFAULT_ALLOWED_CLUSTER_REPLICA_SIZES,
+    description: "The allowed sizes when creating a new cluster replica (Materialize).",
+});
 
 /// Session variables.
 ///
@@ -780,6 +789,7 @@ pub struct SystemVars {
     max_secrets: SystemVar<u32>,
     max_roles: SystemVar<u32>,
     max_result_size: SystemVar<u32>,
+    allowed_cluster_replica_sizes: SystemVar<Vec<String>>, // TODO: BTreeSet<String> will be better
 }
 
 impl Default for SystemVars {
@@ -797,6 +807,7 @@ impl Default for SystemVars {
             max_secrets: SystemVar::new(&MAX_SECRETS),
             max_roles: SystemVar::new(&MAX_ROLES),
             max_result_size: SystemVar::new(&MAX_RESULT_SIZE),
+            allowed_cluster_replica_sizes: SystemVar::new(&ALLOWED_CLUSTER_REPLICA_SIZES),
         }
     }
 }
@@ -818,6 +829,7 @@ impl SystemVars {
             &self.max_secrets,
             &self.max_roles,
             &self.max_result_size,
+            &self.allowed_cluster_replica_sizes,
         ]
         .into_iter()
     }
@@ -857,6 +869,8 @@ impl SystemVars {
             Ok(&self.max_roles)
         } else if name == MAX_RESULT_SIZE.name {
             Ok(&self.max_result_size)
+        } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
+            Ok(&self.allowed_cluster_replica_sizes)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -894,6 +908,8 @@ impl SystemVars {
             self.max_roles.set(value)
         } else if name == MAX_RESULT_SIZE.name {
             self.max_result_size.set(value)
+        } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
+            self.allowed_cluster_replica_sizes.set(value)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -929,6 +945,8 @@ impl SystemVars {
             self.max_roles.reset()
         } else if name == MAX_RESULT_SIZE.name {
             self.max_result_size.reset()
+        } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
+            self.allowed_cluster_replica_sizes.reset()
         } else {
             return Err(AdapterError::UnknownParameter(name.into()));
         }
@@ -994,6 +1012,11 @@ impl SystemVars {
     pub fn max_result_size(&self) -> u32 {
         *self.max_result_size.value()
     }
+
+    /// Returns the value of the `allowed_cluster_replica_sizes` configuration parameter.
+    pub fn allowed_cluster_replica_sizes(&self) -> &Vec<String> {
+        self.allowed_cluster_replica_sizes.value()
+    }
 }
 
 /// A `Var` represents a configuration parameter of an arbitrary type.
@@ -1053,7 +1076,7 @@ where
     }
 }
 
-/// A `SystemVar` is persisted on disck value for a configuration parameter. If unset,
+/// A `SystemVar` is persisted on disk value for a configuration parameter. If unset,
 /// the server default is used instead.
 #[derive(Debug, Clone)]
 struct SystemVar<V>
@@ -1425,6 +1448,41 @@ impl Value for [String] {
 
     fn format(&self) -> String {
         self.join(", ")
+    }
+}
+
+impl Value for Vec<String> {
+    const TYPE_NAME: &'static str = "string list";
+
+    fn parse(s: &str) -> Result<Vec<String>, ()> {
+        match parse_set_variable_value(s) {
+            Ok(SetVariableValue::Ident(ident)) => {
+                let value = vec![ident.into_string()];
+                Ok(value)
+            }
+            Ok(SetVariableValue::Literal(value)) => {
+                // Don't assume that value matches AstValue::String(...) here, as
+                // a single string might be wrongly parsed as a non-string literal.
+                let value = vec![value.to_string()];
+                Ok(value)
+            }
+            Ok(SetVariableValue::Literals(values)) => values
+                .into_iter()
+                .map(|value| match value {
+                    AstValue::String(value) => Ok(value),
+                    _ => Err(()),
+                })
+                .collect(),
+            _ => Err(()),
+        }
+    }
+
+    fn format(&self) -> String {
+        let ast = match self.as_slice() {
+            [value] => SetVariableValue::Ident(Ident::new(value)),
+            _ => SetVariableValue::Literals(self.iter().cloned().map(AstValue::String).collect()),
+        };
+        ast.to_string()
     }
 }
 
