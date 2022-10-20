@@ -39,7 +39,6 @@ use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::operators::feedback::ConnectLoop;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::OperatorInfo;
 use timely::dataflow::operators::generic::OutputHandle;
@@ -171,7 +170,7 @@ where
     S: SourceReader,
     R: ResumptionFrontierCalculator<Timestamp> + 'static,
 {
-    let (resume_stream, source_reader_feedback_handle) =
+    let (resume_stream, resume_token) =
         super::resumption::resumption_operator(scope, config.clone(), calc);
 
     let reclock_follower = {
@@ -180,16 +179,14 @@ where
         ReclockFollower::new(as_of)
     };
 
-    let ((batches, batch_upper_summaries, resumption_feedback_stream), source_reader_token) =
-        source_reader_operator::<G, S>(
-            scope,
-            config.clone(),
-            source_connection,
-            connection_context,
-            reclock_follower.share(),
-            &resume_stream,
-        );
-    resumption_feedback_stream.connect_loop(source_reader_feedback_handle);
+    let ((batches, batch_upper_summaries), source_reader_token) = source_reader_operator::<G, S>(
+        scope,
+        config.clone(),
+        source_connection,
+        connection_context,
+        reclock_follower.share(),
+        &resume_stream,
+    );
 
     let (remap_stream, remap_token) =
         remap_operator::<G, S>(scope, config.clone(), batch_upper_summaries, &resume_stream);
@@ -197,7 +194,7 @@ where
     let ((reclocked_stream, reclocked_err_stream), _reclock_token) =
         reclock_operator::<G, S>(scope, config, reclock_follower, batches, remap_stream);
 
-    let token = Rc::new((source_reader_token, remap_token));
+    let token = Rc::new((source_reader_token, remap_token, resume_token));
 
     ((reclocked_stream, reclocked_err_stream), Some(token))
 }
@@ -425,9 +422,7 @@ where
 /// [`SourceMessageBatch`]. Also returns a second stream that can be used to
 /// learn about the `source_upper` that all the source reader instances now
 /// about. This second stream will be used by `remap_operator` to mint new
-/// timestamp bindings into the remap shard. The third stream is to feedback
-/// a frontier for the `resumption_operator` to inspect. For now, this
-/// stream produces NO data.
+/// timestamp bindings into the remap shard.
 fn source_reader_operator<G, S: 'static>(
     scope: &G,
     config: RawSourceCreationConfig,
@@ -442,7 +437,6 @@ fn source_reader_operator<G, S: 'static>(
             Rc<RefCell<Option<SourceMessageBatch<S::Key, S::Value, S::Diff>>>>,
         >,
         timely::dataflow::Stream<G, BatchUpperSummary>,
-        timely::dataflow::Stream<G, ()>,
     ),
     Option<AsyncSourceToken>,
 )
@@ -715,7 +709,6 @@ where
     let mut input = demux_op.new_input(&stream, Pipeline);
     let (mut batch_output, batch_stream) = demux_op.new_output();
     let (mut summary_output, summary_stream) = demux_op.new_output();
-    let (_feedback_output, feedback_stream) = demux_op.new_output();
     let summary_output_port = summary_stream.name().port;
 
     demux_op.build(move |_caps| {
@@ -740,10 +733,7 @@ where
         }
     });
 
-    (
-        (batch_stream, summary_stream, feedback_stream),
-        Some(capability),
-    )
+    ((batch_stream, summary_stream), Some(capability))
 }
 
 /// Mints new contents for the remap shard based on summaries about the source
