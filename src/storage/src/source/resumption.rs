@@ -16,7 +16,6 @@ use std::any::Any;
 use std::rc::Rc;
 
 use differential_dataflow::Hashable;
-use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::Scope;
 use timely::order::PartialOrder;
@@ -26,7 +25,7 @@ use timely::progress::timestamp::Timestamp as _;
 use crate::controller::ResumptionFrontierCalculator;
 use crate::source::source_reader_pipeline::RawSourceCreationConfig;
 use mz_repr::Timestamp;
-use mz_timely_util::operators_async_ext::OperatorBuilderExt;
+use mz_timely_util::builder_async::OperatorBuilder;
 
 /// Generates a timely `Stream` with no inputs that periodically
 /// downgrades its output `Capability` _to the "resumption frontier"
@@ -66,64 +65,52 @@ where
 
     let mut upper = Antichain::from_elem(Timestamp::minimum());
 
-    let token = Rc::new(());
-    let token_weak = Rc::downgrade(&token);
-    resume_op.build_async(
-        scope.clone(),
-        move |mut capabilities, _frontiers, scheduler| async move {
-            let mut cap_set = if active_worker {
-                CapabilitySet::from_elem(capabilities.pop().expect("missing capability"))
-            } else {
-                CapabilitySet::new()
-            };
-            // Explicitly release the unneeded capabilities!
-            capabilities.clear();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    resume_op.build(move |mut capabilities| async move {
+        if !active_worker {
+            return;
+        }
+        let mut cap_set = CapabilitySet::from_elem(capabilities.pop().expect("missing capability"));
+        // We only have one output
+        assert!(capabilities.is_empty());
 
-            // TODO: determine what interval we want here.
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+        // TODO: determine what interval we want here.
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-            let mut calc_state = {
-                // The lock MUST be dropped before we enter the main loop.
-                let mut persist_clients = persist_clients.lock().await;
-                calc.initialize_state(&mut persist_clients).await
-            };
+        let mut calc_state = {
+            // The lock MUST be dropped before we enter the main loop.
+            let mut persist_clients = persist_clients.lock().await;
+            calc.initialize_state(&mut persist_clients).await
+        };
 
-            while scheduler.notified().await {
-                if token_weak.upgrade().is_none() {
-                    return;
+        tokio::pin!(shutdown_rx);
+        while !upper.is_empty() {
+            let tick_fut = interval.tick();
+            tokio::pin!(tick_fut);
+            // `tokio::time::Interval` is documented as cancel-safe and the shutdown future is
+            // not dropped since it is pinned on the stack outside of the while loop and we only
+            // select through a reference to that future.
+            match futures::future::select(tick_fut, shutdown_rx.as_mut()).await {
+                futures::future::Either::Left(_) => {
+                    // Get a new lower bound for the resumption frontier
+                    let new_upper = calc.calculate_resumption_frontier(&mut calc_state).await;
+
+                    if PartialOrder::less_than(&upper, &new_upper) {
+                        tracing::trace!(
+                            %source_id,
+                            ?new_upper,
+                            "read new resumption frontier from persist",
+                        );
+
+                        cap_set.downgrade(&*new_upper);
+                        upper = new_upper;
+                    }
                 }
-
-                if !active_worker {
-                    continue;
-                }
-
-                // Wait for the set period
-                interval.tick().await;
-
-                // Refresh the data
-                let new_upper = calc.calculate_resumption_frontier(&mut calc_state).await;
-
-                if PartialOrder::less_equal(&new_upper, &upper) {
-                    continue;
-                }
-
-                tracing::trace!(
-                    %source_id,
-                    ?new_upper,
-                    "read new resumption frontier from persist",
-                );
-
-                cap_set.downgrade(new_upper.elements());
-                upper = new_upper;
-                // The resumption frontier is lower bounded by the involved shards (data shard,
-                // remap shard, etc.), so if it goes to empty we know that the source has finished
-                // writing and can shut down.
-                if upper.elements().is_empty() {
-                    return;
-                }
+                futures::future::Either::Right(_) => return,
             }
-        },
-    );
+        }
+    });
 
-    (resume_stream, token)
+    (resume_stream, Rc::new(shutdown_tx))
 }
