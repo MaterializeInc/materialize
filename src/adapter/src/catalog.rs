@@ -3966,7 +3966,11 @@ impl<S: Append> Catalog<S> {
                         )));
                     }
                     let on_cluster_id = state.resolve_compute_instance(&on_cluster_name)?.id();
-                    if on_cluster_id.is_system() {
+                    if on_cluster_id.is_system()
+                        && !session
+                            .map(|session| session.user().is_internal())
+                            .unwrap_or(false)
+                    {
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReadOnlyComputeInstance(on_cluster_name),
                         )));
@@ -4221,7 +4225,11 @@ impl<S: Append> Catalog<S> {
                         )));
                     }
                     let instance = state.resolve_compute_instance(&compute_name)?;
-                    if instance.id().is_system() {
+                    if instance.id().is_system()
+                        && !session
+                            .map(|session| session.user().is_internal())
+                            .unwrap_or(false)
+                    {
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReadOnlyComputeInstance(compute_name),
                         )));

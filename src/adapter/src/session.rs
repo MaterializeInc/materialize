@@ -27,7 +27,7 @@ use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, StatementDesc};
 use mz_sql_parser::ast::TransactionIsolationLevel;
 
-use crate::catalog::SYSTEM_USER;
+use crate::catalog::{INTERNAL_USER_NAMES, SYSTEM_USER};
 use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
 use crate::error::AdapterError;
@@ -65,6 +65,13 @@ pub struct ExternalUserMetadata {
 impl PartialEq for User {
     fn eq(&self, other: &User) -> bool {
         self.name == other.name
+    }
+}
+
+impl User {
+    /// Returns true if this is an internal user, false otherwise.
+    pub fn is_internal(&self) -> bool {
+        INTERNAL_USER_NAMES.contains(&self.name)
     }
 }
 

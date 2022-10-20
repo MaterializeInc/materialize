@@ -65,3 +65,17 @@ INSERT INTO temp SELECT * FROM temp
 2
 1
 2
+
+> SHOW CLUSTER REPLICAS WHERE cluster = 'mz_system'
+mz_system r1 1
+
+$ postgres-execute connection=mz_system
+DROP CLUSTER REPLICA mz_system.r1
+
+> SHOW CLUSTER REPLICAS WHERE cluster = 'mz_system'
+
+$ postgres-execute connection=mz_system
+CREATE CLUSTER REPLICA mz_system.r1 SIZE '1';
+
+> SHOW CLUSTER REPLICAS WHERE cluster = 'mz_system'
+mz_system r1 1
