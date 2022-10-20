@@ -15,6 +15,7 @@ use std::num::TryFromIntError;
 use mz_expr::EvalError;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
+use mz_pgrepr::TypeFromOidError;
 use mz_repr::adt::char::InvalidCharLengthError;
 use mz_repr::adt::numeric::InvalidNumericMaxScaleError;
 use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
@@ -81,6 +82,11 @@ pub enum PlanError {
     ShowCreateViewOnMaterializedView(String),
     ExplainViewOnMaterializedView(String),
     UnacceptableTimelineName(String),
+    UnknownTypeInPostgresSource {
+        table: String,
+        column: String,
+        e: TypeFromOidError,
+    },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -113,6 +119,9 @@ impl PlanError {
             }
             Self::UnacceptableTimelineName(_) => {
                 Some("The prefix \"mz_\" is reserved for system timelines.".into())
+            }
+            Self::UnknownTypeInPostgresSource { table, column , e: _ }  => {
+                Some(format!("You may be using an unsupported type in Materialize for column \"{}\" in table \"{}\".", column, table))
             }
             _ => None,
         }
@@ -208,6 +217,11 @@ impl fmt::Display for PlanError {
             | Self::AlterViewOnMaterializedView(name)
             | Self::ShowCreateViewOnMaterializedView(name)
             | Self::ExplainViewOnMaterializedView(name) => write!(f, "{name} is not a view"),
+            Self::UnknownTypeInPostgresSource {
+                table: _,
+                column: _,
+                e,
+            } => write!(f, "{}", e),
         }
     }
 }
