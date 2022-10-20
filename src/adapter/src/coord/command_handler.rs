@@ -441,9 +441,7 @@ impl<S: Append + 'static> Coordinator<S> {
             // `CREATE SUBSOURCE` statements are disallowed for users and are only generated
             // automatically as part of purification
             Statement::CreateSubsource(_) => tx.send(
-                Err(AdapterError::Unsupported(
-                    "CREATE SUBSOURCE cannot be executed directly",
-                )),
+                Err(AdapterError::Unsupported("CREATE SUBSOURCE statements")),
                 session,
             ),
 
