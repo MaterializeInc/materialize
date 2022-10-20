@@ -33,16 +33,16 @@ use crate::{Metrics, PersistConfig};
 
 use self::StateFieldValDiff::*;
 
-#[derive(Debug)]
-#[cfg_attr(any(test, debug_assertions), derive(Clone, PartialEq))]
+#[derive(Clone, Debug)]
+#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 pub enum StateFieldValDiff<V> {
     Insert(V),
     Update(V, V),
     Delete(V),
 }
 
-#[derive(Debug)]
-#[cfg_attr(any(test, debug_assertions), derive(Clone, PartialEq))]
+#[derive(Clone, Debug)]
+#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 pub struct StateFieldDiff<K, V> {
     pub key: K,
     pub val: StateFieldValDiff<V>,
