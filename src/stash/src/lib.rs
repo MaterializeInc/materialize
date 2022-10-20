@@ -720,35 +720,41 @@ where
         Ok(())
     }
 
-    /// Sets the given k,v pair.
+    /// Sets a value for a key. `f` is passed the previous value, if any.
     ///
-    /// Returns the old value if one existed.
+    /// Returns the previous value if one existed and the value returned from
+    /// `f`.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn upsert_key<S>(
+    pub async fn upsert_key<S, F, R>(
         &self,
         stash: &mut S,
         key: &K,
-        value: &V,
-    ) -> Result<Option<V>, StashError>
+        f: F,
+    ) -> Result<Result<(Option<V>, V), R>, StashError>
     where
         S: Append,
+        F: FnOnce(Option<&V>) -> Result<V, R>,
     {
-        let (prev, ids) = self.upsert_key_no_consolidate(stash, key, value).await?;
+        let (prev, next, ids) = match self.upsert_key_no_consolidate(stash, key, f).await? {
+            Ok(inner) => inner,
+            Err(e) => return Ok(Err(e)),
+        };
         stash.consolidate_batch(&ids).await?;
-        Ok(prev)
+        Ok(Ok((prev, next)))
     }
 
-    /// Same as `upsert_key`, but doesn't consolidate. Returns ids needing
-    /// consolidation.
+    /// Same as `upsert_key`, but doesn't consolidate. Additionally returns ids
+    /// needing consolidation.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn upsert_key_no_consolidate<S>(
+    pub async fn upsert_key_no_consolidate<S, F, R>(
         &self,
         stash: &mut S,
         key: &K,
-        value: &V,
-    ) -> Result<(Option<V>, Vec<Id>), StashError>
+        f: F,
+    ) -> Result<Result<(Option<V>, V, Vec<Id>), R>, StashError>
     where
         S: Append,
+        F: FnOnce(Option<&V>) -> Result<V, R>,
     {
         let collection = self.get(stash).await?;
         let mut batch = collection.make_batch(stash).await?;
@@ -765,12 +771,16 @@ where
                 _ => return Err(err),
             },
         };
+        let next = match f(prev.as_ref()) {
+            Ok(v) => v,
+            Err(e) => return Ok(Err(e)),
+        };
         if let Some(prev) = &prev {
             collection.append_to_batch(&mut batch, key, prev, -1);
         }
-        collection.append_to_batch(&mut batch, key, value, 1);
+        collection.append_to_batch(&mut batch, key, &next, 1);
         stash.append_batch(&[batch]).await?;
-        Ok((prev, vec![collection.id]))
+        Ok(Ok((prev, next, vec![collection.id])))
     }
 
     /// Sets the given key value pairs, removing existing entries match any key.

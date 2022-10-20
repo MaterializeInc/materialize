@@ -803,8 +803,8 @@ impl<S: Append> Connection<S> {
             config: config.clone().into(),
         };
         COLLECTION_COMPUTE_REPLICAS
-            .upsert_key(&mut self.stash, &key, &val)
-            .await?;
+            .upsert_key(&mut self.stash, &key, |_| Ok::<_, Error>(val))
+            .await??;
         Ok(())
     }
 
@@ -825,20 +825,19 @@ impl<S: Append> Connection<S> {
         let key = IdAllocKey {
             name: id_type.to_string(),
         };
-        let prev = COLLECTION_ID_ALLOC
-            .peek_key_one(&mut self.stash, &key)
-            .await?;
-        let id = prev.expect("must exist").next_id;
-        let next = match id.checked_add(amount) {
-            Some(next_gid) => IdAllocValue { next_id: next_gid },
-            None => return Err(Error::new(ErrorKind::IdExhaustion)),
-        };
-        let (_prev, consolidate_ids) = COLLECTION_ID_ALLOC
-            .upsert_key_no_consolidate(&mut self.stash, &key, &next)
-            .await?;
+        let (prev, next, consolidate_ids) = COLLECTION_ID_ALLOC
+            .upsert_key_no_consolidate(&mut self.stash, &key, |prev| {
+                let id = prev.expect("must exist").next_id;
+                match id.checked_add(amount) {
+                    Some(next_gid) => Ok(IdAllocValue { next_id: next_gid }),
+                    None => Err(Error::new(ErrorKind::IdExhaustion)),
+                }
+            })
+            .await??;
         self.consolidations_tx
             .send(consolidate_ids)
             .expect("coordinator unexpectedly gone");
+        let id = prev.expect("must exist").next_id;
         Ok((id..next.next_id).collect())
     }
 
@@ -879,12 +878,13 @@ impl<S: Append> Connection<S> {
         let key = TimestampKey {
             id: timeline.to_string(),
         };
-        let value = TimestampValue { ts: timestamp };
-        let (old_value, consolidate_ids) = COLLECTION_TIMESTAMP
-            .upsert_key_no_consolidate(&mut self.stash, &key, &value)
-            .await?;
-        if let Some(old_value) = old_value {
-            assert!(value >= old_value, "global timestamp must always go up");
+        let (prev, next, consolidate_ids) = COLLECTION_TIMESTAMP
+            .upsert_key_no_consolidate(&mut self.stash, &key, |_| {
+                Ok::<_, Error>(TimestampValue { ts: timestamp })
+            })
+            .await??;
+        if let Some(prev) = prev {
+            assert!(next >= prev, "global timestamp must always go up");
         }
         self.consolidations_tx
             .send(consolidate_ids)
