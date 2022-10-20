@@ -637,7 +637,6 @@ class Testdrive(Service):
         default_timeout: str = "120s",
         seed: Optional[int] = None,
         consistent_seed: bool = False,
-        validate_data_dir: bool = True,
         validate_postgres_stash: bool = False,
         entrypoint: Optional[List[str]] = None,
         entrypoint_extra: List[str] = [],
@@ -686,9 +685,6 @@ class Testdrive(Service):
 
         if aws_endpoint and not aws_region:
             entrypoint.append(f"--aws-endpoint={aws_endpoint}")
-
-        if validate_data_dir:
-            entrypoint.append("--validate-data-dir=/mzdata")
 
         if validate_postgres_stash:
             entrypoint.append(

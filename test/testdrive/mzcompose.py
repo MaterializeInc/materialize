@@ -56,6 +56,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--replicas", type=int, default=1, help="use multiple replicas")
 
     parser.add_argument(
+        "--validate-postgres-stash",
+        action="store_true",
+        help="Have testdrive validate the postgres stash",
+    )
+
+    parser.add_argument(
         "files",
         nargs="*",
         default=["*.td"],
@@ -76,7 +82,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         forward_buildkite_shard=True,
         kafka_default_partitions=args.kafka_default_partitions,
         aws_region=args.aws_region,
-        validate_postgres_stash=True,
+        validate_postgres_stash=args.validate_postgres_stash,
     )
 
     materialized = Materialized(size=args.size) if args.size else Materialized()
