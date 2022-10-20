@@ -69,7 +69,7 @@ impl PartialEq for User {
 }
 
 impl User {
-    /// Returns true if this is an internal user, false otherwise.
+    /// Returns whether this is an internal user.
     pub fn is_internal(&self) -> bool {
         INTERNAL_USER_NAMES.contains(&self.name)
     }
