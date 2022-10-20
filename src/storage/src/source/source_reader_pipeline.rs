@@ -817,7 +817,8 @@ where
 
     // We'll route all the work to a single arbitrary worker;
     // there's not much to do, and we need a global view.
-    let chosen_worker_id = 0;
+    let chosen_worker_id = source_id.hashed() as usize % worker_count;
+    let is_active_worker = chosen_worker_id == healthcheck_worker_id;
 
     let mut healths = vec![HealthStatus::Starting; worker_count];
 
@@ -852,7 +853,7 @@ where
                 input.for_each(|_cap, rows| {
                     rows.swap(&mut buffer);
                     for (worker_id, health_event) in buffer.drain(..) {
-                        if healthcheck_worker_id != chosen_worker_id {
+                        if !is_active_worker {
                             warn!("Health messages for source {source_id} passed to an unexpected worker id: {healthcheck_worker_id}")
                         }
                         let prev_health = &healths[worker_id];
