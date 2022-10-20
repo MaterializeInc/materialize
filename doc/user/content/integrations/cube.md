@@ -42,7 +42,7 @@ menu:
     SSL               | ✅
 
 1. #### Set up the schema
-    You can relay on Cube to infer the schema or skip the step to do it manually. Cube will figure out tables, sources, and materialized views and try to figure out their dimensions, measures, primary keys, and joins.
+    You can rely on Cube to infer the schema or skip the step to do it manually. Cube will figure out tables, sources, and materialized views and try to figure out their dimensions, measures, primary keys, and joins.
 
 1. #### Set up the default database
     Before running queries on Materialize, configure the database name as follows: <br/>
