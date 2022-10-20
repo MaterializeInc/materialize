@@ -33,16 +33,16 @@ use crate::{Metrics, PersistConfig};
 
 use self::StateFieldValDiff::*;
 
-#[derive(Debug)]
-#[cfg_attr(any(test, debug_assertions), derive(Clone, PartialEq))]
+#[derive(Clone, Debug)]
+#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 pub enum StateFieldValDiff<V> {
     Insert(V),
     Update(V, V),
     Delete(V),
 }
 
-#[derive(Debug)]
-#[cfg_attr(any(test, debug_assertions), derive(Clone, PartialEq))]
+#[derive(Clone, Debug)]
+#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 pub struct StateFieldDiff<K, V> {
     pub key: K,
     pub val: StateFieldValDiff<V>,
@@ -545,9 +545,39 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
         diffs, trace
     );
 
-    let mut batches = BTreeMap::new();
-    trace.map_batches(|b| assert!(batches.insert(b.clone(), ()).is_none()));
-    apply_diffs_map("spine", diffs, &mut batches)?;
+    let batches = {
+        let mut batches = BTreeMap::new();
+        trace.map_batches(|b| assert!(batches.insert(b.clone(), ()).is_none()));
+        apply_diffs_map("spine", diffs.clone(), &mut batches).map(|_ok| batches)
+    };
+
+    let batches = match batches {
+        Ok(batches) => batches,
+        Err(err) => {
+            metrics
+                .state
+                .apply_spine_slow_path_with_reconstruction
+                .inc();
+            debug!(
+                "apply_diffs_spines could not apply diffs directly to existing trace batches: {}. diffs={:?} trace={:?}",
+                err, diffs, trace
+            );
+            // if we couldn't apply our diffs directly to our trace's batches, we can
+            // try one more trick: reconstruct a new spine with our existing batches,
+            // in an attempt to create different merges than we currently have. then,
+            // we can try to apply our diffs on top of these new (potentially) merged
+            // batches.
+            let mut reconstructed_spine = Trace::default();
+            trace.map_batches(|b| {
+                let _merge_reqs = reconstructed_spine.push_batch(b.clone());
+            });
+
+            let mut batches = BTreeMap::new();
+            reconstructed_spine.map_batches(|b| assert!(batches.insert(b.clone(), ()).is_none()));
+            apply_diffs_map("spine", diffs, &mut batches)?;
+            batches
+        }
+    };
 
     let mut new_trace = Trace::default();
     new_trace.downgrade_since(trace.since());
