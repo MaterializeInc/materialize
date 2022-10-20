@@ -142,26 +142,24 @@ where
 #[derive(Debug)]
 struct PendingPeek {
     /// For replica-targeted peeks, this specifies the replica whose response we should pass on.
-    ///
-    /// If this value is `None`, we pass on the first response.
+    /// For untargeted peeks, this value is `None` and we pass on the first response.
     target_replica: Option<ReplicaId>,
-    /// Replicas that have yet to respond to this peek.
-    unfinished: BTreeSet<ReplicaId>,
+    /// IDs of replicas that have yet to respond to this peek.
+    outstanding: BTreeSet<ReplicaId>,
     /// The OpenTelemetry context for this peek.
-    ///
-    /// This value is `Some` as long as we have not yet passed a response up the chain, and `None`
-    /// afterwards.
-    otel_ctx: Option<OpenTelemetryContext>,
+    otel_ctx: OpenTelemetryContext,
 }
 
-impl PendingPeek {
-    /// Return whether this peek is finished and can be cleaned up.
+/// Additional information to store with served peeks.
+#[derive(Debug)]
+struct ServedPeek {
+    /// IDs of replicas that have yet to respond to this peek.
+    outstanding: BTreeSet<ReplicaId>,
+}
+
+impl ServedPeek {
     fn is_finished(&self) -> bool {
-        // If we have not yet emitted a response for the peek, the peek is not finished, even if
-        // the set of replicas we are waiting for is currently empty. It might be that the cluster
-        // has no replicas or all replicas have been temporarily removed for re-hydration. In this
-        // case, we wait for new replicas to be added to eventually serve the peek.
-        self.otel_ctx.is_none() && self.unfinished.is_empty()
+        self.outstanding.is_empty()
     }
 }
 
@@ -285,8 +283,13 @@ where
 struct ActiveReplicationState<T> {
     /// IDs of connected replicas.
     replica_ids: BTreeSet<ReplicaId>,
-    /// Outstanding peeks, to guide responses (and which to suppress).
-    peeks: HashMap<uuid::Uuid, PendingPeek>,
+    /// Peeks that we have not yet served a response for.
+    pending_peeks: HashMap<Uuid, PendingPeek>,
+    /// Peeks that we have served but are still being processed by some replicas.
+    ///
+    /// We keep track of these to be able to hold back read holds on peeked collections until we
+    /// know that all replicas have finished reading.
+    served_peeks: HashMap<Uuid, ServedPeek>,
     /// IDs of in-progress subscribes, to guide responses (and which to suppress).
     subscribes: BTreeSet<GlobalId>,
     /// Reported upper frontiers for replicated collections and in-progress subscribes.
@@ -319,14 +322,15 @@ where
         for uppers in self.uppers.values_mut() {
             uppers.add_replica(id);
         }
-        for peek in self.peeks.values_mut() {
-            peek.unfinished.insert(id);
+        for peek in self.pending_peeks.values_mut() {
+            peek.outstanding.insert(id);
         }
     }
 
     fn remove_replica(&mut self, id: ReplicaId) {
         self.replica_ids.remove(&id);
 
+        // Remove the replica from all tracked frontiers.
         // Removing a replica might elicit changes to collection frontiers, which we must
         // report up the chain.
         let mut new_uppers = Vec::new();
@@ -345,15 +349,21 @@ where
                 .push_back(ActiveReplicationResponse::FrontierUppers(new_uppers));
         }
 
-        // Removing a replica might implicitly finish a peek, which we must report up the chain.
-        self.peeks.retain(|uuid, peek| {
-            peek.unfinished.remove(&id);
-            let finished = peek.is_finished();
-            if finished {
+        // Remove the replica from all tracked peeks.
+        // Removing a replica from a served peek might implicitly finish a peek, which we must
+        // report up the chain.
+        for pending in self.pending_peeks.values_mut() {
+            pending.outstanding.remove(&id);
+        }
+        self.served_peeks.retain(|uuid, served| {
+            served.outstanding.remove(&id);
+            if served.is_finished() {
                 self.pending_response
                     .push_back(ActiveReplicationResponse::PeekFinished(uuid.clone()));
+                false
+            } else {
+                true
             }
-            !finished
         });
     }
 
@@ -367,36 +377,36 @@ where
                 target_replica,
                 ..
             }) => {
-                self.peeks.insert(
+                self.pending_peeks.insert(
                     *uuid,
                     PendingPeek {
                         target_replica: *target_replica,
-                        unfinished: self.replica_ids.clone(),
+                        outstanding: self.replica_ids.clone(),
                         // TODO(guswynn): can we just hold the `tracing::Span`
                         // here instead?
-                        otel_ctx: Some(otel_ctx.clone()),
+                        otel_ctx: otel_ctx.clone(),
                     },
                 );
             }
             ComputeCommand::CancelPeeks { uuids } => {
                 // Enqueue the response to the cancelation.
                 for uuid in uuids {
-                    let otel_ctx = self
-                        .peeks
-                        .get_mut(uuid)
-                        // Canceled peeks should not be further responded to.
-                        .map(|pending| pending.otel_ctx.take())
-                        .unwrap_or_else(|| {
-                            tracing::warn!("did not find pending peek for {}", uuid);
-                            None
-                        });
-                    if let Some(ctx) = otel_ctx {
+                    let pending = self.pending_peeks.remove(uuid);
+                    if let Some(peek) = pending {
                         self.pending_response
                             .push_back(ActiveReplicationResponse::PeekResponse(
                                 *uuid,
                                 PeekResponse::Canceled,
-                                ctx,
+                                peek.otel_ctx,
                             ));
+                        self.served_peeks.insert(
+                            *uuid,
+                            ServedPeek {
+                                outstanding: peek.outstanding,
+                            },
+                        );
+                    } else {
+                        tracing::warn!("did not find pending peek for {}", uuid);
                     }
                 }
             }
@@ -469,44 +479,47 @@ where
         otel_ctx: OpenTelemetryContext,
         replica_id: ReplicaId,
     ) -> Option<ActiveReplicationResponse<T>> {
-        let mut peek = match self.peeks.remove(&uuid) {
-            Some(peek) => peek,
-            None => {
-                tracing::warn!("did not find pending peek for {}", uuid);
-                return None;
-            }
-        };
-
         // Forward the peek response, if we didn't already forward a response
         // to this peek previously. If the peek is targeting a replica, only
         // forward the response of that replica.
         // TODO: we could collect the other responses to assert equivalence?
         // Trades resources (memory) for reassurances; idk which is best.
-        //
-        // NOTE: we use the `otel_ctx` from the response, not the
-        // pending peek, because we currently want the parent
-        // to be whatever the compute worker did with this peek. We
-        // still `take` the pending peek's `otel_ctx` to mark it as
-        // served.
-        //
-        // Additionally, we just use the `otel_ctx` from the first worker to
-        // respond.
-        let serving_replica = peek.target_replica.unwrap_or(replica_id);
-        if replica_id == serving_replica && peek.otel_ctx.take().is_some() {
+        if let Some(mut peek) = self.pending_peeks.remove(&uuid) {
+            peek.outstanding.remove(&replica_id);
+
+            let serving_replica = peek.target_replica.unwrap_or(replica_id);
+            if serving_replica != replica_id {
+                // Peek is targeted at another replica; keep it pending.
+                self.pending_peeks.insert(uuid, peek);
+                return None;
+            }
+
+            // NOTE: we use the `otel_ctx` from the response, not the
+            // pending peek, because we currently want the parent
+            // to be whatever the compute worker did with this peek.
             self.pending_response
                 .push_back(ActiveReplicationResponse::PeekResponse(
                     uuid, response, otel_ctx,
                 ));
+            self.served_peeks.insert(
+                uuid,
+                ServedPeek {
+                    outstanding: peek.outstanding,
+                },
+            );
         }
 
-        // Update the per-replica tracking and draw appropriate consequences.
-        peek.unfinished.remove(&replica_id);
-        if peek.is_finished() {
-            self.pending_response
-                .push_back(ActiveReplicationResponse::PeekFinished(uuid));
-        } else {
-            // Put the pending peek back, to await further responses.
-            self.peeks.insert(uuid, peek);
+        // Update our tracking of served peeks and draw appropriate consequences.
+        if let Some(mut peek) = self.served_peeks.remove(&uuid) {
+            peek.outstanding.remove(&replica_id);
+
+            if peek.is_finished() {
+                self.pending_response
+                    .push_back(ActiveReplicationResponse::PeekFinished(uuid));
+            } else {
+                // Awaiting further responses for this peek; keep tracking it.
+                self.served_peeks.insert(uuid, peek);
+            }
         }
 
         self.pending_response.pop_front()
@@ -636,7 +649,8 @@ impl<T> ActiveReplication<T> {
             replicas: Default::default(),
             state: ActiveReplicationState {
                 replica_ids: Default::default(),
-                peeks: Default::default(),
+                pending_peeks: Default::default(),
+                served_peeks: Default::default(),
                 subscribes: Default::default(),
                 uppers: Default::default(),
                 index_log_uppers: Default::default(),
@@ -721,7 +735,7 @@ where
         );
 
         // Take this opportunity to clean up the history we should present.
-        self.state.history.retain_peeks(&self.state.peeks);
+        self.state.history.retain_peeks(&self.state.pending_peeks);
         self.state.history.reduce();
 
         let replica_state = ReplicaState {
