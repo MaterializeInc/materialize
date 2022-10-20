@@ -31,11 +31,11 @@ use mz_persist_client::write::WriteHandle;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 
 use crate::controller::CollectionMetadata;
-use crate::types::sources::SourceData;
 
 /// The Healthchecker is responsible for tracking the current state
 /// of a Timely worker for a source, as well as updating the relevant
 /// state collection based on it.
+#[derive(Debug)]
 pub struct Healthchecker {
     /// Internal ID of the source (e.g. s1)
     sink_id: GlobalId,
@@ -459,7 +459,7 @@ mod tests {
     }
 
     fn failed() -> SinkStatus {
-        SinkStatus::Stalled("".into())
+        SinkStatus::Failed("".into())
     }
 
     #[tokio::test(start_paused = true)]
@@ -703,7 +703,11 @@ mod tests {
         fn run_test(test_case: (SinkStatus, Vec<SinkStatus>, bool)) {
             let (from_status, to_status, allowed) = test_case;
             for status in to_status {
-                assert_eq!(allowed, from_status.can_transition(&status))
+                assert_eq!(
+                    allowed,
+                    from_status.can_transition(&status),
+                    "Bad can_transition: {from_status:?} -> {status:?}; expected allowed: {allowed:?}"
+                );
             }
         }
     }
@@ -724,7 +728,6 @@ mod tests {
     async fn new_healthchecker(
         status_shard_id: ShardId,
         source_id: GlobalId,
-        active: bool,
         persist_clients: &Arc<Mutex<PersistClientCache>>,
     ) -> Healthchecker {
         let start = tokio::time::Instant::now();
@@ -751,7 +754,6 @@ mod tests {
         new_healthchecker(
             status_shard_id,
             GlobalId::User(source_id),
-            true,
             &Arc::clone(persist_clients),
         )
         .await
@@ -779,9 +781,11 @@ mod tests {
             .unwrap()
             .into_iter()
             .map(
-                |((v, _), _, _): ((Result<SourceData, String>, Result<(), String>), u64, i64)| {
-                    v.unwrap().0.unwrap()
-                },
+                |((v, _), _, _): (
+                    (Result<HealthcheckerData, String>, Result<(), String>),
+                    u64,
+                    i64,
+                )| { v.unwrap().0 .0.unwrap() },
             )
             .collect_vec()
     }
