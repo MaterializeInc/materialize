@@ -27,7 +27,7 @@ use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, StatementDesc};
 use mz_sql_parser::ast::TransactionIsolationLevel;
 
-use crate::catalog::SYSTEM_USER;
+use crate::catalog::{INTERNAL_USER_NAMES, SYSTEM_USER};
 use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
 use crate::error::AdapterError;
@@ -100,8 +100,8 @@ impl<T: TimestampManipulation> Session<T> {
 
     fn new_internal(conn_id: ConnectionId, user: User) -> Session<T> {
         let (notices_tx, notices_rx) = mpsc::unbounded_channel();
-        let vars = if user == *SYSTEM_USER {
-            SessionVars::for_cluster(&SYSTEM_USER.name)
+        let vars = if INTERNAL_USER_NAMES.contains(&user.name) {
+            SessionVars::for_cluster(&user.name)
         } else {
             SessionVars::default()
         };
