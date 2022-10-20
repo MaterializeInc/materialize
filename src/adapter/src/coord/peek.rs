@@ -491,7 +491,6 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 self.controller
                     .active_compute()
                     .cancel_peeks(compute_instance, uuids)
-                    .await
                     .unwrap();
             }
 
