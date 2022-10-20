@@ -836,12 +836,19 @@ where
 
     let mut last_reported_status = overall_status(&healths).clone();
 
+    let shutdown_token = Rc::new(());
+    let weak_token = Rc::downgrade(&shutdown_token);
+
     health_op.build_async(
         scope.clone(),
         move |mut _capabilities, _frontiers, scheduler| async move {
             let mut buffer = Vec::new();
             info!("Health for source {source_id} initialized to: {last_reported_status:?}");
             while scheduler.notified().await {
+                if weak_token.upgrade().is_none() {
+                    return;
+                }
+
                 input.for_each(|_cap, rows| {
                     rows.swap(&mut buffer);
                     for (worker_id, health_event) in buffer.drain(..) {
@@ -863,7 +870,7 @@ where
         },
     );
 
-    Rc::new(())
+    shutdown_token
 }
 
 /// Mints new contents for the remap shard based on summaries about the source
