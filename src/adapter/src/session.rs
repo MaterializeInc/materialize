@@ -68,6 +68,13 @@ impl PartialEq for User {
     }
 }
 
+impl User {
+    /// Returns whether this is an internal user.
+    pub fn is_internal(&self) -> bool {
+        INTERNAL_USER_NAMES.contains(&self.name)
+    }
+}
+
 /// A session holds per-connection state.
 #[derive(Debug)]
 pub struct Session<T = mz_repr::Timestamp> {

@@ -15,13 +15,22 @@ mz_introspection
 default
 
 ! DROP CLUSTER mz_system CASCADE
-contains:cluster name "mz_system" is reserved
+contains:system cluster 'mz_system' cannot be modified
 
 ! DROP CLUSTER mz_introspection CASCADE
-contains:cluster name "mz_introspection" is reserved
+contains:system cluster 'mz_introspection' cannot be modified
+
+! DROP CLUSTER mz_joe CASCADE
+contains:unknown cluster 'mz_joe'
 
 ! CREATE CLUSTER mz_joe REPLICAS (r1 (size '1'))
 contains:cluster name "mz_joe" is reserved
+
+! CREATE CLUSTER REPLICA mz_system.r2 SIZE '1';
+contains:system cluster 'mz_system' cannot be modified
+
+! DROP CLUSTER REPLICA mz_system.r1
+contains:system cluster 'mz_system' cannot be modified
 
 > CREATE MATERIALIZED VIEW mv AS SELECT AVG(50)
 
@@ -56,3 +65,17 @@ INSERT INTO temp SELECT * FROM temp
 2
 1
 2
+
+> SHOW CLUSTER REPLICAS WHERE cluster = 'mz_system'
+mz_system r1 1
+
+$ postgres-execute connection=mz_system
+DROP CLUSTER REPLICA mz_system.r1
+
+> SHOW CLUSTER REPLICAS WHERE cluster = 'mz_system'
+
+$ postgres-execute connection=mz_system
+CREATE CLUSTER REPLICA mz_system.r1 SIZE '1';
+
+> SHOW CLUSTER REPLICAS WHERE cluster = 'mz_system'
+mz_system r1 1

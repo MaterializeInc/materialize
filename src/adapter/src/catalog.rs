@@ -47,9 +47,10 @@ use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
-    CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
-    CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogSchema, CatalogType,
-    CatalogTypeDetails, IdReference, NameReference, SessionCatalog, TypeReference,
+    CatalogComputeInstance, CatalogDatabase, CatalogError as SqlCatalogError,
+    CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogItemType,
+    CatalogSchema, CatalogType, CatalogTypeDetails, IdReference, NameReference, SessionCatalog,
+    TypeReference,
 };
 use mz_sql::names::{
     Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
@@ -3499,7 +3500,7 @@ impl<S: Append> Catalog<S> {
             CreateComputeReplica {
                 id: ReplicaId,
                 name: String,
-                on_cluster_name: String,
+                on_cluster_id: ComputeInstanceId,
                 config: ComputeReplicaConfig,
             },
             CreateItem {
@@ -3968,6 +3969,16 @@ impl<S: Append> Catalog<S> {
                             ErrorKind::ReservedReplicaName(name),
                         )));
                     }
+                    let on_cluster_id = state.resolve_compute_instance(&on_cluster_name)?.id();
+                    if on_cluster_id.is_system()
+                        && !session
+                            .map(|session| session.user().is_internal())
+                            .unwrap_or(false)
+                    {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReadOnlyComputeInstance(on_cluster_name),
+                        )));
+                    }
                     let (replica_id, compute_instance_id) =
                         tx.insert_compute_replica(&on_cluster_name, &name, &config.clone().into())?;
                     if let ComputeReplicaLocation::Managed { size, .. } = &config.location {
@@ -3995,7 +4006,7 @@ impl<S: Append> Catalog<S> {
                         Action::CreateComputeReplica {
                             id: replica_id,
                             name,
-                            on_cluster_name,
+                            on_cluster_id,
                             config,
                         },
                     )?;
@@ -4181,7 +4192,7 @@ impl<S: Append> Catalog<S> {
                 Op::DropComputeInstance { name } => {
                     if is_reserved_name(&name) {
                         return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReservedClusterName(name),
+                            ErrorKind::ReadOnlyComputeInstance(name),
                         )));
                     }
                     let (instance_id, introspection_source_index_ids) =
@@ -4218,6 +4229,15 @@ impl<S: Append> Catalog<S> {
                         )));
                     }
                     let instance = state.resolve_compute_instance(&compute_name)?;
+                    if instance.id().is_system()
+                        && !session
+                            .map(|session| session.user().is_internal())
+                            .unwrap_or(false)
+                    {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReadOnlyComputeInstance(compute_name),
+                        )));
+                    }
                     tx.remove_compute_replica(&name, instance.id)?;
 
                     let replica_id = instance.replica_id_by_name[&name];
@@ -4613,17 +4633,16 @@ impl<S: Append> Catalog<S> {
                 Action::CreateComputeReplica {
                     id,
                     name,
-                    on_cluster_name,
+                    on_cluster_id,
                     config,
                 } => {
-                    let compute_instance_id = state.compute_instances_by_name[&on_cluster_name];
                     let introspection_ids: Vec<_> = config.logging.source_and_view_ids().collect();
-                    state.insert_compute_replica(compute_instance_id, name.clone(), id, config);
+                    state.insert_compute_replica(on_cluster_id, name.clone(), id, config);
                     for id in introspection_ids {
                         builtin_table_updates.extend(state.pack_item_update(id, 1));
                     }
                     builtin_table_updates.push(state.pack_compute_replica_update(
-                        compute_instance_id,
+                        on_cluster_id,
                         &name,
                         1,
                     ));
