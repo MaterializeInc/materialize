@@ -526,6 +526,8 @@ class Debezium(Service):
             "CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081",
             "CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081",
             "CONNECT_OFFSET_COMMIT_POLICY=AlwaysCommitOffsetPolicy",
+            "CONNECT_ERRORS_RETRY_TIMEOUT=60000",
+            "CONNECT_ERRORS_RETRY_DELAY_MAX_MS=1000",
         ],
     ) -> None:
         super().__init__(
