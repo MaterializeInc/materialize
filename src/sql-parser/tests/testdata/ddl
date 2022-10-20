@@ -1441,13 +1441,40 @@ CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') 
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("mz_source")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], subsources: Some(All) })
 
-
 parse-statement
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR ALL TABLES WITH (SIZE = 'small');
 ----
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR ALL TABLES WITH (SIZE = 'small')
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("mz_source")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], subsources: Some(All) })
+
+parse-statement
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES (foo, bar as qux, baz into zop) WITH (SIZE = 'small');
+----
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR TABLES (foo, bar AS qux, baz AS zop) WITH (SIZE = 'small')
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("mz_source")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], subsources: Some(Subset([CreateSourceSubsource { reference: UnresolvedObjectName([Ident("foo")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedObjectName([Ident("bar")]), subsource: Some(Deferred(UnresolvedObjectName([Ident("qux")]))) }, CreateSourceSubsource { reference: UnresolvedObjectName([Ident("baz")]), subsource: Some(Deferred(UnresolvedObjectName([Ident("zop")]))) }])) })
+
+parse-statement
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES ([s1 AS foo.bar]) WITH (SIZE = 'small');
+----
+error: Expected identifier, found left square bracket
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES ([s1 AS foo.bar]) WITH (SIZE = 'small');
+                                                                                          ^
+
+parse-statement
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES (baz AS [s1 AS foo.bar]) WITH (SIZE = 'small');
+----
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR TABLES (baz AS [s1 AS foo.bar]) WITH (SIZE = 'small')
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("mz_source")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], subsources: Some(Subset([CreateSourceSubsource { reference: UnresolvedObjectName([Ident("baz")]), subsource: Some(Named(Id("s1", UnresolvedObjectName([Ident("foo"), Ident("bar")])))) }])) })
+
+parse-statement
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES ([s1 AS foo.bar] AS baz) WITH (SIZE = 'small');
+----
+error: Expected identifier, found left square bracket
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES ([s1 AS foo.bar] AS baz) WITH (SIZE = 'small');
+                                                                                          ^
 
 parse-statement
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') WITH (SIZE = 'small') FOR ALL TABLES;

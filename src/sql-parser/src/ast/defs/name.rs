@@ -21,6 +21,7 @@
 use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
+use crate::ast::AstInfo;
 use crate::keywords::Keyword;
 
 /// An identifier.
@@ -161,3 +162,21 @@ impl AstDisplay for UnresolvedDatabaseName {
     }
 }
 impl_display!(UnresolvedDatabaseName);
+
+// The name of an object not yet created during name resolution, which should be
+// resolveable as an object name later.
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub enum DeferredObjectName<T: AstInfo> {
+    Named(T::ObjectName),
+    Deferred(UnresolvedObjectName),
+}
+
+impl<T: AstInfo> AstDisplay for DeferredObjectName<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            DeferredObjectName::Named(o) => f.write_node(o),
+            DeferredObjectName::Deferred(o) => f.write_node(o),
+        }
+    }
+}
+impl_display_t!(DeferredObjectName);
