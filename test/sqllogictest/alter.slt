@@ -10,13 +10,29 @@
 mode cockroach
 
 query error system schema 'mz_catalog.mz_tables' cannot be modified
-alter table mz_tables rename to foo;
+ALTER TABLE mz_tables RENAME TO foo;
 
 query error system schema 'mz_internal.mz_dataflow_channels' cannot be modified
-alter source mz_internal.mz_dataflow_channels rename to foo;
+ALTER SOURCE mz_internal.mz_dataflow_channels RENAME TO foo;
 
 query error system schema 'mz_internal.mz_storage_shards' cannot be modified
-alter source mz_internal.mz_storage_shards rename to foo;
+ALTER SOURCE mz_internal.mz_storage_shards RENAME TO foo;
 
 query error system schema 'mz_internal.mz_storage_shards' cannot be modified
-alter source mz_internal.mz_storage_shards reset (size);
+ALTER SOURCE mz_internal.mz_storage_shards RESET (size);
+
+statement ok
+CREATE CONNECTION c TO KAFKA (BROKER 'localhost:9092');
+
+query TT
+SHOW CONNECTIONS
+----
+c   kafka
+
+statement ok
+ALTER CONNECTION c RENAME TO d;
+
+query TT
+SHOW CONNECTIONS
+----
+d   kafka
