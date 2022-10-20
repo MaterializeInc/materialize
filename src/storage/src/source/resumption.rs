@@ -115,6 +115,12 @@ where
 
                 cap_set.downgrade(new_upper.elements());
                 upper = new_upper;
+                // The resumption frontier is lower bounded by the involved shards (data shard,
+                // remap shard, etc.), so if it goes to empty we know that the source has finished
+                // writing and can shut down.
+                if upper.elements().is_empty() {
+                    return;
+                }
             }
         },
     );
