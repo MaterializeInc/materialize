@@ -84,22 +84,24 @@ The process to connect Materialize to Redpanda Cloud consists of the following s
     c. Copy the URL under **Cluster hosts**. This will be your `<broker-url>` going forward
 
     d. From the _psql_ terminal, run the following command. Replace `<redpanda_cloud>` with whatever you want to name your source. The broker URL is what you copied in step c of this subsection. The `<topic-name>` is the name of the topic you created in Step 4. The `<your-username>` and `<your-password>` are from the _Create a Service Account_ step.
+
     ```sql
       CREATE SECRET redpanda_username AS '<your-username>';
       CREATE SECRET redpanda_password AS '<your-password>';
-
       CREATE SECRET redpanda_ca_cert AS  decode('<redpanda-broker-ca-cert>', 'base64'); -- The base64 encoded certificate
 
-      CREATE CONNECTION <redpanda_cloud> FOR KAFKA
+      CREATE CONNECTION <redpanda_cloud> TO KAFKA (
           BROKER '<redpanda-broker-url>',
           SASL MECHANISMS = 'SCRAM-SHA-256',
           SASL USERNAME = SECRET redpanda_username,
           SASL PASSWORD = SECRET redpanda_password,
-          SSL CERTIFICATE AUTHORITY = SECRET redpanda_ca_cert;
+          SSL CERTIFICATE AUTHORITY = SECRET redpanda_ca_cert
+      );
 
       CREATE SOURCE <topic-name>
         FROM KAFKA CONNECTION redpanda_cloud (TOPIC '<topic-name>')
-        FORMAT BYTES;
+        FORMAT BYTES
+        WITH (SIZE = '3xsmall');
     ```
 
     e. If the command executes without an error and outputs _CREATE SOURCE_, it means that you have successfully connected Materialize to your Redpanda cluster. You can quickly test your connection by running the following statement:
