@@ -13,14 +13,14 @@ use mz_repr::GlobalId;
 use std::collections::{HashMap, HashSet};
 
 use mz_ore::str::StrExt;
-use mz_sql_parser::ast::CreateConnectionStatement;
 
 use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
 use crate::ast::{
-    AstInfo, CreateIndexStatement, CreateMaterializedViewStatement, CreateSecretStatement,
-    CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateViewStatement, Expr,
-    Ident, Query, Raw, RawObjectName, Statement, UnresolvedObjectName, ViewDefinition,
+    AstInfo, CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
+    CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
+    CreateViewStatement, Expr, Ident, Query, Raw, RawObjectName, Statement, UnresolvedObjectName,
+    ViewDefinition,
 };
 use crate::names::FullObjectName;
 
