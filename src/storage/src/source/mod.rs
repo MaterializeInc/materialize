@@ -39,7 +39,7 @@ mod antichain;
 mod commit;
 mod delimited_value_reader;
 pub mod generator;
-mod healthcheck;
+pub mod healthcheck;
 mod kafka;
 mod kinesis;
 pub mod metrics;
