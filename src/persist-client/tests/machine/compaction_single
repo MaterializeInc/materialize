@@ -27,6 +27,20 @@ zero 99 1
 <run 0>
 part 0
 
+# attempting to compact our just-compacted batch should hit our special case,
+# as it is the single nonempty batch with since in advance of [0]
+compact output=b_compacted_again inputs=(b_compacted) lower=1 upper=2 since=999
+----
+parts=1 len=1
+
+# (the since has not advanced, confirming we're reading the same contents referred by b_compacted)
+fetch-batch input=b_compacted_again
+----
+<part 0>
+zero 99 1
+<run 0>
+part 0
+
 # always compact if our only nonempty batch has >1 run, in order to consolidate across runs
 write-batch output=b lower=1 upper=2 target_size=0 runs=1
 zero 1 1
@@ -90,7 +104,7 @@ compact output=b1_unchanged inputs=(b0,b1,b2,b3) lower=0 upper=4 since=99
 ----
 parts=1 len=1
 
-# (notably, the since has not advanced, confirming we're reading the same contents referred by b1)
+# (the since has not advanced, confirming we're reading the same contents referred by b1)
 fetch-batch input=b1_unchanged
 ----
 <part 0>
