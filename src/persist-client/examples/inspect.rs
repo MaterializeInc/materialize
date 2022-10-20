@@ -30,6 +30,9 @@ pub(crate) enum Command {
     /// Prints latest consensus rollup state as JSON
     StateRollup(StateArgs),
 
+    /// Prints consensus rollup state of all known rollups as JSON
+    StateRollups(StateArgs),
+
     /// Prints the count and size of blobs in an environment
     BlobCount(BlobCountArgs),
 
@@ -128,6 +131,19 @@ pub async fn run(command: InspectArgs) -> Result<(), anyhow::Error> {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&state_rollup).expect("unserializable state")
+            );
+        }
+        Command::StateRollups(args) => {
+            let shard_id = ShardId::from_str(&args.shard_id).expect("invalid shard id");
+            let state_rollups = mz_persist_client::inspect::fetch_state_rollups(
+                shard_id,
+                &args.consensus_uri,
+                &args.blob_uri,
+            )
+            .await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&state_rollups).expect("unserializable state")
             );
         }
         Command::StateDiff(args) => {
