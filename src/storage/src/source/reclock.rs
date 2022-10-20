@@ -30,7 +30,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::Upper;
-use mz_repr::{Datum, Diff, Row, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use tracing::trace;
 
 use crate::controller::CollectionMetadata;
@@ -443,6 +443,11 @@ impl ReclockOperator {
         now: NowFn,
         update_interval: Duration,
         as_of: Antichain<Timestamp>,
+        // additional information to improve logging
+        id: GlobalId,
+        operator: &str,
+        worker_id: usize,
+        worker_count: usize,
     ) -> anyhow::Result<Self> {
         let mut persist_clients = persist_clients.lock().await;
         let persist_client = persist_clients
@@ -480,6 +485,13 @@ impl ReclockOperator {
             .listen(since.clone())
             .await
             .expect("since <= as_of asserted");
+
+        tracing::info!(
+            ?since,
+            ?as_of,
+            ?upper,
+            "{operator}({id}) {worker_id}/{worker_count} initializing ReclockOperator"
+        );
 
         let mut operator = Self {
             remap_trace: HashMap::new(),
@@ -559,7 +571,7 @@ impl ReclockOperator {
                 ?new_since,
                 ?self.since,
                 "We are forced to skip the compaction in \
-                the _ReclockFollower_ because the `new_since` was not beyond the `since`. \
+                the _ReclockOperator_ because the `new_since` was not beyond the `since`. \
                 This is a bug that should be fixed."
             );
             return;
@@ -1033,6 +1045,10 @@ mod tests {
             now_fn.now_fn(),
             Duration::from_secs(1),
             as_of.clone(),
+            GlobalId::Explain,
+            "unittest",
+            0,
+            1,
         )
         .await
         .unwrap();
