@@ -442,13 +442,15 @@ pub enum HealthStatus {
     StalledWithError(String),
 }
 
+type WorkerId = usize;
+
 struct SourceReaderStreams<G: Scope<Timestamp = Timestamp>, S: SourceReader> {
     batches: timely::dataflow::Stream<
         G,
         Rc<RefCell<Option<SourceMessageBatch<S::Key, S::Value, S::Diff>>>>,
     >,
     batch_upper_summaries: timely::dataflow::Stream<G, BatchUpperSummary>,
-    health_stream: timely::dataflow::Stream<G, (usize, HealthStatus)>,
+    health_stream: timely::dataflow::Stream<G, (WorkerId, HealthStatus)>,
 }
 
 /// Reads from a [`SourceReader`] and returns a stream of "un-timestamped"
