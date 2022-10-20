@@ -737,6 +737,7 @@ where
     let (mut summary_output, summary_stream) = demux_op.new_output();
     let (mut health_output, health_stream) = demux_op.new_output();
     let summary_output_port = summary_stream.name().port;
+    let health_output_port = health_stream.name().port;
 
     demux_op.build(move |_caps| {
         let mut buffer = Vec::new();
@@ -767,7 +768,8 @@ where
                         };
 
                         if let Some(health) = maybe_health {
-                            let mut session = health_output.session(&cap);
+                            let health_cap = cap.delayed_for_output(cap.time(), health_output_port);
+                            let mut session = health_output.session(&health_cap);
                             session.give((config.worker_id, health));
                         }
                     }
