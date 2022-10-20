@@ -1,7 +1,7 @@
 ---
 title: "CREATE CLUSTER"
 description: "`CREATE CLUSTER` creates a logical cluster, which contains indexes."
-pagerank: 10
+pagerank: 40
 menu:
   main:
     parent: commands
