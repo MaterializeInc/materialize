@@ -2273,21 +2273,11 @@ impl<'a> Parser<'a> {
 
         let subsources = if self.parse_keywords(&[FOR, TABLES]) {
             self.expect_token(&Token::LParen)?;
-            let subsources = self.parse_comma_separated(|parser| {
-                let name = parser.parse_object_name()?;
-                let subsource = if parser.parse_keyword(INTO) {
-                    CreateSourceSubsource::Resolved(name, parser.parse_raw_name()?)
-                } else if parser.parse_keyword(AS) {
-                    CreateSourceSubsource::Aliased(name, parser.parse_object_name()?)
-                } else {
-                    CreateSourceSubsource::Bare(name)
-                };
-                Ok(subsource)
-            })?;
+            let subsources = self.parse_comma_separated(Parser::parse_subsource_references)?;
             self.expect_token(&Token::RParen)?;
-            Some(CreateSourceSubsources::Subset(subsources))
+            Some(CreateReferencedSubsources::Subset(subsources))
         } else if self.parse_keywords(&[FOR, ALL, TABLES]) {
-            Some(CreateSourceSubsources::All)
+            Some(CreateReferencedSubsources::All)
         } else {
             None
         };
@@ -2314,6 +2304,20 @@ impl<'a> Parser<'a> {
             with_options,
             subsources,
         }))
+    }
+
+    fn parse_subsource_references(&mut self) -> Result<CreateSourceSubsource<Raw>, ParserError> {
+        let reference = self.parse_object_name()?;
+        let subsource = if self.parse_one_of_keywords(&[AS, INTO]).is_some() {
+            Some(self.parse_deferred_object_name()?)
+        } else {
+            None
+        };
+
+        Ok(CreateSourceSubsource {
+            reference,
+            subsource,
+        })
     }
 
     /// Parses the column section of a CREATE SOURCE statement which can be
@@ -4007,6 +4011,13 @@ impl<'a> Parser<'a> {
             }
             None => Ok(None),
         }
+    }
+
+    fn parse_deferred_object_name(&mut self) -> Result<DeferredObjectName<Raw>, ParserError> {
+        Ok(match self.parse_raw_name()? {
+            named @ RawObjectName::Id(..) => DeferredObjectName::Named(named),
+            RawObjectName::Name(deferred) => DeferredObjectName::Deferred(deferred),
+        })
     }
 
     fn parse_raw_name(&mut self) -> Result<RawObjectName, ParserError> {

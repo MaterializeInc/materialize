@@ -39,7 +39,7 @@ use mz_sql_parser::ast::{
     AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceStatement,
     AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
     CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    SetVariableValue, SshConnectionOption,
+    DeferredObjectName, SetVariableValue, SshConnectionOption,
 };
 use mz_storage::source::generator::as_generator;
 use mz_storage::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
@@ -69,10 +69,10 @@ use crate::ast::{
     AwsConnectionOptionName, ClusterOption, ClusterOptionName, ColumnOption, Compression,
     CreateClusterReplicaStatement, CreateClusterStatement, CreateConnection,
     CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement,
-    CreateMaterializedViewStatement, CreateRoleOption, CreateRoleStatement, CreateSchemaStatement,
-    CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
-    CreateSinkStatement, CreateSourceConnection, CreateSourceFormat, CreateSourceOption,
-    CreateSourceOptionName, CreateSourceStatement, CreateSourceSubsource, CreateSourceSubsources,
+    CreateMaterializedViewStatement, CreateReferencedSubsources, CreateRoleOption,
+    CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection,
+    CreateSinkOption, CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection,
+    CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, CreateSourceStatement,
     CreateSubsourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
     CreateViewStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection, CsrConnectionAvro,
     CsrConnectionOption, CsrConnectionOptionName, CsrConnectionProtobuf, CsrSeedProtobuf,
@@ -856,18 +856,24 @@ pub fn plan_create_source(
     };
 
     let (available_subsources, requested_subsources) = match (available_subsources, subsources) {
-        (Some(available_subsources), Some(CreateSourceSubsources::Subset(subsources))) => {
+        (Some(available_subsources), Some(CreateReferencedSubsources::Subset(subsources))) => {
             let mut requested_subsources = vec![];
             for subsource in subsources {
-                let (name, target) = match subsource {
-                    CreateSourceSubsource::Resolved(name, target) => (name, target),
-                    CreateSourceSubsource::Aliased(_, _) | CreateSourceSubsource::Bare(_) => {
-                        sql_bail!(
-                            "[internal error] subsources should be resolved during purification"
-                        )
+                let name = subsource.reference.clone();
+
+                let target = match &subsource.subsource {
+                    Some(subsource) => match subsource {
+                        DeferredObjectName::Named(target) => target,
+                        DeferredObjectName::Deferred(_) => sql_bail!(
+                            "[internal error] subsources must be named during purification"
+                        ),
+                    },
+                    None => {
+                        sql_bail!("[internal error] subsources must be named during purification")
                     }
                 };
-                requested_subsources.push((name.clone(), target));
+
+                requested_subsources.push((name, target));
             }
             (available_subsources, requested_subsources)
         }
@@ -875,7 +881,7 @@ pub fn plan_create_source(
             // Multi-output sources must have a table selection clause
             sql_bail!("This is a multi-output source. Use `FOR TABLE (..)` or `FOR ALL TABLES` to select which ones to ingest");
         }
-        (None, Some(_)) | (Some(_), Some(CreateSourceSubsources::All)) => {
+        (None, Some(_)) | (Some(_), Some(CreateReferencedSubsources::All)) => {
             sql_bail!("[internal error] subsources should be resolved during purification")
         }
         (None, None) => (BTreeMap::new(), vec![]),
@@ -895,6 +901,7 @@ pub fn plan_create_source(
                 sql_bail!("[internal error] invalid target id")
             }
         };
+
         // TODO(petrosagg): This is the point where we would normally look into the catalog for the
         // item with ID `target` and verify that its RelationDesc is identical to the type of the
         // dataflow output. We can't do that here however because the subsources are created in the

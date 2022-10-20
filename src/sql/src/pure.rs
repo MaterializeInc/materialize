@@ -33,17 +33,17 @@ use mz_repr::{strconv, GlobalId};
 use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::{
     ColumnDef, ColumnOption, ColumnOptionDef, CsrConnection, CsrSeedAvro, CsrSeedProtobuf,
-    CsrSeedProtobufSchema, DbzMode, Envelope, Ident, KafkaConfigOption, KafkaConfigOptionName,
-    KafkaConnection, KafkaSourceConnection, PgConfigOption, PgConfigOptionName,
-    ReaderSchemaSelectionStrategy, TableConstraint, UnresolvedObjectName,
+    CsrSeedProtobufSchema, DbzMode, DeferredObjectName, Envelope, Ident, KafkaConfigOption,
+    KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection, PgConfigOption,
+    PgConfigOptionName, ReaderSchemaSelectionStrategy, TableConstraint, UnresolvedObjectName,
 };
 use mz_storage::types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
 use mz_storage::types::connections::{Connection, ConnectionContext};
 use mz_storage::types::sources::PostgresSourceDetails;
 
 use crate::ast::{
-    AvroSchema, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,
-    CreateSourceSubsource, CreateSourceSubsources, CreateSubsourceStatement, CsrConnectionAvro,
+    AvroSchema, CreateReferencedSubsources, CreateSourceConnection, CreateSourceFormat,
+    CreateSourceStatement, CreateSourceSubsource, CreateSubsourceStatement, CsrConnectionAvro,
     CsrConnectionProtobuf, CsvColumns, Format, ProtobufSchema, Value, WithOptionValue,
 };
 use crate::catalog::SessionCatalog;
@@ -62,17 +62,18 @@ fn subsource_gen<'a, T>(
     let mut validated_requested_subsources = vec![];
 
     for subsource in selected_subsources {
-        let (upstream_name, subsource_name) = match subsource.clone() {
-            CreateSourceSubsource::Bare(name) => {
-                let upstream_name = normalize::unresolved_object_name(name)?;
-                let subsource_name = UnresolvedObjectName::unqualified(&upstream_name.item);
-                (upstream_name, subsource_name)
-            }
-            CreateSourceSubsource::Aliased(name, alias) => {
-                (normalize::unresolved_object_name(name)?, alias)
-            }
-            CreateSourceSubsource::Resolved(_, _) => {
-                bail!("Cannot alias subsource using `INTO`, use `AS` instead")
+        let upstream_name = normalize::unresolved_object_name(subsource.reference.clone())?;
+
+        let subsource_name = match &subsource.subsource {
+            Some(name) => match name {
+                DeferredObjectName::Deferred(name) => name.clone(),
+                DeferredObjectName::Named(_) => bail!("Cannot manually ID qualify subsources"),
+            },
+            None => {
+                // Use the entered name as the upstream reference, and then use
+                // the item as the subsource name to ensure it's created in the
+                // current schema, not mirroring the schema of the reference.
+                UnresolvedObjectName::unqualified(&upstream_name.item)
             }
         };
 
@@ -145,10 +146,14 @@ pub async fn purify_create_source(
     } = &mut stmt;
 
     // Disallow manually targetting subsources, this syntax is reserved for purification only
-    if let Some(CreateSourceSubsources::Subset(subsources)) = requested_subsources {
-        for subsource in subsources {
-            if matches!(subsource, CreateSourceSubsource::Resolved(_, _)) {
-                bail!("Cannot alias subsource using `INTO`, use `AS` instead");
+    if let Some(CreateReferencedSubsources::Subset(subsources)) = requested_subsources {
+        for CreateSourceSubsource {
+            subsource,
+            reference: _,
+        } in subsources
+        {
+            if let Some(DeferredObjectName::Named(_)) = subsource {
+                bail!("Cannot manually ID qualify subsources");
             }
         }
     }
@@ -293,7 +298,7 @@ pub async fn purify_create_source(
 
             let mut validated_requested_subsources = vec![];
             match requested_subsources {
-                Some(CreateSourceSubsources::All) => {
+                Some(CreateReferencedSubsources::All) => {
                     for table in &tables {
                         let upstream_name = UnresolvedObjectName::qualified(&[
                             &connection.database,
@@ -304,7 +309,7 @@ pub async fn purify_create_source(
                         validated_requested_subsources.push((upstream_name, subsource_name, table));
                     }
                 }
-                Some(CreateSourceSubsources::Subset(subsources)) => {
+                Some(CreateReferencedSubsources::Subset(subsources)) => {
                     // The user manually selected a subset of upstream tables so we need to
                     // validate that the names actually exist and are not ambiguous
 
@@ -358,15 +363,15 @@ pub async fn purify_create_source(
                 let qualified_subsource_name =
                     scx.allocate_qualified_name(partial_subsource_name.clone())?;
                 let full_subsource_name = scx.allocate_full_name(partial_subsource_name)?;
-                targeted_subsources.push(CreateSourceSubsource::Resolved(
-                    upstream_name,
-                    ResolvedObjectName::Object {
+                targeted_subsources.push(CreateSourceSubsource {
+                    reference: upstream_name,
+                    subsource: Some(DeferredObjectName::Named(ResolvedObjectName::Object {
                         id: transient_id,
                         qualifiers: qualified_subsource_name.qualifiers,
                         full_name: full_subsource_name,
-                        print_id: false,
-                    },
-                ));
+                        print_id: true,
+                    })),
+                });
 
                 // Create the subsource statement
                 let subsource = CreateSubsourceStatement {
@@ -385,7 +390,7 @@ pub async fn purify_create_source(
                 };
                 subsources.push((transient_id, subsource));
             }
-            *requested_subsources = Some(CreateSourceSubsources::Subset(targeted_subsources));
+            *requested_subsources = Some(CreateReferencedSubsources::Subset(targeted_subsources));
 
             // Remove any old detail references
             options.retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
@@ -413,7 +418,7 @@ pub async fn purify_create_source(
 
             let mut validated_requested_subsources = vec![];
             match requested_subsources {
-                Some(CreateSourceSubsources::All) => {
+                Some(CreateReferencedSubsources::All) => {
                     let available_subsources = match &available_subsources {
                         Some(available_subsources) => available_subsources,
                         None => bail!("FOR ALL TABLES is only valid for multi-output sources"),
@@ -424,7 +429,7 @@ pub async fn purify_create_source(
                         validated_requested_subsources.push((upstream_name, subsource_name, desc));
                     }
                 }
-                Some(CreateSourceSubsources::Subset(selected_subsources)) => {
+                Some(CreateReferencedSubsources::Subset(selected_subsources)) => {
                     let available_subsources = match &available_subsources {
                         Some(available_subsources) => available_subsources,
                         None => bail!("FOR TABLES (..) is only valid for multi-output sources"),
@@ -507,15 +512,15 @@ pub async fn purify_create_source(
                 let qualified_subsource_name =
                     scx.allocate_qualified_name(partial_subsource_name.clone())?;
                 let full_subsource_name = scx.allocate_full_name(partial_subsource_name)?;
-                targeted_subsources.push(CreateSourceSubsource::Resolved(
-                    upstream_name,
-                    ResolvedObjectName::Object {
+                targeted_subsources.push(CreateSourceSubsource {
+                    reference: upstream_name,
+                    subsource: Some(DeferredObjectName::Named(ResolvedObjectName::Object {
                         id: transient_id,
                         qualifiers: qualified_subsource_name.qualifiers,
                         full_name: full_subsource_name,
-                        print_id: false,
-                    },
-                ));
+                        print_id: true,
+                    })),
+                });
 
                 // Create the subsource statement
                 let subsource = CreateSubsourceStatement {
@@ -531,7 +536,8 @@ pub async fn purify_create_source(
                 subsources.push((transient_id, subsource));
             }
             if available_subsources.is_some() {
-                *requested_subsources = Some(CreateSourceSubsources::Subset(targeted_subsources));
+                *requested_subsources =
+                    Some(CreateReferencedSubsources::Subset(targeted_subsources));
             }
         }
     }
