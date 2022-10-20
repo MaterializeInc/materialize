@@ -473,22 +473,7 @@ where
         // Technically we could truncate any batch where the since is less_than the
         // output_desc's lower, but we're strict here so we don't get any surprises.
         let needs_truncation = inline_desc.since() == &Antichain::from_elem(T::minimum());
-        if needs_truncation {
-            assert!(
-                PartialOrder::less_equal(inline_desc.lower(), registered_desc.lower()),
-                "key={} inline={:?} registered={:?}",
-                key,
-                inline_desc,
-                registered_desc
-            );
-            assert!(
-                PartialOrder::less_equal(registered_desc.upper(), inline_desc.upper()),
-                "key={} inline={:?} registered={:?}",
-                key,
-                inline_desc,
-                registered_desc
-            );
-        } else {
+        if !needs_truncation {
             assert!(
                 PartialOrder::less_equal(registered_desc.lower(), inline_desc.lower())
                     && PartialOrder::less_equal(inline_desc.upper(), registered_desc.upper()),
