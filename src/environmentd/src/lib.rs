@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use tower_http::cors::AllowOrigin;
 
 use mz_adapter::catalog::storage::BootstrapArgs;
@@ -228,6 +228,8 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         server::serve(internal_http_conns, internal_http_server)
     });
 
+    let (consolidations_tx, consolidations_rx) = mpsc::unbounded_channel();
+
     // Load the adapter catalog from disk.
     if !config
         .cluster_replica_sizes
@@ -251,6 +253,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                 .cloned()
                 .unwrap_or_else(|| mz_adapter::DUMMY_AVAILABILITY_ZONE.into()),
         },
+        consolidations_tx.clone(),
     )
     .await?;
 
@@ -285,6 +288,8 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         storage_usage_collection_interval: config.storage_usage_collection_interval,
         segment_api_key: config.segment_api_key,
         egress_ips: config.egress_ips,
+        consolidations_tx,
+        consolidations_rx,
     })
     .await?;
 

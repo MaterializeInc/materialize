@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, convert::Infallible};
 
 use futures::Future;
 use postgres_openssl::MakeTlsConnector;
@@ -134,15 +134,19 @@ where
         .to_string()
         .contains("since {-9223372036854775808} is not less than upper {-9223372036854775808}"));
     TYPED
-        .upsert_key(&mut stash, &"k1".to_string(), &"v1".to_string())
-        .await?;
+        .upsert_key(&mut stash, &"k1".to_string(), |_| {
+            Ok::<_, Infallible>("v1".to_string())
+        })
+        .await??;
     assert_eq!(
         TYPED.peek_one(&mut stash).await.unwrap(),
         BTreeMap::from([("k1".to_string(), "v1".to_string())])
     );
     TYPED
-        .upsert_key(&mut stash, &"k1".to_string(), &"v2".to_string())
-        .await?;
+        .upsert_key(&mut stash, &"k1".to_string(), |_| {
+            Ok::<_, Infallible>("v2".to_string())
+        })
+        .await??;
     assert_eq!(
         TYPED.peek_one(&mut stash).await.unwrap(),
         BTreeMap::from([("k1".to_string(), "v2".to_string())])
@@ -513,8 +517,10 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
     }
 
     TABLE
-        .upsert_key(stash, &1i64.to_le_bytes().to_vec(), &"v1".to_string())
-        .await?;
+        .upsert_key(stash, &1i64.to_le_bytes().to_vec(), |_| {
+            Ok::<_, Infallible>("v1".to_string())
+        })
+        .await??;
     TABLE
         .upsert(stash, vec![(2i64.to_le_bytes().to_vec(), "v2".to_string())])
         .await?;

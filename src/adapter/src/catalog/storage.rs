@@ -13,15 +13,16 @@ use std::iter::once;
 use std::time::Duration;
 
 use itertools::{max, Itertools};
-use mz_ore::now::EpochMillis;
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
+use tokio::sync::mpsc;
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::{ComputeInstanceId, ComputeReplicaConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::now::EpochMillis;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{CatalogError as SqlCatalogError, CatalogItemType};
 use mz_sql::names::{
@@ -505,12 +506,14 @@ pub struct BootstrapArgs {
 #[derive(Debug)]
 pub struct Connection<S> {
     stash: S,
+    consolidations_tx: mpsc::UnboundedSender<Vec<mz_stash::Id>>,
 }
 
 impl<S: Append> Connection<S> {
     pub async fn open(
         mut stash: S,
         bootstrap_args: &BootstrapArgs,
+        consolidations_tx: mpsc::UnboundedSender<Vec<mz_stash::Id>>,
     ) -> Result<Connection<S>, Error> {
         // Run unapplied migrations. The `user_version` field stores the index
         // of the last migration that was run. If the upper is min, the config
@@ -530,7 +533,10 @@ impl<S: Append> Connection<S> {
         initialize_stash(&mut stash).await?;
         migrate(&mut stash, skip, bootstrap_args).await?;
 
-        let conn = Connection { stash };
+        let conn = Connection {
+            stash,
+            consolidations_tx,
+        };
 
         Ok(conn)
     }
@@ -797,8 +803,8 @@ impl<S: Append> Connection<S> {
             config: config.clone().into(),
         };
         COLLECTION_COMPUTE_REPLICAS
-            .upsert_key(&mut self.stash, &key, &val)
-            .await?;
+            .upsert_key(&mut self.stash, &key, |_| Ok::<_, Error>(val))
+            .await??;
         Ok(())
     }
 
@@ -819,17 +825,19 @@ impl<S: Append> Connection<S> {
         let key = IdAllocKey {
             name: id_type.to_string(),
         };
-        let prev = COLLECTION_ID_ALLOC
-            .peek_key_one(&mut self.stash, &key)
-            .await?;
+        let (prev, next, consolidate_ids) = COLLECTION_ID_ALLOC
+            .upsert_key_no_consolidate(&mut self.stash, &key, |prev| {
+                let id = prev.expect("must exist").next_id;
+                match id.checked_add(amount) {
+                    Some(next_gid) => Ok(IdAllocValue { next_id: next_gid }),
+                    None => Err(Error::new(ErrorKind::IdExhaustion)),
+                }
+            })
+            .await??;
+        self.consolidations_tx
+            .send(consolidate_ids)
+            .expect("coordinator unexpectedly gone");
         let id = prev.expect("must exist").next_id;
-        let next = match id.checked_add(amount) {
-            Some(next_gid) => IdAllocValue { next_id: next_gid },
-            None => return Err(Error::new(ErrorKind::IdExhaustion)),
-        };
-        COLLECTION_ID_ALLOC
-            .upsert_key(&mut self.stash, &key, &next)
-            .await?;
         Ok((id..next.next_id).collect())
     }
 
@@ -861,6 +869,7 @@ impl<S: Append> Connection<S> {
     }
 
     /// Persist new global timestamp for a timeline to disk.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn persist_timestamp(
         &mut self,
         timeline: &Timeline,
@@ -869,13 +878,17 @@ impl<S: Append> Connection<S> {
         let key = TimestampKey {
             id: timeline.to_string(),
         };
-        let value = TimestampValue { ts: timestamp };
-        let old_value = COLLECTION_TIMESTAMP
-            .upsert_key(&mut self.stash, &key, &value)
-            .await?;
-        if let Some(old_value) = old_value {
-            assert!(value >= old_value, "global timestamp must always go up");
+        let (prev, next, consolidate_ids) = COLLECTION_TIMESTAMP
+            .upsert_key_no_consolidate(&mut self.stash, &key, |_| {
+                Ok::<_, Error>(TimestampValue { ts: timestamp })
+            })
+            .await??;
+        if let Some(prev) = prev {
+            assert!(next >= prev, "global timestamp must always go up");
         }
+        self.consolidations_tx
+            .send(consolidate_ids)
+            .expect("coordinator unexpectedly gone");
         Ok(())
     }
 

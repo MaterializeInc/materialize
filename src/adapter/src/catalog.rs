@@ -22,7 +22,7 @@ use mz_storage::controller::IntrospectionType;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, MutexGuard};
+use tokio::sync::{mpsc, Mutex, MutexGuard};
 use tracing::{info, trace};
 use uuid::Uuid;
 
@@ -2850,6 +2850,9 @@ impl<S: Append> Catalog<S> {
     /// instead.
     pub async fn open_debug(stash: S, now: NowFn) -> Result<Catalog<S>, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
+        let (consolidations_tx, consolidations_rx) = mpsc::unbounded_channel();
+        // Leak the receiver so it's not dropped and send will work.
+        std::mem::forget(consolidations_rx);
         let storage = storage::Connection::open(
             stash,
             &BootstrapArgs {
@@ -2858,6 +2861,7 @@ impl<S: Append> Catalog<S> {
                 builtin_cluster_replica_size: "1".into(),
                 default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
             },
+            consolidations_tx.clone(),
         )
         .await?;
         let secrets_reader = Arc::new(InMemorySecretsController::new());
