@@ -115,12 +115,10 @@ pub struct RawSourceCreationConfig {
 /// current source upper, and any errors that occurred while reading that batch.
 struct SourceMessageBatch<Key, Value, Diff> {
     messages: HashMap<PartitionId, Vec<(SourceMessage<Key, Value, Diff>, MzOffset)>>,
-    /// Any errors that occurred while obtaining this batch. TODO: These
-    /// non-definite errors should not show up in the dataflows/the persist
-    /// shard but it's the current "correct" behaviour. We need to fix this as a
-    /// follow-up issue because it's a bigger thing that breaks with the current
-    /// behaviour.
-    non_definite_errors: Vec<SourceError>,
+    /// Any errors that occurred while obtaining this batch. These errors should
+    /// be _definite_: re-running the source will produce the same error. If an error
+    /// is added to this collection, the source will be permanently wedged.
+    source_errors: Vec<SourceError>,
     /// The current upper of the `SourceReader`, at the time this batch was
     /// emitted. Source uppers emitted via batches must never regress.
     source_upper: OffsetAntichain,
@@ -213,7 +211,7 @@ struct SourceReaderOperatorOutput<S: SourceReader> {
     /// Messages and their offsets from the source reader.
     messages: HashMap<PartitionId, Vec<MessageAndOffset<S>>>,
     /// See `SourceMessageBatch`.
-    non_definite_errors: Vec<SourceReaderError>,
+    source_errors: Vec<SourceReaderError>,
     /// A list of partitions that this source reader instance
     /// is sure it doesn't care about. Required so the
     /// remap operator can eventually determine whether
@@ -280,7 +278,7 @@ where
         // not advance its downstream frontier.
         yield Some(SourceReaderOperatorOutput {
             messages: HashMap::new(),
-            non_definite_errors: Vec::new(),
+            source_errors: Vec::new(),
             unconsumed_partitions: Vec::new(),
             source_upper: initial_source_upper,
             batch_upper: batch_upper.clone(),
@@ -298,7 +296,7 @@ where
 
         let mut untimestamped_messages = HashMap::<_, Vec<_>>::new();
         let mut unconsumed_partitions = Vec::new();
-        let mut non_definite_errors = vec![];
+        let mut source_errors = vec![];
         loop {
             // TODO(guswyn): move lots of this out of the macro so rustfmt works better
             tokio::select! {
@@ -360,9 +358,12 @@ where
                                 }
                             }
                         }
-                        // TODO: Report these errors to the Healthchecker!
                         Some(Err(e)) => {
-                            non_definite_errors.push(e);
+                            // TODO(bkirwi): right now we can unconditionally do this, since all
+                            // non-durable errors cause a retry (or a panic) in the source. Soon we'll
+                            // need to figure out the right way to report non-durable errors down so
+                            // the healthcheck can access them.
+                            source_errors.push(e);
                         }
                         None => {
                             // This source reader is done. Yield one final
@@ -370,7 +371,7 @@ where
                             yield Some(
                                 SourceReaderOperatorOutput {
                                     messages: std::mem::take(&mut untimestamped_messages),
-                                    non_definite_errors: non_definite_errors.drain(..).collect_vec(),
+                                    source_errors: source_errors.drain(..).collect_vec(),
                                     unconsumed_partitions,
                                     source_upper: source_upper.clone(),
                                     batch_upper: batch_upper.clone(),
@@ -406,7 +407,7 @@ where
                     yield Some(
                         SourceReaderOperatorOutput {
                             messages: std::mem::take(&mut untimestamped_messages),
-                            non_definite_errors: non_definite_errors.drain(..).collect_vec(),
+                            source_errors: source_errors.drain(..).collect_vec(),
                             unconsumed_partitions: unconsumed_partitions.clone(),
                             source_upper: source_upper.clone(),
                             batch_upper: batch_upper.clone(),
@@ -606,7 +607,7 @@ where
                     };
                     let SourceReaderOperatorOutput {
                         messages,
-                        non_definite_errors,
+                        source_errors,
                         unconsumed_partitions,
                         source_upper,
                         batch_upper,
@@ -650,7 +651,7 @@ where
                             .map(|pid| (pid, MzOffset { offset: u64::MAX })),
                     );
 
-                    let non_definite_errors = non_definite_errors
+                    let source_errors = source_errors
                         .into_iter()
                         .map(|e| SourceError {
                             source_id: id,
@@ -668,7 +669,7 @@ where
 
                     let message_batch = SourceMessageBatch {
                         messages,
-                        non_definite_errors,
+                        source_errors,
                         source_upper: extended_source_upper,
                         batch_upper: batch_upper.clone(),
                         batch_lower,
@@ -1206,11 +1207,7 @@ where
                         )
                     });
 
-                    // TODO: We should not emit the non-definite errors as
-                    // DataflowErrors, which will make them end up on the persist
-                    // shard for this source. Instead they should be reported to the
-                    // Healthchecker. But that's future work.
-                    if !untimestamped_batch.non_definite_errors.is_empty() {
+                    if !untimestamped_batch.source_errors.is_empty() {
                         // If there are errors, it means that someone must also have
                         // given us a capability because a batch/batch-summary was
                         // emitted to the remap operator.
@@ -1221,7 +1218,7 @@ where
                         );
                         let mut session = output.session(&err_cap);
                         let errors = untimestamped_batch
-                            .non_definite_errors
+                            .source_errors
                             .iter()
                             .map(|e| (0, Err(e.clone())));
                         session.give_iterator(errors);
