@@ -805,7 +805,7 @@ where
     G: Scope<Timestamp = Timestamp>,
 {
     let RawSourceCreationConfig {
-        worker_id,
+        worker_id: healthcheck_worker_id,
         worker_count,
         id: source_id,
         ..
@@ -817,7 +817,7 @@ where
 
     let mut healths = vec![HealthStatus::Starting; worker_count];
 
-    let operator_name = format!("healthcheck({})", worker_id);
+    let operator_name = format!("healthcheck({})", healthcheck_worker_id);
     let mut health_op = OperatorBuilder::new(operator_name, scope.clone());
 
     let mut input = health_op.new_input_connection(
@@ -841,8 +841,8 @@ where
                 input.for_each(|_cap, rows| {
                     rows.swap(&mut buffer);
                     for (worker_id, health_event) in buffer.drain(..) {
-                        if worker_id != chosen_worker_id {
-                            warn!("Health messages for source {source_id} passed to an unexpected worker id: {worker_id}")
+                        if healthcheck_worker_id != chosen_worker_id {
+                            warn!("Health messages for source {source_id} passed to an unexpected worker id: {healthcheck_worker_id}")
                         }
                         let prev_health = &healths[worker_id];
                         if prev_health != &health_event {
