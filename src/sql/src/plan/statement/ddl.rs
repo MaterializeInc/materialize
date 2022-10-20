@@ -66,7 +66,7 @@ use crate::ast::display::AstDisplay;
 use crate::ast::{
     AlterConnectionStatement, AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement,
     AlterSecretStatement, AvroSchema, AvroSchemaOption, AvroSchemaOptionName, AwsConnectionOption,
-    AwsConnectionOptionName, ClusterOption, ColumnOption, Compression,
+    AwsConnectionOptionName, ClusterOption, ClusterOptionName, ColumnOption, Compression,
     CreateClusterReplicaStatement, CreateClusterStatement, CreateConnection,
     CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement,
     CreateMaterializedViewStatement, CreateRoleOption, CreateRoleStatement, CreateSchemaStatement,
@@ -2299,32 +2299,23 @@ pub fn describe_create_cluster(
     Ok(StatementDesc::new(None))
 }
 
+generate_extracted_config!(ClusterOption, (Replicas, Vec<ReplicaDefinition<Aug>>));
+
 pub fn plan_create_cluster(
     scx: &StatementContext,
     CreateClusterStatement { name, options }: CreateClusterStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let mut replicas_definitions = None;
+    let ClusterOptionExtracted { replicas, .. }: ClusterOptionExtracted = options.try_into()?;
 
-    for option in options {
-        match option {
-            ClusterOption::Replicas(replicas) => {
-                if replicas_definitions.is_some() {
-                    sql_bail!("REPLICAS specified more than once");
-                }
-
-                let mut defs = Vec::with_capacity(replicas.len());
-                for ReplicaDefinition { name, options } in replicas {
-                    defs.push((normalize::ident(name), plan_replica_config(scx, options)?));
-                }
-                replicas_definitions = Some(defs);
-            }
-        }
-    }
-
-    let replicas = match replicas_definitions {
-        Some(r) => r,
-        None => bail_unsupported!("CLUSTER without REPLICAS option"),
+    let replica_defs = match replicas {
+        Some(replica_defs) => replica_defs,
+        None => sql_bail!("REPLICAS option is required"),
     };
+
+    let mut replicas = vec![];
+    for ReplicaDefinition { name, options } in replica_defs {
+        replicas.push((normalize::ident(name), plan_replica_config(scx, options)?));
+    }
 
     Ok(Plan::CreateComputeInstance(CreateComputeInstancePlan {
         name: normalize::ident(name),
@@ -2346,7 +2337,7 @@ generate_extracted_config!(
     (Compute, Vec<String>),
     (Workers, u16),
     (IntrospectionInterval, OptionalInterval),
-    (IntrospectionDebugging, bool)
+    (IntrospectionDebugging, bool, Default(false))
 );
 
 fn plan_replica_config(
@@ -2380,9 +2371,9 @@ fn plan_replica_config(
     let introspection = match introspection_interval {
         Some(interval) => Some(ComputeReplicaIntrospectionConfig {
             interval: interval.duration()?,
-            debugging: introspection_debugging.unwrap_or(false),
+            debugging: introspection_debugging,
         }),
-        None if introspection_debugging == Some(true) => {
+        None if introspection_debugging => {
             sql_bail!("INTROSPECTION DEBUGGING cannot be specified without INTROSPECTION INTERVAL")
         }
         None => None,

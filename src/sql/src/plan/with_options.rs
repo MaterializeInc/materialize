@@ -9,6 +9,7 @@
 
 //! Provides tooling to handle `WITH` options.
 
+use mz_sql_parser::ast::ReplicaDefinition;
 use serde::{Deserialize, Serialize};
 
 use mz_repr::adt::interval::Interval;
@@ -374,13 +375,15 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
             WithOptionValue::Sequence(_)
             | WithOptionValue::Object(_)
             | WithOptionValue::Secret(_)
-            | WithOptionValue::DataType(_) => sql_bail!(
+            | WithOptionValue::DataType(_)
+            | WithOptionValue::ClusterReplicas(_) => sql_bail!(
                 "incompatible value types: cannot convert {} to {}",
                 match v {
                     WithOptionValue::Sequence(_) => "sequences",
                     WithOptionValue::Object(_) => "object references",
                     WithOptionValue::Secret(_) => "secrets",
                     WithOptionValue::DataType(_) => "data types",
+                    WithOptionValue::ClusterReplicas(_) => "cluster replicas",
                     _ => unreachable!(),
                 },
                 V::name()
@@ -401,5 +404,23 @@ impl<T, V: TryFromValue<T> + ImpliedValue> TryFromValue<Option<T>> for V {
     }
     fn name() -> String {
         V::name()
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for Vec<ReplicaDefinition<Aug>> {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        match v {
+            WithOptionValue::ClusterReplicas(replicas) => Ok(replicas),
+            _ => sql_bail!("cannot use value as cluster replicas"),
+        }
+    }
+    fn name() -> String {
+        "cluster replicas".to_string()
+    }
+}
+
+impl ImpliedValue for Vec<ReplicaDefinition<Aug>> {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a set of cluster replicas")
     }
 }

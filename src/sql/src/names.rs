@@ -1092,6 +1092,12 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 }
                 Object(object_name)
             }
+            ClusterReplicas(replicas) => ClusterReplicas(
+                replicas
+                    .into_iter()
+                    .map(|r| self.fold_replica_definition(r))
+                    .collect(),
+            ),
         }
     }
 }

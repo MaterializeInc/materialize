@@ -11,7 +11,7 @@
 
 mode cockroach
 
-statement error CLUSTER without REPLICAS option not yet supported
+statement error Expected REPLICAS, found EOF
 CREATE CLUSTER foo
 
 statement ok
@@ -20,13 +20,13 @@ CREATE CLUSTER foo REPLICAS ()
 statement ok
 DROP CLUSTER foo
 
-statement error Expected end of statement, found comma
+statement error REPLICAS specified more than once
 CREATE CLUSTER foo REPLICAS (), REPLICAS()
 
 # Creating cluster w/ remote replica works.
 
 statement ok
-CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234']))
+CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234;']))
 
 statement error cluster 'foo' already exists
 CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234']))
