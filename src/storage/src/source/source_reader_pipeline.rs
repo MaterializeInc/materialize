@@ -825,10 +825,9 @@ where
     let operator_name = format!("healthcheck({})", healthcheck_worker_id);
     let mut health_op = OperatorBuilder::new(operator_name, scope.clone());
 
-    let mut input = health_op.new_input_connection(
+    let mut input = health_op.new_input(
         &health_stream,
         Exchange::new(move |_| chosen_worker_id as u64),
-        vec![],
     );
 
     fn overall_status(healths: &[HealthStatus]) -> &HealthStatus {
