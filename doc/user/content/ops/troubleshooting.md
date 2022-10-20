@@ -314,9 +314,9 @@ SELECT count(1) FROM (
 );
 ```
 
-## Which objects are a `SUBSCRIBE` command reading?
+## Which objects is a `SUBSCRIBE` command reading?
 
-Each `SUBSCRIBE` command reads data from particular **objects** as indexes, tables, sources, or materialized views.
+Each `SUBSCRIBE` command reads data from **objects** such as indexes, tables, sources, or materialized views.
 Query the **object name and type** by issuing the following statement:
 
 ```sql
