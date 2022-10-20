@@ -3347,7 +3347,6 @@ impl<S: Append> Catalog<S> {
         &self,
         location: SerializedComputeReplicaLocation,
     ) -> Result<ComputeReplicaLocation, AdapterError> {
-        let cluster_replica_sizes = &self.state.cluster_replica_sizes;
         let location = match location {
             SerializedComputeReplicaLocation::Remote {
                 addrs,
@@ -3363,8 +3362,19 @@ impl<S: Append> Catalog<S> {
                 availability_zone,
                 az_user_specified,
             } => {
-                let allocation = cluster_replica_sizes.0.get(&size).ok_or_else(|| {
+                let cluster_replica_sizes = &self.state.cluster_replica_sizes;
+                let allowed_sizes = self.state.system_config().allowed_cluster_replica_sizes();
+
+                if !cluster_replica_sizes.0.contains_key(&size)
+                    || (!allowed_sizes.is_empty() && !allowed_sizes.contains(&size))
+                {
                     let mut entries = cluster_replica_sizes.0.iter().collect::<Vec<_>>();
+
+                    if !allowed_sizes.is_empty() {
+                        let allowed_sizes = HashSet::<&String>::from_iter(allowed_sizes.iter());
+                        entries.retain(|(name, _)| allowed_sizes.contains(name));
+                    }
+
                     entries.sort_by_key(
                         |(
                             _name,
@@ -3373,14 +3383,15 @@ impl<S: Append> Catalog<S> {
                             },
                         )| (scale, cpu_limit),
                     );
-                    let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
-                    AdapterError::InvalidClusterReplicaSize {
-                        size: size.clone(),
-                        expected,
-                    }
-                })?;
+
+                    return Err(AdapterError::InvalidClusterReplicaSize {
+                        size,
+                        expected: entries.into_iter().map(|(name, _)| name.clone()).collect(),
+                    });
+                }
+
                 ComputeReplicaLocation::Managed {
-                    allocation: allocation.clone(),
+                    allocation: cluster_replica_sizes.0.get(&size).unwrap().clone(),
                     availability_zone,
                     size,
                     az_user_specified,
