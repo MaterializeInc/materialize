@@ -98,7 +98,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // assured that the answer will be correct.
         if since.less_equal(&candidate) {
             event!(
-                Level::TRACE,
+                Level::DEBUG,
                 conn_id = format!("{}", session.conn_id()),
                 since = format!("{since:?}"),
                 upper = format!("{upper}"),
