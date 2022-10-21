@@ -119,15 +119,15 @@ impl ColumnKnowledge {
                 }
                 MirRelationExpr::Map { input, scalars } => {
                     let mut input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
-                    let input_typ = input.typ();
+                    let mut column_types = input.typ().column_types;
                     for scalar in scalars.iter_mut() {
-                        let know = optimize(
+                        input_knowledge.push(optimize(
                             scalar,
-                            &input_typ.column_types,
+                            &column_types,
                             &input_knowledge[..],
                             knowledge_stack,
-                        )?;
-                        input_knowledge.push(know);
+                        )?);
+                        column_types.push(scalar.typ(&column_types));
                     }
                     Ok(input_knowledge)
                 }
