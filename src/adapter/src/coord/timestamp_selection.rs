@@ -70,6 +70,8 @@ impl<S: Append + 'static> Coordinator<S> {
             && timeline.is_some()
             && when.advance_to_global_ts();
 
+        let upper = self.largest_not_in_advance_of_upper(id_bundle);
+
         if use_timestamp_oracle {
             let timeline = timeline.expect("checked that timeline exists above");
             let timestamp_oracle = self.get_timestamp_oracle_mut(&timeline);
@@ -79,7 +81,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 candidate.advance_by(since.borrow());
             }
             if when.advance_to_upper() {
-                let upper = self.largest_not_in_advance_of_upper(id_bundle);
                 candidate.join_assign(&upper);
             }
         }
@@ -99,6 +100,8 @@ impl<S: Append + 'static> Coordinator<S> {
             event!(
                 Level::TRACE,
                 conn_id = format!("{}", session.conn_id()),
+                since = format!("{since:?}"),
+                upper = format!("{upper}"),
                 timestamp = format!("{candidate}")
             );
             Ok(candidate)
