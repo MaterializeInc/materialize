@@ -21,6 +21,7 @@ use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
+use timely::progress::Timestamp;
 use uuid::Uuid;
 
 use mz_expr::{
@@ -209,20 +210,27 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
     }
 }
 
-impl<T> ComputeCommand<T> {
+impl<T> ComputeCommand<T>
+where
+    T: Timestamp,
+{
     /// Indicates which global ids should start and cease frontier tracking.
     ///
     /// Identifiers added to `start` will install frontier tracking, and identifiers
     /// added to `cease` will uninstall frontier tracking.
-    pub fn frontier_tracking(&self, start: &mut Vec<GlobalId>, cease: &mut Vec<GlobalId>) {
+    pub fn frontier_tracking(
+        &self,
+        start: &mut Vec<(GlobalId, Option<Antichain<T>>)>,
+        cease: &mut Vec<GlobalId>,
+    ) {
         match self {
             ComputeCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.iter() {
                     for (sink_id, _) in dataflow.sink_exports.iter() {
-                        start.push(*sink_id)
+                        start.push((*sink_id, dataflow.as_of.clone()));
                     }
                     for (index_id, _) in dataflow.index_exports.iter() {
-                        start.push(*index_id);
+                        start.push((*index_id, dataflow.as_of.clone()));
                     }
                 }
             }
@@ -235,7 +243,9 @@ impl<T> ComputeCommand<T> {
             }
             ComputeCommand::CreateInstance(config) => {
                 if let Some(logging_config) = &config.logging {
-                    start.extend(logging_config.log_identifiers());
+                    for log_id in logging_config.log_identifiers() {
+                        start.push((log_id, None));
+                    }
                 }
             }
             _ => {

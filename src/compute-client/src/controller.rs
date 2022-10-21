@@ -64,7 +64,7 @@ use crate::service::{ComputeClient, ComputeGrpcClient};
 use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 
 use self::orchestrator::ComputeOrchestrator;
-use self::replicated::{ActiveReplication, ActiveReplicationResponse, FrontierBounds};
+use self::replicated::{ActiveReplication, ActiveReplicationResponse, FrontierUppers};
 
 mod orchestrator;
 mod replicated;
@@ -560,12 +560,9 @@ where
             }
         };
 
-        self.instance(instance_id)?.add_replica(
-            replica_id,
-            addrs,
-            config.logging,
-            communication_config,
-        )
+        self.instance(instance_id)?
+            .add_replica(replica_id, addrs, config.logging, communication_config)
+            .await
     }
 
     /// Removes a replica from an instance, including its service in the orchestrator.
@@ -584,8 +581,8 @@ where
 
         self.instance(instance_id)
             .unwrap()
-            .remove_replica(replica_id);
-        Ok(())
+            .remove_replica(replica_id)
+            .await
     }
 
     /// Create and maintain the described dataflows, and initialize state for their output.
@@ -720,7 +717,7 @@ where
                     // Ensure there are no gaps in the subscribe stream we receive.
                     assert_eq!(
                         lower,
-                        &instance.compute.collections[&global_id].write_frontier_upper,
+                        &instance.compute.collections[&global_id].write_frontier,
                     );
                 };
 
@@ -847,7 +844,7 @@ where
     ComputeGrpcClient: ComputeClient<T>,
 {
     /// Add a new instance replica, by ID.
-    fn add_replica(
+    async fn add_replica(
         &mut self,
         id: ReplicaId,
         addrs: Vec<String>,
@@ -885,19 +882,50 @@ where
             None
         };
 
-        // Initialize collection state for per-replica log collections.
+        // Install read holds on storage dependencies for the new replica.
+        let mut updates = BTreeMap::<GlobalId, ChangeBatch<T>>::new();
+        let mut initial_uppers = BTreeMap::<GlobalId, Antichain<T>>::new();
+        for (compute_id, collection) in &self.compute.collections {
+            let read_frontier = collection.read_frontier();
+            for storage_id in &collection.storage_dependencies {
+                let changes = updates.entry(*storage_id).or_default();
+                changes.extend(read_frontier.iter().map(|t| (t.clone(), 1)));
+            }
+            initial_uppers.insert(*compute_id, read_frontier.to_owned());
+        }
+        self.storage_controller
+            .update_read_capabilities(&mut updates)
+            .await?;
 
         // Add the replica
-        self.compute
-            .replicas
-            .add_replica(id, addrs, logging_config, communication_config);
+        self.compute.replicas.add_replica(
+            id,
+            addrs,
+            logging_config,
+            communication_config,
+            initial_uppers,
+        );
 
         Ok(())
     }
 
     /// Remove an existing instance replica, by ID.
-    fn remove_replica(&mut self, id: ReplicaId) {
-        self.compute.replicas.remove_replica(id);
+    async fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ComputeError> {
+        let final_uppers = self.compute.replicas.remove_replica(id);
+
+        // Remove read holds installed on storage dependencies for the this replica.
+        let mut updates = BTreeMap::<GlobalId, ChangeBatch<T>>::new();
+        for (collection_id, frontier) in final_uppers {
+            let collection = self.compute.collection(collection_id).unwrap();
+            for storage_id in &collection.storage_dependencies {
+                let changes = updates.entry(*storage_id).or_default();
+                changes.extend(frontier.iter().map(|t| (t.clone(), -1)));
+            }
+        }
+        self.storage_controller
+            .update_read_capabilities(&mut updates)
+            .await?;
+        Ok(())
     }
 
     /// Create the described dataflows and initializes state for their output.
@@ -951,26 +979,32 @@ where
             compute_dependencies.sort();
             compute_dependencies.dedup();
 
-            // We will bump the internals of each input by the number of dependents (outputs).
+            // For compute inputs, insert a read capability for each dependent (output).
             let outputs = dataflow.sink_exports.len() + dataflow.index_exports.len();
-            let mut changes = ChangeBatch::new();
-            for time in as_of.iter() {
-                changes.update(time.clone(), outputs as i64);
-            }
-            // Update storage read capabilities for inputs.
+            let mut compute_changes = ChangeBatch::new();
+            compute_changes.extend(as_of.iter().map(|t| (t.clone(), outputs as i64)));
+            let mut compute_read_updates = compute_dependencies
+                .iter()
+                .map(|id| (*id, compute_changes.clone()))
+                .collect();
+            self.update_read_capabilities(&mut compute_read_updates)
+                .await?;
+
+            // For storage inputs, insert a read capability for each dependent (output).
+            // Additionally, for each dependent, insert a read capability for each replica.
+            let replicas = self.compute.replicas.get_replica_ids().count();
+            let mut storage_changes = compute_changes;
+            storage_changes.extend(
+                as_of
+                    .iter()
+                    .map(|t| (t.clone(), (outputs * replicas) as i64)),
+            );
             let mut storage_read_updates = storage_dependencies
                 .iter()
-                .map(|id| (*id, changes.clone()))
+                .map(|id| (*id, storage_changes.clone()))
                 .collect();
             self.storage_controller
                 .update_read_capabilities(&mut storage_read_updates)
-                .await?;
-            // Update compute read capabilities for inputs.
-            let mut compute_read_updates = compute_dependencies
-                .iter()
-                .map(|id| (*id, changes.clone()))
-                .collect();
-            self.update_read_capabilities(&mut compute_read_updates)
                 .await?;
 
             // Install collection state for each of the exports.
@@ -1135,8 +1169,7 @@ where
         let mut read_capability_changes = BTreeMap::default();
         for (id, policy) in policies.into_iter() {
             if let Ok(collection) = self.compute.collection_mut(id) {
-                let mut new_read_capability =
-                    policy.frontier(collection.write_frontier_lower.borrow());
+                let mut new_read_capability = policy.frontier(collection.write_frontier.borrow());
 
                 if timely::order::PartialOrder::less_equal(
                     &collection.implied_capability,
@@ -1182,25 +1215,21 @@ where
     #[tracing::instrument(level = "debug", skip(self))]
     async fn update_write_frontiers(
         &mut self,
-        updates: &[(GlobalId, FrontierBounds<T>)],
+        updates: &[(GlobalId, FrontierUppers<T>)],
     ) -> Result<(), ComputeError> {
-        let mut read_capability_changes = BTreeMap::default();
-        for (id, new_upper) in updates.iter() {
+        let mut compute_read_capability_changes = BTreeMap::default();
+        let mut storage_read_capability_changes = BTreeMap::default();
+        for (id, uppers) in updates.iter() {
             let collection = self
                 .compute
                 .collection_mut(*id)
                 .expect("Reference to absent collection");
 
-            collection
-                .write_frontier_upper
-                .join_assign(&new_upper.upper);
-            collection
-                .write_frontier_lower
-                .join_assign(&new_upper.lower);
+            collection.write_frontier.join_assign(&uppers.global_upper);
 
             let mut new_read_capability = collection
                 .read_policy
-                .frontier(collection.write_frontier_lower.borrow());
+                .frontier(collection.write_frontier.borrow());
             if timely::order::PartialOrder::less_equal(
                 &collection.implied_capability,
                 &new_read_capability,
@@ -1210,12 +1239,26 @@ where
                 std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
                 update.extend(new_read_capability.iter().map(|time| (time.clone(), -1)));
                 if !update.is_empty() {
-                    read_capability_changes.insert(*id, update);
+                    compute_read_capability_changes.insert(*id, update);
                 }
             }
+
+            // Update read holds on storage dependencies.
+            for storage_id in &collection.storage_dependencies {
+                let update = storage_read_capability_changes
+                    .entry(*storage_id)
+                    .or_default();
+                uppers.replica_changes.clone().drain_into(update);
+            }
         }
-        if !read_capability_changes.is_empty() {
-            self.update_read_capabilities(&mut read_capability_changes)
+
+        if !compute_read_capability_changes.is_empty() {
+            self.update_read_capabilities(&mut compute_read_capability_changes)
+                .await?;
+        }
+        if !storage_read_capability_changes.is_empty() {
+            self.storage_controller
+                .update_read_capabilities(&mut storage_read_capability_changes)
                 .await?;
         }
 
@@ -1227,7 +1270,7 @@ where
         let storage_updates: Vec<_> = updates
             .iter()
             .filter(|(id, _)| self.storage_controller.collection(*id).is_ok())
-            .map(|(id, bounds)| (*id, bounds.upper.clone()))
+            .map(|(id, uppers)| (*id, uppers.global_upper.clone()))
             .collect();
         self.storage_controller
             .update_write_frontiers(&storage_updates)
@@ -1372,14 +1415,8 @@ pub struct CollectionState<T> {
     /// Compute identifiers on which this collection depends.
     compute_dependencies: Vec<GlobalId>,
 
-    /// Upper bound of write frontiers reported by all replicas.
-    ///
-    /// Used to determine valid times at which the collection can be read.
-    write_frontier_upper: Antichain<T>,
-    /// Lower bound of write frontiers reported by all replicas.
-    ///
-    /// Used to determine times that can be compacted.
-    write_frontier_lower: Antichain<T>,
+    /// The write frontier of the collection.
+    write_frontier: Antichain<T>,
 }
 
 impl<T: Timestamp> CollectionState<T> {
@@ -1397,8 +1434,7 @@ impl<T: Timestamp> CollectionState<T> {
             read_policy: ReadPolicy::ValidFrom(since),
             storage_dependencies,
             compute_dependencies,
-            write_frontier_upper: Antichain::from_elem(Timestamp::minimum()),
-            write_frontier_lower: Antichain::from_elem(Timestamp::minimum()),
+            write_frontier: Antichain::from_elem(Timestamp::minimum()),
         }
     }
 
@@ -1414,6 +1450,6 @@ impl<T: Timestamp> CollectionState<T> {
 
     /// Reports the current write frontier.
     pub fn write_frontier(&self) -> AntichainRef<T> {
-        self.write_frontier_upper.borrow()
+        self.write_frontier.borrow()
     }
 }
