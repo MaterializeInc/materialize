@@ -856,7 +856,7 @@ where
             {
                 Some(
                     durable_metadata
-                        .remove(&status_collection_id)
+                        .get(&status_collection_id)
                         .ok_or(StorageError::IdentifierMissing(status_collection_id))?
                         .data_shard,
                 )
