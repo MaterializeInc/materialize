@@ -707,6 +707,7 @@ impl AbstractExpr for CoercibleScalarExpr {
                     nullable: false,
                 })
             }
+            CoercibleScalarExpr::Parameter(i) => params[i],
             _ => None,
         }
     }
