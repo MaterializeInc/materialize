@@ -31,6 +31,8 @@ DEFAULT_MZ_VOLUMES = [
     "tmp:/share/tmp",
 ]
 
+DEFAULT_SIZE = 1
+
 
 class Materialized(Service):
     def __init__(
@@ -43,8 +45,8 @@ class Materialized(Service):
         memory: Optional[str] = None,
         persist_blob_url: Optional[str] = None,
         data_directory: str = "/mzdata",
-        workers: Optional[int] = None,
-        size: Optional[str] = None,
+        workers: Optional[int] = DEFAULT_SIZE,
+        size: Optional[str] = str(DEFAULT_SIZE),
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         environment_extra: Optional[List[str]] = None,
@@ -86,6 +88,7 @@ class Materialized(Service):
 
         if size:
             environment += [
+                f"MZ_BOOTSTRAP_BUILTIN_CLUSTER_REPLICA_SIZE={size}",
                 f"MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE={size}",
                 f"MZ_DEFAULT_STORAGE_HOST_SIZE={size}",
             ]
@@ -159,7 +162,7 @@ class Computed(Service):
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
-        workers: Optional[int] = None,
+        workers: Optional[int] = DEFAULT_SIZE,
         secrets_reader: str = "process",
         secrets_reader_process_dir: str = "mzdata/secrets",
     ) -> None:
@@ -219,7 +222,7 @@ class Storaged(Service):
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
-        workers: Optional[int] = None,
+        workers: Optional[int] = DEFAULT_SIZE,
         secrets_reader: str = "process",
         secrets_reader_process_dir: str = "mzdata/secrets",
     ) -> None:

@@ -11,7 +11,7 @@
 
 > CREATE SOURCE demo FROM LOAD GENERATOR AUCTION (TICK INTERVAL '50ms') FOR ALL TABLES
 
-$ set-regex match=\d replacement=<SIZE>
+$ set-regex match=\d+ replacement=<SIZE>
 
 > SHOW SOURCES
 name          type           size

@@ -11,7 +11,7 @@
 # Basic test for `TEST SCRIPT` sources.
 
 # replace timestamps
-$ set-regex match=(\d{13}|u\d{1,3}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
+$ set-regex match=(\d{13}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
 
 
 > CREATE CONNECTION c_conn
