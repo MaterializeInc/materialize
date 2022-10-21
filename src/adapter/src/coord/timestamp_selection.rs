@@ -11,7 +11,7 @@
 
 use differential_dataflow::lattice::Lattice;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-use tracing::event;
+use tracing::{event, Level};
 
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
@@ -99,7 +99,7 @@ impl<S: Append + 'static> Coordinator<S> {
             event!(
                 Level::TRACE,
                 conn_id = format!("{}", session.conn_id()),
-                timestamp = format!("{timestamp}")
+                timestamp = format!("{candidate}")
             );
             Ok(candidate)
         } else {
