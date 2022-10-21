@@ -106,7 +106,7 @@ name               type   size
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-$ set-regex match=\d replacement=<D>
+$ set-regex match=\d+ replacement=<D>
 
 > SHOW SINKS
 name               type   size
@@ -204,7 +204,7 @@ $ kafka-verify-data format=avro sink=materialize.public.snk8 sort-messages=true
 {"before": null, "after": {"row":{"column1": 2}}}
 {"before": null, "after": {"row":{"column1": 3}}}
 
-$ set-regex match=\d replacement=<D>
+$ set-regex match=\d+ replacement=<D>
 
 > SHOW SINKS
 name               type   size
