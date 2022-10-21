@@ -427,7 +427,7 @@ impl ResolvedSchemaName {
     /// Panics if this is `Self::Error`.
     pub fn schema_spec(&self) -> &SchemaSpecifier {
         match self {
-            ResolvedSchemaName::Schema { schema_spec, .. } => &schema_spec,
+            ResolvedSchemaName::Schema { schema_spec, .. } => schema_spec,
             ResolvedSchemaName::Error => {
                 unreachable!("should have been handled by name resolution")
             }
