@@ -541,6 +541,9 @@ pub trait Append: Stash {
     /// If this method returns `Ok`, the entries have been made durable and uppers
     /// advanced, otherwise no changes were committed.
     async fn append(&mut self, batches: &[AppendBatch]) -> Result<(), StashError> {
+        if batches.is_empty() {
+            return Ok(());
+        }
         self.append_batch(batches).await?;
         let ids: Vec<_> = batches.iter().map(|batch| batch.collection_id).collect();
         self.consolidate_batch(&ids).await?;
@@ -791,6 +794,10 @@ where
             Ok(v) => v,
             Err(e) => return Ok(Err(e)),
         };
+        // Do nothing if the values are the same.
+        if Some(&next) == prev.as_ref() {
+            return Ok(Ok((prev, next, Vec::new())));
+        }
         if let Some(prev) = &prev {
             collection.append_to_batch(&mut batch, key, prev, -1);
         }

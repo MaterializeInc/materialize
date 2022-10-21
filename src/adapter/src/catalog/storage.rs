@@ -839,6 +839,9 @@ impl<S: Append> Connection<S> {
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, Error> {
+        if amount == 0 {
+            return Ok(Vec::new());
+        }
         let key = IdAllocKey {
             name: id_type.to_string(),
         };

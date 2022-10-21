@@ -1015,6 +1015,9 @@ impl From<tokio_postgres::Error> for StashError {
 impl Append for Postgres {
     #[tracing::instrument(level = "debug", skip_all)]
     async fn append_batch(&mut self, batches: &[AppendBatch]) -> Result<(), StashError> {
+        if batches.is_empty() {
+            return Ok(());
+        }
         let batches = batches.to_vec();
         self.transact(move |stmts, tx| {
             let batches = batches.clone();
