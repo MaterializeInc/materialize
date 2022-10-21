@@ -3552,9 +3552,15 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(RecordAny, RecordAny) => BinaryFunc::Gte => Bool, 2993;
             params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Gte =>Bool, oid::FUNC_MZ_TIMESTAMP_GTE_MZ_TIMESTAMP_OID;
         },
-        // Warning! If you are writing functions here that do not simply use
-        // `BinaryFunc::Eq`, you will break row equality (used e.g. DISTINCT
-        // operations).
+        // Warning!
+        // - If you are writing functions here that do not simply use
+        //   `BinaryFunc::Eq`, you will break row equality (used in e.g.
+        //   DISTINCT operations and JOINs). In short, this is totally verboten.
+        // - The implementation of `BinaryFunc::Eq` is byte equality on two
+        //   datums, and we enforce that both inputs to the function are of the
+        //   same type in planning. However, it's possible that we will perform
+        //   equality on types not listed here (e.g. `Varchar`) due to decisions
+        //   made in the optimizer.
         "=" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::Eq, 1752;
             params!(Bool, Bool) => BinaryFunc::Eq, 91;
