@@ -30,7 +30,6 @@ SERVICES = [
     Postgres(),
     Materialized(),
     Testdrive(
-        validate_data_dir=False,
         no_reset=True,
         seed=1,
         default_timeout="600s",

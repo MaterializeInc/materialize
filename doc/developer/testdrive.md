@@ -259,9 +259,9 @@ Shuffle the list of tests before running them (using the value from --seed, if a
 
 ## Other options
 
-#### `--validate-data-dir /path/to/mzdata`
+#### `--validate-postgres-stash=postgres://root@materialized:26257?options=--search_path=adapter`
 
-After executing a DDL statement, validate that the on-disk representation of the catalog is identical to the in-memory one.
+After executing a DDL statement, validate that representation of the catalog in the stash is identical to the in-memory one.
 
 # Executing statements
 
