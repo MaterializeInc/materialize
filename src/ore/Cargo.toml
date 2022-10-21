@@ -50,7 +50,7 @@ zeroize = { version = "1.5.7", features = ["serde"], optional = true }
 ansi_term = { version = "0.12.1", optional = true }
 atty = { version = "0.2.14", optional = true }
 http = { version = "0.2.8", optional = true }
-tracing = { version = "0.1.36", optional = true }
+tracing = { version = "0.1.37", optional = true }
 tracing-opentelemetry = { git = "https://github.com/MaterializeInc/tracing.git", branch = "v0.1.x", optional = true }
 tonic = { version = "0.8.2", features = ["transport"], optional = true }
 tokio-native-tls = { version = "0.3.0", optional = true }

@@ -42,7 +42,7 @@ serde = { version = "1.0.145", features = ["derive"] }
 serde_json = "1.0.86"
 tokio = { version = "1.20.2", features = ["fs"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde"] }
-tracing = "0.1.36"
+tracing = "0.1.37"
 typemap_rev = "0.1.5"
 uncased = "0.9.7"
 uuid = { version = "1.2.1", features = ["serde", "v4"] }

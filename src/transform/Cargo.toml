@@ -16,7 +16,7 @@ mz-repr = { path = "../repr", features = ["tracing_"] }
 mz-storage = { path = "../storage" }
 num-traits = "0.2"
 num-derive = "0.3"
-tracing = "0.1.36"
+tracing = "0.1.37"
 typemap_rev = "0.1.5"
 
 [dev-dependencies]
