@@ -456,8 +456,10 @@ pub fn show_indexes<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let mut query_filter = Vec::new();
 
-    if on_object.is_none() && from_schema.is_none() {
+    if on_object.is_none() && from_schema.is_none() && in_cluster.is_none() {
         query_filter.push("on_id NOT LIKE 's%'".into());
+        let schema_spec = scx.resolve_active_schema().map(|spec| spec.clone())?;
+        query_filter.push(format!("schema_id = {}", schema_spec));
     }
 
     if let Some(on_object) = on_object {
@@ -474,8 +476,10 @@ pub fn show_indexes<'a>(
             );
         }
         query_filter.push(format!("on_id = '{}'", on_item.id()));
-    } else {
-        let schema_spec = scx.resolve_optional_schema(&from_schema)?;
+    }
+
+    if let Some(schema) = from_schema {
+        let schema_spec = schema.schema_spec();
         query_filter.push(format!("schema_id = {}", schema_spec));
     }
 
