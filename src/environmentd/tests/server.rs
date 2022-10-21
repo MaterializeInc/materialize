@@ -893,7 +893,7 @@ fn test_default_cluster_sizes() -> Result<(), Box<dyn Error>> {
 
     let builtin_size: String = client
         .query(
-            "SELECT size FROM mz_cluster_replicas WHERE name LIKE 'mz_%'",
+            "SELECT size FROM (SHOW CLUSTER REPLICAS WHERE cluster LIKE 'mz_%')",
             &[],
         )?
         .get(0)
@@ -903,7 +903,7 @@ fn test_default_cluster_sizes() -> Result<(), Box<dyn Error>> {
 
     let builtin_size: String = client
         .query(
-            "SELECT size FROM mz_cluster_replicas WHERE name = 'default'",
+            "SELECT size FROM (SHOW CLUSTER REPLICAS WHERE cluster = 'default')",
             &[],
         )?
         .get(0)
