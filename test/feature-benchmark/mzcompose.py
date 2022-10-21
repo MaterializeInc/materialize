@@ -89,7 +89,6 @@ SERVICES = [
     # avoid recompiling the current source unless we will actually be benchmarking it.
     Materialized(image="materialize/materialized:unstable"),
     Testdrive(
-        validate_data_dir=False,
         default_timeout=default_timeout,
     ),
     KgenService(),
