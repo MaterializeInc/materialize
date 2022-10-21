@@ -59,6 +59,8 @@ pub struct Config {
     now: NowFn,
     seed: u32,
     storage_usage_collection_interval: Duration,
+    default_cluster_replica_size: String,
+    builtin_cluster_replica_size: String,
 }
 
 impl Default for Config {
@@ -72,6 +74,8 @@ impl Default for Config {
             now: SYSTEM_TIME.clone(),
             seed: rand::random(),
             storage_usage_collection_interval: Duration::from_secs(3600),
+            default_cluster_replica_size: "1".to_string(),
+            builtin_cluster_replica_size: "1".to_string(),
         }
     }
 }
@@ -121,6 +125,22 @@ impl Config {
         storage_usage_collection_interval: Duration,
     ) -> Self {
         self.storage_usage_collection_interval = storage_usage_collection_interval;
+        self
+    }
+
+    pub fn with_default_cluster_replica_size(
+        mut self,
+        default_cluster_replica_size: String,
+    ) -> Self {
+        self.default_cluster_replica_size = default_cluster_replica_size;
+        self
+    }
+
+    pub fn with_builtin_cluster_replica_size(
+        mut self,
+        builtin_cluster_replica_size: String,
+    ) -> Self {
+        self.builtin_cluster_replica_size = builtin_cluster_replica_size;
         self
     }
 }
@@ -209,8 +229,8 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         environment_id: format!("environment-{}-0", Uuid::from_u128(0)),
         cors_allowed_origin: AllowOrigin::list([]),
         cluster_replica_sizes: Default::default(),
-        bootstrap_default_cluster_replica_size: "1".into(),
-        bootstrap_builtin_cluster_replica_size: "1".into(),
+        bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
+        bootstrap_builtin_cluster_replica_size: config.builtin_cluster_replica_size,
         storage_host_sizes: Default::default(),
         default_storage_host_size: None,
         availability_zones: Default::default(),
