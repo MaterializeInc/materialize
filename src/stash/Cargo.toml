@@ -24,7 +24,7 @@ serde_json = "1.0.86"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
 tokio = "1.20.2"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = [ "with-serde_json-1" ] }
-tracing = "0.1.36"
+tracing = "0.1.37"
 
 [dev-dependencies]
 anyhow = "1.0.65"

@@ -36,7 +36,7 @@ scopeguard = "1.1.0"
 serde = { version = "1.0.145", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.20.2", features = ["fs", "rt", "sync"] }
-tracing = "0.1.36"
+tracing = "0.1.37"
 uuid = { version = "1.2.1", features = ["serde", "v4"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]

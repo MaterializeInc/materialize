@@ -20,7 +20,7 @@ serde = { version = "1.0.145", features = ["derive"] }
 tempfile = "3.3.0"
 tokio = { version = "1.20.2", features = ["fs", "rt", "sync"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
-tracing = "0.1.36"
+tracing = "0.1.37"
 
 [build-dependencies]
 protobuf-src = "1.1.0"
