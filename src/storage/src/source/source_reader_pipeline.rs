@@ -63,7 +63,9 @@ use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuild
 use mz_timely_util::operator::StreamExt as _;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
+use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use crate::source::antichain::{MutableOffsetAntichain, OffsetAntichain};
+use crate::source::healthcheck;
 use crate::source::healthcheck::Healthchecker;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockFollower, ReclockOperator};
@@ -264,36 +266,20 @@ where
     S: SourceReader + 'static,
 {
     let RawSourceCreationConfig {
-        name,
+        name: _,
         id,
         num_outputs: _,
         worker_id,
         worker_count,
         timestamp_interval,
         encoding: _,
-        storage_metadata,
+        storage_metadata: _,
         resume_upper: _,
         base_metrics: _,
-        now,
-        persist_clients,
+        now: _,
+        persist_clients: _,
     } = config;
     Box::pin(async_stream::stream!({
-        let mut healthchecker = if storage_metadata.status_shard.is_some() {
-            match Healthchecker::new(id, true, &persist_clients, &storage_metadata, now.clone())
-                .await
-            {
-                Ok(h) => Some(h),
-                Err(e) => {
-                    panic!(
-                        "Failed to create healthchecker for source {}: {:#}",
-                        &name, e
-                    );
-                }
-            }
-        } else {
-            None
-        };
-
         // Most recent batch upper frontier, does not regress.
         // TODO(aljoscha): We track this as we go, but we could also derive it
         // by iterating over all messages in a batch when we emit it.
@@ -378,10 +364,7 @@ where
                                     }
                                     untimestamped_messages.entry(pid).or_default().push((message, offset));
                                 }
-                                SourceMessageType::SourceStatus(update) => {
-                                    if let Some(healthchecker) = &mut healthchecker {
-                                        healthchecker.update_status(update).await;
-                                    }
+                                SourceMessageType::SourceStatus(_update) => {
                                 }
                             }
                         }
