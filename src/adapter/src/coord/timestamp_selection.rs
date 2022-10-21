@@ -11,6 +11,7 @@
 
 use differential_dataflow::lattice::Lattice;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
+use tracing::event;
 
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
@@ -95,6 +96,11 @@ impl<S: Append + 'static> Coordinator<S> {
         // If the timestamp is greater or equal to some element in `since` we are
         // assured that the answer will be correct.
         if since.less_equal(&candidate) {
+            event!(
+                Level::TRACE,
+                conn_id = format!("{}", session.conn_id()),
+                timestamp = format!("{timestamp}")
+            );
             Ok(candidate)
         } else {
             coord_bail!(self.generate_timestamp_not_valid_error_msg(
