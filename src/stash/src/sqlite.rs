@@ -9,9 +9,9 @@
 
 //! Durable metadata storage.
 
-use std::cmp;
 use std::marker::PhantomData;
 use std::path::Path;
+use std::{cmp, collections::BTreeSet};
 
 use async_trait::async_trait;
 use rusqlite::{named_params, params, Connection, OptionalExtension, Transaction};
@@ -288,6 +288,17 @@ impl Stash for Sqlite {
             id: collection_id,
             _kv: PhantomData,
         })
+    }
+
+    async fn collections(&mut self) -> Result<BTreeSet<String>, StashError> {
+        let tx = self.conn.transaction()?;
+        let mut stmt = tx.prepare("SELECT name FROM collections")?;
+        let mut rows = stmt.query([])?;
+        let mut names = Vec::new();
+        while let Some(row) = rows.next()? {
+            names.push(row.get(0)?);
+        }
+        Ok(BTreeSet::from_iter(names))
     }
 
     async fn iter<K, V>(

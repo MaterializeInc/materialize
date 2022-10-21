@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::marker::PhantomData;
 
 use async_trait::async_trait;
@@ -90,6 +90,10 @@ impl<S: Stash> Stash for Memory<S> {
                 collection
             }
         })
+    }
+
+    async fn collections(&mut self) -> Result<BTreeSet<String>, StashError> {
+        self.stash.collections().await
     }
 
     async fn iter<K, V>(

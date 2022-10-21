@@ -4205,6 +4205,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-stash-debug"
+version = "0.28.0-dev"
+dependencies = [
+ "anyhow",
+ "clap",
+ "mz-adapter",
+ "mz-build-info",
+ "mz-ore",
+ "mz-postgres-util",
+ "mz-stash",
+ "mz-storage",
+ "once_cell",
+ "serde_json",
+ "tokio",
+ "tokio-postgres",
+]
+
+[[package]]
 name = "mz-storage"
 version = "0.0.0"
 dependencies = [

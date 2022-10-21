@@ -1627,175 +1627,195 @@ pub async fn initialize_stash<S: Append>(stash: &mut S) -> Result<(), Error> {
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
-struct SettingKey {
+pub struct SettingKey {
     name: String,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
-struct SettingValue {
+pub struct SettingValue {
     value: String,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
-struct IdAllocKey {
+pub struct IdAllocKey {
     name: String,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
-struct IdAllocValue {
+pub struct IdAllocValue {
     next_id: u64,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
-struct GidMappingKey {
+pub struct GidMappingKey {
     schema_name: String,
     object_type: CatalogItemType,
     object_name: String,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
-struct GidMappingValue {
+pub struct GidMappingValue {
     id: u64,
     fingerprint: String,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
-struct ComputeInstanceKey {
+pub struct ComputeInstanceKey {
     id: ComputeInstanceId,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
-struct ComputeInstanceValue {
+pub struct ComputeInstanceValue {
     name: String,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
-struct ComputeIntrospectionSourceIndexKey {
+pub struct ComputeIntrospectionSourceIndexKey {
     compute_id: ComputeInstanceId,
     name: String,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
-struct ComputeIntrospectionSourceIndexValue {
+pub struct ComputeIntrospectionSourceIndexValue {
     index_id: u64,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
-struct DatabaseKey {
+pub struct DatabaseKey {
     id: u64,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
-struct ComputeReplicaKey {
+pub struct ComputeReplicaKey {
     id: ReplicaId,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
-struct ComputeReplicaValue {
+pub struct ComputeReplicaValue {
     compute_instance_id: ComputeInstanceId,
     name: String,
     config: SerializedComputeReplicaConfig,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
-struct DatabaseValue {
+pub struct DatabaseValue {
     name: String,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
-struct SchemaKey {
+pub struct SchemaKey {
     id: u64,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
-struct SchemaValue {
+pub struct SchemaValue {
     database_id: Option<u64>,
     name: String,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
-struct ItemKey {
+pub struct ItemKey {
     gid: GlobalId,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
-struct ItemValue {
+pub struct ItemValue {
     schema_id: u64,
     name: String,
     definition: SerializedCatalogItem,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
-struct RoleKey {
+pub struct RoleKey {
     id: RoleId,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
-struct RoleValue {
+pub struct RoleValue {
     name: String,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
-struct ConfigValue {
+pub struct ConfigValue {
     value: u64,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
-struct AuditLogKey {
+pub struct AuditLogKey {
     event: VersionedEvent,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
-struct StorageUsageKey {
+pub struct StorageUsageKey {
     metric: VersionedStorageUsage,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
-struct TimestampKey {
+pub struct TimestampKey {
     id: String,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
-struct TimestampValue {
+pub struct TimestampValue {
     ts: mz_repr::Timestamp,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
-struct ServerConfigurationKey {
+pub struct ServerConfigurationKey {
     name: String,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
-struct ServerConfigurationValue {
+pub struct ServerConfigurationValue {
     value: String,
 }
 
-static COLLECTION_CONFIG: TypedCollection<String, ConfigValue> = TypedCollection::new("config");
-static COLLECTION_SETTING: TypedCollection<SettingKey, SettingValue> =
+pub static COLLECTION_CONFIG: TypedCollection<String, ConfigValue> = TypedCollection::new("config");
+pub static COLLECTION_SETTING: TypedCollection<SettingKey, SettingValue> =
     TypedCollection::new("setting");
-static COLLECTION_ID_ALLOC: TypedCollection<IdAllocKey, IdAllocValue> =
+pub static COLLECTION_ID_ALLOC: TypedCollection<IdAllocKey, IdAllocValue> =
     TypedCollection::new("id_alloc");
-static COLLECTION_SYSTEM_GID_MAPPING: TypedCollection<GidMappingKey, GidMappingValue> =
+pub static COLLECTION_SYSTEM_GID_MAPPING: TypedCollection<GidMappingKey, GidMappingValue> =
     TypedCollection::new("system_gid_mapping");
-static COLLECTION_COMPUTE_INSTANCES: TypedCollection<ComputeInstanceKey, ComputeInstanceValue> =
+pub static COLLECTION_COMPUTE_INSTANCES: TypedCollection<ComputeInstanceKey, ComputeInstanceValue> =
     TypedCollection::new("compute_instance");
-static COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX: TypedCollection<
+pub static COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX: TypedCollection<
     ComputeIntrospectionSourceIndexKey,
     ComputeIntrospectionSourceIndexValue,
 > = TypedCollection::new("compute_introspection_source_index");
-static COLLECTION_COMPUTE_REPLICAS: TypedCollection<ComputeReplicaKey, ComputeReplicaValue> =
+pub static COLLECTION_COMPUTE_REPLICAS: TypedCollection<ComputeReplicaKey, ComputeReplicaValue> =
     TypedCollection::new("compute_replicas");
-static COLLECTION_DATABASE: TypedCollection<DatabaseKey, DatabaseValue> =
+pub static COLLECTION_DATABASE: TypedCollection<DatabaseKey, DatabaseValue> =
     TypedCollection::new("database");
-static COLLECTION_SCHEMA: TypedCollection<SchemaKey, SchemaValue> = TypedCollection::new("schema");
-static COLLECTION_ITEM: TypedCollection<ItemKey, ItemValue> = TypedCollection::new("item");
-static COLLECTION_ROLE: TypedCollection<RoleKey, RoleValue> = TypedCollection::new("role");
-static COLLECTION_TIMESTAMP: TypedCollection<TimestampKey, TimestampValue> =
+pub static COLLECTION_SCHEMA: TypedCollection<SchemaKey, SchemaValue> =
+    TypedCollection::new("schema");
+pub static COLLECTION_ITEM: TypedCollection<ItemKey, ItemValue> = TypedCollection::new("item");
+pub static COLLECTION_ROLE: TypedCollection<RoleKey, RoleValue> = TypedCollection::new("role");
+pub static COLLECTION_TIMESTAMP: TypedCollection<TimestampKey, TimestampValue> =
     TypedCollection::new("timestamp");
-static COLLECTION_SYSTEM_CONFIGURATION: TypedCollection<
+pub static COLLECTION_SYSTEM_CONFIGURATION: TypedCollection<
     ServerConfigurationKey,
     ServerConfigurationValue,
 > = TypedCollection::new("system_configuration");
-static COLLECTION_AUDIT_LOG: TypedCollection<AuditLogKey, ()> = TypedCollection::new("audit_log");
-static COLLECTION_STORAGE_USAGE: TypedCollection<StorageUsageKey, ()> =
+pub static COLLECTION_AUDIT_LOG: TypedCollection<AuditLogKey, ()> =
+    TypedCollection::new("audit_log");
+pub static COLLECTION_STORAGE_USAGE: TypedCollection<StorageUsageKey, ()> =
     TypedCollection::new("storage_usage");
+
+pub static ALL_COLLECTIONS: &[&str] = &[
+    COLLECTION_CONFIG.name(),
+    COLLECTION_SETTING.name(),
+    COLLECTION_ID_ALLOC.name(),
+    COLLECTION_SYSTEM_GID_MAPPING.name(),
+    COLLECTION_COMPUTE_INSTANCES.name(),
+    COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX.name(),
+    COLLECTION_COMPUTE_REPLICAS.name(),
+    COLLECTION_DATABASE.name(),
+    COLLECTION_SCHEMA.name(),
+    COLLECTION_ITEM.name(),
+    COLLECTION_ROLE.name(),
+    COLLECTION_TIMESTAMP.name(),
+    COLLECTION_SYSTEM_CONFIGURATION.name(),
+    COLLECTION_AUDIT_LOG.name(),
+    COLLECTION_STORAGE_USAGE.name(),
+];

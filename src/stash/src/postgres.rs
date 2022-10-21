@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::{cmp, time::Duration};
@@ -166,6 +166,7 @@ impl<'a> CountedStatements<'a> {
 /// stability. Any changes to the table schemas will be accompanied by a clear
 /// migration path.
 pub struct Postgres {
+    readonly: bool,
     url: String,
     schema: Option<String>,
     tls: MakeTlsConnector,
@@ -192,7 +193,27 @@ impl Postgres {
         schema: Option<String>,
         tls: MakeTlsConnector,
     ) -> Result<Postgres, StashError> {
+        Self::new_inner(false, url, schema, tls).await
+    }
+
+    /// Opens the stash stored at the specified path in readonly mode: any
+    /// mutating query will fail, and the epoch is not incremented on start.
+    pub async fn new_readonly(
+        url: String,
+        schema: Option<String>,
+        tls: MakeTlsConnector,
+    ) -> Result<Postgres, StashError> {
+        Self::new_inner(true, url, schema, tls).await
+    }
+
+    async fn new_inner(
+        readonly: bool,
+        url: String,
+        schema: Option<String>,
+        tls: MakeTlsConnector,
+    ) -> Result<Postgres, StashError> {
         let mut conn = Postgres {
+            readonly,
             url,
             schema,
             tls,
@@ -251,7 +272,11 @@ impl Postgres {
         }
 
         if self.epoch.is_none() {
-            let tx = client.transaction().await?;
+            let tx = client
+                .build_transaction()
+                .read_only(self.readonly)
+                .start()
+                .await?;
             let fence_exists: bool = tx
                 .query_one(
                     r#"
@@ -264,6 +289,11 @@ impl Postgres {
                 .await?
                 .get(0);
             if !fence_exists {
+                if self.readonly {
+                    return Err(
+                        "stash tables do not exist; will not create in readonly mode".into(),
+                    );
+                }
                 tx.batch_execute(SCHEMA).await?;
             }
             // Bump the epoch, which will cause any previous connection to fail. Add a
@@ -271,13 +301,19 @@ impl Postgres {
             // can't accidentally have the same epoch, nonce pair (especially risky if the
             // current epoch has been bumped exactly once, then gets recreated by another
             // connection that also bumps it once).
-            let epoch = tx
-                .query_one(
+            let epoch = if !self.readonly {
+                tx.query_one(
                     "UPDATE fence SET epoch=epoch+1, nonce=$1 RETURNING epoch",
                     &[&self.nonce.to_vec()],
                 )
                 .await?
-                .get(0);
+                .get(0)
+            } else {
+                let row = tx.query_one("SELECT epoch, nonce FROM fence", &[]).await?;
+                let nonce: &[u8] = row.get(1);
+                self.nonce = nonce.try_into().map_err(|_| "could not read nonce")?;
+                row.get(0)
+            };
             tx.commit().await?;
             self.epoch = Some(epoch);
         }
@@ -387,10 +423,12 @@ impl Postgres {
                     InternalStashError::Postgres(pgerr) => {
                         // Some errors aren't retryable.
                         if let Some(dberr) = pgerr.as_db_error() {
-                            if dberr.code() == &SqlState::UNDEFINED_TABLE {
-                                return Err(e);
-                            }
-                            if dberr.code() == &SqlState::WRONG_OBJECT_TYPE {
+                            if matches!(
+                                dberr.code(),
+                                &SqlState::UNDEFINED_TABLE
+                                    | &SqlState::WRONG_OBJECT_TYPE
+                                    | &SqlState::READ_ONLY_SQL_TRANSACTION
+                            ) {
                                 return Err(e);
                             }
                         }
@@ -424,7 +462,11 @@ impl Postgres {
         let client = self.client.as_mut().unwrap();
         let stmts = self.statements.as_ref().unwrap();
         let stmts = CountedStatements::from(stmts);
-        let tx = client.transaction().await?;
+        let tx = client
+            .build_transaction()
+            .read_only(self.readonly)
+            .start()
+            .await?;
         // Pipeline the epoch query and closure.
         let epoch_fut = tx
             .query_one(stmts.select_epoch(), &[])
@@ -711,6 +753,18 @@ impl Stash for Postgres {
             })
         })
         .await
+    }
+
+    async fn collections(&mut self) -> Result<BTreeSet<String>, StashError> {
+        let names = self
+            .transact(move |_stmts, tx| {
+                Box::pin(async move {
+                    let rows = tx.query("SELECT name FROM collections", &[]).await?;
+                    Ok(rows.into_iter().map(|row| row.get(0)))
+                })
+            })
+            .await?;
+        Ok(BTreeSet::from_iter(names))
     }
 
     async fn iter<K, V>(
