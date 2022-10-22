@@ -9,14 +9,16 @@ menu:
 
 Materialize can connect to a Postgres database through a secure SSH bastion server. Through this guide, you will learn how to:
 * Create the connections
-* Create the sources
-* Configure Materialize public keys on the bastion server.
+* Create the source
+* Configure Materialize public keys on the bastion server
 
 ### Pre-requirements
 
-* Postgres database
+Before following the steps, check meeting the next items:
+
+* Running Postgres database
 * SSH bastion server
-    * It must be accessible from Materialize and have access to Postgres.
+    * It must be accessible from Materialize and have access to Postgres
 * Materialize's region enabled
 
 ### Steps
@@ -33,14 +35,19 @@ Materialize can connect to a Postgres database through a secure SSH bastion serv
     ```sql
     SELECT * FROM mz_ssh_tunnel_connections;
     ```
-
-1. Add the keys to the SSH bastion server:
-    ```bash
-    # Command for Linux
-    echo "ssh-ed25519 <KEY> materialize" >> ~/.ssh/authorized_keys
+    ```
+    | id    | public_key_1                          | public_key_2                          |
+    |-------|---------------------------------------|---------------------------------------|
+    | u75   | ssh-ed25519 AAAA...76RH materialize   | ssh-ed25519 AAAA...hLYV materialize   |
     ```
 
-1. Create the Postgres **connection**:
+1. Log in to your SSH bastion server and add the keys from the previous step query:
+    ```bash
+    # Command for Linux
+    echo "ssh-ed25519 AAAA...76RH materialize" >> ~/.ssh/authorized_keys
+    ```
+
+1. Create in Materialize the [Postgres connection](/sql/create-connection/#example-3):
     ```sql
     CREATE SECRET pgpass AS '<POSTGRES_PASSWORD>';
 
@@ -55,7 +62,7 @@ Materialize can connect to a Postgres database through a secure SSH bastion serv
         SSH TUNNEL ssh_connection;
     ```
 
-1. Create the Postgres **source**:
+1. Create in Materialize the [Postgres source](/sql/create-source/postgres/#creating-a-source-1):
     ```sql
     CREATE SOURCE mz_source
     FROM POSTGRES
