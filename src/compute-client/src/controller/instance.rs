@@ -12,11 +12,10 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 use differential_dataflow::lattice::Lattice;
-use futures::future;
 use futures::stream::FuturesUnordered;
+use futures::{future, StreamExt};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::PartialOrder;
-use tokio::sync::mpsc::unbounded_channel;
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
@@ -34,15 +33,15 @@ use crate::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeRe
 use crate::service::{ComputeClient, ComputeGrpcClient};
 use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 
+use super::replica::Replica;
 use super::{CollectionState, ComputeControllerResponse, ComputeError, ComputeReplicaLogging};
 
 /// The state we keep for a compute instance.
 #[derive(Debug)]
-struct Instance<T> {
-    /// The build information for this process.
+pub(super) struct Instance<T> {
     build_info: &'static BuildInfo,
     /// The replicas of this compute instance.
-    replicas: HashMap<ReplicaId, ReplicaState<T>>,
+    replicas: HashMap<ReplicaId, Replica<T>>,
     /// Tracks expressed `since` and received `upper` frontiers for indexes and sinks.
     collections: BTreeMap<GlobalId, CollectionState<T>>,
     /// IDs of arranged log sources maintained by this compute instance.
@@ -67,12 +66,12 @@ struct Instance<T> {
     /// IDs of replicas that have failed and require rehydration.
     failed_replicas: BTreeSet<ReplicaId>,
     /// Ready compute controller responses to be delivered.
-    ready_responses: VecDeque<ComputeControllerResponse<T>>,
+    pub ready_responses: VecDeque<ComputeControllerResponse<T>>,
 }
 
 impl<T> Instance<T> {
     /// Acquire a handle to the collection state associated with `id`.
-    fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, ComputeError> {
+    pub fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, ComputeError> {
         self.collections
             .get(&id)
             .ok_or(ComputeError::IdentifierMissing(id))
@@ -86,7 +85,7 @@ impl<T> Instance<T> {
     }
 
     /// Acquire an [`ActiveInstance`] by providing a storage controller.
-    fn activate<'a>(
+    pub fn activate<'a>(
         &'a mut self,
         storage_controller: &'a mut dyn StorageController<Timestamp = T>,
     ) -> ActiveInstance<'a, T> {
@@ -97,7 +96,7 @@ impl<T> Instance<T> {
     }
 
     /// Return whether this instance has any processing work scheduled.
-    fn wants_processing(&self) -> bool {
+    pub fn wants_processing(&self) -> bool {
         // Do we need to rehydrate failed replicas?
         !self.failed_replicas.is_empty()
         // Do we have responses ready to deliver?
@@ -110,7 +109,7 @@ where
     T: Timestamp + Lattice,
     ComputeGrpcClient: ComputeClient<T>,
 {
-    fn new(
+    pub fn new(
         build_info: &'static BuildInfo,
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
         max_result_size: u32,
@@ -155,7 +154,7 @@ where
     /// Marks the end of any initialization commands.
     ///
     /// Intended to be called by `Controller`, rather than by other code (to avoid repeated calls).
-    fn initialization_complete(&mut self) {
+    pub fn initialization_complete(&mut self) {
         self.send(ComputeCommand::InitializationComplete);
     }
 
@@ -163,7 +162,7 @@ where
     ///
     /// # Panics
     /// - If the compute instance still has active replicas.
-    fn drop(mut self) {
+    pub fn drop(mut self) {
         assert!(
             self.replicas.is_empty(),
             "cannot drop instances with provisioned replicas"
@@ -181,40 +180,21 @@ where
         logging_config: Option<LoggingConfig>,
         communication_config: CommunicationConfig,
     ) {
-        // Launch a task to handle communication with the replica
-        // asynchronously. This isolates the main controller thread from
-        // the replica.
-        let (command_tx, command_rx) = unbounded_channel();
-        let (response_tx, response_rx) = unbounded_channel();
-        let task = mz_ore::task::spawn(
-            || format!("active-replication-replica-{id}"),
-            replica_task(ReplicaTaskConfig {
-                replica_id: id,
-                build_info: self.build_info,
-                addrs: addrs.clone(),
-                command_rx,
-                response_tx,
-            }),
+        let replica = Replica::spawn(
+            id,
+            self.build_info,
+            addrs,
+            logging_config,
+            communication_config,
         );
 
         // Take this opportunity to clean up the history we should present.
         self.history.retain_peeks(&self.peeks);
         self.history.reduce();
 
-        let replica_state = ReplicaState {
-            command_tx,
-            response_rx,
-            _task: task.abort_on_drop(),
-            addrs,
-            logging_config,
-            communication_config,
-        };
-
         // Replay the commands at the client, creating new dataflow identifiers.
         for command in self.history.iter() {
-            let mut command = command.clone();
-            replica_state.specialize_command(&mut command, id);
-            if replica_state.command_tx.send(command).is_err() {
+            if replica.send(command.clone()).is_err() {
                 // We swallow the error here. On the next send, we will fail again, and
                 // restart the connection as well as this rehydration.
                 tracing::warn!("Replica {:?} connection terminated during rehydration", id);
@@ -222,7 +202,7 @@ where
             }
         }
 
-        if let Some(logging) = &replica_state.logging_config {
+        if let Some(logging) = &replica.logging_config {
             // Start tracking frontiers of persisted log collections.
             for (collection_id, _) in logging.sink_logs.values() {
                 let frontier = Antichain::from_elem(Timestamp::minimum());
@@ -240,7 +220,7 @@ where
         }
 
         // Add replica to tracked state.
-        self.replicas.insert(id, replica_state);
+        self.replicas.insert(id, replica);
         for uppers in self.uppers.values_mut() {
             uppers.add_replica(id);
         }
@@ -249,9 +229,9 @@ where
         }
     }
 
-    /// Sends a command to all replicas.
+    /// Sends a command to all replicas of this instance.
     #[tracing::instrument(level = "debug", skip(self))]
-    fn send(&mut self, cmd: ComputeCommand<T>) {
+    pub fn send(&mut self, cmd: ComputeCommand<T>) {
         // Initialize any necessary frontier tracking.
         let mut start = Vec::new();
         let mut cease = Vec::new();
@@ -268,26 +248,24 @@ where
 
         // Clone the command for each active replica.
         for (id, replica) in self.replicas.iter_mut() {
-            let mut command = cmd.clone();
-            replica.specialize_command(&mut command, *id);
             // If sending the command fails, the replica requires rehydration.
-            if replica.command_tx.send(command).is_err() {
+            if replica.send(cmd.clone()).is_err() {
                 self.failed_replicas.insert(*id);
             }
         }
     }
 
-    /// Receives the next response from any replica.
+    /// Receives the next response from any replica of this instance.
     ///
     /// This method is cancellation safe.
-    async fn recv(&mut self) -> (ReplicaId, ComputeResponse<T>) {
+    pub async fn recv(&mut self) -> (ReplicaId, ComputeResponse<T>) {
         // Receive responses from any of the replicas, and take appropriate
         // action.
         loop {
             let response = self
                 .replicas
                 .iter_mut()
-                .map(|(id, replica)| async { (*id, replica.response_rx.recv().await) })
+                .map(|(id, replica)| async { (*id, replica.recv().await) })
                 .collect::<FuturesUnordered<_>>()
                 .next()
                 .await;
@@ -332,7 +310,7 @@ where
 
 /// A wrapper around [`Instance`] with a live storage controller.
 #[derive(Debug)]
-struct ActiveInstance<'a, T> {
+pub(super) struct ActiveInstance<'a, T> {
     compute: &'a mut Instance<T>,
     storage_controller: &'a mut dyn StorageController<Timestamp = T>,
 }
@@ -343,7 +321,7 @@ where
     ComputeGrpcClient: ComputeClient<T>,
 {
     /// Add a new instance replica, by ID.
-    fn add_replica(
+    pub fn add_replica(
         &mut self,
         id: ReplicaId,
         addrs: Vec<String>,
@@ -388,7 +366,7 @@ where
     }
 
     /// Remove an existing instance replica, by ID.
-    async fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ComputeError> {
+    pub async fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ComputeError> {
         // Removing a replica might elicit changes to collection frontiers.
         let mut new_uppers = Vec::new();
         for (collection_id, uppers) in self.compute.uppers.iter_mut() {
@@ -415,14 +393,14 @@ where
         }
         self.remove_peeks(&peeks_to_remove).await?;
 
-        let replica_state = self
+        let replica = self
             .compute
             .replicas
             .remove(&id)
             .expect("replica not found");
 
         // Cease tracking frontiers of persisted log collections.
-        if let Some(logging) = &replica_state.logging_config {
+        if let Some(logging) = replica.logging_config {
             for (collection_id, _) in logging.sink_logs.values() {
                 let previous = self.compute.sink_log_uppers.remove(collection_id);
                 assert!(previous.is_some());
@@ -442,8 +420,18 @@ where
         Ok(())
     }
 
+    /// Rehydrate any failed replicas of this instance.
+    pub async fn rehydrate_failed_replicas(&mut self) -> Result<(), ComputeError> {
+        let failed_replicas = self.compute.failed_replicas.clone();
+        for replica_id in failed_replicas {
+            self.rehydrate_replica(replica_id).await?;
+            self.compute.failed_replicas.remove(&replica_id);
+        }
+        Ok(())
+    }
+
     /// Create the described dataflows and initializes state for their output.
-    async fn create_dataflows(
+    pub async fn create_dataflows(
         &mut self,
         dataflows: Vec<DataflowDescription<crate::plan::Plan<T>, (), T>>,
     ) -> Result<(), ComputeError> {
@@ -605,7 +593,7 @@ where
 
     /// Drops the read capability for the given collections and allows their resources to be
     /// reclaimed.
-    async fn drop_collections(&mut self, ids: Vec<GlobalId>) -> Result<(), ComputeError> {
+    pub async fn drop_collections(&mut self, ids: Vec<GlobalId>) -> Result<(), ComputeError> {
         // Validate that the ids exist.
         self.validate_ids(ids.iter().cloned())?;
 
@@ -616,7 +604,7 @@ where
 
     /// Initiate a peek request for the contents of `id` at `timestamp`.
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn peek(
+    pub async fn peek(
         &mut self,
         id: GlobalId,
         literal_constraints: Option<Vec<Row>>,
@@ -670,7 +658,7 @@ where
     }
 
     /// Cancels existing peek requests.
-    async fn cancel_peeks(&mut self, uuids: BTreeSet<Uuid>) -> Result<(), ComputeError> {
+    pub async fn cancel_peeks(&mut self, uuids: BTreeSet<Uuid>) -> Result<(), ComputeError> {
         self.remove_peeks(&uuids).await?;
 
         // Enqueue the response to the cancelation.
@@ -709,7 +697,7 @@ where
     ///
     /// Identifiers not present in `policies` retain their existing read policies.
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn set_read_policy(
+    pub async fn set_read_policy(
         &mut self,
         policies: Vec<(GlobalId, ReadPolicy<T>)>,
     ) -> Result<(), ComputeError> {
@@ -745,7 +733,7 @@ where
     }
 
     /// Update the max size in bytes of any result.
-    fn update_max_result_size(&mut self, max_result_size: u32) {
+    pub fn update_max_result_size(&mut self, max_result_size: u32) {
         self.compute
             .send(ComputeCommand::UpdateMaxResultSize(max_result_size))
     }
@@ -911,6 +899,27 @@ where
             .map(|(id, frontier)| (id, ReadPolicy::ValidFrom(frontier)));
         self.set_read_policy(policies.collect()).await?;
         Ok(())
+    }
+
+    pub async fn handle_response(
+        &mut self,
+        response: ComputeResponse<T>,
+        replica_id: ReplicaId,
+    ) -> Result<Option<ComputeControllerResponse<T>>, ComputeError> {
+        match response {
+            ComputeResponse::FrontierUppers(list) => {
+                self.handle_frontier_uppers(list, replica_id).await?;
+                Ok(None)
+            }
+            ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
+                self.handle_peek_response(uuid, peek_response, otel_ctx, replica_id)
+                    .await
+            }
+            ComputeResponse::SubscribeResponse(id, response) => {
+                self.handle_subscribe_response(id, response, replica_id)
+                    .await
+            }
+        }
     }
 
     async fn handle_frontier_uppers(
@@ -1100,7 +1109,7 @@ struct ReportedUppers<T> {
     /// The reported uppers per replica.
     per_replica: HashMap<ReplicaId, Antichain<T>>,
     /// The lower and upper bound of all reported uppers.
-    bounds: FrontierBounds<T>,
+    pub bounds: FrontierBounds<T>,
 }
 
 impl<T> ReportedUppers<T>

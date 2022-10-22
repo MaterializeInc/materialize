@@ -59,6 +59,7 @@ use crate::logging::{LogVariant, LogView};
 use crate::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
+use self::instance::{ActiveInstance, Instance};
 use self::orchestrator::ComputeOrchestrator;
 
 mod instance;
@@ -709,14 +710,11 @@ where
     pub async fn process(&mut self) -> Result<Option<ComputeControllerResponse<T>>, ComputeError> {
         // Rehydrate any failed replicas.
         for instance in self.compute.instances.values_mut() {
-            let failed_replicas = std::mem::take(&mut instance.failed_replicas);
-            let mut instance = instance.activate(self.storage);
-            for replica_id in failed_replicas {
-                instance
-                    .rehydrate_replica(replica_id)
-                    .await
-                    .expect("error rehydrating replica: {replica_id}");
-            }
+            instance
+                .activate(self.storage)
+                .rehydrate_failed_replicas()
+                .await
+                .expect("error rehydrating failed replicas");
         }
 
         // Process pending ready responses.
@@ -736,28 +734,11 @@ where
         }
 
         // Process pending responses from replicas.
-        let (instance_id, replica_id, response) = match self.compute.stashed_response.take() {
-            Some(resp) => resp,
-            None => return Ok(None),
-        };
-
-        let mut instance = self.instance(instance_id)?;
-
-        match response {
-            ComputeResponse::FrontierUppers(list) => {
-                instance.handle_frontier_uppers(list, replica_id).await?;
-                Ok(None)
-            }
-            ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
-                instance
-                    .handle_peek_response(uuid, peek_response, otel_ctx, replica_id)
-                    .await
-            }
-            ComputeResponse::SubscribeResponse(id, response) => {
-                instance
-                    .handle_subscribe_response(id, response, replica_id)
-                    .await
-            }
+        if let Some((instance_id, replica_id, response)) = self.compute.stashed_response.take() {
+            let mut instance = self.instance(instance_id)?;
+            instance.handle_response(response, replica_id).await
+        } else {
+            Ok(None)
         }
     }
 }
