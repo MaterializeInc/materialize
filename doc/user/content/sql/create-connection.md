@@ -161,7 +161,7 @@ Field                       | Value            | Required | Description
 
 #### Public key retrieval
 
-Materialize will create two public keys after creating an `SSH TUNNEL` connection. You can get the public keys to use in the bastion server by running the following query:
+Materialize will create two public keys after creating an `SSH TUNNEL` connection. Retrieve the public keys to use in the bastion server by running the following query:
 
 ```sql
 SELECT * FROM mz_ssh_tunnel_connections;
