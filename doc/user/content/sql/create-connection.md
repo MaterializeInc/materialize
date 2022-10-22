@@ -155,7 +155,7 @@ Field                       | Value            | Required | Description
     CREATE CONNECTION ssh_connection TO SSH TUNNEL (
         HOST '<SSH_BASTION_HOST>',
         USER '<SSH_BASTION_USER>',
-        PORT 1
+        PORT <SSH_BASTION_PORT>
     );
 ```
 

@@ -28,7 +28,7 @@ Before following the steps, check meeting the next items:
     CREATE CONNECTION ssh_connection TO SSH TUNNEL (
         HOST '<SSH_BASTION_HOST>',
         USER '<SSH_BASTION_USER>',
-        PORT 1
+        PORT <SSH_BASTION_PORT>
     );
 
 1. Get your **region's public keys** in Materialize for the SSH tunnel connection:
