@@ -204,3 +204,4 @@ pub const FUNC_MZ_NOW_OID: u32 = 16_560;
 pub const FUNC_MAX_MZ_TIMESTAMP_OID: u32 = 16_561;
 pub const FUNC_MIN_MZ_TIMESTAMP_OID: u32 = 16_562;
 pub const FUNC_DATE_FROM_TEXT: u32 = 16_563;
+pub const FUNC_MZ_CLUSTER: u32 = 16_564;

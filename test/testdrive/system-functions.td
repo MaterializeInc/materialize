@@ -27,3 +27,6 @@ true
 
 > SELECT length(cast(mz_internal.mz_session_id() as text));
 36
+
+> SELECT mz_internal.mz_cluster()
+default

@@ -3015,6 +3015,11 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|
                 )
             }), oid::FUNC_MZ_AVG_PROMOTION_U32_OID;
         },
+        "mz_cluster" => Scalar {
+            // Generates essentially same output as `SHOW CLUSTER`, but is
+            // easier to use within other SQL statements.
+            params!() => UnmaterializableFunc::MzCluster, oid::FUNC_MZ_ENVIRONMENT_ID_OID;
+        },
         "mz_error_if_null" => Scalar {
             // If the first argument is NULL, returns an EvalError::Internal whose error
             // message is the second argument.
