@@ -134,6 +134,7 @@ pub struct ComputeInstanceEvent {
 }
 
 /// Responses from the compute controller.
+#[derive(Debug)]
 pub enum ComputeControllerResponse<T> {
     /// See [`ComputeResponse::PeekResponse`](crate::response::ComputeResponse::PeekResponse).
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
@@ -329,7 +330,9 @@ pub struct ComputeController<T> {
     /// Set to `true` once `initialization_complete` has been called.
     initialized: bool,
     /// A response to handle on the next call to `ActiveComputeController::process`.
-    stashed_response: Option<(ComputeInstanceId, ActiveReplicationResponse<T>)>,
+    stashed_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
+    /// Times we have last received responses from replicas.
+    replica_heartbeats: BTreeMap<ReplicaId, DateTime<Utc>>,
 }
 
 impl<T> ComputeController<T> {
@@ -345,6 +348,7 @@ impl<T> ComputeController<T> {
             orchestrator: ComputeOrchestrator::new(orchestrator, computed_image),
             initialized: false,
             stashed_response: None,
+            replica_heartbeats: BTreeMap::new(),
         }
     }
 
@@ -451,17 +455,24 @@ where
         }
     }
 
-    /// Wait until the controller is ready to process a response.
+    /// Wait until the controller is ready to do some processing.
     ///
     /// This method may block for an arbitrarily long time.
     ///
-    /// When the method returns, the caller should call [`ActiveComputeController::process`] to
-    /// process the ready message.
+    /// When the method returns, the caller should call [`ActiveComputeController::process`].
     ///
     /// This method is cancellation safe.
     pub async fn ready(&mut self) {
         if self.stashed_response.is_some() {
             // We still have a response stashed, which we are immediately ready to process.
+            return;
+        }
+        if !self.replica_heartbeats.is_empty() {
+            // We have replica heartbeats waiting to be processes.
+            return;
+        }
+        if self.instances.values().any(|i| i.wants_processing()) {
+            // An instance requires processing.
             return;
         }
 
@@ -472,15 +483,19 @@ where
             future::pending().await
         }
 
-        // `ActiveReplication::recv` is cancellation safe, so it is safe to construct this
-        // `select_all`.
-        let receives = self
-            .instances
-            .iter_mut()
-            .map(|(id, instance)| Box::pin(instance.recv().map(|resp| (*id, resp))));
-        let (resp, _index, _remaining) = future::select_all(receives).await;
+        // `Instance::recv` is cancellation safe, so it is safe to construct this `select_all`.
+        let receives = self.instances.iter_mut().map(|(id, instance)| {
+            Box::pin(
+                instance
+                    .recv()
+                    .map(|(replica_id, resp)| (*id, replica_id, resp)),
+            )
+        });
+        let ((instance_id, replica_id, resp), _index, _remaining) =
+            future::select_all(receives).await;
 
-        self.stashed_response = Some(resp);
+        self.replica_heartbeats.insert(replica_id, Utc::now());
+        self.stashed_response = Some((instance_id, replica_id, resp));
     }
 
     /// Listen for changes to compute services reported by the orchestrator.
@@ -588,8 +603,8 @@ where
 
         self.instance(instance_id)
             .unwrap()
-            .remove_replica(replica_id);
-        Ok(())
+            .remove_replica(replica_id)
+            .await
     }
 
     /// Create and maintain the described dataflows, and initialize state for their output.
@@ -700,7 +715,36 @@ where
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
     pub async fn process(&mut self) -> Result<Option<ComputeControllerResponse<T>>, ComputeError> {
-        let (instance_id, response) = match self.compute.stashed_response.take() {
+        // Rehydrate any failed replicas.
+        for instance in self.compute.instances.values_mut() {
+            let failed_replicas = std::mem::take(&mut instance.failed_replicas);
+            let mut instance = instance.activate(self.storage);
+            for replica_id in failed_replicas {
+                instance
+                    .rehydrate_replica(replica_id)
+                    .await
+                    .expect("error rehydrating replica: {replica_id}");
+            }
+        }
+
+        // Process pending ready responses.
+        for instance in self.compute.instances.values_mut() {
+            if let Some(response) = instance.ready_responses.pop_front() {
+                return Ok(Some(response));
+            }
+        }
+
+        // Process pending replica heartbeats.
+        // TODO(teskje): Use `BTreeMap::pop_first`, once stable.
+        if let Some(replica_id) = self.compute.replica_heartbeats.keys().next().copied() {
+            let when = self.compute.replica_heartbeats.remove(&replica_id).unwrap();
+            return Ok(Some(ComputeControllerResponse::ReplicaHeartbeat(
+                replica_id, when,
+            )));
+        }
+
+        // Process pending responses from replicas.
+        let (instance_id, replica_id, response) = match self.compute.stashed_response.take() {
             Some(resp) => resp,
             None => return Ok(None),
         };
@@ -708,33 +752,20 @@ where
         let mut instance = self.instance(instance_id)?;
 
         match response {
-            ActiveReplicationResponse::FrontierUppers(updates) => {
-                instance.update_write_frontiers(&updates).await?;
+            ComputeResponse::FrontierUppers(list) => {
+                instance.handle_frontier_uppers(list, replica_id).await?;
                 Ok(None)
             }
-            ActiveReplicationResponse::PeekResponse(uuid, peek_response, otel_ctx) => Ok(Some(
-                ComputeControllerResponse::PeekResponse(uuid, peek_response, otel_ctx),
-            )),
-            ActiveReplicationResponse::PeekFinished(uuid) => {
-                instance.remove_peeks(&[uuid].into()).await?;
-                Ok(None)
+            ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
+                instance
+                    .handle_peek_response(uuid, peek_response, otel_ctx, replica_id)
+                    .await
             }
-            ActiveReplicationResponse::SubscribeResponse(global_id, response) => {
-                if let SubscribeResponse::Batch(SubscribeBatch { lower, .. }) = &response {
-                    // Ensure there are no gaps in the subscribe stream we receive.
-                    assert_eq!(
-                        lower,
-                        &instance.compute.collections[&global_id].write_frontier_upper,
-                    );
-                };
-
-                Ok(Some(ComputeControllerResponse::SubscribeResponse(
-                    global_id, response,
-                )))
+            ComputeResponse::SubscribeResponse(id, response) => {
+                instance
+                    .handle_subscribe_response(id, response, replica_id)
+                    .await
             }
-            ActiveReplicationResponse::ReplicaHeartbeat(replica_id, when) => Ok(Some(
-                ComputeControllerResponse::ReplicaHeartbeat(replica_id, when),
-            )),
         }
     }
 }
@@ -767,8 +798,10 @@ struct Instance<T> {
     sink_log_uppers: HashMap<GlobalId, Antichain<T>>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
     history: ComputeCommandHistory<T>,
-    /// Responses that should be emitted on the next `recv` call.
-    pending_response: VecDeque<ActiveReplicationResponse<T>>,
+    /// IDs of replicas that have failed and require rehydration.
+    failed_replicas: BTreeSet<ReplicaId>,
+    /// Ready compute controller responses to be delivered.
+    ready_responses: VecDeque<ComputeControllerResponse<T>>,
 }
 
 impl<T> Instance<T> {
@@ -795,6 +828,14 @@ impl<T> Instance<T> {
             compute: self,
             storage_controller,
         }
+    }
+
+    /// Return whether this instance has any processing work scheduled.
+    fn wants_processing(&self) -> bool {
+        // Do we need to rehydrate failed replicas?
+        !self.failed_replicas.is_empty()
+        // Do we have responses ready to deliver?
+        || !self.ready_responses.is_empty()
     }
 }
 
@@ -831,7 +872,8 @@ where
             index_log_uppers: Default::default(),
             sink_log_uppers: Default::default(),
             history: Default::default(),
-            pending_response: Default::default(),
+            failed_replicas: Default::default(),
+            ready_responses: Default::default(),
         };
 
         instance.send(ComputeCommand::CreateTimely(Default::default()));
@@ -944,32 +986,35 @@ where
     /// Sends a command to all replicas.
     #[tracing::instrument(level = "debug", skip(self))]
     fn send(&mut self, cmd: ComputeCommand<T>) {
-        self.handle_command(&cmd);
+        // Initialize any necessary frontier tracking.
+        let mut start = Vec::new();
+        let mut cease = Vec::new();
+        cmd.frontier_tracking(&mut start, &mut cease);
+        for id in start.into_iter() {
+            self.start_frontier_tracking(id);
+        }
+        for id in cease.into_iter() {
+            self.cease_frontier_tracking(id);
+        }
+
+        // Record the command so that new replicas can be brought up to speed.
+        self.history.push(cmd.clone());
 
         // Clone the command for each active replica.
-        let mut failed_replicas = vec![];
         for (id, replica) in self.replicas.iter_mut() {
             let mut command = cmd.clone();
             replica.specialize_command(&mut command, *id);
             // If sending the command fails, the replica requires rehydration.
             if replica.command_tx.send(command).is_err() {
-                failed_replicas.push(*id);
+                self.failed_replicas.insert(*id);
             }
-        }
-        for id in failed_replicas {
-            self.rehydrate_replica(id);
         }
     }
 
     /// Receives the next response from any replica.
     ///
     /// This method is cancellation safe.
-    async fn recv(&mut self) -> ActiveReplicationResponse<T> {
-        // If we have a pending response, we should send it immediately.
-        if let Some(response) = self.pending_response.pop_front() {
-            return response;
-        }
-
+    async fn recv(&mut self) -> (ReplicaId, ComputeResponse<T>) {
         // Receive responses from any of the replicas, and take appropriate
         // action.
         loop {
@@ -989,66 +1034,14 @@ where
                 }
                 Some((replica_id, None)) => {
                     // A replica has failed and requires rehydration.
-                    self.rehydrate_replica(replica_id)
+                    self.failed_replicas.insert(replica_id);
                 }
                 Some((replica_id, Some(response))) => {
-                    // A replica has produced a response. Absorb it, possibly
-                    // returning a response up the stack.
-                    match self.handle_response(response, replica_id) {
-                        Some(response) => return response,
-                        None => { /* continue */ }
-                    }
+                    // A replica has produced a response. Return it.
+                    return (replica_id, response);
                 }
             }
         }
-    }
-
-    #[tracing::instrument(level = "debug", skip(self))]
-    fn handle_command(&mut self, cmd: &ComputeCommand<T>) {
-        // Update our tracking of peek and subscribe commands.
-        match &cmd {
-            ComputeCommand::CancelPeeks { uuids } => {
-                // Enqueue the response to the cancelation.
-                for uuid in uuids {
-                    let otel_ctx = self
-                        .peeks
-                        .get_mut(uuid)
-                        // Canceled peeks should not be further responded to.
-                        .map(|pending| pending.otel_ctx.take())
-                        .unwrap_or_else(|| {
-                            tracing::warn!("did not find pending peek for {}", uuid);
-                            None
-                        });
-                    if let Some(ctx) = otel_ctx {
-                        self.pending_response
-                            .push_back(ActiveReplicationResponse::PeekResponse(
-                                *uuid,
-                                PeekResponse::Canceled,
-                                ctx,
-                            ));
-                    }
-                }
-            }
-            ComputeCommand::CreateDataflows(dataflows) => {
-                let subscribe_ids = dataflows.iter().flat_map(|df| df.subscribe_ids());
-                self.subscribes.extend(subscribe_ids);
-            }
-            _ => {}
-        }
-
-        // Initialize any necessary frontier tracking.
-        let mut start = Vec::new();
-        let mut cease = Vec::new();
-        cmd.frontier_tracking(&mut start, &mut cease);
-        for id in start.into_iter() {
-            self.start_frontier_tracking(id);
-        }
-        for id in cease.into_iter() {
-            self.cease_frontier_tracking(id);
-        }
-
-        // Record the command so that new replicas can be brought up to speed.
-        self.history.push(cmd.clone());
     }
 
     fn start_frontier_tracking(&mut self, id: GlobalId) {
@@ -1062,32 +1055,11 @@ where
 
         // If we cease tracking an in-progress subscribe, we should emit a `DroppedAt` response.
         if self.subscribes.remove(&id) {
-            self.pending_response
-                .push_back(ActiveReplicationResponse::SubscribeResponse(
+            self.ready_responses
+                .push_back(ComputeControllerResponse::SubscribeResponse(
                     id,
                     SubscribeResponse::DroppedAt(previous.bounds.upper),
                 ));
-        }
-    }
-
-    fn handle_response(
-        &mut self,
-        message: ComputeResponse<T>,
-        replica_id: ReplicaId,
-    ) -> Option<ActiveReplicationResponse<T>> {
-        self.pending_response
-            .push_front(ActiveReplicationResponse::ReplicaHeartbeat(
-                replica_id,
-                Utc::now(),
-            ));
-        match message {
-            ComputeResponse::PeekResponse(uuid, response, otel_ctx) => {
-                self.handle_peek_response(uuid, response, otel_ctx, replica_id)
-            }
-            ComputeResponse::FrontierUppers(list) => self.handle_frontier_uppers(list, replica_id),
-            ComputeResponse::SubscribeResponse(id, response) => {
-                self.handle_subscribe_response(id, response, replica_id)
-            }
         }
     }
 }
@@ -1150,51 +1122,58 @@ where
     }
 
     /// Remove an existing instance replica, by ID.
-    fn remove_replica(&mut self, id: ReplicaId) {
-        // Removing a replica might elicit changes to collection frontiers, which we must
-        // report up the chain.
+    async fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ComputeError> {
+        // Removing a replica might elicit changes to collection frontiers.
         let mut new_uppers = Vec::new();
-        for (collection_id, uppers) in self.uppers.iter_mut() {
+        for (collection_id, uppers) in self.compute.uppers.iter_mut() {
             if uppers.remove_replica(id) {
                 new_uppers.push((*collection_id, uppers.bounds.clone()));
             }
         }
-        for (collection_id, uppers) in self.index_log_uppers.iter_mut() {
+        for (collection_id, uppers) in self.compute.index_log_uppers.iter_mut() {
             if uppers.tracks_replica(id) && uppers.remove_replica(id) {
                 new_uppers.push((*collection_id, uppers.bounds.clone()));
             }
         }
         if !new_uppers.is_empty() {
-            self.pending_response
-                .push_back(ActiveReplicationResponse::FrontierUppers(new_uppers));
+            self.update_write_frontiers(&new_uppers).await?;
         }
 
-        // Removing a replica might implicitly finish a peek, which we must report up the chain.
-        for (uuid, peek) in &mut self.peeks {
+        // Removing a replica might implicitly finish peeks.
+        let mut peeks_to_remove = BTreeSet::new();
+        for (uuid, peek) in &mut self.compute.peeks {
             peek.unfinished.remove(&id);
             if peek.is_finished() {
-                self.pending_response
-                    .push_back(ActiveReplicationResponse::PeekFinished(uuid.clone()));
+                peeks_to_remove.insert(*uuid);
             }
         }
+        self.remove_peeks(&peeks_to_remove).await?;
 
-        let replica_state = self.replicas.remove(&id).expect("replica not found");
+        let replica_state = self
+            .compute
+            .replicas
+            .remove(&id)
+            .expect("replica not found");
 
         // Cease tracking frontiers of persisted log collections.
         if let Some(logging) = &replica_state.logging_config {
             for (collection_id, _) in logging.sink_logs.values() {
-                let previous = self.sink_log_uppers.remove(collection_id);
+                let previous = self.compute.sink_log_uppers.remove(collection_id);
                 assert!(previous.is_some());
             }
         }
+
+        Ok(())
     }
 
-    fn rehydrate_replica(&mut self, id: ReplicaId) {
-        let addrs = self.replicas[&id].addrs.clone();
-        let logging_config = self.replicas[&id].logging_config.clone();
-        let communication_config = self.replicas[&id].communication_config.clone();
-        self.remove_replica(id);
-        self.add_replica(id, addrs, logging_config, communication_config);
+    async fn rehydrate_replica(&mut self, id: ReplicaId) -> Result<(), ComputeError> {
+        let addrs = self.compute.replicas[&id].addrs.clone();
+        let logging_config = self.compute.replicas[&id].logging_config.clone();
+        let communication_config = self.compute.replicas[&id].communication_config.clone();
+        self.remove_replica(id).await?;
+        self.compute
+            .add_replica(id, addrs, logging_config, communication_config);
+        Ok(())
     }
 
     /// Create the described dataflows and initializes state for their output.
@@ -1291,6 +1270,9 @@ where
                     ),
                 );
             }
+
+            // Initialize tracking of subscribes.
+            self.compute.subscribes.extend(dataflow.subscribe_ids());
         }
 
         // Here we augment all imported sources and all exported sinks with with the appropriate
@@ -1415,7 +1397,7 @@ where
             target_replica,
             // Obtain an `OpenTelemetryContext` from the thread-local tracing
             // tree to forward it on to the compute worker.
-            otel_ctx: otel_ctx.clone(),
+            otel_ctx,
         }));
 
         Ok(())
@@ -1424,6 +1406,30 @@ where
     /// Cancels existing peek requests.
     async fn cancel_peeks(&mut self, uuids: BTreeSet<Uuid>) -> Result<(), ComputeError> {
         self.remove_peeks(&uuids).await?;
+
+        // Enqueue the response to the cancelation.
+        for uuid in &uuids {
+            let otel_ctx = self
+                .compute
+                .peeks
+                .get_mut(uuid)
+                // Canceled peeks should not be further responded to.
+                .map(|pending| pending.otel_ctx.take())
+                .unwrap_or_else(|| {
+                    tracing::warn!("did not find pending peek for {}", uuid);
+                    None
+                });
+            if let Some(ctx) = otel_ctx {
+                self.compute
+                    .ready_responses
+                    .push_back(ComputeControllerResponse::PeekResponse(
+                        *uuid,
+                        PeekResponse::Canceled,
+                        ctx,
+                    ));
+            }
+        }
+
         self.compute.send(ComputeCommand::CancelPeeks { uuids });
         Ok(())
     }
@@ -1641,23 +1647,23 @@ where
         Ok(())
     }
 
-    fn handle_frontier_uppers(
+    async fn handle_frontier_uppers(
         &mut self,
         list: Vec<(GlobalId, Antichain<T>)>,
         replica_id: ReplicaId,
-    ) -> Option<ActiveReplicationResponse<T>> {
+    ) -> Result<(), ComputeError> {
         let mut new_uppers = Vec::new();
 
         for (id, new_upper) in list {
-            if let Some(reported) = self.uppers.get_mut(&id) {
+            if let Some(reported) = self.compute.uppers.get_mut(&id) {
                 if reported.update(replica_id, new_upper) {
                     new_uppers.push((id, reported.bounds.clone()));
                 }
-            } else if let Some(reported) = self.index_log_uppers.get_mut(&id) {
+            } else if let Some(reported) = self.compute.index_log_uppers.get_mut(&id) {
                 if reported.update(replica_id, new_upper) {
                     new_uppers.push((id, reported.bounds.clone()));
                 }
-            } else if let Some(reported) = self.sink_log_uppers.get_mut(&id) {
+            } else if let Some(reported) = self.compute.sink_log_uppers.get_mut(&id) {
                 if PartialOrder::less_than(reported, &new_upper) {
                     reported.clone_from(&new_upper);
                     new_uppers.push((
@@ -1671,25 +1677,21 @@ where
             }
         }
 
-        if !new_uppers.is_empty() {
-            Some(ActiveReplicationResponse::FrontierUppers(new_uppers))
-        } else {
-            None
-        }
+        self.update_write_frontiers(&new_uppers).await
     }
 
-    fn handle_peek_response(
+    async fn handle_peek_response(
         &mut self,
         uuid: Uuid,
         response: PeekResponse,
         otel_ctx: OpenTelemetryContext,
         replica_id: ReplicaId,
-    ) -> Option<ActiveReplicationResponse<T>> {
-        let peek = match self.peeks.get_mut(&uuid) {
+    ) -> Result<Option<ComputeControllerResponse<T>>, ComputeError> {
+        let peek = match self.compute.peeks.get_mut(&uuid) {
             Some(peek) => peek,
             None => {
                 tracing::warn!("did not find pending peek for {}", uuid);
-                return None;
+                return Ok(None);
             }
         };
 
@@ -1705,32 +1707,33 @@ where
         //
         // Additionally, we just use the `otel_ctx` from the first worker to
         // respond.
-        if peek.otel_ctx.take().is_some() {
-            self.pending_response
-                .push_back(ActiveReplicationResponse::PeekResponse(
-                    uuid, response, otel_ctx,
-                ));
-        }
+        let controller_response = peek
+            .otel_ctx
+            .take()
+            .map(|_| ComputeControllerResponse::PeekResponse(uuid, response, otel_ctx));
 
         // Update the per-replica tracking and draw appropriate consequences.
         peek.unfinished.remove(&replica_id);
         if peek.is_finished() {
-            self.pending_response
-                .push_back(ActiveReplicationResponse::PeekFinished(uuid));
+            self.remove_peeks(&[uuid].into()).await?;
         }
 
-        self.pending_response.pop_front()
+        Ok(controller_response)
     }
 
-    fn handle_subscribe_response(
+    async fn handle_subscribe_response(
         &mut self,
         subscribe_id: GlobalId,
         response: SubscribeResponse<T>,
         replica_id: ReplicaId,
-    ) -> Option<ActiveReplicationResponse<T>> {
-        let entry = self.uppers.get_mut(&subscribe_id)?;
+    ) -> Result<Option<ComputeControllerResponse<T>>, ComputeError> {
+        let entry = match self.compute.uppers.get_mut(&subscribe_id) {
+            Some(uppers) => uppers,
+            None => return Ok(None),
+        };
 
-        match response {
+        let mut frontier_updates = Vec::new();
+        let controller_response = match response {
             SubscribeResponse::Batch(SubscribeBatch {
                 lower: _,
                 upper,
@@ -1747,34 +1750,33 @@ where
                 let old_upper_bound = entry.bounds.upper.clone();
                 if !entry.update(replica_id, upper.clone()) {
                     // There are no new updates to report.
-                    return None;
+                    return Ok(None);
                 }
+
+                frontier_updates.push((subscribe_id, entry.bounds.clone()));
 
                 if PartialOrder::less_than(&old_upper_bound, &entry.bounds.upper) {
                     // When we get here, the subscribe must still be in progress.
-                    assert!(self.subscribes.get(&subscribe_id).is_some());
+                    assert!(self.compute.subscribes.get(&subscribe_id).is_some());
+
+                    if upper.is_empty() {
+                        // This subscribe has finished producing all its data. Remove it from the
+                        // in-progress subscribes, so we don't emit a `DroppedAt` for it.
+                        self.compute.subscribes.remove(&subscribe_id);
+                    }
 
                     let new_lower = old_upper_bound;
                     updates.retain(|(time, _data, _diff)| new_lower.less_equal(time));
-                    self.pending_response
-                        .push_back(ActiveReplicationResponse::SubscribeResponse(
-                            subscribe_id,
-                            SubscribeResponse::Batch(SubscribeBatch {
-                                lower: new_lower,
-                                upper: entry.bounds.upper.clone(),
-                                updates,
-                            }),
-                        ))
-                }
-
-                let frontier_updates = vec![(subscribe_id, entry.bounds.clone())];
-                self.pending_response
-                    .push_back(ActiveReplicationResponse::FrontierUppers(frontier_updates));
-
-                if upper.is_empty() {
-                    // This subscribe has finished producing all its data. Remove it from the
-                    // in-progress subscribes, so we don't emit a `DroppedAt` for it.
-                    self.subscribes.remove(&subscribe_id);
+                    Some(ComputeControllerResponse::SubscribeResponse(
+                        subscribe_id,
+                        SubscribeResponse::Batch(SubscribeBatch {
+                            lower: new_lower,
+                            upper: entry.bounds.upper.clone(),
+                            updates,
+                        }),
+                    ))
+                } else {
+                    None
                 }
             }
             SubscribeResponse::DroppedAt(_) => {
@@ -1784,10 +1786,12 @@ where
                 // without a tracked frontier, we return immediately at the beginning of this
                 // method.
                 tracing::error!("unexpected `DroppedAt` received for subscribe {subscribe_id}");
+                None
             }
-        }
+        };
 
-        self.pending_response.pop_front()
+        self.update_write_frontiers(&frontier_updates).await?;
+        Ok(controller_response)
     }
 }
 
@@ -2142,26 +2146,6 @@ impl<T> ReplicaState<T> {
             *comm_config = self.communication_config.clone();
         }
     }
-}
-
-/// A response from the ActiveReplication client.
-#[derive(Debug, Clone)]
-enum ActiveReplicationResponse<T = mz_repr::Timestamp> {
-    /// A list of identifiers of traces, with new lower and upper bounds of upper frontiers.
-    FrontierUppers(Vec<(GlobalId, FrontierBounds<T>)>),
-    /// The compute instance's response to the specified peek.
-    PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
-    /// A notification that all replicas have finished processing the specified peek.
-    ///
-    /// This is different from `PeekResponse`, because we respond to a peek immediately upon seeing
-    /// the first response for it. `PeekFinished` reports that it is now allowed to release any
-    /// read holds installed for the peek.
-    PeekFinished(Uuid),
-    /// The compute instance's next response to the specified subscribe.
-    SubscribeResponse(GlobalId, SubscribeResponse<T>),
-    /// A notification that we heard a response from the given replica at the
-    /// given time.
-    ReplicaHeartbeat(ReplicaId, DateTime<Utc>),
 }
 
 #[derive(Debug, Clone)]
