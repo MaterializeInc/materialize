@@ -419,7 +419,7 @@ To ensure each code change passes all style nits before pushing to GitHub,
 symlink `pre-push` into your local git hooks:
 
 ```sh
-ln -s ./misc/githooks/pre-push .git/hooks/pre-push
+ln -s ../../misc/githooks/pre-push .git/hooks/pre-push
 ```
 
 ### Shell completion
