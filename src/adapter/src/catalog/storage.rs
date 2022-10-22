@@ -467,7 +467,7 @@ fn add_new_builtin_compute_replicas_migration<S: Append>(
         if matches!(compute_replica_names, None)
             || matches!(compute_replica_names, Some(names) if !names.contains(builtin_compute_replica.name))
         {
-            let config = default_compute_replica_config(bootstrap_args);
+            let config = builtin_compute_replica_config(bootstrap_args);
             txn.insert_compute_replica(
                 builtin_compute_replica.compute_instance_name,
                 builtin_compute_replica.name,
@@ -483,16 +483,33 @@ fn default_compute_replica_config(
 ) -> SerializedComputeReplicaConfig {
     SerializedComputeReplicaConfig {
         location: SerializedComputeReplicaLocation::Managed {
+            size: bootstrap_args.default_cluster_replica_size.clone(),
+            availability_zone: bootstrap_args.default_availability_zone.clone(),
+            az_user_specified: false,
+        },
+        logging: default_logging_config(),
+    }
+}
+
+fn builtin_compute_replica_config(
+    bootstrap_args: &BootstrapArgs,
+) -> SerializedComputeReplicaConfig {
+    SerializedComputeReplicaConfig {
+        location: SerializedComputeReplicaLocation::Managed {
             size: bootstrap_args.builtin_cluster_replica_size.clone(),
             availability_zone: bootstrap_args.default_availability_zone.clone(),
             az_user_specified: false,
         },
-        logging: SerializedComputeReplicaLogging {
-            log_logging: false,
-            interval: Some(Duration::from_secs(1)),
-            sources: None,
-            views: None,
-        },
+        logging: default_logging_config(),
+    }
+}
+
+fn default_logging_config() -> SerializedComputeReplicaLogging {
+    SerializedComputeReplicaLogging {
+        log_logging: false,
+        interval: Some(Duration::from_secs(1)),
+        sources: None,
+        views: None,
     }
 }
 

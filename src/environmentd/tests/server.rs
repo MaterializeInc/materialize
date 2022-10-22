@@ -880,3 +880,36 @@ fn test_storage_usage_collection_interval_timestamps() -> Result<(), Box<dyn Err
 
     Ok(())
 }
+
+#[test]
+fn test_default_cluster_sizes() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let config = util::Config::default()
+        .with_builtin_cluster_replica_size("1".to_string())
+        .with_default_cluster_replica_size("2".to_string());
+    let server = util::start_server(config)?;
+    let mut client = server.connect(postgres::NoTls)?;
+
+    let builtin_size: String = client
+        .query(
+            "SELECT size FROM (SHOW CLUSTER REPLICAS WHERE cluster LIKE 'mz_%')",
+            &[],
+        )?
+        .get(0)
+        .unwrap()
+        .get(0);
+    assert_eq!(builtin_size, "1");
+
+    let builtin_size: String = client
+        .query(
+            "SELECT size FROM (SHOW CLUSTER REPLICAS WHERE cluster = 'default')",
+            &[],
+        )?
+        .get(0)
+        .unwrap()
+        .get(0);
+    assert_eq!(builtin_size, "2");
+
+    Ok(())
+}
