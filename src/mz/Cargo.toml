@@ -19,7 +19,7 @@ toml = "0.5.9"
 dirs = "4.0.0"
 subprocess = "0.2.9"
 mz-ore = { path = "../ore", features = ["task"] }
-toml_edit = "0.14.4"
+toml_edit = "0.15.0"
 anyhow = "1.0.62"
 indicatif = "0.17.1"
 uuid = "1.2.1"
