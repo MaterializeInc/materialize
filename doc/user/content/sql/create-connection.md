@@ -149,23 +149,23 @@ Field                       | Value            | Required | Description
 `PORT`                      | `int4`           | ✓        | Port for the connection.
 `USER`                      | `text`           | ✓        | Username for the connection.
 
-#### Public key retrieval
-
-Once a connection is created, you can find and retrieve the public keys to be used in the bastion server by running:
-
-`SELECT * FROM mz_ssh_tunnel_connections;`
-
-
 ##### Example
 
 ```sql
-CREATE CONNECTION ssh_connection TO SSH TUNNEL (
-    HOST '<SSH_BASTION_HOST>',
-    USER '<SSH_BASTION_USER>',
-    PORT 1
-);
+    CREATE CONNECTION ssh_connection TO SSH TUNNEL (
+        HOST '<SSH_BASTION_HOST>',
+        USER '<SSH_BASTION_USER>',
+        PORT <SSH_BASTION_PORT>
+    );
 ```
 
+#### Public key retrieval
+
+Materialize will create two public keys after creating an `SSH TUNNEL` connection. Retrieve the public keys to use in the bastion server by running the following query:
+
+```sql
+SELECT * FROM mz_ssh_tunnel_connections;
+```
 ## Related pages
 
 - [`CREATE SECRET`](/sql/create-secret)
