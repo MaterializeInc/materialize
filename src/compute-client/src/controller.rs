@@ -477,7 +477,7 @@ where
         let receives = self
             .instances
             .iter_mut()
-            .map(|(id, instance)| Box::pin(instance.replicas.recv().map(|resp| (*id, resp))));
+            .map(|(id, instance)| Box::pin(instance.recv().map(|resp| (*id, resp))));
         let (resp, _index, _remaining) = future::select_all(receives).await;
 
         self.stashed_response = Some(resp);
@@ -744,22 +744,14 @@ where
 struct Instance<T> {
     /// The build information for this process.
     build_info: &'static BuildInfo,
-    /// State for each replica.
-    replicas: HashMap<ReplicaId, ReplicaState<T>>,
-    /// All other internal state of the client
-    state: ActiveReplicationState<T>,
     /// The replicas of this compute instance.
-    replicas: ActiveReplication<T>,
+    replicas: HashMap<ReplicaId, ReplicaState<T>>,
     /// Tracks expressed `since` and received `upper` frontiers for indexes and sinks.
     collections: BTreeMap<GlobalId, CollectionState<T>>,
     /// IDs of arranged log sources maintained by this compute instance.
     arranged_logs: BTreeMap<LogVariant, GlobalId>,
-    /// Currently outstanding peeks: identifiers and timestamps.
-    peeks: BTreeMap<Uuid, (GlobalId, T)>,
-    /// IDs of connected replicas.
-    replica_ids: BTreeSet<ReplicaId>,
-    /// Outstanding peeks, to guide responses (and which to suppress).
-    peeks: HashMap<uuid::Uuid, PendingPeek>,
+    /// Currently outstanding peeks.
+    peeks: HashMap<Uuid, PendingPeek<T>>,
     /// IDs of in-progress subscribes, to guide responses (and which to suppress).
     subscribes: BTreeSet<GlobalId>,
     /// Reported upper frontiers for replicated collections and in-progress subscribes.
@@ -776,9 +768,6 @@ struct Instance<T> {
     /// The command history, used when introducing new replicas or restarting existing replicas.
     history: ComputeCommandHistory<T>,
     /// Responses that should be emitted on the next `recv` call.
-    ///
-    /// This is introduced to produce peek cancelation responses eagerly, without awaiting a replica
-    /// responding with the response itself, which allows us to compact away the peek in `self.history`.
     pending_response: VecDeque<ActiveReplicationResponse<T>>,
 }
 
@@ -831,28 +820,35 @@ where
             })
             .collect();
 
-        let mut replicas = ActiveReplication::new(build_info);
-        // These commands will be modified by ActiveReplication
-        replicas.send(ComputeCommand::CreateTimely(Default::default()));
-        replicas.send(ComputeCommand::CreateInstance(InstanceConfig {
+        let mut instance = Self {
+            build_info,
+            replicas: Default::default(),
+            collections,
+            arranged_logs,
+            peeks: Default::default(),
+            subscribes: Default::default(),
+            uppers: Default::default(),
+            index_log_uppers: Default::default(),
+            sink_log_uppers: Default::default(),
+            history: Default::default(),
+            pending_response: Default::default(),
+        };
+
+        instance.send(ComputeCommand::CreateTimely(Default::default()));
+        instance.send(ComputeCommand::CreateInstance(InstanceConfig {
             replica_id: Default::default(),
             logging: None,
             max_result_size,
         }));
 
-        Self {
-            replicas,
-            collections,
-            arranged_logs,
-            peeks: Default::default(),
-        }
+        instance
     }
 
     /// Marks the end of any initialization commands.
     ///
     /// Intended to be called by `Controller`, rather than by other code (to avoid repeated calls).
     fn initialization_complete(&mut self) {
-        self.replicas.send(ComputeCommand::InitializationComplete);
+        self.send(ComputeCommand::InitializationComplete);
     }
 
     /// Drop this compute instance.
@@ -861,16 +857,16 @@ where
     /// - If the compute instance still has active replicas.
     fn drop(mut self) {
         assert!(
-            self.replicas.get_replica_ids().next().is_none(),
+            self.replicas.is_empty(),
             "cannot drop instances with provisioned replicas"
         );
-        self.replicas.send(ComputeCommand::DropInstance);
+        self.send(ComputeCommand::DropInstance);
     }
 
     /// Introduce a new replica, and catch it up to the commands of other replicas.
     ///
     /// It is not yet clear under which circumstances a replica can be removed.
-    pub(super) fn add_replica(
+    fn add_replica(
         &mut self,
         id: ReplicaId,
         addrs: Vec<String>,
@@ -894,8 +890,8 @@ where
         );
 
         // Take this opportunity to clean up the history we should present.
-        self.state.history.retain_peeks(&self.state.peeks);
-        self.state.history.reduce();
+        self.history.retain_peeks(&self.peeks);
+        self.history.reduce();
 
         let replica_state = ReplicaState {
             command_tx,
@@ -907,7 +903,7 @@ where
         };
 
         // Replay the commands at the client, creating new dataflow identifiers.
-        for command in self.state.history.iter() {
+        for command in self.history.iter() {
             let mut command = command.clone();
             replica_state.specialize_command(&mut command, id);
             if replica_state.command_tx.send(command).is_err() {
@@ -922,28 +918,21 @@ where
             // Start tracking frontiers of persisted log collections.
             for (collection_id, _) in logging.sink_logs.values() {
                 let frontier = Antichain::from_elem(Timestamp::minimum());
-                let previous = self.state.sink_log_uppers.insert(*collection_id, frontier);
+                let previous = self.sink_log_uppers.insert(*collection_id, frontier);
                 assert!(previous.is_none());
             }
 
             // Start tracking frontiers of arranged log collections.
             for collection_id in logging.active_logs.values() {
-                self.state
-                    .index_log_uppers
+                self.index_log_uppers
                     .entry(*collection_id)
                     .and_modify(|reported| reported.add_replica(id))
-                    .or_insert_with(|| ReportedUppers::new(&[id].into()));
+                    .or_insert_with(|| ReportedUppers::new([id]));
             }
         }
 
         // Add replica to tracked state.
         self.replicas.insert(id, replica_state);
-        self.state.add_replica(id);
-    }
-
-    fn add_replica(&mut self, id: ReplicaId) {
-        self.replica_ids.insert(id);
-
         for uppers in self.uppers.values_mut() {
             uppers.add_replica(id);
         }
@@ -952,14 +941,8 @@ where
         }
     }
 
-    /// Returns an iterator over the IDs of the replicas.
-    pub(super) fn get_replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
-        self.replicas.keys().copied()
-    }
-
+    /// Remove a replica by its identifier.
     fn remove_replica(&mut self, id: ReplicaId) {
-        self.replica_ids.remove(&id);
-
         // Removing a replica might elicit changes to collection frontiers, which we must
         // report up the chain.
         let mut new_uppers = Vec::new();
@@ -979,26 +962,20 @@ where
         }
 
         // Removing a replica might implicitly finish a peek, which we must report up the chain.
-        self.peeks.retain(|uuid, peek| {
+        for (uuid, peek) in &mut self.peeks {
             peek.unfinished.remove(&id);
-            let finished = peek.is_finished();
-            if finished {
+            if peek.is_finished() {
                 self.pending_response
                     .push_back(ActiveReplicationResponse::PeekFinished(uuid.clone()));
             }
-            !finished
-        });
-    }
+        }
 
-    /// Remove a replica by its identifier.
-    pub(super) fn remove_replica(&mut self, id: ReplicaId) {
-        self.state.remove_replica(id);
         let replica_state = self.replicas.remove(&id).expect("replica not found");
 
         // Cease tracking frontiers of persisted log collections.
         if let Some(logging) = &replica_state.logging_config {
             for (collection_id, _) in logging.sink_logs.values() {
-                let previous = self.state.sink_log_uppers.remove(collection_id);
+                let previous = self.sink_log_uppers.remove(collection_id);
                 assert!(previous.is_some());
             }
         }
@@ -1012,15 +989,10 @@ where
         self.add_replica(id, addrs, logging_config, communication_config);
     }
 
-    // We avoid implementing `GenericClient` here, because the protocol between
-    // the compute controller and this client is subtly but meaningfully different:
-    // this client is expected to handle errors, rather than propagate them, and therefore
-    // it returns infallible values.
-
     /// Sends a command to all replicas.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(super) fn send(&mut self, cmd: ComputeCommand<T>) {
-        self.state.handle_command(&cmd);
+    fn send(&mut self, cmd: ComputeCommand<T>) {
+        self.handle_command(&cmd);
 
         // Clone the command for each active replica.
         let mut failed_replicas = vec![];
@@ -1040,21 +1012,24 @@ where
     /// Receives the next response from any replica.
     ///
     /// This method is cancellation safe.
-    pub(super) async fn recv(&mut self) -> ActiveReplicationResponse<T> {
+    async fn recv(&mut self) -> ActiveReplicationResponse<T> {
         // If we have a pending response, we should send it immediately.
-        if let Some(response) = self.state.pending_response.pop_front() {
+        if let Some(response) = self.pending_response.pop_front() {
             return response;
         }
 
         // Receive responses from any of the replicas, and take appropriate
         // action.
         loop {
-            let mut responses = self
+            let response = self
                 .replicas
                 .iter_mut()
                 .map(|(id, replica)| async { (*id, replica.response_rx.recv().await) })
-                .collect::<FuturesUnordered<_>>();
-            match responses.next().await {
+                .collect::<FuturesUnordered<_>>()
+                .next()
+                .await;
+
+            match response {
                 None => {
                     // There were no replicas in the set. Block forever to
                     // communicate that no response is ready.
@@ -1062,13 +1037,12 @@ where
                 }
                 Some((replica_id, None)) => {
                     // A replica has failed and requires rehydration.
-                    drop(responses);
                     self.rehydrate_replica(replica_id)
                 }
                 Some((replica_id, Some(response))) => {
                     // A replica has produced a response. Absorb it, possibly
                     // returning a response up the stack.
-                    match self.state.handle_response(response, replica_id) {
+                    match self.handle_response(response, replica_id) {
                         Some(response) => return response,
                         None => { /* continue */ }
                     }
@@ -1081,26 +1055,6 @@ where
     fn handle_command(&mut self, cmd: &ComputeCommand<T>) {
         // Update our tracking of peek and subscribe commands.
         match &cmd {
-            ComputeCommand::Peek(Peek {
-                uuid,
-                otel_ctx,
-                target_replica,
-                ..
-            }) => {
-                let unfinished = match target_replica {
-                    Some(target) => [*target].into(),
-                    None => self.replica_ids.clone(),
-                };
-                self.peeks.insert(
-                    *uuid,
-                    PendingPeek {
-                        unfinished,
-                        // TODO(guswynn): can we just hold the `tracing::Span`
-                        // here instead?
-                        otel_ctx: Some(otel_ctx.clone()),
-                    },
-                );
-            }
             ComputeCommand::CancelPeeks { uuids } => {
                 // Enqueue the response to the cancelation.
                 for uuid in uuids {
@@ -1146,7 +1100,7 @@ where
     }
 
     fn start_frontier_tracking(&mut self, id: GlobalId) {
-        let uppers = ReportedUppers::new(&self.replica_ids);
+        let uppers = ReportedUppers::new(self.replicas.keys().copied());
         let previous = self.uppers.insert(id, uppers);
         assert!(previous.is_none());
     }
@@ -1192,7 +1146,7 @@ where
         otel_ctx: OpenTelemetryContext,
         replica_id: ReplicaId,
     ) -> Option<ActiveReplicationResponse<T>> {
-        let mut peek = match self.peeks.remove(&uuid) {
+        let peek = match self.peeks.get_mut(&uuid) {
             Some(peek) => peek,
             None => {
                 tracing::warn!("did not find pending peek for {}", uuid);
@@ -1224,9 +1178,6 @@ where
         if peek.is_finished() {
             self.pending_response
                 .push_back(ActiveReplicationResponse::PeekFinished(uuid));
-        } else {
-            // Put the pending peek back, to await further responses.
-            self.peeks.insert(uuid, peek);
         }
 
         self.pending_response.pop_front()
@@ -1389,19 +1340,15 @@ where
             None
         };
 
-        // Initialize collection state for per-replica log collections.
-
         // Add the replica
         self.compute
-            .replicas
             .add_replica(id, addrs, logging_config, communication_config);
-
         Ok(())
     }
 
     /// Remove an existing instance replica, by ID.
     fn remove_replica(&mut self, id: ReplicaId) {
-        self.compute.replicas.remove_replica(id);
+        self.compute.remove_replica(id);
     }
 
     /// Create the described dataflows and initializes state for their output.
@@ -1557,7 +1504,6 @@ where
         }
 
         self.compute
-            .replicas
             .send(ComputeCommand::CreateDataflows(augmented_dataflows));
 
         Ok(())
@@ -1596,9 +1542,24 @@ where
         let mut updates = BTreeMap::new();
         updates.insert(id, ChangeBatch::new_from(timestamp.clone(), 1));
         self.update_read_capabilities(&mut updates).await?;
-        self.compute.peeks.insert(uuid, (id, timestamp.clone()));
 
-        self.compute.replicas.send(ComputeCommand::Peek(Peek {
+        let unfinished = match &target_replica {
+            Some(target) => [*target].into(),
+            None => self.compute.replicas.keys().copied().collect(),
+        };
+        let otel_ctx = OpenTelemetryContext::obtain();
+        self.compute.peeks.insert(
+            uuid,
+            PendingPeek {
+                target: id,
+                time: timestamp.clone(),
+                unfinished,
+                // TODO(guswynn): can we just hold the `tracing::Span` here instead?
+                otel_ctx: Some(otel_ctx.clone()),
+            },
+        );
+
+        self.compute.send(ComputeCommand::Peek(Peek {
             id,
             literal_constraints,
             uuid,
@@ -1608,7 +1569,7 @@ where
             target_replica,
             // Obtain an `OpenTelemetryContext` from the thread-local tracing
             // tree to forward it on to the compute worker.
-            otel_ctx: OpenTelemetryContext::obtain(),
+            otel_ctx: otel_ctx.clone(),
         }));
 
         Ok(())
@@ -1617,9 +1578,7 @@ where
     /// Cancels existing peek requests.
     async fn cancel_peeks(&mut self, uuids: BTreeSet<Uuid>) -> Result<(), ComputeError> {
         self.remove_peeks(&uuids).await?;
-        self.compute
-            .replicas
-            .send(ComputeCommand::CancelPeeks { uuids });
+        self.compute.send(ComputeCommand::CancelPeeks { uuids });
         Ok(())
     }
 
@@ -1670,7 +1629,6 @@ where
     /// Update the max size in bytes of any result.
     fn update_max_result_size(&mut self, max_result_size: u32) {
         self.compute
-            .replicas
             .send(ComputeCommand::UpdateMaxResultSize(max_result_size))
     }
 
@@ -1793,7 +1751,6 @@ where
         }
         if !compaction_commands.is_empty() {
             self.compute
-                .replicas
                 .send(ComputeCommand::AllowCompaction(compaction_commands));
         }
 
@@ -1814,7 +1771,7 @@ where
                 self.compute
                     .peeks
                     .remove(uuid)
-                    .map(|(id, time)| (id, ChangeBatch::new_from(time, -1)))
+                    .map(|peek| (peek.target, ChangeBatch::new_from(peek.time, -1)))
             })
             .collect();
         self.update_read_capabilities(&mut updates).await?;
@@ -1922,9 +1879,12 @@ impl<T: Timestamp> CollectionState<T> {
     }
 }
 
-/// Additional information to store with pending peeks.
 #[derive(Debug)]
-struct PendingPeek {
+struct PendingPeek<T> {
+    /// ID of the collected targeted by this peek.
+    target: GlobalId,
+    /// The peek time.
+    time: T,
     /// Replicas that have yet to respond to this peek.
     unfinished: BTreeSet<ReplicaId>,
     /// The OpenTelemetry context for this peek.
@@ -1934,7 +1894,7 @@ struct PendingPeek {
     otel_ctx: Option<OpenTelemetryContext>,
 }
 
-impl PendingPeek {
+impl<T> PendingPeek<T> {
     /// Return whether this peek is finished and can be cleaned up.
     fn is_finished(&self) -> bool {
         // If we have not yet emitted a response for the peek, the peek is not finished, even if
@@ -1944,7 +1904,6 @@ impl PendingPeek {
         self.otel_ctx.is_none() && self.unfinished.is_empty()
     }
 }
-
 
 /// Configuration for `replica_task`.
 struct ReplicaTaskConfig<T> {
@@ -2056,10 +2015,13 @@ where
     T: Timestamp + Lattice,
 {
     /// Construct a [`ReportedUppers`] that tracks frontiers of the given replicas.
-    fn new(replica_ids: &BTreeSet<ReplicaId>) -> Self {
+    fn new<I>(replica_ids: I) -> Self
+    where
+        I: IntoIterator<Item = ReplicaId>,
+    {
         let per_replica = replica_ids
-            .iter()
-            .map(|id| (*id, Antichain::from_elem(T::minimum())))
+            .into_iter()
+            .map(|id| (id, Antichain::from_elem(T::minimum())))
             .collect();
 
         Self {
@@ -2189,7 +2151,7 @@ impl<T> ReplicaState<T> {
 
 /// A response from the ActiveReplication client.
 #[derive(Debug, Clone)]
-pub(super) enum ActiveReplicationResponse<T = mz_repr::Timestamp> {
+enum ActiveReplicationResponse<T = mz_repr::Timestamp> {
     /// A list of identifiers of traces, with new lower and upper bounds of upper frontiers.
     FrontierUppers(Vec<(GlobalId, FrontierBounds<T>)>),
     /// The compute instance's response to the specified peek.
@@ -2208,10 +2170,9 @@ pub(super) enum ActiveReplicationResponse<T = mz_repr::Timestamp> {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct FrontierBounds<T> {
-    #[allow(dead_code)]
-    pub lower: Antichain<T>,
-    pub upper: Antichain<T>,
+struct FrontierBounds<T> {
+    lower: Antichain<T>,
+    upper: Antichain<T>,
 }
 
 #[cfg(test)]
@@ -2235,7 +2196,7 @@ mod tests {
 
     #[test]
     fn reported_uppers() {
-        let mut uppers = ReportedUppers::<u64>::new(&[1, 2].into());
+        let mut uppers = ReportedUppers::<u64>::new([1, 2]);
         assert_bounds!(uppers, (0, 0));
 
         let changed = uppers.update(1, Antichain::from_elem(1));
