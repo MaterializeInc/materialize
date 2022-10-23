@@ -941,54 +941,6 @@ where
         }
     }
 
-    /// Remove a replica by its identifier.
-    fn remove_replica(&mut self, id: ReplicaId) {
-        // Removing a replica might elicit changes to collection frontiers, which we must
-        // report up the chain.
-        let mut new_uppers = Vec::new();
-        for (collection_id, uppers) in self.uppers.iter_mut() {
-            if uppers.remove_replica(id) {
-                new_uppers.push((*collection_id, uppers.bounds.clone()));
-            }
-        }
-        for (collection_id, uppers) in self.index_log_uppers.iter_mut() {
-            if uppers.tracks_replica(id) && uppers.remove_replica(id) {
-                new_uppers.push((*collection_id, uppers.bounds.clone()));
-            }
-        }
-        if !new_uppers.is_empty() {
-            self.pending_response
-                .push_back(ActiveReplicationResponse::FrontierUppers(new_uppers));
-        }
-
-        // Removing a replica might implicitly finish a peek, which we must report up the chain.
-        for (uuid, peek) in &mut self.peeks {
-            peek.unfinished.remove(&id);
-            if peek.is_finished() {
-                self.pending_response
-                    .push_back(ActiveReplicationResponse::PeekFinished(uuid.clone()));
-            }
-        }
-
-        let replica_state = self.replicas.remove(&id).expect("replica not found");
-
-        // Cease tracking frontiers of persisted log collections.
-        if let Some(logging) = &replica_state.logging_config {
-            for (collection_id, _) in logging.sink_logs.values() {
-                let previous = self.sink_log_uppers.remove(collection_id);
-                assert!(previous.is_some());
-            }
-        }
-    }
-
-    fn rehydrate_replica(&mut self, id: ReplicaId) {
-        let addrs = self.replicas[&id].addrs.clone();
-        let logging_config = self.replicas[&id].logging_config.clone();
-        let communication_config = self.replicas[&id].communication_config.clone();
-        self.remove_replica(id);
-        self.add_replica(id, addrs, logging_config, communication_config);
-    }
-
     /// Sends a command to all replicas.
     #[tracing::instrument(level = "debug", skip(self))]
     fn send(&mut self, cmd: ComputeCommand<T>) {
@@ -1138,155 +1090,6 @@ where
             }
         }
     }
-
-    fn handle_peek_response(
-        &mut self,
-        uuid: Uuid,
-        response: PeekResponse,
-        otel_ctx: OpenTelemetryContext,
-        replica_id: ReplicaId,
-    ) -> Option<ActiveReplicationResponse<T>> {
-        let peek = match self.peeks.get_mut(&uuid) {
-            Some(peek) => peek,
-            None => {
-                tracing::warn!("did not find pending peek for {}", uuid);
-                return None;
-            }
-        };
-
-        // If this is the first response, forward it; otherwise do not.
-        // TODO: we could collect the other responses to assert equivalence?
-        // Trades resources (memory) for reassurances; idk which is best.
-        //
-        // NOTE: we use the `otel_ctx` from the response, not the
-        // pending peek, because we currently want the parent
-        // to be whatever the compute worker did with this peek. We
-        // still `take` the pending peek's `otel_ctx` to mark it as
-        // served.
-        //
-        // Additionally, we just use the `otel_ctx` from the first worker to
-        // respond.
-        if peek.otel_ctx.take().is_some() {
-            self.pending_response
-                .push_back(ActiveReplicationResponse::PeekResponse(
-                    uuid, response, otel_ctx,
-                ));
-        }
-
-        // Update the per-replica tracking and draw appropriate consequences.
-        peek.unfinished.remove(&replica_id);
-        if peek.is_finished() {
-            self.pending_response
-                .push_back(ActiveReplicationResponse::PeekFinished(uuid));
-        }
-
-        self.pending_response.pop_front()
-    }
-
-    fn handle_frontier_uppers(
-        &mut self,
-        list: Vec<(GlobalId, Antichain<T>)>,
-        replica_id: ReplicaId,
-    ) -> Option<ActiveReplicationResponse<T>> {
-        let mut new_uppers = Vec::new();
-
-        for (id, new_upper) in list {
-            if let Some(reported) = self.uppers.get_mut(&id) {
-                if reported.update(replica_id, new_upper) {
-                    new_uppers.push((id, reported.bounds.clone()));
-                }
-            } else if let Some(reported) = self.index_log_uppers.get_mut(&id) {
-                if reported.update(replica_id, new_upper) {
-                    new_uppers.push((id, reported.bounds.clone()));
-                }
-            } else if let Some(reported) = self.sink_log_uppers.get_mut(&id) {
-                if PartialOrder::less_than(reported, &new_upper) {
-                    reported.clone_from(&new_upper);
-                    new_uppers.push((
-                        id,
-                        FrontierBounds {
-                            lower: new_upper.clone(),
-                            upper: new_upper,
-                        },
-                    ));
-                }
-            }
-        }
-
-        if !new_uppers.is_empty() {
-            Some(ActiveReplicationResponse::FrontierUppers(new_uppers))
-        } else {
-            None
-        }
-    }
-
-    fn handle_subscribe_response(
-        &mut self,
-        subscribe_id: GlobalId,
-        response: SubscribeResponse<T>,
-        replica_id: ReplicaId,
-    ) -> Option<ActiveReplicationResponse<T>> {
-        let entry = self.uppers.get_mut(&subscribe_id)?;
-
-        match response {
-            SubscribeResponse::Batch(SubscribeBatch {
-                lower: _,
-                upper,
-                mut updates,
-            }) => {
-                // We track both the upper and the lower bound of all upper frontiers
-                // reported by all replicas.
-                //  * If the upper bound advances, we can emit all updates at times greater
-                //    or equal to the last reported upper bound (to avoid emitting duplicate
-                //    updates) as a `SubscribeResponse`.
-                //  * If either the upper or the lower bound advances, we emit this
-                //    information as a `FrontierUppers` response.
-
-                let old_upper_bound = entry.bounds.upper.clone();
-                if !entry.update(replica_id, upper.clone()) {
-                    // There are no new updates to report.
-                    return None;
-                }
-
-                if PartialOrder::less_than(&old_upper_bound, &entry.bounds.upper) {
-                    // When we get here, the subscribe must still be in progress.
-                    assert!(self.subscribes.get(&subscribe_id).is_some());
-
-                    let new_lower = old_upper_bound;
-                    updates.retain(|(time, _data, _diff)| new_lower.less_equal(time));
-                    self.pending_response
-                        .push_back(ActiveReplicationResponse::SubscribeResponse(
-                            subscribe_id,
-                            SubscribeResponse::Batch(SubscribeBatch {
-                                lower: new_lower,
-                                upper: entry.bounds.upper.clone(),
-                                updates,
-                            }),
-                        ))
-                }
-
-                let frontier_updates = vec![(subscribe_id, entry.bounds.clone())];
-                self.pending_response
-                    .push_back(ActiveReplicationResponse::FrontierUppers(frontier_updates));
-
-                if upper.is_empty() {
-                    // This subscribe has finished producing all its data. Remove it from the
-                    // in-progress subscribes, so we don't emit a `DroppedAt` for it.
-                    self.subscribes.remove(&subscribe_id);
-                }
-            }
-            SubscribeResponse::DroppedAt(_) => {
-                // We should never get here. A replica emits `DroppedAt` only in response to a
-                // subscribe being dropped by its client (via `AllowCompaction`). When we handle
-                // the `AllowCompaction` command, we cease tracking the subscribe's frontier. And
-                // without a tracked frontier, we return immediately at the beginning of this
-                // method.
-                tracing::error!("unexpected `DroppedAt` received for subscribe {subscribe_id}");
-            }
-        }
-
-        self.pending_response.pop_front()
-    }
 }
 
 /// A wrapper around [`Instance`] with a live storage controller.
@@ -1348,7 +1151,50 @@ where
 
     /// Remove an existing instance replica, by ID.
     fn remove_replica(&mut self, id: ReplicaId) {
-        self.compute.remove_replica(id);
+        // Removing a replica might elicit changes to collection frontiers, which we must
+        // report up the chain.
+        let mut new_uppers = Vec::new();
+        for (collection_id, uppers) in self.uppers.iter_mut() {
+            if uppers.remove_replica(id) {
+                new_uppers.push((*collection_id, uppers.bounds.clone()));
+            }
+        }
+        for (collection_id, uppers) in self.index_log_uppers.iter_mut() {
+            if uppers.tracks_replica(id) && uppers.remove_replica(id) {
+                new_uppers.push((*collection_id, uppers.bounds.clone()));
+            }
+        }
+        if !new_uppers.is_empty() {
+            self.pending_response
+                .push_back(ActiveReplicationResponse::FrontierUppers(new_uppers));
+        }
+
+        // Removing a replica might implicitly finish a peek, which we must report up the chain.
+        for (uuid, peek) in &mut self.peeks {
+            peek.unfinished.remove(&id);
+            if peek.is_finished() {
+                self.pending_response
+                    .push_back(ActiveReplicationResponse::PeekFinished(uuid.clone()));
+            }
+        }
+
+        let replica_state = self.replicas.remove(&id).expect("replica not found");
+
+        // Cease tracking frontiers of persisted log collections.
+        if let Some(logging) = &replica_state.logging_config {
+            for (collection_id, _) in logging.sink_logs.values() {
+                let previous = self.sink_log_uppers.remove(collection_id);
+                assert!(previous.is_some());
+            }
+        }
+    }
+
+    fn rehydrate_replica(&mut self, id: ReplicaId) {
+        let addrs = self.replicas[&id].addrs.clone();
+        let logging_config = self.replicas[&id].logging_config.clone();
+        let communication_config = self.replicas[&id].communication_config.clone();
+        self.remove_replica(id);
+        self.add_replica(id, addrs, logging_config, communication_config);
     }
 
     /// Create the described dataflows and initializes state for their output.
@@ -1793,6 +1639,155 @@ where
             .map(|(id, frontier)| (id, ReadPolicy::ValidFrom(frontier)));
         self.set_read_policy(policies.collect()).await?;
         Ok(())
+    }
+
+    fn handle_frontier_uppers(
+        &mut self,
+        list: Vec<(GlobalId, Antichain<T>)>,
+        replica_id: ReplicaId,
+    ) -> Option<ActiveReplicationResponse<T>> {
+        let mut new_uppers = Vec::new();
+
+        for (id, new_upper) in list {
+            if let Some(reported) = self.uppers.get_mut(&id) {
+                if reported.update(replica_id, new_upper) {
+                    new_uppers.push((id, reported.bounds.clone()));
+                }
+            } else if let Some(reported) = self.index_log_uppers.get_mut(&id) {
+                if reported.update(replica_id, new_upper) {
+                    new_uppers.push((id, reported.bounds.clone()));
+                }
+            } else if let Some(reported) = self.sink_log_uppers.get_mut(&id) {
+                if PartialOrder::less_than(reported, &new_upper) {
+                    reported.clone_from(&new_upper);
+                    new_uppers.push((
+                        id,
+                        FrontierBounds {
+                            lower: new_upper.clone(),
+                            upper: new_upper,
+                        },
+                    ));
+                }
+            }
+        }
+
+        if !new_uppers.is_empty() {
+            Some(ActiveReplicationResponse::FrontierUppers(new_uppers))
+        } else {
+            None
+        }
+    }
+
+    fn handle_peek_response(
+        &mut self,
+        uuid: Uuid,
+        response: PeekResponse,
+        otel_ctx: OpenTelemetryContext,
+        replica_id: ReplicaId,
+    ) -> Option<ActiveReplicationResponse<T>> {
+        let peek = match self.peeks.get_mut(&uuid) {
+            Some(peek) => peek,
+            None => {
+                tracing::warn!("did not find pending peek for {}", uuid);
+                return None;
+            }
+        };
+
+        // If this is the first response, forward it; otherwise do not.
+        // TODO: we could collect the other responses to assert equivalence?
+        // Trades resources (memory) for reassurances; idk which is best.
+        //
+        // NOTE: we use the `otel_ctx` from the response, not the
+        // pending peek, because we currently want the parent
+        // to be whatever the compute worker did with this peek. We
+        // still `take` the pending peek's `otel_ctx` to mark it as
+        // served.
+        //
+        // Additionally, we just use the `otel_ctx` from the first worker to
+        // respond.
+        if peek.otel_ctx.take().is_some() {
+            self.pending_response
+                .push_back(ActiveReplicationResponse::PeekResponse(
+                    uuid, response, otel_ctx,
+                ));
+        }
+
+        // Update the per-replica tracking and draw appropriate consequences.
+        peek.unfinished.remove(&replica_id);
+        if peek.is_finished() {
+            self.pending_response
+                .push_back(ActiveReplicationResponse::PeekFinished(uuid));
+        }
+
+        self.pending_response.pop_front()
+    }
+
+    fn handle_subscribe_response(
+        &mut self,
+        subscribe_id: GlobalId,
+        response: SubscribeResponse<T>,
+        replica_id: ReplicaId,
+    ) -> Option<ActiveReplicationResponse<T>> {
+        let entry = self.uppers.get_mut(&subscribe_id)?;
+
+        match response {
+            SubscribeResponse::Batch(SubscribeBatch {
+                lower: _,
+                upper,
+                mut updates,
+            }) => {
+                // We track both the upper and the lower bound of all upper frontiers
+                // reported by all replicas.
+                //  * If the upper bound advances, we can emit all updates at times greater
+                //    or equal to the last reported upper bound (to avoid emitting duplicate
+                //    updates) as a `SubscribeResponse`.
+                //  * If either the upper or the lower bound advances, we emit this
+                //    information as a `FrontierUppers` response.
+
+                let old_upper_bound = entry.bounds.upper.clone();
+                if !entry.update(replica_id, upper.clone()) {
+                    // There are no new updates to report.
+                    return None;
+                }
+
+                if PartialOrder::less_than(&old_upper_bound, &entry.bounds.upper) {
+                    // When we get here, the subscribe must still be in progress.
+                    assert!(self.subscribes.get(&subscribe_id).is_some());
+
+                    let new_lower = old_upper_bound;
+                    updates.retain(|(time, _data, _diff)| new_lower.less_equal(time));
+                    self.pending_response
+                        .push_back(ActiveReplicationResponse::SubscribeResponse(
+                            subscribe_id,
+                            SubscribeResponse::Batch(SubscribeBatch {
+                                lower: new_lower,
+                                upper: entry.bounds.upper.clone(),
+                                updates,
+                            }),
+                        ))
+                }
+
+                let frontier_updates = vec![(subscribe_id, entry.bounds.clone())];
+                self.pending_response
+                    .push_back(ActiveReplicationResponse::FrontierUppers(frontier_updates));
+
+                if upper.is_empty() {
+                    // This subscribe has finished producing all its data. Remove it from the
+                    // in-progress subscribes, so we don't emit a `DroppedAt` for it.
+                    self.subscribes.remove(&subscribe_id);
+                }
+            }
+            SubscribeResponse::DroppedAt(_) => {
+                // We should never get here. A replica emits `DroppedAt` only in response to a
+                // subscribe being dropped by its client (via `AllowCompaction`). When we handle
+                // the `AllowCompaction` command, we cease tracking the subscribe's frontier. And
+                // without a tracked frontier, we return immediately at the beginning of this
+                // method.
+                tracing::error!("unexpected `DroppedAt` received for subscribe {subscribe_id}");
+            }
+        }
+
+        self.pending_response.pop_front()
     }
 }
 
