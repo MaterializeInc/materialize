@@ -57,7 +57,7 @@ impl LazyUnaryFunc for CastMapToString {
         true
     }
 
-    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
         // TODO? If we moved typeconv into expr, we could evaluate this
         None
     }
@@ -107,7 +107,7 @@ impl LazyUnaryFunc for MapLength {
         false
     }
 
-    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
     }
 }

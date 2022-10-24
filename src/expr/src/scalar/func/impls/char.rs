@@ -50,12 +50,12 @@ impl fmt::Display for PadChar {
     }
 }
 
-// This function simply allows the expression of changing a's type from varchar
-// to string
+// This function simply allows the expression of changing a's type from char to
+// string
 sqlfunc!(
     #[sqlname = "char_to_text"]
     #[preserves_uniqueness = true]
-    #[right_inverse = to_unary!(super::CastStringToChar{
+    #[inverse = to_unary!(super::CastStringToChar{
         length: None,
         fail_on_len: false,
     })]

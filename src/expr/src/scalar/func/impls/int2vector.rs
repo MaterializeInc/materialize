@@ -55,7 +55,7 @@ impl LazyUnaryFunc for CastInt2VectorToArray {
         false
     }
 
-    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
     }
 }
@@ -103,7 +103,7 @@ impl LazyUnaryFunc for CastInt2VectorToString {
         true
     }
 
-    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastStringToInt2Vector)
     }
 }

@@ -57,7 +57,7 @@ impl LazyUnaryFunc for CastListToString {
         true
     }
 
-    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
         // TODO? if typeconv was in expr, we could determine this
         None
     }
@@ -119,7 +119,7 @@ impl LazyUnaryFunc for CastList1ToList2 {
         false
     }
 
-    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
         // TODO: this could be figured out--might be easier after enum dispatch?
         None
     }
@@ -169,7 +169,7 @@ impl LazyUnaryFunc for ListLength {
         false
     }
 
-    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
     }
 }

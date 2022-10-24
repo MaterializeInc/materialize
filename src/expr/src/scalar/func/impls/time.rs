@@ -27,7 +27,7 @@ use crate::EvalError;
 sqlfunc!(
     #[sqlname = "time_to_text"]
     #[preserves_uniqueness = true]
-    #[right_inverse = to_unary!(super::CastStringToTime)]
+    #[inverse = to_unary!(super::CastStringToTime)]
     fn cast_time_to_string(a: NaiveTime) -> String {
         let mut buf = String::new();
         strconv::format_time(&mut buf, a);
@@ -38,7 +38,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "time_to_interval"]
     #[preserves_uniqueness = true]
-    #[right_inverse = to_unary!(super::CastIntervalToTime)]
+    #[inverse = to_unary!(super::CastIntervalToTime)]
     fn cast_time_to_interval<'a>(t: NaiveTime) -> Interval {
         // wont overflow because value can't exceed 24 hrs + 1_000_000 ns = 86_400 seconds + 1_000_000 ns = 86_400_001_000 us
         let micros: i64 = Interval::convert_date_time_unit(

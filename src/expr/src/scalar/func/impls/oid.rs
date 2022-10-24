@@ -14,7 +14,7 @@ use mz_repr::strconv;
 sqlfunc!(
     #[sqlname = "oid_to_text"]
     #[preserves_uniqueness = true]
-    #[right_inverse = to_unary!(super::CastStringToOid)]
+    #[inverse = to_unary!(super::CastStringToOid)]
     fn cast_oid_to_string(a: Oid) -> String {
         let mut buf = String::new();
         strconv::format_uint32(&mut buf, a.0);
@@ -25,7 +25,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "oid_to_integer"]
     #[preserves_uniqueness = true]
-    #[right_inverse = to_unary!(super::CastInt32ToOid)]
+    #[inverse = to_unary!(super::CastInt32ToOid)]
     fn cast_oid_to_int32(a: Oid) -> i32 {
         // For historical reasons in PostgreSQL, the bytes of the `u32` are
         // reinterpreted as an `i32` without bounds checks, so very large
@@ -40,7 +40,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "oid_to_bigint"]
     #[preserves_uniqueness = true]
-    #[right_inverse = to_unary!(super::CastInt64ToOid)]
+    #[inverse = to_unary!(super::CastInt64ToOid)]
     fn cast_oid_to_int64(a: Oid) -> i64 {
         i64::from(a.0)
     }
@@ -49,7 +49,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "oidtoregclass"]
     #[preserves_uniqueness = true]
-    #[right_inverse = to_unary!(super::CastRegClassToOid)]
+    #[inverse = to_unary!(super::CastRegClassToOid)]
     fn cast_oid_to_reg_class(a: Oid) -> RegClass {
         RegClass(a.0)
     }
@@ -58,7 +58,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "oidtoregproc"]
     #[preserves_uniqueness = true]
-    #[right_inverse = to_unary!(super::CastRegProcToOid)]
+    #[inverse = to_unary!(super::CastRegProcToOid)]
     fn cast_oid_to_reg_proc(a: Oid) -> RegProc {
         RegProc(a.0)
     }
@@ -67,7 +67,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "oidtoregtype"]
     #[preserves_uniqueness = true]
-    #[right_inverse = to_unary!(super::CastRegTypeToOid)]
+    #[inverse = to_unary!(super::CastRegTypeToOid)]
     fn cast_oid_to_reg_type(a: Oid) -> RegType {
         RegType(a.0)
     }

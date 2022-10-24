@@ -74,7 +74,7 @@ impl LazyUnaryFunc for CastArrayToListOneDim {
         true
     }
 
-    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
     }
 }
@@ -124,7 +124,7 @@ impl LazyUnaryFunc for CastArrayToString {
         true
     }
 
-    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
         // TODO? If we moved typeconv into `expr` we could determine the right
         // inverse of this.
         None
