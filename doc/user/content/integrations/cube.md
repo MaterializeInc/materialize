@@ -11,17 +11,17 @@ menu:
 
 [Cube](https://www.cubejs.com/) is an open-source **Headless BI platform**. This integration guide will teach you how to connect Cube with Materialize in a few steps using the browser.
 
-### Requirements
+## Pre-requisite
 
-- Have a Cube and Materialize account.
-    - Create a [Cube account here](https://cubecloud.dev/auth/signup).
-    - Create a [Materialize account here](https://materialize.com/register/).
+Before following the steps, make sure to meet the next items:
+
+- Have a Cube account. Create [one here](https://cubecloud.dev/auth/signup).
 - A Materialize's region enabled.
 
 ## Steps
 
 1. #### Login to Cube and create a deployment
-    Be sure to match the regions to have the lowest latency.
+    Match the regions to improve latency.
 
 1. #### Set up the Cube project
     You will have the following options to build the project:<br/>
@@ -29,22 +29,22 @@ menu:
         • Github repository<br/>
         • Create from scratch <br/>
 
-    Choose **create from scratch** to proceed with this guide.
+    Click on the **create** from scratch option to be align with this guide.
 
-1. #### Set up the connection to Materialize
-    Select Cube's specific connector for [Materialize](https://cube.dev/docs/config/databases/materialize#materialize) and fill in the fields.
+1. #### Configure the connection to Materialize
+    Use Cube's specific connector for [Materialize](https://cube.dev/docs/config/databases/materialize#materialize) and fill in the fields.
     Field             | Value
     ----------------- | ----------------
     Host              | Materialize host name.
     Port              | **6875**
-    Database username | Materialize user.
+    Database username | Materialize user email
     Database password | App-specific password.
     SSL               | ✅
 
-1. #### Set up the schema
+1. #### Build the schema
     You can rely on Cube to infer the schema or skip the step to do it manually. Cube will figure out tables, sources, and materialized views and try to figure out their dimensions, measures, primary keys, and joins.
 
-1. #### Set up the default database
+1. #### Set the default database
     Before running queries on Materialize, configure the database name as follows: <br/>
       i. Access **Settings** <br/>
       ii. Click on **Configuration** <br/>
