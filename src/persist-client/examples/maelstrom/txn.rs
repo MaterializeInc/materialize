@@ -100,6 +100,8 @@ pub struct MaelstromVal(Vec<u64>);
 /// snapshot and listen along this timestamp.
 #[derive(Debug)]
 pub struct Transactor {
+    shard_id: ShardId,
+    client: PersistClient,
     read: ReadHandle<MaelstromKey, MaelstromVal, u64, i64>,
     write: WriteHandle<MaelstromKey, MaelstromVal, u64, i64>,
 
@@ -138,6 +140,8 @@ impl Transactor {
             .expect("as_of unexpectedly unavailable");
 
         Ok(Transactor {
+            client: client.clone(),
+            shard_id,
             read,
             write,
             since_ts,
@@ -232,10 +236,14 @@ impl Transactor {
         let snap_ts = self.since_ts + (self.read_ts - self.since_ts) / 2;
         let snap_as_of = Antichain::from_elem(snap_ts);
 
+        // Intentionally create this from scratch instead from a clone of the
+        // ReadHandle so we get a brand new copy of state and exercise some more
+        // code paths.
         let listen = self
-            .read
-            .clone()
+            .client
+            .open_reader(self.shard_id)
             .await
+            .expect("codecs should match")
             .listen(snap_as_of.clone())
             .await
             .map_err(|since| MaelstromError {

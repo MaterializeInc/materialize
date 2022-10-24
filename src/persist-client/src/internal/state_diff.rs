@@ -518,7 +518,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
     }
 
     // Fast-path: compaction
-    if let Some((_inputs, output)) = sniff_compaction(&diffs) {
+    if let Some((inputs, output)) = sniff_compaction(&diffs) {
         let res = FueledMergeRes { output };
         // We can't predict how spine will arrange the batches when it's
         // hydrated. This means that something that is maintaining a Spine
@@ -535,6 +535,28 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
             // that they match _inputs?
             metrics.state.apply_spine_fast_path.inc();
             return Ok(());
+        }
+
+        // Otherwise, try our lenient application of a compaction result.
+        match apply_compaction_lenient(metrics, trace, inputs, &res.output) {
+            Ok(batches) => {
+                let mut new_trace = Trace::default();
+                new_trace.downgrade_since(trace.since());
+                for batch in batches {
+                    // Ignore merge_reqs because whichever process generated
+                    // this diff is assigned the work.
+                    let _merge_reqs = new_trace.push_batch(batch.clone());
+                }
+                *trace = new_trace;
+                metrics.state.apply_spine_fast_path_lenient.inc();
+                return Ok(());
+            }
+            Err(err) => {
+                return Err(format!(
+                    "lenient compaction result apply unexpectedly failed: {}",
+                    err
+                ))
+            }
         }
     }
 
@@ -627,6 +649,100 @@ fn sniff_compaction<'a, T: Timestamp + Lattice>(
     }
 
     Some((compaction_inputs, compaction_output.clone()))
+}
+
+fn apply_compaction_lenient<'a, T: Timestamp + Lattice>(
+    metrics: &Metrics,
+    trace: &'a Trace<T>,
+    _inputs: Vec<&'a HollowBatch<T>>,
+    output: &'a HollowBatch<T>,
+) -> Result<Vec<HollowBatch<T>>, String> {
+    let mut batches = Vec::new();
+    trace.map_batches(|b| batches.push(b.clone()));
+
+    let mut removed_batches = Vec::new();
+    batches.retain(|b| {
+        let before_output = PartialOrder::less_equal(b.desc.upper(), output.desc.lower());
+        let after_output = PartialOrder::less_equal(output.desc.upper(), b.desc.lower());
+        let overlaps_output = !(before_output || after_output);
+        if overlaps_output {
+            removed_batches.push(b.clone());
+        }
+        !overlaps_output
+    });
+
+    {
+        let first_removed_batch = match removed_batches.first() {
+            Some(x) => x,
+            None => return Err("output didn't overlap any batches".into()),
+        };
+        if PartialOrder::less_than(first_removed_batch.desc.lower(), output.desc.lower()) {
+            if first_removed_batch.len > 0 {
+                return Err(format!(
+                    "removed batch was unexpectedly non-empty: {:?}",
+                    first_removed_batch
+                ));
+            }
+            let desc = Description::new(
+                first_removed_batch.desc.lower().clone(),
+                output.desc.lower().clone(),
+                first_removed_batch.desc.since().clone(),
+            );
+            batches.push(HollowBatch {
+                desc,
+                parts: Vec::new(),
+                len: 0,
+                runs: Vec::new(),
+            });
+            metrics.state.apply_spine_fast_path_lenient_adjustment.inc();
+        }
+    }
+
+    {
+        let last_removed_batch = match removed_batches.last() {
+            Some(x) => x,
+            None => return Err("output didn't overlap any batches".into()),
+        };
+        if PartialOrder::less_than(output.desc.upper(), last_removed_batch.desc.upper()) {
+            if last_removed_batch.len > 0 {
+                return Err(format!(
+                    "removed batch was unexpectedly non-empty: {:?}",
+                    last_removed_batch
+                ));
+            }
+            let desc = Description::new(
+                output.desc.upper().clone(),
+                last_removed_batch.desc.upper().clone(),
+                last_removed_batch.desc.since().clone(),
+            );
+            batches.push(HollowBatch {
+                desc,
+                parts: Vec::new(),
+                len: 0,
+                runs: Vec::new(),
+            });
+            metrics.state.apply_spine_fast_path_lenient_adjustment.inc();
+        }
+    }
+    batches.push(output.clone());
+
+    // We just inserted stuff at the end, so re-sort them into place.
+    batches.sort_by(|a, b| a.desc.lower().elements().cmp(b.desc.lower().elements()));
+
+    // This impl is a touch complex, so sanity check our work.
+    let mut expected_lower = &Antichain::from_elem(T::minimum());
+    for b in batches.iter() {
+        if b.desc.lower() != expected_lower {
+            return Err(format!(
+                "lower {:?} did not match expected {:?}: {:?}",
+                b.desc.lower(),
+                expected_lower,
+                batches
+            ));
+        }
+        expected_lower = b.desc.upper();
+    }
+    Ok(batches)
 }
 
 impl ProtoStateFieldDiffs {
