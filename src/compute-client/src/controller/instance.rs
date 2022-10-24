@@ -892,7 +892,16 @@ where
         list: Vec<(GlobalId, Antichain<T>)>,
         replica_id: ReplicaId,
     ) -> Result<(), ComputeError> {
-        self.update_write_frontiers(replica_id, &list).await
+        // We should not receive updates for collections we don't track. It is plausible that we
+        // currently do due to a bug where replicas send `FrontierUppers` for collections they drop
+        // during reconciliation.
+        // TODO(teskje): Revisit this after #15535 is resolved.
+        let updates: Vec<_> = list
+            .into_iter()
+            .filter(|(id, _)| self.compute.collections.contains_key(id))
+            .collect();
+
+        self.update_write_frontiers(replica_id, &updates).await
     }
 
     async fn handle_peek_response(
