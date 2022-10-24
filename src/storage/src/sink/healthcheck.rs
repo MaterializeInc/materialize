@@ -25,7 +25,6 @@ use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 
-use crate::controller::CollectionMetadata;
 use crate::types::sources::SourceData;
 
 /// The Healthchecker is responsible for tracking the current state
@@ -54,27 +53,7 @@ impl Healthchecker {
     pub async fn new(
         sink_id: GlobalId,
         persist_clients: &Arc<Mutex<PersistClientCache>>,
-        storage_metadata: &CollectionMetadata,
-        now: NowFn,
-    ) -> Option<anyhow::Result<Self>> {
-        // TODO: encode the presense of status_shard into the type
-        let status_shard_id = storage_metadata.status_shard?;
-        Some(
-            Self::new_unchecked(
-                sink_id,
-                persist_clients,
-                storage_metadata,
-                status_shard_id,
-                now,
-            )
-            .await,
-        )
-    }
-
-    async fn new_unchecked(
-        sink_id: GlobalId,
-        persist_clients: &Arc<Mutex<PersistClientCache>>,
-        storage_metadata: &CollectionMetadata,
+        persist_location: PersistLocation,
         status_shard_id: ShardId,
         now: NowFn,
     ) -> anyhow::Result<Self> {
@@ -82,7 +61,7 @@ impl Healthchecker {
         let persist_client = persist_clients
             .lock()
             .await
-            .open(storage_metadata.persist_location.clone())
+            .open(persist_location)
             .await
             .context("error creating persist client for Healthchecker")?;
 
@@ -676,17 +655,15 @@ mod tests {
         let start = tokio::time::Instant::now();
         let now_fn = NowFn::from(move || start.elapsed().as_millis() as u64);
 
-        let storage_metadata = CollectionMetadata {
-            persist_location: (*PERSIST_LOCATION).clone(),
-            remap_shard: ShardId::new(),
-            data_shard: ShardId::new(),
-            status_shard: Some(status_shard_id),
-        };
-
-        Healthchecker::new(source_id, persist_clients, &storage_metadata, now_fn)
-            .await
-            .expect("status shard not present")
-            .expect("error creating healthchecker")
+        Healthchecker::new(
+            source_id,
+            persist_clients,
+            (*PERSIST_LOCATION).clone(),
+            status_shard_id,
+            now_fn,
+        )
+        .await
+        .expect("error creating healthchecker")
     }
 
     async fn simple_healthchecker(

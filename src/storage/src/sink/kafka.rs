@@ -20,6 +20,7 @@ use anyhow::{anyhow, bail, Context};
 use differential_dataflow::{Collection, Hashable};
 use futures::{StreamExt, TryFutureExt};
 use itertools::Itertools;
+use mz_persist_client::ShardId;
 use prometheus::core::AtomicU64;
 use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
@@ -90,7 +91,7 @@ where
     fn render_continuous_sink(
         &self,
         storage_state: &mut StorageState,
-        sink: &StorageSinkDesc<CollectionMetadata>,
+        sink: &StorageSinkDesc<CollectionMetadata, ShardId>,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         // TODO(benesch): errors should stream out through the sink,
@@ -1102,25 +1103,22 @@ where
     builder.build(move |_capabilities| async move {
         if is_active_worker {
             if let KafkaSinkStateEnum::Init(ref init) = s.sink_state {
-                let healthchecker = if healthchecker_args
-                    .collection_metadata
-                    .status_shard
-                    .is_some()
-                {
-                    let mut hc = Healthchecker::new(
-                        id,
-                        &healthchecker_args.persist_clients,
-                        &healthchecker_args.collection_metadata,
-                        healthchecker_args.now_fn.clone(),
-                    )
-                    .await
-                    .expect("status_shard not Some(_)")
-                    .expect("error initializing healthchecker");
-                    hc.update_status(SinkStatus::Starting).await;
-                    Some(hc)
-                } else {
-                    None
-                };
+                let healthchecker =
+                    if let Some(status_shard_id) = healthchecker_args.status_shard_id {
+                        let mut hc = Healthchecker::new(
+                            id,
+                            &healthchecker_args.persist_clients,
+                            healthchecker_args.persist_location.clone(),
+                            status_shard_id,
+                            healthchecker_args.now_fn.clone(),
+                        )
+                        .await
+                        .expect("error initializing healthchecker");
+                        hc.update_status(SinkStatus::Starting).await;
+                        Some(hc)
+                    } else {
+                        None
+                    };
                 let healthchecker = Arc::new(Mutex::new(healthchecker));
 
                 s.producer
