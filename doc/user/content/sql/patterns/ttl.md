@@ -26,13 +26,13 @@ Pattern example:
   CREATE VIEW TTL_VIEW
   SELECT (created_ts + ttl) as expiration_time
   FROM events
-  WHERE mz_logical_timestamp() < (created_ts + ttl);
+  WHERE mz_now() < (created_ts + ttl);
 ```
 
 To know the remaining time to live:
 
 ```sql
-  SELECT (expiration_time - mz_logical_timestamp()) AS remaining_ttl
+  SELECT (expiration_time - mz_now()) AS remaining_ttl
   FROM TTL_VIEW;
 ```
 
@@ -57,17 +57,17 @@ For a real-world example of the pattern, let's build a task tracking system. It 
         name,
         extract(epoch from (created_ts + ttl)) * 1000 as expiration_time
       FROM tasks
-      WHERE mz_logical_timestamp() < extract(epoch from (created_ts + ttl)) * 1000;
+      WHERE mz_now() < extract(epoch from (created_ts + ttl)) * 1000;
     ```
 
-    The filter clause will discard any row with an **expiration time** less than or equal to `mz_logical_timestamp()`.
+    The filter clause will discard any row with an **expiration time** less than or equal to `mz_now()`.
 1. That's it! Use it in the way that best fits your use case.
 
 ### Usage examples
 
 - Run a query to know the time to live for a row:
   ```sql
-    SELECT expiration_time - mz_logical_timestamp() AS remaining_ttl
+    SELECT expiration_time - mz_now()::text::numeric AS remaining_ttl_in_ms
     FROM tracking_tasks
     WHERE name = 'time_to_eat';
   ```
@@ -82,7 +82,7 @@ For a real-world example of the pattern, let's build a task tracking system. It 
 - Trigger an external process when a row expires:
   ```sql
     INSERT INTO tasks VALUES ('send_email', now(), INTERVAL '5 seconds');
-    COPY( TAIL tracking_tasks WITH (SNAPSHOT = false) ) TO STDOUT;
+    COPY( SUBSCRIBE tracking_tasks WITH (SNAPSHOT = false) ) TO STDOUT;
 
   ```
   ```nofmt
