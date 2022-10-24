@@ -55,8 +55,8 @@ pub(super) struct Instance<T> {
     arranged_logs: BTreeMap<LogVariant, GlobalId>,
     /// Currently outstanding peeks.
     peeks: HashMap<Uuid, PendingPeek<T>>,
-    /// IDs of in-progress subscribes, to guide responses (and which to suppress).
-    subscribes: BTreeSet<GlobalId>,
+    /// Frontiers of in-progress subscribes.
+    subscribes: BTreeMap<GlobalId, Antichain<T>>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
     history: ComputeCommandHistory<T>,
     /// IDs of replicas that have failed and require rehydration.
@@ -167,14 +167,6 @@ where
     /// Sends a command to all replicas of this instance.
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn send(&mut self, cmd: ComputeCommand<T>) {
-        // Initialize any necessary frontier tracking.
-        let mut start = Vec::new();
-        let mut cease = Vec::new();
-        cmd.frontier_tracking(&mut start, &mut cease);
-        for id in cease.into_iter() {
-            self.cease_frontier_tracking(id);
-        }
-
         // Record the command so that new replicas can be brought up to speed.
         self.history.push(cmd.clone());
 
@@ -217,23 +209,6 @@ where
                     return (replica_id, response);
                 }
             }
-        }
-    }
-
-    fn cease_frontier_tracking(&mut self, id: GlobalId) {
-        // If we cease tracking an in-progress subscribe, we should emit a `DroppedAt` response.
-        if self.subscribes.remove(&id) {
-            let frontier = self
-                .collection(id)
-                .expect("untracked frontier")
-                .write_frontier
-                .clone();
-
-            self.ready_responses
-                .push_back(ComputeControllerResponse::SubscribeResponse(
-                    id,
-                    SubscribeResponse::DroppedAt(frontier),
-                ));
         }
     }
 }
@@ -463,7 +438,11 @@ where
             }
 
             // Initialize tracking of subscribes.
-            self.compute.subscribes.extend(dataflow.subscribe_ids());
+            for subscribe_id in dataflow.subscribe_ids() {
+                self.compute
+                    .subscribes
+                    .insert(subscribe_id, Antichain::from_elem(Timestamp::minimum()));
+            }
         }
 
         // Here we augment all imported sources and all exported sinks with with the appropriate
@@ -970,40 +949,29 @@ where
                 upper,
                 mut updates,
             }) => {
-                // We track both the upper and the lower bound of all upper frontiers
-                // reported by all replicas.
-                //  * If the upper bound advances, we can emit all updates at times greater
-                //    or equal to the last reported upper bound (to avoid emitting duplicate
-                //    updates) as a `SubscribeResponse`.
-                //  * If either the upper or the lower bound advances, we emit this
-                //    information as a `FrontierUppers` response.
-
-                let old_upper_bound = self
-                    .compute
-                    .collection(subscribe_id)
-                    .unwrap()
-                    .write_frontier
-                    .clone();
-
                 frontier_updates.push((subscribe_id, upper.clone()));
 
-                if PartialOrder::less_than(&old_upper_bound, &upper) {
-                    // When we get here, the subscribe must still be in progress.
-                    assert!(self.compute.subscribes.get(&subscribe_id).is_some());
+                // If this batch advances the subscribe's frontier, we emit all updates at times
+                // greater or equal to the last frontier (to avoid emitting duplicate updates).
+                // let old_upper_bound = entry.bounds.upper.clone();
+                let lower = self
+                    .compute
+                    .subscribes
+                    .remove(&subscribe_id)
+                    .unwrap_or_else(Antichain::new);
 
-                    if upper.is_empty() {
-                        // This subscribe has finished producing all its data. Remove it from the
-                        // in-progress subscribes, so we don't emit a `DroppedAt` for it.
-                        self.compute.subscribes.remove(&subscribe_id);
+                if PartialOrder::less_than(&lower, &upper) {
+                    if !upper.is_empty() {
+                        // This subscribe can produce more data. Keep tracking it.
+                        self.compute.subscribes.insert(subscribe_id, upper.clone());
                     }
 
-                    let new_lower = old_upper_bound;
-                    updates.retain(|(time, _data, _diff)| new_lower.less_equal(time));
+                    updates.retain(|(time, _data, _diff)| lower.less_equal(time));
                     Some(ComputeControllerResponse::SubscribeResponse(
                         subscribe_id,
                         SubscribeResponse::Batch(SubscribeBatch {
-                            lower: new_lower,
-                            upper: upper.clone(),
+                            lower,
+                            upper,
                             updates,
                         }),
                     ))
@@ -1012,13 +980,18 @@ where
                 }
             }
             SubscribeResponse::DroppedAt(_) => {
-                // We should never get here. A replica emits `DroppedAt` only in response to a
-                // subscribe being dropped by its client (via `AllowCompaction`). When we handle
-                // the `AllowCompaction` command, we cease tracking the subscribe's frontier. And
-                // without a tracked frontier, we return immediately at the beginning of this
-                // method.
-                tracing::error!("unexpected `DroppedAt` received for subscribe {subscribe_id}");
-                None
+                frontier_updates.push((subscribe_id, Antichain::new()));
+
+                // If this subscribe is still in progress, forward the `DroppedAt` response.
+                // Otherwise ignore it.
+                if let Some(frontier) = self.compute.subscribes.remove(&subscribe_id) {
+                    Some(ComputeControllerResponse::SubscribeResponse(
+                        subscribe_id,
+                        SubscribeResponse::DroppedAt(frontier),
+                    ))
+                } else {
+                    None
+                }
             }
         };
 
