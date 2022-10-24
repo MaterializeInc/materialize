@@ -92,6 +92,28 @@ not entirely consistent on the finer points, so don't worry about being exact.
 But please at least capitalize the obvious keywords, like `SELECT`, `INSERT`,
 `FROM`, `WHERE`, `AS`, `AND`, etc.
 
+### SQL error style
+We adhere to the PostgreSQL manual's [SQL error message style guide](https://www.postgresql.org/docs/current/error-style-guide.html).
+
+The format consists of a required primary message and optional detail and hint messages.
+
+**Primary message**: short, factual, and avoids reference to implementation details such as specific function names. Do not capitalize the first letter. Do not end a message with a period. Do not even think about ending a message with an exclamation point.
+
+**Detail message**: factual, use if needed to keep the primary message short or if you feel a need to mention implementation details. Use complete sentences, and end each with a period. Capitalize the first word of sentences. Put two spaces after the period if another sentence follows.
+
+**Hint message**: suggestions about what to do to fix the problem. Use complete sentences, and end each with a period. Capitalize the first word of sentences. Put two spaces after the period if another sentence follows
+
+Some key principles to highlight are:
+* Don't put any specific assumptions about formatting into the message texts.
+* English text should use double quotes when quoting is appropriate.
+* Always use quotes to delimit file names, user-supplied identifiers, and other variables that might contain words
+* Use past tense if an attempt to do something failed, but could perhaps succeed next time (perhaps after fixing some problem). Use present tense if the failure is certainly permanent.
+* When citing the name of an object, state what kind of object it is.
+* Avoid mentioning called function names; instead say what the code was trying to do.
+* Tricky words to avoid: unable, bad, illegal, unknown.
+* Avoid contractions and spell out words in full.
+* Word choices to be mindful of: find vs. exists, may vs. can vs. might.
+
 ## Rust style
 
 [Clippy] and [rustfmt] are enforced via CI, and they are quite opinionated on
