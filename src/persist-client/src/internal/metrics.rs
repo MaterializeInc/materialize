@@ -604,6 +604,9 @@ pub struct CompactionMetrics {
     pub(crate) memory_violations: IntCounter,
     pub(crate) runs_compacted: IntCounter,
     pub(crate) chunks_compacted: IntCounter,
+    pub(crate) not_all_prefetched: IntCounter,
+    pub(crate) parts_prefetched: IntCounter,
+    pub(crate) parts_waited: IntCounter,
 
     pub(crate) applied_exact_match: IntCounter,
     pub(crate) applied_subset_match: IntCounter,
@@ -671,6 +674,18 @@ impl CompactionMetrics {
             chunks_compacted: registry.register(metric!(
                 name: "mz_persist_compaction_chunks_compacted",
                 help: "count of run chunks compacted",
+            )),
+            not_all_prefetched: registry.register(metric!(
+                name: "mz_persist_compaction_not_all_prefetched",
+                help: "count of compactions where not all inputs were prefetched",
+            )),
+            parts_prefetched: registry.register(metric!(
+                name: "mz_persist_compaction_parts_prefetched",
+                help: "count of compaction parts completely prefetched by the time they're needed",
+            )),
+            parts_waited: registry.register(metric!(
+                name: "mz_persist_compaction_parts_waited",
+                help: "count of compaction parts that had to be waited on",
             )),
             applied_exact_match: registry.register(metric!(
                 name: "mz_persist_compaction_applied_exact_match",

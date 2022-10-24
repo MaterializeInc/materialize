@@ -532,6 +532,13 @@ where
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
     ) -> Result<(Vec<HollowBatchPart>, Vec<usize>, usize), anyhow::Error> {
+        // TODO: Figure out a more principled way to allocate our memory budget.
+        // Currently, we give any excess budget to write parallelism. If we had
+        // to pick between 100% towards writes vs 100% towards reads, then reads
+        // is almost certainly better, but the ideal is probably somewhere in
+        // between the two.
+        //
+        // For now, invent some some extra budget out of thin air for prefetch.
         let prefetch_budget_bytes = 2 * cfg.blob_target_size;
 
         let mut compaction_runs = vec![];
@@ -561,6 +568,13 @@ where
 
         start_prefetches(prefetch_budget_bytes, &mut runs, shard_id, &blob, &metrics);
 
+        let all_prefetched = runs
+            .iter()
+            .all(|(_, x)| x.iter().all(|x| x.is_prefetched()));
+        if !all_prefetched {
+            metrics.compaction.not_all_prefetched.inc();
+        }
+
         // populate our heap with the updates from the first part of each run
         for (index, (part_desc, parts)) in runs.iter_mut().enumerate() {
             if let Some(part) = parts.pop_front() {
@@ -569,7 +583,8 @@ where
                     .join(shard_id, blob.as_ref(), &metrics, part_desc)
                     .await?;
                 // Ideally we'd hook into start_prefetches here, too, but runs
-                // is mutable borrowed. Not the end of the world.
+                // is mutable borrowed. Not the end of the world. Instead do it
+                // once after this initial heap population.
                 timings.part_fetching += start.elapsed();
                 let start = Instant::now();
                 while let Some((k, v, mut t, d)) = part.next() {
@@ -584,6 +599,8 @@ where
                 timings.heap_population += start.elapsed();
             }
         }
+
+        start_prefetches(prefetch_budget_bytes, &mut runs, shard_id, &blob, &metrics);
 
         // repeatedly pull off the least element from our heap, refilling from the originating run
         // if needed. the heap will be exhausted only when all parts from all input runs have been
@@ -601,7 +618,9 @@ where
                     // start_prefetches is O(n) so calling it here is O(n^2). N
                     // is the number of things we're about to fetch over the
                     // network, so if it's big enough for N^2 to matter, we've
-                    // got bigger problems.
+                    // got bigger problems. It might be possible to do make this
+                    // overall linear, but the bookkeeping would be pretty
+                    // subtle.
                     start_prefetches(prefetch_budget_bytes, &mut runs, shard_id, &blob, &metrics);
                     timings.part_fetching += start.elapsed();
                     let start = Instant::now();
@@ -863,6 +882,13 @@ enum CompactionPart<'a, T> {
 }
 
 impl<'a, T: Timestamp + Lattice + Codec64> CompactionPart<'a, T> {
+    fn is_prefetched(&self) -> bool {
+        match self {
+            CompactionPart::Queued(_) => false,
+            CompactionPart::Prefetched(_, _) => true,
+        }
+    }
+
     async fn join(
         self,
         shard_id: &ShardId,
@@ -871,8 +897,16 @@ impl<'a, T: Timestamp + Lattice + Codec64> CompactionPart<'a, T> {
         part_desc: &Description<T>,
     ) -> Result<EncodedPart<T>, anyhow::Error> {
         match self {
-            CompactionPart::Prefetched(_, task) => task.await.map_err(anyhow::Error::new)?,
+            CompactionPart::Prefetched(_, task) => {
+                if task.is_finished() {
+                    metrics.compaction.parts_prefetched.inc();
+                } else {
+                    metrics.compaction.parts_waited.inc();
+                }
+                task.await.map_err(anyhow::Error::new)?
+            }
             CompactionPart::Queued(part) => {
+                metrics.compaction.parts_waited.inc();
                 fetch_batch_part(
                     shard_id,
                     blob,
@@ -1090,7 +1124,10 @@ mod tests {
         let blob = &client.blob;
         let metrics = &client.metrics;
 
-        // Enough budget for none, some, and all parts
+        // NB: In the below, parts within a run are separated by `,` and runs
+        // are separated by `|`. Example: `r0p0,r0p1|r1p0|r2p0,r2p1,r2p2`
+
+        // Enough budget for none, some, and all parts of a single run
         let mut runs = parse(" 1, 1, 1");
         start_prefetches(0, &mut runs, &shard_id, blob, metrics);
         assert_eq!(print(&runs), " 1, 1, 1");
