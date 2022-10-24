@@ -49,7 +49,7 @@ use timely::PartialOrder;
 use tokio::sync::Mutex;
 use tokio::time::MissedTickBehavior;
 use tokio_stream::{Stream, StreamExt};
-use tracing::trace;
+use tracing::{info, trace, warn};
 
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
@@ -177,7 +177,14 @@ where
         ReclockFollower::new(as_of)
     };
 
-    let ((batches, batch_upper_summaries), source_reader_token) = source_reader_operator::<G, S>(
+    let (
+        SourceReaderStreams {
+            batches,
+            batch_upper_summaries,
+            health_stream,
+        },
+        source_reader_token,
+    ) = source_reader_operator::<G, S>(
         scope,
         config.clone(),
         source_connection,
@@ -189,10 +196,17 @@ where
     let (remap_stream, remap_token) =
         remap_operator::<G, S>(scope, config.clone(), batch_upper_summaries, &resume_stream);
 
-    let ((reclocked_stream, reclocked_err_stream), _reclock_token) =
-        reclock_operator::<G, S>(scope, config, reclock_follower, batches, remap_stream);
+    let ((reclocked_stream, reclocked_err_stream), _reclock_token) = reclock_operator::<G, S>(
+        scope,
+        config.clone(),
+        reclock_follower,
+        batches,
+        remap_stream,
+    );
 
-    let token = Rc::new((source_reader_token, remap_token, resume_token));
+    let health_token = health_operator(scope, config, health_stream);
+
+    let token = Rc::new((source_reader_token, remap_token, resume_token, health_token));
 
     ((reclocked_stream, reclocked_err_stream), Some(token))
 }
@@ -419,6 +433,27 @@ where
     }))
 }
 
+/// NB: we derive Ord here, so the enum order matters. Generally, statuses later in the list
+/// take precedence over earlier ones: so if one worker is stalled, we'll consider the entire
+/// source to be stalled.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HealthStatus {
+    Starting,
+    Running,
+    StalledWithError(String),
+}
+
+type WorkerId = usize;
+
+struct SourceReaderStreams<G: Scope<Timestamp = Timestamp>, S: SourceReader> {
+    batches: timely::dataflow::Stream<
+        G,
+        Rc<RefCell<Option<SourceMessageBatch<S::Key, S::Value, S::Diff>>>>,
+    >,
+    batch_upper_summaries: timely::dataflow::Stream<G, BatchUpperSummary>,
+    health_stream: timely::dataflow::Stream<G, (WorkerId, HealthStatus)>,
+}
+
 /// Reads from a [`SourceReader`] and returns a stream of "un-timestamped"
 /// [`SourceMessageBatch`]. Also returns a second stream that can be used to
 /// learn about the `source_upper` that all the source reader instances now
@@ -431,16 +466,7 @@ fn source_reader_operator<G, S: 'static>(
     connection_context: ConnectionContext,
     reclock_follower: ReclockFollower,
     resume_stream: &timely::dataflow::Stream<G, ()>,
-) -> (
-    (
-        timely::dataflow::Stream<
-            G,
-            Rc<RefCell<Option<SourceMessageBatch<S::Key, S::Value, S::Diff>>>>,
-        >,
-        timely::dataflow::Stream<G, BatchUpperSummary>,
-    ),
-    Option<AsyncSourceToken>,
-)
+) -> (SourceReaderStreams<G, S>, Option<AsyncSourceToken>)
 where
     G: Scope<Timestamp = Timestamp>,
     S: SourceReader,
@@ -710,7 +736,9 @@ where
     let mut input = demux_op.new_input(&stream, Pipeline);
     let (mut batch_output, batch_stream) = demux_op.new_output();
     let (mut summary_output, summary_stream) = demux_op.new_output();
+    let (mut health_output, health_stream) = demux_op.new_output();
     let summary_output_port = summary_stream.name().port;
+    let health_output_port = health_stream.name().port;
 
     demux_op.build(move |_caps| {
         let mut buffer = Vec::new();
@@ -721,8 +749,32 @@ where
 
                 let mut batch_output = batch_output.activate();
                 let mut summary_output = summary_output.activate();
+                let mut health_output = health_output.activate();
 
                 for (message_batch, source_upper) in buffer.drain(..) {
+                    if let Some(batch) = &*message_batch.borrow() {
+                        let has_errors = batch.non_definite_errors.first();
+                        let has_messages = batch.messages.values().any(|vs| !vs.is_empty());
+
+                        let maybe_health = match (has_errors, has_messages) {
+                            (Some(error), _) => {
+                                // Arguably this case should be "failed", since generally a source
+                                // cannot recover by the time an error reaches this far down the pipe.
+                                // However, we don't actually shut down the source on error yet, so
+                                // treating this as a possibly-temporary stall for now.
+                                Some(HealthStatus::StalledWithError(error.error.to_string()))
+                            }
+                            (_, true) => Some(HealthStatus::Running),
+                            (None, false) => None,
+                        };
+
+                        if let Some(health) = maybe_health {
+                            let health_cap = cap.delayed_for_output(cap.time(), health_output_port);
+                            let mut session = health_output.session(&health_cap);
+                            session.give((config.worker_id, health));
+                        }
+                    }
+
                     let mut session = batch_output.session(&cap);
                     session.give(message_batch);
 
@@ -734,7 +786,92 @@ where
         }
     });
 
-    ((batch_stream, summary_stream), Some(capability))
+    (
+        SourceReaderStreams {
+            batches: batch_stream,
+            batch_upper_summaries: summary_stream,
+            health_stream,
+        },
+        Some(capability),
+    )
+}
+
+/// Mints new contents for the remap shard based on summaries about the source
+/// upper it receives from the raw reader operators.
+///
+/// Only one worker will be active and write to the remap shard. All source
+/// upper summaries will be exchanged to it.
+fn health_operator<G>(
+    scope: &G,
+    config: RawSourceCreationConfig,
+    health_stream: timely::dataflow::Stream<G, (usize, HealthStatus)>,
+) -> Rc<dyn Any>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    let RawSourceCreationConfig {
+        worker_id: healthcheck_worker_id,
+        worker_count,
+        id: source_id,
+        ..
+    } = config;
+
+    // We'll route all the work to a single arbitrary worker;
+    // there's not much to do, and we need a global view.
+    let chosen_worker_id = source_id.hashed() as usize % worker_count;
+    let is_active_worker = chosen_worker_id == healthcheck_worker_id;
+
+    let mut healths = vec![HealthStatus::Starting; worker_count];
+
+    let operator_name = format!("healthcheck({})", healthcheck_worker_id);
+    let mut health_op = OperatorBuilder::new(operator_name, scope.clone());
+
+    let mut input = health_op.new_input(
+        &health_stream,
+        Exchange::new(move |_| chosen_worker_id as u64),
+    );
+
+    fn overall_status(healths: &[HealthStatus]) -> &HealthStatus {
+        healths.iter().max().unwrap_or(&HealthStatus::Starting)
+    }
+
+    let mut last_reported_status = overall_status(&healths).clone();
+
+    let shutdown_token = Rc::new(());
+    let weak_token = Rc::downgrade(&shutdown_token);
+
+    health_op.build_async(
+        scope.clone(),
+        move |mut _capabilities, _frontiers, scheduler| async move {
+            let mut buffer = Vec::new();
+            info!("Health for source {source_id} initialized to: {last_reported_status:?}");
+            while scheduler.notified().await {
+                if weak_token.upgrade().is_none() {
+                    return;
+                }
+
+                input.for_each(|_cap, rows| {
+                    rows.swap(&mut buffer);
+                    for (worker_id, health_event) in buffer.drain(..) {
+                        if !is_active_worker {
+                            warn!("Health messages for source {source_id} passed to an unexpected worker id: {healthcheck_worker_id}")
+                        }
+                        let prev_health = &healths[worker_id];
+                        if prev_health != &health_event {
+                            healths[worker_id] = health_event;
+                            let new_status = overall_status(&healths);
+                            if &last_reported_status != new_status {
+                                info!("Health transition for source {source_id}: {last_reported_status:?} -> {new_status:?}");
+                                last_reported_status = new_status.clone();
+                            }
+                        }
+                    }
+                })
+            }
+        },
+    );
+
+    shutdown_token
 }
 
 /// Mints new contents for the remap shard based on summaries about the source
