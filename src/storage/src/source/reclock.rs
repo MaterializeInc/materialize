@@ -312,19 +312,11 @@ impl ReclockFollower {
 impl ReclockFollowerInner {
     pub fn compact(&mut self, new_since: Antichain<Timestamp>) {
         if !PartialOrder::less_equal(&self.since, &new_since) {
-            // As long as the assertion about `as_of` and `since` on creation
-            // are correct, it is fine to ignore these compaction requests if
-            // they don't advance the since. Note that if the `new_since` and
-            // old `since` are equal, we still attempt to compact the
-            // in-memory trace.
-            tracing::error!(
-                ?new_since,
-                ?self.since,
-                "ReclockFollower: We are forced to skip the compaction \
-                because the `new_since` was not beyond the `since`. \
-                This is a bug that should be fixed."
+            panic!(
+                "ReclockFollower: `new_since` ({:?}) is not beyond \
+                `self.since` ({:?}).",
+                new_since, self.since,
             );
-            return;
         }
 
         for bindings in self.remap_trace.values_mut() {
@@ -516,21 +508,11 @@ impl ReclockOperator {
     /// Compacts the internal state
     pub async fn compact(&mut self, new_since: Antichain<Timestamp>) {
         if !PartialOrder::less_equal(&self.since, &new_since) {
-            // As long as the assertion about `as_of` and `since` on creation
-            // are correct, it is fine to ignore these compaction requests if
-            // they don't advance the since. Note that if the `new_since` and
-            // old `since` are equal, we still attempt to compact the
-            // in-memory trace.
-            tracing::error!(
-                ?new_since,
-                ?self.since,
-                ?self.read_handle,
-                ?self.listener,
-                "ReclockOperator: We are forced to skip the compaction \
-                because the `new_since` was not beyond the `since`. \
-                This is a bug that should be fixed."
+            panic!(
+                "ReclockOperator: `new_since` ({:?}) is not beyond \
+                `self.since` ({:?}), using {:?} and {:?}",
+                new_since, self.since, self.read_handle, self.listener
             );
-            return;
         }
 
         for bindings in self.remap_trace.values_mut() {
