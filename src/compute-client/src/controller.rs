@@ -753,14 +753,8 @@ pub struct CollectionState<T> {
     /// Compute identifiers on which this collection depends.
     compute_dependencies: Vec<GlobalId>,
 
-    /// Upper bound of write frontiers reported by all replicas.
-    ///
-    /// Used to determine valid times at which the collection can be read.
-    write_frontier_upper: Antichain<T>,
-    /// Lower bound of write frontiers reported by all replicas.
-    ///
-    /// Used to determine times that can be compacted.
-    write_frontier_lower: Antichain<T>,
+    /// The write frontier of this collection.
+    write_frontier: Antichain<T>,
 }
 
 impl<T: Timestamp> CollectionState<T> {
@@ -778,8 +772,7 @@ impl<T: Timestamp> CollectionState<T> {
             read_policy: ReadPolicy::ValidFrom(since),
             storage_dependencies,
             compute_dependencies,
-            write_frontier_upper: Antichain::from_elem(Timestamp::minimum()),
-            write_frontier_lower: Antichain::from_elem(Timestamp::minimum()),
+            write_frontier: Antichain::from_elem(Timestamp::minimum()),
         }
     }
 
@@ -795,6 +788,6 @@ impl<T: Timestamp> CollectionState<T> {
 
     /// Reports the current write frontier.
     pub fn write_frontier(&self) -> AntichainRef<T> {
-        self.write_frontier_upper.borrow()
+        self.write_frontier.borrow()
     }
 }

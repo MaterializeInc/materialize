@@ -57,17 +57,6 @@ pub(super) struct Instance<T> {
     peeks: HashMap<Uuid, PendingPeek<T>>,
     /// IDs of in-progress subscribes, to guide responses (and which to suppress).
     subscribes: BTreeSet<GlobalId>,
-    /// Reported upper frontiers for replicated collections and in-progress subscribes.
-    uppers: HashMap<GlobalId, ReportedUppers<T>>,
-    /// Reported upper frontiers for arranged log collections.
-    ///
-    /// Arranged log collections are special in that their IDs are shared between replicas, but
-    /// only exist on replicas that have introspection enabled.
-    index_log_uppers: HashMap<GlobalId, ReportedUppers<T>>,
-    /// Reported upper frontiers for persisted log collections.
-    ///
-    /// Persisted log collections are special in that they are replica-specific.
-    sink_log_uppers: HashMap<GlobalId, Antichain<T>>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
     history: ComputeCommandHistory<T>,
     /// IDs of replicas that have failed and require rehydration.
@@ -145,9 +134,6 @@ where
             arranged_logs,
             peeks: Default::default(),
             subscribes: Default::default(),
-            uppers: Default::default(),
-            index_log_uppers: Default::default(),
-            sink_log_uppers: Default::default(),
             history: Default::default(),
             failed_replicas: Default::default(),
             ready_responses: Default::default(),
@@ -189,9 +175,6 @@ where
         let mut start = Vec::new();
         let mut cease = Vec::new();
         cmd.frontier_tracking(&mut start, &mut cease);
-        for id in start.into_iter() {
-            self.start_frontier_tracking(id);
-        }
         for id in cease.into_iter() {
             self.cease_frontier_tracking(id);
         }
@@ -241,21 +224,19 @@ where
         }
     }
 
-    fn start_frontier_tracking(&mut self, id: GlobalId) {
-        let uppers = ReportedUppers::new(self.replicas.keys().copied());
-        let previous = self.uppers.insert(id, uppers);
-        assert!(previous.is_none());
-    }
-
     fn cease_frontier_tracking(&mut self, id: GlobalId) {
-        let previous = self.uppers.remove(&id).expect("untracked frontier");
-
         // If we cease tracking an in-progress subscribe, we should emit a `DroppedAt` response.
         if self.subscribes.remove(&id) {
+            let frontier = self
+                .collection(id)
+                .expect("untracked frontier")
+                .write_frontier
+                .clone();
+
             self.ready_responses
                 .push_back(ComputeControllerResponse::SubscribeResponse(
                     id,
-                    SubscribeResponse::DroppedAt(previous.bounds.upper),
+                    SubscribeResponse::DroppedAt(frontier),
                 ));
         }
     }
@@ -319,32 +300,8 @@ where
             }
         }
 
-        if let Some(logging) = &replica.logging_config {
-            // Start tracking frontiers of persisted log collections.
-            for (collection_id, _) in logging.sink_logs.values() {
-                let frontier = Antichain::from_elem(Timestamp::minimum());
-                let previous = self
-                    .compute
-                    .sink_log_uppers
-                    .insert(*collection_id, frontier);
-                assert!(previous.is_none());
-            }
-
-            // Start tracking frontiers of arranged log collections.
-            for collection_id in logging.active_logs.values() {
-                self.compute
-                    .index_log_uppers
-                    .entry(*collection_id)
-                    .and_modify(|reported| reported.add_replica(id))
-                    .or_insert_with(|| ReportedUppers::new([id]));
-            }
-        }
-
         // Add replica to tracked state.
         self.compute.replicas.insert(id, replica);
-        for uppers in self.compute.uppers.values_mut() {
-            uppers.add_replica(id);
-        }
         for peek in self.compute.peeks.values_mut() {
             peek.unfinished.insert(id);
         }
@@ -352,8 +309,10 @@ where
         Ok(())
     }
 
-    /// Remove an existing instance replica, by ID. Will remove the replica from the
-    /// orchestrator.
+    /// Remove an existing instance replica, by ID.
+    ///
+    /// This method removes the replica from the orchestrator and should only be called if the
+    /// replica should be permanently removed.
     pub async fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ComputeError> {
         if let Err(e) = self.compute.replicas[&id].send(ComputeCommand::DropInstance) {
             tracing::warn!("Could not send DropInstance to replica {:?}: {}", &id, &e)
@@ -362,25 +321,11 @@ where
         self.remove_replica_state(id).await
     }
 
-    /// Remove all state related to a replica. This will not cause an orchestrator removal
-    /// of the replica.
+    /// Remove all state related to a replica.
+    ///
+    /// This method does not cause an orchestrator removal of the replica, so it is suitable for
+    /// removing the replica temporarily, e.g., during rehydration.
     async fn remove_replica_state(&mut self, id: ReplicaId) -> Result<(), ComputeError> {
-        // Removing a replica might elicit changes to collection frontiers.
-        let mut new_uppers = Vec::new();
-        for (collection_id, uppers) in self.compute.uppers.iter_mut() {
-            if uppers.remove_replica(id) {
-                new_uppers.push((*collection_id, uppers.bounds.clone()));
-            }
-        }
-        for (collection_id, uppers) in self.compute.index_log_uppers.iter_mut() {
-            if uppers.tracks_replica(id) && uppers.remove_replica(id) {
-                new_uppers.push((*collection_id, uppers.bounds.clone()));
-            }
-        }
-        if !new_uppers.is_empty() {
-            self.update_write_frontiers(&new_uppers).await?;
-        }
-
         // Removing a replica might implicitly finish a peeks.
         let mut peeks_to_remove = BTreeSet::new();
         for (uuid, peek) in &mut self.compute.peeks {
@@ -391,19 +336,10 @@ where
         }
         self.remove_peeks(&peeks_to_remove).await?;
 
-        let replica = self
-            .compute
+        self.compute
             .replicas
             .remove(&id)
             .expect("replica not found");
-
-        // Cease tracking frontiers of persisted log collections.
-        if let Some(logging) = replica.logging_config {
-            for (collection_id, _) in logging.sink_logs.values() {
-                let previous = self.compute.sink_log_uppers.remove(collection_id);
-                assert!(previous.is_some());
-            }
-        }
 
         Ok(())
     }
@@ -699,8 +635,7 @@ where
         let mut read_capability_changes = BTreeMap::default();
         for (id, policy) in policies.into_iter() {
             if let Ok(collection) = self.compute.collection_mut(id) {
-                let mut new_read_capability =
-                    policy.frontier(collection.write_frontier_lower.borrow());
+                let mut new_read_capability = policy.frontier(collection.write_frontier.borrow());
 
                 if timely::order::PartialOrder::less_equal(
                     &collection.implied_capability,
@@ -745,7 +680,7 @@ where
     #[tracing::instrument(level = "debug", skip(self))]
     async fn update_write_frontiers(
         &mut self,
-        updates: &[(GlobalId, FrontierBounds<T>)],
+        updates: &[(GlobalId, Antichain<T>)],
     ) -> Result<(), ComputeError> {
         let mut read_capability_changes = BTreeMap::default();
         for (id, new_upper) in updates.iter() {
@@ -754,16 +689,11 @@ where
                 .collection_mut(*id)
                 .expect("Reference to absent collection");
 
-            collection
-                .write_frontier_upper
-                .join_assign(&new_upper.upper);
-            collection
-                .write_frontier_lower
-                .join_assign(&new_upper.lower);
+            collection.write_frontier.join_assign(&new_upper);
 
             let mut new_read_capability = collection
                 .read_policy
-                .frontier(collection.write_frontier_lower.borrow());
+                .frontier(collection.write_frontier.borrow());
             if timely::order::PartialOrder::less_equal(
                 &collection.implied_capability,
                 &new_read_capability,
@@ -790,7 +720,7 @@ where
         let storage_updates: Vec<_> = updates
             .iter()
             .filter(|(id, _)| self.storage_controller.collection(*id).is_ok())
-            .map(|(id, bounds)| (*id, bounds.upper.clone()))
+            .map(|(id, upper)| (*id, upper.clone()))
             .collect();
         self.storage_controller
             .update_write_frontiers(&storage_updates)
@@ -922,32 +852,7 @@ where
         list: Vec<(GlobalId, Antichain<T>)>,
         replica_id: ReplicaId,
     ) -> Result<(), ComputeError> {
-        let mut new_uppers = Vec::new();
-
-        for (id, new_upper) in list {
-            if let Some(reported) = self.compute.uppers.get_mut(&id) {
-                if reported.update(replica_id, new_upper) {
-                    new_uppers.push((id, reported.bounds.clone()));
-                }
-            } else if let Some(reported) = self.compute.index_log_uppers.get_mut(&id) {
-                if reported.update(replica_id, new_upper) {
-                    new_uppers.push((id, reported.bounds.clone()));
-                }
-            } else if let Some(reported) = self.compute.sink_log_uppers.get_mut(&id) {
-                if PartialOrder::less_than(reported, &new_upper) {
-                    reported.clone_from(&new_upper);
-                    new_uppers.push((
-                        id,
-                        FrontierBounds {
-                            lower: new_upper.clone(),
-                            upper: new_upper,
-                        },
-                    ));
-                }
-            }
-        }
-
-        self.update_write_frontiers(&new_uppers).await
+        self.update_write_frontiers(&list).await
     }
 
     async fn handle_peek_response(
@@ -997,11 +902,6 @@ where
         response: SubscribeResponse<T>,
         replica_id: ReplicaId,
     ) -> Result<Option<ComputeControllerResponse<T>>, ComputeError> {
-        let entry = match self.compute.uppers.get_mut(&subscribe_id) {
-            Some(uppers) => uppers,
-            None => return Ok(None),
-        };
-
         let mut frontier_updates = Vec::new();
         let controller_response = match response {
             SubscribeResponse::Batch(SubscribeBatch {
@@ -1017,15 +917,16 @@ where
                 //  * If either the upper or the lower bound advances, we emit this
                 //    information as a `FrontierUppers` response.
 
-                let old_upper_bound = entry.bounds.upper.clone();
-                if !entry.update(replica_id, upper.clone()) {
-                    // There are no new updates to report.
-                    return Ok(None);
-                }
+                let old_upper_bound = self
+                    .compute
+                    .collection(subscribe_id)
+                    .unwrap()
+                    .write_frontier
+                    .clone();
 
-                frontier_updates.push((subscribe_id, entry.bounds.clone()));
+                frontier_updates.push((subscribe_id, upper.clone()));
 
-                if PartialOrder::less_than(&old_upper_bound, &entry.bounds.upper) {
+                if PartialOrder::less_than(&old_upper_bound, &upper) {
                     // When we get here, the subscribe must still be in progress.
                     assert!(self.compute.subscribes.get(&subscribe_id).is_some());
 
@@ -1041,7 +942,7 @@ where
                         subscribe_id,
                         SubscribeResponse::Batch(SubscribeBatch {
                             lower: new_lower,
-                            upper: entry.bounds.upper.clone(),
+                            upper: upper.clone(),
                             updates,
                         }),
                     ))
