@@ -55,7 +55,7 @@ use mz_repr::{GlobalId, Row};
 use mz_storage::controller::{ReadPolicy, StorageController, StorageError};
 
 use crate::command::{DataflowDescription, ProcessId, ReplicaId};
-use crate::logging::{LogVariant, LogView};
+use crate::logging::{LogVariant, LogView, LoggingConfig};
 use crate::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
@@ -543,7 +543,25 @@ where
         replica_id: ReplicaId,
         config: ComputeReplicaConfig,
     ) -> Result<(), ComputeError> {
-        self.instance(instance_id)?.add_replica(replica_id, config)
+        let logging_config = if let Some(interval) = config.logging.interval {
+            let mut sink_logs = BTreeMap::new();
+            for (variant, id) in config.logging.sources {
+                let storage_meta = self.storage.collection(id)?.collection_metadata.clone();
+                sink_logs.insert(variant, (id, storage_meta));
+            }
+
+            Some(LoggingConfig {
+                interval_ns: interval.as_nanos(),
+                active_logs: Default::default(),
+                log_logging: config.logging.log_logging,
+                sink_logs,
+            })
+        } else {
+            None
+        };
+
+        self.instance(instance_id)?
+            .add_replica(replica_id, config.location, logging_config)
     }
 
     /// Removes a replica from an instance, including its service in the orchestrator.

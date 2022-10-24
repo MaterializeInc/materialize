@@ -37,7 +37,7 @@ use super::orchestrator::ComputeOrchestrator;
 use super::replica::Replica;
 use super::{
     CollectionState, ComputeControllerResponse, ComputeError, ComputeInstanceId,
-    ComputeReplicaConfig, ComputeReplicaLocation,
+    ComputeReplicaLocation,
 };
 
 /// The state we keep for a compute instance.
@@ -182,65 +182,6 @@ where
         );
     }
 
-    /// Introduce a new replica, and catch it up to the commands of other replicas.
-    ///
-    /// It is not yet clear under which circumstances a replica can be removed.
-    fn add_replica(
-        &mut self,
-        id: ReplicaId,
-        location: ComputeReplicaLocation,
-        logging_config: Option<LoggingConfig>,
-    ) {
-        let replica = Replica::spawn(
-            id,
-            self.instance_id,
-            self.build_info,
-            location,
-            logging_config,
-            self.orchestrator.clone(),
-        );
-
-        // Take this opportunity to clean up the history we should present.
-        self.history.retain_peeks(&self.peeks);
-        self.history.reduce();
-
-        // Replay the commands at the client, creating new dataflow identifiers.
-        for command in self.history.iter() {
-            if replica.send(command.clone()).is_err() {
-                // We swallow the error here. On the next send, we will fail again, and
-                // restart the connection as well as this rehydration.
-                tracing::warn!("Replica {:?} connection terminated during rehydration", id);
-                break;
-            }
-        }
-
-        if let Some(logging) = &replica.logging_config {
-            // Start tracking frontiers of persisted log collections.
-            for (collection_id, _) in logging.sink_logs.values() {
-                let frontier = Antichain::from_elem(Timestamp::minimum());
-                let previous = self.sink_log_uppers.insert(*collection_id, frontier);
-                assert!(previous.is_none());
-            }
-
-            // Start tracking frontiers of arranged log collections.
-            for collection_id in logging.active_logs.values() {
-                self.index_log_uppers
-                    .entry(*collection_id)
-                    .and_modify(|reported| reported.add_replica(id))
-                    .or_insert_with(|| ReportedUppers::new([id]));
-            }
-        }
-
-        // Add replica to tracked state.
-        self.replicas.insert(id, replica);
-        for uppers in self.uppers.values_mut() {
-            uppers.add_replica(id);
-        }
-        for peek in self.peeks.values_mut() {
-            peek.unfinished.insert(id);
-        }
-    }
-
     /// Sends a command to all replicas of this instance.
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn send(&mut self, cmd: ComputeCommand<T>) {
@@ -336,42 +277,78 @@ where
     pub fn add_replica(
         &mut self,
         id: ReplicaId,
-        config: ComputeReplicaConfig,
+        location: ComputeReplicaLocation,
+        mut logging_config: Option<LoggingConfig>,
     ) -> Result<(), ComputeError> {
-        let logging_config = if let Some(interval) = config.logging.interval {
+        if let Some(logging) = &mut logging_config {
             // Initialize state for per-replica log sources.
-            let mut sink_logs = BTreeMap::new();
-            for (variant, id) in config.logging.sources {
+            for (log_id, _) in logging.sink_logs.values() {
                 self.compute.collections.insert(
-                    id,
+                    *log_id,
                     CollectionState::new(
                         Antichain::from_elem(T::minimum()),
                         Vec::new(),
                         Vec::new(),
                     ),
                 );
-
-                let storage_meta = self
-                    .storage_controller
-                    .collection(id)?
-                    .collection_metadata
-                    .clone();
-                sink_logs.insert(variant, (id, storage_meta));
             }
 
-            Some(LoggingConfig {
-                interval_ns: interval.as_nanos(),
-                active_logs: self.compute.arranged_logs.clone(),
-                log_logging: config.logging.log_logging,
-                sink_logs,
-            })
-        } else {
-            None
+            logging.active_logs = self.compute.arranged_logs.clone();
         };
 
-        // Add the replica
-        self.compute
-            .add_replica(id, config.location, logging_config);
+        let replica = Replica::spawn(
+            id,
+            self.compute.instance_id,
+            self.compute.build_info,
+            location,
+            logging_config,
+            self.compute.orchestrator.clone(),
+        );
+
+        // Take this opportunity to clean up the history we should present.
+        self.compute.history.retain_peeks(&self.compute.peeks);
+        self.compute.history.reduce();
+
+        // Replay the commands at the client, creating new dataflow identifiers.
+        for command in self.compute.history.iter() {
+            if replica.send(command.clone()).is_err() {
+                // We swallow the error here. On the next send, we will fail again, and
+                // restart the connection as well as this rehydration.
+                tracing::warn!("Replica {:?} connection terminated during hydration", id);
+                break;
+            }
+        }
+
+        if let Some(logging) = &replica.logging_config {
+            // Start tracking frontiers of persisted log collections.
+            for (collection_id, _) in logging.sink_logs.values() {
+                let frontier = Antichain::from_elem(Timestamp::minimum());
+                let previous = self
+                    .compute
+                    .sink_log_uppers
+                    .insert(*collection_id, frontier);
+                assert!(previous.is_none());
+            }
+
+            // Start tracking frontiers of arranged log collections.
+            for collection_id in logging.active_logs.values() {
+                self.compute
+                    .index_log_uppers
+                    .entry(*collection_id)
+                    .and_modify(|reported| reported.add_replica(id))
+                    .or_insert_with(|| ReportedUppers::new([id]));
+            }
+        }
+
+        // Add replica to tracked state.
+        self.compute.replicas.insert(id, replica);
+        for uppers in self.compute.uppers.values_mut() {
+            uppers.add_replica(id);
+        }
+        for peek in self.compute.peeks.values_mut() {
+            peek.unfinished.insert(id);
+        }
+
         Ok(())
     }
 
@@ -435,8 +412,7 @@ where
         let location = self.compute.replicas[&id].location.clone();
         let logging_config = self.compute.replicas[&id].logging_config.clone();
         self.remove_replica_state(id).await?;
-        self.compute.add_replica(id, location, logging_config);
-        Ok(())
+        self.add_replica(id, location, logging_config)
     }
 
     /// Rehydrate any failed replicas of this instance.
