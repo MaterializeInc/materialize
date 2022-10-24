@@ -96,6 +96,13 @@ parent = "reference"
 weight = 100
 
 [[menu.main]]
+identifier = "cs_connections"
+name = "Connections"
+parent = "create-source"
+url = "/sql/create-connection/"
+weight= 100
+
+[[menu.main]]
 name = "SQL patterns"
 parent = 'reference'
 identifier = 'sql-patterns'
