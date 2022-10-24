@@ -15,7 +15,7 @@ The following examples are possible TTL use cases:
 - Maintain time-sensitive security blockers
 - Saving-up memory
 
-Before continuing, make sure to understand how [mz_now](/sql/functions/now_and_mz_now/) and [temporal filters](/sql/patterns/temporal-filters/) work.
+Before continuing, make sure to understand how [mz_now()](/sql/functions/now_and_mz_now/) and [temporal filters](/sql/patterns/temporal-filters/) work.
 
 ## Pattern
 
