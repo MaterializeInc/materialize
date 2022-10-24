@@ -177,7 +177,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     RemovePendingPeeks {
         conn_id: ConnectionId,
     },
-    LinearizeReads(Vec<PendingTxn>),
+    LinearizeReads(Vec<PendingReadTxn>),
     StorageUsageFetch,
     StorageUsageUpdate(HashMap<Option<ShardId>, u64>),
     Consolidate(Vec<mz_stash::Id>),
@@ -297,6 +297,15 @@ pub struct PendingTxn {
     action: EndTransactionAction,
 }
 
+#[derive(Debug)]
+/// A pending read transaction waiting to be committed.
+pub struct PendingReadTxn {
+    /// The inner transaction.
+    txn: PendingTxn,
+    /// The timestamp of the transaction, if one exists.
+    timestamp: Option<(mz_repr::Timestamp, Option<Timeline>)>,
+}
+
 /// Glues the external world to the Timely workers.
 pub struct Coordinator<S> {
     /// The controller for the storage and compute layers.
@@ -309,7 +318,7 @@ pub struct Coordinator<S> {
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
 
     /// Channel for strict serializable reads ready to commit.
-    strict_serializable_reads_tx: mpsc::UnboundedSender<PendingTxn>,
+    strict_serializable_reads_tx: mpsc::UnboundedSender<PendingReadTxn>,
 
     /// Channel for catalog stash consolidations.
     consolidations_tx: mpsc::UnboundedSender<Vec<mz_stash::Id>>,
@@ -776,7 +785,7 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn serve(
         mut self,
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
-        mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingTxn>,
+        mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingReadTxn>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
         mut consolidations_rx: mpsc::UnboundedReceiver<Vec<mz_stash::Id>>,
     ) {
@@ -961,7 +970,7 @@ pub async fn serve<S: Append + 'static>(
                     timeline,
                     TimelineState {
                         oracle,
-                        read_holds: ReadHolds::new(initial_timestamp),
+                        read_holds: ReadHolds::new(),
                     },
                 );
             }

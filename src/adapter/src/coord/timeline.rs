@@ -350,7 +350,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         |ts| self.catalog.persist_timestamp(&timeline, ts),
                     )
                     .await,
-                    read_holds: ReadHolds::new(Timestamp::minimum()),
+                    read_holds: ReadHolds::new(),
                 },
             );
         }
@@ -370,8 +370,8 @@ impl<S: Append + 'static> Coordinator<S> {
                     .global_timelines
                     .get_mut(&timeline)
                     .expect("all timelines have a timestamp oracle");
-                read_holds.id_bundle.storage_ids.remove(&id);
-                if read_holds.id_bundle.is_empty() {
+                read_holds.remove_storage_id(&id);
+                if read_holds.is_empty() {
                     self.global_timelines.remove(&timeline);
                     empty_timelines.push(timeline);
                 }
@@ -391,15 +391,10 @@ impl<S: Append + 'static> Coordinator<S> {
                     .global_timelines
                     .get_mut(&timeline)
                     .expect("all timelines have a timestamp oracle");
-                if let Some(ids) = read_holds.id_bundle.compute_ids.get_mut(&compute_instance) {
-                    ids.remove(&id);
-                    if ids.is_empty() {
-                        read_holds.id_bundle.compute_ids.remove(&compute_instance);
-                    }
-                    if read_holds.id_bundle.is_empty() {
-                        self.global_timelines.remove(&timeline);
-                        empty_timelines.push(timeline);
-                    }
+                read_holds.remove_compute_id(&compute_instance, &id);
+                if read_holds.is_empty() {
+                    self.global_timelines.remove(&timeline);
+                    empty_timelines.push(timeline);
                 }
             }
         }
@@ -412,8 +407,8 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Vec<Timeline> {
         let mut empty_timelines = Vec::new();
         for (timeline, TimelineState { read_holds, .. }) in &mut self.global_timelines {
-            read_holds.id_bundle.compute_ids.remove(&compute_instance);
-            if read_holds.id_bundle.is_empty() {
+            read_holds.remove_compute_instance(&compute_instance);
+            if read_holds.is_empty() {
                 empty_timelines.push(timeline.clone());
             }
         }
@@ -552,6 +547,33 @@ impl<S: Append + 'static> Coordinator<S> {
             .collect()
     }
 
+    /// Returns an iterator that partitions an id bundle by the timeline that each id belongs to.
+    pub fn partition_ids_by_timeline(
+        &self,
+        id_bundle: CollectionIdBundle,
+    ) -> impl Iterator<Item = (Option<Timeline>, CollectionIdBundle)> {
+        let mut res: HashMap<Option<Timeline>, CollectionIdBundle> = HashMap::new();
+
+        for id in id_bundle.storage_ids {
+            let timeline = self.get_timeline(id);
+            res.entry(timeline).or_default().storage_ids.insert(id);
+        }
+
+        for (compute_instance, ids) in id_bundle.compute_ids {
+            for id in ids {
+                let timeline = self.get_timeline(id);
+                res.entry(timeline)
+                    .or_default()
+                    .compute_ids
+                    .entry(compute_instance)
+                    .or_default()
+                    .insert(id);
+            }
+        }
+
+        res.into_iter()
+    }
+
     /// Return the set of ids in a timedomain and verify timeline correctness.
     ///
     /// When a user starts a transaction, we need to prevent compaction of anything
@@ -659,8 +681,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 .apply_write(now, |ts| self.catalog.persist_timestamp(&timeline, ts))
                 .await;
             let read_ts = oracle.read_ts();
-            if read_holds.time.less_than(&read_ts) {
-                read_holds = self.update_read_hold(read_holds, read_ts).await;
+            if let Some(time) = read_holds.min_time() {
+                if time.less_than(&read_ts) {
+                    read_holds = self.update_read_hold(read_holds, read_ts).await;
+                }
             }
             self.global_timelines
                 .insert(timeline, TimelineState { oracle, read_holds });

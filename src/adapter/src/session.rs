@@ -26,6 +26,7 @@ use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType, TimestampManipulation};
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, StatementDesc};
 use mz_sql_parser::ast::TransactionIsolationLevel;
+use mz_storage::types::sources::Timeline;
 
 use crate::catalog::{INTERNAL_USER_NAMES, SYSTEM_USER};
 use crate::client::ConnectionId;
@@ -369,11 +370,12 @@ impl<T: TimestampManipulation> Session<T> {
         }
     }
 
-    /// Returns the transaction's read timestamp, if set.
+    /// Returns the transaction's read timestamp, if set. Also returns the
+    /// transaction's timeline, if one exists.
     ///
     /// Returns `None` if there is no active transaction, or if the active
     /// transaction is not a read transaction.
-    pub fn get_transaction_timestamp(&self) -> Option<T> {
+    pub fn get_transaction_timestamp(&self) -> Option<(T, Option<Timeline>)> {
         // If the transaction already has a peek timestamp, use it. Otherwise generate
         // one. We generate one even though we could check here that the transaction
         // isn't in some other conflicting state because we want all of that logic to
@@ -796,7 +798,7 @@ pub enum TransactionOps<T> {
     /// is Some, it must only do other peeks. However, if the value is None
     /// (i.e. the values are constants), the transaction can still perform
     /// writes.
-    Peeks(Option<T>),
+    Peeks(Option<(T, Option<Timeline>)>),
     /// This transaction has done a `SUBSCRIBE` and must do nothing else.
     Subscribe,
     /// This transaction has had a write (`INSERT`, `UPDATE`, `DELETE`) and must

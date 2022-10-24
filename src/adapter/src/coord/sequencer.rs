@@ -64,8 +64,8 @@ use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::dataflows::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
 use crate::coord::{
-    peek, read_policy, Coordinator, Message, PendingTxn, SendDiffs, SinkConnectionReady, TxnReads,
-    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+    peek, Coordinator, Message, PendingReadTxn, PendingTxn, SendDiffs, SinkConnectionReady,
+    TxnReads, DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
 };
 use crate::error::AdapterError;
 use crate::explain_new::optimizer_trace::OptimizerTrace;
@@ -1103,18 +1103,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
-                // We must advance the timeline to `since_ts` so that the table is not invalid.
-                let timeline = self
-                    .get_timeline(table_id)
-                    .expect("Table not present in a timeline");
-                let old_read_holds = self
-                    .ensure_timeline_state(timeline.clone())
-                    .await
-                    .read_holds
-                    .clone();
-                let new_read_holds = self.update_read_hold(old_read_holds, since_ts).await;
-                self.ensure_timeline_state(timeline).await.read_holds = new_read_holds;
-
                 self.initialize_storage_read_policies(
                     vec![table_id],
                     DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
@@ -1943,16 +1931,19 @@ impl<S: Append + 'static> Coordinator<S> {
                 });
                 return;
             }
-            Ok((Some(TransactionOps::Peeks(_)), _))
+            Ok((Some(TransactionOps::Peeks(timestamp)), _))
                 if session.vars().transaction_isolation()
                     == &IsolationLevel::StrictSerializable =>
             {
                 self.strict_serializable_reads_tx
-                    .send(PendingTxn {
-                        client_transmitter: tx,
-                        response,
-                        session,
-                        action,
+                    .send(PendingReadTxn {
+                        txn: PendingTxn {
+                            client_transmitter: tx,
+                            response,
+                            session,
+                            action,
+                        },
+                        timestamp,
                     })
                     .expect("sending to strict_serializable_reads_tx cannot fail");
                 return;
@@ -2056,12 +2047,12 @@ impl<S: Append + 'static> Coordinator<S> {
         // sources or indexes and there is no reference to `mz_now()`.
         let timestamp_independent = source_ids.is_empty() && !source.contains_temporal();
         // For transactions that do not use AS OF, get the
-        // timestamp of the in-progress transaction or create one. If this is an AS OF
+        // timestamp and timeline of the in-progress transaction or create one. If this is an AS OF
         // query, we don't care about any possible transaction timestamp. If this is a
         // single-statement transaction (TransactionStatus::Started), we don't need to
         // worry about preventing compaction or choosing a valid timestamp for future
         // queries.
-        let timestamp = if session.transaction().is_in_multi_statement_transaction()
+        let (timestamp, timeline) = if session.transaction().is_in_multi_statement_transaction()
             && when == QueryWhen::Immediately
         {
             // If all previous statements were timestamp-independent and the current one is
@@ -2072,8 +2063,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
             }
 
-            let timestamp = match session.get_transaction_timestamp() {
-                Some(ts) => ts,
+            let (timestamp, timeline) = match session.get_transaction_timestamp() {
+                Some((ts, timeline)) => (ts, timeline),
                 _ => {
                     // Determine a timestamp that will be valid for anything in any schema
                     // referenced by the first query.
@@ -2082,23 +2073,19 @@ impl<S: Append + 'static> Coordinator<S> {
 
                     // We want to prevent compaction of the indexes consulted by
                     // determine_timestamp, not the ones listed in the query.
-                    let timestamp = self.determine_timestamp(
+                    let (timestamp, timeline) = self.determine_timestamp(
                         session,
                         &id_bundle,
                         &QueryWhen::Immediately,
                         compute_instance,
                     )?;
-                    let read_holds = read_policy::ReadHolds {
-                        time: timestamp,
-                        id_bundle,
-                    };
-                    self.acquire_read_holds(&read_holds).await;
+                    let read_holds = self.acquire_read_holds(timestamp, id_bundle).await;
                     let txn_reads = TxnReads {
                         timestamp_independent,
                         read_holds,
                     };
                     self.txn_reads.insert(conn_id, txn_reads);
-                    timestamp
+                    (timestamp, timeline)
                 }
             };
 
@@ -2107,7 +2094,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let id_bundle = self
                 .index_oracle(compute_instance)
                 .sufficient_collections(&source_ids);
-            let allowed_id_bundle = &self.txn_reads.get(&conn_id).unwrap().read_holds.id_bundle;
+            let allowed_id_bundle = &self.txn_reads.get(&conn_id).unwrap().read_holds.id_bundle();
             // Find the first reference or index (if any) that is not in the transaction. A
             // reference could be caused by a user specifying an object in a different
             // schema than the first query. An index could be caused by a CREATE INDEX
@@ -2144,7 +2131,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 });
             }
 
-            timestamp
+            (timestamp, timeline)
         } else {
             // TODO(guswynn): acquire_read_holds for linearized reads
             let id_bundle = self
@@ -2228,7 +2215,7 @@ impl<S: Append + 'static> Coordinator<S> {
             {
                 None
             } else {
-                Some(timestamp)
+                Some((timestamp, timeline))
             };
 
             session.add_transaction_ops(TransactionOps::Peeks(peek_ts))?;
@@ -2288,7 +2275,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .index_oracle(compute_instance_id)
                 .sufficient_collections(uses);
             // If a timestamp was explicitly requested, use that.
-            let timestamp =
+            let (timestamp, _) =
                 coord.determine_timestamp(session, &id_bundle, &when, compute_instance_id)?;
 
             Ok::<_, AdapterError>(ComputeSinkDesc {
@@ -2567,7 +2554,8 @@ impl<S: Append + 'static> Coordinator<S> {
         // TODO: determine_timestamp takes a mut self to track linearizability,
         // so explaining a plan involving tables has side effects. Removing those side
         // effects would be good.
-        let timestamp = self.determine_timestamp(
+        // TODO(jkosh44): Would be a nice addition to include the timeline in output.
+        let (timestamp, _timeline) = self.determine_timestamp(
             session,
             &id_bundle,
             &QueryWhen::Immediately,
