@@ -72,11 +72,16 @@ where
     if res.len() != 1 {
         return Err(CreateTopicError::TopicCountMismatch(res.len()));
     }
-    match res.into_element() {
-        Ok(_) => Ok(()),
-        Err((_, RDKafkaErrorCode::TopicAlreadyExists)) if allow_existing => Ok(()),
+    let already_exists = match res.into_element() {
+        Ok(_) => Ok(false),
+        Err((_, RDKafkaErrorCode::TopicAlreadyExists)) if allow_existing => Ok(true),
         Err((_, e)) => Err(CreateTopicError::Kafka(KafkaError::AdminOp(e))),
     }?;
+
+    // We don't need to read in metadata / do any validation if the topic already exists.
+    if already_exists {
+        return Ok(());
+    }
 
     // Topic creation is asynchronous, and if we don't wait for it to complete,
     // we might produce a message (below) that causes it to get automatically
