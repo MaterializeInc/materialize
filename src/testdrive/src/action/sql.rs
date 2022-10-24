@@ -235,8 +235,8 @@ async fn try_run_sql(
             if &actual.len() != num_values {
                 bail!(
                     "wrong row count: expected:\n{:?}\ngot:\n{:?}\n",
-                    actual.len(),
                     num_values,
+                    actual.len(),
                 )
             } else {
                 let mut hasher = Md5::new();
