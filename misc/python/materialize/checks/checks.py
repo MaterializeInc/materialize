@@ -36,14 +36,23 @@ class Check:
     def validate(self) -> Testdrive:
         assert False
 
-    def run_initialize(self, e: Executor) -> None:
+    def start_initialize(self, e: Executor) -> None:
         self._initialize.execute(e)
 
-    def run_manipulate(self, e: Executor, phase: int) -> None:
+    def join_initialize(self, e: Executor) -> None:
+        self._initialize.join(e)
+
+    def start_manipulate(self, e: Executor, phase: int) -> None:
         self._manipulate[phase].execute(e)
 
-    def run_validate(self, e: Executor) -> None:
+    def join_manipulate(self, e: Executor, phase: int) -> None:
+        self._manipulate[phase].join(e)
+
+    def start_validate(self, e: Executor) -> None:
         self._validate.execute(e)
+
+    def join_validate(self, e: Executor) -> None:
+        self._validate.join(e)
 
 
 class CheckDisabled(Check):
