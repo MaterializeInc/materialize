@@ -753,7 +753,7 @@ where
 
                 for (message_batch, source_upper) in buffer.drain(..) {
                     if let Some(batch) = &*message_batch.borrow() {
-                        let has_errors = batch.non_definite_errors.first();
+                        let has_errors = batch.source_errors.first();
                         let has_messages = batch.messages.values().any(|vs| !vs.is_empty());
 
                         let maybe_health = match (has_errors, has_messages) {
