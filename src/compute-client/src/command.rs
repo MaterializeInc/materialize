@@ -209,42 +209,6 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
     }
 }
 
-impl<T> ComputeCommand<T> {
-    /// Indicates which global ids should start and cease frontier tracking.
-    ///
-    /// Identifiers added to `start` will install frontier tracking, and identifiers
-    /// added to `cease` will uninstall frontier tracking.
-    pub fn frontier_tracking(&self, start: &mut Vec<GlobalId>, cease: &mut Vec<GlobalId>) {
-        match self {
-            ComputeCommand::CreateDataflows(dataflows) => {
-                for dataflow in dataflows.iter() {
-                    for (sink_id, _) in dataflow.sink_exports.iter() {
-                        start.push(*sink_id)
-                    }
-                    for (index_id, _) in dataflow.index_exports.iter() {
-                        start.push(*index_id);
-                    }
-                }
-            }
-            ComputeCommand::AllowCompaction(frontiers) => {
-                for (id, frontier) in frontiers.iter() {
-                    if frontier.is_empty() {
-                        cease.push(*id);
-                    }
-                }
-            }
-            ComputeCommand::CreateInstance(config) => {
-                if let Some(logging_config) = &config.logging {
-                    start.extend(logging_config.log_identifiers());
-                }
-            }
-            _ => {
-                // Other commands have no known impact on frontier tracking.
-            }
-        }
-    }
-}
-
 /// An abstraction allowing us to name different replicas.
 pub type ReplicaId = u64;
 
