@@ -935,6 +935,11 @@ pub mod datadriven {
         let upper = args.expect_antichain("upper");
         let target_size = args.optional("target_size");
         let parts_size_override = args.optional("parts_size_override");
+        let runs = args.optional_str("runs").map(|x| {
+            x.split(',')
+                .map(|s| s.parse::<usize>().expect("invalid run"))
+                .collect()
+        });
         let updates = args.input.split('\n').flat_map(DirectiveArgs::parse_update);
 
         let mut cfg = datadriven.client.cfg.clone();
@@ -954,11 +959,15 @@ pub mod datadriven {
         for ((k, ()), t, d) in updates {
             builder.add(&k, &(), &t, &d).await.expect("invalid batch");
         }
-        let batch = builder
+        let mut batch = builder
             .finish(upper)
             .await
             .expect("invalid batch")
             .into_hollow_batch();
+
+        if let Some(runs) = runs {
+            batch.runs = runs;
+        }
 
         if let Some(size) = parts_size_override {
             let mut batch = batch.clone();
@@ -1036,13 +1045,18 @@ pub mod datadriven {
         let output = args.expect_str("output");
         let lower = args.expect_antichain("lower");
         let upper = args.expect_antichain("upper");
+        let since = args.optional_antichain("since");
 
         let mut batch = datadriven
             .batches
             .get(input)
             .expect("unknown batch")
             .clone();
-        let truncated_desc = Description::new(lower, upper, batch.desc.since().clone());
+        let truncated_desc = Description::new(
+            lower,
+            upper,
+            since.unwrap_or_else(|| batch.desc.since().clone()),
+        );
         let () = validate_truncate_batch(&batch.desc, &truncated_desc)?;
         batch.desc = truncated_desc;
         datadriven.batches.insert(output.to_owned(), batch.clone());

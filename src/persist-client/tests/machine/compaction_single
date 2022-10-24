@@ -1,0 +1,147 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+## Compaction with a single nonempty input is special cased to
+## return the nonempty batch directly with a new description
+
+# always compact if our only nonempty batch has a since of [0], in order to trim truncatable data
+write-batch output=b lower=1 upper=2
+zero 1 1
+----
+parts=1 len=1
+
+compact output=b_compacted inputs=(b) lower=1 upper=2 since=99
+----
+parts=1 len=1
+
+fetch-batch input=b_compacted
+----
+<part 0>
+zero 99 1
+<run 0>
+part 0
+
+# attempting to compact our just-compacted batch should hit our special case,
+# as it is the single nonempty batch with since in advance of [0]
+compact output=b_compacted_again inputs=(b_compacted) lower=1 upper=2 since=999
+----
+parts=1 len=1
+
+# (the timestamp has not advanced, confirming we're reading the same contents referred by b_compacted)
+fetch-batch input=b_compacted_again
+----
+<part 0>
+zero 99 1
+<run 0>
+part 0
+
+# always compact if our only nonempty batch has >1 run, in order to consolidate across runs
+write-batch output=b lower=1 upper=2 target_size=0 runs=1
+zero 1 1
+one 1 1
+----
+parts=2 len=2
+
+# (same lower/upper, but rewrite the since to be in advance of [0])
+truncate-batch-desc input=b output=b lower=1 upper=2 since=1
+----
+parts=2 len=2
+
+fetch-batch input=b
+----
+<part 0>
+zero 1 1
+<part 1>
+one 1 1
+<run 0>
+part 0
+<run 1>
+part 1
+
+compact output=b_compacted inputs=(b) lower=1 upper=2 since=99
+----
+parts=1 len=2
+
+fetch-batch input=b_compacted
+----
+<part 0>
+one 99 1
+zero 99 1
+<run 0>
+part 0
+
+
+# now let's cover cases where we skip compaction and send back the same batch with a new description
+write-batch output=b0 lower=0 upper=1
+----
+parts=0 len=0
+
+write-batch output=b1 lower=1 upper=2
+zero 1 1
+----
+parts=1 len=1
+
+truncate-batch-desc input=b1 output=b1 lower=1 upper=2 since=1
+----
+parts=1 len=1
+
+write-batch output=b2 lower=2 upper=3
+----
+parts=0 len=0
+
+write-batch output=b3 lower=3 upper=4
+----
+parts=0 len=0
+
+# compacting b1 with empty batches will return a batch pointing to the same keys as b1, but with an updated desc
+compact output=b1_unchanged inputs=(b0,b1,b2,b3) lower=0 upper=4 since=99
+----
+parts=1 len=1
+
+# (the timestamp has not advanced, confirming we're reading the same contents referred by b1)
+fetch-batch input=b1_unchanged
+----
+<part 0>
+zero 1 1
+<run 0>
+part 0
+
+# and test edge cases of our non-empty batch being the lower / upper / only batch
+compact output=b1_unchanged inputs=(b1,b2) lower=1 upper=3 since=99
+----
+parts=1 len=1
+
+fetch-batch input=b1_unchanged
+----
+<part 0>
+zero 1 1
+<run 0>
+part 0
+
+compact output=b1_unchanged inputs=(b0,b1) lower=0 upper=2 since=99
+----
+parts=1 len=1
+
+fetch-batch input=b1_unchanged
+----
+<part 0>
+zero 1 1
+<run 0>
+part 0
+
+compact output=b1_unchanged inputs=(b1) lower=1 upper=2 since=99
+----
+parts=1 len=1
+
+fetch-batch input=b1_unchanged
+----
+<part 0>
+zero 1 1
+<run 0>
+part 0
