@@ -35,6 +35,9 @@ to vary dependending on which cluster you are working in. In particular, indexes
 and dataflows are local to a cluster, so their introspection information will
 vary across clusters.
 
+<!--
+DISABLED till a better or more accurate proposition is suggested.
+
 ## How fast are my sources loading data?
 
 You can count the number of records accepted in a source, materialized view,
@@ -94,7 +97,7 @@ is useful:
 -- Histogram of wall-clock delays in propagating data obtained from storage
 -- through materializations
 SELECT * FROM mz_internal.mz_worker_compute_delays;
-```
+``` -->
 
 ## Why is Materialize running so slowly?
 
