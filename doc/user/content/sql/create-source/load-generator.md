@@ -1,7 +1,7 @@
 ---
 title: "CREATE SOURCE: Load generator"
 description: "Using Materialize's built-in load generators"
-pagerank: 10
+pagerank: 50
 menu:
   main:
     parent: 'create-source'
