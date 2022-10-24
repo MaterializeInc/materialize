@@ -20,7 +20,7 @@ DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.5"
 # Be sure to use a `X.Y.Z.Final` tag here; `X.Y` tags refer to the latest
 # minor version in the release series, and minor versions have been known to
 # introduce breakage.
-DEFAULT_DEBEZIUM_VERSION = "1.9.5.Final"
+DEFAULT_DEBEZIUM_VERSION = "1.9.6.Final"
 
 LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5", "1.6"]
 
