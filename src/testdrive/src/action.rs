@@ -347,39 +347,10 @@ impl State {
         F: FnOnce(ConnCatalog) -> T,
     {
         if let Some(url) = &self.materialize_catalog_postgres_stash {
-            let schema = format!("mz_stash_copy_{}", self.seed);
-
-            let (client, _) = postgres_client(url).await?;
-
-            let current_schema: String =
-                client.query_one("SELECT current_schema", &[]).await?.get(0);
-
-            client
-                .execute(format!("CREATE SCHEMA {schema}").as_str(), &[])
-                .await?;
-            client
-                .execute(format!("SET search_path TO {schema}").as_str(), &[])
-                .await?;
-            client
-                .batch_execute(&format!(
-                    "
-                    CREATE TABLE fence AS SELECT * FROM {0}.fence;
-                    CREATE TABLE collections AS SELECT * FROM {0}.collections;
-                    CREATE TABLE data AS SELECT * FROM {0}.data;
-                    CREATE TABLE sinces AS SELECT * FROM {0}.sinces;
-                    CREATE TABLE uppers AS SELECT * FROM {0}.uppers;
-                    ",
-                    current_schema,
-                ))
-                .await?;
-
-            let catalog =
-                Catalog::open_debug_postgres(url.clone(), Some(schema.clone()), NOW_ZERO.clone())
-                    .await?;
+            let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new()).unwrap();
+            let stash = mz_stash::Postgres::new_readonly(url.clone(), None, tls).await?;
+            let catalog = Catalog::open_debug(stash, NOW_ZERO.clone()).await?;
             let res = f(catalog.for_session(&Session::dummy()));
-            client
-                .execute(format!("DROP SCHEMA {schema} CASCADE").as_str(), &[])
-                .await?;
             Ok(Some(res))
         } else {
             Ok(None)
