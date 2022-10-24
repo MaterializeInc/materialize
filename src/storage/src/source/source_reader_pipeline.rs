@@ -181,6 +181,7 @@ where
 
     let reclock_follower = {
         let upper_ts = config.resume_upper.as_option().copied().unwrap();
+        // Same value as our use of `derive_new_compaction_since`.
         let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
         ReclockFollower::new(as_of)
     };
@@ -970,13 +971,7 @@ where
 
             let upper_ts = resume_upper.as_option().copied().unwrap();
 
-            // NOTE: Below, we allow compaction only up to around 3 days before
-            // the resumption frontier. We still restart from right before the
-            // upper which is a) perfectly safe to do, and b) will make extra
-            // certain that the `as_of` is valid with regards to the since. If
-            // we pick the same time that we compact up to, we might run into
-            // the same (alleged/potential) off-by-one bug that this
-            // three-day-bandaid below is trying to paper over.
+            // Same value as our use of `derive_new_compaction_since`.
             let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
             let mut timestamper = match ReclockOperator::new(
                 Arc::clone(&persist_clients),
@@ -1082,8 +1077,8 @@ where
                 if let Some(new_compaction_since) = derive_new_compaction_since(
                     resumption_frontier,
                     &last_compaction_since,
-                    // 3 days in milliseconds
-                    1000 * 60 * 24 * 3,
+                    // Choose a `since` as aggresively as possible
+                    1,
                     id,
                     "remap",
                     worker_id,

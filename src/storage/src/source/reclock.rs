@@ -329,8 +329,8 @@ impl ReclockFollowerInner {
             tracing::error!(
                 ?new_since,
                 ?self.since,
-                "We are forced to skip the compaction in \
-                the _ReclockFollower_ because the `new_since` was not beyond the `since`. \
+                "ReclockFollower: We are forced to skip the compaction \
+                because the `new_since` was not beyond the `since`. \
                 This is a bug that should be fixed."
             );
             return;
@@ -570,8 +570,10 @@ impl ReclockOperator {
             tracing::error!(
                 ?new_since,
                 ?self.since,
-                "We are forced to skip the compaction in \
-                the _ReclockOperator_ because the `new_since` was not beyond the `since`. \
+                ?self.read_handle,
+                ?self.listener,
+                "ReclockOperator: We are forced to skip the compaction \
+                because the `new_since` was not beyond the `since`. \
                 This is a bug that should be fixed."
             );
             return;
