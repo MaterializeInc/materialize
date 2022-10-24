@@ -44,6 +44,13 @@ steps:
           - { value: checks-oneatatime-kill-storaged }
           - { value: checks-oneatatime-restart-postgres-backend }
           - { value: checks-oneatatime-restart-redpanda }
+          - { value: checks-parallel-drop-create-default-replica }
+          - { value: checks-parallel-restart-computed }
+          - { value: checks-parallel-restart-entire-mz }
+          - { value: checks-parallel-restart-environmentd-storaged }
+          - { value: checks-parallel-kill-storaged }
+          - { value: checks-parallel-restart-postgres-backend }
+          - { value: checks-parallel-restart-redpanda }
           - { value: checks-upgrade-entire-mz }
           - { value: checks-upgrade-computed-first }
           - { value: checks-upgrade-computed-last }
@@ -365,6 +372,76 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=RestartRedpanda, --execution-mode=oneatatime]
+
+  - id: checks-parallel-drop-create-default-replica
+    label: "Checks parallel + DROP/CREATE replica"
+    timeout_in_minutes: 300
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=DropCreateDefaultReplica, --execution-mode=parallel]
+
+  - id: checks-parallel-restart-computed
+    label: "Checks parallel + restart computed"
+    timeout_in_minutes: 300
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=RestartComputed, --execution-mode=parallel]
+
+  - id: checks-parallel-restart-entire-mz
+    label: "Checks parallel + restart of the entire Mz"
+    timeout_in_minutes: 300
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=RestartEntireMz, --execution-mode=parallel]
+
+  - id: checks-parallel-restart-environmentd-storaged
+    label: "Checks parallel + restart of environmentd & storaged"
+    timeout_in_minutes: 300
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=RestartEnvironmentdStoraged, --execution-mode=parallel]
+
+  - id: checks-parallel-kill-storaged
+    label: "Checks parallel + kill storaged"
+    timeout_in_minutes: 300
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=KillStoraged, --execution-mode=parallel]
+
+  - id: checks-parallel-restart-postgres-backend
+    label: "Checks parallel + restart Postgres backend"
+    timeout_in_minutes: 300
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=RestartPostgresBackend, --execution-mode=parallel]
+
+  - id: checks-parallel-restart-redpanda
+    label: "Checks parallel + restart Redpanda"
+    timeout_in_minutes: 300
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=RestartRedpanda, --execution-mode=parallel]
 
   - id: checks-upgrade-entire-mz
     label: "Platform checks upgrade, whole-Mz restart"

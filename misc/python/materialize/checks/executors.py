@@ -16,6 +16,8 @@
 # by the Apache License, Version 2.0.
 
 import random
+import threading
+from typing import Any, Optional
 
 from materialize.cloudtest.application import MaterializeApplication
 from materialize.mzcompose import Composition
@@ -26,7 +28,7 @@ from materialize.mzcompose import Composition
 class Executor:
     pass
 
-    def testdrive(self, input: str) -> None:
+    def testdrive(self, input: str) -> Any:
         assert False
 
     def mzcompose_composition(self) -> Composition:
@@ -34,6 +36,9 @@ class Executor:
 
     def cloudtest_application(self) -> MaterializeApplication:
         assert False
+
+    def join(self, handle: Any) -> None:
+        pass
 
 
 class MzcomposeExecutor(Executor):
@@ -45,6 +50,29 @@ class MzcomposeExecutor(Executor):
 
     def testdrive(self, input: str) -> None:
         self.composition.testdrive(input)
+
+
+class MzcomposeExecutorParallel(MzcomposeExecutor):
+    def __init__(self, composition: Composition) -> None:
+        self.composition = composition
+        self.exception: Optional[BaseException] = None
+
+    def testdrive(self, input: str) -> Any:
+        thread = threading.Thread(target=self._testdrive, args=[input])
+        thread.start()
+        return thread
+
+    def _testdrive(self, input: str) -> None:
+        try:
+            self.composition.testdrive(input)
+        except BaseException as e:
+            self.exception = e
+
+    def join(self, handle: Any) -> None:
+        assert type(handle) is threading.Thread
+        handle.join()
+        if self.exception:
+            raise self.exception
 
 
 class CloudtestExecutor(Executor):

@@ -16,7 +16,7 @@
 # by the Apache License, Version 2.0.
 
 import time
-from typing import TYPE_CHECKING, List, Optional, Type
+from typing import TYPE_CHECKING, Any, List, Optional, Type
 
 from materialize.checks.executors import Executor
 
@@ -28,6 +28,9 @@ class Action:
     def execute(self, e: Executor) -> None:
         assert False
 
+    def join(self, e: Executor) -> None:
+        assert False
+
 
 class Testdrive(Action):
     # Instruct pytest this class does not contain actual tests
@@ -35,10 +38,15 @@ class Testdrive(Action):
 
     def __init__(self, input: str) -> None:
         self.input = input
+        self.handle: Optional[Any] = None
 
     def execute(self, e: Executor) -> None:
         """Pass testdrive actions to be run by an Executor-specific implementation."""
-        e.testdrive(self.input)
+        self.handle = e.testdrive(self.input)
+
+    def join(self, e: Executor) -> None:
+        assert self.handle is not None
+        e.join(self.handle)
 
 
 class Sleep(Action):
@@ -57,7 +65,10 @@ class Initialize(Action):
     def execute(self, e: Executor) -> None:
         for check in self.checks:
             print(f"Running initialize() from {check}")
-            check.run_initialize(e)
+            check.start_initialize(e)
+
+        for check in self.checks:
+            check.join_initialize(e)
 
 
 class Manipulate(Action):
@@ -74,7 +85,10 @@ class Manipulate(Action):
         assert self.phase is not None
         for check in self.checks:
             print(f"Running manipulate() from {check}")
-            check.run_manipulate(e, self.phase)
+            check.start_manipulate(e, self.phase)
+
+        for check in self.checks:
+            check.join_manipulate(e, self.phase)
 
 
 class Validate(Action):
@@ -84,4 +98,7 @@ class Validate(Action):
     def execute(self, e: Executor) -> None:
         for check in self.checks:
             print(f"Running validate() from {check}")
-            check.run_validate(e)
+            check.start_validate(e)
+
+        for check in self.checks:
+            check.join_validate(e)
