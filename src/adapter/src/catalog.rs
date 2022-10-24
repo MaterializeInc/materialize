@@ -1957,6 +1957,7 @@ impl<S: Append> Catalog<S> {
     /// Returns the catalog, metadata about builtin objects that have
     /// changed schemas since last restart, and a list of updates to builtin
     /// tables that describe the initial state of the catalog.
+    #[tracing::instrument(level = "info", skip_all)]
     pub async fn open(
         config: Config<'_, S>,
     ) -> Result<
