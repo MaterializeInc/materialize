@@ -47,6 +47,9 @@ pub struct Config<'a, S> {
     pub storage_host_sizes: StorageHostSizeMap,
     /// Default storage host size, should be a key from storage_host_sizes.
     pub default_storage_host_size: Option<String>,
+    /// An optional semicolon-separated list of $var_name=$var_value pairs for
+    /// bootstraping system variables that are not already modified.
+    pub bootstrap_system_vars: Option<String>,
     /// Valid availability zones for replicas.
     pub availability_zones: Vec<String>,
     /// A handle to a secrets manager that can only read secrets.

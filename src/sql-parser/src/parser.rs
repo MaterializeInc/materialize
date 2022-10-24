@@ -88,6 +88,22 @@ pub fn parse_data_type(sql: &str) -> Result<RawDataType, ParserError> {
     }
 }
 
+/// Parses a SQL string containing a `SET` variable value.
+pub fn parse_set_variable_value(sql: &str) -> Result<SetVariableValue, ParserError> {
+    let tokens = lexer::lex(sql)?;
+    let mut parser = Parser::new(sql, tokens);
+    let value = parser.parse_set_variable_value()?;
+    if parser.next_token().is_some() {
+        parser_err!(
+            parser,
+            parser.peek_prev_pos(),
+            "extra token after SET variable value"
+        )
+    } else {
+        Ok(value)
+    }
+}
+
 macro_rules! maybe {
     ($e:expr) => {{
         if let Some(v) = $e {
@@ -4542,13 +4558,47 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_set_variable_value(&mut self) -> Result<SetVariableValue, ParserError> {
-        let token = self.peek_token();
-        Ok(match (self.parse_value(), token) {
-            (Ok(value), _) => SetVariableValue::Literal(value),
-            (Err(_), Some(Token::Keyword(DEFAULT))) => SetVariableValue::Default,
-            (Err(_), Some(Token::Keyword(kw))) => SetVariableValue::Ident(kw.into_ident()),
-            (Err(_), Some(Token::Ident(id))) => SetVariableValue::Ident(Ident::new(id)),
-            (Err(_), other) => self.expected(self.peek_pos(), "variable value", other)?,
+        let parse_ident_or_keyword = |parser: &mut Self| match parser.next_token() {
+            Some(Token::Keyword(keyword)) => Ok(keyword.into_ident()),
+            Some(Token::Ident(ident)) => Ok(Ident::new(ident)),
+            other => parser.expected(parser.peek_prev_pos(), "identifier or keyword", other),
+        };
+
+        let curr_pos = self.peek_pos();
+        let curr_token = self.peek_token();
+
+        Ok(match self.parse_value() {
+            Ok(value) => match self.peek_token() {
+                Some(Token::Comma) => {
+                    self.next_token();
+                    let mut values = vec![value];
+                    values.append(&mut self.parse_comma_separated(Self::parse_value)?);
+                    SetVariableValue::Literals(values)
+                }
+                _ => SetVariableValue::Literal(value),
+            },
+            Err(_) => match curr_token {
+                Some(Token::Keyword(DEFAULT)) => SetVariableValue::Default,
+                Some(Token::Ident(ident)) => match self.peek_token() {
+                    Some(Token::Comma) => {
+                        self.next_token();
+                        let mut idents = vec![Ident::new(ident)];
+                        idents.append(&mut self.parse_comma_separated(parse_ident_or_keyword)?);
+                        SetVariableValue::Idents(idents)
+                    }
+                    _ => SetVariableValue::Ident(Ident::new(ident)),
+                },
+                Some(Token::Keyword(keyword)) => match self.peek_token() {
+                    Some(Token::Comma) => {
+                        self.next_token();
+                        let mut idents = vec![keyword.into_ident()];
+                        idents.append(&mut self.parse_comma_separated(parse_ident_or_keyword)?);
+                        SetVariableValue::Idents(idents)
+                    }
+                    _ => SetVariableValue::Ident(keyword.into_ident()),
+                },
+                other => self.expected(curr_pos, "variable value", other)?,
+            },
         })
     }
 

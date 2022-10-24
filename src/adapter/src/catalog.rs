@@ -2325,6 +2325,15 @@ impl<S: Append> Catalog<S> {
             .await?;
 
         let system_config = catalog.storage().await.load_system_configuration().await?;
+        if let Some(bootstrap_system_vars) = config.bootstrap_system_vars {
+            for entry in bootstrap_system_vars.trim().split(';') {
+                if let Some((name, value)) = entry.split_once('=') {
+                    if !system_config.contains_key(name) {
+                        catalog.state.insert_system_configuration(name, value)?;
+                    }
+                }
+            }
+        }
         for (name, value) in system_config {
             catalog.state.insert_system_configuration(&name, &value)?;
         }
@@ -2878,6 +2887,7 @@ impl<S: Append> Catalog<S> {
             cluster_replica_sizes: Default::default(),
             storage_host_sizes: Default::default(),
             default_storage_host_size: None,
+            bootstrap_system_vars: None,
             availability_zones: vec![],
             secrets_reader,
             egress_ips: vec![],
@@ -3347,7 +3357,6 @@ impl<S: Append> Catalog<S> {
         &self,
         location: SerializedComputeReplicaLocation,
     ) -> Result<ComputeReplicaLocation, AdapterError> {
-        let cluster_replica_sizes = &self.state.cluster_replica_sizes;
         let location = match location {
             SerializedComputeReplicaLocation::Remote {
                 addrs,
@@ -3363,8 +3372,19 @@ impl<S: Append> Catalog<S> {
                 availability_zone,
                 az_user_specified,
             } => {
-                let allocation = cluster_replica_sizes.0.get(&size).ok_or_else(|| {
+                let cluster_replica_sizes = &self.state.cluster_replica_sizes;
+                let allowed_sizes = self.state.system_config().allowed_cluster_replica_sizes();
+
+                if !cluster_replica_sizes.0.contains_key(&size)
+                    || (!allowed_sizes.is_empty() && !allowed_sizes.contains(&size))
+                {
                     let mut entries = cluster_replica_sizes.0.iter().collect::<Vec<_>>();
+
+                    if !allowed_sizes.is_empty() {
+                        let allowed_sizes = HashSet::<&String>::from_iter(allowed_sizes.iter());
+                        entries.retain(|(name, _)| allowed_sizes.contains(name));
+                    }
+
                     entries.sort_by_key(
                         |(
                             _name,
@@ -3373,14 +3393,15 @@ impl<S: Append> Catalog<S> {
                             },
                         )| (scale, cpu_limit),
                     );
-                    let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
-                    AdapterError::InvalidClusterReplicaSize {
-                        size: size.clone(),
-                        expected,
-                    }
-                })?;
+
+                    return Err(AdapterError::InvalidClusterReplicaSize {
+                        size,
+                        expected: entries.into_iter().map(|(name, _)| name.clone()).collect(),
+                    });
+                }
+
                 ComputeReplicaLocation::Managed {
-                    allocation: allocation.clone(),
+                    allocation: cluster_replica_sizes.0.get(&size).unwrap().clone(),
                     availability_zone,
                     size,
                     az_user_specified,
@@ -3537,7 +3558,7 @@ impl<S: Append> Catalog<S> {
             UpdateComputeInstanceStatus {
                 event: ComputeInstanceEvent,
             },
-            UpdateSysytemConfiguration {
+            UpdateSystemConfiguration {
                 name: String,
                 value: String,
             },
@@ -4487,7 +4508,7 @@ impl<S: Append> Catalog<S> {
                     catalog_action(
                         state,
                         builtin_table_updates,
-                        Action::UpdateSysytemConfiguration { name, value },
+                        Action::UpdateSystemConfiguration { name, value },
                     )?;
                 }
                 Op::ResetSystemConfiguration { name } => {
@@ -4766,7 +4787,7 @@ impl<S: Append> Catalog<S> {
                         ));
                     }
                 }
-                Action::UpdateSysytemConfiguration { name, value } => {
+                Action::UpdateSystemConfiguration { name, value } => {
                     state.insert_system_configuration(&name, &value)?;
                 }
                 Action::ResetSystemConfiguration { name } => {

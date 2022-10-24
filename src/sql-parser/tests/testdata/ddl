@@ -1390,7 +1390,7 @@ ALTER SYSTEM SET some_array_key = [667, 668]
 ----
 error: Expected variable value, found left square bracket
 ALTER SYSTEM SET some_array_key = [667, 668]
-                                   ^
+                                  ^
 
 parse-statement
 ALTER SYSTEM SET quantum_enabled = true
