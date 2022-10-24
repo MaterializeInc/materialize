@@ -24,7 +24,7 @@ use crate::EvalError;
 sqlfunc!(
     #[sqlname = "mz_timestamp_to_text"]
     #[preserves_uniqueness = true]
-    #[right_inverse = to_unary!(super::CastStringToMzTimestamp)]
+    #[inverse = to_unary!(super::CastStringToMzTimestamp)]
     fn cast_mz_timestamp_to_string(a: Timestamp) -> String {
         let mut buf = String::new();
         strconv::format_mz_timestamp(&mut buf, a);
@@ -35,7 +35,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "text_to_mz_timestamp"]
     #[preserves_uniqueness = false]
-    #[right_inverse = to_unary!(super::CastMzTimestampToString)]
+    #[inverse = to_unary!(super::CastMzTimestampToString)]
     fn cast_string_to_mz_timestamp(a: String) -> Result<Timestamp, EvalError> {
         strconv::parse_mz_timestamp(&a).err_into()
     }

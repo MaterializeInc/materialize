@@ -24,7 +24,7 @@ use crate::EvalError;
 sqlfunc!(
     #[sqlname = "jsonb_to_text"]
     #[preserves_uniqueness = false]
-    #[right_inverse = to_unary!(super::CastStringToJsonb)]
+    #[inverse = to_unary!(super::CastStringToJsonb)]
     fn cast_jsonb_to_string<'a>(a: JsonbRef<'a>) -> String {
         let mut buf = String::new();
         strconv::format_jsonb(&mut buf, a);

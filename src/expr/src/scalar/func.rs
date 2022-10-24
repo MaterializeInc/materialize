@@ -3405,23 +3405,34 @@ trait LazyUnaryFunc {
     /// the above property is true.
     fn preserves_uniqueness(&self) -> bool;
 
-    /// The [right inverse] of this function, if it has one and we have
-    /// determined it.
+    /// The [inverse] of this function, if it has one and we have determined it.
     ///
-    /// The optimizer can use this information when selecting indexes, e.g. an
+    /// The optimizer _can_ use this information when selecting indexes, e.g. an
     /// indexed column has a cast applied to it, by moving the right inverse of
     /// the cast to another value, we can select the indexed column.
     ///
-    /// Note that a value of `None` does not imply that the right inverse does
-    /// not exist; it could also mean we have not yet invested the energy in
+    /// Note that a value of `None` does not imply that the inverse does not
+    /// exist; it could also mean we have not yet invested the energy in
     /// representing it. For example, in the case of complex casts, such as
     /// between two list types, we could determine the right inverse, but doing
     /// so is not immediately necessary as this information is only used by the
     /// optimizer.
     ///
-    /// [right inverse]:
-    ///     https://en.wikipedia.org/wiki/Inverse_function#Left_and_right_inverses
-    fn right_inverse(&self) -> Option<crate::UnaryFunc>;
+    /// ## Right vs. left vs. inverses
+    /// - Right inverses are when the inverse function preserves uniqueness.
+    ///   These are the functions that the optimizer uses to move casts between
+    ///   expressions.
+    /// - Left inverses are when the function itself preserves uniqueness.
+    /// - Inverses are when a function is both a right and a left inverse (e.g.,
+    ///   bit_not_int64 is both a right and left inverse of itself).
+    ///
+    /// We call this function `inverse` for simplicity's sake; it doesn't always
+    /// correspond to the mathematical notion of "inverse." However, in
+    /// conjunction with checks to `preserves_uniqueness` you can determine
+    /// which type of inverse we return.
+    ///
+    /// [inverse]: https://en.wikipedia.org/wiki/Inverse_function
+    fn inverse(&self) -> Option<crate::UnaryFunc>;
 }
 
 /// A description of an SQL unary function that operates on eagerly evaluated expressions
@@ -3451,7 +3462,7 @@ trait EagerUnaryFunc<'a> {
         false
     }
 
-    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
     }
 }
@@ -3489,8 +3500,8 @@ impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
         self.preserves_uniqueness()
     }
 
-    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
-        self.right_inverse()
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        self.inverse()
     }
 }
 

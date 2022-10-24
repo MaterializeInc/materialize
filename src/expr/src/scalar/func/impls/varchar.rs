@@ -13,7 +13,7 @@ use mz_repr::adt::varchar::VarChar;
 sqlfunc!(
     #[sqlname = "varchar_to_text"]
     #[preserves_uniqueness = true]
-    #[right_inverse = to_unary!(super::CastStringToVarChar {
+    #[inverse = to_unary!(super::CastStringToVarChar {
         length: None,
         fail_on_len: false,
     })]

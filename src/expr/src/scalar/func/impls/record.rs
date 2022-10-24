@@ -58,7 +58,7 @@ impl LazyUnaryFunc for CastRecordToString {
         true
     }
 
-    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
         // TODO? if we moved typeconv into expr, we could evaluate this
         None
     }
@@ -114,7 +114,7 @@ impl LazyUnaryFunc for CastRecord1ToRecord2 {
         false
     }
 
-    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
         // TODO: we could determine Record1's type from `cast_exprs`
         None
     }
@@ -169,7 +169,7 @@ impl LazyUnaryFunc for RecordGet {
         false
     }
 
-    fn right_inverse(&self) -> Option<crate::UnaryFunc> {
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
     }
 }
