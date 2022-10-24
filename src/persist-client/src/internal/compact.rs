@@ -343,15 +343,17 @@ where
                 }
             }
         }
-        if let Some(batch) = single_nonempty_batch {
+        if let Some(single_nonempty_batch) = single_nonempty_batch {
             // if we have a single nonempty batch, we still want to compact if:
             //   - it has >1 run, so its runs can be merged together
             //   - it it has a since of the minimum antichain. this implies the batch was
             //     produced by a writer's append (i.e. not from compaction), and it could
             //     require truncation. rewriting the batch via compaction will trim out any
             //     of the unneeded data.
-            if batch.runs.len() == 0 && batch.desc.since() != &Antichain::from_elem(T::minimum()) {
-                let mut output = batch.clone();
+            if single_nonempty_batch.runs.len() == 0
+                && single_nonempty_batch.desc.since() != &Antichain::from_elem(T::minimum())
+            {
+                let mut output = single_nonempty_batch.clone();
                 output.desc = req.desc;
                 metrics.compaction.single_batch_fast_path.inc();
                 return Ok(CompactRes { output });

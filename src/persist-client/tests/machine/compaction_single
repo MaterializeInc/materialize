@@ -33,7 +33,7 @@ compact output=b_compacted_again inputs=(b_compacted) lower=1 upper=2 since=999
 ----
 parts=1 len=1
 
-# (the since has not advanced, confirming we're reading the same contents referred by b_compacted)
+# (the timestamp has not advanced, confirming we're reading the same contents referred by b_compacted)
 fetch-batch input=b_compacted_again
 ----
 <part 0>
@@ -104,7 +104,7 @@ compact output=b1_unchanged inputs=(b0,b1,b2,b3) lower=0 upper=4 since=99
 ----
 parts=1 len=1
 
-# (the since has not advanced, confirming we're reading the same contents referred by b1)
+# (the timestamp has not advanced, confirming we're reading the same contents referred by b1)
 fetch-batch input=b1_unchanged
 ----
 <part 0>
