@@ -329,7 +329,7 @@ impl KafkaTxProducer {
 
     async fn retry_on_txn_error<'a, F, Fut, T>(
         &self,
-        hc: Rc<RefCell<Option<Healthchecker>>>,
+        hc: Arc<Mutex<Option<Healthchecker>>>,
         f: F,
     ) -> T
     where
@@ -343,9 +343,9 @@ impl KafkaTxProducer {
                     Ok(result) => Ok(result),
                     Err(KafkaError::Transaction(e)) if e.txn_requires_abort() => {
                         info!("error requiring txn abort in kafka sink: {:?}", e);
-                        let () = self.abort_active_txn(Rc::clone(&hc)).await;
+                        let () = self.abort_active_txn(Arc::clone(&hc)).await;
                         Healthchecker::report_stall_and_panic(
-                            hc.borrow_mut().as_mut(),
+                            hc.lock().await.as_mut(),
                             format!(
                                 "shutting down due error requiring txn abort in kafka sink: {e:?}"
                             ),
@@ -358,7 +358,7 @@ impl KafkaTxProducer {
                     }
                     Err(e) => {
                         Healthchecker::report_stall_and_panic(
-                            hc.borrow_mut().as_mut(),
+                            hc.lock().await.as_mut(),
                             format!("shutting down due to non-retriable error: {e:?}"),
                         )
                         .await
@@ -369,7 +369,7 @@ impl KafkaTxProducer {
             .expect("retries infinitely")
     }
 
-    async fn abort_active_txn(&self, hc: Rc<RefCell<Option<Healthchecker>>>) {
+    async fn abort_active_txn(&self, hc: Arc<Mutex<Option<Healthchecker>>>) {
         Retry::default()
             .clamp_backoff(BACKOFF_CLAMP)
             .retry_async(|_| async {
@@ -381,7 +381,7 @@ impl KafkaTxProducer {
                     }
                     Err(e) => {
                         Healthchecker::report_stall_and_panic(
-                            hc.borrow_mut().as_mut(),
+                            hc.lock().await.as_mut(),
                             format!("non-retriable error while aborting kafka transaction: {e:?}"),
                         )
                         .await
@@ -404,7 +404,7 @@ impl ProgressInitState {
     fn to_running(
         self,
         gate_ts: Rc<Cell<Option<Timestamp>>>,
-        healthchecker: Rc<RefCell<Option<Healthchecker>>>,
+        healthchecker: Arc<Mutex<Option<Healthchecker>>>,
     ) -> ProgressRunningState {
         ProgressRunningState {
             topic: self.topic,
@@ -420,8 +420,9 @@ struct ProgressRunningState {
     topic: String,
     key: String,
     gate_ts: Rc<Cell<Option<Timestamp>>>,
-    // N.B. Safe because we don't hold borrows open very long -- and everything is on one thread.
-    healthchecker: Rc<RefCell<Option<Healthchecker>>>,
+    // Using Arc<Mutex> because clippy complains about holding a RefCell reference across await points if we use
+    // an `Rc<RefCell>`.
+    healthchecker: Arc<Mutex<Option<Healthchecker>>>,
 }
 
 #[derive(Debug)]
@@ -448,10 +449,10 @@ impl KafkaSinkStateEnum {
         }
     }
 
-    fn healthchecker(&self) -> Rc<RefCell<Option<Healthchecker>>> {
+    fn healthchecker(&self) -> Arc<Mutex<Option<Healthchecker>>> {
         match self {
-            Self::Init(_) => Rc::new(RefCell::new(None)),
-            Self::Running(ProgressRunningState { healthchecker, .. }) => Rc::clone(healthchecker),
+            Self::Init(_) => Arc::new(Mutex::new(None)),
+            Self::Running(ProgressRunningState { healthchecker, .. }) => Arc::clone(healthchecker),
         }
     }
 }
@@ -627,10 +628,10 @@ impl KafkaSinkState {
                     } else {
                         // We've received an error that is not transient
                         Healthchecker::report_stall_and_panic(
-                            self.sink_state.healthchecker().borrow_mut().as_mut(),
+                            self.sink_state.healthchecker().lock().await.as_mut(),
                             format!("fatal error while producing message in {}: {e}", self.name,),
                         )
-                        .await
+                        .await;
                     }
                 }
             }
@@ -1120,17 +1121,17 @@ where
                 } else {
                     None
                 };
-                let healthchecker = Rc::new(RefCell::new(healthchecker));
+                let healthchecker = Arc::new(Mutex::new(healthchecker));
 
                 s.producer
-                    .retry_on_txn_error(Rc::clone(&healthchecker), |p| p.init_transactions())
+                    .retry_on_txn_error(Arc::clone(&healthchecker), |p| p.init_transactions())
                     .await;
 
                 let latest_ts = match s.determine_latest_progress_record().await {
                     Ok(latest_ts) => latest_ts,
                     Err(e) => {
                         Healthchecker::report_stall_and_panic(
-                            healthchecker.borrow_mut().as_mut(),
+                            healthchecker.lock().await.as_mut(),
                             format!("determining latest progress record {e:?}"),
                         )
                         .await
@@ -1142,7 +1143,7 @@ where
                 );
                 shared_gate_ts.set(latest_ts);
 
-                if let Some(ref mut healthchecker) = &mut *healthchecker.borrow_mut() {
+                if let Some(ref mut healthchecker) = healthchecker.lock().await.as_mut() {
                     healthchecker.update_status(SinkStatus::Running).await;
                 }
 
