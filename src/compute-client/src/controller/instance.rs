@@ -117,11 +117,7 @@ where
         let collections = arranged_logs
             .iter()
             .map(|(_, id)| {
-                let state = CollectionState::new(
-                    Antichain::from_elem(T::minimum()),
-                    Vec::new(),
-                    Vec::new(),
-                );
+                let state = CollectionState::new_log_collection();
                 (*id, state)
             })
             .collect();
@@ -255,27 +251,38 @@ where
     ComputeGrpcClient: ComputeClient<T>,
 {
     /// Add a new instance replica, by ID.
-    pub fn add_replica(
+    pub async fn add_replica(
         &mut self,
         id: ReplicaId,
         location: ComputeReplicaLocation,
         mut logging_config: Option<LoggingConfig>,
     ) -> Result<(), ComputeError> {
-        if let Some(logging) = &mut logging_config {
-            // Initialize state for per-replica log sources.
+        let maintained_logs = if let Some(logging) = &mut logging_config {
+            // Initialize state for per-replica log collections.
             for (log_id, _) in logging.sink_logs.values() {
-                self.compute.collections.insert(
-                    *log_id,
-                    CollectionState::new(
-                        Antichain::from_elem(T::minimum()),
-                        Vec::new(),
-                        Vec::new(),
-                    ),
-                );
+                self.compute
+                    .collections
+                    .insert(*log_id, CollectionState::new_log_collection());
             }
 
             logging.active_logs = self.compute.arranged_logs.clone();
+            logging.log_identifiers().collect()
+        } else {
+            BTreeSet::new()
         };
+
+        // Initialize frontier tracking the new replica.
+        let mut updates = Vec::new();
+        for (compute_id, collection) in &mut self.compute.collections {
+            // Skip log collections not maintained by this replica.
+            if collection.log_collection && !maintained_logs.contains(compute_id) {
+                continue;
+            }
+
+            let read_frontier = collection.read_frontier();
+            updates.push((*compute_id, read_frontier.to_owned()));
+        }
+        self.update_write_frontiers(id, &updates).await?;
 
         let replica = Replica::spawn(
             id,
@@ -305,7 +312,6 @@ where
         for peek in self.compute.peeks.values_mut() {
             peek.unfinished.insert(id);
         }
-
         Ok(())
     }
 
@@ -326,7 +332,10 @@ where
     /// This method does not cause an orchestrator removal of the replica, so it is suitable for
     /// removing the replica temporarily, e.g., during rehydration.
     async fn remove_replica_state(&mut self, id: ReplicaId) -> Result<(), ComputeError> {
-        // Removing a replica might implicitly finish a peeks.
+        // Remove frontier tracking for this replica.
+        self.remove_write_frontiers(id).await?;
+
+        // Removing a replica might implicitly finish peeks.
         let mut peeks_to_remove = BTreeSet::new();
         for (uuid, peek) in &mut self.compute.peeks {
             peek.unfinished.remove(&id);
@@ -348,7 +357,7 @@ where
         let location = self.compute.replicas[&id].location.clone();
         let logging_config = self.compute.replicas[&id].logging_config.clone();
         self.remove_replica_state(id).await?;
-        self.add_replica(id, location, logging_config)
+        self.add_replica(id, location, logging_config).await
     }
 
     /// Rehydrate any failed replicas of this instance.
@@ -435,25 +444,22 @@ where
                 .await?;
 
             // Install collection state for each of the exports.
-            for sink_id in dataflow.sink_exports.keys() {
+            let mut updates = Vec::new();
+            for export_id in dataflow.export_ids() {
                 self.compute.collections.insert(
-                    *sink_id,
+                    export_id,
                     CollectionState::new(
                         as_of.clone(),
                         storage_dependencies.clone(),
                         compute_dependencies.clone(),
                     ),
                 );
+                updates.push((export_id, as_of.clone()));
             }
-            for index_id in dataflow.index_exports.keys() {
-                self.compute.collections.insert(
-                    *index_id,
-                    CollectionState::new(
-                        as_of.clone(),
-                        storage_dependencies.clone(),
-                        compute_dependencies.clone(),
-                    ),
-                );
+            // Initialize tracking of replica frontiers.
+            let replica_ids: Vec<_> = self.compute.replicas.keys().copied().collect();
+            for replica_id in replica_ids {
+                self.update_write_frontiers(replica_id, &updates).await?;
             }
 
             // Initialize tracking of subscribes.
@@ -680,16 +686,26 @@ where
     #[tracing::instrument(level = "debug", skip(self))]
     async fn update_write_frontiers(
         &mut self,
+        replica_id: ReplicaId,
         updates: &[(GlobalId, Antichain<T>)],
     ) -> Result<(), ComputeError> {
-        let mut read_capability_changes = BTreeMap::default();
+        let mut advanced_collections = Vec::new();
+        let mut compute_read_capability_changes = BTreeMap::default();
+        let mut storage_read_capability_changes = BTreeMap::default();
         for (id, new_upper) in updates.iter() {
             let collection = self
                 .compute
                 .collection_mut(*id)
                 .expect("Reference to absent collection");
 
-            collection.write_frontier.join_assign(&new_upper);
+            if PartialOrder::less_than(&collection.write_frontier, new_upper) {
+                advanced_collections.push(*id);
+                collection.write_frontier = new_upper.clone();
+            }
+
+            let old_upper = collection
+                .replica_write_frontiers
+                .insert(replica_id, new_upper.clone());
 
             let mut new_read_capability = collection
                 .read_policy
@@ -703,12 +719,28 @@ where
                 std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
                 update.extend(new_read_capability.iter().map(|time| (time.clone(), -1)));
                 if !update.is_empty() {
-                    read_capability_changes.insert(*id, update);
+                    compute_read_capability_changes.insert(*id, update);
                 }
             }
+
+            // Update read holds on storage dependencies.
+            for storage_id in &collection.storage_dependencies {
+                let update = storage_read_capability_changes
+                    .entry(*storage_id)
+                    .or_insert_with(|| ChangeBatch::new());
+                if let Some(old) = &old_upper {
+                    update.extend(old.iter().map(|time| (time.clone(), -1)));
+                }
+                update.extend(new_upper.iter().map(|time| (time.clone(), 1)));
+            }
         }
-        if !read_capability_changes.is_empty() {
-            self.update_read_capabilities(&mut read_capability_changes)
+        if !compute_read_capability_changes.is_empty() {
+            self.update_read_capabilities(&mut compute_read_capability_changes)
+                .await?;
+        }
+        if !storage_read_capability_changes.is_empty() {
+            self.storage_controller
+                .update_read_capabilities(&mut storage_read_capability_changes)
                 .await?;
         }
 
@@ -717,14 +749,43 @@ where
         // TODO(teskje): The storage controller should have a task to directly
         // keep track of the frontiers of storage collections, instead of
         // relying on others for that information.
-        let storage_updates: Vec<_> = updates
-            .iter()
-            .filter(|(id, _)| self.storage_controller.collection(*id).is_ok())
-            .map(|(id, upper)| (*id, upper.clone()))
+        let storage_updates: Vec<_> = advanced_collections
+            .into_iter()
+            .filter(|id| self.storage_controller.collection(*id).is_ok())
+            .map(|id| {
+                let collection = self.compute.collection(id).unwrap();
+                (id, collection.write_frontier.clone())
+            })
             .collect();
         self.storage_controller
             .update_write_frontiers(&storage_updates)
             .await?;
+
+        Ok(())
+    }
+
+    /// Remove frontier tracking state for the given replica.
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn remove_write_frontiers(&mut self, replica_id: ReplicaId) -> Result<(), ComputeError> {
+        let mut storage_read_capability_changes = BTreeMap::default();
+        for collection in self.compute.collections.values_mut() {
+            let last_upper = collection.replica_write_frontiers.remove(&replica_id);
+
+            if let Some(frontier) = last_upper {
+                // Update read holds on storage dependencies.
+                for storage_id in &collection.storage_dependencies {
+                    let update = storage_read_capability_changes
+                        .entry(*storage_id)
+                        .or_insert_with(|| ChangeBatch::new());
+                    update.extend(frontier.iter().map(|time| (time.clone(), -1)));
+                }
+            }
+        }
+        if !storage_read_capability_changes.is_empty() {
+            self.storage_controller
+                .update_read_capabilities(&mut storage_read_capability_changes)
+                .await?;
+        }
 
         Ok(())
     }
@@ -852,7 +913,7 @@ where
         list: Vec<(GlobalId, Antichain<T>)>,
         replica_id: ReplicaId,
     ) -> Result<(), ComputeError> {
-        self.update_write_frontiers(&list).await
+        self.update_write_frontiers(replica_id, &list).await
     }
 
     async fn handle_peek_response(
@@ -961,7 +1022,8 @@ where
             }
         };
 
-        self.update_write_frontiers(&frontier_updates).await?;
+        self.update_write_frontiers(replica_id, &frontier_updates)
+            .await?;
         Ok(controller_response)
     }
 }

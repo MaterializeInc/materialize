@@ -537,7 +537,7 @@ where
     ComputeGrpcClient: ComputeClient<T>,
 {
     /// Adds replicas of an instance.
-    pub fn add_replica_to_instance(
+    pub async fn add_replica_to_instance(
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
@@ -562,6 +562,7 @@ where
 
         self.instance(instance_id)?
             .add_replica(replica_id, config.location, logging_config)
+            .await
     }
 
     /// Removes a replica from an instance, including its service in the orchestrator.
@@ -738,6 +739,11 @@ impl<T> ComputeInstanceRef<'_, T> {
 /// State maintained about individual collections.
 #[derive(Debug)]
 pub struct CollectionState<T> {
+    /// Whether this collection is a log collection.
+    ///
+    /// Log collections are special in that they are only maintained by a subset of all replicas.
+    log_collection: bool,
+
     /// Accumulation of read capabilities for the collection.
     ///
     /// This accumulation will always contain `self.implied_capability`, but may also contain
@@ -755,6 +761,8 @@ pub struct CollectionState<T> {
 
     /// The write frontier of this collection.
     write_frontier: Antichain<T>,
+    /// The write frontiers reported by individual replicas.
+    replica_write_frontiers: BTreeMap<ReplicaId, Antichain<T>>,
 }
 
 impl<T: Timestamp> CollectionState<T> {
@@ -766,14 +774,24 @@ impl<T: Timestamp> CollectionState<T> {
     ) -> Self {
         let mut read_capabilities = MutableAntichain::new();
         read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
+
         Self {
+            log_collection: false,
             read_capabilities,
             implied_capability: since.clone(),
             read_policy: ReadPolicy::ValidFrom(since),
             storage_dependencies,
             compute_dependencies,
             write_frontier: Antichain::from_elem(Timestamp::minimum()),
+            replica_write_frontiers: BTreeMap::new(),
         }
+    }
+
+    pub fn new_log_collection() -> Self {
+        let since = Antichain::from_elem(Timestamp::minimum());
+        let mut state = Self::new(since, Vec::new(), Vec::new());
+        state.log_collection = true;
+        state
     }
 
     /// Reports the current read capability.
