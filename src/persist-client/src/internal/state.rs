@@ -351,7 +351,19 @@ where
     pub fn expire_reader(&mut self, reader_id: &ReaderId) -> ControlFlow<Infallible, bool> {
         let existed = self.readers.remove(reader_id).is_some();
         if existed {
-            self.update_since();
+            // TODO: Re-enable this once we have #15511.
+            //
+            // Temporarily disabling this because we think it might be the cause
+            // of the remap since bug. Specifically, a storaged process has a
+            // ReadHandle for maintaining the once and one inside a Listen. If
+            // we crash and stay down for longer than the read lease duration,
+            // it's possible that an expiry of them both in quick succession
+            // jumps the since forward to the Listen one.
+            //
+            // Don't forget to update the downgrade_since when this gets
+            // switched back on.
+            //
+            // self.update_since();
         }
         // No-op if existed is false, but still commit the state change so that
         // this gets linearized.
@@ -890,11 +902,19 @@ mod tests {
 
         // Shard since advances when reader with the minimal since expires.
         assert_eq!(state.collections.expire_reader(&reader2), Continue(true));
-        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));
+        // TODO: expiry temporarily doesn't advance since until we have #15511.
+        // Switch this assertion back when we re-enable this.
+        //
+        // assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));
+        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
 
         // Shard since unaffected when all readers are expired.
         assert_eq!(state.collections.expire_reader(&reader3), Continue(true));
-        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));
+        // TODO: expiry temporarily doesn't advance since until we have #15511.
+        // Switch this assertion back when we re-enable this.
+        //
+        // assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));
+        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
     }
 
     #[test]

@@ -268,8 +268,8 @@ where
             .await
             .unwrap_or_else(|e| {
                 panic!(
-                    "{source_id}: cannot serve requested as_of {:?}: {:?}",
-                    as_of_stream, e
+                    "{source_id}: {} cannot serve requested as_of {:?}: {:?}",
+                    data_shard, as_of_stream, e
                 )
             });
 
