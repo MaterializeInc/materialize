@@ -11,3 +11,6 @@
 
 # History starts out empty when there are no sources
 > select * from mz_internal.mz_source_status_history
+
+# History starts out empty when there are no sinks
+> select * from mz_internal.mz_sink_status_history
