@@ -121,7 +121,21 @@ impl Healthchecker {
         Ok(healthchecker)
     }
 
-    /// Process a [`SourceStatusUpdate`] emitted by a source
+    /// Report a SinkStatus::Stalled and then panic with the same message
+    pub async fn report_stall_and_panic<S>(hc: Option<&mut Self>, msg: S) -> !
+    where
+        S: ToString + std::fmt::Debug,
+    {
+        if let Some(healthchecker) = hc {
+            healthchecker
+                .update_status(SinkStatus::Stalled(msg.to_string()))
+                .await;
+        }
+
+        panic!("{msg:?}")
+    }
+
+    /// Process a [`SinkStatusUpdate`] emitted by a sink
     pub async fn update_status(&mut self, status_update: SinkStatus) {
         trace!(
             "Processing status update: {status_update:?}, current status is {current_status}",

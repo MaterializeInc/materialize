@@ -326,6 +326,71 @@ impl KafkaTxProducer {
     {
         self.inner.send(record)
     }
+
+    async fn retry_on_txn_error<'a, F, Fut, T>(
+        &self,
+        hc: Rc<RefCell<Option<Healthchecker>>>,
+        f: F,
+    ) -> T
+    where
+        F: Fn(KafkaTxProducer) -> Fut,
+        Fut: Future<Output = KafkaResult<T>>,
+    {
+        Retry::default()
+            .clamp_backoff(BACKOFF_CLAMP)
+            .retry_async(|_| async {
+                match f(self.clone()).await {
+                    Ok(result) => Ok(result),
+                    Err(KafkaError::Transaction(e)) if e.txn_requires_abort() => {
+                        info!("error requiring txn abort in kafka sink: {:?}", e);
+                        let () = self.abort_active_txn(Rc::clone(&hc)).await;
+                        Healthchecker::report_stall_and_panic(
+                            hc.borrow_mut().as_mut(),
+                            format!(
+                                "shutting down due error requiring txn abort in kafka sink: {e:?}"
+                            ),
+                        )
+                        .await
+                    }
+                    Err(KafkaError::Transaction(e)) if e.is_retriable() => {
+                        info!("retriable error in kafka sink: {e:?}; will retry");
+                        Err(KafkaError::Transaction(e))
+                    }
+                    Err(e) => {
+                        Healthchecker::report_stall_and_panic(
+                            hc.borrow_mut().as_mut(),
+                            format!("shutting down due to non-retriable error: {e:?}"),
+                        )
+                        .await
+                    }
+                }
+            })
+            .await
+            .expect("retries infinitely")
+    }
+
+    async fn abort_active_txn(&self, hc: Rc<RefCell<Option<Healthchecker>>>) {
+        Retry::default()
+            .clamp_backoff(BACKOFF_CLAMP)
+            .retry_async(|_| async {
+                info!("Attempting to abort kafka transaction");
+                match self.abort_transaction().await {
+                    Ok(()) => Ok(()),
+                    Err(KafkaError::Transaction(e)) if e.is_retriable() => {
+                        Err(KafkaError::Transaction(e))
+                    }
+                    Err(e) => {
+                        Healthchecker::report_stall_and_panic(
+                            hc.borrow_mut().as_mut(),
+                            format!("non-retriable error while aborting kafka transaction: {e:?}"),
+                        )
+                        .await
+                    }
+                }
+            })
+            .await
+            .expect("retries infinitely");
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -339,7 +404,7 @@ impl ProgressInitState {
     fn to_running(
         self,
         gate_ts: Rc<Cell<Option<Timestamp>>>,
-        healthchecker: Option<Healthchecker>,
+        healthchecker: Rc<RefCell<Option<Healthchecker>>>,
     ) -> ProgressRunningState {
         ProgressRunningState {
             topic: self.topic,
@@ -355,7 +420,8 @@ struct ProgressRunningState {
     topic: String,
     key: String,
     gate_ts: Rc<Cell<Option<Timestamp>>>,
-    healthchecker: Option<Healthchecker>,
+    // N.B. Safe because we don't hold borrows open very long -- and everything is on one thread.
+    healthchecker: Rc<RefCell<Option<Healthchecker>>>,
 }
 
 #[derive(Debug)]
@@ -382,10 +448,10 @@ impl KafkaSinkStateEnum {
         }
     }
 
-    fn healthchecker(&self) -> Option<&Healthchecker> {
+    fn healthchecker(&self) -> Rc<RefCell<Option<Healthchecker>>> {
         match self {
-            Self::Init(_) => None,
-            Self::Running(ProgressRunningState { healthchecker, .. }) => healthchecker.as_ref(),
+            Self::Init(_) => Rc::new(RefCell::new(None)),
+            Self::Running(ProgressRunningState { healthchecker, .. }) => Rc::clone(healthchecker),
         }
     }
 }
@@ -530,53 +596,6 @@ impl KafkaSinkState {
         config
     }
 
-    async fn retry_on_txn_error<'a, F, Fut, T>(&self, f: F) -> T
-    where
-        F: Fn(KafkaTxProducer) -> Fut,
-        Fut: Future<Output = KafkaResult<T>>,
-    {
-        Retry::default()
-            .clamp_backoff(BACKOFF_CLAMP)
-            .retry_async(|_| async {
-                match f(self.producer.clone()).await {
-                    Ok(result) => Ok(result),
-                    Err(KafkaError::Transaction(e)) if e.txn_requires_abort() => {
-                        info!("error requiring txn abort in kafka sink: {:?}", e);
-                        let () = self.abort_active_txn().await;
-                        panic!("shutting down due error requiring txn abort in kafka sink: {e:?}");
-                    }
-                    Err(KafkaError::Transaction(e)) if e.is_retriable() => {
-                        info!("retriable error in kafka sink: {e:?}; will retry");
-                        Err(KafkaError::Transaction(e))
-                    }
-                    Err(e) => {
-                        panic!("shutting down due to non-retriable error: {e:?}");
-                    }
-                }
-            })
-            .await
-            .expect("retries infinitely")
-    }
-
-    async fn abort_active_txn(&self) {
-        Retry::default()
-            .clamp_backoff(BACKOFF_CLAMP)
-            .retry_async(|_| async {
-                info!("Attempting to abort kafka transaction");
-                match self.producer.abort_transaction().await {
-                    Ok(()) => Ok(()),
-                    Err(KafkaError::Transaction(e)) if e.is_retriable() => {
-                        Err(KafkaError::Transaction(e))
-                    }
-                    Err(e) => {
-                        panic!("non-retriable error while aborting kafka transaction: {e:?}");
-                    }
-                }
-            })
-            .await
-            .expect("retries infinitely");
-    }
-
     async fn send<'a, K, P>(&self, mut record: BaseRecord<'a, K, P>)
     where
         K: ToBytes + ?Sized,
@@ -607,7 +626,11 @@ impl KafkaSinkState {
                         continue;
                     } else {
                         // We've received an error that is not transient
-                        panic!("fatal error while producing message in {}: {e}", self.name,);
+                        Healthchecker::report_stall_and_panic(
+                            self.sink_state.healthchecker().borrow_mut().as_mut(),
+                            format!("fatal error while producing message in {}: {e}", self.name,),
+                        )
+                        .await
                     }
                 }
             }
@@ -894,7 +917,9 @@ impl KafkaSinkState {
 
             if min_frontier > self.latest_progress_ts {
                 // record the write frontier in the progress topic.
-                self.retry_on_txn_error(|p| p.begin_transaction()).await;
+                self.producer
+                    .retry_on_txn_error(self.sink_state.healthchecker(), |p| p.begin_transaction())
+                    .await;
 
                 info!(
                     "{}: sending progress for gate ts: {:?}",
@@ -903,7 +928,9 @@ impl KafkaSinkState {
                 self.send_progress_record(min_frontier, self.sink_state.unwrap_running())
                     .await;
 
-                self.retry_on_txn_error(|p| p.commit_transaction()).await;
+                self.producer
+                    .retry_on_txn_error(self.sink_state.healthchecker(), |p| p.commit_transaction())
+                    .await;
                 progress_emitted = true;
                 self.latest_progress_ts = min_frontier;
             }
@@ -1074,7 +1101,7 @@ where
     builder.build(move |_capabilities| async move {
         if is_active_worker {
             if let KafkaSinkStateEnum::Init(ref init) = s.sink_state {
-                let mut healthchecker = if healthchecker_args
+                let healthchecker = if healthchecker_args
                     .collection_metadata
                     .status_shard
                     .is_some()
@@ -1093,20 +1120,29 @@ where
                 } else {
                     None
                 };
+                let healthchecker = Rc::new(RefCell::new(healthchecker));
 
-                s.retry_on_txn_error(|p| p.init_transactions()).await;
+                s.producer
+                    .retry_on_txn_error(Rc::clone(&healthchecker), |p| p.init_transactions())
+                    .await;
 
-                let latest_ts = s
-                    .determine_latest_progress_record()
-                    .await
-                    .expect("determining latest progress record");
+                let latest_ts = match s.determine_latest_progress_record().await {
+                    Ok(latest_ts) => latest_ts,
+                    Err(e) => {
+                        Healthchecker::report_stall_and_panic(
+                            healthchecker.borrow_mut().as_mut(),
+                            format!("determining latest progress record {e:?}"),
+                        )
+                        .await
+                    }
+                };
                 info!(
                     "{}: initial as_of: {:?}, latest progress record: {:?}",
                     s.name, as_of.frontier, latest_ts
                 );
                 shared_gate_ts.set(latest_ts);
 
-                if let Some(ref mut healthchecker) = healthchecker {
+                if let Some(ref mut healthchecker) = &mut *healthchecker.borrow_mut() {
                     healthchecker.update_status(SinkStatus::Running).await;
                 }
 
@@ -1213,7 +1249,9 @@ where
                                     ts,
                                     rows.len()
                                 );
-                                s.retry_on_txn_error(|p| p.begin_transaction()).await;
+                s.producer
+                    .retry_on_txn_error(s.sink_state.healthchecker(), |p| p.begin_transaction())
+                    .await;
 
                                 let mut repeat_counter = 0;
                                 for encoded_row in rows {
@@ -1252,7 +1290,9 @@ where
                                 s.send_progress_record(*ts, s.sink_state.unwrap_running()).await;
 
                                 info!("Committing transaction for {:?}", ts,);
-                                s.retry_on_txn_error(|p| p.commit_transaction()).await;
+                s.producer
+                    .retry_on_txn_error(s.sink_state.healthchecker(), |p| p.commit_transaction())
+                    .await;
 
                                 s.flush().await;
 
