@@ -37,7 +37,7 @@ Before following the steps, make sure to meet the next items:
     ----------------- | ----------------
     Host              | Materialize host name.
     Port              | **6875**
-    Database username | Materialize user email
+    Database username | Materialize user.
     Database password | App-specific password.
     SSL               | ✅
 
