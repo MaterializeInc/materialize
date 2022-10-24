@@ -45,7 +45,6 @@ class Testdrive(Action):
         self.handle = e.testdrive(self.input)
 
     def join(self, e: Executor) -> None:
-        assert self.handle is not None
         e.join(self.handle)
 
 
