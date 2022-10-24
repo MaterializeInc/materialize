@@ -98,6 +98,7 @@ impl MetadataExport<mz_repr::Timestamp> for MetadataExportFetcher {
 pub enum IntrospectionType {
     /// We're not responsible for appending to this collection automatically, but we should
     /// automatically bump the write frontier from time to time.
+    SinkStatusHistory,
     SourceStatusHistory,
     ShardMapping,
 }
@@ -950,8 +951,9 @@ where
                             self.truncate_managed_collection(id).await;
                             self.initialize_shard_mapping().await;
                         }
-                        IntrospectionType::SourceStatusHistory => {
-                            // nothing to do: only storaged writes rows to the collection
+                        IntrospectionType::SourceStatusHistory
+                        | IntrospectionType::SinkStatusHistory => {
+                            // nothing to do: only storaged writes rows to these collections
                         }
                     }
                 }
