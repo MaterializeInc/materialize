@@ -512,6 +512,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             // Report frontier information back the coordinator.
             if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
                 compute_state.report_compute_frontiers();
+                compute_state.report_dropped_collections();
             }
 
             // Handle any received commands.
@@ -563,6 +564,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     sink_write_frontiers: HashMap::new(),
                     pending_peeks: Vec::new(),
                     reported_frontiers: HashMap::new(),
+                    dropped_collections: Vec::new(),
                     compute_logger: None,
                     persist_clients: Arc::clone(&self.persist_clients),
                     command_history: ComputeCommandHistory::default(),
