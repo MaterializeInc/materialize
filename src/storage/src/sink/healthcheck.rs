@@ -9,16 +9,11 @@
 
 //! Healthchecks for sinks
 use std::fmt::Display;
-use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use anyhow::Context;
-use bytes::BufMut;
 use chrono::{DateTime, NaiveDateTime, Utc};
-use mz_persist_client::ShardId;
-use mz_persist_types::Codec;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use prost::Message;
+use mz_persist_client::{PersistLocation, ShardId};
 use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
 use tokio::sync::Mutex;
@@ -31,6 +26,7 @@ use mz_persist_client::write::WriteHandle;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 
 use crate::controller::CollectionMetadata;
+use crate::types::sources::SourceData;
 
 /// The Healthchecker is responsible for tracking the current state
 /// of a Timely worker for a source, as well as updating the relevant
@@ -46,78 +42,15 @@ pub struct Healthchecker {
     /// Write handle of the Healthchecker persist shard
     ///
     /// The schema used matches the one used in regular sources and tables.
-    write_handle: WriteHandle<HealthcheckerData, (), Timestamp, i64>,
+    write_handle: WriteHandle<SourceData, (), Timestamp, i64>,
     /// A listener to tail the Healthchecker shard for new updates
-    listener: Listen<HealthcheckerData, (), Timestamp, i64>,
+    listener: Listen<SourceData, (), Timestamp, i64>,
     /// The function that should be used to get the current time when updating upper
     now: NowFn,
 }
 
-// XXX: make this less general than just a "Row"
-// Defined as pub struct SourceData(pub Result<Row, DataflowError>);
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct HealthcheckerData(crate::types::sources::SourceData);
-impl Deref for HealthcheckerData {
-    type Target = crate::types::sources::SourceData;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-impl DerefMut for HealthcheckerData {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl RustType<crate::types::sources::ProtoSourceData> for HealthcheckerData {
-    fn into_proto(&self) -> crate::types::sources::ProtoSourceData {
-        use crate::types::sources::proto_source_data::Kind;
-        crate::types::sources::ProtoSourceData {
-            kind: Some(match &***self {
-                Ok(row) => Kind::Ok(row.into_proto()),
-                Err(err) => Kind::Err(err.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(
-        proto: crate::types::sources::ProtoSourceData,
-    ) -> Result<Self, TryFromProtoError> {
-        use crate::types::sources::proto_source_data::Kind;
-        match proto.kind {
-            Some(kind) => match kind {
-                Kind::Ok(row) => Ok(HealthcheckerData(crate::types::sources::SourceData(Ok(
-                    row.into_rust()?,
-                )))),
-                Kind::Err(err) => Ok(HealthcheckerData(crate::types::sources::SourceData(Err(
-                    err.into_rust()?,
-                )))),
-            },
-            None => Result::Err(TryFromProtoError::missing_field("ProtoSourceData::kind")),
-        }
-    }
-}
-
-impl Codec for HealthcheckerData {
-    fn codec_name() -> String {
-        "protobuf[HealthcheckerData]".into()
-    }
-
-    fn encode<B: BufMut>(&self, buf: &mut B) {
-        (&*self)
-            .into_proto()
-            .encode(buf)
-            .expect("no required fields means no initialization errors");
-    }
-
-    fn decode(buf: &[u8]) -> Result<Self, String> {
-        let proto =
-            crate::types::sources::ProtoSourceData::decode(buf).map_err(|err| err.to_string())?;
-        proto.into_rust().map_err(|err| err.to_string())
-    }
-}
-
 impl Healthchecker {
+    /// Create healthchecker for sink, recorded on `status_shard_id` at `persist_location`.
     pub async fn new(
         sink_id: GlobalId,
         persist_clients: &Arc<Mutex<PersistClientCache>>,
@@ -267,7 +200,7 @@ impl Healthchecker {
     /// having to assume that the `upper` is a single `u64`.
     async fn bootstrap_state(
         &mut self,
-        mut read_handle: ReadHandle<HealthcheckerData, (), Timestamp, i64>,
+        mut read_handle: ReadHandle<SourceData, (), Timestamp, i64>,
         upper: &Antichain<Timestamp>,
     ) {
         let since = read_handle.since().clone();
@@ -289,7 +222,7 @@ impl Healthchecker {
     fn process_collection_updates(
         &mut self,
         mut updates: Vec<(
-            (Result<HealthcheckerData, String>, Result<(), String>),
+            (Result<SourceData, String>, Result<(), String>),
             Timestamp,
             i64,
         )>,
@@ -301,7 +234,6 @@ impl Healthchecker {
             let row = source_data
                 .expect("failed to deserialize row")
                 .0
-                 .0
                 .expect("status collection should not have errors");
             let row_vec = row.unpack();
             let row_source_id = row_vec[1].unwrap_str();
@@ -317,7 +249,7 @@ impl Healthchecker {
         &self,
         status_update: &SinkStatus,
         ts: u64,
-    ) -> Vec<((HealthcheckerData, ()), Timestamp, i64)> {
+    ) -> Vec<((SourceData, ()), Timestamp, i64)> {
         let timestamp = NaiveDateTime::from_timestamp(
             (ts / 1000)
                 .try_into()
@@ -339,10 +271,7 @@ impl Healthchecker {
         let row = Row::pack_slice(&[timestamp, sink_id, status, error, metadata]);
 
         vec![(
-            (
-                HealthcheckerData(crate::types::sources::SourceData(Ok(row))),
-                (),
-            ),
+            (SourceData(Ok(row)), ()),
             ts.try_into()
                 .expect("timestamp does not fit into MzTimestamp"),
             1,
@@ -385,8 +314,8 @@ impl SinkStatus {
 
     fn error(&self) -> Option<&str> {
         match self {
-            SinkStatus::Stalled(e) => Some(e.deref()),
-            SinkStatus::Failed(e) => Some(e.deref()),
+            SinkStatus::Stalled(e) => Some(&*e),
+            SinkStatus::Failed(e) => Some(&*e),
             SinkStatus::Setup => None,
             SinkStatus::Starting => None,
             SinkStatus::Running => None,
@@ -781,11 +710,9 @@ mod tests {
             .unwrap()
             .into_iter()
             .map(
-                |((v, _), _, _): (
-                    (Result<HealthcheckerData, String>, Result<(), String>),
-                    u64,
-                    i64,
-                )| { v.unwrap().0 .0.unwrap() },
+                |((v, _), _, _): ((Result<SourceData, String>, Result<(), String>), u64, i64)| {
+                    v.unwrap().0.unwrap()
+                },
             )
             .collect_vec()
     }
