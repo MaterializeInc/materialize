@@ -12,7 +12,7 @@
 //! This module houses the handlers for statements that modify the catalog, like
 //! `ALTER`, `CREATE`, and `DROP`.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 use std::num::NonZeroUsize;
 use std::str::FromStr;
@@ -602,7 +602,7 @@ pub fn plan_create_source(
                 ProtoPostgresSourceDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
 
             // Register the available subsources
-            let mut available_subsources = HashMap::new();
+            let mut available_subsources = BTreeMap::new();
 
             for (i, table) in details.tables.iter().enumerate() {
                 let name = FullObjectName {
@@ -699,7 +699,7 @@ pub fn plan_create_source(
             let (load_generator, available_subsources) =
                 load_generator_ast_to_generator(generator, options)?;
             let available_subsources = available_subsources
-                .map(|a| HashMap::from_iter(a.into_iter().map(|(k, v)| (k, v.0))));
+                .map(|a| BTreeMap::from_iter(a.into_iter().map(|(k, v)| (k, v.0))));
             let generator = as_generator(&load_generator);
 
             let LoadGeneratorOptionExtracted { tick_interval, .. } = options.clone().try_into()?;
@@ -878,7 +878,7 @@ pub fn plan_create_source(
         (None, Some(_)) | (Some(_), Some(CreateSourceSubsources::All)) => {
             sql_bail!("[internal error] subsources should be resolved during purification")
         }
-        (None, None) => (HashMap::<FullObjectName, usize>::new(), vec![]),
+        (None, None) => (BTreeMap::new(), vec![]),
     };
 
     let mut subsource_exports = HashMap::new();
@@ -1062,7 +1062,7 @@ pub(crate) fn load_generator_ast_to_generator(
 ) -> Result<
     (
         mz_storage::types::sources::LoadGenerator,
-        Option<HashMap<FullObjectName, (usize, RelationDesc)>>,
+        Option<BTreeMap<FullObjectName, (usize, RelationDesc)>>,
     ),
     PlanError,
 > {
@@ -1113,7 +1113,7 @@ pub(crate) fn load_generator_ast_to_generator(
         }
     };
 
-    let mut available_subsources = HashMap::new();
+    let mut available_subsources = BTreeMap::new();
     let generator = as_generator(&load_generator);
     for (i, (name, desc)) in generator.views().iter().enumerate() {
         let name = FullObjectName {
