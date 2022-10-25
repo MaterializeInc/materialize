@@ -43,6 +43,7 @@ use crate::types::sources::{MzOffset, SourceData};
 /// produces messages with their associated timestamps.
 ///
 /// Shareable with `.share()`
+#[derive(Debug)]
 pub struct ReclockFollower {
     inner: Rc<RefCell<ReclockFollowerInner>>,
 }
@@ -133,6 +134,7 @@ fn integrate<'a>(
     })
 }
 
+#[derive(Debug)]
 struct ReclockFollowerInner {
     /// A dTVC trace of the remap collection containing all consolidated updates at
     /// `t` such that `since <= t < upper` indexed by partition and sorted by time.

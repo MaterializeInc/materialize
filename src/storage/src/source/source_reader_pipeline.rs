@@ -1136,6 +1136,11 @@ where
                 for update in remap_trace_buffer.drain(..) {
                     timestamper.push_trace_updates(update.into_iter())
                 }
+                trace!(
+                    "reclock({id}) {worker_id}/{worker_count}: \
+                    storing reclocked capability {:?}",
+                    cap
+                );
                 cap_set.insert(cap.retain());
             });
 
@@ -1314,15 +1319,42 @@ where
                         "reclock({id}) {worker_id}/{worker_count}: \
                         downgrading to {:?} \
                         global_source_upper {:?}, \
-                        global_batch_lower {:?}",
+                        global_batch_lower {:?}, \
+                        reclock follower {:?}",
                         new_ts_upper,
                         global_source_upper,
-                        global_batch_lower
+                        global_batch_lower,
+                        timestamper
                     );
 
-                    cap_set
-                        .try_downgrade(new_ts_upper.iter())
-                        .expect("cannot downgrade in reclock");
+                    match cap_set.try_downgrade(new_ts_upper.iter()) {
+                        Ok(()) => (), // All good!
+                        Err(_downgrade_error) => {
+                            // The `remap_operator` will only hand out
+                            // capabilities (with remap trace updates) for
+                            // timestamps that are beyond the reclocked
+                            // frontier. When this here `reclock_operator` is
+                            // starting up, it can happen that the frontier (as
+                            // far as we are aware of) is still at `[0]`,
+                            // meaning we cannot downgrade our capabilities.
+                            // This is perfectly fine, though, and we will
+                            // eventually downgrade the capabilities that we
+                            // have when the reclocked frontier advances
+                            // sufficiently.
+                            trace!(
+                                "reclock({id}) {worker_id}/{worker_count}: \
+                                cannot downgrade {:?} to {:?} \
+                                global_source_upper {:?}, \
+                                global_batch_lower {:?}, \
+                                reclock follower {:?}",
+                                cap_set,
+                                new_ts_upper,
+                                global_source_upper,
+                                global_batch_lower,
+                                timestamper
+                            );
+                        }
+                    }
                 }
             }
         }
