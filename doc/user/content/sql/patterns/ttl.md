@@ -23,8 +23,8 @@ The pattern uses a temporal filter over a row's creation timestamp plus a TTL. T
 
 Pattern example:
 ```sql
-  CREATE VIEW TTL_VIEW
-  SELECT (created_ts + ttl) as expiration_time
+  CREATE VIEW TTL_VIEW AS
+  SELECT (created_ts + ttl) AS expiration_time
   FROM events
   WHERE mz_now() < (created_ts + ttl);
 ```
