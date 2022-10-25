@@ -244,7 +244,7 @@ where
         }
 
         // Record the command so that new replicas can be brought up to speed.
-        self.history.push(cmd.clone());
+        self.history.push(cmd.clone(), &self.peeks);
 
         // Clone the command for each active replica.
         for (id, replica) in self.replicas.iter_mut() {
