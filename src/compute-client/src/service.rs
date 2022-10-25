@@ -304,22 +304,20 @@ where
                         match (&mut entry.1, &mut updates) {
                             (Err(_), _) => {
                                 // Subscribe is borked; nothing to do.
-                                None
+                                // TODO: Consider refreshing error?
                             }
                             (_, Err(text)) => {
                                 entry.1 = Err(text.clone());
-                                Some(Ok(ComputeResponse::SubscribeResponse(
-                                    id,
-                                    SubscribeResponse::Batch(SubscribeBatch {
-                                        lower: old_frontier,
-                                        upper: new_frontier,
-                                        updates: Err(text.to_string()),
-                                    }),
-                                )))
                             }
                             (Ok(stashed_updates), Ok(updates)) => {
                                 stashed_updates.append(updates);
-                                if old_frontier != new_frontier {
+                            }
+                        }
+
+                        // If the frontier has advanced, it is time to announce a thing.
+                        if old_frontier != new_frontier {
+                            let updates = match &mut entry.1 {
+                                Ok(stashed_updates) => {
                                     consolidate_updates(stashed_updates);
                                     let mut ship = Vec::new();
                                     let mut keep = Vec::new();
@@ -331,18 +329,20 @@ where
                                         }
                                     }
                                     entry.1 = Ok(keep);
-                                    Some(Ok(ComputeResponse::SubscribeResponse(
-                                        id,
-                                        SubscribeResponse::Batch(SubscribeBatch {
-                                            lower: old_frontier,
-                                            upper: new_frontier,
-                                            updates: Ok(ship),
-                                        }),
-                                    )))
-                                } else {
-                                    None
+                                    Ok(ship)
                                 }
-                            }
+                                Err(text) => Err(text.clone()),
+                            };
+                            Some(Ok(ComputeResponse::SubscribeResponse(
+                                id,
+                                SubscribeResponse::Batch(SubscribeBatch {
+                                    lower: old_frontier,
+                                    upper: new_frontier,
+                                    updates,
+                                }),
+                            )))
+                        } else {
+                            None
                         }
                     }
                     SubscribeResponse::DroppedAt(frontier) => {
