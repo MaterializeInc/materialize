@@ -99,10 +99,10 @@ impl Configuration {
     }
 
     pub(crate) fn current_profile(&self, profile: Option<String>) -> String {
-        profile.unwrap_or(self.default_profile.clone())
+        profile.unwrap_or_else(|| self.default_profile.clone())
     }
 
-    pub(crate) fn get_profile<'a>(&'a mut self, profile: Option<String>) -> Result<Profile<'a>> {
+    pub(crate) fn get_profile(&mut self, profile: Option<String>) -> Result<Profile> {
         let profile = self.current_profile(profile);
         self.profiles
             .get_mut(&profile)
@@ -117,7 +117,7 @@ impl Configuration {
         let mut keys = self
             .profiles
             .keys()
-            .map(|key| key.clone())
+            .cloned()
             .chain(profile.into_iter())
             .collect::<Vec<_>>();
 

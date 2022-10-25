@@ -23,6 +23,8 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_
 use reqwest::Client;
 
 /// Request handler for the server waiting the browser API token creation
+// axum requires the handler be async even though we don't ever actually await.
+#[allow(clippy::unused_async)]
 async fn request(
     Query(BrowserAPIToken {
         email,
@@ -56,7 +58,7 @@ pub(crate) async fn auth_with_browser(
     let (tx, mut result) = channel(1);
     let mut close = tx.subscribe();
     let app = Router::new().route("/", get(|body| request(body, tx)));
-    tokio::spawn(async {
+    mz_ore::task::spawn(|| "callback_server", async {
         let addr = SocketAddr::from(([127, 0, 0, 1], 8808));
         axum::Server::bind(&addr)
             .serve(app.into_make_service())

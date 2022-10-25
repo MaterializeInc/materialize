@@ -40,8 +40,8 @@ impl CloudProviderRegion {
 impl Display for CloudProviderRegion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CloudProviderRegion::AwsUsEast1 => write!(f, "{}", "aws/us-east-1"),
-            CloudProviderRegion::AwsEuWest1 => write!(f, "{}", "aws/eu-west-1"),
+            CloudProviderRegion::AwsUsEast1 => write!(f, "aws/us-east-1"),
+            CloudProviderRegion::AwsEuWest1 => write!(f, "aws/eu-west-1"),
         }
     }
 }
