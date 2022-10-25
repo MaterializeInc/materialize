@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import random
+from enum import Enum
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
@@ -38,6 +39,14 @@ SERVICES = [
 ]
 
 
+class TransactionIsolation(Enum):
+    SERIALIZABLE = "serializable"
+    STRICT_SERIALIZABLE = "strict serializable"
+
+    def __str__(self) -> str:
+        return self.value
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--scenario",
@@ -57,15 +66,34 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         default=1000,
     )
 
+    parser.add_argument(
+        "--transaction-isolation",
+        type=TransactionIsolation,
+        choices=list(TransactionIsolation),
+        default=TransactionIsolation.STRICT_SERIALIZABLE,
+    )
+
     args = parser.parse_args()
     scenario_class = globals()[args.scenario]
 
     c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
-    c.up("testdrive", persistent=True)
 
     random.seed(args.seed)
 
-    print("Generating test...")
-    test = Test(scenario=scenario_class(), actions=args.actions)
-    print("Running test...")
-    test.run(c)
+    with c.override(
+        Testdrive(
+            no_reset=True,
+            seed=1,
+            default_timeout="600s",
+            materialize_params={
+                "statement_timeout": "'900s'",
+                "transaction_isolation": f"'{args.transaction_isolation}'",
+            },
+        )
+    ):
+        c.up("testdrive", persistent=True)
+
+        print("Generating test...")
+        test = Test(scenario=scenario_class(), actions=args.actions)
+        print("Running test...")
+        test.run(c)
