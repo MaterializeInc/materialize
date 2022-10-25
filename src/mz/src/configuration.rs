@@ -113,6 +113,20 @@ impl Configuration {
             .context("Profile not found. Please, add one or login using `mz login`.")
     }
 
+    pub(crate) fn get_profiles(&self, profile: Option<String>) -> Vec<String> {
+        let mut keys = self
+            .profiles
+            .keys()
+            .map(|key| key.clone())
+            .chain(profile.into_iter())
+            .collect::<Vec<_>>();
+
+        keys.push(self.default_profile.clone());
+        keys.sort();
+        keys.dedup();
+        keys
+    }
+
     pub(crate) fn update_default_profile(&mut self, profile: String) {
         self.modified = true;
         self.default_profile = profile;

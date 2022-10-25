@@ -82,6 +82,11 @@ enum Commands {
         #[clap(possible_values = CloudProviderRegion::variants())]
         cloud_provider_region: Option<String>,
     },
+    /// Show information about a certain object type
+    Show {
+        #[clap(subcommand)]
+        value: Showable,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -91,6 +96,14 @@ enum Settable {
 
     /// Set the default region to connect to for the current profile
     Region { region: String },
+}
+
+#[derive(Debug, Subcommand)]
+enum Showable {
+    /// Show the current profile
+    Profile,
+    /// Show all profiles
+    Profiles,
 }
 
 #[derive(Debug, Args)]
@@ -363,6 +376,15 @@ async fn main() -> Result<()> {
                 .await
                 .with_context(|| "running shell")?;
         }
+
+        Commands::Show { value } => match value {
+            Showable::Profile => println!("{}", config.current_profile(profile)),
+            Showable::Profiles => {
+                for profile in config.get_profiles(profile) {
+                    println!("{}", profile);
+                }
+            }
+        },
     }
 
     config.close()
