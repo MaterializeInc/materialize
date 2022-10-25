@@ -154,7 +154,7 @@ where
     async fn step_rehydrate(&mut self) -> RehydrationTaskState {
         // Reconnect to the storage host.
         let client = Retry::default()
-            .clamp_backoff(Duration::from_secs(32))
+            .clamp_backoff(Duration::from_secs(1))
             .retry_async(|_| {
                 let addr = self.addr.clone();
                 let version = self.build_info.semver_version();
