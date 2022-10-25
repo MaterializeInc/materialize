@@ -471,7 +471,10 @@ impl ReclockOperator {
         // initialize our `self.since` is a more conservative option.
         assert!(
             PartialOrder::less_equal(since, &as_of),
-            "invalid as_of: as_of({as_of:?}) < since({since:?})"
+            "invalid as_of: as_of({as_of:?}) < since({since:?}), \
+            source {id}, \
+            remap_shard: {}",
+            metadata.remap_shard
         );
 
         assert!(
