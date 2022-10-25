@@ -459,8 +459,8 @@ impl<T: Serialize> Serialize for CheckedTimestamp<T> {
 // Thus on the low end we have 4713-12-31 BC from Postgres, and on the high end
 // 262143-12-31 from chrono.
 
-static LOW_DATE: Lazy<NaiveDate> = Lazy::new(|| NaiveDate::from_ymd(-4713, 12, 31));
-static HIGH_DATE: Lazy<NaiveDate> = Lazy::new(|| NaiveDate::from_ymd(262143, 12, 31));
+pub static LOW_DATE: Lazy<NaiveDate> = Lazy::new(|| NaiveDate::from_ymd(-4713, 12, 31));
+pub static HIGH_DATE: Lazy<NaiveDate> = Lazy::new(|| NaiveDate::from_ymd(262143, 12, 31));
 
 impl<T: TimestampLike> CheckedTimestamp<T> {
     pub fn from_timestamplike(t: T) -> Result<Self, TimestampError> {

@@ -1073,6 +1073,9 @@ pub(crate) fn load_generator_ast_to_generator(
         mz_sql_parser::ast::LoadGenerator::Counter => {
             mz_storage::types::sources::LoadGenerator::Counter
         }
+        mz_sql_parser::ast::LoadGenerator::Datums => {
+            mz_storage::types::sources::LoadGenerator::Datums
+        }
         mz_sql_parser::ast::LoadGenerator::Tpch => {
             let LoadGeneratorOptionExtracted { scale_factor, .. } = options.to_vec().try_into()?;
 
@@ -1118,6 +1121,7 @@ pub(crate) fn load_generator_ast_to_generator(
             schema: match loadgen {
                 mz_sql_parser::ast::LoadGenerator::Counter => "counter".into(),
                 mz_sql_parser::ast::LoadGenerator::Auction => "auction".into(),
+                mz_sql_parser::ast::LoadGenerator::Datums => "datums".into(),
                 mz_sql_parser::ast::LoadGenerator::Tpch => "tpch".into(),
                 // Please use `snake_case` for any multi-word load generators
                 // that you add.

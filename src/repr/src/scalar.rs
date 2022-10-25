@@ -1215,11 +1215,11 @@ pub enum ScalarType {
     ///
     /// Valid datum variants for this type are:
     ///
-    ///   * [`Datum::Null`]
+    ///   * [`Datum::JsonNull`]
     ///   * [`Datum::False`]
     ///   * [`Datum::True`]
     ///   * [`Datum::String`]
-    ///   * [`Datum::Float64`]
+    ///   * [`Datum::Numeric`]
     ///   * [`Datum::List`]
     ///   * [`Datum::Map`]
     Jsonb,
@@ -2240,6 +2240,307 @@ impl<'a> ScalarType {
             }
             (s, o) => ScalarBaseType::from(s) == ScalarBaseType::from(o),
         }
+    }
+
+    /// Returns various interesting datums for a ScalarType (max, min, 0 values,
+    /// etc.).
+    pub fn interesting_datums(&self) -> impl Iterator<Item = Datum> {
+        // TODO: Is there a better way than packing everything into Lazys and
+        // Rows? `&[Datum::X(x)]` doesn't seem to work because some Datum
+        // variants need to call non-const functions to construct themselves.
+
+        static BOOL: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[Datum::True, Datum::False]));
+        static INT16: Lazy<Row> = Lazy::new(|| {
+            Row::pack_slice(&[
+                Datum::Int16(0),
+                Datum::Int16(1),
+                Datum::Int16(-1),
+                Datum::Int16(i16::MIN),
+                Datum::Int16(i16::MIN + 1),
+                Datum::Int16(i16::MAX),
+            ])
+        });
+        static INT32: Lazy<Row> = Lazy::new(|| {
+            Row::pack_slice(&[
+                Datum::Int32(0),
+                Datum::Int32(1),
+                Datum::Int32(-1),
+                Datum::Int32(i32::MIN),
+                Datum::Int32(i32::MIN + 1),
+                Datum::Int32(i32::MAX),
+            ])
+        });
+        static INT64: Lazy<Row> = Lazy::new(|| {
+            Row::pack_slice(&[
+                Datum::Int64(0),
+                Datum::Int64(1),
+                Datum::Int64(-1),
+                Datum::Int64(i64::MIN),
+                Datum::Int64(i64::MIN + 1),
+                Datum::Int64(i64::MAX),
+            ])
+        });
+        static UINT16: Lazy<Row> = Lazy::new(|| {
+            Row::pack_slice(&[Datum::UInt16(0), Datum::UInt16(1), Datum::UInt16(u16::MAX)])
+        });
+        static UINT32: Lazy<Row> = Lazy::new(|| {
+            Row::pack_slice(&[Datum::UInt32(0), Datum::UInt32(1), Datum::UInt32(u32::MAX)])
+        });
+        static UINT64: Lazy<Row> = Lazy::new(|| {
+            Row::pack_slice(&[Datum::UInt64(0), Datum::UInt64(1), Datum::UInt64(u64::MAX)])
+        });
+        static FLOAT32: Lazy<Row> = Lazy::new(|| {
+            Row::pack_slice(&[
+                Datum::Float32(OrderedFloat(0.0)),
+                Datum::Float32(OrderedFloat(1.0)),
+                Datum::Float32(OrderedFloat(-1.0)),
+                Datum::Float32(OrderedFloat(f32::MIN)),
+                Datum::Float32(OrderedFloat(f32::MIN_POSITIVE)),
+                Datum::Float32(OrderedFloat(f32::MAX)),
+                Datum::Float32(OrderedFloat(f32::EPSILON)),
+                Datum::Float32(OrderedFloat(f32::NAN)),
+                Datum::Float32(OrderedFloat(f32::INFINITY)),
+                Datum::Float32(OrderedFloat(f32::NEG_INFINITY)),
+            ])
+        });
+        static FLOAT64: Lazy<Row> = Lazy::new(|| {
+            Row::pack_slice(&[
+                Datum::Float64(OrderedFloat(0.0)),
+                Datum::Float64(OrderedFloat(1.0)),
+                Datum::Float64(OrderedFloat(-1.0)),
+                Datum::Float64(OrderedFloat(f64::MIN)),
+                Datum::Float64(OrderedFloat(f64::MIN_POSITIVE)),
+                Datum::Float64(OrderedFloat(f64::MAX)),
+                Datum::Float64(OrderedFloat(f64::EPSILON)),
+                Datum::Float64(OrderedFloat(f64::NAN)),
+                Datum::Float64(OrderedFloat(f64::INFINITY)),
+                Datum::Float64(OrderedFloat(f64::NEG_INFINITY)),
+            ])
+        });
+        static NUMERIC: Lazy<Row> = Lazy::new(|| {
+            Row::pack_slice(&[
+                Datum::Numeric(OrderedDecimal(Numeric::from(0.0))),
+                Datum::Numeric(OrderedDecimal(Numeric::from(1.0))),
+                Datum::Numeric(OrderedDecimal(Numeric::from(-1.0))),
+                Datum::Numeric(OrderedDecimal(Numeric::from(f64::MIN))),
+                Datum::Numeric(OrderedDecimal(Numeric::from(f64::MIN_POSITIVE))),
+                Datum::Numeric(OrderedDecimal(Numeric::from(f64::MAX))),
+                Datum::Numeric(OrderedDecimal(Numeric::from(f64::EPSILON))),
+                Datum::Numeric(OrderedDecimal(Numeric::from(f64::NAN))),
+                Datum::Numeric(OrderedDecimal(Numeric::from(f64::INFINITY))),
+                Datum::Numeric(OrderedDecimal(Numeric::from(f64::NEG_INFINITY))),
+            ])
+        });
+        static DATE: Lazy<Row> = Lazy::new(|| {
+            Row::pack_slice(&[
+                Datum::Date(Date::from_pg_epoch(0).unwrap()),
+                Datum::Date(Date::from_pg_epoch(Date::LOW_DAYS).unwrap()),
+                Datum::Date(Date::from_pg_epoch(Date::HIGH_DAYS).unwrap()),
+            ])
+        });
+        static TIME: Lazy<Row> = Lazy::new(|| {
+            Row::pack_slice(&[
+                Datum::Time(NaiveTime::from_hms_micro(0, 0, 0, 0)),
+                Datum::Time(NaiveTime::from_hms_micro(23, 59, 59, 999_999)),
+            ])
+        });
+        static TIMESTAMP: Lazy<Row> = Lazy::new(|| {
+            Row::pack_slice(&[
+                Datum::Timestamp(NaiveDateTime::from_timestamp(0, 0).try_into().unwrap()),
+                Datum::Timestamp(
+                    crate::adt::timestamp::LOW_DATE
+                        .and_hms(0, 0, 0)
+                        .try_into()
+                        .unwrap(),
+                ),
+                Datum::Timestamp(
+                    crate::adt::timestamp::HIGH_DATE
+                        .and_hms(0, 0, 0)
+                        .try_into()
+                        .unwrap(),
+                ),
+            ])
+        });
+        static TIMESTAMPTZ: Lazy<Row> = Lazy::new(|| {
+            Row::pack_slice(&[
+                Datum::TimestampTz(
+                    DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc)
+                        .try_into()
+                        .unwrap(),
+                ),
+                Datum::TimestampTz(
+                    DateTime::from_utc(crate::adt::timestamp::LOW_DATE.and_hms(0, 0, 0), Utc)
+                        .try_into()
+                        .unwrap(),
+                ),
+                Datum::TimestampTz(
+                    DateTime::from_utc(crate::adt::timestamp::HIGH_DATE.and_hms(0, 0, 0), Utc)
+                        .try_into()
+                        .unwrap(),
+                ),
+            ])
+        });
+        static INTERVAL: Lazy<Row> = Lazy::new(|| {
+            Row::pack_slice(&[
+                Datum::Interval(Interval::new(0, 0, 0)),
+                Datum::Interval(Interval::new(i32::MIN, i32::MIN, i64::MIN)),
+                Datum::Interval(Interval::new(i32::MAX, i32::MAX, i64::MAX)),
+            ])
+        });
+        static PGLEGACYCHAR: Lazy<Row> =
+            Lazy::new(|| Row::pack_slice(&[Datum::UInt8(u8::MIN), Datum::UInt8(u8::MAX)]));
+        static BYTES: Lazy<Row> = Lazy::new(|| {
+            Row::pack_slice(&[Datum::Bytes(&[]), Datum::Bytes(&[0]), Datum::Bytes(&[255])])
+        });
+        static STRING: Lazy<Row> = Lazy::new(|| {
+            Row::pack_slice(&[
+                Datum::String(""),
+                Datum::String(" "),
+                Datum::String("'"),
+                Datum::String("\""),
+                Datum::String("."),
+            ])
+        });
+        static CHAR: Lazy<Row> = Lazy::new(|| {
+            Row::pack_slice(&[
+                Datum::String(" "),
+                Datum::String("'"),
+                Datum::String("\""),
+                Datum::String("."),
+            ])
+        });
+        static JSONB: Lazy<Row> = Lazy::new(|| {
+            Row::pack_slice(&[
+                Datum::True,
+                Datum::False,
+                Datum::JsonNull,
+                Datum::String(""),
+                Datum::String(" "),
+                Datum::String("'"),
+                Datum::String("\""),
+                Datum::Numeric(OrderedDecimal(Numeric::from(0.0))),
+                Datum::Numeric(OrderedDecimal(Numeric::from(1.0))),
+                Datum::Numeric(OrderedDecimal(Numeric::from(-1.0))),
+                Datum::Numeric(OrderedDecimal(Numeric::from(i64::MAX))),
+                Datum::Numeric(OrderedDecimal(Numeric::from(i64::MIN))),
+                // TODO: Add List, Map.
+            ])
+        });
+        static UUID: Lazy<Row> = Lazy::new(|| {
+            Row::pack_slice(&[
+                Datum::Uuid(Uuid::from_u128(u128::MIN)),
+                Datum::Uuid(Uuid::from_u128(u128::MAX)),
+            ])
+        });
+        static ARRAY: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
+        static LIST: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
+        static RECORD: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
+        static OID: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
+        static MAP: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
+        static REGPROC: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
+        static REGTYPE: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
+        static REGCLASS: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
+        static INT2VECTOR: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
+        static MZTIMESTAMP: Lazy<Row> = Lazy::new(|| {
+            Row::pack_slice(&[
+                Datum::MzTimestamp(crate::Timestamp::MIN),
+                Datum::MzTimestamp(crate::Timestamp::MAX),
+            ])
+        });
+
+        match self {
+            ScalarType::Bool => (*BOOL).iter(),
+            ScalarType::Int16 => (*INT16).iter(),
+            ScalarType::Int32 => (*INT32).iter(),
+            ScalarType::Int64 => (*INT64).iter(),
+            ScalarType::UInt16 => (*UINT16).iter(),
+            ScalarType::UInt32 => (*UINT32).iter(),
+            ScalarType::UInt64 => (*UINT64).iter(),
+            ScalarType::Float32 => (*FLOAT32).iter(),
+            ScalarType::Float64 => (*FLOAT64).iter(),
+            ScalarType::Numeric { .. } => (*NUMERIC).iter(),
+            ScalarType::Date => (*DATE).iter(),
+            ScalarType::Time => (*TIME).iter(),
+            ScalarType::Timestamp => (*TIMESTAMP).iter(),
+            ScalarType::TimestampTz => (*TIMESTAMPTZ).iter(),
+            ScalarType::Interval => (*INTERVAL).iter(),
+            ScalarType::PgLegacyChar => (*PGLEGACYCHAR).iter(),
+            ScalarType::Bytes => (*BYTES).iter(),
+            ScalarType::String => (*STRING).iter(),
+            ScalarType::Char { .. } => (*CHAR).iter(),
+            ScalarType::VarChar { .. } => (*STRING).iter(),
+            ScalarType::Jsonb => (*JSONB).iter(),
+            ScalarType::Uuid => (*UUID).iter(),
+            ScalarType::Array(_) => (*ARRAY).iter(),
+            ScalarType::List { .. } => (*LIST).iter(),
+            ScalarType::Record { .. } => (*RECORD).iter(),
+            ScalarType::Oid => (*OID).iter(),
+            ScalarType::Map { .. } => (*MAP).iter(),
+            ScalarType::RegProc => (*REGPROC).iter(),
+            ScalarType::RegType => (*REGTYPE).iter(),
+            ScalarType::RegClass => (*REGCLASS).iter(),
+            ScalarType::Int2Vector => (*INT2VECTOR).iter(),
+            ScalarType::MzTimestamp => (*MZTIMESTAMP).iter(),
+        }
+    }
+
+    /// Returns all non-parameterized types and some versions of some
+    /// parameterized types.
+    pub fn enumerate() -> &'static [Self] {
+        // TODO: Is there a compile-time way to make sure any new
+        // non-parameterized types get added here?
+        &[
+            ScalarType::Bool,
+            ScalarType::Int16,
+            ScalarType::Int32,
+            ScalarType::Int64,
+            ScalarType::UInt16,
+            ScalarType::UInt32,
+            ScalarType::UInt64,
+            ScalarType::Float32,
+            ScalarType::Float64,
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale(
+                    crate::adt::numeric::NUMERIC_DATUM_MAX_PRECISION,
+                )),
+            },
+            ScalarType::Date,
+            ScalarType::Time,
+            ScalarType::Timestamp,
+            ScalarType::TimestampTz,
+            ScalarType::Interval,
+            ScalarType::PgLegacyChar,
+            ScalarType::Bytes,
+            ScalarType::String,
+            ScalarType::Char {
+                length: Some(CharLength(1)),
+            },
+            ScalarType::VarChar { max_length: None },
+            ScalarType::Jsonb,
+            ScalarType::Uuid,
+            ScalarType::Oid,
+            ScalarType::RegProc,
+            ScalarType::RegType,
+            ScalarType::RegClass,
+            ScalarType::Int2Vector,
+            ScalarType::MzTimestamp,
+            // TODO: Fill in some variants of these.
+            /*
+            ScalarType::Array(_),
+            ScalarType::List {
+                element_type: todo!(),
+                custom_id: todo!(),
+            },
+            ScalarType::Record {
+                fields: todo!(),
+                custom_id: todo!(),
+            },
+            ScalarType::Map {
+                value_type: todo!(),
+                custom_id: todo!(),
+            },
+            */
+        ]
     }
 }
 
