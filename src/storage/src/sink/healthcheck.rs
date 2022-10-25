@@ -114,7 +114,7 @@ impl Healthchecker {
         panic!("{msg:?}")
     }
 
-    /// Process a [`SinkStatusUpdate`] emitted by a sink
+    /// Process a [`SinkStatus`] emitted by a sink
     pub async fn update_status(&mut self, status_update: SinkStatus) {
         trace!(
             "Processing status update: {status_update:?}, current status is {current_status}",
@@ -231,9 +231,18 @@ impl Healthchecker {
             let row_vec = row.unpack();
             let row_source_id = row_vec[1].unwrap_str();
             let row_status = row_vec[2].unwrap_str();
+            let row_error = {
+                let err = row_vec[3];
+                if err.is_null() {
+                    None
+                } else {
+                    Some(err.unwrap_str())
+                }
+            };
 
             if self.sink_id.to_string() == row_source_id {
-                self.current_status = SinkStatus::try_from(row_status).expect("invalid status");
+                self.current_status = SinkStatus::try_from_status_error(row_status, row_error)
+                    .expect("invalid status and error");
             }
         }
     }
@@ -329,27 +338,23 @@ impl SinkStatus {
             | SinkStatus::Stalled(_) => self != new_status,
         }
     }
+
+    fn try_from_status_error(status: &str, error: Option<&str>) -> Result<Self, String> {
+        match status {
+            "setup" => Ok(SinkStatus::Setup),
+            "starting" => Ok(SinkStatus::Starting),
+            "running" => Ok(SinkStatus::Running),
+            "stalled" => Ok(SinkStatus::Stalled(error.unwrap_or_default().into())),
+            "failed" => Ok(SinkStatus::Failed(error.unwrap_or_default().into())),
+            "dropped" => Ok(SinkStatus::Dropped),
+            _ => Err(format!("{status} is not a valid SourceStatus")),
+        }
+    }
 }
 
 impl Display for SinkStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name())
-    }
-}
-
-impl TryFrom<&str> for SinkStatus {
-    type Error = String;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value {
-            "setup" => Ok(SinkStatus::Setup),
-            "starting" => Ok(SinkStatus::Starting),
-            "running" => Ok(SinkStatus::Running),
-            "stalled" => Ok(SinkStatus::Stalled(String::default())),
-            "failed" => Ok(SinkStatus::Failed(String::default())),
-            "dropped" => Ok(SinkStatus::Dropped),
-            _ => Err(format!("{value} is not a valid SourceStatus")),
-        }
     }
 }
 
