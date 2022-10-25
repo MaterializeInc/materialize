@@ -183,6 +183,7 @@ impl ReclockFollower {
         for (pid, ts, diff) in batch.updates {
             let bindings = inner.remap_trace.entry(pid.clone()).or_default();
             bindings.push((ts, diff));
+            bindings.sort_unstable();
 
             inner.source_upper.advance(pid, diff);
         }
