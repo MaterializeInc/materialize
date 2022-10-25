@@ -2464,35 +2464,31 @@ IN CLUSTER mz_introspection
 ON mz_catalog.mz_secrets (schema_id)",
 };
 
-pub static MZ_SYSTEM_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
+pub const MZ_SYSTEM_ROLE: BuiltinRole = BuiltinRole {
     name: &*SYSTEM_USER_NAME,
-});
+};
 
-pub static MZ_INTROSPECTION_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
+pub const MZ_INTROSPECTION_ROLE: BuiltinRole = BuiltinRole {
     name: &*INTROSPECTION_USER_NAME,
-});
+};
 
-pub static MZ_SYSTEM_COMPUTE_INSTANCE: Lazy<BuiltinComputeInstance> =
-    Lazy::new(|| BuiltinComputeInstance {
-        name: &*SYSTEM_USER_NAME,
-    });
+pub const MZ_SYSTEM_COMPUTE_INSTANCE: BuiltinComputeInstance = BuiltinComputeInstance {
+    name: &*SYSTEM_USER_NAME,
+};
 
-pub static MZ_SYSTEM_COMPUTE_REPLICA: Lazy<BuiltinComputeReplica> =
-    Lazy::new(|| BuiltinComputeReplica {
-        name: DEFAULT_CLUSTER_REPLICA_NAME,
-        compute_instance_name: MZ_SYSTEM_COMPUTE_INSTANCE.name,
-    });
+pub const MZ_SYSTEM_COMPUTE_REPLICA: BuiltinComputeReplica = BuiltinComputeReplica {
+    name: DEFAULT_CLUSTER_REPLICA_NAME,
+    compute_instance_name: MZ_SYSTEM_COMPUTE_INSTANCE.name,
+};
 
-pub static MZ_INTROSPECTION_COMPUTE_INSTANCE: Lazy<BuiltinComputeInstance> =
-    Lazy::new(|| BuiltinComputeInstance {
-        name: &*INTROSPECTION_USER_NAME,
-    });
+pub const MZ_INTROSPECTION_COMPUTE_INSTANCE: BuiltinComputeInstance = BuiltinComputeInstance {
+    name: &*INTROSPECTION_USER_NAME,
+};
 
-pub static MZ_INTROSPECTION_COMPUTE_REPLICA: Lazy<BuiltinComputeReplica> =
-    Lazy::new(|| BuiltinComputeReplica {
-        name: DEFAULT_CLUSTER_REPLICA_NAME,
-        compute_instance_name: MZ_INTROSPECTION_COMPUTE_INSTANCE.name,
-    });
+pub const MZ_INTROSPECTION_COMPUTE_REPLICA: BuiltinComputeReplica = BuiltinComputeReplica {
+    name: DEFAULT_CLUSTER_REPLICA_NAME,
+    compute_instance_name: MZ_INTROSPECTION_COMPUTE_INSTANCE.name,
+};
 
 /// List of all builtin objects sorted topologically by dependency.
 pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
@@ -2705,17 +2701,17 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
     builtins
 });
 pub static BUILTIN_ROLES: Lazy<Vec<&BuiltinRole>> =
-    Lazy::new(|| vec![&*MZ_SYSTEM_ROLE, &*MZ_INTROSPECTION_ROLE]);
+    Lazy::new(|| vec![&MZ_SYSTEM_ROLE, &MZ_INTROSPECTION_ROLE]);
 pub static BUILTIN_COMPUTE_INSTANCES: Lazy<Vec<&BuiltinComputeInstance>> = Lazy::new(|| {
     vec![
-        &*MZ_SYSTEM_COMPUTE_INSTANCE,
-        &*MZ_INTROSPECTION_COMPUTE_INSTANCE,
+        &MZ_SYSTEM_COMPUTE_INSTANCE,
+        &MZ_INTROSPECTION_COMPUTE_INSTANCE,
     ]
 });
 pub static BUILTIN_COMPUTE_REPLICAS: Lazy<Vec<&BuiltinComputeReplica>> = Lazy::new(|| {
     vec![
-        &*MZ_SYSTEM_COMPUTE_REPLICA,
-        &*MZ_INTROSPECTION_COMPUTE_REPLICA,
+        &MZ_SYSTEM_COMPUTE_REPLICA,
+        &MZ_INTROSPECTION_COMPUTE_REPLICA,
     ]
 });
 
