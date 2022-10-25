@@ -10,11 +10,14 @@
 use semver::Version;
 
 use mz_ore::collections::CollectionExt;
-use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::Raw;
+use mz_sql::ast::{
+    display::AstDisplay, CreateSourceStatement, CreateSourceSubsource, DeferredObjectName,
+    RawObjectName, Statement, UnresolvedObjectName,
+};
+use mz_sql::ast::{CreateReferencedSubsources, Raw};
 use mz_stash::Append;
 
-use crate::catalog::{Catalog, SerializedCatalogItem};
+use crate::catalog::{Catalog, ConnCatalog, SerializedCatalogItem, SYSTEM_CONN_ID};
 
 use super::storage::Transaction;
 
@@ -54,8 +57,12 @@ pub(crate) async fn migrate<S: Append>(catalog: &mut Catalog<S>) -> Result<(), a
     // it. You probably should be adding a basic AST migration above, unless
     // you are really certain you want one of these crazy migrations.
     let cat = Catalog::load_catalog_items(&mut tx, catalog)?;
-    let _conn_cat = cat.for_system_session();
-    rewrite_items(&mut tx, |_item| Ok(()))?;
+    let conn_cat = cat.for_system_session();
+
+    rewrite_items(&mut tx, |item| {
+        deferred_object_name_rewrite(&conn_cat, item)?;
+        Ok(())
+    })?;
     tx.commit().await.map_err(|e| e.into())
 }
 
@@ -83,3 +90,42 @@ pub(crate) async fn migrate<S: Append>(catalog: &mut Catalog<S>) -> Result<(), a
 // ****************************************************************************
 // Semantic migrations -- Weird migrations that require access to the catalog
 // ****************************************************************************
+
+// Rewrites all subsource references to be qualified by their IDs, which is the
+// mechanism by which `DeferredObjectName` differentiates between user input and
+// created objects.
+fn deferred_object_name_rewrite(
+    cat: &ConnCatalog,
+    stmt: &mut mz_sql::ast::Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    if let Statement::CreateSource(CreateSourceStatement {
+        subsources: Some(CreateReferencedSubsources::Subset(create_source_subsources)),
+        ..
+    }) = stmt
+    {
+        for CreateSourceSubsource { subsource, .. } in create_source_subsources {
+            let object_name = subsource.as_mut().unwrap();
+            let name: UnresolvedObjectName = match object_name {
+                DeferredObjectName::Deferred(name) => name.clone(),
+                DeferredObjectName::Named(..) => continue,
+            };
+
+            let partial_subsource_name =
+                mz_sql::normalize::unresolved_object_name(name.clone()).expect("resolvable");
+            let qualified_subsource_name = cat
+                .resolve_item_name(&partial_subsource_name)
+                .expect("known to exist");
+            let entry = cat
+                .state
+                .try_get_entry_in_schema(qualified_subsource_name, SYSTEM_CONN_ID)
+                .expect("known to exist");
+            let id = entry.id();
+
+            *subsource = Some(DeferredObjectName::Named(RawObjectName::Id(
+                id.to_string(),
+                name,
+            )));
+        }
+    }
+    Ok(())
+}

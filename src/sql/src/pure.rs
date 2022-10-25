@@ -67,7 +67,7 @@ fn subsource_gen<'a, T>(
         let subsource_name = match &subsource.subsource {
             Some(name) => match name {
                 DeferredObjectName::Deferred(name) => name.clone(),
-                DeferredObjectName::Named(_) => bail!("Cannot manually ID qualify subsources"),
+                DeferredObjectName::Named(..) => bail!("Cannot manually ID qualify subsources"),
             },
             None => {
                 // Use the entered name as the upstream reference, and then use
