@@ -7,13 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::process::exit;
+use anyhow::{bail, Ok, Result};
+use indicatif::{ProgressBar, ProgressStyle};
 use std::str::FromStr;
 use std::time::Duration;
-
-use indicatif::{ProgressBar, ProgressStyle};
-
-use crate::ExitMessage;
 
 /// Cloud providers and regions available.
 #[derive(Debug, Clone, Copy)]
@@ -37,17 +34,14 @@ impl CloudProviderRegion {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ParseError;
-
 impl FromStr for CloudProviderRegion {
-    type Err = ParseError;
+    type Err = anyhow::Error;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self> {
         match s {
             "aws/us-east-1" => Ok(CloudProviderRegion::AwsUsEast1),
             "aws/eu-west-1" => Ok(CloudProviderRegion::AwsEuWest1),
-            _ => Err(ParseError),
+            _ => bail!("Unknown region {}", s),
         }
     }
 }
@@ -78,13 +72,4 @@ pub(crate) fn run_loading_spinner(message: String) -> ProgressBar {
     progress_bar.set_message(message);
 
     progress_bar
-}
-
-/// Standard function to exit the process when there is any type of error
-pub(crate) fn exit_with_fail_message(message: ExitMessage) -> ! {
-    match message {
-        ExitMessage::String(string_message) => println!("{}", string_message),
-        ExitMessage::Str(str_message) => println!("{}", str_message),
-    }
-    exit(1);
 }

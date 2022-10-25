@@ -37,7 +37,7 @@ use serde::Deserialize;
 use clap::{Args, Parser, Subcommand};
 use reqwest::Client;
 use shell::check_environment_health;
-use utils::{exit_with_fail_message, run_loading_spinner, CloudProviderRegion};
+use utils::{run_loading_spinner, CloudProviderRegion};
 
 use crate::login::{login_with_browser, login_with_console};
 use crate::region::{enable_region_environment, list_cloud_providers, list_regions};
@@ -154,12 +154,6 @@ struct CloudProviderAndRegion {
     region: Option<Region>,
 }
 
-#[derive(Debug)]
-enum ExitMessage {
-    String(String),
-    Str(&'static str),
-}
-
 /// Constants
 const CLOUD_PROVIDERS_URL: &str = "https://cloud.materialize.com/api/cloud-providers";
 const API_TOKEN_AUTH_URL: &str =
@@ -172,7 +166,6 @@ const MACHINE_AUTH_URL: &str =
     "https://admin.cloud.materialize.com/identity/resources/auth/v1/api-token";
 const WEB_LOGIN_URL: &str = "https://cloud.materialize.com/account/login?redirectUrl=/access/cli";
 const WEB_DOCS_URL: &str = "https://www.materialize.com/docs";
-const ERROR_UNKNOWN_REGION: &str = "Unknown region";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -238,43 +231,42 @@ async fn main() -> Result<()> {
             match command {
                 RegionCommand::Enable {
                     cloud_provider_region,
-                } => match CloudProviderRegion::from_str(&cloud_provider_region) {
-                    Ok(cloud_provider_region) => {
-                        let profile = config.get_profile(Some(profile_name))?;
+                } => {
+                    let cloud_provider_region =
+                        CloudProviderRegion::from_str(&cloud_provider_region)?;
+                    let profile = config.get_profile(Some(profile_name))?;
 
-                        let valid_profile = profile
-                            .validate(&client)
-                            .await
-                            .context("failed to validate profile. reauthorize using mz login")?;
-
-                        let loading_spinner = run_loading_spinner("Enabling region...".to_string());
-                        let cloud_provider = get_provider_by_region_name(
-                            &client,
-                            &valid_profile,
-                            &cloud_provider_region,
-                        )
+                    let valid_profile = profile
+                        .validate(&client)
                         .await
-                        .with_context(|| "Retrieving cloud provider.")?;
+                        .context("failed to validate profile. reauthorize using mz login")?;
 
-                        let region =
-                            enable_region_environment(&client, &cloud_provider, &valid_profile)
-                                .await
-                                .with_context(|| "Enabling region.")?;
+                    let loading_spinner = run_loading_spinner("Enabling region...".to_string());
+                    let cloud_provider = get_provider_by_region_name(
+                        &client,
+                        &valid_profile,
+                        &cloud_provider_region,
+                    )
+                    .await
+                    .with_context(|| "Retrieving cloud provider.")?;
 
-                        let environment = get_region_environment(&client, &valid_profile, &region)
+                    let region =
+                        enable_region_environment(&client, &cloud_provider, &valid_profile)
                             .await
-                            .with_context(|| "Retrieving environment data.")?;
+                            .with_context(|| "Enabling region.")?;
 
-                        loop {
-                            if check_environment_health(&valid_profile, &environment) {
-                                break;
-                            }
+                    let environment = get_region_environment(&client, &valid_profile, &region)
+                        .await
+                        .with_context(|| "Retrieving environment data.")?;
+
+                    loop {
+                        if check_environment_health(&valid_profile, &environment) {
+                            break;
                         }
-
-                        loading_spinner.finish_with_message("Region enabled.");
                     }
-                    Err(_) => exit_with_fail_message(ExitMessage::Str(ERROR_UNKNOWN_REGION)),
-                },
+
+                    loading_spinner.finish_with_message("Region enabled.");
+                }
 
                 RegionCommand::List => {
                     let profile = config.get_profile(Some(profile_name))?;
@@ -300,49 +292,47 @@ async fn main() -> Result<()> {
 
                 RegionCommand::Status {
                     cloud_provider_region,
-                } => match CloudProviderRegion::from_str(&cloud_provider_region) {
-                    Ok(cloud_provider_region) => {
-                        let profile = config.get_profile(Some(profile_name))?;
+                } => {
+                    let cloud_provider_region =
+                        CloudProviderRegion::from_str(&cloud_provider_region)?;
 
-                        let valid_profile = profile
-                            .validate(&client)
-                            .await
-                            .context("failed to validate profile. reauthorize using mz login")?;
+                    let profile = config.get_profile(Some(profile_name))?;
 
-                        let environment = get_provider_region_environment(
-                            &client,
-                            &valid_profile,
-                            &cloud_provider_region,
-                        )
+                    let valid_profile = profile
+                        .validate(&client)
                         .await
-                        .with_context(|| "Retrieving cloud provider region.")?;
-                        let health = check_environment_health(&valid_profile, &environment);
+                        .context("failed to validate profile. reauthorize using mz login")?;
 
-                        print_environment_status(environment, health);
-                    }
-                    Err(_) => exit_with_fail_message(ExitMessage::Str(ERROR_UNKNOWN_REGION)),
-                },
+                    let environment = get_provider_region_environment(
+                        &client,
+                        &valid_profile,
+                        &cloud_provider_region,
+                    )
+                    .await
+                    .with_context(|| "Retrieving cloud provider region.")?;
+                    let health = check_environment_health(&valid_profile, &environment);
+
+                    print_environment_status(environment, health);
+                }
             }
         }
 
         Commands::Shell {
             cloud_provider_region,
-        } => match CloudProviderRegion::from_str(&cloud_provider_region) {
-            Ok(cloud_provider_region) => {
-                let profile = config.get_profile(Some(profile_name))?;
+        } => {
+            let cloud_provider_region = CloudProviderRegion::from_str(&cloud_provider_region)?;
+            let profile = config.get_profile(Some(profile_name))?;
 
-                let client = Client::new();
-                let valid_profile = profile
-                    .validate(&client)
-                    .await
-                    .context("failed to validate profile. reauthorize using mz login")?;
+            let client = Client::new();
+            let valid_profile = profile
+                .validate(&client)
+                .await
+                .context("failed to validate profile. reauthorize using mz login")?;
 
-                shell(client, valid_profile, cloud_provider_region)
-                    .await
-                    .with_context(|| "Running shell")?;
-            }
-            Err(_) => exit_with_fail_message(ExitMessage::Str(ERROR_UNKNOWN_REGION)),
-        },
+            shell(client, valid_profile, cloud_provider_region)
+                .await
+                .with_context(|| "Running shell")?;
+        }
     }
 
     config.close()

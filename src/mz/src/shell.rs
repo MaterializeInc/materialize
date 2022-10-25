@@ -9,8 +9,8 @@
 
 use crate::configuration::ValidProfile;
 use crate::region::get_provider_region_environment;
-use crate::utils::{exit_with_fail_message, CloudProviderRegion};
-use crate::{Environment, ExitMessage};
+use crate::utils::CloudProviderRegion;
+use crate::Environment;
 use anyhow::{Context, Result};
 use reqwest::Client;
 use std::os::unix::process::CommandExt;
@@ -33,7 +33,7 @@ pub(crate) fn parse_pgwire(envrionment: &Environment) -> (&str, &str) {
 }
 
 /// Runs psql as a subprocess command
-fn run_psql_shell(valid_profile: ValidProfile<'_>, environment: &Environment) {
+fn run_psql_shell(valid_profile: ValidProfile<'_>, environment: &Environment) -> Result<()> {
     let (host, port) = parse_pgwire(environment);
 
     let error = Command::new("psql")
@@ -47,10 +47,7 @@ fn run_psql_shell(valid_profile: ValidProfile<'_>, environment: &Environment) {
         .env("PGPASSWORD", valid_profile.profile.get_app_password())
         .exec();
 
-    exit_with_fail_message(ExitMessage::String(format!(
-        "Failed to spawn psql {}",
-        error
-    )))
+    Err(error).context("failed to spawn psql")
 }
 
 /// Runs pg_isready to check if an environment is healthy
@@ -88,7 +85,5 @@ pub(crate) async fn shell(
             .await
             .with_context(|| "Retrieving cloud provider region.")?;
 
-    run_psql_shell(valid_profile, &environment);
-
-    Ok(())
+    run_psql_shell(valid_profile, &environment)
 }
