@@ -177,26 +177,16 @@ impl ReclockFollower {
         Ref::map(RefCell::borrow(&self.inner), |inner| &inner.source_upper)
     }
 
-    /// Pushes new trace updates into this [`ReclockFollower`].
-    pub fn push_trace_updates(
-        &self,
-        updates: impl IntoIterator<Item = (PartitionId, Vec<(Timestamp, MzOffset)>)>,
-    ) {
+    /// Pushes a new trace batch into this [`ReclockFollower`].
+    pub fn push_trace_batch(&mut self, batch: ReclockBatch) {
         let mut inner = self.inner.borrow_mut();
-        for (pid, updates) in updates {
-            for (ts, diff) in updates {
-                let bindings = inner.remap_trace.entry(pid.clone()).or_default();
-                bindings.push((ts, diff));
+        for (pid, ts, diff) in batch.updates {
+            let bindings = inner.remap_trace.entry(pid.clone()).or_default();
+            bindings.push((ts, diff));
 
-                inner.source_upper.advance(pid.clone(), diff);
-            }
+            inner.source_upper.advance(pid, diff);
         }
-    }
-
-    /// Updates the upper based on information received from
-    /// [`ReclockOperator`].
-    pub fn push_upper_update(&self, upper: Antichain<Timestamp>) {
-        self.inner.borrow_mut().upper = upper;
+        inner.upper = batch.upper;
     }
 
     /// Reclocks a batch of messages timestamped with `SourceTime` and returns an iterator of
@@ -435,6 +425,11 @@ pub struct ReclockOperator {
     update_interval_ms: u64,
 }
 
+pub struct ReclockBatch {
+    pub updates: Vec<(PartitionId, Timestamp, MzOffset)>,
+    pub upper: Antichain<Timestamp>,
+}
+
 impl ReclockOperator {
     /// Construct a new [ReclockOperator] from the given collection metadata
     pub async fn new(
@@ -448,7 +443,7 @@ impl ReclockOperator {
         operator: &str,
         worker_id: usize,
         worker_count: usize,
-    ) -> anyhow::Result<Self> {
+    ) -> anyhow::Result<(Self, ReclockBatch)> {
         let mut persist_clients = persist_clients.lock().await;
         let persist_client = persist_clients
             .open(metadata.persist_location)
@@ -509,54 +504,9 @@ impl ReclockOperator {
         };
 
         // Load the initial state that might exist in the shard
-        operator.sync(&upper).await;
+        let initial_batch = operator.sync(&upper).await;
 
-        Ok(operator)
-    }
-
-    /// Reclocks a `SourceTime` frontier into a `DestTime` frontier.
-    ///
-    /// The conversion has the property that all messages that are beyond the provided `SourceTime`
-    /// frontier will be relocked at times that will be beyond the returned `DestTime` frontier.
-    /// This can be used to drive a `DestTime` capability forward when the caller knows that a
-    /// `SourceTime` frontier has advanced.
-    ///
-    /// The method returns an error if the `SourceTime` frontier is not beyond the since frontier.
-    /// The error will contain the offending `SourceTime`.
-    pub fn reclock_frontier(
-        &self,
-        source_frontier: &OffsetAntichain,
-    ) -> Result<Antichain<Timestamp>, (PartitionId, MzOffset)> {
-        // The upper is the greatest frontier that we can ever return
-        let mut dest_frontier = self.upper.clone();
-
-        let mut partitions = HashSet::new();
-        partitions.extend(self.source_upper.keys());
-        partitions.extend(source_frontier.partitions());
-        // To refine it we have to go through all the partitions we know about and:
-        for pid in partitions {
-            let offset = source_frontier.get(pid).copied().unwrap_or_default();
-            // Ensure that the offsets are beyond the source since frontier
-            if !(self.partition_since(pid) <= offset) {
-                return Err((pid.clone(), offset));
-            }
-            // If a binding exists whose upper is greater than `offset` then all messages that are
-            // beyond `offset` will be reclocked at a time that is beyond that binding's time.
-            let binding = self
-                .partition_bindings(pid)
-                .find(|(_, upper)| offset < *upper);
-            if let Some((ts, _)) = binding {
-                // Adding to the frontier will "pull" it backwards if this timestamp is less than
-                // the its current value.
-                dest_frontier.insert(ts);
-            }
-            // If no such binding exists then the offset in question needs bindings to be minted
-            // that will certainly be beyond the upper. Therefore the upper fits the property that
-            // this method promises and since `dest_frontier` was initialized with it we have
-            // nothing to do.
-        }
-
-        Ok(dest_frontier)
+        Ok((operator, initial_batch))
     }
 
     /// Compacts the internal state
@@ -592,12 +542,19 @@ impl ReclockOperator {
     }
 
     /// Advances the upper of the reclock operator if appropriate
-    pub async fn advance(&mut self) {
+    pub async fn advance(&mut self) -> ReclockBatch {
+        // Any updates to the remap trace that occured during advancing.
+        let mut trace_updates = vec![];
+
         if self.next_mint_timestamp().is_ok() {
             let empty: Vec<(PartitionId, MzOffset)> = Vec::new();
             while let Err(Upper(actual_upper)) = self.append(&empty).await {
-                self.sync(&actual_upper).await;
+                trace_updates.extend(self.sync(&actual_upper).await.updates);
             }
+        }
+        ReclockBatch {
+            updates: trace_updates,
+            upper: self.upper.clone(),
         }
     }
 
@@ -622,10 +579,7 @@ impl ReclockOperator {
 
     /// Syncs the state of this operator to match that of the persist shard until the provided
     /// frontier
-    async fn sync(
-        &mut self,
-        target_upper: &Antichain<Timestamp>,
-    ) -> Vec<(PartitionId, Vec<(Timestamp, MzOffset)>)> {
+    async fn sync(&mut self, target_upper: &Antichain<Timestamp>) -> ReclockBatch {
         // **IMPORTANT**: Make sure we heartbeat our read handle when we read
         // from our listen. The listen will internally downgrade its since, and
         // if we let our read handle expire that means we don't hold back the
@@ -634,7 +588,7 @@ impl ReclockOperator {
 
         let mut pending_batch = vec![];
 
-        let mut trace_updates: HashMap<PartitionId, Vec<(Timestamp, MzOffset)>> = HashMap::new();
+        let mut trace_updates = vec![];
 
         // If this is the first sync and the collection is non-empty load the initial snapshot
         let first_sync = self.upper.elements() == [Timestamp::minimum()];
@@ -662,8 +616,7 @@ impl ReclockOperator {
                             bindings.push((ts, diff));
 
                             // Record all updates for returning.
-                            let update_bindings = trace_updates.entry(pid.clone()).or_default();
-                            update_bindings.push((ts, diff));
+                            trace_updates.push((pid.clone(), ts, diff));
 
                             *self.source_upper.entry(pid.clone()).or_default() += diff;
                         }
@@ -680,13 +633,10 @@ impl ReclockOperator {
             }
         }
 
-        trace_updates.into_iter().collect()
-    }
-
-    /// Returns the current contents of the remap trace. Suitable for
-    /// bootstrapping a `ReclockListener`.
-    pub fn remap_trace(&self) -> HashMap<PartitionId, Vec<(Timestamp, MzOffset)>> {
-        self.remap_trace.clone()
+        ReclockBatch {
+            updates: trace_updates,
+            upper: self.upper.clone(),
+        }
     }
 
     /// Ensures that the persist shard backing this reclock operator contains bindings that cover
@@ -695,12 +645,9 @@ impl ReclockOperator {
     /// When this function returns the local dTVC view of the remap collection will contain
     /// definite timestamp bindings that can be used to reclock messages at offsets that are not
     /// beyond the provided frontier.
-    pub async fn mint(
-        &mut self,
-        source_frontier: &OffsetAntichain,
-    ) -> HashMap<PartitionId, Vec<(Timestamp, MzOffset)>> {
+    pub async fn mint(&mut self, source_frontier: &OffsetAntichain) -> ReclockBatch {
         // Any updates to the remap trace that occured during minting.
-        let mut trace_updates: HashMap<PartitionId, Vec<(Timestamp, MzOffset)>> = HashMap::new();
+        let mut trace_updates = vec![];
 
         loop {
             let mut updates = vec![];
@@ -721,24 +668,20 @@ impl ReclockOperator {
             }
 
             match self.append(&updates).await {
-                Ok(new_updates) => {
-                    for (pid, update) in new_updates {
-                        let bindings = trace_updates.entry(pid.clone()).or_default();
-                        bindings.extend(update);
-                    }
+                Ok(batch) => {
+                    trace_updates.extend(batch.updates);
                     break;
                 }
                 Err(Upper(actual_upper)) => {
-                    let new_updates = self.sync(&actual_upper).await;
-                    for (pid, update) in new_updates {
-                        let bindings = trace_updates.entry(pid.clone()).or_default();
-                        bindings.extend(update);
-                    }
+                    trace_updates.extend(self.sync(&actual_upper).await.updates);
                 }
             }
         }
 
-        trace_updates
+        ReclockBatch {
+            updates: trace_updates,
+            upper: self.upper.clone(),
+        }
     }
 
     /// Appends the provided updates to the remap collection at the next available minting
@@ -751,7 +694,7 @@ impl ReclockOperator {
     async fn append(
         &mut self,
         updates: &[(PartitionId, MzOffset)],
-    ) -> Result<Vec<(PartitionId, Vec<(Timestamp, MzOffset)>)>, Upper<Timestamp>> {
+    ) -> Result<ReclockBatch, Upper<Timestamp>> {
         let next_ts = loop {
             match self.next_mint_timestamp() {
                 Ok(ts) => break ts,
@@ -820,34 +763,6 @@ impl ReclockOperator {
         PartitionBindings {
             offset: MzOffset::default(),
             bindings,
-        }
-    }
-
-    /// Returns the since frontier for a given partition
-    fn partition_since(&self, pid: &PartitionId) -> MzOffset {
-        if self.since.elements() == [Timestamp::minimum()] {
-            // If we never compacted in the DestTime domain then the SourceTime domain isn't
-            // compated either. Therefore the since frontier is zero
-            MzOffset::default()
-        } else {
-            // If we have compacted there are two posibilities. Either the since frontier is at
-            // exactly the time of the first binding (and will continue to do so since times are
-            // advanced during compaction), or it is behind it.
-            let (first_ts, first_offset) = self
-                .remap_trace
-                .get(pid)
-                .and_then(|b| b.first())
-                .copied()
-                .unwrap_or_default();
-
-            if self.since.less_than(&first_ts) {
-                // If it is behind then the first binding will cover all offsets starting at zero,
-                // so the since frontier of the partition is also zero.
-                MzOffset::default()
-            } else {
-                // Otherwise the since frontier is the offset of the first binding
-                first_offset
-            }
         }
     }
 }
@@ -1041,7 +956,7 @@ mod tests {
             status_shard: None,
         };
 
-        let operator = ReclockOperator::new(
+        let (operator, initial_batch) = ReclockOperator::new(
             Arc::clone(persist_cache),
             metadata,
             now_fn.now_fn(),
@@ -1055,26 +970,12 @@ mod tests {
         .await
         .unwrap();
 
-        let follower = ReclockFollower::new(as_of);
+        let mut follower = ReclockFollower::new(as_of);
 
-        // Push any updates that might already exist in the persist shard to the
-        // follower.
-        follower.push_trace_updates(operator.remap_trace().into_iter());
+        // Push any updates that might already exist in the persist shard to the follower.
+        follower.push_trace_batch(initial_batch);
 
         (operator, follower)
-    }
-
-    async fn mint_and_follow(
-        operator: &mut ReclockOperator,
-        follower: &mut ReclockFollower,
-        source_upper: &mut OffsetAntichain,
-    ) {
-        let trace_updates = operator.mint(source_upper).await;
-        let reclock_upper = operator
-            .reclock_frontier(source_upper)
-            .expect("wrong source upper");
-        follower.push_trace_updates(trace_updates.into_iter());
-        follower.push_upper_update(reclock_upper);
     }
 
     #[tokio::test(start_paused = true)]
@@ -1106,7 +1007,7 @@ mod tests {
             ],
         );
         source_upper.insert(PART_ID, MzOffset::from(4));
-        mint_and_follow(&mut operator, &mut follower, &mut source_upper).await;
+        follower.push_trace_batch(operator.mint(&source_upper).await);
 
         let reclocked_msgs = follower
             .reclock(&mut batch)
@@ -1155,7 +1056,7 @@ mod tests {
         let now_fn = TestNowFn::new();
         let persist_cache = persist_cache(now_fn.now_fn());
 
-        let (mut operator, _follower) = make_test_operator(
+        let (mut operator, mut follower) = make_test_operator(
             ShardId::new(),
             Antichain::from_elem(0.into()),
             &persist_cache,
@@ -1176,7 +1077,7 @@ mod tests {
         assert_eq!(operator.next_mint_timestamp(), Ok(2000.into()));
 
         // Advance the upper frontier to 2001
-        operator.advance().await;
+        follower.push_trace_batch(operator.advance().await);
 
         // Test calculation of sleep time works as expected
         let sleep_duration = operator.next_mint_timestamp().unwrap_err();
@@ -1195,7 +1096,7 @@ mod tests {
         const PART1: PartitionId = PartitionId::Kafka(1);
         const PART2: PartitionId = PartitionId::Kafka(2);
 
-        let (mut operator, _follower) = make_test_operator(
+        let (mut operator, mut follower) = make_test_operator(
             ShardId::new(),
             Antichain::from_elem(0.into()),
             &persist_cache,
@@ -1207,19 +1108,23 @@ mod tests {
         // This is the initial source frontier so we should get the initial ts upper
         assert_eq!(
             Ok(Antichain::from_elem(0.into())),
-            operator.reclock_frontier(&query)
+            follower.reclock_frontier(&query)
         );
 
         // Mint a couple of bindings for multiple partitions
         now_fn.advance(Duration::from_secs(1));
-        operator
-            .mint(&OffsetAntichain::from_iter([(PART1, MzOffset::from(10))]))
-            .await;
+        follower.push_trace_batch(
+            operator
+                .mint(&OffsetAntichain::from_iter([(PART1, MzOffset::from(10))]))
+                .await,
+        );
 
         now_fn.advance(Duration::from_secs(1));
-        operator
-            .mint(&OffsetAntichain::from_iter([(PART2, MzOffset::from(10))]))
-            .await;
+        follower.push_trace_batch(
+            operator
+                .mint(&OffsetAntichain::from_iter([(PART2, MzOffset::from(10))]))
+                .await,
+        );
         assert_eq!(
             operator.remap_trace[&PART1],
             &[(1000.into(), MzOffset::from(10))]
@@ -1233,57 +1138,59 @@ mod tests {
         let query = OffsetAntichain::new();
         assert_eq!(
             Ok(Antichain::from_elem(1000.into())),
-            operator.reclock_frontier(&query)
+            follower.reclock_frontier(&query)
         );
 
         // Map a frontier that advances only one of the partitions
         let query = OffsetAntichain::from_iter([(PART1, MzOffset::from(9))]);
         assert_eq!(
             Ok(Antichain::from_elem(1000.into())),
-            operator.reclock_frontier(&query)
+            follower.reclock_frontier(&query)
         );
         let query = OffsetAntichain::from_iter([(PART1, MzOffset::from(10))]);
         assert_eq!(
             Ok(Antichain::from_elem(2000.into())),
-            operator.reclock_frontier(&query)
+            follower.reclock_frontier(&query)
         );
         // A frontier that is the upper of both partitions should map to the timestamp upper
         let query =
             OffsetAntichain::from_iter([(PART1, MzOffset::from(10)), (PART2, MzOffset::from(10))]);
         assert_eq!(
             Ok(Antichain::from_elem(2001.into())),
-            operator.reclock_frontier(&query)
+            follower.reclock_frontier(&query)
         );
 
         // Advance the operator and confirm that we get to the next timestamp
         now_fn.advance(Duration::from_secs(1));
-        operator.advance().await;
+        follower.push_trace_batch(operator.advance().await);
         let query =
             OffsetAntichain::from_iter([(PART1, MzOffset::from(10)), (PART2, MzOffset::from(10))]);
         assert_eq!(
             Ok(Antichain::from_elem(3001.into())),
-            operator.reclock_frontier(&query)
+            follower.reclock_frontier(&query)
         );
 
         // Compact but not enough to change the bindings
         operator.compact(Antichain::from_elem(900.into())).await;
+        follower.compact(Antichain::from_elem(900.into()));
         let query = OffsetAntichain::from_iter([(PART1, MzOffset::from(9))]);
         assert_eq!(
             Ok(Antichain::from_elem(1000.into())),
-            operator.reclock_frontier(&query)
+            follower.reclock_frontier(&query)
         );
 
         // Compact enough to compact bindings
         operator.compact(Antichain::from_elem(1500.into())).await;
+        follower.compact(Antichain::from_elem(1500.into()));
         let query = OffsetAntichain::from_iter([(PART1, MzOffset::from(9))]);
         assert_eq!(
             Err((PART1, MzOffset::from(9))),
-            operator.reclock_frontier(&query)
+            follower.reclock_frontier(&query)
         );
         let query = OffsetAntichain::from_iter([(PART1, MzOffset::from(10))]);
         assert_eq!(
             Ok(Antichain::from_elem(2000.into())),
-            operator.reclock_frontier(&query)
+            follower.reclock_frontier(&query)
         );
     }
 
@@ -1312,7 +1219,7 @@ mod tests {
         );
         source_upper.insert(PART_ID, MzOffset::from(3));
 
-        mint_and_follow(&mut operator, &mut follower, &mut source_upper).await;
+        follower.push_trace_batch(operator.mint(&source_upper).await);
         let reclocked_msgs = follower
             .reclock(&mut batch)
             .expect("beyond source frontier")
@@ -1329,7 +1236,7 @@ mod tests {
         source_upper.insert(PART_ID, MzOffset::from(5));
 
         now_fn.advance(Duration::from_millis(1000));
-        mint_and_follow(&mut operator, &mut follower, &mut source_upper).await;
+        follower.push_trace_batch(operator.mint(&source_upper).await);
         let reclocked_msgs = follower
             .reclock(&mut batch)
             .expect("beyond source frontier")
@@ -1431,7 +1338,7 @@ mod tests {
         );
         source_upper.insert(PART_ID, MzOffset::from(3));
 
-        mint_and_follow(&mut operator, &mut follower, &mut source_upper).await;
+        follower.push_trace_batch(operator.mint(&source_upper).await);
         let reclocked_msgs = follower
             .reclock(&mut batch)
             .expect("beyond source frontier")
@@ -1448,7 +1355,7 @@ mod tests {
         );
         source_upper.insert(PART_ID, MzOffset::from(5));
 
-        mint_and_follow(&mut operator, &mut follower, &mut source_upper).await;
+        follower.push_trace_batch(operator.mint(&source_upper).await);
         let reclocked_msgs = follower
             .reclock(&mut batch)
             .expect("beyond source frontier")
@@ -1548,7 +1455,7 @@ mod tests {
         );
         source_upper.insert(PART_ID, MzOffset::from(3));
 
-        mint_and_follow(&mut op_a, &mut follower_a, &mut source_upper).await;
+        follower_a.push_trace_batch(op_a.mint(&source_upper).await);
         let reclocked_msgs = follower_a
             .reclock(&mut batch)
             .expect("beyond source frontier")
@@ -1577,7 +1484,7 @@ mod tests {
         source_upper.insert(PART_ID, MzOffset::from(5));
         // This operator should attempt to mint in one go, fail, re-sync, and retry only for the
         // bindings that still need minting
-        mint_and_follow(&mut op_b, &mut follower_b, &mut source_upper).await;
+        follower_b.push_trace_batch(op_b.mint(&source_upper).await);
         let reclocked_msgs = follower_b
             .reclock(&mut batch)
             .expect("beyond source frontier")
@@ -1622,7 +1529,7 @@ mod tests {
             vec![(1, MzOffset::from(1)), (2, MzOffset::from(2))],
         );
         source_upper.insert(PART_ID, MzOffset::from(3));
-        mint_and_follow(&mut operator, &mut follower, &mut source_upper).await;
+        follower.push_trace_batch(operator.mint(&source_upper).await);
         let reclocked_msgs = follower
             .reclock(&mut batch)
             .expect("beyond source frontier")
@@ -1638,7 +1545,7 @@ mod tests {
             vec![(3, MzOffset::from(3)), (4, MzOffset::from(4))],
         );
         source_upper.insert(PART_ID, MzOffset::from(5));
-        mint_and_follow(&mut operator, &mut follower, &mut source_upper).await;
+        follower.push_trace_batch(operator.mint(&source_upper).await);
         let reclocked_msgs = follower
             .reclock(&mut batch)
             .expect("beyond source frontier")
@@ -1654,7 +1561,7 @@ mod tests {
             vec![(5, MzOffset::from(5)), (6, MzOffset::from(6))],
         );
         source_upper.insert(PART_ID, MzOffset::from(7));
-        mint_and_follow(&mut operator, &mut follower, &mut source_upper).await;
+        follower.push_trace_batch(operator.mint(&source_upper).await);
         let reclocked_msgs = follower
             .reclock(&mut batch)
             .expect("beyond source frontier")

@@ -62,8 +62,7 @@ use crate::source::antichain::MutableOffsetAntichain;
 use crate::source::antichain::OffsetAntichain;
 use crate::source::healthcheck::Healthchecker;
 use crate::source::metrics::SourceBaseMetrics;
-use crate::source::reclock::ReclockFollower;
-use crate::source::reclock::ReclockOperator;
+use crate::source::reclock::{ReclockBatch, ReclockFollower, ReclockOperator};
 use crate::source::types::SourceOutput;
 use crate::source::types::SourceReaderError;
 use crate::source::types::{
@@ -899,7 +898,7 @@ fn remap_operator<G, S: 'static>(
     batch_upper_summaries: timely::dataflow::Stream<G, BatchUpperSummary>,
     resume_stream: &timely::dataflow::Stream<G, ()>,
 ) -> (
-    timely::dataflow::Stream<G, HashMap<PartitionId, Vec<(Timestamp, MzOffset)>>>,
+    timely::dataflow::Stream<G, (PartitionId, Timestamp, MzOffset)>,
     Rc<dyn Any>,
 )
 where
@@ -965,7 +964,7 @@ where
 
         // Same value as our use of `derive_new_compaction_since`.
         let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
-        let mut timestamper = match ReclockOperator::new(
+        let (mut timestamper, mut initial_batch) = match ReclockOperator::new(
             Arc::clone(&persist_clients),
             storage_metadata.clone(),
             now.clone(),
@@ -989,22 +988,15 @@ where
             .source_upper_at_frontier(resume_upper.borrow())
             .expect("source_upper_at_frontier to be used correctly");
 
-        let new_ts_upper = timestamper
-            .reclock_frontier(&global_source_upper)
-            .expect("compacted past upper");
-
-        cap_set.downgrade(new_ts_upper);
-
         // Emit initial snapshot of the remap_shard, bootstrapping
         // downstream reclock operators.
-        let remap_trace = timestamper.remap_trace();
         trace!(
             "remap({id}) {worker_id}/{worker_count}: \
                 emitting initial remap_trace. \
                 source_upper: {:?} \
                 trace_updates: {:?}",
             global_source_upper,
-            remap_trace
+            &initial_batch.updates
         );
 
         // Out of an abundance of caution, do not hold the output handle
@@ -1013,7 +1005,8 @@ where
             let mut remap_output = remap_output.activate();
             let cap = cap_set.delayed(cap_set.first().unwrap());
             let mut session = remap_output.session(&cap);
-            session.give(remap_trace);
+            session.give_vec(&mut initial_batch.updates);
+            cap_set.downgrade(initial_batch.upper);
         }
 
         // The last frontier we compacted the remap shard to, starting at [0].
@@ -1035,21 +1028,16 @@ where
                         tokio::time::sleep(wait_time).await;
                     }
                 } => {
-                    let remap_trace_updates = timestamper.mint(&global_source_upper).await;
-
-                    timestamper.advance().await;
-                    let new_ts_upper = timestamper
-                        .reclock_frontier(&global_source_upper)
-                        .expect("compacted past upper");
+                    let mut remap_trace_batch = timestamper.mint(&global_source_upper).await;
 
                     trace!(
                         "remap({id}) {worker_id}/{worker_count}: minted new bindings. \
                         source_upper: {:?} \
                         trace_updates: {:?} \
-                        new_ts_upper: {:?}",
+                        trace_upper: {:?}",
                         global_source_upper,
-                        remap_trace_updates,
-                        new_ts_upper
+                        &remap_trace_batch.updates,
+                        &remap_trace_batch.upper
                     );
 
                     // Out of an abundance of caution, do not hold the output handle
@@ -1058,10 +1046,24 @@ where
                         let mut remap_output = remap_output.activate();
                         let cap = cap_set.delayed(cap_set.first().unwrap());
                         let mut session = remap_output.session(&cap);
-                        session.give(remap_trace_updates);
+                        session.give_vec(&mut remap_trace_batch.updates);
                     }
 
-                    cap_set.downgrade(new_ts_upper);
+                    cap_set.downgrade(remap_trace_batch.upper);
+
+
+                    let mut remap_trace_batch = timestamper.advance().await;
+
+                    // Out of an abundance of caution, do not hold the output handle
+                    // across an await, and drop it before we downgrade the capability.
+                    {
+                        let mut remap_output = remap_output.activate();
+                        let cap = cap_set.delayed(cap_set.first().unwrap());
+                        let mut session = remap_output.session(&cap);
+                        session.give_vec(&mut remap_trace_batch.updates);
+                    }
+
+                    cap_set.downgrade(remap_trace_batch.upper);
 
                     // Make sure we do this after writing any timestamp bindings to
                     // the remap shard that might be needed for the reported source
@@ -1121,12 +1123,9 @@ where
 fn reclock_operator<G, S: 'static>(
     scope: &G,
     config: RawSourceCreationConfig,
-    timestamper: ReclockFollower,
+    mut timestamper: ReclockFollower,
     batches: timely::dataflow::Stream<G, SourceMessageBatch<S::Key, S::Value, S::Diff>>,
-    remap_trace_updates: timely::dataflow::Stream<
-        G,
-        HashMap<PartitionId, Vec<(Timestamp, MzOffset)>>,
-    >,
+    remap_trace_updates: timely::dataflow::Stream<G, (PartitionId, Timestamp, MzOffset)>,
 ) -> (
     (
         Vec<timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>>,
@@ -1172,7 +1171,13 @@ where
     let mut remap_input = reclock_op.new_input(&remap_trace_updates, Pipeline);
 
     reclock_op.build(move |mut capabilities| {
-        capabilities.clear();
+        // The capability of the output after reclocking the source frontier
+        let mut cap_set = CapabilitySet::from_elem(
+            capabilities
+                .drain(..)
+                .exactly_one()
+                .expect("missing initial output capability"),
+        );
 
         let mut source_metrics =
             SourceMetrics::new(&base_metrics, &name, id, &worker_id.to_string());
@@ -1181,8 +1186,6 @@ where
             .resume_upper
             .set(mz_persist_client::metrics::encode_ts_metric(&resume_upper));
 
-        // Use this to retain capabilities from the remap_operator input.
-        let mut cap_set = CapabilitySet::new();
         let mut batch_buffer = Vec::new();
         let mut remap_trace_buffer = Vec::new();
 
@@ -1207,6 +1210,9 @@ where
         // need when we can finally emit a reclocked batch.
         let mut batch_capabilities = MutableOffsetAntichain::new();
 
+        // Stash of reclock updates that are still beyond the upper frontier
+        let mut remap_updates_stash = vec![];
+        let mut prev_remap_upper = Antichain::from_elem(Timestamp::minimum());
         move |frontiers| {
             batch_input.for_each(|cap, data| {
                 data.swap(&mut batch_buffer);
@@ -1244,20 +1250,34 @@ where
                 }
             });
 
-            remap_input.for_each(|cap, data| {
+            while let Some((_cap, data)) = remap_input.next() {
                 data.swap(&mut remap_trace_buffer);
-                for update in remap_trace_buffer.drain(..) {
-                    timestamper.push_trace_updates(update.into_iter())
-                }
-                cap_set.insert(cap.retain());
-            });
+                remap_updates_stash.append(&mut remap_trace_buffer);
+            }
 
-            let remap_frontier = &frontiers[1];
-            trace!(
-                "reclock({id}) {worker_id}/{worker_count}: remap frontier: {:?}",
-                remap_frontier.frontier()
-            );
-            timestamper.push_upper_update(remap_frontier.frontier().to_owned());
+            // If the remap frontier advanced it's time to carve out a batch that includes all
+            // updates not beyond the upper
+            let remap_upper = &frontiers[1].frontier();
+            if PartialOrder::less_than(&prev_remap_upper.borrow(), remap_upper) {
+                trace!("reclock({id}) {worker_id}/{worker_count}: remap upper: {remap_upper:?}");
+                let mut updates = Vec::with_capacity(remap_updates_stash.len());
+                // TODO(petrosagg) replace with Vec::drain_filter when it's stable.
+                let mut i = 0;
+                while i < remap_updates_stash.len() {
+                    let (_, ref ts, _) = &remap_updates_stash[i];
+                    if !remap_upper.less_equal(ts) {
+                        updates.push(remap_updates_stash.swap_remove(i));
+                    } else {
+                        i += 1;
+                    }
+                }
+                let remap_trace_batch = ReclockBatch {
+                    updates,
+                    upper: remap_upper.to_owned(),
+                };
+                timestamper.push_trace_batch(remap_trace_batch);
+                prev_remap_upper = remap_upper.to_owned();
+            }
 
             // Accumulate updates to bytes_read for Prometheus metrics collection
             let mut bytes_read = 0;
@@ -1422,21 +1442,17 @@ where
                     partition_metrics.closed_ts.set(ts.into());
                 }
 
-                if !cap_set.is_empty() {
-                    trace!(
-                        "reclock({id}) {worker_id}/{worker_count}: \
-                        downgrading to {:?} \
-                        global_source_upper {:?}, \
-                        global_batch_lower {:?}",
-                        new_ts_upper,
-                        global_source_upper,
-                        global_batch_lower
-                    );
+                trace!(
+                    "reclock({id}) {worker_id}/{worker_count}: \
+                    downgrading to {:?} \
+                    global_source_upper {:?}, \
+                    global_batch_lower {:?}",
+                    new_ts_upper,
+                    global_source_upper,
+                    global_batch_lower
+                );
 
-                    cap_set
-                        .try_downgrade(new_ts_upper.iter())
-                        .expect("cannot downgrade in reclock");
-                }
+                cap_set.downgrade(new_ts_upper);
             }
         }
     });
