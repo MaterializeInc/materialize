@@ -15,6 +15,7 @@
 
 extern crate core;
 
+mod configuration;
 mod login;
 mod password;
 mod profiles;
