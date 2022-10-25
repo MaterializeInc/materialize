@@ -335,7 +335,7 @@ pub async fn purify_create_source(
                 for c in table.columns.iter() {
                     let name = Ident::new(c.name.clone());
                     let ty = mz_pgrepr::Type::from_oid_and_typmod(c.type_oid, c.type_mod).map_err(
-                        |e| PlanError::UnknownTypeInPostgresSource {
+                        |e| PlanError::UnrecognizedTypeInPostgresSource {
                             table: subsource_name.to_string(),
                             column: name.to_string(),
                             e,

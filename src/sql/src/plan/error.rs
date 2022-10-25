@@ -82,7 +82,7 @@ pub enum PlanError {
     ShowCreateViewOnMaterializedView(String),
     ExplainViewOnMaterializedView(String),
     UnacceptableTimelineName(String),
-    UnknownTypeInPostgresSource {
+    UnrecognizedTypeInPostgresSource {
         table: String,
         column: String,
         e: TypeFromOidError,
@@ -100,7 +100,14 @@ impl PlanError {
     }
 
     pub fn detail(&self) -> Option<String> {
-        None
+        match self {
+            Self::UnrecognizedTypeInPostgresSource {
+                table: _,
+                column: _,
+                e,
+            } => Some(format!("{e}")),
+            _ => None,
+        }
     }
 
     pub fn hint(&self) -> Option<String> {
@@ -120,9 +127,15 @@ impl PlanError {
             Self::UnacceptableTimelineName(_) => {
                 Some("The prefix \"mz_\" is reserved for system timelines.".into())
             }
-            Self::UnknownTypeInPostgresSource { table, column , e: _ }  => {
-                Some(format!("You may be using an unsupported type in Materialize for column \"{}\" in table \"{}\".", column, table))
-            }
+            Self::UnrecognizedTypeInPostgresSource {
+                table: _,
+                column: _,
+                e: _,
+            } => Some(
+                "You may be using an unsupported type in Materialize, such as an enum. \
+                Try excluding the table from the publication."
+                    .into(),
+            ),
             _ => None,
         }
     }
@@ -217,11 +230,15 @@ impl fmt::Display for PlanError {
             | Self::AlterViewOnMaterializedView(name)
             | Self::ShowCreateViewOnMaterializedView(name)
             | Self::ExplainViewOnMaterializedView(name) => write!(f, "{name} is not a view"),
-            Self::UnknownTypeInPostgresSource {
-                table: _,
-                column: _,
-                e,
-            } => write!(f, "{}", e),
+            Self::UnrecognizedTypeInPostgresSource {
+                table,
+                column,
+                e: _,
+            } => write!(
+                f,
+                "column {} uses unrecognized type",
+                format!("{}.{}", table, column).quoted()
+            ),
         }
     }
 }

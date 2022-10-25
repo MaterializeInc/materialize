@@ -26,6 +26,6 @@ CREATE TABLE person (name TEXT, current_mood mood);
 INSERT INTO person VALUES ('Moe', 'happy');
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-# Todo: add test for hint once testdrive supports that
+# Todo: add test for detail and hint once testdrive supports that
 ! CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR ALL TABLES;
-regex:type with OID .* is unknown\nhint: You may be using an unsupported type in Materialize for column "current_mood" in table "person".
+contains: column "person.current_mood" uses unrecognized type

@@ -392,10 +392,6 @@ async fn try_run_fail_sql(
         Err(err) => match err.source().and_then(|err| err.downcast_ref::<DbError>()) {
             Some(err) => {
                 let mut err_string = err.message().to_string();
-                if let Some(hint) = err.hint() {
-                    err_string.push_str("\nhint: ");
-                    err_string.push_str(hint);
-                }
                 if let Some(regex) = &state.regex {
                     err_string = regex
                         .replace_all(&err_string, state.regex_replacement.as_str())
