@@ -92,24 +92,26 @@ not entirely consistent on the finer points, so don't worry about being exact.
 But please at least capitalize the obvious keywords, like `SELECT`, `INSERT`,
 `FROM`, `WHERE`, `AS`, `AND`, etc.
 
-### SQL error style
-We adhere to the PostgreSQL manual's [SQL error message style guide](https://www.postgresql.org/docs/current/error-style-guide.html).
+### Error message style
+_Portions of this section are copied from the PostgreSQL documentation and subject to the PostgreSQL license, a copy of which is available in the LICENSE file at the root of this repository._
 
-The format consists of a required primary message and optional detail and hint messages.
+For error message style, we strive to adhere to the [guidelines](https://www.postgresql.org/docs/current/error-style-guide.html) in the PostgreSQL manual, and use a format that consists of a **required** _primary_ message followed by **optional** _detail_ and _hint_ messages.
 
-**Primary message**: short, factual, and avoids reference to implementation details such as specific function names. Do not capitalize the first letter. Do not end a message with a period. Do not even think about ending a message with an exclamation point.
+**Primary message**: short, factual, and avoids reference to implementation details. Lowercase the first letter and do not end with any punctuation.
 
-**Detail message**: factual, use if needed to keep the primary message short or if you feel a need to mention implementation details. Use complete sentences, and end each with a period. Capitalize the first word of sentences. Put two spaces after the period if another sentence follows.
+**Detail message**: factual, use if needed to keep the primary message short or to mention implementation details. Use complete sentences, each of which starts with a capitalized letter and ends with a period. Separate sentences with two spaces.
 
-**Hint message**: suggestions about what to do to fix the problem. Use complete sentences, and end each with a period. Capitalize the first word of sentences. Put two spaces after the period if another sentence follows
+**Hint message**: suggestions about what to do to fix the problem. This should be actionable, and can provide a shortlink to direct the user to more information. Use complete sentences, each of which starts with a capitalized letter and ends with a period. Separate sentences with two spaces.
+
+To use a shortlink in a Hint, add the shortlink to this [file](https://github.com/MaterializeInc/materialize/blob/3efb2c933e4e6c8e694afb1e794c7d8dae368e7d/ci/deploy/website.sh#L29) in your PR to add/modify the hint mesage. Be mindful that we are committed to the upkeep of the referenced link.
 
 Some key principles to highlight are:
-* Don't put any specific assumptions about formatting into the message texts.
-* English text should use double quotes when quoting is appropriate.
-* Always use quotes to delimit file names, user-supplied identifiers, and other variables that might contain words
+* Do not put any formatting into message texts, such as newlines.
+* Use quotes to delimit file names, user-supplied identifiers, and other variables that might contain words.
+* Use double quotes when quoting is appropriate.
 * Use past tense if an attempt to do something failed, but could perhaps succeed next time (perhaps after fixing some problem). Use present tense if the failure is certainly permanent.
 * When citing the name of an object, state what kind of object it is.
-* Avoid mentioning called function names; instead say what the code was trying to do.
+* Avoid mentioning called function names. Instead say what the code was trying to do.
 * Tricky words to avoid: unable, bad, illegal, unknown.
 * Avoid contractions and spell out words in full.
 * Word choices to be mindful of: find vs. exists, may vs. can vs. might.
