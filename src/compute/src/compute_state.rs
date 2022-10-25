@@ -105,7 +105,9 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         use ComputeCommand::*;
-        self.compute_state.command_history.push(cmd.clone(), &self.compute_state.pending_peeks);
+        self.compute_state
+            .command_history
+            .push(cmd.clone(), &self.compute_state.pending_peeks);
         match cmd {
             CreateTimely(_) => panic!("CreateTimely must be captured before"),
             CreateInstance(config) => self.handle_create_instance(config),
@@ -267,7 +269,9 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             self.send_peek_response(peek, response);
         } else {
             peek.span = span!(parent: &peek.span, Level::DEBUG, "pending peek");
-            self.compute_state.pending_peeks.insert(peek.peek.uuid, peek);
+            self.compute_state
+                .pending_peeks
+                .insert(peek.peek.uuid, peek);
         }
     }
 

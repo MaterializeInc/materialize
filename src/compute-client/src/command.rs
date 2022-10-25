@@ -1012,9 +1012,13 @@ pub struct ComputeCommandHistory<T = mz_repr::Timestamp> {
 impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
     /// Add a command to the history.
     ///
-    /// This action will reduce the history every time it doubles, while retaining the
+    /// This action will reduce the history every time it doubles while retaining the
     /// provided peeks.
-    pub fn push<V>(&mut self, command: ComputeCommand<T>, peeks: &std::collections::HashMap<uuid::Uuid, V>) {
+    pub fn push<V>(
+        &mut self,
+        command: ComputeCommand<T>,
+        peeks: &std::collections::HashMap<uuid::Uuid, V>,
+    ) {
         self.commands.push(command);
         if self.commands.len() > 2 * self.reduced_count {
             self.retain_peeks(peeks);
