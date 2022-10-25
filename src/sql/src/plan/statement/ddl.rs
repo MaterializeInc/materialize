@@ -863,10 +863,22 @@ pub fn plan_create_source(
 
                 let target = match &subsource.subsource {
                     Some(subsource) => match subsource {
-                        DeferredObjectName::Named(target) => target,
-                        DeferredObjectName::Deferred(_) => sql_bail!(
-                            "[internal error] subsources must be named during purification"
-                        ),
+                        DeferredObjectName::Named(target) => target.clone(),
+                        DeferredObjectName::Deferred(name) => {
+                            // TODO: remove this after the next release, we need
+                            // it only so we can load the catalog to do the
+                            // proper rewrite.
+                            let partial_subsource_name =
+                                normalize::unresolved_object_name(name.clone())?;
+                            let item = scx.catalog.resolve_item(&partial_subsource_name).unwrap();
+
+                            ResolvedObjectName::Object {
+                                id: item.id(),
+                                qualifiers: item.name().qualifiers.clone(),
+                                full_name: scx.catalog.resolve_full_name(item.name()),
+                                print_id: true,
+                            }
+                        }
                     },
                     None => {
                         sql_bail!("[internal error] subsources must be named during purification")
@@ -909,7 +921,7 @@ pub fn plan_create_source(
         // provisional catalogs are made available to the planner we could do the check. For now
         // we don't allow users to manually target subsources and rely on purification generating
         // correct definitions.
-        subsource_exports.insert(*target_id, *idx);
+        subsource_exports.insert(target_id, *idx);
     }
 
     let if_not_exists = *if_not_exists;
