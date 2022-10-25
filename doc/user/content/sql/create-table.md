@@ -59,11 +59,6 @@ _col&lowbar;type_ | The data type of the column indicated by _col&lowbar;name_.
 
 ### Restrictions
 
-{{< warning >}}
-Tables do not persist any data that is inserted. This means that restarting a
-Materialize instance will lose any data that was previously stored in a table.
-{{< /warning >}}
-
 Additionally, tables do not currently support:
 - Primary keys
 - Unique constraints
