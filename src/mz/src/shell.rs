@@ -45,6 +45,7 @@ fn run_psql_shell(valid_profile: ValidProfile<'_>, environment: &Environment) ->
         .arg(port)
         .arg("materialize")
         .env("PGPASSWORD", valid_profile.profile.get_app_password())
+        .env("PGCONNECT_TIMEOUT", "10")
         .exec();
 
     Err(error).context("failed to spawn psql")

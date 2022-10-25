@@ -21,12 +21,14 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::utils::CloudProviderRegion;
+
 #[derive(Serialize, Deserialize, Debug)]
 struct Profile0 {
     email: String,
     #[serde(rename(serialize = "app-password", deserialize = "app-password"))]
     app_password: String,
-    region: Option<String>,
+    region: Option<CloudProviderRegion>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -96,8 +98,12 @@ impl Configuration {
             .unwrap_or_else(|| Ok(Configuration::default()))
     }
 
+    pub(crate) fn current_profile(&self, profile: Option<String>) -> String {
+        profile.unwrap_or(self.default_profile.clone())
+    }
+
     pub(crate) fn get_profile<'a>(&'a mut self, profile: Option<String>) -> Result<Profile<'a>> {
-        let profile = profile.unwrap_or(self.default_profile.clone());
+        let profile = self.current_profile(profile);
         self.profiles
             .get_mut(&profile)
             .map(|p| Profile {
@@ -105,6 +111,11 @@ impl Configuration {
                 profile: p,
             })
             .context("Profile not found. Please, add one or login using `mz login`.")
+    }
+
+    pub(crate) fn update_default_profile(&mut self, profile: String) {
+        self.modified = true;
+        self.default_profile = profile;
     }
 
     pub(crate) fn create_or_update_profile(
@@ -168,8 +179,8 @@ impl Profile<'_> {
         &self.profile.app_password
     }
 
-    pub(crate) fn get_default_region(&self) -> Option<&str> {
-        self.profile.region.as_ref().map(|x| &**x)
+    pub(crate) fn get_default_region(&self) -> Option<CloudProviderRegion> {
+        self.profile.region
     }
 
     pub(crate) fn set_email(&mut self, email: String) {
@@ -182,7 +193,7 @@ impl Profile<'_> {
         self.profile.app_password = password;
     }
 
-    pub(crate) fn set_default_region(&mut self, region: String) {
+    pub(crate) fn set_default_region(&mut self, region: CloudProviderRegion) {
         *self._modified = true;
         self.profile.region = Some(region)
     }

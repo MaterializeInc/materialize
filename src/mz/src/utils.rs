@@ -9,6 +9,9 @@
 
 use anyhow::{bail, Ok, Result};
 use indicatif::{ProgressBar, ProgressStyle};
+use serde::de::{Unexpected, Visitor};
+use serde::{Deserialize, Serialize};
+use std::fmt::Display;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -34,6 +37,15 @@ impl CloudProviderRegion {
     }
 }
 
+impl Display for CloudProviderRegion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CloudProviderRegion::AwsUsEast1 => write!(f, "{}", "aws/us-east-1"),
+            CloudProviderRegion::AwsEuWest1 => write!(f, "{}", "aws/eu-west-1"),
+        }
+    }
+}
+
 impl FromStr for CloudProviderRegion {
     type Err = anyhow::Error;
 
@@ -43,6 +55,46 @@ impl FromStr for CloudProviderRegion {
             "aws/eu-west-1" => Ok(CloudProviderRegion::AwsEuWest1),
             _ => bail!("Unknown region {}", s),
         }
+    }
+}
+
+struct CloudProviderRegionVisitor;
+
+impl<'de> Visitor<'de> for CloudProviderRegionVisitor {
+    type Value = CloudProviderRegion;
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        CloudProviderRegion::from_str(v).map_err(|_| {
+            E::invalid_value(
+                Unexpected::Str(v),
+                &format!("{:?}", CloudProviderRegion::variants()).as_str(),
+            )
+        })
+    }
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(formatter, "{:?}", CloudProviderRegion::variants())
+    }
+}
+
+impl<'de> Deserialize<'de> for CloudProviderRegion {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_str(CloudProviderRegionVisitor)
+    }
+}
+
+impl Serialize for CloudProviderRegion {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
     }
 }
 
