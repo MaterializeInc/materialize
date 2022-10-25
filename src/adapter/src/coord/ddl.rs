@@ -421,7 +421,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // This is disabled for the moment because we want to attempt to roll out the change slowly as we're
         // stressing persist in a new way.
-        let status_id = if false {
+        let status_id = if true {
             Some(self.catalog.resolve_builtin_storage_collection(
                 &crate::catalog::builtin::MZ_SINK_STATUS_HISTORY,
             ))
