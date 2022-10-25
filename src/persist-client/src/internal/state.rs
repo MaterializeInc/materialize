@@ -273,7 +273,11 @@ where
         debug_assert_eq!(self.trace.upper(), batch.desc.upper());
 
         // Also use this as an opportunity to heartbeat the writer
-        self.writer(writer_id).last_heartbeat_timestamp_ms = heartbeat_timestamp_ms;
+        let writer_state = self.writer(writer_id);
+        writer_state.last_heartbeat_timestamp_ms = std::cmp::max(
+            heartbeat_timestamp_ms,
+            writer_state.last_heartbeat_timestamp_ms,
+        );
 
         Continue(merge_reqs)
     }
@@ -298,7 +302,10 @@ where
 
         // Also use this as an opportunity to heartbeat the reader and downgrade
         // the seqno capability.
-        reader_state.last_heartbeat_timestamp_ms = heartbeat_timestamp_ms;
+        reader_state.last_heartbeat_timestamp_ms = std::cmp::max(
+            heartbeat_timestamp_ms,
+            reader_state.last_heartbeat_timestamp_ms,
+        );
 
         let seqno = match outstanding_seqno {
             Some(outstanding_seqno) => {
