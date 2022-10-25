@@ -317,7 +317,10 @@ where
     };
 
     let sentry_guard = if let Some(sentry_config) = config.sentry {
-        let mut sentry_client_options = sentry::ClientOptions::default();
+        let mut sentry_client_options = sentry::ClientOptions {
+            attach_stacktrace: true,
+            ..Default::default()
+        };
         sentry_client_options.release = Some(Cow::Owned(build_version.to_string()));
 
         let guard = sentry::init((sentry_config.dsn, sentry_client_options));
