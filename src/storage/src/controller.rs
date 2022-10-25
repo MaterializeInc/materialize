@@ -2208,7 +2208,7 @@ mod persist_write_handles {
                                                 Err(StorageError::InvalidUppers(filtered))
                                             }
                                         }
-                                        _ => Ok(()),
+                                        Ok(()) => Ok(()),
                                     };
                                     // It is not an error for the other end to hang up.
                                     let _ = response.send(result);
