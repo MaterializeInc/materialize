@@ -135,7 +135,7 @@ In the above example, the index `active_customers_geo_idx`...
 
 ### Speed up filtering with indexes
 
-You can set up an index over a column were filtering by literal values or expressions are common to improve the performance.
+If you commonly filter by a certain column being equal to a literal value, you can set up an index over that column to speed up your queries:
 
 ```sql
 CREATE MATERIALIZED VIEW active_customers AS
@@ -145,22 +145,23 @@ CREATE MATERIALIZED VIEW active_customers AS
 
 CREATE INDEX active_customers_idx ON active_customers (guid);
 
+-- The above index speeds up the following filter:
 SELECT * FROM active_customers WHERE guid = 'd868a5bf-2430-461d-a665-40418b1125e7';
 
--- Using expressions
+-- An index whose key is an expression:
 CREATE INDEX active_customers_exp_idx ON active_customers (upper(guid));
-
 SELECT * FROM active_customers WHERE upper(guid) = 'D868A5BF-2430-461D-A665-40418B1125E7';
 
--- Filter using an expression in one field and a literal in another field
+-- Filter using an expression in one field and a literal in another field:
 CREATE INDEX active_customers_exp_field_idx ON active_customers (upper(guid), geo_id);
-
 SELECT * FROM active_customers WHERE upper(guid) = 'D868A5BF-2430-461D-A665-40418B1125E7' and geo_id = 'ID_8482';
 ```
 
-Create an index with an expression to improve query performance over a frequent used expression and
+Create an index with an expression to improve query performance over a frequently used expression, and
 avoid building downstream views to apply the function like the one used in the example: `upper()`.
-Take into account that aggregations like `count()` cannot be used as expressions.
+Take into account that aggregations like `count()` cannot be used as index expressions.
+
+For more details on using indexes to optimize queries, see [Optimization](../ops/optimization.md).
 
 ## Related pages
 
