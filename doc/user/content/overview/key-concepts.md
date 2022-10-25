@@ -20,14 +20,14 @@ Materialize and how its components differ from traditional databases.
 
 Materialize offers the following components through its SQL API:
 
-Component | Use
-----------|-----
-**Sources** | Sources describe an external system you want Materialize to read data from (e.g. Kafka).
-**Views** | Views represent queries of sources and other views that you want to save for repeated execution.
-**Indexes** | Indexes represent query results stored in memory.
-**Sinks** | Sinks represent output streams or files that Materialize sends data to.
-**Clusters** | Clusters represent a logical set of indexes that share physical resources.
-**Cluster replicas** | Cluster replicas provide physical resources for a cluster's indexes.
+Component              | Use
+-----------------------|-----
+**[Sources]**          | Sources describe an external system you want Materialize to read data from (e.g. Kafka).
+**[Views]**            | Views represent queries of sources and other views that you want to save for repeated execution.
+**[Indexes]**          | Indexes represent query results stored in memory.
+**[Sinks]**            | Sinks represent output streams or files that Materialize sends data to.
+**[Clusters]**         | Clusters represent a logical set of indexes that share physical resources.
+**[Cluster replicas]** | Cluster replicas provide physical resources for a cluster's indexes.
 
 ## Sources
 
@@ -132,7 +132,7 @@ views that query it, and the process repeats.
 
 When reading from a materialized view, Materialize simply returns the dataflow's
 current result set from durable storage. To improve the speed of queries on
-materialized views, we recommend creating [indexes](#indexes) based on
+materialized views, we recommend creating [indexes] based on
 common query patterns.
 
 ### Non-materialized views
@@ -142,14 +142,14 @@ for performing the query.
 
 Unlike materialized views, non-materialized views _do not_ store the results of
 their embedded queries. The results of a view can be incrementally
-maintained in memory within a [cluster](/overview/key-concepts/#clusters) by
+maintained in memory within a [cluster][clusters] by
 creating an index. This allows you to serve queries without
 the overhead of materializing the view.
 
 ## Indexes
 
 Indexes assemble and maintain a query's results in memory within a
-[cluster](/overview/key-concepts#clusters), which provides future queries
+[cluster][clusters], which provides future queries
 the data they need in a format they can immediately use.
 
 These continually updated indexes are known as
@@ -231,4 +231,10 @@ Add replicas to a cluster | Greater tolerance to replica failure
 - [`CREATE CLUSTER`](/sql/create-cluster)
 - [`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica)
 
+[Clusters]: #clusters
+[Cluster replicas]: #cluster-replicas
+[Indexes]: #indexes
 [Debezium]: http://debezium.io
+[Sinks]: #sinks
+[Sources]: #sources
+[Views]: #views
