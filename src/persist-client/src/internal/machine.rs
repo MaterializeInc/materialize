@@ -1215,7 +1215,7 @@ pub mod datadriven {
         let listen = datadriven.listens.get_mut(input).expect("unknown listener");
         let mut s = String::new();
         loop {
-            for event in listen.next().await {
+            for event in listen.next_and_downgrade().await {
                 match event {
                     ListenEvent::Updates(x) => {
                         for ((k, _v), t, d) in x.iter() {

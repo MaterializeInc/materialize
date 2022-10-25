@@ -133,7 +133,7 @@ where
 
         match self.snapshot.take() {
             Some(x) => x,
-            None => self.listen.next_parts().await,
+            None => self.listen.next_parts_and_downgrade().await,
         }
     }
 
@@ -216,7 +216,7 @@ where
     pub fn into_stream(mut self) -> impl Stream<Item = ListenEvent<K, V, T, D>> {
         async_stream::stream!({
             loop {
-                for msg in self.next().await {
+                for msg in self.next_and_downgrade().await {
                     yield msg;
                 }
             }
@@ -227,7 +227,6 @@ where
     pub fn frontier(&self) -> &Antichain<T> {
         &self.frontier
     }
-
     /// Attempt to pull out the next values of this subscription.
     ///
     /// The returned [`LeasedBatchPart`] is appropriate to use with
@@ -263,9 +262,8 @@ where
 
         let new_frontier = batch.desc.upper().clone();
 
-        // We will have a new frontier, so this is an opportunity to downgrade our
-        // since capability. Go through `maybe_heartbeat` so we can rate limit
-        // this along with our heartbeats.
+        // We will have a new frontier, so this is an opportunity to calculate our
+        // since capability.
         //
         // HACK! Everything would be simpler if we could downgrade since to the
         // new frontier, but we can't. The next call needs to be able to
@@ -292,7 +290,6 @@ where
                 self.since.join_assign(&Antichain::from_elem(x.clone()));
             }
         }
-        self.handle.maybe_downgrade_since(&self.since).await;
 
         let metadata = SerdeLeasedBatchPartMetadata::Listen {
             as_of: self.as_of.iter().map(T::encode).collect(),
@@ -305,6 +302,20 @@ where
         self.frontier = new_frontier;
 
         (parts, self.frontier.clone())
+    }
+
+    /// Attempt to pull out the next values of this subscription and downgrade the since frontier.
+    ///
+    /// The returned [`LeasedBatchPart`] is appropriate to use with
+    /// `crate::fetch::fetch_leased_part`.
+    ///
+    /// The returned `Antichain` represents the subscription progress as it will
+    /// be _after_ the returned parts are fetched.
+    pub async fn next_parts_and_downgrade(&mut self) -> (Vec<LeasedBatchPart<T>>, Antichain<T>) {
+        let ret = self.next_parts().await;
+        // Go through `maybe_heartbeat` so we can rate limit this along with our heartbeats.
+        self.handle.maybe_downgrade_since(&self.since).await;
+        ret
     }
 
     /// Attempt to pull out the next values of this subscription.
@@ -340,6 +351,54 @@ where
         ret
     }
 
+    /// Attempt to pull out the next values of this subscription and downgrade the since frontier.
+    ///
+    /// The updates received in [ListenEvent::Updates] should be assumed to be in arbitrary order
+    /// and not necessarily consolidated. However, the timestamp of each individual update will be
+    /// greater than or equal to the last received [ListenEvent::Progress] frontier (or this
+    /// [Listen]'s initial `as_of` frontier if no progress event has been emitted yet) and less
+    /// than the next [ListenEvent::Progress] frontier.
+    ///
+    /// If you have a use for consolidated listen output, given that snapshots can't be
+    /// consolidated, come talk to us!
+    #[instrument(level = "debug", name = "listen::next", skip_all, fields(shard = %self.handle.machine.shard_id()))]
+    pub async fn next_and_downgrade(&mut self) -> Vec<ListenEvent<K, V, T, D>> {
+        let ret = self.next().await;
+        // Go through `maybe_heartbeat` so we can rate limit this along with our heartbeats.
+        self.handle.maybe_downgrade_since(&self.since).await;
+        ret
+    }
+
+    /// Forwards the since frontier of this handle, giving up the ability to
+    /// read at times not greater or equal to `new_since`.
+    ///
+    /// This may trigger (asynchronous) compaction and consolidation in the
+    /// system. A `new_since` of the empty antichain "finishes" this shard,
+    /// promising that no more data will ever be read by this handle.
+    ///
+    /// This also acts as a heartbeat for the reader lease (including if called
+    /// with `new_since` equal to something like `self.since()` or the minimum
+    /// timestamp, making the call a no-op).
+    #[instrument(level = "debug", skip_all, fields(shard = %self.handle.machine.shard_id()))]
+    pub async fn downgrade_since(&mut self, new_since: &Antichain<T>) {
+        self.since.join_assign(new_since);
+        self.handle.downgrade_since(&self.since).await;
+    }
+
+    /// A rate-limited version of [Self::downgrade_since].
+    ///
+    /// This is an internally rate limited helper, designed to allow users to
+    /// call it as frequently as they like. Call this [Self::downgrade_since],
+    /// or Self::maybe_heartbeat_reader on some interval that is "frequent"
+    /// compared to PersistConfig::FAKE_READ_LEASE_DURATION.
+    ///
+    /// This is communicating actual progress information, so is given
+    /// preferential treatment compared to Self::maybe_heartbeat_reader.
+    pub async fn maybe_downgrade_since(&mut self, new_since: &Antichain<T>) {
+        self.since.join_assign(new_since);
+        self.handle.maybe_downgrade_since(&self.since).await;
+    }
+
     /// Politely expires this listen, releasing its lease.
     ///
     /// There is a best-effort impl in Drop to expire a listen that wasn't
@@ -367,7 +426,7 @@ where
         let mut updates = Vec::new();
         let mut frontier = Antichain::from_elem(T::minimum());
         while self.frontier.less_than(ts) {
-            for event in self.next().await {
+            for event in self.next_and_downgrade().await {
                 match event {
                     ListenEvent::Updates(mut x) => updates.append(&mut x),
                     ListenEvent::Progress(x) => frontier = x,
@@ -1104,7 +1163,7 @@ mod tests {
         // state by fetching the first events from next. This is awkward but
         // only necessary because we're about to do some weird things with
         // unreliable.
-        let listen_actual = listen.next().await;
+        let listen_actual = listen.next_and_downgrade().await;
         let expected_events = vec![ListenEvent::Progress(Antichain::from_elem(1))];
         assert_eq!(listen_actual, expected_events);
 

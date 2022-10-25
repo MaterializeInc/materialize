@@ -299,7 +299,7 @@ impl Transactor {
     > {
         let mut ret = Vec::new();
         loop {
-            for event in listen.next().await {
+            for event in listen.next_and_downgrade().await {
                 match event {
                     ListenEvent::Progress(x) => {
                         // NB: Unlike the snapshot as_of, a listener frontier is
@@ -328,7 +328,7 @@ impl Transactor {
         i64,
     )> {
         while PartialOrder::less_equal(self.long_lived_listen.frontier(), as_of) {
-            for event in self.long_lived_listen.next().await {
+            for event in self.long_lived_listen.next_and_downgrade().await {
                 match event {
                     ListenEvent::Updates(mut updates) => {
                         self.long_lived_updates.append(&mut updates)

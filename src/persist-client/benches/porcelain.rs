@@ -117,7 +117,7 @@ async fn bench_write_to_listen_one_iter(
     let listen = task::spawn(|| "listen", async move {
         loop {
             let events = tokio::select! {
-                x = listen.next() => x,
+                x = listen.next_and_downgrade() => x,
                 _ = tx.closed() => break,
             };
             for event in events {
