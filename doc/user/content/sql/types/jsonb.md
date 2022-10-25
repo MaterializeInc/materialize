@@ -585,7 +585,7 @@ SELECT jsonb_strip_nulls('[{"1":"a","2":null},"b",null,"c"]'::jsonb);
 
 <hr/>
 
-#### `to_jsonb` {#ex-to-jsonb}
+#### `to_jsonb`
 
 ```sql
 SELECT to_jsonb('hello');
