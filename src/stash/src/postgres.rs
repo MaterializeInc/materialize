@@ -23,7 +23,7 @@ use timely::progress::Antichain;
 use timely::PartialOrder;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Statement, Transaction};
-use tracing::{event, warn, Level};
+use tracing::{error, event, warn, Level};
 
 use mz_ore::retry::Retry;
 
@@ -433,7 +433,7 @@ impl Postgres {
                             }
                         }
                         attempt += 1;
-                        warn!("tokio-postgres stash error, retry attempt {attempt}: {pgerr}");
+                        error!("tokio-postgres stash error, retry attempt {attempt}: {pgerr}");
                         self.client = None;
                         retry.next().await;
                     }
