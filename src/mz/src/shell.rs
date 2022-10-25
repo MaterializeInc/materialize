@@ -7,14 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::region::get_provider_region_environment;
-use crate::utils::{exit_with_fail_message, CloudProviderRegion};
-use crate::{Environment, ExitMessage, ValidProfile};
-use anyhow::{Context, Result};
+use crate::configuration::ValidProfile;
+use crate::region::{get_provider_region_environment, CloudProviderRegion};
+use crate::Environment;
+use anyhow::{Context, Ok, Result};
 use reqwest::Client;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
-use subprocess::Exec;
 
 /// ----------------------------
 /// Shell command
@@ -32,64 +31,59 @@ pub(crate) fn parse_pgwire(envrionment: &Environment) -> (&str, &str) {
 }
 
 /// Runs psql as a subprocess command
-fn run_psql_shell(valid_profile: ValidProfile, environment: &Environment) {
+fn run_psql_shell(valid_profile: ValidProfile<'_>, environment: &Environment) -> Result<()> {
     let (host, port) = parse_pgwire(environment);
-    let email = valid_profile.profile.email.clone();
 
     let error = Command::new("psql")
         .arg("-U")
-        .arg(email)
+        .arg(valid_profile.profile.get_email())
         .arg("-h")
         .arg(host)
         .arg("-p")
         .arg(port)
         .arg("materialize")
-        .env("PGPASSWORD", valid_profile.profile.app_password)
+        .env("PGPASSWORD", valid_profile.profile.get_app_password())
         .exec();
 
-    exit_with_fail_message(ExitMessage::String(format!(
-        "Failed to spawn psql {}",
-        error
-    )))
+    Err(error).context("failed to spawn psql")
 }
 
 /// Runs pg_isready to check if an environment is healthy
 pub(crate) fn check_environment_health(
-    valid_profile: ValidProfile,
+    valid_profile: &ValidProfile<'_>,
     environment: &Environment,
-) -> bool {
+) -> Result<bool> {
     let (host, port) = parse_pgwire(environment);
-    let email = valid_profile.profile.email.clone();
 
-    let output = Exec::cmd("pg_isready")
+    let status = Command::new("pg_isready")
         .arg("-U")
-        .arg(email)
+        .arg(valid_profile.profile.get_email())
         .arg("-h")
         .arg(host)
         .arg("-p")
         .arg(port)
-        .env("PGPASSWORD", valid_profile.profile.app_password)
+        .env("PGPASSWORD", valid_profile.profile.get_app_password())
         .arg("-d")
         .arg("materialize")
         .arg("-q")
-        .join()
-        .unwrap();
+        .output()
+        .context("failed to execute pg_isready")?
+        .status
+        .success();
 
-    output.success()
+    Ok(status)
 }
 
 /// Command to run a shell (psql) on a Materialize cloud instance
 pub(crate) async fn shell(
     client: Client,
-    valid_profile: ValidProfile,
+    valid_profile: ValidProfile<'_>,
     cloud_provider_region: CloudProviderRegion,
 ) -> Result<()> {
     let environment =
         get_provider_region_environment(&client, &valid_profile, &cloud_provider_region)
             .await
-            .with_context(|| "Retrieving cloud provider region.")?;
+            .context("Retrieving cloud provider region.")?;
 
-    run_psql_shell(valid_profile, &environment);
-
-    Ok(())
+    run_psql_shell(valid_profile, &environment)
 }
