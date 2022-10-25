@@ -15,8 +15,8 @@
 
 extern crate core;
 
+mod auth;
 mod configuration;
-mod login;
 mod password;
 mod region;
 mod shell;
@@ -24,9 +24,9 @@ mod utils;
 
 use std::str::FromStr;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Ok, Result};
+use auth::generate_api_token;
 use configuration::Configuration;
-use login::generate_api_token;
 use password::list_passwords;
 use region::{
     get_provider_by_region_name, get_provider_region_environment, get_region_environment,
@@ -39,7 +39,7 @@ use reqwest::Client;
 use shell::check_environment_health;
 use utils::{run_loading_spinner, CloudProviderRegion};
 
-use crate::login::{login_with_browser, login_with_console};
+use crate::auth::{auth_with_browser, auth_with_console};
 use crate::region::{enable_region_environment, list_cloud_providers, list_regions};
 use crate::shell::shell;
 
@@ -61,11 +61,15 @@ enum Commands {
     AppPassword(AppPasswordCommand),
     /// Open the docs
     Docs,
-    /// Open the web login
-    Login {
-        /// Login by typing your email and password
+    /// Authorize the current profile
+    Auth {
+        /// Authorize by typing your email and password
         #[clap(short, long)]
         interactive: bool,
+
+        /// Force a new authorization
+        #[clap(short, long)]
+        force: bool,
     },
     /// Show commands to interact with regions
     Region {
@@ -244,12 +248,20 @@ async fn main() -> Result<()> {
             open::that(WEB_DOCS_URL).with_context(|| "Opening the browser.")?
         }
 
-        Commands::Login { interactive } => {
-            let profile_name = config.current_profile(profile);
+        Commands::Auth { interactive, force } => {
+            let profile_name = config.current_profile(profile.clone());
+            if !force && config.get_profile(profile).is_ok() {
+                println!(
+                    "{} is already authorized. Use -f to reauthorize.",
+                    profile_name
+                );
+                return Ok(());
+            }
+
             if interactive {
-                login_with_console(&profile_name, &mut config).await?
+                auth_with_console(&profile_name, &mut config).await?
             } else {
-                login_with_browser(&profile_name, &mut config).await?
+                auth_with_browser(&profile_name, &mut config).await?
             }
         }
 
@@ -267,7 +279,7 @@ async fn main() -> Result<()> {
                     let valid_profile = profile
                         .validate(&client)
                         .await
-                        .context("failed to validate profile. reauthorize using mz login")?;
+                        .context("failed to validate profile. reauthorize using mz auth --force")?;
 
                     let loading_spinner = run_loading_spinner("Enabling region...".to_string());
                     let cloud_provider = get_provider_by_region_name(
@@ -302,7 +314,7 @@ async fn main() -> Result<()> {
                     let valid_profile = profile
                         .validate(&client)
                         .await
-                        .context("failed to validate profile. reauthorize using mz login")?;
+                        .context("failed to validate profile. reauthorize using mz auth --force")?;
 
                     let cloud_providers = list_cloud_providers(&client, &valid_profile)
                         .await
@@ -329,7 +341,7 @@ async fn main() -> Result<()> {
                     let valid_profile = profile
                         .validate(&client)
                         .await
-                        .context("failed to validate profile. reauthorize using mz login")?;
+                        .context("failed to validate profile. reauthorize using mz auth")?;
 
                     let environment = get_provider_region_environment(
                         &client,
@@ -370,7 +382,7 @@ async fn main() -> Result<()> {
             let valid_profile = profile
                 .validate(&client)
                 .await
-                .context("failed to validate profile. reauthorize using mz login")?;
+                .context("failed to validate profile. reauthorize using mz auth")?;
 
             shell(client, valid_profile, cloud_provider_region)
                 .await

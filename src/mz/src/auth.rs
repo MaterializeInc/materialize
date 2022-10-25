@@ -41,8 +41,8 @@ async fn request(
     (StatusCode::OK, "You can now close the tab.")
 }
 
-/// Log the user using the browser, generates an API token and saves the new profile data.
-pub(crate) async fn login_with_browser(
+/// Authorize the user using the browser, generates an API token and saves the new profile data.
+pub(crate) async fn auth_with_browser(
     profile_name: &str,
     config: &mut Configuration,
 ) -> Result<()> {
@@ -75,7 +75,7 @@ pub(crate) async fn login_with_browser(
             config.create_or_update_profile(profile_name.to_string(), email, api_token);
             Ok(())
         }
-        None => bail!("failed to login via browser"),
+        None => bail!("failed to authorize via browser"),
     }
 }
 
@@ -135,8 +135,8 @@ async fn authenticate_user(client: &Client, email: &str, password: &str) -> Resu
     }
 }
 
-/// Log the user using the console, generates an API token and saves the new profile data.
-pub(crate) async fn login_with_console(
+/// Authorize the user using the console, generates an API token and saves the new profile data.
+pub(crate) async fn auth_with_console(
     profile_name: &String,
     config: &mut Configuration,
 ) -> Result<()> {

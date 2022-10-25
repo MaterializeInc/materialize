@@ -230,16 +230,14 @@ impl Profile<'_> {
             .await
             .context("failed to connect to server")?;
 
-        let auth = if authentication_result.status() == 401 {
-            println!("{:?}", access_token_request_body);
-            println!("{:?}", authentication_result);
+        if authentication_result.status() == 401 {
             bail!("Unauthorized. Please, check the credentials.");
-        } else {
-            authentication_result
-                .json::<FronteggAuth>()
-                .await
-                .context("failed to parse results from server")?
-        };
+        }
+
+        let auth = authentication_result
+            .json::<FronteggAuth>()
+            .await
+            .context("failed to parse results from server")?;
 
         Ok(ValidProfile {
             profile: self,
