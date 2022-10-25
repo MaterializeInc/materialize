@@ -543,6 +543,7 @@ impl ReclockOperator {
         }
         self.since = new_since;
         self.read_handle.maybe_downgrade_since(&self.since).await;
+        self.listener.maybe_downgrade_since(&self.since).await;
     }
 
     /// Advances the upper of the reclock operator if appropriate
@@ -584,12 +585,6 @@ impl ReclockOperator {
     /// Syncs the state of this operator to match that of the persist shard until the provided
     /// frontier
     async fn sync(&mut self, target_upper: &Antichain<Timestamp>) -> ReclockBatch {
-        // **IMPORTANT**: Make sure we heartbeat our read handle when we read
-        // from our listen. The listen will internally downgrade its since, and
-        // if we let our read handle expire that means we don't hold back the
-        // since to what we think it should be.
-        self.read_handle.maybe_downgrade_since(&self.since).await;
-
         let mut pending_batch = vec![];
 
         let mut trace_updates = vec![];
@@ -1662,81 +1657,5 @@ mod tests {
             .source_upper_at_frontier(Antichain::from_elem(2001.into()).borrow())
             .unwrap_err();
         assert!(err.to_string().contains("is too great"));
-    }
-
-    // Regression test for
-    // https://github.com/MaterializeInc/materialize/issues/14740.
-    #[tokio::test(start_paused = true)]
-    async fn test_since_hold() {
-        let now_fn = TestNowFn::new();
-        let persist_cache = persist_cache(now_fn.now_fn());
-
-        let binding_shard = ShardId::new();
-
-        const PART_ID: PartitionId = PartitionId::None;
-        let (mut operator, _follower) = make_test_operator(
-            binding_shard,
-            Antichain::from_elem(0.into()),
-            &persist_cache,
-            &now_fn,
-        )
-        .await;
-
-        let mut source_upper = OffsetAntichain::new();
-
-        // We do multiple rounds of minting. This will downgrade the since of
-        // the internal listen. If we didn't make sure to also heartbeat the
-        // internal handle that holds back the overall remap since the checks
-        // below would fail.
-        //
-        // We do two rounds and advance the time by half the lease timeout in
-        // between so that the "listen handle" will not timeout but the internal
-        // handle used for holding back the since will timeout.
-
-        now_fn.advance(PERSIST_READER_LEASE_TIMEOUT_MS / 2 + Duration::from_millis(1));
-        source_upper.insert(PART_ID, MzOffset::from(3));
-        let _ = operator.mint(&source_upper).await;
-
-        now_fn.advance(PERSIST_READER_LEASE_TIMEOUT_MS / 2 + Duration::from_millis(1));
-        source_upper.insert(PART_ID, MzOffset::from(5));
-        let _ = operator.mint(&source_upper).await;
-
-        // Allow time for background maintenance work, which does lease
-        // expiration. 1 ms is enough here, we just need to yield to allow the
-        // background task to be "scheduled".
-        tokio::time::sleep(Duration::from_millis(1)).await;
-
-        // Starting a new operator with an `as_of` of `0`, to verify that
-        // holding back the `since` of the remap shard works as expected.
-        let (_operator, _follower) = make_test_operator(
-            binding_shard,
-            Antichain::from_elem(0.into()),
-            &persist_cache,
-            &now_fn,
-        )
-        .await;
-
-        // Also manually assert the since of the remap shard.
-        let persist_location = PersistLocation {
-            blob_uri: "mem://".to_owned(),
-            consensus_uri: "mem://".to_owned(),
-        };
-
-        let mut persist_clients = persist_cache.lock().await;
-        let persist_client = persist_clients
-            .open(persist_location)
-            .await
-            .expect("error creating persist client");
-        drop(persist_clients);
-
-        let read_handle = persist_client
-            .open_reader::<SourceData, (), Timestamp, Diff>(binding_shard)
-            .await
-            .expect("error opening persist shard");
-
-        assert_eq!(
-            Antichain::from_elem(0.into()),
-            read_handle.since().to_owned()
-        );
     }
 }
