@@ -1936,7 +1936,7 @@ mod persist_read_handles {
 
 mod persist_write_handles {
 
-    use std::collections::{BTreeMap, VecDeque};
+    use std::collections::{BTreeMap, HashSet, VecDeque};
 
     use differential_dataflow::lattice::Lattice;
     use futures::stream::FuturesUnordered;
@@ -2036,7 +2036,9 @@ mod persist_write_handles {
                                             }
                                         }
                                         PersistWorkerCmd::Append(updates, response) => {
+                                            let mut ids = HashSet::new();
                                             for (id, update, upper) in updates {
+                                                ids.insert(id);
                                                 let (old_span, updates, old_upper) =
                                                     all_updates.entry(id).or_insert_with(|| {
                                                         (
@@ -2059,7 +2061,7 @@ mod persist_write_handles {
                                                 updates.extend(update);
                                                 old_upper.join_assign(&Antichain::from_elem(upper));
                                             }
-                                            all_responses.push(response);
+                                            all_responses.push((ids, response));
                                         }
                                         PersistWorkerCmd::MonotonicAppend(updates, response) => {
                                             let mut updates_outer = Vec::with_capacity(updates.len());
@@ -2217,9 +2219,20 @@ mod persist_write_handles {
                                 let result =
                                     append_work(&mut frontier_responses, &mut write_handles, all_updates).await;
 
-                                // It is not an error for the other end to hang up.
-                                for response in all_responses {
-                                    let _ = response.send(result.clone().map_err(StorageError::InvalidUppers));
+                                for (ids, response) in all_responses {
+                                    let result = match &result {
+                                        Err(bad_ids) => {
+                                            let filtered: Vec<_> = bad_ids.iter().filter(|id| ids.contains(id)).copied().collect();
+                                            if filtered.is_empty() {
+                                                Ok(())
+                                            } else {
+                                                Err(StorageError::InvalidUppers(filtered))
+                                            }
+                                        }
+                                        Ok(()) => Ok(()),
+                                    };
+                                    // It is not an error for the other end to hang up.
+                                    let _ = response.send(result);
                                 }
 
                                 if shutdown {
