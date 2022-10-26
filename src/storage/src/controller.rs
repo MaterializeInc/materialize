@@ -1927,7 +1927,7 @@ mod persist_read_handles {
             match self.tx.send((tracing::Span::current(), cmd)) {
                 Ok(()) => (), // All good!
                 Err(e) => {
-                    tracing::error!("could not forward command: {:?}", e);
+                    tracing::trace!("could not forward command: {:?}", e);
                 }
             }
         }
@@ -2296,7 +2296,7 @@ mod persist_write_handles {
             match self.tx.send((tracing::Span::current(), cmd)) {
                 Ok(()) => (), // All good!
                 Err(e) => {
-                    tracing::error!("could not forward command: {:?}", e);
+                    tracing::trace!("could not forward command: {:?}", e);
                 }
             }
         }
