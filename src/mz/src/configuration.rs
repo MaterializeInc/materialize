@@ -35,7 +35,7 @@ struct Profile0 {
 pub(crate) struct Configuration {
     #[serde(skip)]
     modified: bool,
-    default_profile: String,
+    current_profile: String,
     profiles: BTreeMap<String, Profile0>,
 }
 
@@ -99,7 +99,7 @@ impl Configuration {
     }
 
     pub(crate) fn current_profile(&self, profile: Option<String>) -> String {
-        profile.unwrap_or_else(|| self.default_profile.clone())
+        profile.unwrap_or_else(|| self.current_profile.clone())
     }
 
     pub(crate) fn get_profile(&mut self, profile: Option<String>) -> Result<Profile> {
@@ -121,7 +121,7 @@ impl Configuration {
             .chain(profile.into_iter())
             .collect::<Vec<_>>();
 
-        keys.push(self.default_profile.clone());
+        keys.push(self.current_profile.clone());
         keys.sort();
         keys.dedup();
         keys
@@ -129,7 +129,7 @@ impl Configuration {
 
     pub(crate) fn update_default_profile(&mut self, profile: String) {
         self.modified = true;
-        self.default_profile = profile;
+        self.current_profile = profile;
     }
 
     pub(crate) fn create_or_update_profile(
@@ -177,7 +177,7 @@ impl Default for Configuration {
     fn default() -> Self {
         Self {
             modified: false,
-            default_profile: Self::DEFAULT_PROFILE.to_string(),
+            current_profile: Self::DEFAULT_PROFILE.to_string(),
             profiles: Default::default(),
         }
     }
