@@ -28,7 +28,7 @@ Field | Use
 _src_name_  | The name for the source.
 **COUNTER** | Use the [counter](#counter) load generator.
 **AUCTION** | Use the [auction](#auction) load generator.
-| **TPCH** | Use the [tpch](#tpch) load generator.
+**TPCH**    | Use the [tpch](#tpch) load generator.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists.
 **TICK INTERVAL**  | The interval at which the next datum should be emitted. Defaults to one second.
 **SCALE FACTOR**  | The scale factor for the `TPCH` generator. Defaults to `0.01` (~ 10MB).
@@ -109,7 +109,7 @@ is placed in the currently ongoing auction.
 
 ### TPCH
 
-The TPCH load generator implements the TPC-H benchmark specification.
+The TPCH load generator implements the [TPC-H benchmark specification](https://www.tpc.org/tpch/default5.asp).
 The TPCH source must be used with `FOR ALL TABLES`, which will create the standard TPCH relations.
 
 ## Examples
@@ -136,12 +136,11 @@ SELECT * FROM counter;
        1
        2
        3
-(3 rows)
 ```
 
 ### Creating an auction load generator
 
-To create the load generator source and its associated views:
+To create the load generator source and its associated subsources:
 
 ```sql
 CREATE SOURCE auction_house
@@ -177,7 +176,71 @@ SELECT * from bids;
  10 |  3844 |          1 |     59 | 2022-09-16 23:24:07.332+00
  11 |  1861 |          1 |     40 | 2022-09-16 23:24:08.332+00
  12 |  3338 |          1 |     97 | 2022-09-16 23:24:09.332+00
-(3 rows)
+```
+
+### Creating a TPCH load generator
+
+To create the load generator source and its associated subsources:
+
+```sql
+CREATE SOURCE tpch
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR 1)
+  FOR ALL TABLES
+  WITH (SIZE = '3xsmall');
+```
+
+To display the created subsources:
+
+```sql
+SHOW SOURCES;
+```
+```nofmt
+   name   |      type      |  size
+----------+----------------+---------
+ tpch     | load-generator | 3xsmall
+ supplier | subsource      |
+ region   | subsource      |
+ partsupp | subsource      |
+ part     | subsource      |
+ orders   | subsource      |
+ nation   | subsource      |
+ lineitem | subsource      |
+ customer | subsource      |
+```
+
+To run the Pricing Summary Report Query (Q1), which reports the amount of
+billed, shipped, and returned items:
+
+```sql
+SELECT
+    l_returnflag,
+    l_linestatus,
+    sum(l_quantity) AS sum_qty,
+    sum(l_extendedprice) AS sum_base_price,
+    sum(l_extendedprice * (1 - l_discount)) AS sum_disc_price,
+    sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) AS sum_charge,
+    avg(l_quantity) AS avg_qty,
+    avg(l_extendedprice) AS avg_price,
+    avg(l_discount) AS avg_disc,
+    count(*) AS count_order
+FROM
+    lineitem
+WHERE
+    l_shipdate <= date '1998-12-01' - interval '90' day
+GROUP BY
+    l_returnflag,
+    l_linestatus
+ORDER BY
+    l_returnflag,
+    l_linestatus;
+```
+```nofmt
+ l_returnflag | l_linestatus | sum_qty  | sum_base_price | sum_disc_price  |    sum_charge     |      avg_qty       |     avg_price      |      avg_disc       | count_order
+--------------+--------------+----------+----------------+-----------------+-------------------+--------------------+--------------------+---------------------+-------------
+ A            | F            | 37772997 |    56604341792 |  54338346989.17 |  57053313118.2657 | 25.490380624798817 | 38198.351517998075 | 0.04003729114831228 |     1481853
+ N            | F            |   986796 |     1477585066 |   1418531782.89 |   1489171757.0798 | 25.463731840115603 |  38128.27564317601 | 0.04007431682708436 |       38753
+ N            | O            | 74281600 |   111337230039 | 106883023012.04 | 112227399730.9018 |  25.49430183051871 | 38212.221432873834 | 0.03999775539657235 |     2913655
+ R            | F            | 37770949 |    56610551077 |   54347734573.7 |  57066196254.4557 | 25.496431466814634 |  38213.68205054471 | 0.03997848687172654 |     1481421
 ```
 
 ### Sizing a source
