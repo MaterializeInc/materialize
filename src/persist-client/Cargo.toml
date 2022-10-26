@@ -50,7 +50,7 @@ semver = "1.0.14"
 serde = { version = "1.0.145", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.20.2", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
-tracing = "0.1.36"
+tracing = "0.1.37"
 uuid = { version = "1.2.1", features = ["v4"] }
 
 [features]

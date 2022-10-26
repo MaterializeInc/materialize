@@ -89,7 +89,7 @@ contains:Expected a list of columns in parentheses, found EOF
 
 # The write frontier of a source from  a static CSV should be empty,
 # since the definition of "static" means "will never change again".
-$ set-regex match=(\d{13}|u\d{1,3}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
+$ set-regex match=(\d{13}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
 > EXPLAIN TIMESTAMP FOR SELECT * FROM static_csv
 "          query timestamp: <> <>\n                    since:[<> <>]\n                    upper:[]\n         global timestamp: <> <>\n  can respond immediately: <>\n\nsource materialize.public.static_csv (<>, storage):\n            read frontier:[<> <>]\n           write frontier:[]\n"
 

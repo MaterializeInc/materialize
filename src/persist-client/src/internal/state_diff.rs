@@ -33,16 +33,16 @@ use crate::{Metrics, PersistConfig};
 
 use self::StateFieldValDiff::*;
 
-#[derive(Debug)]
-#[cfg_attr(any(test, debug_assertions), derive(Clone, PartialEq))]
+#[derive(Clone, Debug)]
+#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 pub enum StateFieldValDiff<V> {
     Insert(V),
     Update(V, V),
     Delete(V),
 }
 
-#[derive(Debug)]
-#[cfg_attr(any(test, debug_assertions), derive(Clone, PartialEq))]
+#[derive(Clone, Debug)]
+#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 pub struct StateFieldDiff<K, V> {
     pub key: K,
     pub val: StateFieldValDiff<V>,
@@ -201,26 +201,29 @@ impl<K, V, T: Timestamp + Lattice + Codec64, D> State<K, V, T, D> {
             state_seqno = diff.seqno_to;
             Some(diff)
         });
-        self.apply_diffs(metrics, diffs)
-            .expect("state diff should apply cleanly");
+        self.apply_diffs(metrics, diffs);
     }
 }
 
 impl<K, V, T: Timestamp + Lattice, D> State<K, V, T, D> {
-    // This might leave state in an invalid (umm) state when returning an error.
-    // The caller is responsible for handling this.
     pub fn apply_diffs<I: IntoIterator<Item = StateDiff<T>>>(
         &mut self,
         metrics: &Metrics,
         diffs: I,
-    ) -> Result<(), String> {
+    ) {
         for diff in diffs {
             // TODO: This could special-case batch apply for diffs where it's
             // more efficient (in particular, spine batches that hit the slow
             // path).
-            self.apply_diff(metrics, diff)?;
+            let pretty_diff = format!("{:?}", diff);
+            match self.apply_diff(metrics, diff) {
+                Ok(()) => {}
+                Err(err) => panic!(
+                    "state diff should apply cleanly: {} diff {} state {:?}",
+                    err, pretty_diff, self
+                ),
+            }
         }
-        Ok(())
     }
 
     // Intentionally not even pub(crate) because all callers should use
@@ -542,9 +545,39 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
         diffs, trace
     );
 
-    let mut batches = BTreeMap::new();
-    trace.map_batches(|b| assert!(batches.insert(b.clone(), ()).is_none()));
-    apply_diffs_map("spine", diffs, &mut batches)?;
+    let batches = {
+        let mut batches = BTreeMap::new();
+        trace.map_batches(|b| assert!(batches.insert(b.clone(), ()).is_none()));
+        apply_diffs_map("spine", diffs.clone(), &mut batches).map(|_ok| batches)
+    };
+
+    let batches = match batches {
+        Ok(batches) => batches,
+        Err(err) => {
+            metrics
+                .state
+                .apply_spine_slow_path_with_reconstruction
+                .inc();
+            debug!(
+                "apply_diffs_spines could not apply diffs directly to existing trace batches: {}. diffs={:?} trace={:?}",
+                err, diffs, trace
+            );
+            // if we couldn't apply our diffs directly to our trace's batches, we can
+            // try one more trick: reconstruct a new spine with our existing batches,
+            // in an attempt to create different merges than we currently have. then,
+            // we can try to apply our diffs on top of these new (potentially) merged
+            // batches.
+            let mut reconstructed_spine = Trace::default();
+            trace.map_batches(|b| {
+                let _merge_reqs = reconstructed_spine.push_batch(b.clone());
+            });
+
+            let mut batches = BTreeMap::new();
+            reconstructed_spine.map_batches(|b| assert!(batches.insert(b.clone(), ()).is_none()));
+            apply_diffs_map("spine", diffs, &mut batches)?;
+            batches
+        }
+    };
 
     let mut new_trace = Trace::default();
     new_trace.downgrade_since(trace.since());

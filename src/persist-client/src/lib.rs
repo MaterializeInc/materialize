@@ -181,6 +181,8 @@ impl ShardId {
     }
 }
 
+pub(crate) const MB: usize = 1024 * 1024;
+
 /// The tunable knobs for persist.
 #[derive(Debug, Clone)]
 pub struct PersistConfig {
@@ -217,6 +219,10 @@ pub struct PersistConfig {
     /// In Compactor::compact_and_apply_background, the maximum number of concurrent
     /// compaction requests that can execute for a given shard.
     pub compaction_concurrency_limit: usize,
+    /// In Compactor::compact_and_apply_background, the minimum amount of time to
+    /// allow a compaction request to run before timing it out. A request may be
+    /// given a timeout greater than this value depending on the inputs' size
+    pub compaction_minimum_timeout: Duration,
     /// The maximum size of the connection pool to Postgres/CRDB when performing
     /// consensus reads and writes.
     pub consensus_connection_pool_max_size: usize,
@@ -275,7 +281,6 @@ impl PersistConfig {
     pub fn new(build_info: &BuildInfo, now: NowFn) -> Self {
         // Escape hatch in case we need to disable compaction.
         let compaction_disabled = mz_ore::env::is_var_truthy("MZ_PERSIST_COMPACTION_DISABLED");
-        const MB: usize = 1024 * 1024;
         Self {
             build_version: build_info.semver_version(),
             now,
@@ -286,6 +291,7 @@ impl PersistConfig {
             compaction_heuristic_min_inputs: 8,
             compaction_heuristic_min_updates: 1024,
             compaction_concurrency_limit: 5,
+            compaction_minimum_timeout: Duration::from_secs(90),
             consensus_connection_pool_max_size: 50,
             writer_lease_duration: Duration::from_secs(60 * 15),
             reader_lease_duration: Self::DEFAULT_READ_LEASE_DURATION,

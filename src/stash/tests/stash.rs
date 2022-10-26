@@ -7,13 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, convert::Infallible};
 
 use futures::Future;
 use postgres_openssl::MakeTlsConnector;
 use tempfile::NamedTempFile;
 use timely::progress::Antichain;
 use tokio_postgres::Config;
+
+use mz_ore::assert_contains;
 
 use mz_stash::{
     Append, Memory, Postgres, Sqlite, Stash, StashCollection, StashError, TableTransaction,
@@ -112,6 +114,33 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
         });
         let _: StashCollection<String, String> = conn2.collection("c").await?;
     }
+    // Test readonly.
+    {
+        let mut stash_rw = Postgres::new(connstr.to_string(), None, tls.clone())
+            .await
+            .unwrap();
+        stash_rw.collection::<i64, i64>("c1").await.unwrap();
+        let col_rw = stash_rw.collection::<i64, i64>("c1").await.unwrap();
+        let mut batch = col_rw.make_batch(&mut stash_rw).await.unwrap();
+        col_rw.append_to_batch(&mut batch, &1, &2, 1);
+        stash_rw.append(&[batch]).await.unwrap();
+
+        // Now make a readonly stash. We should fail to create new collections,
+        // but be able to read existing collections.
+        let mut stash_ro = Postgres::new_readonly(connstr.to_string(), None, tls)
+            .await
+            .unwrap();
+        let res = stash_ro.collection::<i64, i64>("c2").await;
+        assert_contains!(
+            res.unwrap_err().to_string(),
+            "cannot execute INSERT in a read-only transaction"
+        );
+        let col_ro = stash_ro.collection::<i64, i64>("c1").await.unwrap();
+        assert_eq!(stash_ro.peek(col_ro).await.unwrap(), vec![(1, 2, 1)],);
+
+        // The previous stash should still be the leader.
+        assert!(stash_rw.confirm_leadership().await.is_ok());
+    }
 
     Ok(())
 }
@@ -134,15 +163,19 @@ where
         .to_string()
         .contains("since {-9223372036854775808} is not less than upper {-9223372036854775808}"));
     TYPED
-        .upsert_key(&mut stash, &"k1".to_string(), &"v1".to_string())
-        .await?;
+        .upsert_key(&mut stash, &"k1".to_string(), |_| {
+            Ok::<_, Infallible>("v1".to_string())
+        })
+        .await??;
     assert_eq!(
         TYPED.peek_one(&mut stash).await.unwrap(),
         BTreeMap::from([("k1".to_string(), "v1".to_string())])
     );
     TYPED
-        .upsert_key(&mut stash, &"k1".to_string(), &"v2".to_string())
-        .await?;
+        .upsert_key(&mut stash, &"k1".to_string(), |_| {
+            Ok::<_, Infallible>("v2".to_string())
+        })
+        .await??;
     assert_eq!(
         TYPED.peek_one(&mut stash).await.unwrap(),
         BTreeMap::from([("k1".to_string(), "v2".to_string())])
@@ -313,16 +346,17 @@ where
     stash
         .update(orders, ("wombats".into(), "2".into()), 1, 2)
         .await?;
+    // Move this before iter to better test the memory stash's iter_key.
+    assert_eq!(
+        stash.iter_key(orders, &"widgets".to_string()).await?,
+        &[("1".into(), 1, 1)]
+    );
     assert_eq!(
         stash.iter(orders).await?,
         &[
             (("widgets".into(), "1".into()), 1, 1),
             (("wombats".into(), "2".into()), 1, 2),
         ]
-    );
-    assert_eq!(
-        stash.iter_key(orders, &"widgets".to_string()).await?,
-        &[("1".into(), 1, 1)]
     );
     assert_eq!(
         stash.iter_key(orders, &"wombats".to_string()).await?,
@@ -512,8 +546,10 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
     }
 
     TABLE
-        .upsert_key(stash, &1i64.to_le_bytes().to_vec(), &"v1".to_string())
-        .await?;
+        .upsert_key(stash, &1i64.to_le_bytes().to_vec(), |_| {
+            Ok::<_, Infallible>("v1".to_string())
+        })
+        .await??;
     TABLE
         .upsert(stash, vec![(2i64.to_le_bytes().to_vec(), "v2".to_string())])
         .await?;

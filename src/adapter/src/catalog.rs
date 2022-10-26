@@ -22,7 +22,7 @@ use mz_storage::controller::IntrospectionType;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, MutexGuard};
+use tokio::sync::{mpsc, Mutex, MutexGuard};
 use tracing::{info, trace};
 use uuid::Uuid;
 
@@ -47,9 +47,10 @@ use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
-    CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
-    CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogSchema, CatalogType,
-    CatalogTypeDetails, IdReference, NameReference, SessionCatalog, TypeReference,
+    CatalogComputeInstance, CatalogDatabase, CatalogError as SqlCatalogError,
+    CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogItemType,
+    CatalogSchema, CatalogType, CatalogTypeDetails, IdReference, NameReference, SessionCatalog,
+    TypeReference,
 };
 use mz_sql::names::{
     Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
@@ -99,6 +100,18 @@ pub const SYSTEM_CONN_ID: ConnectionId = 0;
 pub static SYSTEM_USER: Lazy<User> = Lazy::new(|| User {
     name: "mz_system".into(),
     external_metadata: None,
+});
+
+pub static INTROSPECTION_USER: Lazy<User> = Lazy::new(|| User {
+    name: "mz_introspection".into(),
+    external_metadata: None,
+});
+
+pub static INTERNAL_USER_NAMES: Lazy<BTreeSet<String>> = Lazy::new(|| {
+    [&SYSTEM_USER, &INTROSPECTION_USER]
+        .into_iter()
+        .map(|user| user.name.clone())
+        .collect()
 });
 
 pub static HTTP_DEFAULT_USER: Lazy<User> = Lazy::new(|| User {
@@ -2312,6 +2325,15 @@ impl<S: Append> Catalog<S> {
             .await?;
 
         let system_config = catalog.storage().await.load_system_configuration().await?;
+        if let Some(bootstrap_system_vars) = config.bootstrap_system_vars {
+            for entry in bootstrap_system_vars.trim().split(';') {
+                if let Some((name, value)) = entry.split_once('=') {
+                    if !system_config.contains_key(name) {
+                        catalog.state.insert_system_configuration(name, value)?;
+                    }
+                }
+            }
+        }
         for (name, value) in system_config {
             catalog.state.insert_system_configuration(&name, &value)?;
         }
@@ -2838,6 +2860,9 @@ impl<S: Append> Catalog<S> {
     /// instead.
     pub async fn open_debug(stash: S, now: NowFn) -> Result<Catalog<S>, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
+        let (consolidations_tx, consolidations_rx) = mpsc::unbounded_channel();
+        // Leak the receiver so it's not dropped and send will work.
+        std::mem::forget(consolidations_rx);
         let storage = storage::Connection::open(
             stash,
             &BootstrapArgs {
@@ -2846,6 +2871,7 @@ impl<S: Append> Catalog<S> {
                 builtin_cluster_replica_size: "1".into(),
                 default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
             },
+            consolidations_tx.clone(),
         )
         .await?;
         let secrets_reader = Arc::new(InMemorySecretsController::new());
@@ -2861,6 +2887,7 @@ impl<S: Append> Catalog<S> {
             cluster_replica_sizes: Default::default(),
             storage_host_sizes: Default::default(),
             default_storage_host_size: None,
+            bootstrap_system_vars: None,
             availability_zones: vec![],
             secrets_reader,
             egress_ips: vec![],
@@ -3330,7 +3357,6 @@ impl<S: Append> Catalog<S> {
         &self,
         location: SerializedComputeReplicaLocation,
     ) -> Result<ComputeReplicaLocation, AdapterError> {
-        let cluster_replica_sizes = &self.state.cluster_replica_sizes;
         let location = match location {
             SerializedComputeReplicaLocation::Remote {
                 addrs,
@@ -3346,8 +3372,19 @@ impl<S: Append> Catalog<S> {
                 availability_zone,
                 az_user_specified,
             } => {
-                let allocation = cluster_replica_sizes.0.get(&size).ok_or_else(|| {
+                let cluster_replica_sizes = &self.state.cluster_replica_sizes;
+                let allowed_sizes = self.state.system_config().allowed_cluster_replica_sizes();
+
+                if !cluster_replica_sizes.0.contains_key(&size)
+                    || (!allowed_sizes.is_empty() && !allowed_sizes.contains(&size))
+                {
                     let mut entries = cluster_replica_sizes.0.iter().collect::<Vec<_>>();
+
+                    if !allowed_sizes.is_empty() {
+                        let allowed_sizes = HashSet::<&String>::from_iter(allowed_sizes.iter());
+                        entries.retain(|(name, _)| allowed_sizes.contains(name));
+                    }
+
                     entries.sort_by_key(
                         |(
                             _name,
@@ -3356,14 +3393,15 @@ impl<S: Append> Catalog<S> {
                             },
                         )| (scale, cpu_limit),
                     );
-                    let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
-                    AdapterError::InvalidClusterReplicaSize {
-                        size: size.clone(),
-                        expected,
-                    }
-                })?;
+
+                    return Err(AdapterError::InvalidClusterReplicaSize {
+                        size,
+                        expected: entries.into_iter().map(|(name, _)| name.clone()).collect(),
+                    });
+                }
+
                 ComputeReplicaLocation::Managed {
-                    allocation: allocation.clone(),
+                    allocation: cluster_replica_sizes.0.get(&size).unwrap().clone(),
                     availability_zone,
                     size,
                     az_user_specified,
@@ -3483,7 +3521,7 @@ impl<S: Append> Catalog<S> {
             CreateComputeReplica {
                 id: ReplicaId,
                 name: String,
-                on_cluster_name: String,
+                on_cluster_id: ComputeInstanceId,
                 config: ComputeReplicaConfig,
             },
             CreateItem {
@@ -3520,7 +3558,7 @@ impl<S: Append> Catalog<S> {
             UpdateComputeInstanceStatus {
                 event: ComputeInstanceEvent,
             },
-            UpdateSysytemConfiguration {
+            UpdateSystemConfiguration {
                 name: String,
                 value: String,
             },
@@ -3559,10 +3597,11 @@ impl<S: Append> Catalog<S> {
                     let name = entry.name().clone();
 
                     if entry.id().is_system() {
-                        let name = state
-                            .resolve_full_name(&name, session.map(|session| session.conn_id()));
+                        let schema_name = state
+                            .resolve_full_name(&name, session.map(|session| session.conn_id()))
+                            .schema;
                         return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReadOnlySystemSchema(name.to_string()),
+                            ErrorKind::ReadOnlySystemSchema(schema_name),
                         )));
                     }
 
@@ -3663,10 +3702,11 @@ impl<S: Append> Catalog<S> {
                     let name = entry.name().clone();
 
                     if entry.id().is_system() {
-                        let name = state
-                            .resolve_full_name(&name, session.map(|session| session.conn_id()));
+                        let schema_name = state
+                            .resolve_full_name(&name, session.map(|session| session.conn_id()))
+                            .schema;
                         return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReadOnlySystemSchema(name.to_string()),
+                            ErrorKind::ReadOnlySystemSchema(schema_name),
                         )));
                     }
 
@@ -3950,6 +3990,16 @@ impl<S: Append> Catalog<S> {
                             ErrorKind::ReservedReplicaName(name),
                         )));
                     }
+                    let on_cluster_id = state.resolve_compute_instance(&on_cluster_name)?.id();
+                    if on_cluster_id.is_system()
+                        && !session
+                            .map(|session| session.user().is_internal())
+                            .unwrap_or(false)
+                    {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReadOnlyComputeInstance(on_cluster_name),
+                        )));
+                    }
                     let (replica_id, compute_instance_id) =
                         tx.insert_compute_replica(&on_cluster_name, &name, &config.clone().into())?;
                     if let ComputeReplicaLocation::Managed { size, .. } = &config.location {
@@ -3977,7 +4027,7 @@ impl<S: Append> Catalog<S> {
                         Action::CreateComputeReplica {
                             id: replica_id,
                             name,
-                            on_cluster_name,
+                            on_cluster_id,
                             config,
                         },
                     )?;
@@ -4022,11 +4072,19 @@ impl<S: Append> Catalog<S> {
                             )));
                         }
                         if let ResolvedDatabaseSpecifier::Ambient = name.qualifiers.database_spec {
-                            let name = state
-                                .resolve_full_name(&name, session.map(|session| session.conn_id()));
-                            return Err(AdapterError::Catalog(Error::new(
-                                ErrorKind::ReadOnlySystemSchema(name.to_string()),
-                            )));
+                            // We allow users to create indexes on system objects to speed up
+                            // debugging related queries.
+                            if item.typ() != CatalogItemType::Index {
+                                let schema_name = state
+                                    .resolve_full_name(
+                                        &name,
+                                        session.map(|session| session.conn_id()),
+                                    )
+                                    .schema;
+                                return Err(AdapterError::Catalog(Error::new(
+                                    ErrorKind::ReadOnlySystemSchema(schema_name),
+                                )));
+                            }
                         }
                         let schema_id = name.qualifiers.schema_spec.clone().into();
                         let serialized_item = Self::serialize_item(&item);
@@ -4155,7 +4213,7 @@ impl<S: Append> Catalog<S> {
                 Op::DropComputeInstance { name } => {
                     if is_reserved_name(&name) {
                         return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReservedClusterName(name),
+                            ErrorKind::ReadOnlyComputeInstance(name),
                         )));
                     }
                     let (instance_id, introspection_source_index_ids) =
@@ -4192,6 +4250,15 @@ impl<S: Append> Catalog<S> {
                         )));
                     }
                     let instance = state.resolve_compute_instance(&compute_name)?;
+                    if instance.id().is_system()
+                        && !session
+                            .map(|session| session.user().is_internal())
+                            .unwrap_or(false)
+                    {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReadOnlyComputeInstance(compute_name),
+                        )));
+                    }
                     tx.remove_compute_replica(&name, instance.id)?;
 
                     let replica_id = instance.replica_id_by_name[&name];
@@ -4278,12 +4345,14 @@ impl<S: Append> Catalog<S> {
                     }
 
                     if entry.id().is_system() {
-                        let name = state.resolve_full_name(
-                            entry.name(),
-                            session.map(|session| session.conn_id()),
-                        );
+                        let schema_name = state
+                            .resolve_full_name(
+                                entry.name(),
+                                session.map(|session| session.conn_id()),
+                            )
+                            .schema;
                         return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReadOnlySystemSchema(name.to_string()),
+                            ErrorKind::ReadOnlySystemSchema(schema_name),
                         )));
                     }
 
@@ -4439,7 +4508,7 @@ impl<S: Append> Catalog<S> {
                     catalog_action(
                         state,
                         builtin_table_updates,
-                        Action::UpdateSysytemConfiguration { name, value },
+                        Action::UpdateSystemConfiguration { name, value },
                     )?;
                 }
                 Op::ResetSystemConfiguration { name } => {
@@ -4585,17 +4654,16 @@ impl<S: Append> Catalog<S> {
                 Action::CreateComputeReplica {
                     id,
                     name,
-                    on_cluster_name,
+                    on_cluster_id,
                     config,
                 } => {
-                    let compute_instance_id = state.compute_instances_by_name[&on_cluster_name];
                     let introspection_ids: Vec<_> = config.logging.source_and_view_ids().collect();
-                    state.insert_compute_replica(compute_instance_id, name.clone(), id, config);
+                    state.insert_compute_replica(on_cluster_id, name.clone(), id, config);
                     for id in introspection_ids {
                         builtin_table_updates.extend(state.pack_item_update(id, 1));
                     }
                     builtin_table_updates.push(state.pack_compute_replica_update(
-                        compute_instance_id,
+                        on_cluster_id,
                         &name,
                         1,
                     ));
@@ -4719,7 +4787,7 @@ impl<S: Append> Catalog<S> {
                         ));
                     }
                 }
-                Action::UpdateSysytemConfiguration { name, value } => {
+                Action::UpdateSystemConfiguration { name, value } => {
                     state.insert_system_configuration(&name, &value)?;
                 }
                 Action::ResetSystemConfiguration { name } => {

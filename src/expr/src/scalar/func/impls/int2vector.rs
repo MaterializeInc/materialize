@@ -54,6 +54,10 @@ impl LazyUnaryFunc for CastInt2VectorToArray {
     fn preserves_uniqueness(&self) -> bool {
         false
     }
+
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        None
+    }
 }
 
 impl fmt::Display for CastInt2VectorToArray {
@@ -97,6 +101,10 @@ impl LazyUnaryFunc for CastInt2VectorToString {
 
     fn preserves_uniqueness(&self) -> bool {
         true
+    }
+
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        to_unary!(super::CastStringToInt2Vector)
     }
 }
 

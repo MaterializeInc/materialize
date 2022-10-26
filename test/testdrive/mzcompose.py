@@ -50,7 +50,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="set the default number of kafka partitions per topic",
     )
     parser.add_argument(
-        "--size", type=int, default=4, help="use SIZE 'N' for replicas and sources"
+        "--size", type=int, default=1, help="use SIZE 'N' for replicas and sources"
     )
 
     parser.add_argument("--replicas", type=int, default=1, help="use multiple replicas")
@@ -85,7 +85,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.start_and_wait_for_tcp(services=dependencies)
         c.wait_for_materialized("materialized")
 
-        if args.replicas > 1 or args.size > 1:
+        if args.replicas > 1:
             c.sql("DROP CLUSTER default CASCADE")
             # Make sure a replica named 'r1' always exists
             replica_names = [

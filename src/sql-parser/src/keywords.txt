@@ -86,6 +86,7 @@ Current
 Cursor
 Database
 Databases
+Datums
 Day
 Days
 Deallocate
@@ -282,9 +283,11 @@ Row
 Rows
 S3
 Sasl
+Scale
 Scan
 Schema
 Schemas
+Script
 Second
 Seconds
 Secret
@@ -323,6 +326,7 @@ Tables
 Tail
 Temp
 Temporary
+Test
 Text
 Then
 Tick
@@ -334,6 +338,7 @@ Timestamp
 To
 Token
 Topic
+Tpch
 Trace
 Trailing
 Transaction

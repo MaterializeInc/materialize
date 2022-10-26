@@ -9,7 +9,7 @@
 
 > CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
-$ set-regex match=\d replacement=<SIZE>
+$ set-regex match=\d+ replacement=<SIZE>
 
 > SHOW SOURCES
 accounts      subsource      <null>

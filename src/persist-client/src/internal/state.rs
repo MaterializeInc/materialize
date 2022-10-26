@@ -10,6 +10,7 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
+use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
 use std::time::Duration;
@@ -272,7 +273,11 @@ where
         debug_assert_eq!(self.trace.upper(), batch.desc.upper());
 
         // Also use this as an opportunity to heartbeat the writer
-        self.writer(writer_id).last_heartbeat_timestamp_ms = heartbeat_timestamp_ms;
+        let writer_state = self.writer(writer_id);
+        writer_state.last_heartbeat_timestamp_ms = std::cmp::max(
+            heartbeat_timestamp_ms,
+            writer_state.last_heartbeat_timestamp_ms,
+        );
 
         Continue(merge_reqs)
     }
@@ -297,7 +302,10 @@ where
 
         // Also use this as an opportunity to heartbeat the reader and downgrade
         // the seqno capability.
-        reader_state.last_heartbeat_timestamp_ms = heartbeat_timestamp_ms;
+        reader_state.last_heartbeat_timestamp_ms = std::cmp::max(
+            heartbeat_timestamp_ms,
+            reader_state.last_heartbeat_timestamp_ms,
+        );
 
         let seqno = match outstanding_seqno {
             Some(outstanding_seqno) => {
@@ -350,7 +358,19 @@ where
     pub fn expire_reader(&mut self, reader_id: &ReaderId) -> ControlFlow<Infallible, bool> {
         let existed = self.readers.remove(reader_id).is_some();
         if existed {
-            self.update_since();
+            // TODO: Re-enable this once we have #15511.
+            //
+            // Temporarily disabling this because we think it might be the cause
+            // of the remap since bug. Specifically, a storaged process has a
+            // ReadHandle for maintaining the once and one inside a Listen. If
+            // we crash and stay down for longer than the read lease duration,
+            // it's possible that an expiry of them both in quick succession
+            // jumps the since forward to the Listen one.
+            //
+            // Don't forget to update the downgrade_since when this gets
+            // switched back on.
+            //
+            // self.update_since();
         }
         // No-op if existed is false, but still commit the state change so that
         // this gets linearized.
@@ -434,7 +454,6 @@ where
 }
 
 // TODO: Document invariants.
-#[derive(Debug)]
 pub struct State<K, V, T, D> {
     pub(crate) applier_version: semver::Version,
     pub(crate) shard_id: ShardId,
@@ -461,6 +480,27 @@ impl<K, V, T: Clone, D> State<K, V, T, D> {
             collections: self.collections.clone(),
             _phantom: self._phantom.clone(),
         }
+    }
+}
+
+impl<K, V, T: Debug, D> Debug for State<K, V, T, D> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // Deconstruct self so we get a compile failure if new fields
+        // are added.
+        let State {
+            applier_version,
+            shard_id,
+            seqno,
+            collections,
+            _phantom,
+        } = self;
+        f.debug_struct("State")
+            .field("applier_version", applier_version)
+            .field("shard_id", shard_id)
+            .field("seqno", seqno)
+            .field("collections", collections)
+            .field("_phantom", _phantom)
+            .finish()
     }
 }
 
@@ -869,11 +909,19 @@ mod tests {
 
         // Shard since advances when reader with the minimal since expires.
         assert_eq!(state.collections.expire_reader(&reader2), Continue(true));
-        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));
+        // TODO: expiry temporarily doesn't advance since until we have #15511.
+        // Switch this assertion back when we re-enable this.
+        //
+        // assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));
+        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
 
         // Shard since unaffected when all readers are expired.
         assert_eq!(state.collections.expire_reader(&reader3), Continue(true));
-        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));
+        // TODO: expiry temporarily doesn't advance since until we have #15511.
+        // Switch this assertion back when we re-enable this.
+        //
+        // assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));
+        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
     }
 
     #[test]

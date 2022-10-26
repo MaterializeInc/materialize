@@ -9,7 +9,7 @@
 
 //! Durable metadata storage.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::error::Error;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
@@ -74,6 +74,9 @@ pub trait Stash: std::fmt::Debug + Send {
     where
         K: Data,
         V: Data;
+
+    /// Returns the names of the collections in the stash.
+    async fn collections(&mut self) -> Result<BTreeSet<String>, StashError>;
 
     /// Iterates over all entries in the stash.
     ///
@@ -408,6 +411,7 @@ pub trait Stash: std::fmt::Debug + Send {
 /// [`seal`]: Stash::seal
 /// [correctness vocabulary document]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210831_correctness.md
 /// [`Collection`]: differential_dataflow::collection::Collection
+#[derive(Debug)]
 pub struct StashCollection<K, V> {
     pub id: Id,
     _kv: PhantomData<(K, V)>,
@@ -537,6 +541,9 @@ pub trait Append: Stash {
     /// If this method returns `Ok`, the entries have been made durable and uppers
     /// advanced, otherwise no changes were committed.
     async fn append(&mut self, batches: &[AppendBatch]) -> Result<(), StashError> {
+        if batches.is_empty() {
+            return Ok(());
+        }
         self.append_batch(batches).await?;
         let ids: Vec<_> = batches.iter().map(|batch| batch.collection_id).collect();
         self.consolidate_batch(&ids).await?;
@@ -611,6 +618,10 @@ impl<K, V> TypedCollection<K, V> {
             typ: PhantomData,
         }
     }
+
+    pub const fn name(&self) -> &'static str {
+        self.name
+    }
 }
 
 impl<K, V> TypedCollection<K, V>
@@ -625,6 +636,14 @@ where
     pub async fn upper(&self, stash: &mut impl Stash) -> Result<Antichain<Timestamp>, StashError> {
         let collection = self.get(stash).await?;
         stash.upper(collection).await
+    }
+
+    pub async fn iter(
+        &self,
+        stash: &mut impl Stash,
+    ) -> Result<Vec<((K, V), Timestamp, Diff)>, StashError> {
+        let collection = self.get(stash).await?;
+        stash.iter(collection).await
     }
 
     pub async fn peek_one<S>(&self, stash: &mut S) -> Result<BTreeMap<K, V>, StashError>
@@ -720,18 +739,41 @@ where
         Ok(())
     }
 
-    /// Sets the given k,v pair.
+    /// Sets a value for a key. `f` is passed the previous value, if any.
     ///
-    /// Returns the old value if one existed.
+    /// Returns the previous value if one existed and the value returned from
+    /// `f`.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn upsert_key<S>(
+    pub async fn upsert_key<S, F, R>(
         &self,
         stash: &mut S,
         key: &K,
-        value: &V,
-    ) -> Result<Option<V>, StashError>
+        f: F,
+    ) -> Result<Result<(Option<V>, V), R>, StashError>
     where
         S: Append,
+        F: FnOnce(Option<&V>) -> Result<V, R>,
+    {
+        let (prev, next, ids) = match self.upsert_key_no_consolidate(stash, key, f).await? {
+            Ok(inner) => inner,
+            Err(e) => return Ok(Err(e)),
+        };
+        stash.consolidate_batch(&ids).await?;
+        Ok(Ok((prev, next)))
+    }
+
+    /// Same as `upsert_key`, but doesn't consolidate. Additionally returns ids
+    /// needing consolidation.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn upsert_key_no_consolidate<S, F, R>(
+        &self,
+        stash: &mut S,
+        key: &K,
+        f: F,
+    ) -> Result<Result<(Option<V>, V, Vec<Id>), R>, StashError>
+    where
+        S: Append,
+        F: FnOnce(Option<&V>) -> Result<V, R>,
     {
         let collection = self.get(stash).await?;
         let mut batch = collection.make_batch(stash).await?;
@@ -748,12 +790,20 @@ where
                 _ => return Err(err),
             },
         };
+        let next = match f(prev.as_ref()) {
+            Ok(v) => v,
+            Err(e) => return Ok(Err(e)),
+        };
+        // Do nothing if the values are the same.
+        if Some(&next) == prev.as_ref() {
+            return Ok(Ok((prev, next, Vec::new())));
+        }
         if let Some(prev) = &prev {
             collection.append_to_batch(&mut batch, key, prev, -1);
         }
-        collection.append_to_batch(&mut batch, key, value, 1);
-        stash.append(&[batch]).await?;
-        Ok(prev)
+        collection.append_to_batch(&mut batch, key, &next, 1);
+        stash.append_batch(&[batch]).await?;
+        Ok(Ok((prev, next, vec![collection.id])))
     }
 
     /// Sets the given key value pairs, removing existing entries match any key.

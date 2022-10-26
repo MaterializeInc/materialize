@@ -13,6 +13,7 @@ $ set-regex match=u\d{1,3} replacement=<RID>
 # Verify initial roles.
 > SELECT id, name FROM mz_roles
 s1 mz_system
+s2 mz_introspection
 <RID> materialize
 
 # Verify that invalid options are rejected.
@@ -30,6 +31,7 @@ contains:conflicting or redundant options
 > CREATE USER fms SUPERUSER
 > SELECT id, name FROM mz_roles
 s1 mz_system
+s2 mz_introspection
 <RID> materialize
 <RID> rj
 <RID> fms
@@ -40,6 +42,7 @@ s1 mz_system
 contains:unknown role 'bad'
 > SELECT id, name FROM mz_roles
 s1 mz_system
+s2 mz_introspection
 <RID> materialize
 <RID> rj
 <RID> fms
@@ -48,17 +51,20 @@ s1 mz_system
 > DROP ROLE IF EXISTS rj, fms, bad
 > SELECT id, name FROM mz_roles
 s1 mz_system
+s2 mz_introspection
 <RID> materialize
 
 # Verify that the single name version of DROP ROLE works too.
 > CREATE ROLE nlb LOGIN SUPERUSER
 > SELECT id, name FROM mz_roles
 s1 mz_system
+s2 mz_introspection
 <RID> materialize
 <RID> nlb
 > DROP ROLE nlb
 > SELECT id, name FROM mz_roles
 s1 mz_system
+s2 mz_introspection
 <RID> materialize
 > DROP ROLE IF EXISTS nlb
 

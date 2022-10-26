@@ -1,0 +1,63 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+register-source name=s1
+{
+  "script": [
+    {"command": "emit", "value": "gus", "offset": 0},
+    {"command": "emit", "value": "gus2", "offset": 1}
+  ],
+  "encoding": {
+    "Single": {
+      "force_nullable_columns": false,
+      "inner": "Bytes"
+    }
+  },
+  "envelope": {
+    "None": {
+      "key_envelope": "None",
+      "key_arity": 0
+    }
+  }
+}
+----
+<empty>
+
+# TODO(guswynn): make the output less verbose
+run-source name=s1 expected_len=2
+----
+[
+    SourceData(
+        Ok(
+            Row{[
+                Bytes(
+                    [
+                        103,
+                        117,
+                        115,
+                    ],
+                ),
+            ]},
+        ),
+    ),
+    SourceData(
+        Ok(
+            Row{[
+                Bytes(
+                    [
+                        103,
+                        117,
+                        115,
+                        50,
+                    ],
+                ),
+            ]},
+        ),
+    ),
+]

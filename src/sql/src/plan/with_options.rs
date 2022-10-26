@@ -9,6 +9,7 @@
 
 //! Provides tooling to handle `WITH` options.
 
+use mz_sql_parser::ast::ReplicaDefinition;
 use serde::{Deserialize, Serialize};
 
 use mz_repr::adt::interval::Interval;
@@ -216,6 +217,27 @@ impl ImpliedValue for bool {
     }
 }
 
+impl TryFromValue<Value> for f64 {
+    fn try_from_value(v: Value) -> Result<Self, PlanError> {
+        match v {
+            Value::Number(v) => v
+                .parse::<f64>()
+                .map_err(|e| sql_err!("invalid numeric value: {e}")),
+            _ => sql_bail!("cannot use value as number"),
+        }
+    }
+
+    fn name() -> String {
+        "float8".to_string()
+    }
+}
+
+impl ImpliedValue for f64 {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a float value")
+    }
+}
+
 impl TryFromValue<Value> for i32 {
     fn try_from_value(v: Value) -> Result<Self, PlanError> {
         match v {
@@ -296,10 +318,14 @@ impl ImpliedValue for u64 {
     }
 }
 
-impl<V: TryFromValue<Value>> TryFromValue<Value> for Vec<V> {
-    fn try_from_value(v: Value) -> Result<Self, PlanError> {
+impl<T, V> TryFromValue<WithOptionValue<T>> for Vec<V>
+where
+    T: AstInfo,
+    V: TryFromValue<WithOptionValue<T>>,
+{
+    fn try_from_value(v: WithOptionValue<T>) -> Result<Self, PlanError> {
         match v {
-            Value::Array(a) => {
+            WithOptionValue::Sequence(a) => {
                 let mut out = Vec::with_capacity(a.len());
                 for i in a {
                     out.push(
@@ -346,14 +372,18 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
         match v {
             WithOptionValue::Value(v) => V::try_from_value(v),
             WithOptionValue::Ident(i) => V::try_from_value(Value::String(i.to_string())),
-            WithOptionValue::Object(_)
+            WithOptionValue::Sequence(_)
+            | WithOptionValue::Object(_)
             | WithOptionValue::Secret(_)
-            | WithOptionValue::DataType(_) => sql_bail!(
+            | WithOptionValue::DataType(_)
+            | WithOptionValue::ClusterReplicas(_) => sql_bail!(
                 "incompatible value types: cannot convert {} to {}",
                 match v {
+                    WithOptionValue::Sequence(_) => "sequences",
                     WithOptionValue::Object(_) => "object references",
                     WithOptionValue::Secret(_) => "secrets",
                     WithOptionValue::DataType(_) => "data types",
+                    WithOptionValue::ClusterReplicas(_) => "cluster replicas",
                     _ => unreachable!(),
                 },
                 V::name()
@@ -374,5 +404,23 @@ impl<T, V: TryFromValue<T> + ImpliedValue> TryFromValue<Option<T>> for V {
     }
     fn name() -> String {
         V::name()
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for Vec<ReplicaDefinition<Aug>> {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        match v {
+            WithOptionValue::ClusterReplicas(replicas) => Ok(replicas),
+            _ => sql_bail!("cannot use value as cluster replicas"),
+        }
+    }
+    fn name() -> String {
+        "cluster replicas".to_string()
+    }
+}
+
+impl ImpliedValue for Vec<ReplicaDefinition<Aug>> {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a set of cluster replicas")
     }
 }

@@ -20,7 +20,7 @@ DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.5"
 # Be sure to use a `X.Y.Z.Final` tag here; `X.Y` tags refer to the latest
 # minor version in the release series, and minor versions have been known to
 # introduce breakage.
-DEFAULT_DEBEZIUM_VERSION = "1.9.5.Final"
+DEFAULT_DEBEZIUM_VERSION = "1.9.6.Final"
 
 LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5", "1.6"]
 
@@ -30,6 +30,8 @@ DEFAULT_MZ_VOLUMES = [
     "mydata:/var/lib/mysql-files",
     "tmp:/share/tmp",
 ]
+
+DEFAULT_SIZE = 1
 
 
 class Materialized(Service):
@@ -43,8 +45,8 @@ class Materialized(Service):
         memory: Optional[str] = None,
         persist_blob_url: Optional[str] = None,
         data_directory: str = "/mzdata",
-        workers: Optional[int] = None,
-        size: Optional[str] = None,
+        workers: Optional[int] = DEFAULT_SIZE,
+        size: Optional[str] = str(DEFAULT_SIZE),
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         environment_extra: Optional[List[str]] = None,
@@ -86,6 +88,7 @@ class Materialized(Service):
 
         if size:
             environment += [
+                f"MZ_BOOTSTRAP_BUILTIN_CLUSTER_REPLICA_SIZE={size}",
                 f"MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE={size}",
                 f"MZ_DEFAULT_STORAGE_HOST_SIZE={size}",
             ]
@@ -159,7 +162,7 @@ class Computed(Service):
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
-        workers: Optional[int] = None,
+        workers: Optional[int] = DEFAULT_SIZE,
         secrets_reader: str = "process",
         secrets_reader_process_dir: str = "mzdata/secrets",
     ) -> None:
@@ -219,7 +222,7 @@ class Storaged(Service):
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
-        workers: Optional[int] = None,
+        workers: Optional[int] = DEFAULT_SIZE,
         secrets_reader: str = "process",
         secrets_reader_process_dir: str = "mzdata/secrets",
     ) -> None:
@@ -526,6 +529,8 @@ class Debezium(Service):
             "CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081",
             "CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081",
             "CONNECT_OFFSET_COMMIT_POLICY=AlwaysCommitOffsetPolicy",
+            "CONNECT_ERRORS_RETRY_TIMEOUT=60000",
+            "CONNECT_ERRORS_RETRY_DELAY_MAX_MS=1000",
         ],
     ) -> None:
         super().__init__(
@@ -635,7 +640,6 @@ class Testdrive(Service):
         default_timeout: str = "120s",
         seed: Optional[int] = None,
         consistent_seed: bool = False,
-        validate_data_dir: bool = True,
         validate_postgres_stash: bool = False,
         entrypoint: Optional[List[str]] = None,
         entrypoint_extra: List[str] = [],
@@ -684,9 +688,6 @@ class Testdrive(Service):
 
         if aws_endpoint and not aws_region:
             entrypoint.append(f"--aws-endpoint={aws_endpoint}")
-
-        if validate_data_dir:
-            entrypoint.append("--validate-data-dir=/mzdata")
 
         if validate_postgres_stash:
             entrypoint.append(

@@ -17,9 +17,10 @@ use mz_ore::str::StrExt;
 use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
 use crate::ast::{
-    AstInfo, CreateIndexStatement, CreateMaterializedViewStatement, CreateSecretStatement,
-    CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateViewStatement, Expr,
-    Ident, Query, Raw, RawObjectName, Statement, UnresolvedObjectName, ViewDefinition,
+    AstInfo, CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
+    CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
+    CreateViewStatement, Expr, Ident, Query, Raw, RawObjectName, Statement, UnresolvedObjectName,
+    ViewDefinition,
 };
 use crate::names::FullObjectName;
 
@@ -47,6 +48,10 @@ pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String
             name.0[object_name_len] = Ident::new(to_item_name);
         }
         Statement::CreateSecret(CreateSecretStatement { name, .. }) => {
+            let object_name_len = name.0.len() - 1;
+            name.0[object_name_len] = Ident::new(to_item_name);
+        }
+        Statement::CreateConnection(CreateConnectionStatement { name, .. }) => {
             let object_name_len = name.0.len() - 1;
             name.0[object_name_len] = Ident::new(to_item_name);
         }
@@ -97,7 +102,10 @@ pub fn create_stmt_rename_refs(
         | Statement::CreateMaterializedView(CreateMaterializedViewStatement { query, .. }) => {
             rewrite_query(from_name, to_item_name, query)?;
         }
-        Statement::CreateSource(_) | Statement::CreateTable(_) | Statement::CreateSecret(_) => {}
+        Statement::CreateSource(_)
+        | Statement::CreateTable(_)
+        | Statement::CreateSecret(_)
+        | Statement::CreateConnection(_) => {}
         _ => unreachable!("Internal error: only catalog items need to update item refs"),
     }
 

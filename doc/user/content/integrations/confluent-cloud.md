@@ -1,5 +1,5 @@
 ---
-title: "How to connect Confluent Cloud Kafka cluster to Materialize"
+title: "Confluent Cloud"
 description: "How to securely connect a Confluent Cloud Kafka cluster as a source to Materialize."
 menu:
   main:
@@ -32,11 +32,11 @@ The process to connect Materialize to a Confluent Cloud Kafka cluster consists o
 
     b. Choose the Confluent Cloud Kafka cluster you just created in Step 1
 
-    c. Click on the **Data Integration** tab and then choose **API Keys**
+    c. Click on the **API Keys** tab
 
     d. In the **API Keys** section, choose **Add Key**
 
-    e. Specify the scope for the API key and then click **Create Key**. If you choose to create a _granular access_ API key, make sure to give the key `Read` and `Write` access to the topic you want to create a source for.
+    e. Specify the scope for the API key and then click **Create Key**. If you choose to create a _granular access_ API key, make sure to give the key `Read` access to the topic you want to create a source for.
 
     Take note of the API Key you just created, as well as the API Key secret key; you'll need them later on. Keep in mind that the API Key secret key contains sensitive information, and you should store it somewhere safe!
 
@@ -59,13 +59,14 @@ The process to connect Materialize to a Confluent Cloud Kafka cluster consists o
       CREATE SECRET confluent_username AS '<your-api-key>';
       CREATE SECRET confluent_password AS '<your-api-secret>';
 
-      CREATE CONNECTION <confluent_cloud> FOR KAFKA
-          BROKER '<confluent-broker-url>',
-          SASL MECHANISMS = 'PLAIN',
-          SASL USERNAME = SECRET confluent_username,
-          SASL PASSWORD = SECRET confluent_password;
+      CREATE CONNECTION <confluent_cloud> TO KAFKA (
+        BROKER '<confluent-broker-url>',
+        SASL MECHANISMS = 'PLAIN',
+        SASL USERNAME = SECRET confluent_username,
+        SASL PASSWORD = SECRET confluent_password
+      );
 
-      CREATE SOURCE <topic-name>
+      CREATE SOURCE <source-name>
         FROM KAFKA CONNECTION confluent_cloud (TOPIC '<topic-name>')
         FORMAT BYTES
         WITH (SIZE = '3xsmall');

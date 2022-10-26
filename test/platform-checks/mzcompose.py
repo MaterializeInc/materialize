@@ -11,7 +11,7 @@ from enum import Enum
 
 from materialize.checks.all_checks import *  # noqa: F401 F403
 from materialize.checks.checks import Check
-from materialize.checks.executors import MzcomposeExecutor
+from materialize.checks.executors import MzcomposeExecutor, MzcomposeExecutorParallel
 from materialize.checks.scenarios import *  # noqa: F401 F403
 from materialize.checks.scenarios import Scenario
 from materialize.checks.scenarios_upgrade import *  # noqa: F401 F403
@@ -39,7 +39,8 @@ SERVICES = [
 
 
 class ExecutionMode(Enum):
-    ALLTOGETHER = "alltogether"
+    SEQUENTIAL = "sequential"
+    PARALLEL = "parallel"
     ONEATATIME = "oneatatime"
 
     def __str__(self) -> str:
@@ -86,7 +87,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--execution-mode",
         type=ExecutionMode,
         choices=list(ExecutionMode),
-        default=ExecutionMode.ALLTOGETHER,
+        default=ExecutionMode.SEQUENTIAL,
     )
 
     args = parser.parse_args()
@@ -102,10 +103,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     executor = MzcomposeExecutor(composition=c)
-
     for scenario_class in scenarios:
         print(f"Testing scenario {scenario_class}...")
-        if args.execution_mode is ExecutionMode.ALLTOGETHER:
+
+        executor_class = (
+            MzcomposeExecutorParallel
+            if args.execution_mode is ExecutionMode.PARALLEL
+            else MzcomposeExecutor
+        )
+        executor = executor_class(composition=c)
+
+        if args.execution_mode in [ExecutionMode.SEQUENTIAL, ExecutionMode.PARALLEL]:
             setup(c)
             scenario = scenario_class(checks=checks, executor=executor)
             scenario.run()

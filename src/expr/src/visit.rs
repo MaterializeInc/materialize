@@ -143,6 +143,28 @@ pub trait Visit {
     where
         F: FnMut(&Self);
 
+    /// Pre-order immutable infallible visitor for `self`, which also accumulates context
+    /// information along the path from the root to the current node's parent.
+    /// `acc_fun` is a similar closure as in `fold`. The accumulated context is passed to the
+    /// visitor, along with the current node.
+    ///
+    /// For example, one can use this on a `MirScalarExpr` to tell the visitor whether the current
+    /// subexpression has a negation somewhere above it.
+    ///
+    /// When using it on a `MirRelationExpr`, one has to be mindful that `Let` bindings are not
+    /// followed, i.e., the context won't include what happens with a `Let` binding in some other
+    /// `MirRelationExpr` where the binding occurs in a `Get`.
+    fn visit_pre_with_context<Context, AccFun, Visitor>(
+        &self,
+        init: Context,
+        acc_fun: &mut AccFun,
+        visitor: &mut Visitor,
+    ) -> Result<(), RecursionLimitError>
+    where
+        Context: Clone,
+        AccFun: FnMut(Context, &Self) -> Context,
+        Visitor: FnMut(&Context, &Self);
+
     /// Pre-order immutable infallible visitor for `self`.
     /// Does not enforce a recursion limit.
     #[deprecated = "Use `visit_pre` instead."]
@@ -328,6 +350,20 @@ impl<T: VisitChildren<T>> Visit for T {
         F: FnMut(&Self),
     {
         StackSafeVisit::new().visit_pre(self, f)
+    }
+
+    fn visit_pre_with_context<Context, AccFun, Visitor>(
+        &self,
+        init: Context,
+        acc_fun: &mut AccFun,
+        visitor: &mut Visitor,
+    ) -> Result<(), RecursionLimitError>
+    where
+        Context: Clone,
+        AccFun: FnMut(Context, &Self) -> Context,
+        Visitor: FnMut(&Context, &Self),
+    {
+        StackSafeVisit::new().visit_pre_with_context(self, init, acc_fun, visitor)
     }
 
     fn visit_pre_nolimit<F>(&self, f: &mut F)
@@ -528,6 +564,27 @@ impl<T: VisitChildren<T>> StackSafeVisit<T> {
         self.checked_recur(move |_| {
             f(value);
             value.try_visit_children(|child| self.visit_pre(child, f))
+        })
+    }
+
+    fn visit_pre_with_context<Context, AccFun, Visitor>(
+        &self,
+        node: &T,
+        init: Context,
+        acc_fun: &mut AccFun,
+        visitor: &mut Visitor,
+    ) -> Result<(), RecursionLimitError>
+    where
+        Context: Clone,
+        AccFun: FnMut(Context, &T) -> Context,
+        Visitor: FnMut(&Context, &T),
+    {
+        self.checked_recur(move |_| {
+            visitor(&init, node);
+            let context = acc_fun(init, node);
+            node.try_visit_children(|child| {
+                self.visit_pre_with_context(child, context.clone(), acc_fun, visitor)
+            })
         })
     }
 

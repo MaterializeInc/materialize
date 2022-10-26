@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use tower_http::cors::AllowOrigin;
 
 use mz_adapter::catalog::storage::BootstrapArgs;
@@ -101,6 +101,9 @@ pub struct Config {
     pub bootstrap_default_cluster_replica_size: String,
     /// The size of the builtin cluster replicas if bootstrapping.
     pub bootstrap_builtin_cluster_replica_size: String,
+    /// An optional semicolon-separated list of $var_name=$var_value pairs for
+    /// bootstraping system variables that are not already modified.
+    pub bootstrap_system_vars: Option<String>,
     /// A map from size name to resource allocations for storage hosts.
     pub storage_host_sizes: StorageHostSizeMap,
     /// Default storage host size, should be a key from storage_host_sizes.
@@ -228,6 +231,8 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         server::serve(internal_http_conns, internal_http_server)
     });
 
+    let (consolidations_tx, consolidations_rx) = mpsc::unbounded_channel();
+
     // Load the adapter catalog from disk.
     if !config
         .cluster_replica_sizes
@@ -251,6 +256,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                 .cloned()
                 .unwrap_or_else(|| mz_adapter::DUMMY_AVAILABILITY_ZONE.into()),
         },
+        consolidations_tx.clone(),
     )
     .await?;
 
@@ -280,11 +286,14 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         storage_host_sizes: config.storage_host_sizes,
         default_storage_host_size: config.default_storage_host_size,
         availability_zones: config.availability_zones,
+        bootstrap_system_vars: config.bootstrap_system_vars,
         connection_context: config.connection_context,
         storage_usage_client,
         storage_usage_collection_interval: config.storage_usage_collection_interval,
         segment_api_key: config.segment_api_key,
         egress_ips: config.egress_ips,
+        consolidations_tx,
+        consolidations_rx,
     })
     .await?;
 

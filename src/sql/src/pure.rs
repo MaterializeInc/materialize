@@ -216,17 +216,22 @@ pub async fn purify_create_source(
                         info!("add start_offset {:?}", start_offsets);
                         base_with_options.push(KafkaConfigOption {
                             name: KafkaConfigOptionName::StartOffset,
-                            value: Some(WithOptionValue::Value(Value::Array(
+                            value: Some(WithOptionValue::Sequence(
                                 start_offsets
                                     .iter()
-                                    .map(|offset| Value::Number(offset.to_string()))
+                                    .map(|offset| {
+                                        WithOptionValue::Value(Value::Number(offset.to_string()))
+                                    })
                                     .collect(),
-                            ))),
+                            )),
                         });
                     }
                     None => {}
                 }
             }
+        }
+        CreateSourceConnection::TestScript { desc_json: _ } => {
+            // TODO: verify valid json and valid schema
         }
         CreateSourceConnection::S3 { connection, .. } => {
             let scx = StatementContext::new(None, &*catalog);
@@ -539,8 +544,12 @@ async fn purify_source_format(
     connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     if matches!(format, CreateSourceFormat::KeyValue { .. })
-        && !matches!(connection, CreateSourceConnection::Kafka { .. })
+        && !matches!(
+            connection,
+            CreateSourceConnection::Kafka { .. } | CreateSourceConnection::TestScript { .. }
+        )
     {
+        // We don't mention `TestScript` to users here
         bail!("Kafka sources are the only source type that can provide KEY/VALUE formats")
     }
 

@@ -53,10 +53,12 @@ class DebeziumDeployment(K8sDeployment):
             V1EnvVar(
                 name="CONNECT_OFFSET_COMMIT_POLICY", value="AlwaysCommitOffsetPolicy"
             ),
+            V1EnvVar(name="CONNECT_ERRORS_RETRY_TIMEOUT", value="60000"),
+            V1EnvVar(name="CONNECT_ERRORS_RETRY_DELAY_MAX_MS", value="1000"),
         ]
 
         container = V1Container(
-            name="debezium", image="debezium/connect:1.9.5.Final", env=env, ports=ports
+            name="debezium", image="debezium/connect:1.9.6.Final", env=env, ports=ports
         )
 
         template = V1PodTemplateSpec(

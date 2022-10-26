@@ -35,7 +35,7 @@ use tokio_postgres::config::Host;
 use tokio_postgres::Client;
 use tracing::info;
 
-use mz_adapter::catalog::SYSTEM_USER;
+use mz_adapter::catalog::{INTERNAL_USER_NAMES, INTROSPECTION_USER, SYSTEM_USER};
 use mz_ore::assert_contains;
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO, SYSTEM_TIME};
 use mz_ore::retry::Retry;
@@ -1419,7 +1419,7 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-fn test_system_user() -> Result<(), Box<dyn Error>> {
+fn test_internal_users() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
     let config = util::Config::default();
@@ -1437,9 +1437,36 @@ fn test_system_user() -> Result<(), Box<dyn Error>> {
         .is_ok());
     assert!(server
         .pg_config_internal()
+        .user(&INTROSPECTION_USER.name)
+        .connect(postgres::NoTls)
+        .is_ok());
+    assert!(server
+        .pg_config_internal()
         .user("mz_something_else")
         .connect(postgres::NoTls)
         .is_err());
+
+    Ok(())
+}
+
+#[test]
+fn test_internal_users_cluster() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let config = util::Config::default();
+    let server = util::start_server(config)?;
+
+    for user in INTERNAL_USER_NAMES.iter() {
+        let mut internal_client = server
+            .pg_config_internal()
+            .user(user)
+            .connect(postgres::NoTls)?;
+
+        let cluster = internal_client
+            .query_one("SHOW CLUSTER", &[])?
+            .get::<_, String>(0);
+        assert_eq!(user, &cluster);
+    }
 
     Ok(())
 }

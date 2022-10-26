@@ -15,12 +15,11 @@
 
 //! Utilities for working with Timely.
 
-#![warn(missing_docs)]
-
 pub mod activator;
 pub mod builder_async;
 pub mod event;
 pub mod operator;
 pub mod operators_async_ext;
+pub mod order;
 pub mod progress;
 pub mod replay;

@@ -20,7 +20,7 @@ use postgres_protocol::message::backend::{
 use timely::scheduling::SyncActivator;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio_postgres::error::{DbError, Severity, SqlState};
+use tokio_postgres::error::DbError;
 use tokio_postgres::replication::LogicalReplicationStream;
 use tokio_postgres::types::PgLsn;
 use tokio_postgres::SimpleQueryMessage;
@@ -57,78 +57,80 @@ static WAL_LAG_GRACE_PERIOD: Duration = Duration::from_secs(5 * 60); // 5 minute
 static MAX_WAL_LAG: u64 = 100 * 1024 * 1024;
 
 trait ErrorExt {
-    fn is_recoverable(&self) -> bool;
+    fn is_definite(&self) -> bool;
 }
 
 impl ErrorExt for tokio::time::error::Elapsed {
-    fn is_recoverable(&self) -> bool {
-        true
+    fn is_definite(&self) -> bool {
+        false
     }
 }
 
 impl ErrorExt for tokio_postgres::Error {
-    fn is_recoverable(&self) -> bool {
+    fn is_definite(&self) -> bool {
         match self.source() {
-            Some(err) => {
-                match err.downcast_ref::<DbError>() {
-                    Some(db_err) => {
-                        use Severity::*;
-                        // Connection and non-fatal errors
-                        db_err.code() == &SqlState::CONNECTION_EXCEPTION
-                            || db_err.code() == &SqlState::CONNECTION_DOES_NOT_EXIST
-                            || db_err.code() == &SqlState::CONNECTION_FAILURE
-                            || db_err.code() == &SqlState::TOO_MANY_CONNECTIONS
-                            || db_err.code() == &SqlState::CANNOT_CONNECT_NOW
-                            || db_err.code() == &SqlState::ADMIN_SHUTDOWN
-                            || db_err.code() == &SqlState::CRASH_SHUTDOWN
-                            || !matches!(
-                                db_err.parsed_severity(),
-                                Some(Error) | Some(Fatal) | Some(Panic)
-                            )
+            Some(err) => match err.downcast_ref::<DbError>() {
+                Some(db_err) => {
+                    let class = match db_err.code().code().get(0..2) {
+                        None => return false,
+                        Some(class) => class,
+                    };
+                    match class {
+                        // See https://www.postgresql.org/docs/current/errcodes-appendix.html
+                        // for the class definitions.
+
+                        // unknown catalog or schema names
+                        "3D" | "3F" => true,
+                        // syntax error or access rule violation
+                        "42" => true,
+                        _ => false,
                     }
-                    // IO errors
-                    None => err.is::<std::io::Error>(),
                 }
-            }
+                None => false,
+            },
             // We have no information about what happened, it might be a fatal error or
             // it might not. Unexpected errors can happen if the upstream crashes for
             // example in which case we should retry.
             //
-            // Therefore, we adopt a "recoverable unless proven otherwise" policy and
+            // Therefore, we adopt a "indefinite unless proven otherwise" policy and
             // keep retrying in the event of unexpected errors.
-            None => true,
+            None => false,
         }
     }
 }
 
 enum ReplicationError {
-    Recoverable(anyhow::Error),
-    Fatal(anyhow::Error),
+    /// This error is definite: this source is permanently wedged.
+    /// Returning a definite error will cause the collection to become un-queryable.
+    Definite(anyhow::Error),
+    /// This error may or may not resolve itself in the future, and
+    /// should be retried instead of being added to the output.
+    Indefinite(anyhow::Error),
 }
 
 impl<E: ErrorExt + Into<anyhow::Error>> From<E> for ReplicationError {
     fn from(err: E) -> Self {
-        if err.is_recoverable() {
-            Self::Recoverable(err.into())
+        if err.is_definite() {
+            Self::Definite(err.into())
         } else {
-            Self::Fatal(err.into())
+            Self::Indefinite(err.into())
         }
     }
 }
 
-macro_rules! try_fatal {
+macro_rules! try_definite {
     ($expr:expr $(,)?) => {
         match $expr {
             Ok(val) => val,
-            Err(err) => return Err(ReplicationError::Fatal(err.into())),
+            Err(err) => return Err(ReplicationError::Definite(err.into())),
         }
     };
 }
-macro_rules! try_recoverable {
+macro_rules! try_indefinite {
     ($expr:expr $(,)?) => {
         match $expr {
             Ok(val) => val,
-            Err(err) => return Err(ReplicationError::Recoverable(err.into())),
+            Err(err) => return Err(ReplicationError::Indefinite(err.into())),
         }
     };
 }
@@ -405,7 +407,7 @@ async fn postgres_replication_loop_inner(
                     &task_info.source_id
                 );
             }
-            Err(ReplicationError::Recoverable(e)) => {
+            Err(ReplicationError::Indefinite(e)) => {
                 // TODO: In the future we probably want to handle this more gracefully,
                 // to avoid stressing out any monitoring tools,
                 // but for now panicking is the easiest way to dump the data in the pipe.
@@ -418,7 +420,7 @@ async fn postgres_replication_loop_inner(
                     &task_info.source_id, e
                 );
             }
-            Err(ReplicationError::Fatal(e)) => {
+            Err(ReplicationError::Definite(e)) => {
                 return Err(SourceReaderError {
                     inner: SourceErrorDetails::Initialization(e.to_string()),
                 })
@@ -428,13 +430,13 @@ async fn postgres_replication_loop_inner(
 
     loop {
         match task_info.produce_replication().await {
-            Err(ReplicationError::Recoverable(e)) => {
+            Err(ReplicationError::Indefinite(e)) => {
                 warn!(
                     "replication for source {} interrupted, retrying: {}",
                     task_info.source_id, e
                 )
             }
-            Err(ReplicationError::Fatal(e)) => {
+            Err(ReplicationError::Definite(e)) => {
                 return Err(SourceReaderError {
                     inner: SourceErrorDetails::Other(e.to_string()),
                 })
@@ -601,11 +603,11 @@ impl PostgresTaskInfo {
     /// the LSN at which we should start the replication stream at.
     async fn produce_snapshot(&mut self) -> Result<(), ReplicationError> {
         // Get all the relevant tables for this publication
-        let publication_tables = try_recoverable!(
+        let publication_tables = try_indefinite!(
             mz_postgres_util::publication_info(&self.connection_config, &self.publication).await
         );
 
-        let client = try_recoverable!(self.connection_config.clone().connect_replication().await);
+        let client = try_indefinite!(self.connection_config.clone().connect_replication().await);
 
         // We're initializing this source so any previously existing slot must be removed and
         // re-created. Once we have data persistence we will be able to reuse slots across restarts
@@ -614,7 +616,7 @@ impl PostgresTaskInfo {
             .await;
 
         // Validate publication tables against the state snapshot
-        try_fatal!(self.validate_tables(publication_tables));
+        try_definite!(self.validate_tables(publication_tables));
 
         // Start a transaction and immediately create a replication slot with the USE SNAPSHOT
         // directive. This makes the starting point of the slot and the snapshot of the transaction
@@ -637,16 +639,16 @@ impl PostgresTaskInfo {
                 _ => None,
             })
             .ok_or_else(|| {
-                ReplicationError::Recoverable(anyhow!(
+                ReplicationError::Indefinite(anyhow!(
                     "empty result after creating replication slot"
                 ))
             })?;
 
         // Store the lsn at which we will need to start the replication stream from
-        let consistent_point = try_recoverable!(slot_row
+        let consistent_point = try_indefinite!(slot_row
             .get("consistent_point")
             .ok_or_else(|| anyhow!("missing expected column: `consistent_point`")));
-        self.lsn = try_fatal!(consistent_point
+        self.lsn = try_definite!(consistent_point
             .parse()
             .or_else(|_| Err(anyhow!("invalid lsn"))));
 
@@ -679,9 +681,9 @@ impl PostgresTaskInfo {
 
                 let mut raw_values = parser.iter_raw(info.desc.columns.len() as i32);
                 while let Some(raw_value) = raw_values.next() {
-                    match try_fatal!(raw_value) {
+                    match try_definite!(raw_value) {
                         Some(value) => {
-                            packer.push(Datum::String(try_fatal!(std::str::from_utf8(value))))
+                            packer.push(Datum::String(try_definite!(std::str::from_utf8(value))))
                         }
                         None => packer.push(Datum::Null),
                     }
@@ -690,7 +692,7 @@ impl PostgresTaskInfo {
                 let mut datums = datum_vec.borrow();
                 datums.extend(text_row.iter());
 
-                let row = try_fatal!(PostgresTaskInfo::cast_row(&info.casts, &datums));
+                let row = try_definite!(PostgresTaskInfo::cast_row(&info.casts, &datums));
 
                 self.row_sender
                     .insert(info.output_index, row, self.lsn)
@@ -698,7 +700,7 @@ impl PostgresTaskInfo {
                 // Failure scenario after we have produced at least one row, but before a
                 // successful `COMMIT`
                 fail::fail_point!("pg_snapshot_failure", |_| {
-                    Err(ReplicationError::Recoverable(anyhow::anyhow!(
+                    Err(ReplicationError::Indefinite(anyhow::anyhow!(
                         "recoverable errors should crash the process"
                     )))
                 });
@@ -762,7 +764,7 @@ impl PostgresTaskInfo {
         //   all updates >= this lsn.
         let mut committed_lsn: PgLsn = self.lsn;
 
-        let client = try_recoverable!(self.connection_config.clone().connect_replication().await);
+        let client = try_indefinite!(self.connection_config.clone().connect_replication().await);
 
         // Before consuming the replication stream we will peek into the replication slot using a
         // normal SQL query and the `pg_logical_slot_peek_binary_changes` administrative function.
@@ -772,7 +774,7 @@ impl PostgresTaskInfo {
         // there are no message then it is safe to fast forward to the end WAL LSN and start the
         // replication stream from there.
         let cur_lsn = {
-            let rows = try_recoverable!(
+            let rows = try_indefinite!(
                 client
                     .simple_query("SELECT pg_current_wal_flush_lsn()")
                     .await
@@ -798,7 +800,7 @@ impl PostgresTaskInfo {
                 lsn = cur_lsn,
                 publication = self.publication
             );
-            let rows = try_recoverable!(client.simple_query(&query).await);
+            let rows = try_indefinite!(client.simple_query(&query).await);
 
             match rows.first().expect("query returns exactly one row") {
                 SimpleQueryMessage::Row(row) => {
@@ -825,7 +827,7 @@ impl PostgresTaskInfo {
             lsn = self.lsn,
             publication = self.publication
         );
-        let copy_stream = try_recoverable!(client.copy_both_simple(&query).await);
+        let copy_stream = try_indefinite!(client.copy_both_simple(&query).await);
 
         let stream = LogicalReplicationStream::new(copy_stream).take_until(self.sender.closed());
         tokio::pin!(stream);
@@ -884,7 +886,7 @@ impl PostgresTaskInfo {
                     Begin(_) => {
                         last_data_message = Instant::now();
                         if !inserts.is_empty() || !deletes.is_empty() {
-                            return Err(Fatal(anyhow!(
+                            return Err(Definite(anyhow!(
                                 "got BEGIN statement after uncommitted data"
                             )));
                         }
@@ -896,12 +898,12 @@ impl PostgresTaskInfo {
                         let info = self.source_tables.get(&rel_id).unwrap();
                         let new_tuple = insert.tuple().tuple_data();
                         let mut datums = datum_vec.borrow();
-                        try_fatal!(PostgresTaskInfo::datums_from_tuple(
+                        try_definite!(PostgresTaskInfo::datums_from_tuple(
                             rel_id,
                             new_tuple,
                             &mut *datums
                         ));
-                        let row = try_fatal!(PostgresTaskInfo::cast_row(&info.casts, &datums));
+                        let row = try_definite!(PostgresTaskInfo::cast_row(&info.casts, &datums));
                         inserts.push((info.output_index, row));
                     }
                     Update(update) if self.source_tables.contains_key(&update.rel_id()) => {
@@ -916,15 +918,16 @@ impl PostgresTaskInfo {
                                 rel_id
                             )
                         };
-                        let old_tuple = try_fatal!(update.old_tuple().ok_or_else(err)).tuple_data();
+                        let old_tuple =
+                            try_definite!(update.old_tuple().ok_or_else(err)).tuple_data();
                         let mut old_datums = datum_vec.borrow();
-                        try_fatal!(PostgresTaskInfo::datums_from_tuple(
+                        try_definite!(PostgresTaskInfo::datums_from_tuple(
                             rel_id,
                             old_tuple,
                             &mut *old_datums
                         ));
                         let old_row =
-                            try_fatal!(PostgresTaskInfo::cast_row(&info.casts, &old_datums));
+                            try_definite!(PostgresTaskInfo::cast_row(&info.casts, &old_datums));
                         deletes.push((info.output_index, old_row));
                         drop(old_datums);
 
@@ -940,13 +943,13 @@ impl PostgresTaskInfo {
                                 _ => new,
                             });
                         let mut new_datums = datum_vec.borrow();
-                        try_fatal!(PostgresTaskInfo::datums_from_tuple(
+                        try_definite!(PostgresTaskInfo::datums_from_tuple(
                             rel_id,
                             new_tuple,
                             &mut *new_datums
                         ));
                         let new_row =
-                            try_fatal!(PostgresTaskInfo::cast_row(&info.casts, &new_datums));
+                            try_definite!(PostgresTaskInfo::cast_row(&info.casts, &new_datums));
                         inserts.push((info.output_index, new_row));
                     }
                     Delete(delete) if self.source_tables.contains_key(&delete.rel_id()) => {
@@ -961,14 +964,15 @@ impl PostgresTaskInfo {
                                 rel_id
                             )
                         };
-                        let old_tuple = try_fatal!(delete.old_tuple().ok_or_else(err)).tuple_data();
+                        let old_tuple =
+                            try_definite!(delete.old_tuple().ok_or_else(err)).tuple_data();
                         let mut datums = datum_vec.borrow();
-                        try_fatal!(PostgresTaskInfo::datums_from_tuple(
+                        try_definite!(PostgresTaskInfo::datums_from_tuple(
                             rel_id,
                             old_tuple,
                             &mut *datums
                         ));
-                        let row = try_fatal!(PostgresTaskInfo::cast_row(&info.casts, &datums));
+                        let row = try_definite!(PostgresTaskInfo::cast_row(&info.casts, &datums));
                         deletes.push((info.output_index, row));
                     }
                     Commit(commit) => {
@@ -996,7 +1000,7 @@ impl PostgresTaskInfo {
                                     "alter table detected on {} with id {}",
                                     info.desc.name, info.desc.oid
                                 );
-                                return Err(Fatal(anyhow!(
+                                return Err(Definite(anyhow!(
                                     "source table {} with oid {} has been altered",
                                     info.desc.name,
                                     info.desc.oid
@@ -1014,7 +1018,7 @@ impl PostgresTaskInfo {
                                     relation.namespace().unwrap(),
                                     relation.name().unwrap()
                                 );
-                                return Err(Fatal(anyhow!(
+                                return Err(Definite(anyhow!(
                                     "source table {} with oid {} has been altered",
                                     info.desc.name,
                                     info.desc.oid
@@ -1037,7 +1041,7 @@ impl PostgresTaskInfo {
                                         info.desc.columns,
                                         relation.columns()
                                     );
-                                    return Err(Fatal(anyhow!(
+                                    return Err(Definite(anyhow!(
                                         "source table {} with oid {} has been altered",
                                         info.desc.name,
                                         info.desc.oid
@@ -1058,25 +1062,25 @@ impl PostgresTaskInfo {
                             .filter_map(|id| self.source_tables.get(id))
                             .map(|info| format!("name: {} id: {}", info.desc.name, info.desc.oid))
                             .collect::<Vec<String>>();
-                        return Err(Fatal(anyhow!(
+                        return Err(Definite(anyhow!(
                             "source table(s) {} got truncated",
                             tables.join(", ")
                         )));
                     }
                     // The enum is marked as non_exhaustive. Better to be conservative here in
                     // case a new message is relevant to the semantics of our source
-                    _ => return Err(Fatal(anyhow!("unexpected logical replication message"))),
+                    _ => return Err(Definite(anyhow!("unexpected logical replication message"))),
                 },
                 PrimaryKeepAlive(keepalive) => {
                     needs_status_update = needs_status_update || keepalive.reply() == 1;
                     if last_data_message.elapsed() > WAL_LAG_GRACE_PERIOD
                         && keepalive.wal_end().saturating_sub(self.lsn.into()) > MAX_WAL_LAG
                     {
-                        return Err(Recoverable(anyhow!("reached maximum WAL lag")));
+                        return Err(Indefinite(anyhow!("reached maximum WAL lag")));
                     }
                 }
                 // The enum is marked non_exhaustive, better be conservative
-                _ => return Err(Fatal(anyhow!("Unexpected replication message"))),
+                _ => return Err(Definite(anyhow!("Unexpected replication message"))),
             }
             if needs_status_update {
                 let ts: i64 = PG_EPOCH
@@ -1086,7 +1090,7 @@ impl PostgresTaskInfo {
                     .try_into()
                     .expect("software more than 200k years old, consider updating");
 
-                try_recoverable!(
+                try_indefinite!(
                     stream
                         .as_mut()
                         .get_pin_mut()
@@ -1097,7 +1101,7 @@ impl PostgresTaskInfo {
             }
         }
         if !stream.is_stopped() {
-            return Err(Recoverable(anyhow!("replication stream ended")));
+            return Err(Indefinite(anyhow!("replication stream ended")));
         }
         Ok(())
     }

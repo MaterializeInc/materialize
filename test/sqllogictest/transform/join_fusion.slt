@@ -197,12 +197,12 @@ Explained Query:
   Project (#1, #0, #1) // { arity: 3 }
     Join on=(#2 = #4 AND #3 = #5) type=differential // { arity: 6 }
       implementation
-        %2 » %0[] » %1[#0, #1]
-      ArrangeBy keys=[[]] // { arity: 4 }
+        %2 » %1[] » %0[#2, #3]
+      ArrangeBy keys=[[#2, #3]] // { arity: 4 }
         Project (#0, #1, #4, #6) // { arity: 4 }
           Filter (#4 = (#4 % 5)) // { arity: 8 }
             Get materialize.public.lineitem // { arity: 8 }
-      ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+      ArrangeBy keys=[[]] // { arity: 2 }
         Project (#2, #3) // { arity: 2 }
           Filter (#2 = (#2 % 5)) // { arity: 5 }
             Join on=(#1 = #4) type=indexed_filter // { arity: 5 }
@@ -236,23 +236,23 @@ Explained Query:
   Project (#0..=#9, #4, #5, #12..=#14) // { arity: 15 }
     Join on=(#4 = #10 AND #5 = #11) type=differential // { arity: 15 }
       implementation
-        %2 » %0[] » %1[#2, #3]
-      ArrangeBy keys=[[]] // { arity: 8 }
+        %1 » %0[#4, #5] » %2[]
+      ArrangeBy keys=[[#4, #5]] // { arity: 8 }
         Filter (date_to_timestamp(#7) = (#5 + 6 days)) // { arity: 8 }
           Get materialize.public.lineitem // { arity: 8 }
-      ArrangeBy keys=[[#2, #3]] // { arity: 4 }
-        Project (#0..=#3) // { arity: 4 }
-          Join on=(#1 = #4) type=indexed_filter // { arity: 5 }
-            ArrangeBy keys=[[#1]] // { arity: 4 }
-              Get materialize.public.orders // { arity: 4 }
-            Constant // { arity: 1 }
-              - (229)
-      Project (#0..=#2) // { arity: 3 }
-        Join on=(#0 = #3) type=indexed_filter // { arity: 4 }
-          ArrangeBy keys=[[#0]] // { arity: 3 }
-            Get materialize.public.customer // { arity: 3 }
+      Project (#0..=#3) // { arity: 4 }
+        Join on=(#1 = #4) type=indexed_filter // { arity: 5 }
+          ArrangeBy keys=[[#1]] // { arity: 4 }
+            Get materialize.public.orders // { arity: 4 }
           Constant // { arity: 1 }
             - (229)
+      ArrangeBy keys=[[]] // { arity: 3 }
+        Project (#0..=#2) // { arity: 3 }
+          Join on=(#0 = #3) type=indexed_filter // { arity: 4 }
+            ArrangeBy keys=[[#0]] // { arity: 3 }
+              Get materialize.public.customer // { arity: 3 }
+            Constant // { arity: 1 }
+              - (229)
 
 Used Indexes:
   - materialize.public.pk_customer_custkey

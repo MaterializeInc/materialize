@@ -81,7 +81,8 @@ use crate::{TransformArgs, TransformError};
 use itertools::Itertools;
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{
-    func, AggregateFunc, Id, MirRelationExpr, MirScalarExpr, VariadicFunc, RECURSION_LIMIT,
+    func, AggregateFunc, Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, VariadicFunc,
+    RECURSION_LIMIT,
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::{ColumnType, Datum, ScalarType};
@@ -266,67 +267,19 @@ impl PredicatePushdown {
                                 std::iter::once(&input_type.column_types),
                             );
 
-                            // // Predicates to push at each input, and to retain.
-                            let mut push_downs = vec![Vec::new(); inputs.len()];
-                            let mut retain = Vec::new();
+                            let (retain, push_downs) = Self::push_filters_through_join(
+                                &input_mapper,
+                                equivalences,
+                                pred_not_translated,
+                            );
 
-                            for predicate in pred_not_translated.drain(..) {
-                                // Track if the predicate has been pushed to at least one input.
-                                let mut pushed = false;
-                                // For each input, try and see if the join
-                                // equivalences allow the predicate to be rewritten
-                                // in terms of only columns from that input.
-                                for (index, push_down) in push_downs.iter_mut().enumerate() {
-                                    if predicate.is_literal_err() {
-                                        // Do nothing. We don't push down literal errors,
-                                        // as we can't know the join will be non-empty.
-                                    } else {
-                                        let mut localized = predicate.clone();
-                                        if input_mapper.try_localize_to_input_with_bound_expr(
-                                            &mut localized,
-                                            index,
-                                            equivalences,
-                                        ) {
-                                            push_down.push(localized);
-                                            pushed = true;
-                                        } else if let Some(consequence) = input_mapper
-                                            // (`consequence_for_input` assumes that
-                                            // `try_localize_to_input_with_bound_expr` has already
-                                            // been called on `localized`.)
-                                            .consequence_for_input(&localized, index)
-                                        {
-                                            push_down.push(consequence);
-                                            // We don't set `pushed` here! We want to retain the
-                                            // predicate, because we only pushed a consequence of
-                                            // it, but not the full predicate.
-                                        }
-                                    }
-                                }
-
-                                if !pushed {
-                                    retain.push(predicate);
-                                }
-                            }
-
-                            let new_inputs = inputs
-                                .drain(..)
-                                .zip(push_downs)
-                                .enumerate()
-                                .map(|(_index, (input, push_down))| {
-                                    if !push_down.is_empty() {
-                                        input.filter(push_down)
-                                    } else {
-                                        input
-                                    }
-                                })
-                                .collect();
-                            *inputs = new_inputs;
+                            Self::update_join_inputs_with_push_downs(inputs, push_downs);
 
                             // Recursively descend on the join
                             self.action(input, get_predicates)?;
 
                             // remove all predicates that were pushed down from the current Filter node
-                            std::mem::swap(&mut retain, predicates);
+                            *predicates = retain;
                         }
                         MirRelationExpr::Reduce {
                             input: inner,
@@ -410,7 +363,7 @@ impl PredicatePushdown {
                             self.action(relation, get_predicates)?;
                         }
                         MirRelationExpr::Map { input, scalars } => {
-                            let (retained, pushdown) = self.push_filters_through_map(
+                            let (retained, pushdown) = Self::push_filters_through_map(
                                 scalars,
                                 predicates,
                                 input.arity(),
@@ -725,20 +678,8 @@ impl PredicatePushdown {
                         input_types.iter().map(|t| &t.column_types),
                     );
 
-                    let new_inputs = inputs
-                        .drain(..)
-                        .zip(push_downs)
-                        .enumerate()
-                        .map(|(_index, (input, push_down))| {
-                            if !push_down.is_empty() {
-                                input.filter(push_down)
-                            } else {
-                                input
-                            }
-                        })
-                        .collect();
+                    Self::update_join_inputs_with_push_downs(inputs, push_downs);
 
-                    *inputs = new_inputs;
                     // Recursively descend on each of the inputs.
                     for input in inputs.iter_mut() {
                         self.action(input, get_predicates)?;
@@ -754,6 +695,74 @@ impl PredicatePushdown {
         })
     }
 
+    fn update_join_inputs_with_push_downs(
+        inputs: &mut Vec<MirRelationExpr>,
+        push_downs: Vec<Vec<MirScalarExpr>>,
+    ) {
+        let new_inputs = inputs
+            .drain(..)
+            .zip(push_downs)
+            .map(|(input, push_down)| {
+                if !push_down.is_empty() {
+                    input.filter(push_down)
+                } else {
+                    input
+                }
+            })
+            .collect();
+        *inputs = new_inputs;
+    }
+
+    /// Returns (<predicates to retain>, <predicates to push at each input>).
+    pub fn push_filters_through_join(
+        input_mapper: &JoinInputMapper,
+        equivalences: &Vec<Vec<MirScalarExpr>>,
+        mut predicates: Vec<MirScalarExpr>,
+    ) -> (Vec<MirScalarExpr>, Vec<Vec<MirScalarExpr>>) {
+        let mut push_downs = vec![Vec::new(); input_mapper.total_inputs()];
+        let mut retain = Vec::new();
+
+        for predicate in predicates.drain(..) {
+            // Track if the predicate has been pushed to at least one input.
+            let mut pushed = false;
+            // For each input, try and see if the join
+            // equivalences allow the predicate to be rewritten
+            // in terms of only columns from that input.
+            for (index, push_down) in push_downs.iter_mut().enumerate() {
+                if predicate.is_literal_err() {
+                    // Do nothing. We don't push down literal errors,
+                    // as we can't know the join will be non-empty.
+                } else {
+                    let mut localized = predicate.clone();
+                    if input_mapper.try_localize_to_input_with_bound_expr(
+                        &mut localized,
+                        index,
+                        equivalences,
+                    ) {
+                        push_down.push(localized);
+                        pushed = true;
+                    } else if let Some(consequence) = input_mapper
+                        // (`consequence_for_input` assumes that
+                        // `try_localize_to_input_with_bound_expr` has already
+                        // been called on `localized`.)
+                        .consequence_for_input(&localized, index)
+                    {
+                        push_down.push(consequence);
+                        // We don't set `pushed` here! We want to retain the
+                        // predicate, because we only pushed a consequence of
+                        // it, but not the full predicate.
+                    }
+                }
+            }
+
+            if !pushed {
+                retain.push(predicate);
+            }
+        }
+
+        (retain, push_downs)
+    }
+
     /// Computes "safe" predicates to push through a Map.
     ///
     /// In the case of a Filter { Map {...} }, we can always push down the Filter
@@ -766,7 +775,6 @@ impl PredicatePushdown {
     ///
     /// Returns the predicates that can be pushed down, followed by ones that cannot.
     pub fn push_filters_through_map(
-        &self,
         scalars: &Vec<MirScalarExpr>,
         predicates: &mut Vec<MirScalarExpr>,
         input_arity: usize,
@@ -811,7 +819,7 @@ impl PredicatePushdown {
     /// provided by the FlatMap input.
     ///
     /// Returns the predicates that can be pushed down, followed by ones that cannot.
-    pub fn push_filters_through_flat_map(
+    fn push_filters_through_flat_map(
         predicates: &mut Vec<MirScalarExpr>,
         input_arity: usize,
     ) -> (Vec<MirScalarExpr>, Vec<MirScalarExpr>) {

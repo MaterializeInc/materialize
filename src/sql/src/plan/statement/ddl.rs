@@ -12,7 +12,7 @@
 //! This module houses the handlers for statements that modify the catalog, like
 //! `ALTER`, `CREATE`, and `DROP`.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 use std::num::NonZeroUsize;
 use std::str::FromStr;
@@ -20,6 +20,7 @@ use std::str::FromStr;
 use aws_arn::ResourceName as AmazonResourceName;
 use globset::GlobBuilder;
 use itertools::Itertools;
+use mz_ore::cast::f64_to_i64;
 use prost::Message;
 use regex::Regex;
 use tracing::warn;
@@ -58,14 +59,14 @@ use mz_storage::types::sources::{
     IncludedColumnPos, KafkaSourceConnection, KeyEnvelope, KinesisSourceConnection,
     LoadGeneratorSourceConnection, PostgresSourceConnection, PostgresSourceDetails,
     ProtoPostgresSourceDetails, S3SourceConnection, SourceConnection, SourceDesc, SourceEnvelope,
-    Timeline, UnplannedSourceEnvelope, UpsertStyle,
+    TestScriptSourceConnection, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     AlterConnectionStatement, AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement,
     AlterSecretStatement, AvroSchema, AvroSchemaOption, AvroSchemaOptionName, AwsConnectionOption,
-    AwsConnectionOptionName, ClusterOption, ColumnOption, Compression,
+    AwsConnectionOptionName, ClusterOption, ClusterOptionName, ColumnOption, Compression,
     CreateClusterReplicaStatement, CreateClusterStatement, CreateConnection,
     CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement,
     CreateMaterializedViewStatement, CreateRoleOption, CreateRoleStatement, CreateSchemaStatement,
@@ -428,7 +429,7 @@ pub fn plan_create_source(
                 sql_bail!("START OFFSET is not supported with ENVELOPE {}", envelope)
             }
 
-            let encoding = get_encoding(scx, format, &envelope, connection)?;
+            let encoding = get_encoding(scx, format, &envelope, Some(connection))?;
 
             let mut connection = KafkaSourceConnection {
                 connection: kafka_connection,
@@ -515,7 +516,7 @@ pub fn plan_create_source(
                 _ => sql_bail!("{} is not an AWS connection", connection_item.name()),
             };
 
-            let encoding = get_encoding(scx, format, &envelope, connection)?;
+            let encoding = get_encoding(scx, format, &envelope, Some(connection))?;
             let connection = SourceConnection::Kinesis(KinesisSourceConnection {
                 connection_id: connection_item.id(),
                 stream_name,
@@ -553,7 +554,7 @@ pub fn plan_create_source(
                 };
                 converted_sources.push(dtks);
             }
-            let encoding = get_encoding(scx, format, &envelope, connection)?;
+            let encoding = get_encoding(scx, format, &envelope, Some(connection))?;
             if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
                 sql_bail!("S3 sources do not support key decoding");
             }
@@ -601,7 +602,7 @@ pub fn plan_create_source(
                 ProtoPostgresSourceDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
 
             // Register the available subsources
-            let mut available_subsources = HashMap::new();
+            let mut available_subsources = BTreeMap::new();
 
             for (i, table) in details.tables.iter().enumerate() {
                 let name = FullObjectName {
@@ -698,7 +699,7 @@ pub fn plan_create_source(
             let (load_generator, available_subsources) =
                 load_generator_ast_to_generator(generator, options)?;
             let available_subsources = available_subsources
-                .map(|a| HashMap::from_iter(a.into_iter().map(|(k, v)| (k, v.0))));
+                .map(|a| BTreeMap::from_iter(a.into_iter().map(|(k, v)| (k, v.0))));
             let generator = as_generator(&load_generator);
 
             let LoadGeneratorOptionExtracted { tick_interval, .. } = options.clone().try_into()?;
@@ -714,6 +715,15 @@ pub fn plan_create_source(
                 tick_micros,
             });
             (connection, generator.data_encoding(), available_subsources)
+        }
+        CreateSourceConnection::TestScript { desc_json } => {
+            scx.require_unsafe_mode("CREATE SOURCE ... FROM TEST SCRIPT")?;
+            let connection = SourceConnection::TestScript(TestScriptSourceConnection {
+                desc_json: desc_json.clone(),
+            });
+            // we just use the encoding from the format and envelope
+            let encoding = get_encoding(scx, format, &envelope, None)?;
+            (connection, encoding, None)
         }
     };
     let (key_desc, value_desc) = encoding.desc()?;
@@ -868,7 +878,7 @@ pub fn plan_create_source(
         (None, Some(_)) | (Some(_), Some(CreateSourceSubsources::All)) => {
             sql_bail!("[internal error] subsources should be resolved during purification")
         }
-        (None, None) => (HashMap::<FullObjectName, usize>::new(), vec![]),
+        (None, None) => (BTreeMap::new(), vec![]),
     };
 
     let mut subsource_exports = HashMap::new();
@@ -1040,15 +1050,19 @@ pub fn plan_create_subsource(
     }))
 }
 
-generate_extracted_config!(LoadGeneratorOption, (TickInterval, Interval));
+generate_extracted_config!(
+    LoadGeneratorOption,
+    (TickInterval, Interval),
+    (ScaleFactor, f64)
+);
 
 pub(crate) fn load_generator_ast_to_generator(
     loadgen: &mz_sql_parser::ast::LoadGenerator,
-    _options: &[LoadGeneratorOption<Aug>],
+    options: &[LoadGeneratorOption<Aug>],
 ) -> Result<
     (
         mz_storage::types::sources::LoadGenerator,
-        Option<HashMap<FullObjectName, (usize, RelationDesc)>>,
+        Option<BTreeMap<FullObjectName, (usize, RelationDesc)>>,
     ),
     PlanError,
 > {
@@ -1059,9 +1073,47 @@ pub(crate) fn load_generator_ast_to_generator(
         mz_sql_parser::ast::LoadGenerator::Counter => {
             mz_storage::types::sources::LoadGenerator::Counter
         }
+        mz_sql_parser::ast::LoadGenerator::Datums => {
+            mz_storage::types::sources::LoadGenerator::Datums
+        }
+        mz_sql_parser::ast::LoadGenerator::Tpch => {
+            let LoadGeneratorOptionExtracted { scale_factor, .. } = options.to_vec().try_into()?;
+
+            // Default to 0.01 scale factor (=10MB).
+            let sf: f64 = scale_factor.unwrap_or(0.01);
+            if !sf.is_finite() || sf < 0.0 {
+                sql_bail!("unsupported scale factor {sf}");
+            }
+
+            let f_to_i = |multiplier: f64| -> Result<i64, PlanError> {
+                let total = (sf * multiplier).floor();
+                let mut i =
+                    f64_to_i64(total).ok_or_else(|| sql_err!("unsupported scale factor {sf}"))?;
+                if i < 1 {
+                    i = 1;
+                }
+                Ok(i)
+            };
+
+            // The multiplications here are safely unchecked because they will
+            // overflow to infinity, which will be caught by f64_to_i64.
+            let count_supplier = f_to_i(10_000f64)?;
+            let count_part = f_to_i(200_000f64)?;
+            let count_customer = f_to_i(150_000f64)?;
+            let count_orders = f_to_i(150_000f64 * 10f64)?;
+            let count_clerk = f_to_i(1_000f64)?;
+
+            mz_storage::types::sources::LoadGenerator::Tpch {
+                count_supplier,
+                count_part,
+                count_customer,
+                count_orders,
+                count_clerk,
+            }
+        }
     };
 
-    let mut available_subsources = HashMap::new();
+    let mut available_subsources = BTreeMap::new();
     let generator = as_generator(&load_generator);
     for (i, (name, desc)) in generator.views().iter().enumerate() {
         let name = FullObjectName {
@@ -1069,6 +1121,8 @@ pub(crate) fn load_generator_ast_to_generator(
             schema: match loadgen {
                 mz_sql_parser::ast::LoadGenerator::Counter => "counter".into(),
                 mz_sql_parser::ast::LoadGenerator::Auction => "auction".into(),
+                mz_sql_parser::ast::LoadGenerator::Datums => "datums".into(),
+                mz_sql_parser::ast::LoadGenerator::Tpch => "tpch".into(),
                 // Please use `snake_case` for any multi-word load generators
                 // that you add.
             },
@@ -1108,7 +1162,7 @@ fn get_encoding(
     scx: &StatementContext,
     format: &CreateSourceFormat<Aug>,
     envelope: &Envelope,
-    connection: &CreateSourceConnection<Aug>,
+    connection: Option<&CreateSourceConnection<Aug>>,
 ) -> Result<SourceDataEncoding, PlanError> {
     let encoding = match format {
         CreateSourceFormat::None => sql_bail!("Source format must be specified"),
@@ -1126,7 +1180,7 @@ fn get_encoding(
         }
     };
 
-    let force_nullable_keys = matches!(connection, CreateSourceConnection::Kafka(_))
+    let force_nullable_keys = matches!(connection, Some(CreateSourceConnection::Kafka(_)))
         && matches!(envelope, Envelope::None);
     let encoding = encoding.into_source_data_encoding(force_nullable_keys);
 
@@ -2249,32 +2303,23 @@ pub fn describe_create_cluster(
     Ok(StatementDesc::new(None))
 }
 
+generate_extracted_config!(ClusterOption, (Replicas, Vec<ReplicaDefinition<Aug>>));
+
 pub fn plan_create_cluster(
     scx: &StatementContext,
     CreateClusterStatement { name, options }: CreateClusterStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let mut replicas_definitions = None;
+    let ClusterOptionExtracted { replicas, .. }: ClusterOptionExtracted = options.try_into()?;
 
-    for option in options {
-        match option {
-            ClusterOption::Replicas(replicas) => {
-                if replicas_definitions.is_some() {
-                    sql_bail!("REPLICAS specified more than once");
-                }
-
-                let mut defs = Vec::with_capacity(replicas.len());
-                for ReplicaDefinition { name, options } in replicas {
-                    defs.push((normalize::ident(name), plan_replica_config(scx, options)?));
-                }
-                replicas_definitions = Some(defs);
-            }
-        }
-    }
-
-    let replicas = match replicas_definitions {
-        Some(r) => r,
-        None => bail_unsupported!("CLUSTER without REPLICAS option"),
+    let replica_defs = match replicas {
+        Some(replica_defs) => replica_defs,
+        None => sql_bail!("REPLICAS option is required"),
     };
+
+    let mut replicas = vec![];
+    for ReplicaDefinition { name, options } in replica_defs {
+        replicas.push((normalize::ident(name), plan_replica_config(scx, options)?));
+    }
 
     Ok(Plan::CreateComputeInstance(CreateComputeInstancePlan {
         name: normalize::ident(name),
@@ -2296,7 +2341,7 @@ generate_extracted_config!(
     (Compute, Vec<String>),
     (Workers, u16),
     (IntrospectionInterval, OptionalInterval),
-    (IntrospectionDebugging, bool)
+    (IntrospectionDebugging, bool, Default(false))
 );
 
 fn plan_replica_config(
@@ -2330,9 +2375,9 @@ fn plan_replica_config(
     let introspection = match introspection_interval {
         Some(interval) => Some(ComputeReplicaIntrospectionConfig {
             interval: interval.duration()?,
-            debugging: introspection_debugging.unwrap_or(false),
+            debugging: introspection_debugging,
         }),
-        None if introspection_debugging == Some(true) => {
+        None if introspection_debugging => {
             sql_bail!("INTROSPECTION DEBUGGING cannot be specified without INTROSPECTION INTERVAL")
         }
         None => None,
@@ -2489,7 +2534,7 @@ impl KafkaConnectionOptionExtracted {
                 .to_string();
             if broker.contains(',') {
                 sql_bail!("invalid CONNECTION: cannot specify multiple Kafka broker addresses in one string.\n\n
-Instead, specify BROKERS using an array of strings, e.g. BROKERS ['kafka:9092', 'kafka:9093']");
+Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'kafka:9093')");
             }
         }
 

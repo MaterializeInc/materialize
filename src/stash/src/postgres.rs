@@ -7,7 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::marker::PhantomData;
+use std::sync::{Arc, Mutex};
 use std::{cmp, time::Duration};
 
 use async_trait::async_trait;
@@ -21,7 +23,7 @@ use timely::progress::Antichain;
 use timely::PartialOrder;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Statement, Transaction};
-use tracing::warn;
+use tracing::{error, event, warn, Level};
 
 use mz_ore::retry::Retry;
 
@@ -80,11 +82,91 @@ struct PreparedStatements {
     update_many: Statement,
 }
 
+// Track statement execution counts.
+struct CountedStatements<'a> {
+    stmts: &'a PreparedStatements,
+    // Due to our use of try_join and futures, this needs to be an Arc Mutex.
+    // Use a BTreeMap for deterministic debug printing. Use an Option to avoid
+    // allocating an Arc when unused.
+    counts: Option<Arc<Mutex<BTreeMap<&'static str, usize>>>>,
+}
+
+impl<'a> CountedStatements<'a> {
+    fn from(stmts: &'a PreparedStatements) -> Self {
+        Self {
+            stmts,
+            counts: if tracing::enabled!(Level::DEBUG) {
+                Some(Arc::new(Mutex::new(BTreeMap::new())))
+            } else {
+                None
+            },
+        }
+    }
+
+    fn inc(&self, name: &'static str) {
+        if let Some(counts) = &self.counts {
+            let mut map = counts.lock().unwrap();
+            *map.entry(name).or_default() += 1;
+            *map.entry("_total").or_default() += 1;
+        }
+    }
+
+    fn select_epoch(&self) -> &Statement {
+        self.inc("select_epoch");
+        &self.stmts.select_epoch
+    }
+    fn iter_key(&self) -> &Statement {
+        self.inc("iter_key");
+        &self.stmts.iter_key
+    }
+    fn since(&self) -> &Statement {
+        self.inc("since");
+        &self.stmts.since
+    }
+    fn upper(&self) -> &Statement {
+        self.inc("upper");
+        &self.stmts.upper
+    }
+    fn collection(&self) -> &Statement {
+        self.inc("collection");
+        &self.stmts.collection
+    }
+    fn iter(&self) -> &Statement {
+        self.inc("iter");
+        &self.stmts.iter
+    }
+    fn seal(&self) -> &Statement {
+        self.inc("seal");
+        &self.stmts.seal
+    }
+    fn compact(&self) -> &Statement {
+        self.inc("compact");
+        &self.stmts.compact
+    }
+    fn consolidate_consolidation(&self) -> &Statement {
+        self.inc("consolidate_consolidation");
+        &self.stmts.consolidate_consolidation
+    }
+    fn consolidate_insert(&self) -> &Statement {
+        self.inc("consolidate_insert");
+        &self.stmts.consolidate_insert
+    }
+    fn consolidate_delete(&self) -> &Statement {
+        self.inc("consolidate_delete");
+        &self.stmts.consolidate_delete
+    }
+    fn update_many(&self) -> &Statement {
+        self.inc("update_many");
+        &self.stmts.update_many
+    }
+}
+
 /// A Stash whose data is stored in a Postgres database. The format of the
 /// tables are not specified and should not be relied upon. The only promise is
 /// stability. Any changes to the table schemas will be accompanied by a clear
 /// migration path.
 pub struct Postgres {
+    readonly: bool,
     url: String,
     schema: Option<String>,
     tls: MakeTlsConnector,
@@ -111,7 +193,27 @@ impl Postgres {
         schema: Option<String>,
         tls: MakeTlsConnector,
     ) -> Result<Postgres, StashError> {
+        Self::new_inner(false, url, schema, tls).await
+    }
+
+    /// Opens the stash stored at the specified path in readonly mode: any
+    /// mutating query will fail, and the epoch is not incremented on start.
+    pub async fn new_readonly(
+        url: String,
+        schema: Option<String>,
+        tls: MakeTlsConnector,
+    ) -> Result<Postgres, StashError> {
+        Self::new_inner(true, url, schema, tls).await
+    }
+
+    async fn new_inner(
+        readonly: bool,
+        url: String,
+        schema: Option<String>,
+        tls: MakeTlsConnector,
+    ) -> Result<Postgres, StashError> {
         let mut conn = Postgres {
+            readonly,
             url,
             schema,
             tls,
@@ -170,7 +272,11 @@ impl Postgres {
         }
 
         if self.epoch.is_none() {
-            let tx = client.transaction().await?;
+            let tx = client
+                .build_transaction()
+                .read_only(self.readonly)
+                .start()
+                .await?;
             let fence_exists: bool = tx
                 .query_one(
                     r#"
@@ -183,6 +289,11 @@ impl Postgres {
                 .await?
                 .get(0);
             if !fence_exists {
+                if self.readonly {
+                    return Err(
+                        "stash tables do not exist; will not create in readonly mode".into(),
+                    );
+                }
                 tx.batch_execute(SCHEMA).await?;
             }
             // Bump the epoch, which will cause any previous connection to fail. Add a
@@ -190,13 +301,19 @@ impl Postgres {
             // can't accidentally have the same epoch, nonce pair (especially risky if the
             // current epoch has been bumped exactly once, then gets recreated by another
             // connection that also bumps it once).
-            let epoch = tx
-                .query_one(
+            let epoch = if !self.readonly {
+                tx.query_one(
                     "UPDATE fence SET epoch=epoch+1, nonce=$1 RETURNING epoch",
                     &[&self.nonce.to_vec()],
                 )
                 .await?
-                .get(0);
+                .get(0)
+            } else {
+                let row = tx.query_one("SELECT epoch, nonce FROM fence", &[]).await?;
+                let nonce: &[u8] = row.get(1);
+                self.nonce = nonce.try_into().map_err(|_| "could not read nonce")?;
+                row.get(0)
+            };
             tx.commit().await?;
             self.epoch = Some(epoch);
         }
@@ -290,7 +407,7 @@ impl Postgres {
     async fn transact<F, T>(&mut self, f: F) -> Result<T, StashError>
     where
         F: for<'a> Fn(
-            &'a PreparedStatements,
+            &'a CountedStatements<'a>,
             &'a Transaction,
         ) -> BoxFuture<'a, Result<T, StashError>>,
     {
@@ -306,15 +423,17 @@ impl Postgres {
                     InternalStashError::Postgres(pgerr) => {
                         // Some errors aren't retryable.
                         if let Some(dberr) = pgerr.as_db_error() {
-                            if dberr.code() == &SqlState::UNDEFINED_TABLE {
-                                return Err(e);
-                            }
-                            if dberr.code() == &SqlState::WRONG_OBJECT_TYPE {
+                            if matches!(
+                                dberr.code(),
+                                &SqlState::UNDEFINED_TABLE
+                                    | &SqlState::WRONG_OBJECT_TYPE
+                                    | &SqlState::READ_ONLY_SQL_TRANSACTION
+                            ) {
                                 return Err(e);
                             }
                         }
                         attempt += 1;
-                        warn!("tokio-postgres stash error, retry attempt {attempt}: {pgerr}");
+                        error!("tokio-postgres stash error, retry attempt {attempt}: {pgerr}");
                         self.client = None;
                         retry.next().await;
                     }
@@ -328,7 +447,7 @@ impl Postgres {
     async fn transact_inner<F, T>(&mut self, f: &F) -> Result<T, StashError>
     where
         F: for<'a> Fn(
-            &'a PreparedStatements,
+            &'a CountedStatements<'a>,
             &'a Transaction,
         ) -> BoxFuture<'a, Result<T, StashError>>,
     {
@@ -342,12 +461,17 @@ impl Postgres {
         // client is guaranteed to be Some here.
         let client = self.client.as_mut().unwrap();
         let stmts = self.statements.as_ref().unwrap();
-        let tx = client.transaction().await?;
+        let stmts = CountedStatements::from(stmts);
+        let tx = client
+            .build_transaction()
+            .read_only(self.readonly)
+            .start()
+            .await?;
         // Pipeline the epoch query and closure.
         let epoch_fut = tx
-            .query_one(&stmts.select_epoch, &[])
+            .query_one(stmts.select_epoch(), &[])
             .map_err(|err| err.into());
-        let f_fut = f(stmts, &tx);
+        let f_fut = f(&stmts, &tx);
         let (row, res) = future::try_join(epoch_fut, f_fut).await?;
         let current_epoch: i64 = row.get(0);
         if Some(current_epoch) != self.epoch {
@@ -361,29 +485,35 @@ impl Postgres {
         if current_nonce != self.nonce {
             return Err(InternalStashError::Fence("unexpected fence nonce".into()).into());
         }
+        if let Some(counts) = stmts.counts {
+            event!(
+                Level::DEBUG,
+                counts = format!("{:?}", counts.lock().unwrap()),
+            );
+        }
         tx.commit().await?;
         Ok(res)
     }
 
     async fn since_tx(
-        stmts: &PreparedStatements,
+        stmts: &CountedStatements<'_>,
         tx: &Transaction<'_>,
         collection_id: Id,
     ) -> Result<Antichain<Timestamp>, StashError> {
         let since: Option<Timestamp> = tx
-            .query_one(&stmts.since, &[&collection_id])
+            .query_one(stmts.since(), &[&collection_id])
             .await?
             .get("since");
         Ok(Antichain::from_iter(since))
     }
 
     async fn upper_tx(
-        stmts: &PreparedStatements,
+        stmts: &CountedStatements<'_>,
         tx: &Transaction<'_>,
         collection_id: Id,
     ) -> Result<Antichain<Timestamp>, StashError> {
         let upper: Option<Timestamp> = tx
-            .query_one(&stmts.upper, &[&collection_id])
+            .query_one(stmts.upper(), &[&collection_id])
             .await?
             .get("upper");
         Ok(Antichain::from_iter(upper))
@@ -392,7 +522,7 @@ impl Postgres {
     /// `seals` has tuples of `(collection id, new upper, Option<current upper>)`. The
     /// current upper can be `Some` if it is already known.
     async fn seal_batch_tx<'a, I>(
-        stmts: &PreparedStatements,
+        stmts: &CountedStatements<'_>,
         tx: &Transaction<'_>,
         seals: I,
     ) -> Result<(), StashError>
@@ -416,7 +546,7 @@ impl Postgres {
                     Ok(())
                 },
                 async move {
-                    tx.execute(&stmts.seal, &[&new_upper.as_option(), &collection_id])
+                    tx.execute(stmts.seal(), &[&new_upper.as_option(), &collection_id])
                         .map_err(StashError::from)
                         .await
                 },
@@ -428,7 +558,7 @@ impl Postgres {
 
     /// `upper` can be `Some` if the collection's upper is already known.
     async fn update_many_tx(
-        stmts: &PreparedStatements,
+        stmts: &CountedStatements<'_>,
         tx: &Transaction<'_>,
         collection_id: Id,
         entries: &[((Value, Value), Timestamp, Diff)],
@@ -438,7 +568,7 @@ impl Postgres {
         for ((key, value), time, diff) in entries {
             futures.push(async move {
                 tx.execute(
-                    &stmts.update_many,
+                    stmts.update_many(),
                     &[&collection_id, &key, &value, &time, &diff],
                 )
                 .map_err(|err| err.into())
@@ -473,7 +603,7 @@ impl Postgres {
     /// `compactions` has tuples of `(collection id, new since, Option<current
     /// upper>)`. The current upper can be `Some` if it is already known.
     async fn compact_batch_tx<'a, I>(
-        stmts: &PreparedStatements,
+        stmts: &CountedStatements<'_>,
         tx: &Transaction<'_>,
         compactions: I,
     ) -> Result<(), StashError>
@@ -508,7 +638,7 @@ impl Postgres {
                     Ok(())
                 },
                 async move {
-                    tx.execute(&stmts.compact, &[&new_since.as_option(), &collection_id])
+                    tx.execute(stmts.compact(), &[&new_since.as_option(), &collection_id])
                         .map_err(StashError::from)
                         .await
                 },
@@ -519,7 +649,7 @@ impl Postgres {
     }
 
     async fn consolidate_batch_tx(
-        stmts: &PreparedStatements,
+        stmts: &CountedStatements<'_>,
         tx: &Transaction<'_>,
         collections: &[Id],
     ) -> Result<(), StashError> {
@@ -530,7 +660,7 @@ impl Postgres {
                 match since.into_option() {
                     Some(since) => {
                         let mut updates = tx
-                            .query(&stmts.consolidate_consolidation, &[&collection_id, &since])
+                            .query(stmts.consolidate_consolidation(), &[&collection_id, &since])
                             .map_err(StashError::from)
                             .await?
                             .into_iter()
@@ -551,7 +681,7 @@ impl Postgres {
                                     let key: Value = serde_json::from_slice(&key)?;
                                     let value: Value = serde_json::from_slice(&value)?;
                                     tx.execute(
-                                        &stmts.consolidate_insert,
+                                        stmts.consolidate_insert(),
                                         &[&collection_id, &key, &value, &time, &diff],
                                     )
                                     .map_err(StashError::from)
@@ -560,7 +690,7 @@ impl Postgres {
                         try_join_all(updates).await?;
                     }
                     None => {
-                        tx.execute(&stmts.consolidate_delete, &[&collection_id])
+                        tx.execute(stmts.consolidate_delete(), &[&collection_id])
                             .map_err(StashError::from)
                             .await?;
                     }
@@ -587,7 +717,7 @@ impl Stash for Postgres {
             let name = name.clone();
             Box::pin(async move {
                 let collection_id_opt: Option<_> = tx
-                    .query_one(&stmts.collection, &[&name])
+                    .query_one(stmts.collection(), &[&name])
                     .await
                     .map(|row| row.get("collection_id"))
                     .ok();
@@ -625,6 +755,18 @@ impl Stash for Postgres {
         .await
     }
 
+    async fn collections(&mut self) -> Result<BTreeSet<String>, StashError> {
+        let names = self
+            .transact(move |_stmts, tx| {
+                Box::pin(async move {
+                    let rows = tx.query("SELECT name FROM collections", &[]).await?;
+                    Ok(rows.into_iter().map(|row| row.get(0)))
+                })
+            })
+            .await?;
+        Ok(BTreeSet::from_iter(names))
+    }
+
     async fn iter<K, V>(
         &mut self,
         collection: StashCollection<K, V>,
@@ -647,7 +789,7 @@ impl Stash for Postgres {
                     }
                 };
                 let rows = tx
-                    .query(&stmts.iter, &[&collection.id])
+                    .query(stmts.iter(), &[&collection.id])
                     .await?
                     .into_iter()
                     .map(|row| {
@@ -684,7 +826,7 @@ impl Stash for Postgres {
             Box::pin(async move {
                 let (since, rows) = future::try_join(
                     Self::since_tx(stmts, tx, collection.id),
-                    tx.query(&stmts.iter_key, &[&collection.id, &key])
+                    tx.query(stmts.iter_key(), &[&collection.id, &key])
                         .map_err(|err| err.into()),
                 )
                 .await?;
@@ -873,6 +1015,9 @@ impl From<tokio_postgres::Error> for StashError {
 impl Append for Postgres {
     #[tracing::instrument(level = "debug", skip_all)]
     async fn append_batch(&mut self, batches: &[AppendBatch]) -> Result<(), StashError> {
+        if batches.is_empty() {
+            return Ok(());
+        }
         let batches = batches.to_vec();
         self.transact(move |stmts, tx| {
             let batches = batches.clone();

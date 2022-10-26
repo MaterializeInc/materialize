@@ -13,6 +13,7 @@ use mz_repr::adt::timestamp::TimestampError;
 use std::collections::HashSet;
 use std::fmt;
 use std::mem;
+use std::ops::BitOrAssign;
 
 use mz_ore::stack::RecursionLimitError;
 use mz_proto::IntoRustIfSome;
@@ -328,22 +329,42 @@ impl MirScalarExpr {
     }
 
     /// For a given `expr`, if `self` is `<expr> = <literal>` or `<literal> = <expr>` then
-    /// return `<literal>`.
-    pub fn expr_eq_literal(&self, expr: &MirScalarExpr) -> Option<Datum> {
+    /// return `(<literal>, false)`. In addition to just trying to match `<expr>` as it is, it also
+    /// tries to remove an invertible function call (such as a cast). If the match match succeeds
+    /// with the inversion, then it returns `(<inverted-literal>, true)`. For more details on the
+    /// inversion, see `invert_casts_on_expr_eq_literal_inner`.
+    pub fn expr_eq_literal(&self, expr: &MirScalarExpr) -> Option<(Row, bool)> {
         if let MirScalarExpr::CallBinary {
             func: BinaryFunc::Eq,
             expr1,
             expr2,
         } = self
         {
-            if let Some(Ok(datum1)) = expr1.as_literal() {
-                if &**expr2 == expr {
-                    return Some(datum1);
-                }
+            if let Some(Ok(lit)) = expr1.as_literal_owned() {
+                return Self::expr_eq_literal_inner(expr, lit, expr1, expr2);
             }
-            if let Some(Ok(datum2)) = expr2.as_literal() {
-                if &**expr1 == expr {
-                    return Some(datum2);
+            if let Some(Ok(lit)) = expr2.as_literal_owned() {
+                return Self::expr_eq_literal_inner(expr, lit, expr2, expr1);
+            }
+        }
+        None
+    }
+
+    fn expr_eq_literal_inner(
+        expr_to_match: &MirScalarExpr,
+        literal: Row,
+        literal_expr: &MirScalarExpr,
+        other_side: &MirScalarExpr,
+    ) -> Option<(Row, bool)> {
+        if other_side == expr_to_match {
+            return Some((literal, false));
+        } else {
+            // expr didn't exactly match. See if we can match it by inverse-casting.
+            let (cast_removed, inv_cast_lit) =
+                Self::invert_casts_on_expr_eq_literal_inner(other_side, literal_expr);
+            if &cast_removed == expr_to_match {
+                if let Some(Ok(inv_cast_lit_row)) = inv_cast_lit.as_literal_owned() {
+                    return Some((inv_cast_lit_row, true));
                 }
             }
         }
@@ -351,7 +372,8 @@ impl MirScalarExpr {
     }
 
     /// If `self` is `<expr> = <literal>` or `<literal> = <expr>` then
-    /// return `<expr>`.
+    /// return `<expr>`. It also tries to remove a cast (or other invertible function call) from
+    /// `<expr>` before returning it, see `invert_casts_on_expr_eq_literal_inner`.
     pub fn any_expr_eq_literal(&self) -> Option<MirScalarExpr> {
         if let MirScalarExpr::CallBinary {
             func: BinaryFunc::Eq,
@@ -360,13 +382,165 @@ impl MirScalarExpr {
         } = self
         {
             if expr1.is_literal() {
-                return Some((**expr2).clone());
+                let (expr, _literal) = Self::invert_casts_on_expr_eq_literal_inner(expr2, expr1);
+                return Some(expr);
             }
             if expr2.is_literal() {
-                return Some((**expr1).clone());
+                let (expr, _literal) = Self::invert_casts_on_expr_eq_literal_inner(expr1, expr2);
+                return Some(expr);
             }
         }
         None
+    }
+
+    /// If the given `MirScalarExpr` is a literal equality where one side is an invertible function
+    /// call, then calls the inverse function on both sides of the equality and returns the modified
+    /// version of the given `MirScalarExpr`. Otherwise, it returns the original expression.
+    /// For more details, see `invert_casts_on_expr_eq_literal_inner`.
+    pub fn invert_casts_on_expr_eq_literal(&self) -> MirScalarExpr {
+        if let MirScalarExpr::CallBinary {
+            func: BinaryFunc::Eq,
+            expr1,
+            expr2,
+        } = self
+        {
+            if expr1.is_literal() {
+                let (expr, literal) = Self::invert_casts_on_expr_eq_literal_inner(expr2, expr1);
+                return MirScalarExpr::CallBinary {
+                    func: BinaryFunc::Eq,
+                    expr1: Box::new(literal),
+                    expr2: Box::new(expr),
+                };
+            }
+            if expr2.is_literal() {
+                let (expr, literal) = Self::invert_casts_on_expr_eq_literal_inner(expr1, expr2);
+                return MirScalarExpr::CallBinary {
+                    func: BinaryFunc::Eq,
+                    expr1: Box::new(literal),
+                    expr2: Box::new(expr),
+                };
+            }
+            // Note: The above return statements should be consistent in whether they put the
+            // literal in expr1 or expr2, for the deduplication in CanonicalizeMfp to work.
+        }
+        self.clone()
+    }
+
+    /// Given an `<expr>` and a `<literal>` that were taken out from `<expr> = <literal>` or
+    /// `<literal> = <expr>`, it tries to simplify the equality by applying the inverse function of
+    /// the outermost function call of `<expr>` (if exists):
+    ///
+    /// <literal> = func(<inner_expr>), where f is invertible
+    ///  -->
+    /// <func^-1(literal)> = <inner_expr>
+    /// (if func^-1(literal) doesn't error out)
+    ///
+    /// The return value is the <inner_expr> and the literal value that we get by applying the
+    /// inverse function.
+    fn invert_casts_on_expr_eq_literal_inner(
+        expr: &MirScalarExpr,
+        literal: &MirScalarExpr,
+    ) -> (MirScalarExpr, MirScalarExpr) {
+        assert!(matches!(literal, MirScalarExpr::Literal(..)));
+
+        let temp_storage = &RowArena::new();
+        let eval = |e: &MirScalarExpr| {
+            MirScalarExpr::literal(e.eval(&[], temp_storage), e.typ(&[]).scalar_type)
+        };
+
+        if let MirScalarExpr::CallUnary {
+            func,
+            expr: inner_expr,
+        } = expr
+        {
+            if let Some(inverse_func) = func.inverse() {
+                // We don't want to insert a function call that doesn't preserve
+                // uniqueness. E.g., if `a` has an integer type, we don't want to do
+                // a surprise rounding for `WHERE a = 3.14`.
+                if inverse_func.preserves_uniqueness() {
+                    let lit_inv = eval(&MirScalarExpr::CallUnary {
+                        func: inverse_func,
+                        expr: Box::new(literal.clone()),
+                    });
+                    // The evaluation can error out, e.g., when casting a too large int32 to int16.
+                    // This case is handled by `impossible_literal_equality_because_types`.
+                    if !lit_inv.is_literal_err() {
+                        return (*inner_expr.clone(), lit_inv);
+                    }
+                }
+            }
+        }
+        (expr.clone(), literal.clone())
+    }
+
+    /// Tries to remove a cast (or other invertible function) in the same way as
+    /// `invert_casts_on_expr_eq_literal`, but if calling the inverse function fails on the literal,
+    /// then it deems the equality to be impossible. For example if `a` is a smallint column, then
+    /// it catches `a::integer = 1000000` to be an always false predicate (where the `::integer`
+    /// could have been inserted implicitly).
+    pub fn impossible_literal_equality_because_types(&self) -> bool {
+        if let MirScalarExpr::CallBinary {
+            func: BinaryFunc::Eq,
+            expr1,
+            expr2,
+        } = self
+        {
+            if expr1.is_literal() {
+                return Self::impossible_literal_equality_because_types_inner(expr1, expr2);
+            }
+            if expr2.is_literal() {
+                return Self::impossible_literal_equality_because_types_inner(expr2, expr1);
+            }
+        }
+        false
+    }
+
+    fn impossible_literal_equality_because_types_inner(
+        literal: &MirScalarExpr,
+        other_side: &MirScalarExpr,
+    ) -> bool {
+        assert!(matches!(literal, MirScalarExpr::Literal(..)));
+
+        let temp_storage = &RowArena::new();
+        let eval = |e: &MirScalarExpr| {
+            MirScalarExpr::literal(e.eval(&[], temp_storage), e.typ(&[]).scalar_type)
+        };
+
+        if let MirScalarExpr::CallUnary { func, .. } = other_side {
+            if let Some(inverse_func) = func.inverse() {
+                if inverse_func.preserves_uniqueness()
+                    && eval(&MirScalarExpr::CallUnary {
+                        func: inverse_func,
+                        expr: Box::new(literal.clone()),
+                    })
+                    .is_literal_err()
+                {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Determines if `self` is
+    /// `<expr> < <literal>` or
+    /// `<expr> > <literal>` or
+    /// `<literal> < <expr>` or
+    /// `<literal> > <expr>` or
+    /// `<expr> <= <literal>` or
+    /// `<expr> >= <literal>` or
+    /// `<literal> <= <expr>` or
+    /// `<literal> >= <expr>`.
+    pub fn any_expr_ineq_literal(&self) -> bool {
+        match self {
+            MirScalarExpr::CallBinary {
+                func: BinaryFunc::Lt | BinaryFunc::Lte | BinaryFunc::Gt | BinaryFunc::Gte,
+                expr1,
+                expr2,
+            } => expr1.is_literal() || expr2.is_literal(),
+            _ => false,
+        }
     }
 
     /// Rewrites column indices with their value in `permutation`.
@@ -415,6 +589,14 @@ impl MirScalarExpr {
     pub fn as_literal(&self) -> Option<Result<Datum, &EvalError>> {
         if let MirScalarExpr::Literal(lit, _column_type) = self {
             Some(lit.as_ref().map(|row| row.unpack_first()))
+        } else {
+            None
+        }
+    }
+
+    pub fn as_literal_owned(&self) -> Option<Result<Row, EvalError>> {
+        if let MirScalarExpr::Literal(lit, _column_type) = self {
+            Some(lit.clone())
         } else {
             None
         }
@@ -1797,6 +1979,134 @@ impl VisitChildren<Self> for MirScalarExpr {
             }
         }
         Ok(())
+    }
+}
+
+/// Filter characteristics that are used for ordering join inputs.
+/// This can be created for a `Vec<MirScalarExpr>`, which represents an AND of predicates.
+///
+/// The fields are ordered based on heuristic assumptions about their typical selectivity, so that
+/// Ord gives the right ordering for join inputs. Bigger is better, i.e., will tend to come earlier
+/// than other inputs.
+#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect)]
+pub struct FilterCharacteristics {
+    // `<expr> = <literal>` appears in the filter.
+    // Excludes cases where NOT appears anywhere above the literal equality.
+    literal_equality: bool,
+    // (Assuming a random string of lower-case characters, `LIKE 'a%'` has a selectivity of 1/26.)
+    like: bool,
+    is_null: bool,
+    // Number of Vec elements that involve inequality predicates. (A BETWEEN is represented as two
+    // inequality predicates.)
+    // Excludes cases where NOT appears around the literal inequality.
+    // Note that for inequality predicates, some databases assume 1/3 selectivity in the absence of
+    // concrete statistics.
+    literal_inequality: usize,
+    /// Any filter, except ones involving `IS NOT NULL`, because those are too common.
+    /// Can be true by itself, or any other field being true can also make this true.
+    /// `NOT LIKE` is only in this category.
+    /// `!=` is only in this category.
+    /// `NOT (a = b)` is turned into `!=` by `reduce` before us!
+    any_filter: bool,
+}
+
+impl BitOrAssign for FilterCharacteristics {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.literal_equality |= rhs.literal_equality;
+        self.like |= rhs.like;
+        self.is_null |= rhs.is_null;
+        self.literal_inequality += rhs.literal_inequality;
+        self.any_filter |= rhs.any_filter;
+    }
+}
+
+impl FilterCharacteristics {
+    pub fn none() -> FilterCharacteristics {
+        FilterCharacteristics {
+            literal_equality: false,
+            like: false,
+            is_null: false,
+            literal_inequality: 0,
+            any_filter: false,
+        }
+    }
+
+    pub fn filter_characteristics(
+        filters: &Vec<MirScalarExpr>,
+    ) -> Result<FilterCharacteristics, RecursionLimitError> {
+        let mut literal_equality = false;
+        let mut like = false;
+        let mut is_null = false;
+        let mut literal_inequality = 0;
+        let mut any_filter = false;
+        filters.iter().try_for_each(|f| {
+            let mut literal_inequality_in_current_filter = false;
+            let mut is_not_null_in_current_filter = false;
+            f.visit_pre_with_context(
+                false,
+                &mut |not_in_parent_chain, expr| {
+                    not_in_parent_chain
+                        || matches!(
+                            expr,
+                            MirScalarExpr::CallUnary {
+                                func: UnaryFunc::Not(func::Not),
+                                ..
+                            }
+                        )
+                },
+                &mut |not_in_parent_chain, expr| {
+                    if !not_in_parent_chain {
+                        if expr.any_expr_eq_literal().is_some() {
+                            literal_equality = true;
+                        }
+                        if expr.any_expr_ineq_literal() {
+                            literal_inequality_in_current_filter = true;
+                        }
+                        if matches!(
+                            expr,
+                            MirScalarExpr::CallUnary {
+                                func: UnaryFunc::IsLikeMatch(_),
+                                ..
+                            }
+                        ) {
+                            like = true;
+                        }
+                    };
+                    if matches!(
+                        expr,
+                        MirScalarExpr::CallUnary {
+                            func: UnaryFunc::IsNull(crate::func::IsNull),
+                            ..
+                        }
+                    ) {
+                        if *not_in_parent_chain {
+                            is_not_null_in_current_filter = true;
+                        } else {
+                            is_null = true;
+                        }
+                    }
+                },
+            )?;
+            if literal_inequality_in_current_filter {
+                literal_inequality += 1;
+            }
+            if !is_not_null_in_current_filter {
+                // We want to ignore `IS NOT NULL` for `any_filter`.
+                any_filter = true;
+            }
+            Ok(())
+        })?;
+        Ok(FilterCharacteristics {
+            literal_equality,
+            like,
+            is_null,
+            literal_inequality,
+            any_filter,
+        })
+    }
+
+    pub fn add_literal_equality(&mut self) {
+        self.literal_equality = true;
     }
 }
 

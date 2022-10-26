@@ -9,7 +9,7 @@
 
 //! CLI introspection tools for persist
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
@@ -102,6 +102,63 @@ pub async fn fetch_latest_state_rollup(
     }
 
     Err(anyhow!("unknown shard"))
+}
+
+/// Fetches the state from all known rollups of a given shard
+pub async fn fetch_state_rollups(
+    shard_id: ShardId,
+    consensus_uri: &str,
+    blob_uri: &str,
+) -> Result<impl serde::Serialize, anyhow::Error> {
+    let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
+    let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
+    let consensus =
+        ConsensusConfig::try_from(consensus_uri, 1, metrics.postgres_consensus.clone())?;
+    let consensus = consensus.clone().open().await?;
+    let blob = BlobConfig::try_from(blob_uri).await?;
+    let blob = blob.clone().open().await?;
+
+    let mut rollup_keys = HashSet::new();
+
+    let state_versions =
+        StateVersions::new(cfg, consensus, Arc::clone(&blob), Arc::clone(&metrics));
+    let mut state_iter = match state_versions
+        .fetch_live_states::<K, V, u64, D>(&shard_id)
+        .await
+    {
+        Ok(state_iter) => state_iter,
+        Err(codec) => {
+            {
+                let mut kvtd = KVTD_CODECS.lock().expect("lockable");
+                *kvtd = codec.actual;
+            }
+            state_versions
+                .fetch_live_states::<K, V, u64, D>(&shard_id)
+                .await?
+        }
+    };
+
+    while let Some(v) = state_iter.next() {
+        for key in v.collections.rollups.values() {
+            rollup_keys.insert(key.clone());
+        }
+    }
+
+    if rollup_keys.is_empty() {
+        return Err(anyhow!("unknown shard"));
+    }
+
+    let mut rollup_states = HashMap::with_capacity(rollup_keys.len());
+    for key in rollup_keys {
+        let rollup_buf = blob.get(&key.complete(&shard_id)).await.unwrap();
+        if let Some(rollup_buf) = rollup_buf {
+            let proto =
+                ProtoStateRollup::decode(rollup_buf.as_slice()).expect("invalid encoded state");
+            rollup_states.insert(key.to_string(), proto);
+        }
+    }
+
+    Ok(rollup_states)
 }
 
 /// Fetches each state in a shard

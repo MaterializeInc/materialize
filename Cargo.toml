@@ -49,6 +49,7 @@ members = [
     "src/sql-parser",
     "src/sqllogictest",
     "src/stash",
+    "src/stash-debug",
     "src/storage",
     "src/storaged",
     "src/testdrive",

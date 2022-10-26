@@ -34,10 +34,12 @@ def released_materialize_versions() -> List[Version]:
     The list is returned in version order with newest versions first.
     """
     files = Path(ROOT / "doc" / "user" / "content" / "releases").glob("v*.md")
-    versions = [
-        Version.parse(f.stem.lstrip("v"))
-        for f in files
-        if frontmatter.load(f).get("released", False)
-    ]
+    versions = []
+    for f in files:
+        base = f.stem.lstrip("v")
+        metadata = frontmatter.load(f)
+        if metadata.get("released", False):
+            patch = metadata.get("patch", 0)
+            versions.append(Version.parse(f"{base}.{patch}"))
     versions.sort(reverse=True)
     return versions

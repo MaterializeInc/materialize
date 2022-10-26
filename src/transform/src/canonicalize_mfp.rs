@@ -221,23 +221,35 @@ impl CanonicalizeMfp {
         id: GlobalId,
         indexes: &dyn IndexOracle,
     ) -> Option<(Vec<MirScalarExpr>, Vec<Row>)> {
+        // If each OR argument constrains each key field, then the following inner fn returns the
+        // constraining literal values as a Vec<Row>, where each Row corresponds to one OR argument,
+        // and each value in the Row corresponds to one key field.
+        //
+        // The bool shows whether we needed to inverse cast equalities to match them up with key
+        // fields. The inverse cast enables index usage when an implicit cast is wrapping a key
+        // field. E.g., if `a` is smallint, and the user writes `a = 5`, then HIR inserts an
+        // implicit cast: `smallint_to_integer(a) = 5`, which we invert to `a = 5`, where the
+        // `5` is a smallint literal. For more details on the inversion, see
+        // `invert_casts_on_expr_eq_literal_inner`.
         fn each_or_arg_constrains_each_key_field(
             key: &[MirScalarExpr],
             or_args: Vec<MirScalarExpr>,
-        ) -> Option<Vec<Row>> {
+        ) -> Option<(Vec<Row>, bool)> {
             let mut literal_values = Vec::new();
+            let mut inv_cast_any = false;
             for or_arg in or_args {
                 let mut row = Row::default();
                 let mut packer = row.packer();
                 for key_field in key {
                     let and_args = or_arg.and_or_args(VariadicFunc::And);
-                    if let Some(literal) = and_args
+                    if let Some((literal, inv_cast)) = and_args
                         .iter()
                         .find_map(|and_arg| and_arg.expr_eq_literal(key_field))
                     {
                         // (Note that the above find_map can find only 0 or 1 result, because
                         // of `remove_impossible_or_args`.)
-                        packer.push(literal);
+                        packer.push(literal.unpack_first());
+                        inv_cast_any |= inv_cast;
                     } else {
                         return None;
                     }
@@ -252,7 +264,7 @@ impl CanonicalizeMfp {
             // keys from the index 2 times, leading to duplicate results.
             literal_values.sort();
             literal_values.dedup();
-            Some(literal_values)
+            Some((literal_values, inv_cast_any))
         }
 
         indexes
@@ -264,10 +276,13 @@ impl CanonicalizeMfp {
                     let or_args = Self::get_or_args(mfp);
                     each_or_arg_constrains_each_key_field(key, or_args)
                 };
-                possible_vals.map(|vals| (key.to_owned(), vals))
+                possible_vals.map(|(vals, inv_cast)| (key.to_owned(), vals, inv_cast))
             })
-            // Maximize number of predicates that are sped using a single index.
-            .max_by_key(|(key, _val)| key.len())
+            // Maximize:
+            //  1. number of predicates that are sped using a single index.
+            //  2. whether we are using a simpler index by having removed a cast from the key expr.
+            .max_by_key(|(key, _val, inv_cast)| (key.len(), *inv_cast))
+            .map(|(key, val, _inv_cast)| (key, val))
     }
 
     /// Removes the expressions that [CanonicalizeMfp::detect_literal_constraints] found, if
@@ -387,22 +402,31 @@ impl CanonicalizeMfp {
                 exprs: and_args,
             } = or_arg
             {
-                and_args.sort();
-                let and_args_before_dedup = and_args.clone();
-                and_args.dedup();
-                if *and_args != and_args_before_dedup {
-                    changed = true;
-                }
-                // Deduplicated, so we cannot have something like `a = 5 AND a = 5`.
-                // This means that if we now have `<expr1> = <literal1> AND <expr1> = <literal2>`,
-                // then `literal1` is definitely not the same as `literal2`. This means that this
-                // whole or_arg is a contradiction, because it's something like `a = 5 AND a = 8`.
-                let mut literal_constrained_exprs = and_args
+                if and_args
                     .iter()
-                    .filter_map(|and_arg| and_arg.any_expr_eq_literal());
-                if !literal_constrained_exprs.all_unique() {
+                    .any(|e| e.impossible_literal_equality_because_types())
+                {
                     changed = true;
                     to_remove.push(i);
+                } else {
+                    and_args.sort_by_key(|e: &MirScalarExpr| e.invert_casts_on_expr_eq_literal());
+                    let and_args_before_dedup = and_args.clone();
+                    and_args
+                        .dedup_by_key(|e: &mut MirScalarExpr| e.invert_casts_on_expr_eq_literal());
+                    if *and_args != and_args_before_dedup {
+                        changed = true;
+                    }
+                    // Deduplicated, so we cannot have something like `a = 5 AND a = 5`.
+                    // This means that if we now have `<expr1> = <literal1> AND <expr1> = <literal2>`,
+                    // then `literal1` is definitely not the same as `literal2`. This means that this
+                    // whole or_arg is a contradiction, because it's something like `a = 5 AND a = 8`.
+                    let mut literal_constrained_exprs = and_args
+                        .iter()
+                        .filter_map(|and_arg| and_arg.any_expr_eq_literal());
+                    if !literal_constrained_exprs.all_unique() {
+                        changed = true;
+                        to_remove.push(i);
+                    }
                 }
             } else {
                 // `unary_and` made sure that each OR arg is an AND

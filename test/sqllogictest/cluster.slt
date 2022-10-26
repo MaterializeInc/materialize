@@ -11,7 +11,7 @@
 
 mode cockroach
 
-statement error CLUSTER without REPLICAS option not yet supported
+statement error Expected REPLICAS, found EOF
 CREATE CLUSTER foo
 
 statement ok
@@ -20,13 +20,13 @@ CREATE CLUSTER foo REPLICAS ()
 statement ok
 DROP CLUSTER foo
 
-statement error Expected end of statement, found comma
+statement error REPLICAS specified more than once
 CREATE CLUSTER foo REPLICAS (), REPLICAS()
 
 # Creating cluster w/ remote replica works.
 
 statement ok
-CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234']))
+CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234;']))
 
 statement error cluster 'foo' already exists
 CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234']))
@@ -122,7 +122,7 @@ statement ok
 CREATE DEFAULT INDEX foo_v_idx IN CLUSTER foo ON v
 
 query TTTT
-SHOW INDEXES IN CLUSTER bar;
+SHOW INDEXES IN CLUSTER bar WHERE name NOT LIKE 'mz_%';
 ----
 v_primary_idx v bar {?column?}
 
@@ -368,26 +368,26 @@ CREATE CLUSTER REPLICA default.size_1 SIZE;
 statement ok
 CREATE CLUSTER REPLICA default.size_1 SIZE '1';
 
-query TT
+query TTT
 SHOW CLUSTER REPLICAS
 ----
-default r1
-default size_1
-mz_introspection r1
-mz_system r1
+default r1 1
+default size_1 1
+mz_introspection r1 1
+mz_system r1 1
 
 statement ok
 CREATE CLUSTER foo REPLICAS (size_1 (SIZE '1'), size_2 (SIZE '2'))
 
-query TT
+query TTT
 SHOW CLUSTER REPLICAS
 ----
-default r1
-default size_1
-foo size_1
-foo size_2
-mz_introspection r1
-mz_system r1
+default r1 1
+default size_1 1
+foo size_1 1
+foo size_2 2
+mz_introspection r1 1
+mz_system r1 1
 
 statement ok
 DROP CLUSTER REPLICA IF EXISTS default.bar
@@ -407,12 +407,12 @@ DROP CLUSTER REPLICA default.size_1
 statement ok
 DROP CLUSTER REPLICA foo.size_1, foo.size_2
 
-query TT
+query TTT
 SHOW CLUSTER REPLICAS
 ----
-default r1
-mz_introspection r1
-mz_system r1
+default r1 1
+mz_introspection r1 1
+mz_system r1 1
 
 statement ok
 CREATE CLUSTER REPLICA default.foo_bar SIZE '1'

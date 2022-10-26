@@ -596,16 +596,22 @@ pub struct CompactionMetrics {
     pub(crate) skipped: IntCounter,
     pub(crate) started: IntCounter,
     pub(crate) applied: IntCounter,
+    pub(crate) timed_out: IntCounter,
     pub(crate) failed: IntCounter,
     pub(crate) noop: IntCounter,
     pub(crate) seconds: Counter,
     pub(crate) concurrency_waits: IntCounter,
+    pub(crate) single_batch_fast_path: IntCounter,
     pub(crate) memory_violations: IntCounter,
     pub(crate) runs_compacted: IntCounter,
     pub(crate) chunks_compacted: IntCounter,
+    pub(crate) not_all_prefetched: IntCounter,
+    pub(crate) parts_prefetched: IntCounter,
+    pub(crate) parts_waited: IntCounter,
 
     pub(crate) applied_exact_match: IntCounter,
     pub(crate) applied_subset_match: IntCounter,
+    pub(crate) not_applied_too_many_updates: IntCounter,
 
     pub(crate) batch: BatchWriteMetrics,
     pub(crate) steps: CompactionStepTimings,
@@ -642,6 +648,10 @@ impl CompactionMetrics {
                 name: "mz_persist_compaction_applied",
                 help: "count of compactions applied to state",
             )),
+            timed_out: registry.register(metric!(
+                name: "mz_persist_compaction_timed_out",
+                help: "count of compactions that timed out",
+            )),
             noop: registry.register(metric!(
                 name: "mz_persist_compaction_noop",
                 help: "count of compactions discarded (obsolete)",
@@ -653,6 +663,10 @@ impl CompactionMetrics {
             concurrency_waits: registry.register(metric!(
                 name: "mz_persist_compaction_concurrency_waits",
                 help: "count of compaction requests that ever blocked due to concurrency limit",
+            )),
+            single_batch_fast_path: registry.register(metric!(
+                name: "mz_persist_compaction_single_batch_fast_path",
+                help: "count of single nonempty batch fast path compactions",
             )),
             memory_violations: registry.register(metric!(
                 name: "mz_persist_compaction_memory_violations",
@@ -666,6 +680,18 @@ impl CompactionMetrics {
                 name: "mz_persist_compaction_chunks_compacted",
                 help: "count of run chunks compacted",
             )),
+            not_all_prefetched: registry.register(metric!(
+                name: "mz_persist_compaction_not_all_prefetched",
+                help: "count of compactions where not all inputs were prefetched",
+            )),
+            parts_prefetched: registry.register(metric!(
+                name: "mz_persist_compaction_parts_prefetched",
+                help: "count of compaction parts completely prefetched by the time they're needed",
+            )),
+            parts_waited: registry.register(metric!(
+                name: "mz_persist_compaction_parts_waited",
+                help: "count of compaction parts that had to be waited on",
+            )),
             applied_exact_match: registry.register(metric!(
                 name: "mz_persist_compaction_applied_exact_match",
                 help: "count of merge results that exactly replaced a SpineBatch",
@@ -673,6 +699,10 @@ impl CompactionMetrics {
             applied_subset_match: registry.register(metric!(
                 name: "mz_persist_compaction_applied_subset_match",
                 help: "count of merge results that replaced a subset of a SpineBatch",
+            )),
+            not_applied_too_many_updates: registry.register(metric!(
+                name: "mz_persist_compaction_not_applied_too_many_updates",
+                help: "count of merge results that did not apply due to too many updates",
             )),
             batch: BatchWriteMetrics::new(registry, "compaction"),
             steps: CompactionStepTimings::new(step_timings.clone()),
@@ -850,6 +880,7 @@ impl CodecMetrics {
 pub struct StateMetrics {
     pub(crate) apply_spine_fast_path: IntCounter,
     pub(crate) apply_spine_slow_path: IntCounter,
+    pub(crate) apply_spine_slow_path_with_reconstruction: IntCounter,
     pub(crate) update_state_fast_path: IntCounter,
     pub(crate) update_state_slow_path: IntCounter,
     pub(crate) rollup_at_seqno_migration: IntCounter,
@@ -865,6 +896,10 @@ impl StateMetrics {
             apply_spine_slow_path: registry.register(metric!(
                 name: "mz_persist_state_apply_spine_slow_path",
                 help: "count of spine diff applications that hit the slow path",
+            )),
+            apply_spine_slow_path_with_reconstruction: registry.register(metric!(
+                name: "mz_persist_state_apply_spine_slow_path_with_reconstruction",
+                help: "count of spine diff applications that hit the slow path with extra spine reconstruction step",
             )),
             update_state_fast_path: registry.register(metric!(
                 name: "mz_persist_state_update_state_fast_path",

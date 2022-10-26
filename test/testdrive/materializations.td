@@ -334,7 +334,7 @@ a  b
 3  4
 1  2
 
-$ set-regex match=\d replacement=<SIZE>
+$ set-regex match=\d+ replacement=<SIZE>
 
 > SHOW SOURCES
 name     type    size

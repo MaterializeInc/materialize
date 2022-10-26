@@ -56,19 +56,19 @@ SERVICES = [
         ],
         volumes_extra=["secrets:/share/secrets"],
     ),
-    # N.B.: we need to use `validate_data_dir=False` because testdrive uses
+    # N.B.: we need to use `validate_postgres_stash=False` because testdrive uses
     # HEAD to load the catalog from disk but does *not* run migrations. There
     # is no guarantee that HEAD can load an old catalog without running
     # migrations.
     #
     # When testdrive is targeting a HEAD materialized, we re-enable catalog
-    # validation below by manually passing the `--validate-data-dir` flag.
+    # validation.
     #
     # Disabling catalog validation is preferable to using a versioned testdrive
     # because that would involve maintaining backwards compatibility for all
     # testdrive commands.
     Testdrive(
-        validate_data_dir=False,
+        validate_postgres_stash=False,
         volumes_extra=["secrets:/share/secrets"],
     ),
 ]
@@ -177,15 +177,20 @@ def test_upgrade_from_version(
     c.up("materialized")
     c.wait_for_materialized("materialized")
 
-    c.run(
-        "testdrive",
-        "--no-reset",
-        f"--var=upgrade-from-version={from_version}",
-        temp_dir,
-        seed,
-        "--validate-data-dir=/mzdata",
-        f"check-{style}from-{version_glob}-{filter}.td",
-    )
+    with c.override(
+        Testdrive(
+            validate_postgres_stash=True,
+            volumes_extra=["secrets:/share/secrets"],
+        )
+    ):
+        c.run(
+            "testdrive",
+            "--no-reset",
+            f"--var=upgrade-from-version={from_version}",
+            temp_dir,
+            seed,
+            f"check-{style}from-{version_glob}-{filter}.td",
+        )
 
 
 def ssl_services() -> Tuple[Kafka, SchemaRegistry, Testdrive]:
@@ -259,7 +264,7 @@ def ssl_services() -> Tuple[Kafka, SchemaRegistry, Testdrive]:
         volumes_extra=["secrets:/share/secrets"],
         # Required to install root certs above
         propagate_uid_gid=False,
-        validate_data_dir=False,
+        validate_postgres_stash=False,
     )
 
     return (kafka, schema_registry, testdrive)

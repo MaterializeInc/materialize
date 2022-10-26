@@ -162,7 +162,7 @@ renamed_sink
 # Clean up temp view
 > DROP VIEW public_objects;
 
-$ set-regex match=\d replacement=<SIZE>
+$ set-regex match=\d+ replacement=<SIZE>
 
 # Source was successfully renamed
 > SHOW SOURCES;

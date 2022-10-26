@@ -412,8 +412,10 @@ SELECT 1::bigint::bigint;
 ----
 1
 
-query error CAST does not support casting from boolean to bigint
+query T
 SELECT TRUE::boolean::bigint
+----
+1
 
 query error CAST does not support casting from date to bigint
 SELECT '2001 02-03'::date::bigint

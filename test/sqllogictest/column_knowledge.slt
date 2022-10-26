@@ -553,3 +553,18 @@ Source materialize.public.double_table
   filter=((#0) IS NOT NULL)
 
 EOF
+
+statement ok
+CREATE TABLE json_table(data JSONB);
+
+# Include map prefix in the `column_types` passed to `column_knowledge::optimize` (https://github.com/MaterializeInc/materialize/issues/15570)
+
+query T multiline
+EXPLAIN WITH(arity, types) SELECT COALESCE(field, '') FROM (SELECT data->>'field' AS field FROM json_table);
+----
+Explained Query:
+  Project (#1) // { arity: 1, types: "(text?)" }
+    Map (coalesce((#0 ->> "field"), "")) // { arity: 2, types: "(jsonb?, text?)" }
+      Get materialize.public.json_table // { arity: 1, types: "(jsonb?)" }
+
+EOF

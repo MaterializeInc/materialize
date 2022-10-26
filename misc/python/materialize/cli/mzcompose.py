@@ -603,6 +603,7 @@ class DownCommand(DockerComposeCommand):
         super().__init__("down", "Stop and remove containers, networks")
 
     def run(self, args: argparse.Namespace) -> Any:
+        args.unknown_subargs.append("--volumes")
         # --remove-orphans needs to be in effect at all times otherwise
         # services added to a composition after the fact will not be cleaned up
         args.unknown_subargs.append("--remove-orphans")

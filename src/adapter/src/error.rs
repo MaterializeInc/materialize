@@ -125,6 +125,7 @@ pub enum AdapterError {
         resource_type: String,
         limit: u32,
         current_amount: usize,
+        new_instances: i32,
     },
     /// Result size of a query is too large.
     ResultSize(String),
@@ -406,11 +407,13 @@ impl fmt::Display for AdapterError {
                 resource_type,
                 limit,
                 current_amount,
+                new_instances,
             } => {
                 write!(
                     f,
                     "{resource_type} resource limit of {limit} cannot be exceeded. \
-                    Current amount is {current_amount}."
+                    Current amount is {current_amount} instances, tried to create \
+                    {new_instances} new instances."
                 )
             }
             AdapterError::ResultSize(e) => write!(f, "{e}"),

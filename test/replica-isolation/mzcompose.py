@@ -463,7 +463,6 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
 
         with c.override(
             Testdrive(
-                validate_data_dir=False,
                 no_reset=True,
                 materialize_params={"cluster": "cluster1"},
                 seed=id,

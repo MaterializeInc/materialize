@@ -34,7 +34,7 @@ use mz_sql::catalog::{
 };
 use mz_storage::controller::IntrospectionType;
 
-use crate::catalog::{DEFAULT_CLUSTER_REPLICA_NAME, SYSTEM_USER};
+use crate::catalog::{DEFAULT_CLUSTER_REPLICA_NAME, INTROSPECTION_USER, SYSTEM_USER};
 
 pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
 pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
@@ -1406,19 +1406,26 @@ pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 
 pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_source_status_history",
-    schema: MZ_CATALOG_SCHEMA,
-    data_source: None,
+    schema: MZ_INTERNAL_SCHEMA,
+    data_source: Some(IntrospectionType::SourceStatusHistory),
     desc: RelationDesc::empty()
-        .with_column("timestamp", ScalarType::Timestamp.nullable(false))
-        .with_column("source_name", ScalarType::String.nullable(false))
+        .with_column("occurred_at", ScalarType::TimestampTz.nullable(false))
         .with_column("source_id", ScalarType::String.nullable(false))
-        .with_column("source_type", ScalarType::String.nullable(false))
-        .with_column("upstream_name", ScalarType::String.nullable(true))
-        .with_column("worker_id", ScalarType::Int64.nullable(false))
-        .with_column("worker_count", ScalarType::Int64.nullable(false))
         .with_column("status", ScalarType::String.nullable(false))
         .with_column("error", ScalarType::String.nullable(true))
-        .with_column("metadata", ScalarType::Jsonb.nullable(true)),
+        .with_column("details", ScalarType::Jsonb.nullable(true)),
+});
+
+pub static MZ_SINK_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_sink_status_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    data_source: Some(IntrospectionType::SinkStatusHistory),
+    desc: RelationDesc::empty()
+        .with_column("occurred_at", ScalarType::TimestampTz.nullable(false))
+        .with_column("sink_id", ScalarType::String.nullable(false))
+        .with_column("status", ScalarType::String.nullable(false))
+        .with_column("error", ScalarType::String.nullable(true))
+        .with_column("details", ScalarType::Jsonb.nullable(true)),
 });
 
 pub static MZ_STORAGE_USAGE_BY_SHARD: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2330,8 +2337,7 @@ FROM
             LEFT JOIN mz_columns obj_cols ON
                 idxs.on_id = obj_cols.id AND idx_cols.on_position = obj_cols.position
         GROUP BY idxs.id) AS keys
-    ON idxs.id = keys.id
-WHERE idxs.on_id NOT LIKE 's%'",
+    ON idxs.id = keys.id",
 };
 
 pub const MZ_SHOW_CLUSTER_REPLICAS: BuiltinView = BuiltinView {
@@ -2340,7 +2346,8 @@ pub const MZ_SHOW_CLUSTER_REPLICAS: BuiltinView = BuiltinView {
     sql: r#"CREATE VIEW mz_internal.mz_show_cluster_replicas
 AS SELECT
     mz_catalog.mz_clusters.name AS cluster,
-    mz_catalog.mz_cluster_replicas.name AS replica
+    mz_catalog.mz_cluster_replicas.name AS replica,
+    mz_catalog.mz_cluster_replicas.size AS size
 FROM
     mz_catalog.mz_cluster_replicas
     JOIN mz_catalog.mz_clusters ON
@@ -2458,7 +2465,7 @@ pub const MZ_SHOW_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_show_cluster_replicas_ind
 IN CLUSTER mz_introspection
-ON mz_internal.mz_show_cluster_replicas (cluster, replica)",
+ON mz_internal.mz_show_cluster_replicas (cluster, replica, size)",
 };
 
 pub const MZ_SHOW_SECRETS_IND: BuiltinIndex = BuiltinIndex {
@@ -2473,6 +2480,10 @@ pub static MZ_SYSTEM_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*SYSTEM_USER.name,
 });
 
+pub static MZ_INTROSPECTION_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
+    name: &*INTROSPECTION_USER.name,
+});
+
 pub static MZ_SYSTEM_COMPUTE_INSTANCE: Lazy<BuiltinComputeInstance> =
     Lazy::new(|| BuiltinComputeInstance {
         name: &*SYSTEM_USER.name,
@@ -2484,14 +2495,15 @@ pub static MZ_SYSTEM_COMPUTE_REPLICA: Lazy<BuiltinComputeReplica> =
         compute_instance_name: MZ_SYSTEM_COMPUTE_INSTANCE.name,
     });
 
-pub static MZ_INTROSPECTION: Lazy<BuiltinComputeInstance> = Lazy::new(|| BuiltinComputeInstance {
-    name: "mz_introspection",
-});
+pub static MZ_INTROSPECTION_COMPUTE_INSTANCE: Lazy<BuiltinComputeInstance> =
+    Lazy::new(|| BuiltinComputeInstance {
+        name: &*INTROSPECTION_USER.name,
+    });
 
-pub static MZ_INTROSPECTION_REPLICA: Lazy<BuiltinComputeReplica> =
+pub static MZ_INTROSPECTION_COMPUTE_REPLICA: Lazy<BuiltinComputeReplica> =
     Lazy::new(|| BuiltinComputeReplica {
         name: DEFAULT_CLUSTER_REPLICA_NAME,
-        compute_instance_name: MZ_INTROSPECTION.name,
+        compute_instance_name: MZ_INTROSPECTION_COMPUTE_INSTANCE.name,
     });
 
 /// List of all builtin objects sorted topologically by dependency.
@@ -2682,10 +2694,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_INHERITS),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
-        // This is disabled for the moment because it has unusual upper
-        // advancement behavior.
-        // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
-        // Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),
+        Builtin::Source(&MZ_SINK_STATUS_HISTORY),
+        Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),
         Builtin::Source(&MZ_STORAGE_SHARDS),
         Builtin::View(&MZ_STORAGE_USAGE),
         Builtin::Index(&MZ_SHOW_DATABASES_IND),
@@ -2707,11 +2717,20 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
 
     builtins
 });
-pub static BUILTIN_ROLES: Lazy<Vec<&BuiltinRole>> = Lazy::new(|| vec![&*MZ_SYSTEM_ROLE]);
-pub static BUILTIN_COMPUTE_INSTANCES: Lazy<Vec<&BuiltinComputeInstance>> =
-    Lazy::new(|| vec![&*MZ_SYSTEM_COMPUTE_INSTANCE, &*MZ_INTROSPECTION]);
-pub static BUILTIN_COMPUTE_REPLICAS: Lazy<Vec<&BuiltinComputeReplica>> =
-    Lazy::new(|| vec![&*MZ_SYSTEM_COMPUTE_REPLICA, &*MZ_INTROSPECTION_REPLICA]);
+pub static BUILTIN_ROLES: Lazy<Vec<&BuiltinRole>> =
+    Lazy::new(|| vec![&*MZ_SYSTEM_ROLE, &*MZ_INTROSPECTION_ROLE]);
+pub static BUILTIN_COMPUTE_INSTANCES: Lazy<Vec<&BuiltinComputeInstance>> = Lazy::new(|| {
+    vec![
+        &*MZ_SYSTEM_COMPUTE_INSTANCE,
+        &*MZ_INTROSPECTION_COMPUTE_INSTANCE,
+    ]
+});
+pub static BUILTIN_COMPUTE_REPLICAS: Lazy<Vec<&BuiltinComputeReplica>> = Lazy::new(|| {
+    vec![
+        &*MZ_SYSTEM_COMPUTE_REPLICA,
+        &*MZ_INTROSPECTION_COMPUTE_REPLICA,
+    ]
+});
 
 #[allow(non_snake_case)]
 pub mod BUILTINS {

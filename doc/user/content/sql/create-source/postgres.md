@@ -1,7 +1,7 @@
 ---
 title: "CREATE SOURCE: PostgreSQL"
 description: "Connecting Materialize to a PostgreSQL database"
-pagerank: 10
+pagerank: 40
 menu:
   main:
     parent: 'create-source'
@@ -65,8 +65,8 @@ SHOW SOURCES;
 ```nofmt
          name         |   type    |  size
 ----------------------+-----------+---------
- table_1              | subsource | 3xsmall
- table_2              | subsource | 3xsmall
+ table_1              | subsource |
+ table_2              | subsource |
  mz_source            | postgres  | 3xsmall
 ```
 
@@ -129,13 +129,14 @@ Once created, a connection is **reusable** across multiple `CREATE SOURCE` state
 ```sql
 CREATE SECRET pgpass AS '<POSTGRES_PASSWORD>';
 
-CREATE CONNECTION pg_connection FOR POSTGRES
+CREATE CONNECTION pg_connection TO POSTGRES (
     HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
     PORT 5432,
     USER 'postgres',
     PASSWORD SECRET pgpass,
     SSL MODE 'require',
-    DATABASE 'postgres';
+    DATABASE 'postgres'
+);
 ```
 
 ### Creating a source

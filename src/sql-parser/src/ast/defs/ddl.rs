@@ -966,6 +966,9 @@ pub enum CreateSourceConnection<T: AstInfo> {
         generator: LoadGenerator,
         options: Vec<LoadGeneratorOption<T>>,
     },
+    TestScript {
+        desc_json: String,
+    },
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
@@ -1027,6 +1030,12 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
                     f.write_str(")");
                 }
             }
+            CreateSourceConnection::TestScript { desc_json } => {
+                f.write_str("TEST SCRIPT ");
+                f.write_str("'");
+                f.write_str(&display::escape_single_quote_string(desc_json));
+                f.write_str("'");
+            }
         }
     }
 }
@@ -1036,6 +1045,8 @@ impl_display_t!(CreateSourceConnection);
 pub enum LoadGenerator {
     Counter,
     Auction,
+    Datums,
+    Tpch,
 }
 
 impl AstDisplay for LoadGenerator {
@@ -1043,6 +1054,8 @@ impl AstDisplay for LoadGenerator {
         match self {
             Self::Counter => f.write_str("COUNTER"),
             Self::Auction => f.write_str("AUCTION"),
+            Self::Datums => f.write_str("DATUMS"),
+            Self::Tpch => f.write_str("TPCH"),
         }
     }
 }
@@ -1050,12 +1063,14 @@ impl_display!(LoadGenerator);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LoadGeneratorOptionName {
+    ScaleFactor,
     TickInterval,
 }
 
 impl AstDisplay for LoadGeneratorOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
+            LoadGeneratorOptionName::ScaleFactor => "SCALE FACTOR",
             LoadGeneratorOptionName::TickInterval => "TICK INTERVAL",
         })
     }

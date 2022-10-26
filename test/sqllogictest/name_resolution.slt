@@ -24,11 +24,17 @@ CREATE TABLE not_a_secret (a int);
 statement ok
 CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'broker');
 
+statement error catalog item 'kafka_conn' already exists
+CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'broker');
+
+statement ok
+CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER 'broker');
+
 statement error materialize.public.not_a_secret is not a secret
-CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'broker', SASL PASSWORD = SECRET not_a_secret);
+CREATE CONNECTION kafka_conn2 TO KAFKA (BROKER 'broker', SASL PASSWORD = SECRET not_a_secret);
 
 statement error unknown catalog item 'not_an_object_at_all'
-CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'broker', SASL PASSWORD = SECRET not_an_object_at_all);
+CREATE CONNECTION kafka_conn2 TO KAFKA (BROKER 'broker', SASL PASSWORD = SECRET not_an_object_at_all);
 
 statement ok
 CREATE SECRET pgpass AS 'postgres'

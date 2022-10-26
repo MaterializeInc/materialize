@@ -41,7 +41,7 @@ use crate::plan::PlanError;
 /// `FullObjectName`.
 ///
 /// [`normalize::unresolved_object_name`]: crate::normalize::unresolved_object_name
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct FullObjectName {
     /// The database name.
     pub database: RawDatabaseSpecifier,
@@ -206,7 +206,7 @@ impl fmt::Display for PartialSchemaName {
 }
 
 /// A human readable name of a database.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum RawDatabaseSpecifier {
     /// The "ambient" database, which is always present and is not named
     /// explicitly, but by omission.
@@ -421,6 +421,18 @@ pub enum ResolvedSchemaName {
         full_name: FullSchemaName,
     },
     Error,
+}
+
+impl ResolvedSchemaName {
+    /// Panics if this is `Self::Error`.
+    pub fn schema_spec(&self) -> &SchemaSpecifier {
+        match self {
+            ResolvedSchemaName::Schema { schema_spec, .. } => schema_spec,
+            ResolvedSchemaName::Error => {
+                unreachable!("should have been handled by name resolution")
+            }
+        }
+    }
 }
 
 impl AstDisplay for ResolvedSchemaName {
@@ -1057,6 +1069,11 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
     ) -> mz_sql_parser::ast::WithOptionValue<Aug> {
         use mz_sql_parser::ast::WithOptionValue::*;
         match node {
+            Sequence(vs) => Sequence(
+                vs.into_iter()
+                    .map(|v| self.fold_with_option_value(v))
+                    .collect(),
+            ),
             Value(v) => Value(self.fold_value(v)),
             Ident(i) => Ident(self.fold_ident(i)),
             DataType(dt) => DataType(self.fold_data_type(dt)),
@@ -1087,6 +1104,12 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 }
                 Object(object_name)
             }
+            ClusterReplicas(replicas) => ClusterReplicas(
+                replicas
+                    .into_iter()
+                    .map(|r| self.fold_replica_definition(r))
+                    .collect(),
+            ),
         }
     }
 }

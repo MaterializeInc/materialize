@@ -140,9 +140,6 @@ struct Args {
     /// Materialize.
     #[clap(long, value_name = "KEY=VAL", parse(from_str = parse_kafka_opt))]
     materialize_param: Vec<(String, String)>,
-    /// Validate the on-disk state of the specified Materialize data directory.
-    #[clap(long, value_name = "PATH")]
-    validate_data_dir: Option<PathBuf>,
     /// Validate the stash state of the specified postgres connection string.
     #[clap(long, value_name = "POSTGRES_URL")]
     validate_postgres_stash: Option<String>,

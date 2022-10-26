@@ -88,6 +88,22 @@ pub fn parse_data_type(sql: &str) -> Result<RawDataType, ParserError> {
     }
 }
 
+/// Parses a SQL string containing a `SET` variable value.
+pub fn parse_set_variable_value(sql: &str) -> Result<SetVariableValue, ParserError> {
+    let tokens = lexer::lex(sql)?;
+    let mut parser = Parser::new(sql, tokens);
+    let value = parser.parse_set_variable_value()?;
+    if parser.next_token().is_some() {
+        parser_err!(
+            parser,
+            parser.peek_prev_pos(),
+            "extra token after SET variable value"
+        )
+    } else {
+        Ok(value)
+    }
+}
+
 macro_rules! maybe {
     ($e:expr) => {{
         if let Some(v) = $e {
@@ -2431,7 +2447,7 @@ impl<'a> Parser<'a> {
     fn parse_create_source_connection(
         &mut self,
     ) -> Result<CreateSourceConnection<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[KAFKA, KINESIS, S3, POSTGRES, LOAD])? {
+        match self.expect_one_of_keywords(&[KAFKA, KINESIS, S3, POSTGRES, LOAD, TEST])? {
             POSTGRES => {
                 self.expect_keyword(CONNECTION)?;
                 let connection = self.parse_raw_name()?;
@@ -2527,11 +2543,14 @@ impl<'a> Parser<'a> {
             }
             LOAD => {
                 self.expect_keyword(GENERATOR)?;
-                let generator = match self.expect_one_of_keywords(&[COUNTER, AUCTION])? {
-                    COUNTER => LoadGenerator::Counter,
-                    AUCTION => LoadGenerator::Auction,
-                    _ => unreachable!(),
-                };
+                let generator =
+                    match self.expect_one_of_keywords(&[COUNTER, AUCTION, TPCH, DATUMS])? {
+                        COUNTER => LoadGenerator::Counter,
+                        AUCTION => LoadGenerator::Auction,
+                        TPCH => LoadGenerator::Tpch,
+                        DATUMS => LoadGenerator::Datums,
+                        _ => unreachable!(),
+                    };
                 let options = if self.consume_token(&Token::LParen) {
                     let options =
                         self.parse_comma_separated(Parser::parse_load_generator_option)?;
@@ -2541,6 +2560,12 @@ impl<'a> Parser<'a> {
                     vec![]
                 };
                 Ok(CreateSourceConnection::LoadGenerator { generator, options })
+            }
+            TEST => {
+                self.expect_keyword(SCRIPT)?;
+                Ok(CreateSourceConnection::TestScript {
+                    desc_json: self.parse_literal_string()?,
+                })
             }
             _ => unreachable!(),
         }
@@ -2559,7 +2584,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_load_generator_option(&mut self) -> Result<LoadGeneratorOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[TICK])? {
+        let name = match self.expect_one_of_keywords(&[SCALE, TICK])? {
+            SCALE => {
+                self.expect_keyword(FACTOR)?;
+                LoadGeneratorOptionName::ScaleFactor
+            }
             TICK => {
                 self.expect_keyword(INTERVAL)?;
                 LoadGeneratorOptionName::TickInterval
@@ -2870,31 +2899,33 @@ impl<'a> Parser<'a> {
 
     fn parse_create_cluster(&mut self) -> Result<Statement<Raw>, ParserError> {
         let name = self.parse_identifier()?;
-
-        let mut options = Vec::new();
-        if self.parse_keyword(REPLICAS) {
-            self.expect_token(&Token::LParen)?;
-
-            let replicas = if self.peek_token() == Some(Token::RParen) {
-                vec![]
-            } else {
-                self.parse_comma_separated(|parser| {
-                    let name = parser.parse_identifier()?;
-                    parser.expect_token(&Token::LParen)?;
-                    let options = parser.parse_comma_separated(Parser::parse_replica_option)?;
-                    parser.expect_token(&Token::RParen)?;
-                    Ok(ReplicaDefinition { name, options })
-                })?
-            };
-
-            self.expect_token(&Token::RParen)?;
-            options.push(ClusterOption::Replicas(replicas));
-        }
-
+        let options = self.parse_comma_separated(Parser::parse_cluster_option)?;
         Ok(Statement::CreateCluster(CreateClusterStatement {
             name,
             options,
         }))
+    }
+
+    fn parse_cluster_option(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
+        self.expect_keyword(REPLICAS)?;
+        self.expect_token(&Token::LParen)?;
+        let replicas = if self.consume_token(&Token::RParen) {
+            vec![]
+        } else {
+            let replicas = self.parse_comma_separated(|parser| {
+                let name = parser.parse_identifier()?;
+                parser.expect_token(&Token::LParen)?;
+                let options = parser.parse_comma_separated(Parser::parse_replica_option)?;
+                parser.expect_token(&Token::RParen)?;
+                Ok(ReplicaDefinition { name, options })
+            })?;
+            self.expect_token(&Token::RParen)?;
+            replicas
+        };
+        Ok(ClusterOption {
+            name: ClusterOptionName::Replicas,
+            value: Some(WithOptionValue::ClusterReplicas(replicas)),
+        })
     }
 
     fn parse_replica_option(&mut self) -> Result<ReplicaOption<Raw>, ParserError> {
@@ -3299,13 +3330,29 @@ impl<'a> Parser<'a> {
         // means there's no value, anything else means we expect a valid value.
         match self.peek_token() {
             Some(Token::RParen) | Some(Token::Comma) | Some(Token::Semicolon) | None => Ok(None),
-            _ => Ok(Some(self.parse_option_value()?)),
+            _ => {
+                let _ = self.consume_token(&Token::Eq);
+                Ok(Some(self.parse_option_value()?))
+            }
         }
     }
 
     fn parse_option_value(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
-        let _ = self.consume_token(&Token::Eq);
-        if self.parse_keyword(SECRET) {
+        if self.consume_token(&Token::LParen) {
+            if self.consume_token(&Token::RParen) {
+                return Ok(WithOptionValue::Sequence(vec![]));
+            }
+            let options = self.parse_comma_separated(Parser::parse_option_value)?;
+            self.expect_token(&Token::RParen)?;
+            Ok(WithOptionValue::Sequence(options))
+        } else if self.consume_token(&Token::LBracket) {
+            if self.consume_token(&Token::RBracket) {
+                return Ok(WithOptionValue::Sequence(vec![]));
+            }
+            let options = self.parse_comma_separated(Parser::parse_option_value)?;
+            self.expect_token(&Token::RBracket)?;
+            Ok(WithOptionValue::Sequence(options))
+        } else if self.parse_keyword(SECRET) {
             if let Some(secret) = self.maybe_parse(Parser::parse_raw_name) {
                 Ok(WithOptionValue::Secret(secret))
             } else {
@@ -3557,7 +3604,7 @@ impl<'a> Parser<'a> {
                 let to_item_name = self.parse_identifier()?;
 
                 Statement::AlterObjectRename(AlterObjectRenameStatement {
-                    object_type: ObjectType::Secret,
+                    object_type: ObjectType::Connection,
                     if_exists,
                     name,
                     to_item_name,
@@ -3667,7 +3714,6 @@ impl<'a> Parser<'a> {
                 Token::Number(ref n) => Ok(Value::Number(n.to_string())),
                 Token::String(ref s) => Ok(Value::String(s.to_string())),
                 Token::HexString(ref s) => Ok(Value::HexString(s.to_string())),
-                Token::LBracket => self.parse_value_array(),
                 _ => parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -3680,21 +3726,6 @@ impl<'a> Parser<'a> {
                 "Expecting a value, but found EOF"
             ),
         }
-    }
-
-    fn parse_value_array(&mut self) -> Result<Value, ParserError> {
-        let mut values = vec![];
-        loop {
-            if let Some(Token::RBracket) = self.peek_token() {
-                break;
-            }
-            values.push(self.parse_value()?);
-            if !self.consume_token(&Token::Comma) {
-                break;
-            }
-        }
-        self.expect_token(&Token::RBracket)?;
-        Ok(Value::Array(values))
     }
 
     fn parse_array(&mut self) -> Result<Expr<Raw>, ParserError> {
@@ -4529,13 +4560,47 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_set_variable_value(&mut self) -> Result<SetVariableValue, ParserError> {
-        let token = self.peek_token();
-        Ok(match (self.parse_value(), token) {
-            (Ok(value), _) => SetVariableValue::Literal(value),
-            (Err(_), Some(Token::Keyword(DEFAULT))) => SetVariableValue::Default,
-            (Err(_), Some(Token::Keyword(kw))) => SetVariableValue::Ident(kw.into_ident()),
-            (Err(_), Some(Token::Ident(id))) => SetVariableValue::Ident(Ident::new(id)),
-            (Err(_), other) => self.expected(self.peek_pos(), "variable value", other)?,
+        let parse_ident_or_keyword = |parser: &mut Self| match parser.next_token() {
+            Some(Token::Keyword(keyword)) => Ok(keyword.into_ident()),
+            Some(Token::Ident(ident)) => Ok(Ident::new(ident)),
+            other => parser.expected(parser.peek_prev_pos(), "identifier or keyword", other),
+        };
+
+        let curr_pos = self.peek_pos();
+        let curr_token = self.peek_token();
+
+        Ok(match self.parse_value() {
+            Ok(value) => match self.peek_token() {
+                Some(Token::Comma) => {
+                    self.next_token();
+                    let mut values = vec![value];
+                    values.append(&mut self.parse_comma_separated(Self::parse_value)?);
+                    SetVariableValue::Literals(values)
+                }
+                _ => SetVariableValue::Literal(value),
+            },
+            Err(_) => match curr_token {
+                Some(Token::Keyword(DEFAULT)) => SetVariableValue::Default,
+                Some(Token::Ident(ident)) => match self.peek_token() {
+                    Some(Token::Comma) => {
+                        self.next_token();
+                        let mut idents = vec![Ident::new(ident)];
+                        idents.append(&mut self.parse_comma_separated(parse_ident_or_keyword)?);
+                        SetVariableValue::Idents(idents)
+                    }
+                    _ => SetVariableValue::Ident(Ident::new(ident)),
+                },
+                Some(Token::Keyword(keyword)) => match self.peek_token() {
+                    Some(Token::Comma) => {
+                        self.next_token();
+                        let mut idents = vec![keyword.into_ident()];
+                        idents.append(&mut self.parse_comma_separated(parse_ident_or_keyword)?);
+                        SetVariableValue::Idents(idents)
+                    }
+                    _ => SetVariableValue::Ident(keyword.into_ident()),
+                },
+                other => self.expected(curr_pos, "variable value", other)?,
+            },
         })
     }
 
