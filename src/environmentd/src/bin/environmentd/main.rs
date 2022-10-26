@@ -465,6 +465,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         runtime.block_on(mz_ore::tracing::configure(
             "environmentd",
             &args.tracing,
+            mz_service::tracing::mz_sentry_event_filter,
             (BUILD_INFO.version, BUILD_INFO.sha, BUILD_INFO.time),
         ))?;
 
