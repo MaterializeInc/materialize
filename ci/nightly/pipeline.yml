@@ -27,7 +27,8 @@ steps:
           - { value: limits-instance-size }
           - { value: testdrive-partitions-5 }
           - { value: testdrive-replicas-4}
-          - { value: testdrive-size-4}
+          - { value: testdrive-size-1}
+          - { value: testdrive-size-16}
           - { value: testdrive-in-cloudtest}
 #          - { value: feature-benchmark-single-node }
 #          - { value: feature-benchmark-cluster }
@@ -212,8 +213,8 @@ steps:
           composition: testdrive
           args: [--aws-region=us-east-2, --replicas=4]
 
-  - id: testdrive-size-4
-    label: ":racing_car: testdrive with SIZE 4"
+  - id: testdrive-size-1
+    label: ":racing_car: testdrive with SIZE 1"
     timeout_in_minutes: 600
     agents:
       queue: linux-x86_64
@@ -221,7 +222,18 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          args: [--aws-region=us-east-2, --size=4]
+          args: [--aws-region=us-east-2, --size=1]
+
+  - id: testdrive-size-16
+    label: ":racing_car: testdrive with SIZE 16"
+    timeout_in_minutes: 600
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/scratch-aws-access: ~
+      - ./ci/plugins/mzcompose:
+          composition: testdrive
+          args: [--aws-region=us-east-2, --size=16]
 
   - id: testdrive-in-cloudtest
     label: Full Testdrive in Cloudtest (K8s)
