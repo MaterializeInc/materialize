@@ -21,17 +21,14 @@ Materialize has several pre-installed clusters.
 
 ### Default cluster
 
-When you enable a Materialize region, we automatically create a cluster named
-`default` with a single [replica](/overview/key-concepts/#cluster-replicas)
-named `r1` of size `xsmall`. You can modify or drop this cluster or its
-replicas at any time.
+When you enable a Materialize region, a cluster named `default` with a single
+`xsmall` [replica](/overview/key-concepts/#cluster-replicas) named `r1` will be
+pre-installed. You can modify or drop this cluster or its replicas at any
+time.
 
-{{< note >}}
-The default value for the `cluster` session parameter is `default`. If you do
-not have a cluster named `default`, each connection to Materialize will need to
-run [`SET cluster`](/sql/select/#ad-hoc-queries) to choose a valid cluster in
-order to run `SELECT` queries.
-{{< /note >}}
+{{< note >}} The default value for the `cluster` session parameter is `default`.
+If the `default` cluster is dropped, you must run [`SET cluster`](/sql/select/#ad-hoc-queries)
+to choose a valid cluster in order to run `SELECT` queries.{{< /note >}}
 
 ### `mz_introspection` system cluster
 
