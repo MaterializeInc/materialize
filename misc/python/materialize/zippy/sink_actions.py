@@ -38,7 +38,9 @@ class CreateSink(Action):
             self.new_sink = True
             self.source_view = random.choice(capabilities.get(ViewExists))
             self.dest_view = ViewExists(
-                name=f"{sink_name}_view", froms=[self.source_view]
+                name=f"{sink_name}_view",
+                froms=[self.source_view],
+                expensive_aggregates=True,
             )
         elif len(existing_sinks) == 1:
             self.new_sink = False
@@ -72,11 +74,11 @@ class CreateSink(Action):
                 # from the 'before' and the 'after'
 
                 > CREATE MATERIALIZED VIEW {self.dest_view.name} AS
-                  SELECT SUM(min)::int AS min, SUM(max)::int AS max, SUM(c1)::int AS c1, SUM(c2)::int AS c2 FROM (
-                    SELECT (after).min, (after).max, (after).c1, (after).c2 FROM {self.sink.name}_source
-                    UNION ALL
-                    SELECT - (before).min, - (before).max, -(before).c1, -(before).c2 FROM {self.sink.name}_source
-                  );
+                    SELECT SUM(c1)::int AS c1, SUM(c2)::int AS c2, SUM(min)::int AS min, SUM(max)::int AS max FROM (
+                      SELECT (after).c1, (after).c2, (after).min, (after).max FROM {self.sink.name}_source
+                      UNION ALL
+                      SELECT -(before).c1, -(before).c2, -(before).min, -(before).max FROM {self.sink.name}_source
+                    );
             """
             )
         )
