@@ -507,13 +507,13 @@ impl<S: Append + 'static> Coordinator<S> {
         {
             Ok(()) => {
                 for (source_id, source) in sources {
-                    // This is disabled for the moment because it has unusual upper
-                    // advancement behavior.
-                    // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
-                    let source_status_history_shard =
-                        self.catalog.resolve_builtin_storage_collection(
+                    let source_status_history_shard = if self.catalog.config().unsafe_mode {
+                        Some(self.catalog.resolve_builtin_storage_collection(
                             &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
-                        );
+                        ))
+                    } else {
+                        None
+                    };
 
                     let (data_source, status_collection_id) = match source.data_source {
                         DataSourceDesc::Ingestion(ingestion) => {
@@ -545,7 +545,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                     source_exports,
                                     host_config: ingestion.host_config,
                                 }),
-                                Some(source_status_history_shard),
+                                source_status_history_shard,
                             )
                         }
                         DataSourceDesc::Source => (DataSource::Other, None),
