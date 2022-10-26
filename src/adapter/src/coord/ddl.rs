@@ -419,9 +419,8 @@ impl<S: Append + 'static> Coordinator<S> {
         // Validate `sink.from` is in fact a storage collection
         self.controller.storage.collection(sink.from)?;
 
-        // This is disabled for the moment because it has unusual upper
-        // advancement behavior.
-        // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
+        // This is disabled for the moment because we want to attempt to roll out the change slowly as we're
+        // stressing persist in a new way.
         let status_id = if false {
             Some(self.catalog.resolve_builtin_storage_collection(
                 &crate::catalog::builtin::MZ_SINK_STATUS_HISTORY,
