@@ -25,20 +25,27 @@ use mz_repr::{GlobalId, Row};
 use mz_storage::controller::{ReadPolicy, StorageController};
 
 use crate::command::{
-    CommunicationConfig, ComputeCommand, ComputeCommandHistory, DataflowDescription,
-    InstanceConfig, Peek, ReplicaId, SourceInstanceDesc,
+    ComputeCommand, ComputeCommandHistory, DataflowDescription, InstanceConfig, Peek, ReplicaId,
+    SourceInstanceDesc,
 };
 use crate::logging::{LogVariant, LoggingConfig};
 use crate::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 
+use super::orchestrator::ComputeOrchestrator;
 use super::replica::Replica;
-use super::{CollectionState, ComputeControllerResponse, ComputeError, ComputeReplicaLogging};
+use super::{
+    CollectionState, ComputeControllerResponse, ComputeError, ComputeInstanceId,
+    ComputeReplicaConfig, ComputeReplicaLocation,
+};
 
 /// The state we keep for a compute instance.
 #[derive(Debug)]
 pub(super) struct Instance<T> {
+    /// ID of this instance
+    instance_id: ComputeInstanceId,
+    /// Build info for spawning replicas
     build_info: &'static BuildInfo,
     /// The replicas of this compute instance.
     replicas: HashMap<ReplicaId, Replica<T>>,
@@ -67,6 +74,8 @@ pub(super) struct Instance<T> {
     failed_replicas: BTreeSet<ReplicaId>,
     /// Ready compute controller responses to be delivered.
     pub ready_responses: VecDeque<ComputeControllerResponse<T>>,
+    /// Orchestrator for managing replicas
+    orchestrator: ComputeOrchestrator,
 }
 
 impl<T> Instance<T> {
@@ -110,9 +119,11 @@ where
     ComputeGrpcClient: ComputeClient<T>,
 {
     pub fn new(
+        instance_id: ComputeInstanceId,
         build_info: &'static BuildInfo,
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
         max_result_size: u32,
+        orchestrator: ComputeOrchestrator,
     ) -> Self {
         let collections = arranged_logs
             .iter()
@@ -127,6 +138,7 @@ where
             .collect();
 
         let mut instance = Self {
+            instance_id,
             build_info,
             replicas: Default::default(),
             collections,
@@ -139,6 +151,7 @@ where
             history: Default::default(),
             failed_replicas: Default::default(),
             ready_responses: Default::default(),
+            orchestrator,
         };
 
         instance.send(ComputeCommand::CreateTimely(Default::default()));
@@ -162,12 +175,11 @@ where
     ///
     /// # Panics
     /// - If the compute instance still has active replicas.
-    pub fn drop(mut self) {
+    pub fn drop(self) {
         assert!(
             self.replicas.is_empty(),
             "cannot drop instances with provisioned replicas"
         );
-        self.send(ComputeCommand::DropInstance);
     }
 
     /// Introduce a new replica, and catch it up to the commands of other replicas.
@@ -176,16 +188,16 @@ where
     fn add_replica(
         &mut self,
         id: ReplicaId,
-        addrs: Vec<String>,
+        location: ComputeReplicaLocation,
         logging_config: Option<LoggingConfig>,
-        communication_config: CommunicationConfig,
     ) {
         let replica = Replica::spawn(
             id,
+            self.instance_id,
             self.build_info,
-            addrs,
+            location,
             logging_config,
-            communication_config,
+            self.orchestrator.clone(),
         );
 
         // Take this opportunity to clean up the history we should present.
@@ -324,14 +336,12 @@ where
     pub fn add_replica(
         &mut self,
         id: ReplicaId,
-        addrs: Vec<String>,
-        logging: ComputeReplicaLogging,
-        communication_config: CommunicationConfig,
+        config: ComputeReplicaConfig,
     ) -> Result<(), ComputeError> {
-        let logging_config = if let Some(interval) = logging.interval {
+        let logging_config = if let Some(interval) = config.logging.interval {
             // Initialize state for per-replica log sources.
             let mut sink_logs = BTreeMap::new();
-            for (variant, id) in logging.sources {
+            for (variant, id) in config.logging.sources {
                 self.compute.collections.insert(
                     id,
                     CollectionState::new(
@@ -352,7 +362,7 @@ where
             Some(LoggingConfig {
                 interval_ns: interval.as_nanos(),
                 active_logs: self.compute.arranged_logs.clone(),
-                log_logging: logging.log_logging,
+                log_logging: config.logging.log_logging,
                 sink_logs,
             })
         } else {
@@ -361,12 +371,23 @@ where
 
         // Add the replica
         self.compute
-            .add_replica(id, addrs, logging_config, communication_config);
+            .add_replica(id, config.location, logging_config);
         Ok(())
     }
 
-    /// Remove an existing instance replica, by ID.
+    /// Remove an existing instance replica, by ID. Will remove the replica from the
+    /// orchestrator.
     pub async fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ComputeError> {
+        if let Err(e) = self.compute.replicas[&id].send(ComputeCommand::DropInstance) {
+            tracing::warn!("Could not send DropInstance to replica {:?}: {}", &id, &e)
+        }
+
+        self.remove_replica_state(id).await
+    }
+
+    /// Remove all state related to a replica. This will not cause an orchestrator removal
+    /// of the replica.
+    async fn remove_replica_state(&mut self, id: ReplicaId) -> Result<(), ComputeError> {
         // Removing a replica might elicit changes to collection frontiers.
         let mut new_uppers = Vec::new();
         for (collection_id, uppers) in self.compute.uppers.iter_mut() {
@@ -411,12 +432,10 @@ where
     }
 
     async fn rehydrate_replica(&mut self, id: ReplicaId) -> Result<(), ComputeError> {
-        let addrs = self.compute.replicas[&id].addrs.clone();
+        let location = self.compute.replicas[&id].location.clone();
         let logging_config = self.compute.replicas[&id].logging_config.clone();
-        let communication_config = self.compute.replicas[&id].communication_config.clone();
-        self.remove_replica(id).await?;
-        self.compute
-            .add_replica(id, addrs, logging_config, communication_config);
+        self.remove_replica_state(id).await?;
+        self.compute.add_replica(id, location, logging_config);
         Ok(())
     }
 

@@ -21,10 +21,13 @@ use mz_orchestrator::{
     ServiceEvent, ServicePort,
 };
 
-use crate::command::ReplicaId;
+use crate::command::{CommunicationConfig, ReplicaId};
 
-use super::{ComputeInstanceEvent, ComputeInstanceId, ComputeReplicaAllocation};
+use super::{
+    ComputeInstanceEvent, ComputeInstanceId, ComputeReplicaAllocation, ComputeReplicaLocation,
+};
 
+#[derive(Clone, Debug)]
 pub(super) struct ComputeOrchestrator {
     inner: Arc<dyn NamespacedOrchestrator>,
     computed_image: String,
@@ -35,6 +38,47 @@ impl ComputeOrchestrator {
         Self {
             inner,
             computed_image,
+        }
+    }
+    pub(super) async fn ensure_replica_location(
+        &self,
+        instance_id: ComputeInstanceId,
+        replica_id: ReplicaId,
+        location: ComputeReplicaLocation,
+    ) -> Result<(Vec<String>, CommunicationConfig), anyhow::Error> {
+        match location {
+            ComputeReplicaLocation::Remote {
+                addrs,
+                compute_addrs,
+                workers,
+            } => {
+                let addrs = addrs.into_iter().collect();
+                let comm_config = CommunicationConfig {
+                    workers: workers.get(),
+                    process: 0,
+                    addresses: compute_addrs.into_iter().collect(),
+                };
+                Ok((addrs, comm_config))
+            }
+            ComputeReplicaLocation::Managed {
+                allocation,
+                availability_zone,
+                ..
+            } => {
+                let service = self
+                    .ensure_replica(instance_id, replica_id, allocation, availability_zone)
+                    .await?;
+
+                let addrs = service.addresses("controller");
+                let comm_config = CommunicationConfig {
+                    workers: allocation.workers.get(),
+                    process: 0,
+                    addresses: service.addresses("compute"),
+                };
+
+                tracing::debug!("Obtained comm_config: {:?}", comm_config);
+                Ok((addrs, comm_config))
+            }
         }
     }
 
