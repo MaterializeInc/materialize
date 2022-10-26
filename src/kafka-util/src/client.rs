@@ -43,7 +43,7 @@ impl ClientContext for MzClientContext {
     }
     // Refer to the comment on the `log` callback.
     fn error(&self, error: rdkafka::error::KafkaError, reason: &str) {
-        error!("librdkafka: {}: {}", error, reason);
+        error!(target: "librdkafka", "{}: {}", error, reason);
     }
 }
 

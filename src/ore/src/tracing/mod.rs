@@ -202,13 +202,18 @@ pub struct TokioConsoleConfig {
 // Setting up OpenTelemetry in the background requires we are in a Tokio runtime
 // context, hence the `async`.
 #[allow(clippy::unused_async)]
-pub async fn configure<C>(
+pub async fn configure<C, F>(
     service_name: &str,
     config: C,
+    // _Effectively_ unused if `sentry_config` is not set in the `config`,
+    // as its not dynamically configured and is likely a closure with
+    // an opaque type.
+    sentry_event_filter: F,
     (build_version, build_sha, build_time): (&str, &str, &str),
 ) -> Result<(TracingTargetCallbacks, Option<sentry::ClientInitGuard>), anyhow::Error>
 where
     C: Into<TracingConfig>,
+    F: Fn(&tracing::Metadata<'_>) -> sentry_tracing::EventFilter + Send + Sync + 'static,
 {
     let service_name = service_name.to_string();
 
@@ -344,7 +349,7 @@ where
     let stack = stack.with(otel_layer);
     #[cfg(feature = "tokio-console")]
     let stack = stack.with(tokio_console_layer);
-    let stack = stack.with(sentry_tracing::layer());
+    let stack = stack.with(sentry_tracing::layer().event_filter(sentry_event_filter));
     stack.init();
 
     #[cfg(feature = "tokio-console")]
