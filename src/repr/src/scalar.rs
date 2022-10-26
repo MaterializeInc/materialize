@@ -2128,6 +2128,38 @@ impl<'a> ScalarType {
         }
     }
 
+    /// Returns a "near match" of `self`, which are types that are implicitly
+    /// castable from `self` and offer a means to leverage Materialize's type
+    /// system to achieve more reasonable approaches to unifying types.
+    ///
+    /// However, it's very important to not blithely accept the `near_match`,
+    /// which can be suboptimal/unnecessary, e.g. in the case of an already
+    /// homogeneous group.
+    ///
+    /// The feature is preferrable in MZ, but unnecessary in PG because PG's
+    /// type system offers totally linear progression through the complexity of
+    /// types. e.g. with numbers, there is a linear progression in the domain
+    /// each can represent. However, MZ's support for unsigned integers create a
+    /// non-linear type system, i.e. while the magnitude of `Int32` and
+    /// `UInt32`'s domains are the same, they are not equal.
+    ///
+    /// Without this feature, Materialize will:
+    /// - Guess that a mixute of the same width of int and uint cannot be
+    ///   coerced to a homogeneous type.
+    /// - Select the `Float64` based version of common binary functions (e.g.
+    ///   `=`), which introduces an unexpected float cast to integer values.
+    ///
+    /// Note that if adding any near matches besides unsigned ints, consider
+    /// extending/generalizing how `guess_best_common_type` uses this function.
+    pub fn near_match(&self) -> Option<&'static ScalarType> {
+        match self {
+            ScalarType::UInt16 => Some(&ScalarType::Int32),
+            ScalarType::UInt32 => Some(&ScalarType::Int64),
+            ScalarType::UInt64 => Some(&ScalarType::Numeric { max_scale: None }),
+            _ => None,
+        }
+    }
+
     /// Derives a column type from this scalar type with the specified
     /// nullability.
     pub fn nullable(self, nullable: bool) -> ColumnType {
