@@ -766,7 +766,7 @@ impl<T> Determinacy for Since<T> {
 }
 
 /// Wrapper for Antichain that represents an Upper
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Upper<T>(pub Antichain<T>);
 
 // When used as an error, Upper is determinate.
