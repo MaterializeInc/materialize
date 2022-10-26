@@ -54,6 +54,8 @@ use differential_dataflow::trace::Description;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use tracing::info;
+use uuid::Uuid;
 
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
@@ -69,6 +71,7 @@ pub struct FueledMergeReq<T> {
 #[derive(Debug)]
 pub struct FueledMergeRes<T> {
     pub output: HollowBatch<T>,
+    pub name: Uuid,
 }
 
 /// An append-only collection of compactable update batches.
@@ -204,6 +207,10 @@ impl<T: Timestamp + Lattice> Trace<T> {
                             // called, so update this one too.
                             assert!(m.b1.maybe_replace(res).applied());
                         }
+                        info!(
+                            "{} compaction apply_merge_res early return, matched b1 of double",
+                            res.name
+                        );
                         return result;
                     }
                     let result = batch2.maybe_replace(res);
@@ -214,24 +221,37 @@ impl<T: Timestamp + Lattice> Trace<T> {
                             // called, so update this one too.
                             assert!(m.b2.maybe_replace(res).applied());
                         }
+                        info!(
+                            "{} compaction apply_merge_res early return, matched b2 of double",
+                            res.name
+                        );
                         return result;
                     }
                 }
                 MergeState::Double(MergeVariant::Complete(Some((batch, _)))) => {
                     let result = batch.maybe_replace(res);
                     if result.matched() {
+                        info!(
+                            "{} compaction apply_merge_res early return, matched completed",
+                            res.name
+                        );
                         return result;
                     }
                 }
                 MergeState::Single(Some(batch)) => {
                     let result = batch.maybe_replace(res);
                     if result.matched() {
+                        info!(
+                            "{} compaction apply_merge_res early return, matched single",
+                            res.name
+                        );
                         return result;
                     }
                 }
                 _ => {}
             }
         }
+        info!("{} compaction no match", res.name);
         ApplyMergeResult::NotAppliedNoMatch
     }
 
@@ -387,6 +407,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
             if res.output.len > self.len() {
                 return ApplyMergeResult::NotAppliedTooManyUpdates;
             }
+            info!("{}: compaction maybe_replace applying exact", res.name);
             *self = SpineBatch::Merged(res.output.clone());
             return ApplyMergeResult::AppliedExact;
         }
@@ -432,6 +453,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
                         if new_spine_batch.len() > self.len() {
                             return ApplyMergeResult::NotAppliedTooManyUpdates;
                         }
+                        info!("{}: compaction maybe_replace applying subset", res.name);
                         *self = new_spine_batch;
                         ApplyMergeResult::AppliedSubset
                     }

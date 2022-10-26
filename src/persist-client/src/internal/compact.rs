@@ -36,6 +36,7 @@ use tokio::sync::{mpsc, oneshot, TryAcquireError};
 use tokio::task::JoinHandle;
 use tracing::log::warn;
 use tracing::{debug, debug_span, info, trace, Instrument, Span};
+use uuid::Uuid;
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::batch::BatchParts;
@@ -202,7 +203,10 @@ where
 
                     match res {
                         Ok(Ok(res)) => {
-                            let res = FueledMergeRes { output: res.output };
+                            let res = FueledMergeRes {
+                                output: res.output,
+                                name: Uuid::new_v4(),
+                            };
                             let apply_merge_result = machine.merge_res(&res).await;
                             match &apply_merge_result {
                                 ApplyMergeResult::AppliedExact => {
@@ -226,7 +230,7 @@ where
                                     metrics.compaction.noop.inc();
                                     for part in res.output.parts {
                                         let key = part.key.complete(&machine.shard_id());
-                                        info!("deleting compaction blob {}", key);
+                                        info!("{}: deleting compaction blob {}", res.name, key);
                                         retry_external(
                                             &metrics.retries.external.compaction_noop_delete,
                                             || blob.delete(&key),

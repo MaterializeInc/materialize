@@ -22,6 +22,7 @@ use mz_ore::task::spawn;
 use timely::progress::{Antichain, Timestamp};
 use tokio::task::JoinHandle;
 use tracing::{debug, info};
+use uuid::Uuid;
 
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
@@ -303,17 +304,18 @@ where
         // anyway need a mechanism to clean up leaked blobs because of process
         // crashes.
         let mut merge_result_ever_applied = ApplyMergeResult::NotAppliedNoMatch;
-        let time = SYSTEM_TIME.clone().as_secs();
+        let identifier = res.name.clone();
         let shard_id = self.shard_id();
         let (_seqno, _apply_merge_result, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, state| {
+                info!("{}: state apply attempt", identifier);
                 let ret = state.apply_merge_res(res);
                 if let Continue(result) = ret {
                     // record if we've ever applied the merge
                     if result.applied() {
                         info!(
-                            "setting compaction at ({},{}) to {:?}",
-                            time, shard_id, result
+                            "{}: setting compaction for {} to {:?}. batch: {:?}",
+                            identifier, shard_id, result, res.output
                         );
                         merge_result_ever_applied = result;
                     }
@@ -322,8 +324,8 @@ where
                     if result.matched() && !result.applied() && !merge_result_ever_applied.applied()
                     {
                         info!(
-                            "setting compaction at ({},{}) to {:?}",
-                            time, shard_id, result
+                            "{}: setting compaction for {} to {:?}. batch: {:?}",
+                            identifier, shard_id, result, res.output
                         );
                         merge_result_ever_applied = result;
                     }
@@ -332,8 +334,8 @@ where
             })
             .await;
         info!(
-            "returning compaction at ({},{}) with {:?}",
-            time, shard_id, merge_result_ever_applied
+            "{}: returning compaction for {} to {:?}. batch: {:?}",
+            identifier, shard_id, merge_result_ever_applied, res.output
         );
         merge_result_ever_applied
     }
