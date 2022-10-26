@@ -22,11 +22,9 @@ use mz_ore::task::spawn;
 use timely::progress::{Antichain, Timestamp};
 use tokio::task::JoinHandle;
 use tracing::{debug, info};
-use uuid::Uuid;
 
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
-use mz_ore::now::SYSTEM_TIME;
 use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
@@ -811,6 +809,7 @@ pub mod datadriven {
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::trace::Description;
     use mz_build_info::DUMMY_BUILD_INFO;
+    use uuid::Uuid;
 
     use crate::batch::{validate_truncate_batch, BatchBuilder};
     use crate::fetch::fetch_batch_part;
@@ -1372,7 +1371,10 @@ pub mod datadriven {
             .clone();
         let merge_res = datadriven
             .machine
-            .merge_res(&FueledMergeRes { output: batch })
+            .merge_res(&FueledMergeRes {
+                output: batch,
+                name: Uuid::new_v4(),
+            })
             .await;
         Ok(format!(
             "{} {}\n",

@@ -1314,6 +1314,7 @@ pub mod datadriven {
     ) -> Result<String, anyhow::Error> {
         let res = FueledMergeRes {
             output: DirectiveArgs::parse_hollow_batch(args.input),
+            name: Uuid::new_v4(),
         };
         match datadriven.trace.apply_merge_res(&res) {
             ApplyMergeResult::AppliedExact => Ok("applied exact\n".into()),
