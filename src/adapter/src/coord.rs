@@ -764,7 +764,7 @@ impl<S: Append + 'static> Coordinator<S> {
         {
             info!(
                 "coordinator init: resetting system table {} ({})",
-                self.catalog.resolve_full_name(&system_table.name(), None),
+                self.catalog.resolve_full_name(system_table.name(), None),
                 system_table.id()
             );
             let current_contents = self
