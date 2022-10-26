@@ -36,7 +36,7 @@ and dataflows are local to a cluster, so their introspection information will
 vary across clusters.
 
 <!--
-[//]: # "TODO(joacoc) We should share ways for the user to diagnose and troubleshoot the if and how fast a source is consuming."
+[//]: # "TODO(joacoc) We should share ways for the user to diagnose and troubleshoot if and how fast a source is consuming."
 ``` -->
 
 ## Why is Materialize running so slowly?
