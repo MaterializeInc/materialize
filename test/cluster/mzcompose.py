@@ -7,8 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import re
 import time
 from textwrap import dedent
+from typing import Tuple
 
 from pg8000.dbapi import ProgrammingError
 
@@ -54,6 +56,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for name in [
         "test-cluster",
         "test-github-12251",
+        "test-github-15535",
         "test-remote-storaged",
         "test-drop-default-cluster",
         "test-upsert",
@@ -195,6 +198,69 @@ def workflow_test_github_12251(c: Composition) -> None:
 
     # Ensure we can select from tables after cancellation.
     c.sql("SELECT * FROM log_table;")
+
+
+def workflow_test_github_15535(c: Composition) -> None:
+    """
+    Test that compute reconciliation does not produce empty frontiers.
+
+    Regression test for https://github.com/MaterializeInc/materialize/issues/15535.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("computed_1")
+    c.wait_for_materialized()
+
+    # Set up a dataflow on computed.
+    c.sql(
+        """
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (
+            REMOTE ['computed_1:2100'],
+            COMPUTE ['computed_1:2102'],
+            WORKERS 2
+        ));
+        SET cluster = cluster1;
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+        -- wait for the dataflow to be ready
+        SELECT * FROM mv;
+        """
+    )
+
+    # Restart environmentd to trigger a reconciliation on computed.
+    c.kill("materialized")
+    c.up("materialized")
+    c.wait_for_materialized()
+
+    print("Sleeping to wait for frontier updates")
+    time.sleep(10)
+
+    def extract_frontiers(output: str) -> Tuple[str, str]:
+        since_re = re.compile("^\s+since:\[(?P<frontier>.*)\]")
+        upper_re = re.compile("^\s+upper:\[(?P<frontier>.*)\]")
+        since = None
+        upper = None
+        for line in output.splitlines():
+            if match := since_re.match(line):
+                since = match.group("frontier").strip()
+            elif match := upper_re.match(line):
+                upper = match.group("frontier").strip()
+
+        assert since is not None, "since not found in EXPLAIN TIMESTAMP output"
+        assert upper is not None, "upper not found in EXPLAIN TIMESTAMP output"
+        return (since, upper)
+
+    # Verify that there are no empty frontiers.
+    output = c.sql_query("EXPLAIN TIMESTAMP FOR SELECT * FROM mv")
+    mv_since, mv_upper = extract_frontiers(output[0][0])
+    output = c.sql_query("EXPLAIN TIMESTAMP FOR SELECT * FROM t")
+    t_since, t_upper = extract_frontiers(output[0][0])
+
+    assert mv_since, "mv has empty since frontier"
+    assert mv_upper, "mv has empty upper frontier"
+    assert t_since, "t has empty since frontier"
+    assert t_upper, "t has empty upper frontier"
 
 
 def workflow_test_upsert(c: Composition) -> None:
