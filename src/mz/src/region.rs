@@ -145,25 +145,6 @@ pub(crate) async fn list_cloud_providers(
         .await
 }
 
-/// Prints if a region is enabled or not
-///
-/// E.g.: AWS/us-east-1  enabled
-pub(crate) fn print_region_enabled(cloud_provider_and_region: &CloudProviderAndRegion) {
-    let region = &cloud_provider_and_region.region;
-    let cloud_provider = &cloud_provider_and_region.cloud_provider;
-
-    match region {
-        Some(_) => println!(
-            "{:}/{:}  enabled",
-            cloud_provider.provider, cloud_provider.region
-        ),
-        None => println!(
-            "{:}/{:}  disabled",
-            cloud_provider.provider, cloud_provider.region
-        ),
-    };
-}
-
 ///
 /// Prints an environment's status and addresses
 ///

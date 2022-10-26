@@ -20,6 +20,7 @@ mod configuration;
 mod password;
 mod region;
 mod shell;
+mod table;
 mod utils;
 
 use std::str::FromStr;
@@ -30,13 +31,14 @@ use configuration::Configuration;
 use password::list_passwords;
 use region::{
     get_provider_by_region_name, get_provider_region_environment, get_region_environment,
-    print_environment_status, print_region_enabled,
+    print_environment_status,
 };
 use serde::Deserialize;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 use reqwest::Client;
 use shell::check_environment_health;
+use table::{ShowProfile, Tabled};
 use utils::{run_loading_spinner, CloudProviderRegion};
 
 use crate::auth::{auth_with_browser, auth_with_console};
@@ -57,8 +59,6 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Show commands to interact with passwords
-    AppPassword(AppPasswordCommand),
     /// Open the docs
     Docs,
     /// Authorize the current profile
@@ -75,6 +75,11 @@ enum Commands {
     Region {
         #[clap(subcommand)]
         command: RegionCommand,
+    },
+    /// Create a new object
+    Create {
+        #[clap(subcommand)]
+        value: Creatable,
     },
     /// Set a variable
     Set {
@@ -94,6 +99,18 @@ enum Commands {
 }
 
 #[derive(Debug, Subcommand)]
+enum Creatable {
+    AppPassword {
+        /// Name for the password
+        name: String,
+    },
+    Region {
+        #[clap(possible_values = CloudProviderRegion::variants())]
+        cloud_provider_region: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum Settable {
     /// Set the default profile for this configuration
     Profile { profile: String },
@@ -104,38 +121,20 @@ enum Settable {
 
 #[derive(Debug, Subcommand)]
 enum Showable {
+    /// Show all app-passwords
+    AppPasswords,
     /// Show the current profile
     Profile,
     /// Show all profiles
     Profiles,
-}
-
-#[derive(Debug, Args)]
-struct AppPasswordCommand {
-    #[clap(subcommand)]
-    command: AppPasswordSubommand,
-}
-
-#[derive(Debug, Subcommand)]
-enum AppPasswordSubommand {
-    /// Create a password.
-    Create {
-        /// Name for the password.
-        name: String,
-    },
-    /// List all enabled passwords.
-    List,
+    /// Show the default region for the current profile if set
+    Region,
+    /// Show all enabled regions
+    Regions,
 }
 
 #[derive(Debug, Subcommand)]
 enum RegionCommand {
-    /// Enable a region.
-    Enable {
-        #[clap(possible_values = CloudProviderRegion::variants())]
-        cloud_provider_region: String,
-    },
-    /// List all enabled regions.
-    List,
     /// Display a region's status.
     Status {
         #[clap(possible_values = CloudProviderRegion::variants())]
@@ -204,45 +203,6 @@ async fn main() -> Result<()> {
     let profile = args.profile;
     let mut config = Configuration::load()?;
     match args.command {
-        Commands::AppPassword(password_cmd) => {
-            let profile = config.get_profile(profile)?;
-
-            let client = Client::new();
-            let valid_profile = profile
-                .validate(&client)
-                .await
-                .context("failed to validate profile. reauthorize using mz login")?;
-
-            match password_cmd.command {
-                AppPasswordSubommand::Create { name } => {
-                    let api_token = generate_api_token(&client, valid_profile.frontegg_auth, &name)
-                        .await
-                        .with_context(|| "failed to create a new app password")?;
-
-                    println!("{}", api_token)
-                }
-                AppPasswordSubommand::List => {
-                    let app_passwords = list_passwords(&client, &valid_profile)
-                        .await
-                        .with_context(|| "failed to retrieve app passwords")?;
-
-                    println!("{0: <24} | {1: <24} ", "Name", "Created At");
-                    println!("----------------------------------------------------");
-
-                    app_passwords.iter().for_each(|app_password| {
-                        let mut name = app_password.description.clone();
-
-                        if name.len() > 20 {
-                            let short_name = name[..20].to_string();
-                            name = format!("{:}...", short_name);
-                        }
-
-                        println!("{0: <24} | {1: <24}", name, app_password.created_at);
-                    })
-                }
-            }
-        }
-
         Commands::Docs => {
             // Open the browser docs
             open::that(WEB_DOCS_URL).with_context(|| "Opening the browser.")?
@@ -265,71 +225,62 @@ async fn main() -> Result<()> {
             }
         }
 
+        Commands::Create { value } => match value {
+            Creatable::AppPassword { name } => {
+                let profile = config.get_profile(profile)?;
+
+                let client = Client::new();
+                let valid_profile = profile
+                    .validate(&client)
+                    .await
+                    .context("failed to validate profile. reauthorize using mz login")?;
+
+                let api_token = generate_api_token(&client, valid_profile.frontegg_auth, &name)
+                    .await
+                    .with_context(|| "failed to create a new app password")?;
+
+                println!("{}", api_token)
+            }
+            Creatable::Region {
+                cloud_provider_region,
+            } => {
+                let client = Client::new();
+                let cloud_provider_region = CloudProviderRegion::from_str(&cloud_provider_region)?;
+                let profile = config.get_profile(profile)?;
+
+                let valid_profile = profile
+                    .validate(&client)
+                    .await
+                    .context("failed to validate profile. reauthorize using mz auth --force")?;
+
+                let loading_spinner = run_loading_spinner("Enabling region...".to_string());
+                let cloud_provider =
+                    get_provider_by_region_name(&client, &valid_profile, &cloud_provider_region)
+                        .await
+                        .with_context(|| "Retrieving cloud provider.")?;
+
+                let region = enable_region_environment(&client, &cloud_provider, &valid_profile)
+                    .await
+                    .with_context(|| "Enabling region.")?;
+
+                let environment = get_region_environment(&client, &valid_profile, &region)
+                    .await
+                    .with_context(|| "Retrieving environment data.")?;
+
+                loop {
+                    if check_environment_health(&valid_profile, &environment) {
+                        break;
+                    }
+                }
+
+                loading_spinner.finish_with_message("Region enabled.");
+            }
+        },
+
         Commands::Region { command } => {
             let client = Client::new();
 
             match command {
-                RegionCommand::Enable {
-                    cloud_provider_region,
-                } => {
-                    let cloud_provider_region =
-                        CloudProviderRegion::from_str(&cloud_provider_region)?;
-                    let profile = config.get_profile(profile)?;
-
-                    let valid_profile = profile
-                        .validate(&client)
-                        .await
-                        .context("failed to validate profile. reauthorize using mz auth --force")?;
-
-                    let loading_spinner = run_loading_spinner("Enabling region...".to_string());
-                    let cloud_provider = get_provider_by_region_name(
-                        &client,
-                        &valid_profile,
-                        &cloud_provider_region,
-                    )
-                    .await
-                    .with_context(|| "Retrieving cloud provider.")?;
-
-                    let region =
-                        enable_region_environment(&client, &cloud_provider, &valid_profile)
-                            .await
-                            .with_context(|| "Enabling region.")?;
-
-                    let environment = get_region_environment(&client, &valid_profile, &region)
-                        .await
-                        .with_context(|| "Retrieving environment data.")?;
-
-                    loop {
-                        if check_environment_health(&valid_profile, &environment) {
-                            break;
-                        }
-                    }
-
-                    loading_spinner.finish_with_message("Region enabled.");
-                }
-
-                RegionCommand::List => {
-                    let profile = config.get_profile(profile)?;
-
-                    let valid_profile = profile
-                        .validate(&client)
-                        .await
-                        .context("failed to validate profile. reauthorize using mz auth --force")?;
-
-                    let cloud_providers = list_cloud_providers(&client, &valid_profile)
-                        .await
-                        .with_context(|| "Retrieving cloud providers.")?;
-                    let cloud_providers_regions =
-                        list_regions(&cloud_providers, &client, &valid_profile)
-                            .await
-                            .with_context(|| "Listing regions.")?;
-                    cloud_providers_regions
-                        .iter()
-                        .for_each(|cloud_provider_region| {
-                            print_region_enabled(cloud_provider_region);
-                        });
-                }
-
                 RegionCommand::Status {
                     cloud_provider_region,
                 } => {
@@ -389,14 +340,61 @@ async fn main() -> Result<()> {
                 .with_context(|| "running shell")?;
         }
 
-        Commands::Show { value } => match value {
-            Showable::Profile => println!("{}", config.current_profile(profile)),
-            Showable::Profiles => {
-                for profile in config.get_profiles(profile) {
-                    println!("{}", profile);
+        Commands::Show { value } => {
+            let client = Client::new();
+            match value {
+                Showable::Profile => {
+                    let profile = ShowProfile {
+                        name: config.current_profile(profile),
+                    };
+                    println!("{}", profile.table());
+                }
+                Showable::Profiles => {
+                    let showable: Vec<_> = config
+                        .get_profiles(profile)
+                        .iter()
+                        .map(|name| ShowProfile { name: name.clone() })
+                        .collect();
+
+                    println!("{}", showable.table());
+                }
+                Showable::AppPasswords => {
+                    let profile = config.get_profile(profile)?;
+
+                    let valid_profile = profile
+                        .validate(&client)
+                        .await
+                        .context("failed to validate profile. reauthorize using mz auth")?;
+
+                    let app_passwords = list_passwords(&client, &valid_profile)
+                        .await
+                        .with_context(|| "failed to retrieve app passwords")?;
+
+                    println!("{}", app_passwords.table());
+                }
+                Showable::Region => {
+                    let profile = config.get_profile(profile)?;
+                    println!("{}", profile.get_default_region().table());
+                }
+                Showable::Regions => {
+                    let profile = config.get_profile(profile)?;
+
+                    let valid_profile = profile
+                        .validate(&client)
+                        .await
+                        .context("failed to validate profile. reauthorize using mz auth --force")?;
+
+                    let cloud_providers = list_cloud_providers(&client, &valid_profile)
+                        .await
+                        .with_context(|| "Retrieving cloud providers.")?;
+                    let cloud_providers_regions =
+                        list_regions(&cloud_providers, &client, &valid_profile)
+                            .await
+                            .with_context(|| "Listing regions.")?;
+                    println!("{}", cloud_providers_regions.table());
                 }
             }
-        },
+        }
     }
 
     config.close()
