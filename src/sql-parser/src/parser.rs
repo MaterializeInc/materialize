@@ -395,6 +395,11 @@ impl<'a> Parser<'a> {
             .next_token()
             .ok_or_else(|| self.error(self.peek_prev_pos(), "Unexpected EOF".to_string()))?;
         let expr = match tok {
+            Token::LBracket => {
+                self.prev_token();
+                let name = self.parse_raw_name()?;
+                self.parse_function(name)
+            }
             Token::Keyword(TRUE) | Token::Keyword(FALSE) | Token::Keyword(NULL) => {
                 self.prev_token();
                 Ok(Expr::Value(self.parse_value()?))
@@ -600,7 +605,7 @@ impl<'a> Parser<'a> {
         Ok(parse(self)?.into_expr())
     }
 
-    fn parse_function(&mut self, name: UnresolvedItemName) -> Result<Expr<Raw>, ParserError> {
+    fn parse_function(&mut self, name: RawItemName) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let distinct = matches!(
             self.parse_at_most_one_keyword(&[ALL, DISTINCT], &format!("function: {}", name))?,
@@ -788,7 +793,7 @@ impl<'a> Parser<'a> {
         let expr = self.parse_expr()?;
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: UnresolvedItemName::unqualified("extract"),
+            name: RawItemName::Name(UnresolvedItemName::unqualified("extract")),
             args: FunctionArgs::args(vec![Expr::Value(Value::String(field)), expr]),
             filter: None,
             over: None,
@@ -851,7 +856,7 @@ impl<'a> Parser<'a> {
         }
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: UnresolvedItemName::unqualified(name),
+            name: RawItemName::Name(UnresolvedItemName::unqualified(name)),
             args: FunctionArgs::args(exprs),
             filter: None,
             over: None,
@@ -869,7 +874,7 @@ impl<'a> Parser<'a> {
         let haystack = self.parse_expr()?;
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: UnresolvedItemName::unqualified("position"),
+            name: RawItemName::Name(UnresolvedItemName::unqualified("position")),
             args: FunctionArgs::args(vec![needle, haystack]),
             filter: None,
             over: None,
@@ -1095,7 +1100,7 @@ impl<'a> Parser<'a> {
                 AT => {
                     self.expect_keywords(&[TIME, ZONE])?;
                     Ok(Expr::Function(Function {
-                        name: UnresolvedItemName(vec!["timezone".into()]),
+                        name: RawItemName::Name(UnresolvedItemName::unqualified("timezone")),
                         args: FunctionArgs::args(vec![self.parse_subexpr(precedence)?, expr]),
                         filter: None,
                         over: None,
@@ -1219,7 +1224,7 @@ impl<'a> Parser<'a> {
 
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: UnresolvedItemName::unqualified("substring"),
+            name: RawItemName::Name(UnresolvedItemName::unqualified("substring")),
             args: FunctionArgs::args(exprs),
             filter: None,
             over: None,
@@ -4562,7 +4567,7 @@ impl<'a> Parser<'a> {
                     Ok(Expr::QualifiedWildcard(id_parts))
                 } else if self.consume_token(&Token::LParen) {
                     self.prev_token();
-                    self.parse_function(UnresolvedItemName(id_parts))
+                    self.parse_function(RawItemName::Name(UnresolvedItemName(id_parts)))
                 } else {
                     Ok(Expr::Identifier(id_parts))
                 }
@@ -5320,7 +5325,7 @@ impl<'a> Parser<'a> {
             } else if self.parse_keywords(&[ROWS, FROM]) {
                 return self.parse_rows_from();
             } else {
-                let name = self.parse_item_name()?;
+                let name = self.parse_raw_name()?;
                 self.expect_token(&Token::LParen)?;
                 let args = self.parse_optional_args(false)?;
                 let alias = self.parse_optional_table_alias()?;
@@ -5388,7 +5393,7 @@ impl<'a> Parser<'a> {
         } else {
             let name = self.parse_raw_name()?;
             match name {
-                RawItemName::Name(name) if self.consume_token(&Token::LParen) => {
+                name @ RawItemName::Name(..) if self.consume_token(&Token::LParen) => {
                     let args = self.parse_optional_args(false)?;
                     let alias = self.parse_optional_table_alias()?;
                     let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
@@ -5420,7 +5425,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_table_function(&mut self) -> Result<TableFunction<Raw>, ParserError> {
-        let name = self.parse_item_name()?;
+        let name = self.parse_raw_name()?;
         self.expect_token(&Token::LParen)?;
         Ok(TableFunction {
             name,
