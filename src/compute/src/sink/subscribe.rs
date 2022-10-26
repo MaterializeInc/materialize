@@ -140,7 +140,7 @@ impl SubscribeProtocol {
                 SubscribeResponse::Batch(SubscribeBatch {
                     lower: self.prev_upper.clone(),
                     upper: upper.clone(),
-                    updates: ship,
+                    updates: Ok(ship),
                 }),
             ));
             self.prev_upper = upper;

@@ -674,7 +674,9 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     /// Scan the shared subscribe response buffer, and forward results along.
     pub fn process_subscribes(&mut self) {
         let mut subscribe_responses = self.compute_state.subscribe_response_buffer.borrow_mut();
-        for (sink_id, response) in subscribe_responses.drain(..) {
+        for (sink_id, mut response) in subscribe_responses.drain(..) {
+            response
+                .to_error_if_exceeds(usize::try_from(self.compute_state.max_result_size).unwrap());
             self.send_compute_response(ComputeResponse::SubscribeResponse(sink_id, response));
         }
     }
