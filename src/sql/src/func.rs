@@ -736,6 +736,16 @@ impl ParamType {
         }
     }
 
+    /// Is `self` the [`ParamType`] corresponding to `t`'s [near match] value?
+    ///
+    /// [near match]: ScalarType::near_match
+    fn is_near_match(&self, t: &ScalarType) -> bool {
+        match (self, t.near_match()) {
+            (ParamType::Plain(t), Some(near_match)) => t.structural_eq(near_match),
+            _ => false,
+        }
+    }
+
     /// Is `self` the preferred parameter type for its `TypeCategory`?
     fn prefers_self(&self) -> bool {
         if let Some(pt) = TypeCategory::from_param(self).preferred_type() {
@@ -1017,6 +1027,7 @@ pub struct Candidate<'a, R> {
     fimpl: &'a FuncImpl<R>,
     exact_matches: usize,
     preferred_types: usize,
+    near_matches: usize,
 }
 
 /// Selects the best implementation given the provided `args` using a
@@ -1129,9 +1140,11 @@ fn find_match<'a, R: std::fmt::Debug>(
         };
     }
     let mut max_exact_matches = 0;
+
     for fimpl in impls {
         let mut exact_matches = 0;
         let mut preferred_types = 0;
+        let mut near_matches = 0;
 
         for (i, arg_type) in types.iter().enumerate() {
             let param_type = &fimpl.params[i];
@@ -1143,6 +1156,9 @@ fn find_match<'a, R: std::fmt::Debug>(
                     }
                     if param_type.is_preferred_by(arg_type) {
                         preferred_types += 1;
+                    }
+                    if param_type.is_near_match(arg_type) {
+                        near_matches += 1;
                     }
                 }
                 None => {
@@ -1162,13 +1178,14 @@ fn find_match<'a, R: std::fmt::Debug>(
             fimpl,
             exact_matches,
             preferred_types,
+            near_matches,
         });
     }
 
     if candidates.is_empty() {
         sql_bail!(
             "arguments cannot be implicitly cast to any implementation's parameters; \
-            try providing explicit casts"
+        try providing explicit casts"
         )
     }
 
@@ -1179,6 +1196,16 @@ fn find_match<'a, R: std::fmt::Debug>(
     candidates.retain(|c| c.exact_matches >= max_exact_matches);
 
     maybe_get_last_candidate!();
+
+    // 4.c.i. (MZ extension) Run through all candidates and keep those with the
+    // most 'near' matches on input types. Keep all candidates if none have near
+    // matches. If only one candidate remains, use it; else continue to the next
+    // step.
+    let mut max_near_matches = 0;
+    for c in &candidates {
+        max_near_matches = std::cmp::max(max_near_matches, c.near_matches);
+    }
+    candidates.retain(|c| c.near_matches >= max_near_matches);
 
     // 4.d. Run through all candidates and keep those that accept preferred
     // types (of the input data type's type category) at the most positions

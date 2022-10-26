@@ -720,17 +720,6 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
 /// Guesses the most-common type among a set of [`ScalarType`]s that all members
 /// can be cast to. Returns `None` if a common type cannot be deduced.
 ///
-/// The returned type is not guaranteed to be accurate because we ignore type
-/// categories, e.g. on input `[ScalarType::Date, ScalarType::Int32]`, will
-/// guess that `Date` is the common type.
-///
-/// However, if there _is_ a common type among the input, it will correctly
-/// determine it, i.e. returns false positives but never false negatives.
-///
-/// The `types` parameter is meant to represent the types inferred from a
-/// `Vec<CoercibleScalarExpr>`. If no known types are present in the `types`
-/// parameter, it will try to use a provided type hint, instead.
-///
 /// Note that this function implements the type-determination components of
 /// Postgres' ["`UNION`, `CASE`, and Related Constructs"][union-type-conv] type
 /// conversion.
@@ -740,23 +729,41 @@ pub fn guess_best_common_type(
     ecx: &ExprContext,
     types: &[Option<ScalarType>],
 ) -> Result<ScalarType, PlanError> {
-    // This function is a direct translation of `select_common_type` in
-    // PostgreSQL.
+    // This function is a translation of `select_common_type` in PostgreSQL with
+    // the addition of our near match logic, which supports Materialize
+    // non-linear type promotions.
     // https://github.com/postgres/postgres/blob/d1b307eef/src/backend/parser/parse_coerce.c#L1288-L1308
 
-    // Remove unknown types.
-    let types: Vec<_> = types.into_iter().filter_map(|v| v.as_ref()).collect();
+    // Remove unknown types, and collect them.
+    let mut types: Vec<_> = types.into_iter().filter_map(|v| v.as_ref()).collect();
 
-    // If no known types, fall back to `String`.
-    if types.is_empty() {
-        return Ok(ScalarType::String);
+    // In the case of mixed ints and uints, replace uints with their near match
+    let contains_int = types
+        .iter()
+        .any(|t| matches!(t, ScalarType::Int16 | ScalarType::Int32 | ScalarType::Int64));
+
+    for t in types.iter_mut() {
+        if contains_int
+            && matches!(
+                t,
+                ScalarType::UInt16 | ScalarType::UInt32 | ScalarType::UInt64
+            )
+        {
+            *t = t.near_match().expect("unsigned ints have near matches")
+        }
     }
 
-    let mut types = types.into_iter();
+    let mut types = types.iter();
 
-    // Start by guessing the first type, then look at each following type in
-    // turn.
-    let mut candidate = types.next().unwrap();
+    let mut candidate = match types.next() {
+        // If no known types, fall back to `String`.
+        None => return Ok(ScalarType::String),
+        // Start by guessing the first type.
+        Some(t) => t,
+    };
+
+    let preferred_type = TypeCategory::from_type(candidate).preferred_type();
+
     for typ in types {
         if TypeCategory::from_type(candidate) != TypeCategory::from_type(typ) {
             // The next type is in a different category; give up.
@@ -766,7 +773,10 @@ pub fn guess_best_common_type(
                 ecx.humanize_scalar_type(candidate),
                 ecx.humanize_scalar_type(typ),
             );
-        } else if TypeCategory::from_type(candidate).preferred_type().as_ref() != Some(candidate)
+        };
+
+        // If this type is the preferred type, make it the candidate.
+        if preferred_type.as_ref() != Some(candidate)
             && can_cast(ecx, CastContext::Implicit, candidate, typ)
             && !can_cast(ecx, CastContext::Implicit, typ, candidate)
         {
