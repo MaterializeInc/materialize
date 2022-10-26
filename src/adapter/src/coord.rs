@@ -84,7 +84,7 @@ use timely::progress::Timestamp as _;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tracing::{span, warn, Level};
+use tracing::{info, span, warn, Level};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
@@ -393,9 +393,12 @@ impl<S: Append + 'static> Coordinator<S> {
         builtin_migration_metadata: BuiltinMigrationMetadata,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
+        info!("coordinator init: beginning bootstrap");
+
         // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
         let mut policies_to_set: CollectionIdBundle = Default::default();
 
+        info!("coordinator init: creating compute replicas");
         for instance in self.catalog.compute_instances() {
             self.controller.compute.create_instance(
                 instance.id,
@@ -436,6 +439,7 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
+        info!("coordinator init: migrating builtin objects");
         // Migrate builtin objects.
         self.controller
             .storage
@@ -478,7 +482,13 @@ impl<S: Append + 'static> Coordinator<S> {
             None
         };
 
+        info!("coordinator init: installing existing objects in catalog");
         for entry in &entries {
+            info!(
+                "coordinator init: installing {} {}",
+                entry.item().typ(),
+                entry.id()
+            );
             match entry.item() {
                 // Currently catalog item rebuild assumes that sinks and
                 // indexes are always built individually and does not store information
@@ -668,10 +678,12 @@ impl<S: Append + 'static> Coordinator<S> {
         self.initialize_read_policies(policies_to_set, DEFAULT_LOGICAL_COMPACTION_WINDOW_MS)
             .await;
 
+        info!("coordinator init: announcing completion of initialization to controller");
         // Announce the completion of initialization.
         self.controller.initialization_complete();
 
         // Announce primary and foreign key relationships.
+        info!("coordinator init: announcing primary and foreign key relationships");
         let mz_view_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_KEYS);
         for log in BUILTINS::logs() {
             let log_id = &self.catalog.resolve_builtin_log(log).to_string();
@@ -725,6 +737,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         // Advance all tables to the current timestamp
+        info!("coordinator init: advancing all tables to current timestamp");
         let WriteTimestamp {
             timestamp: _,
             advance_to,
@@ -743,17 +756,24 @@ impl<S: Append + 'static> Coordinator<S> {
             .unwrap();
 
         // Add builtin table updates the clear the contents of all system tables
+        info!("coordinator init: resetting system tables");
         let read_ts = self.get_local_read_ts();
         for system_table in entries
             .iter()
             .filter(|entry| entry.is_table() && entry.id().is_system())
         {
+            info!(
+                "coordinator init: resetting system table {} ({})",
+                self.catalog.resolve_full_name(system_table.name(), None),
+                system_table.id()
+            );
             let current_contents = self
                 .controller
                 .storage
                 .snapshot(system_table.id(), read_ts)
                 .await
                 .unwrap();
+            info!("coordinator init: table size {}", current_contents.len());
             let retractions = current_contents
                 .into_iter()
                 .map(|(row, diff)| BuiltinTableUpdate {
@@ -764,9 +784,11 @@ impl<S: Append + 'static> Coordinator<S> {
             builtin_table_updates.extend(retractions);
         }
 
+        info!("coordinator init: sending builtin table updates");
         self.send_builtin_table_updates(builtin_table_updates, BuiltinTableUpdateSource::DDL)
             .await;
 
+        info!("coordinator init: bootstrap complete");
         Ok(())
     }
 
@@ -888,6 +910,8 @@ pub async fn serve<S: Append + 'static>(
         consolidations_rx,
     }: Config<S>,
 ) -> Result<(Handle, Client), AdapterError> {
+    info!("coordinator init: beginning");
+
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
     let (strict_serializable_reads_tx, strict_serializable_reads_rx) = mpsc::unbounded_channel();
@@ -906,6 +930,7 @@ pub async fn serve<S: Append + 'static>(
     // Coordinator::sequence_create_compute_replica.
     availability_zones.shuffle(&mut rand::thread_rng());
 
+    info!("coordinator init: opening catalog");
     let (mut catalog, builtin_migration_metadata, builtin_table_updates) =
         Catalog::open(catalog::Config {
             storage,
@@ -1014,6 +1039,7 @@ pub async fn serve<S: Append + 'static>(
         .unwrap();
     match bootstrap_rx.await.unwrap() {
         Ok(()) => {
+            info!("coordinator init: complete");
             let handle = Handle {
                 session_id,
                 start_instant,
