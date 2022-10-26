@@ -35,66 +35,9 @@ to vary dependending on which cluster you are working in. In particular, indexes
 and dataflows are local to a cluster, so their introspection information will
 vary across clusters.
 
-## How fast are my sources loading data?
-
-You can count the number of records accepted in a source, materialized view,
-or indexed view. Note that this makes less sense for a non-materialized,
-non-indexed view, as invoking it will create a new dataflow and run it to
-the point that it is caught up with its sources; that elapsed time may be
-informative, but it tells you something other than how fast a collection
-is populated.
-
-```sql
--- Report the number of records available from the materialization.
-SELECT count(*) FROM my_source_or_materialization;
-```
-
-The following introspection source indicates the upper frontier of materializations.
-
-This source provides timestamp-based progress, which reveals not the
-volume of data, but how closely the contents track source timestamps.
-```sql
--- For each materialization, the next timestamp to be added.
-SELECT * FROM mz_internal.mz_compute_frontiers;
-```
-
-You can also contrast the materialization's upper frontier with the
-corresponding source object frontiers known by Materialize's compute
-layer.
-```sql
--- For each materialization, the next timestamps of the materialization and
--- its source objects.
-SELECT *
-FROM (
-  SELECT mcd.export_id, mcd.import_id, mcd.worker_id,
-         mfe.time AS export_time, mfi.time AS import_time
-  FROM mz_internal.mz_worker_compute_dependencies AS mcd
-       JOIN mz_internal.mz_worker_compute_frontiers AS mfe
-           ON (mfe.export_id = mcd.export_id AND mfe.worker_id = mcd.worker_id)
-       JOIN mz_internal.mz_worker_compute_frontiers AS mfi
-           ON (mfi.export_id = mcd.import_id AND mfi.worker_id = mcd.worker_id)
-  UNION
-  SELECT mcd.export_id, mcd.import_id, mcd.worker_id,
-         mfe.time AS export_time, mfi.time AS import_time
-  FROM mz_internal.mz_worker_compute_dependencies AS mcd
-       JOIN mz_internal.mz_worker_compute_frontiers AS mfe
-           ON (mfe.export_id = mcd.export_id AND mfe.worker_id = mcd.worker_id)
-       JOIN mz_internal.mz_worker_compute_import_frontiers AS mfi
-           ON (mfi.import_id = mcd.import_id AND mfi.worker_id = mcd.worker_id
-               AND mfi.export_id = mcd.export_id)
-)
-ORDER BY export_id, import_id;
-```
-
-The above query shows the currently known frontiers, but not the wall-clock
-delays of propagating information within Materialize's compute layer once it
-it read out from storage. For the latter, the following introspection source
-is useful:
-```sql
--- Histogram of wall-clock delays in propagating data obtained from storage
--- through materializations
-SELECT * FROM mz_internal.mz_worker_compute_delays;
-```
+<!--
+[//]: # "TODO(joacoc) We should share ways for the user to diagnose and troubleshoot if and how fast a source is consuming."
+``` -->
 
 ## Why is Materialize running so slowly?
 
