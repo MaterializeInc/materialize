@@ -328,69 +328,57 @@ impl KafkaTxProducer {
         self.inner.send(record)
     }
 
-    async fn retry_on_txn_error<'a, F, Fut, T>(
-        &self,
-        hc: Arc<Mutex<Option<Healthchecker>>>,
-        f: F,
-    ) -> T
+    async fn retry_on_txn_error<'a, F, Fut, T>(&self, f: F) -> Result<T, String>
     where
         F: Fn(KafkaTxProducer) -> Fut,
         Fut: Future<Output = KafkaResult<T>>,
     {
-        Retry::default()
+        let stream = Retry::default()
             .clamp_backoff(BACKOFF_CLAMP)
-            .retry_async(|_| async {
-                match f(self.clone()).await {
-                    Ok(result) => Ok(result),
-                    Err(KafkaError::Transaction(e)) if e.txn_requires_abort() => {
-                        info!("error requiring txn abort in kafka sink: {:?}", e);
-                        let () = self.abort_active_txn(Arc::clone(&hc)).await;
-                        Healthchecker::report_stall_and_panic(
-                            hc.lock().await.as_mut(),
-                            format!(
-                                "shutting down due error requiring txn abort in kafka sink: {e:?}"
-                            ),
-                        )
-                        .await
-                    }
-                    Err(KafkaError::Transaction(e)) if e.is_retriable() => {
-                        info!("retriable error in kafka sink: {e:?}; will retry");
-                        Err(KafkaError::Transaction(e))
-                    }
-                    Err(e) => {
-                        Healthchecker::report_stall_and_panic(
-                            hc.lock().await.as_mut(),
-                            format!("shutting down due to non-retriable error: {e:?}"),
-                        )
-                        .await
-                    }
+            .into_retry_stream();
+        tokio::pin!(stream);
+        loop {
+            stream.next().await;
+            match f(self.clone()).await {
+                Ok(result) => return Ok(result),
+                Err(KafkaError::Transaction(e)) if e.txn_requires_abort() => {
+                    info!("error requiring txn abort in kafka sink: {:?}", e);
+                    self.abort_active_txn().await?;
+                    return Err(format!(
+                        "shutting down due error requiring txn abort in kafka sink: {e:?}"
+                    ));
                 }
-            })
-            .await
-            .expect("retries infinitely")
+                Err(KafkaError::Transaction(e)) if e.is_retriable() => {
+                    info!("retriable error in kafka sink: {e:?}; will retry");
+                    continue;
+                }
+                Err(e) => {
+                    return Err(format!("shutting down due to non-retriable error: {e:?}"));
+                }
+            }
+        }
     }
 
-    async fn abort_active_txn(&self, hc: Arc<Mutex<Option<Healthchecker>>>) {
-        Retry::default()
+    async fn abort_active_txn(&self) -> Result<(), String> {
+        let stream = Retry::default()
             .clamp_backoff(BACKOFF_CLAMP)
-            .retry_async(|_| async {
-                info!("Attempting to abort kafka transaction");
-                match self.abort_transaction().await {
-                    Ok(()) => Ok(()),
-                    Err(KafkaError::Transaction(e)) if e.is_retriable() => {
-                        Err(KafkaError::Transaction(e))
-                    }
-                    Err(e) => {
-                        Healthchecker::report_stall_and_panic(
-                            hc.lock().await.as_mut(),
-                            format!("non-retriable error while aborting kafka transaction: {e:?}"),
-                        )
-                        .await
-                    }
+            .into_retry_stream();
+        tokio::pin!(stream);
+        loop {
+            stream.next().await;
+            info!("Attempting to abort kafka transaction");
+            match self.abort_transaction().await {
+                Ok(()) => return Ok(()),
+                Err(KafkaError::Transaction(e)) if e.is_retriable() => {
+                    continue;
                 }
-            })
-            .await
-            .expect("retries infinitely");
+                Err(e) => {
+                    return Err(format!(
+                        "non-retriable error while aborting kafka transaction: {e:?}"
+                    ));
+                }
+            }
+        }
     }
 }
 
@@ -919,9 +907,20 @@ impl KafkaSinkState {
 
             if min_frontier > self.latest_progress_ts {
                 // record the write frontier in the progress topic.
-                self.producer
-                    .retry_on_txn_error(self.sink_state.healthchecker(), |p| p.begin_transaction())
-                    .await;
+                let () = match self
+                    .producer
+                    .retry_on_txn_error(|p| p.begin_transaction())
+                    .await
+                {
+                    Ok(()) => (),
+                    Err(err) => {
+                        Healthchecker::report_stall_and_panic(
+                            self.sink_state.healthchecker().lock().await.as_mut(),
+                            err,
+                        )
+                        .await
+                    }
+                };
 
                 info!(
                     "{}: sending progress for gate ts: {:?}",
@@ -930,9 +929,20 @@ impl KafkaSinkState {
                 self.send_progress_record(min_frontier, self.sink_state.unwrap_running())
                     .await;
 
-                self.producer
-                    .retry_on_txn_error(self.sink_state.healthchecker(), |p| p.commit_transaction())
-                    .await;
+                let () = match self
+                    .producer
+                    .retry_on_txn_error(|p| p.commit_transaction())
+                    .await
+                {
+                    Ok(()) => (),
+                    Err(err) => {
+                        Healthchecker::report_stall_and_panic(
+                            self.sink_state.healthchecker().lock().await.as_mut(),
+                            err,
+                        )
+                        .await
+                    }
+                };
                 progress_emitted = true;
                 self.latest_progress_ts = min_frontier;
             }
@@ -1103,7 +1113,7 @@ where
     builder.build(move |_capabilities| async move {
         if is_active_worker {
             if let KafkaSinkStateEnum::Init(ref init) = s.sink_state {
-                let healthchecker =
+                let mut healthchecker =
                     if let Some(status_shard_id) = healthchecker_args.status_shard_id {
                         let mut hc = Healthchecker::new(
                             id,
@@ -1119,17 +1129,23 @@ where
                     } else {
                         None
                     };
-                let healthchecker = Arc::new(Mutex::new(healthchecker));
 
-                s.producer
-                    .retry_on_txn_error(Arc::clone(&healthchecker), |p| p.init_transactions())
-                    .await;
+                let () = match s
+                    .producer
+                    .retry_on_txn_error(|p| p.init_transactions())
+                    .await
+                {
+                    Ok(()) => (),
+                    Err(err) => {
+                        Healthchecker::report_stall_and_panic(healthchecker.as_mut(), err).await
+                    }
+                };
 
                 let latest_ts = match s.determine_latest_progress_record().await {
                     Ok(latest_ts) => latest_ts,
                     Err(e) => {
                         Healthchecker::report_stall_and_panic(
-                            healthchecker.lock().await.as_mut(),
+                            healthchecker.as_mut(),
                             format!("determining latest progress record {e:?}"),
                         )
                         .await
@@ -1141,13 +1157,13 @@ where
                 );
                 shared_gate_ts.set(latest_ts);
 
-                if let Some(ref mut healthchecker) = healthchecker.lock().await.as_mut() {
+                if let Some(ref mut healthchecker) = healthchecker.as_mut() {
                     healthchecker.update_status(SinkStatus::Running).await;
                 }
 
                 let progress_state = init
                     .clone()
-                    .to_running(Rc::clone(&shared_gate_ts), healthchecker);
+                    .to_running(Rc::clone(&shared_gate_ts), Arc::new(Mutex::new(healthchecker)));
 
                 if let Some(gate) = latest_ts {
                     assert!(
@@ -1248,9 +1264,12 @@ where
                                     ts,
                                     rows.len()
                                 );
-                s.producer
-                    .retry_on_txn_error(s.sink_state.healthchecker(), |p| p.begin_transaction())
-                    .await;
+                                let () = match s.producer
+                                    .retry_on_txn_error(|p| p.begin_transaction())
+                                    .await {
+                                        Ok(()) => (),
+                                        Err(err) => Healthchecker::report_stall_and_panic(s.sink_state.healthchecker().lock().await.as_mut(), err).await,
+                                    };
 
                                 let mut repeat_counter = 0;
                                 for encoded_row in rows {
@@ -1289,9 +1308,12 @@ where
                                 s.send_progress_record(*ts, s.sink_state.unwrap_running()).await;
 
                                 info!("Committing transaction for {:?}", ts,);
-                s.producer
-                    .retry_on_txn_error(s.sink_state.healthchecker(), |p| p.commit_transaction())
-                    .await;
+                                let () = match s.producer
+                                    .retry_on_txn_error(|p| p.commit_transaction())
+                                    .await {
+                                        Ok(()) => (),
+                                        Err(err) => Healthchecker::report_stall_and_panic(s.sink_state.healthchecker().lock().await.as_mut(), err).await,
+                                    };
 
                                 s.flush().await;
 
