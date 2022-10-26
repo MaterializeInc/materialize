@@ -22,3 +22,4 @@ pub mod client;
 pub mod grpc;
 pub mod local;
 pub mod secrets;
+pub mod tracing;

@@ -130,6 +130,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let (tracing_target_callbacks, _sentry_guard) = mz_ore::tracing::configure(
         "storaged",
         &args.tracing,
+        mz_service::tracing::mz_sentry_event_filter,
         (BUILD_INFO.version, BUILD_INFO.sha, BUILD_INFO.time),
     )
     .await?;

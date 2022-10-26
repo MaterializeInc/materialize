@@ -62,6 +62,7 @@ fn main() {
         .block_on(mz_ore::tracing::configure(
             "persist-open-loop",
             TracingConfig::from(&args.tracing),
+            sentry_tracing::default_event_filter,
             (
                 DUMMY_BUILD_INFO.version,
                 DUMMY_BUILD_INFO.sha,
