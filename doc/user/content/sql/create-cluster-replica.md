@@ -47,6 +47,7 @@ _replica_name_ | A name for this replica.
 
 Valid `size` options are:
 
+- `2xsmall`
 - `xsmall`
 - `small`
 - `medium`
