@@ -226,6 +226,7 @@ where
                                     metrics.compaction.noop.inc();
                                     for part in res.output.parts {
                                         let key = part.key.complete(&machine.shard_id());
+                                        info!("deleting compaction blob {}", key);
                                         retry_external(
                                             &metrics.retries.external.compaction_noop_delete,
                                             || blob.delete(&key),

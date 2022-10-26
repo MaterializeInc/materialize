@@ -25,6 +25,7 @@ use tracing::{debug, info};
 
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
+use mz_ore::now::SYSTEM_TIME;
 use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
@@ -302,24 +303,38 @@ where
         // anyway need a mechanism to clean up leaked blobs because of process
         // crashes.
         let mut merge_result_ever_applied = ApplyMergeResult::NotAppliedNoMatch;
+        let time = SYSTEM_TIME.clone().as_secs();
+        let shard_id = self.shard_id();
         let (_seqno, _apply_merge_result, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, state| {
                 let ret = state.apply_merge_res(res);
                 if let Continue(result) = ret {
                     // record if we've ever applied the merge
                     if result.applied() {
+                        info!(
+                            "setting compaction at ({},{}) to {:?}",
+                            time, shard_id, result
+                        );
                         merge_result_ever_applied = result;
                     }
                     // otherwise record the most granular reason for _not_
                     // applying the merge when there was a matching batch
                     if result.matched() && !result.applied() && !merge_result_ever_applied.applied()
                     {
+                        info!(
+                            "setting compaction at ({},{}) to {:?}",
+                            time, shard_id, result
+                        );
                         merge_result_ever_applied = result;
                     }
                 }
                 ret
             })
             .await;
+        info!(
+            "returning compaction at ({},{}) with {:?}",
+            time, shard_id, merge_result_ever_applied
+        );
         merge_result_ever_applied
     }
 
