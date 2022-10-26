@@ -466,21 +466,44 @@ where
         //   these batches, all data physically in the batch but outside of the
         //   truncated bounds must be ignored. Not every user batch is
         //   truncated.
-        // - Batches written by compaction. These always have an inline desc that
-        //   is a subset of the description they are registered with. The since can
-        //   be anything.
+        // - Batches written by compaction. These always have an inline desc
+        //   that exactly matches the one they are registered with. The since
+        //   can be anything.
         let inline_desc = &part.desc;
-        // Technically we could truncate any batch where the since is less_than the
-        // output_desc's lower, but we're strict here so we don't get any surprises.
-        let needs_truncation = inline_desc.since() == &Antichain::from_elem(T::minimum());
-        if !needs_truncation {
+        let needs_truncation = inline_desc.lower() != registered_desc.lower()
+            || inline_desc.upper() != registered_desc.upper();
+        if needs_truncation {
             assert!(
-                PartialOrder::less_equal(registered_desc.lower(), inline_desc.lower())
-                    && PartialOrder::less_equal(inline_desc.upper(), registered_desc.upper()),
+                PartialOrder::less_equal(inline_desc.lower(), registered_desc.lower()),
                 "key={} inline={:?} registered={:?}",
                 key,
                 inline_desc,
                 registered_desc
+            );
+            assert!(
+                PartialOrder::less_equal(registered_desc.upper(), inline_desc.upper()),
+                "key={} inline={:?} registered={:?}",
+                key,
+                inline_desc,
+                registered_desc
+            );
+            // As mentioned above, batches that needs truncation will always have a
+            // since of the minimum timestamp. Technically we could truncate any
+            // batch where the since is less_than the output_desc's lower, but we're
+            // strict here so we don't get any surprises.
+            assert_eq!(
+                inline_desc.since(),
+                &Antichain::from_elem(T::minimum()),
+                "key={} inline={:?} registered={:?}",
+                key,
+                inline_desc,
+                registered_desc
+            );
+        } else {
+            assert_eq!(
+                inline_desc, &registered_desc,
+                "key={} inline={:?} registered={:?}",
+                key, inline_desc, registered_desc
             );
         }
 

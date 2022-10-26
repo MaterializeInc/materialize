@@ -29,7 +29,7 @@ use mz_persist::indexed::columnar::{
 };
 use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Timestamp;
 use timely::PartialOrder;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot, TryAcquireError};
@@ -329,39 +329,6 @@ where
         writer_id: WriterId,
     ) -> Result<CompactRes<T>, anyhow::Error> {
         let () = Self::validate_req(&req)?;
-
-        // special case: if our inputs only contain a single batch with >0 updates in a single run,
-        // we can return the same batch with an updated description to avoid pulling it down and
-        // rewriting it.
-        let mut single_nonempty_batch = None;
-        for batch in &req.inputs {
-            if batch.len > 0 {
-                match single_nonempty_batch {
-                    None => single_nonempty_batch = Some(batch),
-                    Some(_previous_nonempty_batch) => {
-                        single_nonempty_batch = None;
-                        break;
-                    }
-                }
-            }
-        }
-        if let Some(single_nonempty_batch) = single_nonempty_batch {
-            // if we have a single nonempty batch, we still want to compact if:
-            //   - it has >1 run, so its runs can be merged together
-            //   - it it has a since of the minimum antichain. this implies the batch was
-            //     produced by a writer's append (i.e. not from compaction), and it could
-            //     require truncation. rewriting the batch via compaction will trim out any
-            //     of the unneeded data.
-            if single_nonempty_batch.runs.len() == 0
-                && single_nonempty_batch.desc.since() != &Antichain::from_elem(T::minimum())
-            {
-                let mut output = single_nonempty_batch.clone();
-                output.desc = req.desc;
-                metrics.compaction.single_batch_fast_path.inc();
-                return Ok(CompactRes { output });
-            }
-        }
-
         // compaction needs memory enough for at least 2 runs and 2 in-progress parts
         assert!(cfg.compaction_memory_bound_bytes >= 4 * cfg.blob_target_size);
         // reserve space for the in-progress part to be held in-mem representation and columnar
