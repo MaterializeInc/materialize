@@ -24,7 +24,7 @@ use timely::progress::Antichain;
 use timely::PartialOrder;
 use tokio::sync::mpsc;
 use tokio_postgres::error::SqlState;
-use tokio_postgres::{Client, Statement, Transaction};
+use tokio_postgres::{Client, Statement};
 use tracing::{error, event, warn, Level};
 
 use mz_ore::retry::Retry;
@@ -198,12 +198,22 @@ impl<'a> CountedStatements<'a> {
     }
 }
 
+#[derive(Debug)]
+enum TransactionMode {
+    /// Transact operations occurs in a normal transaction.
+    Writeable,
+    /// Transact operations occur in a read-only transaction.
+    Readonly,
+    /// Transact operations occur in a nested transaction using SAVEPOINTs.
+    Savepoint,
+}
+
 /// A Stash whose data is stored in a Postgres database. The format of the
 /// tables are not specified and should not be relied upon. The only promise is
 /// stability. Any changes to the table schemas will be accompanied by a clear
 /// migration path.
 pub struct Postgres {
-    readonly: bool,
+    txn_mode: TransactionMode,
     url: String,
     schema: Option<String>,
     tls: MakeTlsConnector,
@@ -256,7 +266,7 @@ impl Postgres {
         schema: Option<String>,
         tls: MakeTlsConnector,
     ) -> Result<Postgres, StashError> {
-        Self::new_inner(false, url, schema, tls).await
+        Self::new_inner(TransactionMode::Writeable, url, schema, tls).await
     }
 
     /// Opens the stash stored at the specified path in readonly mode: any
@@ -266,19 +276,27 @@ impl Postgres {
         schema: Option<String>,
         tls: MakeTlsConnector,
     ) -> Result<Postgres, StashError> {
-        Self::new_inner(true, url, schema, tls).await
+        Self::new_inner(TransactionMode::Readonly, url, schema, tls).await
+    }
+
+    /// Opens the stash stored at the specified path in savepoint mode: mutating
+    /// queries are allowed, but they will never be committed, and the epoch is
+    /// not incremented on start. This mode is used to test migrations on a
+    /// running stash.
+    pub async fn new_savepoint(url: String, tls: MakeTlsConnector) -> Result<Postgres, StashError> {
+        Self::new_inner(TransactionMode::Savepoint, url, None, tls).await
     }
 
     async fn new_inner(
-        readonly: bool,
+        txn_mode: TransactionMode,
         url: String,
         schema: Option<String>,
         tls: MakeTlsConnector,
     ) -> Result<Postgres, StashError> {
-        let (sinces_tx, sinces_rx) = mpsc::unbounded_channel();
+        let (sinces_tx, mut sinces_rx) = mpsc::unbounded_channel();
 
         let mut conn = Postgres {
-            readonly,
+            txn_mode,
             url: url.clone(),
             schema,
             tls: tls.clone(),
@@ -319,7 +337,15 @@ impl Postgres {
             break;
         }
 
-        Consolidator::start(url, tls, sinces_rx);
+        if matches!(conn.txn_mode, TransactionMode::Savepoint) {
+            // In savepoint mode, pretend that we're consolidating things.
+            mz_ore::task::spawn(|| "stash consolidation dropper", async move {
+                while let Some(_) = sinces_rx.recv().await {}
+            });
+        } else {
+            Consolidator::start(url, tls, sinces_rx);
+        }
+
         Ok(conn)
     }
 
@@ -343,7 +369,7 @@ impl Postgres {
         if self.epoch.is_none() {
             let tx = client
                 .build_transaction()
-                .read_only(self.readonly)
+                .read_only(matches!(self.txn_mode, TransactionMode::Readonly))
                 .start()
                 .await?;
             let fence_exists: bool = tx
@@ -358,10 +384,12 @@ impl Postgres {
                 .await?
                 .get(0);
             if !fence_exists {
-                if self.readonly {
-                    return Err(
-                        "stash tables do not exist; will not create in readonly mode".into(),
-                    );
+                if !matches!(self.txn_mode, TransactionMode::Writeable) {
+                    return Err(format!(
+                        "stash tables do not exist; will not create in {:?} mode",
+                        self.txn_mode
+                    )
+                    .into());
                 }
                 tx.batch_execute(SCHEMA).await?;
             }
@@ -370,7 +398,7 @@ impl Postgres {
             // can't accidentally have the same epoch, nonce pair (especially risky if the
             // current epoch has been bumped exactly once, then gets recreated by another
             // connection that also bumps it once).
-            let epoch = if !self.readonly {
+            let epoch = if matches!(self.txn_mode, TransactionMode::Writeable) {
                 tx.query_one(
                     "UPDATE fence SET epoch=epoch+1, nonce=$1 RETURNING epoch",
                     &[&self.nonce.to_vec()],
@@ -409,6 +437,23 @@ impl Postgres {
         }
 
         self.statements = Some(PreparedStatements::from(&client).await?);
+
+        // In savepoint mode start a transaction that will never be committed.
+        // Use a low priority so the rw stash won't ever block waiting for the
+        // savepoint stash to complete its transaction.
+        if matches!(self.txn_mode, TransactionMode::Savepoint) {
+            client
+                .batch_execute(if self.is_cockroach.unwrap_or(false) {
+                    "BEGIN PRIORITY LOW"
+                } else {
+                    // PRIORITY is a Cockroach extension, so disable it if we
+                    // are connecting to Postgres. Needed because some testdrive
+                    // tests still use Postgres as the stash backend.
+                    "BEGIN"
+                })
+                .await?;
+        }
+
         self.client = Some(client);
         Ok(())
     }
@@ -435,7 +480,7 @@ impl Postgres {
     where
         F: for<'a> Fn(
             &'a CountedStatements<'a>,
-            &'a Transaction,
+            &'a Client,
         ) -> BoxFuture<'a, Result<T, StashError>>,
     {
         let retry = Retry::default()
@@ -444,28 +489,36 @@ impl Postgres {
         let mut retry = Box::pin(retry);
         let mut attempt: u64 = 0;
         loop {
+            // Execute the operation in a transaction or savepoint.
             match self.transact_inner(&f).await {
                 Ok(r) => return Ok(r),
-                Err(e) => match &e.inner {
-                    InternalStashError::Postgres(pgerr) => {
-                        // Some errors aren't retryable.
-                        if let Some(dberr) = pgerr.as_db_error() {
-                            if matches!(
-                                dberr.code(),
-                                &SqlState::UNDEFINED_TABLE
-                                    | &SqlState::WRONG_OBJECT_TYPE
-                                    | &SqlState::READ_ONLY_SQL_TRANSACTION
-                            ) {
-                                return Err(e);
+                Err(e) => {
+                    // If this returns an error, close the connection to force a
+                    // reconnect (and also not need to worry about any
+                    // in-progress transaction state cleanup).
+                    self.client = None;
+                    match &e.inner {
+                        InternalStashError::Postgres(pgerr)
+                            if !matches!(self.txn_mode, TransactionMode::Savepoint) =>
+                        {
+                            // Some errors aren't retryable.
+                            if let Some(dberr) = pgerr.as_db_error() {
+                                if matches!(
+                                    dberr.code(),
+                                    &SqlState::UNDEFINED_TABLE
+                                        | &SqlState::WRONG_OBJECT_TYPE
+                                        | &SqlState::READ_ONLY_SQL_TRANSACTION
+                                ) {
+                                    return Err(e);
+                                }
                             }
+                            attempt += 1;
+                            error!("tokio-postgres stash error, retry attempt {attempt}: {pgerr}");
+                            retry.next().await;
                         }
-                        attempt += 1;
-                        error!("tokio-postgres stash error, retry attempt {attempt}: {pgerr}");
-                        self.client = None;
-                        retry.next().await;
+                        _ => return Err(e),
                     }
-                    _ => return Err(e),
-                },
+                }
             }
         }
     }
@@ -475,7 +528,7 @@ impl Postgres {
     where
         F: for<'a> Fn(
             &'a CountedStatements<'a>,
-            &'a Transaction,
+            &'a Client,
         ) -> BoxFuture<'a, Result<T, StashError>>,
     {
         let reconnect = match &self.client {
@@ -489,16 +542,18 @@ impl Postgres {
         let client = self.client.as_mut().unwrap();
         let stmts = self.statements.as_ref().unwrap();
         let stmts = CountedStatements::from(stmts);
-        let tx = client
-            .build_transaction()
-            .read_only(self.readonly)
-            .start()
-            .await?;
+        // Generate statements to execute depending on our mode.
+        let (tx_start, tx_end) = match self.txn_mode {
+            TransactionMode::Writeable => ("BEGIN", "COMMIT"),
+            TransactionMode::Readonly => ("BEGIN READ  ONLY", "COMMIT"),
+            TransactionMode::Savepoint => ("SAVEPOINT stash", "RELEASE SAVEPOINT stash"),
+        };
+        client.batch_execute(tx_start).await?;
         // Pipeline the epoch query and closure.
-        let epoch_fut = tx
+        let epoch_fut = client
             .query_one(stmts.select_epoch(), &[])
             .map_err(|err| err.into());
-        let f_fut = f(&stmts, &tx);
+        let f_fut = f(&stmts, client);
         let (row, res) = future::try_join(epoch_fut, f_fut).await?;
         let current_epoch: i64 = row.get(0);
         if Some(current_epoch) != self.epoch {
@@ -518,13 +573,13 @@ impl Postgres {
                 counts = format!("{:?}", counts.lock().unwrap()),
             );
         }
-        tx.commit().await?;
+        client.batch_execute(tx_end).await?;
         Ok(res)
     }
 
     async fn since_tx(
         stmts: &CountedStatements<'_>,
-        tx: &Transaction<'_>,
+        tx: &Client,
         collection_id: Id,
     ) -> Result<Antichain<Timestamp>, StashError> {
         let since: Option<Timestamp> = tx
@@ -536,7 +591,7 @@ impl Postgres {
 
     async fn upper_tx(
         stmts: &CountedStatements<'_>,
-        tx: &Transaction<'_>,
+        tx: &Client,
         collection_id: Id,
     ) -> Result<Antichain<Timestamp>, StashError> {
         let upper: Option<Timestamp> = tx
@@ -550,7 +605,7 @@ impl Postgres {
     /// current upper can be `Some` if it is already known.
     async fn seal_batch_tx<'a, I>(
         stmts: &CountedStatements<'_>,
-        tx: &Transaction<'_>,
+        tx: &Client,
         seals: I,
     ) -> Result<(), StashError>
     where
@@ -586,7 +641,7 @@ impl Postgres {
     /// `upper` can be `Some` if the collection's upper is already known.
     async fn update_many_tx(
         stmts: &CountedStatements<'_>,
-        tx: &Transaction<'_>,
+        tx: &Client,
         collection_id: Id,
         entries: &[((Value, Value), Timestamp, Diff)],
         upper: Option<Antichain<Timestamp>>,
@@ -631,7 +686,7 @@ impl Postgres {
     /// upper>)`. The current upper can be `Some` if it is already known.
     async fn compact_batch_tx<'a, I>(
         stmts: &CountedStatements<'_>,
-        tx: &Transaction<'_>,
+        tx: &Client,
         compactions: I,
     ) -> Result<(), StashError>
     where
@@ -678,7 +733,7 @@ impl Postgres {
     /// Returns sinces for the requested collections.
     async fn sinces_batch_tx(
         stmts: &CountedStatements<'_>,
-        tx: &Transaction<'_>,
+        tx: &Client,
         collections: &[Id],
     ) -> Result<HashMap<Id, Antichain<Timestamp>>, StashError> {
         let mut futures = Vec::with_capacity(collections.len());

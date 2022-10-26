@@ -4280,6 +4280,7 @@ dependencies = [
  "mz-build-info",
  "mz-ore",
  "mz-postgres-util",
+ "mz-secrets",
  "mz-stash",
  "mz-storage",
  "once_cell",

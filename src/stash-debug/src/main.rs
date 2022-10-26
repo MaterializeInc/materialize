@@ -16,23 +16,35 @@ use std::{
     path::PathBuf,
     process,
     str::FromStr,
+    sync::Arc,
 };
 
 use clap::Parser;
 use once_cell::sync::Lazy;
+use tokio::sync::mpsc;
 
-use mz_adapter::catalog::storage as catalog;
+use mz_adapter::{
+    catalog::{
+        storage::{self as catalog, BootstrapArgs},
+        Catalog, Config,
+    },
+    DUMMY_AVAILABILITY_ZONE,
+};
 use mz_build_info::{build_info, BuildInfo};
-use mz_ore::cli::{self, CliConfig};
+use mz_ore::{
+    cli::{self, CliConfig},
+    metrics::MetricsRegistry,
+    now::SYSTEM_TIME,
+};
+use mz_secrets::InMemorySecretsController;
 use mz_stash::{Append, Postgres, Stash};
 use mz_storage::controller as storage;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
-// TODO: When I use VERSION.as_str() in the clap derive below I get an error.
-pub const VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
+pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
 
 #[derive(Parser, Debug)]
-#[clap(name = "stash", next_line_help = true, version = "todo")]
+#[clap(name = "stash", next_line_help = true, version = VERSION.as_str())]
 pub struct Args {
     #[clap(long, env = "POSTGRES_URL")]
     postgres_url: String,
@@ -51,6 +63,12 @@ enum Action {
         key: serde_json::Value,
         value: serde_json::Value,
     },
+    /// Checks if the specified stash could be upgraded from its state to the
+    /// adapter catalog at the version of this binary. Prints a success message
+    /// or error message. Exits with 0 if the upgrade would succeed, otherwise
+    /// non-zero. Can be used on a running environmentd. Operates without
+    /// interfering with it or committing any data to that stash.
+    UpgradeCheck,
 }
 
 #[tokio::main]
@@ -90,6 +108,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             let stash = Postgres::new(args.postgres_url, None, tls).await?;
             edit(stash, usage, collection, key, value).await
         }
+        Action::UpgradeCheck => {
+            // upgrade needs fake writes, so use a savepoint.
+            let stash = Postgres::new_savepoint(args.postgres_url, tls).await?;
+            upgrade_check(stash, usage).await
+        }
     }
 }
 
@@ -113,6 +136,11 @@ async fn dump(
     let data = usage.dump(&mut stash).await?;
     serde_json::to_writer_pretty(&mut target, &data)?;
     write!(&mut target, "\n")?;
+    Ok(())
+}
+async fn upgrade_check(stash: impl Append, usage: Usage) -> Result<(), anyhow::Error> {
+    let msg = usage.upgrade_check(stash).await?;
+    println!("{msg}");
     Ok(())
 }
 
@@ -268,6 +296,54 @@ impl Usage {
             }
         }
         anyhow::bail!("unknown collection {} for stash {:?}", collection, self)
+    }
+
+    async fn upgrade_check(&self, stash: impl Append) -> Result<String, anyhow::Error> {
+        if !matches!(self, Self::Catalog) {
+            anyhow::bail!("upgrade_check expected Catalog stash, found {:?}", self);
+        }
+
+        let metrics_registry = &MetricsRegistry::new();
+        let now = SYSTEM_TIME.clone();
+        let (consolidations_tx, consolidations_rx) = mpsc::unbounded_channel();
+        // Leak the receiver so it's not dropped and send will work.
+        std::mem::forget(consolidations_rx);
+        let storage = mz_adapter::catalog::storage::Connection::open(
+            stash,
+            &BootstrapArgs {
+                now: (now)(),
+                default_cluster_replica_size: "1".into(),
+                builtin_cluster_replica_size: "1".into(),
+                default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
+            },
+            consolidations_tx.clone(),
+        )
+        .await?;
+        let secrets_reader = Arc::new(InMemorySecretsController::new());
+        let (_catalog, _, _, last_catalog_version) = Catalog::open(Config {
+            storage,
+            unsafe_mode: true,
+            persisted_introspection: true,
+            build_info: &BUILD_INFO,
+            environment_id: "environment-stash-debug".to_string(),
+            now,
+            skip_migrations: false,
+            metrics_registry,
+            cluster_replica_sizes: Default::default(),
+            storage_host_sizes: Default::default(),
+            default_storage_host_size: None,
+            bootstrap_system_vars: None,
+            availability_zones: vec![],
+            secrets_reader,
+            egress_ips: vec![],
+        })
+        .await?;
+
+        Ok(format!(
+            "catalog upgrade from {} to {} would succeed",
+            last_catalog_version,
+            BUILD_INFO.human_version(),
+        ))
     }
 }
 

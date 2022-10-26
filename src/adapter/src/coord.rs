@@ -1021,7 +1021,7 @@ pub async fn serve<S: Append + 'static>(
     availability_zones.shuffle(&mut rand::thread_rng());
 
     info!("coordinator init: opening catalog");
-    let (mut catalog, builtin_migration_metadata, builtin_table_updates) =
+    let (mut catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
         Catalog::open(catalog::Config {
             storage,
             unsafe_mode,
