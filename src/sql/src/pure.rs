@@ -51,6 +51,7 @@ use crate::kafka_util;
 use crate::kafka_util::KafkaConfigOptionExtracted;
 use crate::names::{Aug, RawDatabaseSpecifier, ResolvedObjectName};
 use crate::normalize;
+use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
 use crate::plan::StatementContext;
 
@@ -333,9 +334,13 @@ pub async fn purify_create_source(
                 let mut columns = vec![];
                 for c in table.columns.iter() {
                     let name = Ident::new(c.name.clone());
-
-                    let ty = mz_pgrepr::Type::from_oid_and_typmod(c.type_oid, c.type_mod)
-                        .map_err(|e| sql_err!("{}", e))?;
+                    let ty = mz_pgrepr::Type::from_oid_and_typmod(c.type_oid, c.type_mod).map_err(
+                        |e| PlanError::UnrecognizedTypeInPostgresSource {
+                            table: subsource_name.to_string(),
+                            column: name.to_string(),
+                            e,
+                        },
+                    )?;
                     let data_type = scx.resolve_type(ty)?;
 
                     columns.push(ColumnDef {
