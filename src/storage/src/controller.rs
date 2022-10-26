@@ -292,7 +292,28 @@ pub trait StorageController: Debug + Send {
         policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>,
     ) -> Result<(), StorageError>;
 
-    /// Accept write frontier updates from the compute layer.
+    /// Ingests write frontier updates for collections that this controller
+    /// maintains and potentially generates updates to read capabilities, which
+    /// are passed on to [`StorageController::update_read_capabilities`].
+    ///
+    /// These updates come from the entity that is responsible for writing to
+    /// the collection, and in turn advancing its `upper` (aka
+    /// `write_frontier`). The most common such "writers" are:
+    ///
+    /// * `storaged` instances, for source ingestions
+    ///
+    /// * introspection collections (which this controller writes to)
+    ///
+    /// * Tables (which are written to by this controller)
+    ///
+    /// * Materialized Views, which are running inside COMPUTE, and for which
+    /// COMPUTE sends updates to this storage controller
+    ///
+    /// The so-called "implied capability" is a read capability for a collection
+    /// that is updated based on the write frontier and the collections
+    /// [`ReadPolicy`]. Advancing the write frontier might change this implied
+    /// capability, which in turn might change the overall `since` (a
+    /// combination of all read capabilities) of a collection.
     async fn update_write_frontiers(
         &mut self,
         updates: &[(GlobalId, Antichain<Self::Timestamp>)],
