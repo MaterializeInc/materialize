@@ -13,16 +13,16 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use chrono::{DateTime, NaiveDateTime, Utc};
-use mz_persist_client::{PersistLocation, ShardId};
-use timely::progress::{Antichain, Timestamp as _};
+use timely::progress::Antichain;
 use timely::PartialOrder;
 use tokio::sync::Mutex;
 use tracing::trace;
 
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
+use mz_persist_client::read::{Listen, ListenEvent};
 use mz_persist_client::write::WriteHandle;
+use mz_persist_client::{PersistLocation, ShardId};
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 
 use crate::types::sources::SourceData;
@@ -35,7 +35,7 @@ pub struct Healthchecker {
     /// Internal ID of the source (e.g. s1)
     sink_id: GlobalId,
     /// Current status of this source
-    current_status: SinkStatus,
+    current_status: Option<SinkStatus>,
     /// Last observed upper
     upper: Antichain<Timestamp>,
     /// Write handle of the Healthchecker persist shard
@@ -50,6 +50,9 @@ pub struct Healthchecker {
 
 impl Healthchecker {
     /// Create healthchecker for sink, recorded on `status_shard_id` at `persist_location`.
+    ///
+    /// This function initializes the Healthchecker in the `SinkStatus::Setup` state without writing to persistent
+    /// storage.
     pub async fn new(
         sink_id: GlobalId,
         persist_clients: &Arc<Mutex<PersistClientCache>>,
@@ -70,34 +73,24 @@ impl Healthchecker {
             .await
             .context("error opening Healthchecker persist shard")?;
 
-        let (since, upper) = (read_handle.since().clone(), write_handle.upper().clone());
+        let upper = write_handle.upper().clone();
 
-        // More details on why the listener starts at `since` instead of `upper` in the docstring for [`bootstrap_state`]
+        // We don't need access to the old history so start at `upper`.
         let listener = read_handle
             .clone()
             .await
-            .listen(since.clone())
+            .listen(upper.clone())
             .await
             .expect("since <= as_of asserted");
 
-        let mut healthchecker = Self {
+        Ok(Self {
             sink_id,
-            current_status: SinkStatus::Starting,
-            upper: Antichain::from_elem(Timestamp::minimum()),
+            current_status: None,
+            upper,
             write_handle,
             listener,
             now,
-        };
-
-        // Bootstrap should reload the previous state of the source, if any
-        healthchecker.bootstrap_state(read_handle, &upper).await;
-        tracing::trace!(
-            "Healthchecker for source {} at status {} finished bootstrapping!",
-            &healthchecker.sink_id,
-            &healthchecker.current_status
-        );
-
-        Ok(healthchecker)
+        })
     }
 
     /// Report a SinkStatus::Stalled and then panic with the same message
@@ -117,11 +110,11 @@ impl Healthchecker {
     /// Process a [`SinkStatus`] emitted by a sink
     pub async fn update_status(&mut self, status_update: SinkStatus) {
         trace!(
-            "Processing status update: {status_update:?}, current status is {current_status}",
+            "Processing status update: {status_update:?}, current status is {current_status:?}",
             current_status = &self.current_status
         );
         // Only update status if it is a valid transition
-        if self.current_status.can_transition(&status_update) {
+        if SinkStatus::can_transition(self.current_status.as_ref(), &status_update) {
             loop {
                 let next_ts = (self.now)();
                 let new_upper = Antichain::from_elem(Timestamp::from(next_ts).step_forward());
@@ -135,7 +128,7 @@ impl Healthchecker {
                     Ok(Ok(Ok(()))) => {
                         self.upper = new_upper;
                         // Update internal status only after a successful append
-                        self.current_status = status_update;
+                        self.current_status = Some(status_update);
                         break;
                     }
                     Ok(Ok(Err(actual_upper))) => {
@@ -147,7 +140,8 @@ impl Healthchecker {
                         // Sync to the new upper, go to the loop again
                         self.sync(&actual_upper.0).await;
                         // If we can't transition to the new status after the sync, no need to do anything else
-                        if !self.current_status.can_transition(&status_update) {
+                        if !SinkStatus::can_transition(self.current_status.as_ref(), &status_update)
+                        {
                             break;
                         }
                     }
@@ -184,32 +178,6 @@ impl Healthchecker {
         }
     }
 
-    /// Bootstraps the state of this Healthchecker instance by reading data from the
-    /// underlying storage collection
-    ///
-    /// This function works by first reading a snapshot of the collection at its `since`,
-    /// and then using the listener to read all updates from `since` up until (but not including)
-    /// `upper`. This is done as a way to read all data in the collection, but without
-    /// having to assume that the `upper` is a single `u64`.
-    async fn bootstrap_state(
-        &mut self,
-        mut read_handle: ReadHandle<SourceData, (), Timestamp, i64>,
-        upper: &Antichain<Timestamp>,
-    ) {
-        let since = read_handle.since().clone();
-        trace!("Bootstrapping state as of {:?}!", since);
-        // Ensure the collection is readable at `since`
-        if PartialOrder::less_than(&since, &self.upper) {
-            let updates = read_handle
-                .snapshot_and_fetch(since.clone())
-                .await
-                .expect("local since is not beyond read handle's since");
-            self.process_collection_updates(updates);
-        };
-        self.sync(upper).await;
-        trace!("State bootstrapped as of {since:?}!");
-    }
-
     /// Process any updates that might be in the collection to update current status
     /// Currently assumes that the collection only contains assertions (rows with diff = 1)
     fn process_collection_updates(
@@ -241,8 +209,10 @@ impl Healthchecker {
             };
 
             if self.sink_id.to_string() == row_source_id {
-                self.current_status = SinkStatus::try_from_status_error(row_status, row_error)
-                    .expect("invalid status and error");
+                self.current_status = Some(
+                    SinkStatus::try_from_status_error(row_status, row_error)
+                        .expect("invalid status and error"),
+                );
             }
         }
     }
@@ -325,17 +295,20 @@ impl SinkStatus {
         }
     }
 
-    fn can_transition(&self, new_status: &SinkStatus) -> bool {
-        match self {
+    fn can_transition(old_status: Option<&SinkStatus>, new_status: &SinkStatus) -> bool {
+        match old_status {
+            None => true,
             // Failed can only transition to Dropped
-            SinkStatus::Failed(_) => matches!(new_status, SinkStatus::Dropped),
+            Some(SinkStatus::Failed(_)) => matches!(new_status, SinkStatus::Dropped),
             // Dropped is a terminal state
-            SinkStatus::Dropped => false,
+            Some(SinkStatus::Dropped) => false,
             // All other states can transition freely to any other state
-            SinkStatus::Setup
-            | SinkStatus::Starting
-            | SinkStatus::Running
-            | SinkStatus::Stalled(_) => self != new_status,
+            Some(
+                old @ SinkStatus::Setup
+                | old @ SinkStatus::Starting
+                | old @ SinkStatus::Running
+                | old @ SinkStatus::Stalled(_),
+            ) => old != new_status,
         }
     }
 
@@ -378,7 +351,7 @@ mod tests {
         let persist_cache = persist_cache();
         let healthchecker = simple_healthchecker(ShardId::new(), 1, &persist_cache).await;
 
-        assert_eq!(healthchecker.current_status, SinkStatus::Starting);
+        assert_eq!(healthchecker.current_status, None);
     }
 
     fn stalled() -> SinkStatus {
@@ -387,60 +360,6 @@ mod tests {
 
     fn failed() -> SinkStatus {
         SinkStatus::Failed("".into())
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_simple_bootstrap() {
-        let shard_id = ShardId::new();
-        let persist_cache = persist_cache();
-
-        let mut healthchecker = simple_healthchecker(shard_id, 1, &persist_cache).await;
-
-        tokio::time::advance(Duration::from_millis(1)).await;
-
-        // Update status to Running
-        healthchecker.update_status(SinkStatus::Running).await;
-
-        // Check that the status is indeed Running
-        assert_eq!(healthchecker.current_status, SinkStatus::Running);
-
-        // Start new healthchecker on the same shard
-        let healthchecker = simple_healthchecker(shard_id, 1, &persist_cache).await;
-
-        // Ensure that we loaded the previous state
-        assert_eq!(healthchecker.current_status, SinkStatus::Running);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_bootstrap_last_state() {
-        let shard_id = ShardId::new();
-        let persist_cache = persist_cache();
-
-        let mut healthchecker = simple_healthchecker(shard_id, 1, &persist_cache).await;
-
-        tokio::time::advance(Duration::from_millis(1)).await;
-
-        // Update status to Running
-        healthchecker.update_status(SinkStatus::Running).await;
-
-        // Now update status to Stalled
-        tokio::time::advance(Duration::from_millis(1)).await;
-        let error = String::from("some error here");
-        healthchecker
-            .update_status(SinkStatus::Stalled(error.clone()))
-            .await;
-
-        // Check that the status is indeed Stalled
-        assert_eq!(
-            healthchecker.current_status,
-            SinkStatus::Stalled(error.clone())
-        );
-
-        // Start new healthchecker on the same shard
-        let healthchecker = simple_healthchecker(shard_id, 1, &persist_cache).await;
-
-        // Ensure that it is at the latest state, Stalled, not Running or Starting
-        assert_eq!(healthchecker.current_status, SinkStatus::Stalled(error));
     }
 
     #[tokio::test(start_paused = true)]
@@ -459,8 +378,8 @@ mod tests {
         // Start new healthchecker on the same shard for source u2
         let healthchecker = simple_healthchecker(shard_id, 2, &persist_cache).await;
 
-        // It should ignore the state for source u1, and be at the Starting state
-        assert_eq!(healthchecker.current_status, SinkStatus::Starting);
+        // It should ignore the state for source u1, and be at the Setup state
+        assert_eq!(healthchecker.current_status, None);
     }
 
     #[tokio::test(start_paused = true)]
@@ -520,13 +439,16 @@ mod tests {
             .await;
         assert_eq!(
             healthchecker.current_status,
-            SinkStatus::Failed(error.clone())
+            Some(SinkStatus::Failed(error.clone()))
         );
 
         // Validate that we can't transition back to Running
         tokio::time::advance(Duration::from_millis(1)).await;
         healthchecker.update_status(SinkStatus::Running).await;
-        assert_eq!(healthchecker.current_status, SinkStatus::Failed(error));
+        assert_eq!(
+            healthchecker.current_status,
+            Some(SinkStatus::Failed(error))
+        );
 
         // Check that the error message is persisted
         let error_message = dump_storage_collection(shard_id, &persist_cache)
@@ -549,7 +471,7 @@ mod tests {
         let test_cases = [
             // Allowed transitions
             (
-                SinkStatus::Setup,
+                Some(SinkStatus::Setup),
                 vec![
                     SinkStatus::Starting,
                     SinkStatus::Running,
@@ -560,7 +482,7 @@ mod tests {
                 true,
             ),
             (
-                SinkStatus::Starting,
+                Some(SinkStatus::Starting),
                 vec![
                     SinkStatus::Setup,
                     SinkStatus::Running,
@@ -571,7 +493,7 @@ mod tests {
                 true,
             ),
             (
-                SinkStatus::Running,
+                Some(SinkStatus::Running),
                 vec![
                     SinkStatus::Setup,
                     SinkStatus::Starting,
@@ -582,7 +504,7 @@ mod tests {
                 true,
             ),
             (
-                stalled(),
+                Some(stalled()),
                 vec![
                     SinkStatus::Setup,
                     SinkStatus::Starting,
@@ -592,14 +514,30 @@ mod tests {
                 ],
                 true,
             ),
-            (failed(), vec![SinkStatus::Dropped], true),
+            (Some(failed()), vec![SinkStatus::Dropped], true),
+            (
+                None,
+                vec![
+                    SinkStatus::Setup,
+                    SinkStatus::Starting,
+                    SinkStatus::Running,
+                    stalled(),
+                    failed(),
+                    SinkStatus::Dropped,
+                ],
+                true,
+            ),
             // Forbidden transitions
-            (SinkStatus::Setup, vec![SinkStatus::Setup], false),
-            (SinkStatus::Starting, vec![SinkStatus::Starting], false),
-            (SinkStatus::Running, vec![SinkStatus::Running], false),
-            (stalled(), vec![stalled()], false),
+            (Some(SinkStatus::Setup), vec![SinkStatus::Setup], false),
             (
-                failed(),
+                Some(SinkStatus::Starting),
+                vec![SinkStatus::Starting],
+                false,
+            ),
+            (Some(SinkStatus::Running), vec![SinkStatus::Running], false),
+            (Some(stalled()), vec![stalled()], false),
+            (
+                Some(failed()),
                 vec![
                     SinkStatus::Setup,
                     SinkStatus::Starting,
@@ -610,7 +548,7 @@ mod tests {
                 false,
             ),
             (
-                SinkStatus::Dropped,
+                Some(SinkStatus::Dropped),
                 vec![
                     SinkStatus::Setup,
                     SinkStatus::Starting,
@@ -627,12 +565,12 @@ mod tests {
             run_test(test_case)
         }
 
-        fn run_test(test_case: (SinkStatus, Vec<SinkStatus>, bool)) {
+        fn run_test(test_case: (Option<SinkStatus>, Vec<SinkStatus>, bool)) {
             let (from_status, to_status, allowed) = test_case;
             for status in to_status {
                 assert_eq!(
                     allowed,
-                    from_status.can_transition(&status),
+                    SinkStatus::can_transition(from_status.as_ref(), &status),
                     "Bad can_transition: {from_status:?} -> {status:?}; expected allowed: {allowed:?}"
                 );
             }
