@@ -842,6 +842,7 @@ where
         id: source_id,
         storage_metadata,
         persist_clients,
+        now,
         ..
     } = config;
 
@@ -934,8 +935,9 @@ where
             };
 
             info!("Health for source {source_id} initialized to: {last_reported_status:?}");
-            let row = healthcheck::pack_status_row(source_id, last_reported_status.name(), last_reported_status.error(), 0);
-            write_to_persist(row, Timestamp::MIN).await;
+            let now_ms = now();
+            let row = healthcheck::pack_status_row(source_id, last_reported_status.name(), last_reported_status.error(), now_ms);
+            write_to_persist(row, Timestamp::from(now_ms)).await;
 
             while scheduler.notified().await {
                 if weak_token.upgrade().is_none() {
@@ -955,8 +957,9 @@ where
                 let new_status = overall_status(&healths);
                 if &last_reported_status != new_status {
                     info!("Health transition for source {source_id}: {last_reported_status:?} -> {new_status:?}");
-                    let row = healthcheck::pack_status_row(source_id, new_status.name(), new_status.error(), 0);
-                    write_to_persist(row, Timestamp::MIN).await;
+                    let now_ms = now();
+                    let row = healthcheck::pack_status_row(source_id, new_status.name(), new_status.error(), now_ms);
+                    write_to_persist(row, Timestamp::from(now_ms)).await;
 
                     last_reported_status = new_status.clone();
                 }
