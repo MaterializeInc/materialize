@@ -161,7 +161,7 @@ Create an index with an expression to improve query performance over a frequentl
 avoid building downstream views to apply the function like the one used in the example: `upper()`.
 Take into account that aggregations like `count()` cannot be used as index expressions.
 
-For more details on using indexes to optimize queries, see [Optimization](../ops/optimization.md).
+For more details on using indexes to optimize queries, see [Optimization](../../ops/optimization/).
 
 ## Related pages
 

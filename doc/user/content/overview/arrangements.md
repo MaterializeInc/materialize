@@ -119,7 +119,7 @@ columns, in order to ensure good data distribution. Creating an unmaterialized
 view and then specifying a custom index makes the key smaller.
 
 For more infromation on when and how to create an index manually, see
-[Recommendations for query optimization in Materialize](../ops/optimization.md).
+[Recommendations for query optimization in Materialize](../../ops/optimization/).
 For more in-depth information on joins, see [Joins in Materialize](https://materialize.com/joins-in-materialize/).
 
 ### Casting the data type
@@ -132,7 +132,7 @@ when you combine 32-bit and 64-bit numbers.
 
 ## Related topics
 
-* [Recommendations for query optimization in Materialize](../ops/optimization.md)
+* [Recommendations for query optimization in Materialize](../../ops/optimization/)
 * [Joins in Materialize](https://materialize.com/joins-in-materialize/)
 * [Diagnosing Using SQL](/ops/troubleshooting/)
 * [Deployment](/ops/optimization/)
