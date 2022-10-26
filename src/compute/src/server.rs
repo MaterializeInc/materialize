@@ -44,6 +44,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistConfig;
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::local::LocalClient;
+use tracing::info;
 
 use crate::communication::initialize_networking;
 use crate::compute_state::ActiveComputeState;
@@ -141,6 +142,7 @@ impl ClusterClient<PartitionedClient> {
     }
 
     fn build_timely(&mut self, comm_config: CommunicationConfig) -> Result<TimelyContainer, Error> {
+        info!("Building timely container with config {comm_config:?}");
         let (client_txs, client_rxs): (Vec<_>, Vec<_>) = (0..comm_config.workers)
             .map(|_| crossbeam_channel::unbounded())
             .unzip();
@@ -197,6 +199,7 @@ impl ClusterClient<PartitionedClient> {
         let timely = match timely {
             Some(existing) => {
                 assert_eq!(existing.comm_config, comm_config);
+                info!("Timely already initialized; re-using.");
                 existing
             }
             None => self.build_timely(comm_config)?,
