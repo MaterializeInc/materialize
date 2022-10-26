@@ -907,4 +907,27 @@ impl<'a> StatementContext<'a> {
     pub fn get_owner_id(&self, id: &ObjectId) -> Option<RoleId> {
         self.catalog.get_owner_id(id)
     }
+
+    /// WARNING! This style of name resolution assumes the referred-to objects exists (i.e. panics
+    /// if objects do not exist) so should never be used to handle user input.
+    pub fn dangerous_resolve_name(&self, name: Vec<&str>) -> ResolvedItemName {
+        tracing::trace!("dangerous_resolve_name {:?}", name);
+        let name = UnresolvedItemName::qualified(&name);
+        let entry = match self.resolve_item(RawItemName::Name(name.clone())) {
+            Ok(entry) => entry,
+            Err(_) => self
+                .resolve_function(name.clone())
+                .expect("name referred to an existing object"),
+        };
+
+        let partial = normalize::unresolved_item_name(name).unwrap();
+        let full_name = self.allocate_full_name(partial).unwrap();
+
+        ResolvedItemName::Item {
+            id: entry.id(),
+            qualifiers: entry.name().qualifiers.clone(),
+            full_name,
+            print_id: true,
+        }
+    }
 }

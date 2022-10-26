@@ -144,7 +144,6 @@ pub enum PlanError {
     UnknownFunction {
         name: String,
         arg_types: Vec<String>,
-        alternative_hint: Option<String>,
     },
     IndistinctFunction {
         name: String,
@@ -252,12 +251,7 @@ impl PlanError {
                 None
             }
             Self::InvalidOptionValue { err, .. } => err.hint(),
-            Self::UnknownFunction { alternative_hint, ..} => {
-                match alternative_hint {
-                    Some(_) => alternative_hint.clone(),
-                    None => Some("No function matches the given name and argument types. You might need to add explicit type casts.".into()),
-                }
-            }
+            Self::UnknownFunction { ..} => Some("No function matches the given name and argument types. You might need to add explicit type casts.".into()),
             Self::IndistinctFunction {..} => {
                 Some("Could not choose a best candidate function. You might need to add explicit type casts.".into())
             }

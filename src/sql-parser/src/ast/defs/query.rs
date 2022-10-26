@@ -23,9 +23,7 @@ use std::hash::Hash;
 use std::mem;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{
-    AstInfo, Expr, FunctionArgs, Ident, ShowStatement, UnresolvedItemName, WithOptionValue,
-};
+use crate::ast::{AstInfo, Expr, FunctionArgs, Ident, ShowStatement, WithOptionValue};
 
 /// The most complete variant of a `SELECT` query expression, optionally
 /// including `WITH`, `UNION` / other set operations, and `ORDER BY`.
@@ -625,7 +623,7 @@ impl_display_t!(TableFactor);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TableFunction<T: AstInfo> {
-    pub name: UnresolvedItemName,
+    pub name: T::ItemName,
     pub args: FunctionArgs<T>,
 }
 impl<T: AstInfo> AstDisplay for TableFunction<T> {
