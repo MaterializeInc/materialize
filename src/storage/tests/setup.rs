@@ -240,7 +240,7 @@ where
 
             let collection_metadata = mz_storage_client::controller::CollectionMetadata {
                 persist_location,
-                remap_shard: mz_persist_client::ShardId::new(),
+                remap_shard: None,
                 data_shard: mz_persist_client::ShardId::new(),
                 status_shard: None,
                 // TODO(guswynn|danhhz): replace this with a real desc when persist requires a
@@ -284,6 +284,7 @@ where
                                     mz_storage_client::types::instances::StorageInstanceId::User(
                                         100,
                                     ),
+                                remap_collection_id: None,
                             },
                         // TODO: test resumption as well!
                         resumption_frontier: Antichain::from_elem(Timestamp::minimum()),

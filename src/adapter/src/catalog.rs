@@ -5667,7 +5667,7 @@ impl Catalog {
                                     self.state.clusters_by_linked_object_id[&id]
                                 }
                             },
-                            remap_collection_id: None,
+                            remap_collection_id: ingestion.progress_subsource,
                         })
                     }
                     mz_sql::plan::DataSourceDesc::Progress => {

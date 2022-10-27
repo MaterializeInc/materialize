@@ -171,3 +171,6 @@ id value
 3  b
 4  c
 5  c
+
+> SELECT * FROM s3_csv_headers_progress
+7

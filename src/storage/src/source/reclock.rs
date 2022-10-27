@@ -673,7 +673,7 @@ mod tests {
                 blob_uri: "mem://".to_owned(),
                 consensus_uri: "mem://".to_owned(),
             },
-            remap_shard: shard,
+            remap_shard: Some(shard),
             data_shard: ShardId::new(),
             status_shard: None,
             relation_desc: RelationDesc::empty(),
