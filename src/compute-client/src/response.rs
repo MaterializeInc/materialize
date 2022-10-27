@@ -203,6 +203,15 @@ pub enum SubscribeResponse<T = mz_repr::Timestamp> {
     DroppedAt(Antichain<T>),
 }
 
+impl<T> SubscribeResponse<T> {
+    /// Converts `self` to an error if a maximum size is exceeded.
+    pub fn to_error_if_exceeds(&mut self, max_result_size: usize) {
+        if let SubscribeResponse::Batch(batch) = self {
+            batch.to_error_if_exceeds(max_result_size);
+        }
+    }
+}
+
 impl RustType<ProtoSubscribeResponse> for SubscribeResponse<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoSubscribeResponse {
         use proto_subscribe_response::Kind::*;
@@ -250,7 +259,29 @@ pub struct SubscribeBatch<T> {
     /// The upper frontier of the batch of updates.
     pub upper: Antichain<T>,
     /// All updates greater than `lower` and not greater than `upper`.
-    pub updates: Vec<(T, Row, Diff)>,
+    ///
+    /// An `Err` variant can be used to indicate e.g. that the size of the updates exceeds internal limits.
+    pub updates: Result<Vec<(T, Row, Diff)>, String>,
+}
+
+impl<T> SubscribeBatch<T> {
+    /// Converts `self` to an error if a maximum size is exceeded.
+    fn to_error_if_exceeds(&mut self, max_result_size: usize) {
+        use bytesize::ByteSize;
+        if let Ok(updates) = &self.updates {
+            let total_size: usize = updates
+                .iter()
+                .map(|(_time, row, _diff)| row.byte_len())
+                .sum();
+            if total_size > max_result_size {
+                use mz_ore::cast::CastFrom;
+                self.updates = Err(format!(
+                    "result exceeds max size of {}",
+                    ByteSize::b(u64::cast_from(max_result_size))
+                ));
+            }
+        }
+    }
 }
 
 impl RustType<ProtoSubscribeBatch> for SubscribeBatch<mz_repr::Timestamp> {
@@ -259,15 +290,31 @@ impl RustType<ProtoSubscribeBatch> for SubscribeBatch<mz_repr::Timestamp> {
         ProtoSubscribeBatch {
             lower: Some(self.lower.into_proto()),
             upper: Some(self.upper.into_proto()),
-            updates: self
-                .updates
-                .iter()
-                .map(|(t, r, d)| ProtoUpdate {
-                    timestamp: t.into(),
-                    row: Some(r.into_proto()),
-                    diff: *d,
-                })
-                .collect(),
+            updates: Some(proto_subscribe_batch::ProtoSubscribeBatchContents {
+                kind: match &self.updates {
+                    Ok(updates) => {
+                        let updates = updates
+                            .iter()
+                            .map(|(t, r, d)| ProtoUpdate {
+                                timestamp: t.into(),
+                                row: Some(r.into_proto()),
+                                diff: *d,
+                            })
+                            .collect();
+
+                        Some(
+                            proto_subscribe_batch::proto_subscribe_batch_contents::Kind::Updates(
+                                proto_subscribe_batch::ProtoSubscribeUpdates { updates },
+                            ),
+                        )
+                    }
+                    Err(text) => Some(
+                        proto_subscribe_batch::proto_subscribe_batch_contents::Kind::Error(
+                            text.clone(),
+                        ),
+                    ),
+                },
+            }),
         }
     }
 
@@ -275,17 +322,25 @@ impl RustType<ProtoSubscribeBatch> for SubscribeBatch<mz_repr::Timestamp> {
         Ok(SubscribeBatch {
             lower: proto.lower.into_rust_if_some("ProtoTailUpdate::lower")?,
             upper: proto.upper.into_rust_if_some("ProtoTailUpdate::upper")?,
-            updates: proto
-                .updates
-                .into_iter()
-                .map(|update| {
-                    Ok((
-                        update.timestamp.into(),
-                        update.row.into_rust_if_some("ProtoUpdate::row")?,
-                        update.diff,
-                    ))
-                })
-                .collect::<Result<Vec<_>, TryFromProtoError>>()?,
+            updates: match proto.updates.unwrap().kind {
+                Some(proto_subscribe_batch::proto_subscribe_batch_contents::Kind::Updates(
+                    updates,
+                )) => Ok(updates
+                    .updates
+                    .into_iter()
+                    .map(|update| {
+                        Ok((
+                            update.timestamp.into(),
+                            update.row.into_rust_if_some("ProtoUpdate::row")?,
+                            update.diff,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, TryFromProtoError>>()?),
+                Some(proto_subscribe_batch::proto_subscribe_batch_contents::Kind::Error(text)) => {
+                    Err(text)
+                }
+                None => Err(TryFromProtoError::missing_field("ProtoPeekResponse::kind"))?,
+            },
         })
     }
 }
@@ -306,7 +361,7 @@ impl Arbitrary for SubscribeBatch<mz_repr::Timestamp> {
             .prop_map(|(lower, upper, updates)| SubscribeBatch {
                 lower: Antichain::from(lower),
                 upper: Antichain::from(upper),
-                updates,
+                updates: Ok(updates),
             })
             .boxed()
     }

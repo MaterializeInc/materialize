@@ -972,7 +972,9 @@ where
                         self.compute.subscribes.insert(subscribe_id, upper.clone());
                     }
 
-                    updates.retain(|(time, _data, _diff)| lower.less_equal(time));
+                    if let Ok(updates) = updates.as_mut() {
+                        updates.retain(|(time, _data, _diff)| lower.less_equal(time));
+                    }
                     Some(ComputeControllerResponse::SubscribeResponse(
                         subscribe_id,
                         SubscribeResponse::Batch(SubscribeBatch {
