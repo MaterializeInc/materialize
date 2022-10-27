@@ -434,6 +434,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 self.controller
                     .active_compute()
                     .add_replica_to_instance(instance.id, replica_id, replica.config)
+                    .await
                     .unwrap();
             }
         }

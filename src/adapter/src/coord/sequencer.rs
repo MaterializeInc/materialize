@@ -878,6 +878,7 @@ impl<S: Append + 'static> Coordinator<S> {
             self.controller
                 .active_compute()
                 .add_replica_to_instance(instance_id, replica_id, replica.config)
+                .await
                 .unwrap();
         }
 
@@ -1030,6 +1031,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.controller
             .active_compute()
             .add_replica_to_instance(instance_id, replica_id, replica_concrete_config)
+            .await
             .unwrap();
 
         if !log_source_ids.is_empty() {
