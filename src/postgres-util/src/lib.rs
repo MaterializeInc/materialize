@@ -380,6 +380,9 @@ impl Config {
                 tempfile.set_permissions(std::fs::Permissions::from_mode(0o400))?;
 
                 let mut builder = openssh::SessionBuilder::default();
+                builder.known_hosts_check(openssh::KnownHosts::Accept);
+                builder.user_known_hosts_file("/dev/null");
+
                 builder.user(user.clone()).port(*port).keyfile(&path);
                 let session = builder.connect(host).await?;
 
