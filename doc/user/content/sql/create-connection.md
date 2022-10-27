@@ -134,7 +134,7 @@ Field                       | Value            | Required | Description
 `SSL KEY`                   | secret           |          | Client SSL key in PEM format.
 `USER`                      | `text`           | ✓        | Database username.
 
-##### Example
+##### Example {#postgres-example}
 
 ```sql
 CREATE SECRET pgpass AS '<POSTGRES_PASSWORD>';
@@ -159,7 +159,7 @@ Field                       | Value            | Required | Description
 `PORT`                      | `int4`           | ✓        | Port for the connection.
 `USER`                      | `text`           | ✓        | Username for the connection.
 
-##### Example
+##### Example {#postgres-ssh-example}
 
 ```sql
     CREATE CONNECTION ssh_connection TO SSH TUNNEL (
