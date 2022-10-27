@@ -47,7 +47,7 @@ impl StackProfile {
             assert!(!(k.contains(':') || k.contains('\n') || v.contains('\n')));
             writeln!(&mut builder, "{k}: {v}").unwrap();
         }
-        writeln!(&mut builder, "").unwrap() ;
+        writeln!(&mut builder, "").unwrap();
 
         for (WeightedStack { addrs, weight }, anno) in &self.stacks {
             let anno = anno.map(|i| &self.annotations[i]);

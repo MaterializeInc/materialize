@@ -307,7 +307,7 @@ mod enabled {
                     .stats()
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 let stats_rendered = render_jemalloc_stats(&stats);
-                let  stats_rendered = stats_rendered
+                let stats_rendered = stats_rendered
                     .iter()
                     .map(|(k, v)| (*k, v.as_str()))
                     .collect::<Vec<_>>();
