@@ -106,7 +106,7 @@ For error message style, we strive to adhere to the [guidelines](https://www.pos
 ```
 Primary: could not parse column "bar.foo"
 Detail: Column "bar.foo" contains an unsupported type.
-Hint: Try using CAST in the CREATE SOURCE statement or excluding this column from replcation.
+Hint: Try using CAST in the CREATE SOURCE statement or excluding this column from replication.
 ```
 
 To use a shortlink in a Hint, add the shortlink to this [file](https://github.com/MaterializeInc/materialize/blob/3efb2c933e4e6c8e694afb1e794c7d8dae368e7d/ci/deploy/website.sh#L29) in your PR to add/modify the hint message. Be mindful that we are committed to the upkeep of the referenced link.
