@@ -41,7 +41,8 @@ impl<S: Append + 'static> Coordinator<S> {
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
         compute_instance: ComputeInstanceId,
-    ) -> Result<(Timestamp, Option<Timeline>), AdapterError> {
+        timeline: &Option<Timeline>,
+    ) -> Result<Timestamp, AdapterError> {
         // Each involved trace has a validity interval `[since, upper)`.
         // The contents of a trace are only guaranteed to be correct when
         // accumulated at a time greater or equal to `since`, and they
@@ -65,7 +66,6 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         let isolation_level = session.vars().transaction_isolation();
-        let timeline = self.validate_timeline(id_bundle.iter())?;
         let use_timestamp_oracle = isolation_level == &vars::IsolationLevel::StrictSerializable
             && timeline.is_some()
             && when.advance_to_global_ts();
@@ -96,7 +96,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 upper = format!("{upper}"),
                 timestamp = format!("{candidate}")
             );
-            Ok((candidate, timeline))
+            Ok(candidate)
         } else {
             coord_bail!(self.generate_timestamp_not_valid_error_msg(
                 id_bundle,

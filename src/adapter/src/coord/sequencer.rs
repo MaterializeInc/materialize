@@ -2052,7 +2052,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // single-statement transaction (TransactionStatus::Started), we don't need to
         // worry about preventing compaction or choosing a valid timestamp for future
         // queries.
-        let (timestamp, timeline) = if session.transaction().is_in_multi_statement_transaction()
+        let timestamp = if session.transaction().is_in_multi_statement_transaction()
             && when == QueryWhen::Immediately
         {
             // If all previous statements were timestamp-independent and the current one is
@@ -2063,8 +2063,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
             }
 
-            let (timestamp, timeline) = match session.get_transaction_timestamp() {
-                Some((ts, timeline)) => (ts, timeline),
+            let timestamp = match session.get_transaction_timestamp() {
+                Some(ts) => ts,
                 _ => {
                     // Determine a timestamp that will be valid for anything in any schema
                     // referenced by the first query.
@@ -2073,11 +2073,12 @@ impl<S: Append + 'static> Coordinator<S> {
 
                     // We want to prevent compaction of the indexes consulted by
                     // determine_timestamp, not the ones listed in the query.
-                    let (timestamp, timeline) = self.determine_timestamp(
+                    let timestamp = self.determine_timestamp(
                         session,
                         &id_bundle,
                         &QueryWhen::Immediately,
                         compute_instance,
+                        &timeline,
                     )?;
                     let read_holds = self.acquire_read_holds(timestamp, id_bundle).await;
                     let txn_reads = TxnReads {
@@ -2085,7 +2086,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         read_holds,
                     };
                     self.txn_reads.insert(conn_id, txn_reads);
-                    (timestamp, timeline)
+                    timestamp
                 }
             };
 
@@ -2131,13 +2132,13 @@ impl<S: Append + 'static> Coordinator<S> {
                 });
             }
 
-            (timestamp, timeline)
+            timestamp
         } else {
             // TODO(guswynn): acquire_read_holds for linearized reads
             let id_bundle = self
                 .index_oracle(compute_instance)
                 .sufficient_collections(&source_ids);
-            self.determine_timestamp(session, &id_bundle, &when, compute_instance)?
+            self.determine_timestamp(session, &id_bundle, &when, compute_instance, &timeline)?
         };
 
         // before we have the corrected timestamp ^
@@ -2274,9 +2275,15 @@ impl<S: Append + 'static> Coordinator<S> {
             let id_bundle = coord
                 .index_oracle(compute_instance_id)
                 .sufficient_collections(uses);
+            let timeline = coord.validate_timeline(id_bundle.iter())?;
             // If a timestamp was explicitly requested, use that.
-            let (timestamp, _) =
-                coord.determine_timestamp(session, &id_bundle, &when, compute_instance_id)?;
+            let timestamp = coord.determine_timestamp(
+                session,
+                &id_bundle,
+                &when,
+                compute_instance_id,
+                &timeline,
+            )?;
 
             Ok::<_, AdapterError>(ComputeSinkDesc {
                 from,
@@ -2555,11 +2562,12 @@ impl<S: Append + 'static> Coordinator<S> {
         // so explaining a plan involving tables has side effects. Removing those side
         // effects would be good.
         // TODO(jkosh44): Would be a nice addition to include the timeline in output.
-        let (timestamp, _timeline) = self.determine_timestamp(
+        let timestamp = self.determine_timestamp(
             session,
             &id_bundle,
             &QueryWhen::Immediately,
             compute_instance,
+            &timeline,
         )?;
         let since = self.least_valid_read(&id_bundle).elements().to_vec();
         let upper = self.least_valid_write(&id_bundle);

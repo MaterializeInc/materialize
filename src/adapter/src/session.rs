@@ -375,7 +375,7 @@ impl<T: TimestampManipulation> Session<T> {
     ///
     /// Returns `None` if there is no active transaction, or if the active
     /// transaction is not a read transaction.
-    pub fn get_transaction_timestamp(&self) -> Option<(T, Option<Timeline>)> {
+    pub fn get_transaction_timestamp(&self) -> Option<T> {
         // If the transaction already has a peek timestamp, use it. Otherwise generate
         // one. We generate one even though we could check here that the transaction
         // isn't in some other conflicting state because we want all of that logic to
@@ -386,7 +386,7 @@ impl<T: TimestampManipulation> Session<T> {
                 ops: TransactionOps::Peeks(ts),
                 write_lock_guard: _,
                 access: _,
-            }) => ts.clone(),
+            }) => ts.clone().map(|(ts, _)| ts),
             _ => None,
         }
     }
