@@ -185,7 +185,7 @@ where
         self,
         machine: &Machine<K, V, T, D>,
         gc: &GarbageCollector<K, V, T, D>,
-        compactor: Option<&Compactor<T, D>>,
+        compactor: Option<&Compactor<K, V, T, D>>,
     ) where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -203,7 +203,7 @@ where
         self,
         machine: &Machine<K, V, T, D>,
         gc: &GarbageCollector<K, V, T, D>,
-        compactor: Option<&Compactor<T, D>>,
+        compactor: Option<&Compactor<K, V, T, D>>,
     ) where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -222,7 +222,7 @@ where
         self,
         machine: &Machine<K, V, T, D>,
         gc: &GarbageCollector<K, V, T, D>,
-        compactor: Option<&Compactor<T, D>>,
+        compactor: Option<&Compactor<K, V, T, D>>,
     ) -> Vec<BoxFuture<'static, ()>>
     where
         K: Debug + Codec,
@@ -233,7 +233,7 @@ where
 
         if let Some(compactor) = compactor {
             for req in self.compaction {
-                if let Some(receiver) = compactor.compact_and_apply_background(req) {
+                if let Some(receiver) = compactor.compact_and_apply_background(req, machine) {
                     // it's safe to ignore errors on the receiver. in the
                     // case of shutdown, the sender may have been dropped
                     futures.push(receiver.map(|_| ()).boxed());

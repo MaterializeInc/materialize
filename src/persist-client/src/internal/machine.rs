@@ -1097,7 +1097,7 @@ pub mod datadriven {
             desc: Description::new(lower, upper, since),
             inputs,
         };
-        let res = Compactor::<u64, i64>::compact(
+        let res = Compactor::<String, (), u64, i64>::compact(
             cfg,
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.metrics),
