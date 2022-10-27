@@ -13,7 +13,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
@@ -604,6 +604,8 @@ where
                 .await
                 .expect("could not open persist shard");
 
+            let mut last_heartbeat_activation = Instant::now();
+            activator.activate_after(Duration::from_secs(60));
             while scheduler.notified().await {
                 if token_weak.upgrade().is_none() {
                     return;
@@ -622,7 +624,10 @@ where
                 // NOTE: We schedule ourselves to make sure that we keep
                 // heartbeating even in cases where there are no changes in our
                 // inputs (updates or frontier changes).
-                activator.activate_after(Duration::from_secs(60));
+                if last_heartbeat_activation <= Instant::now() + Duration::from_secs(60) {
+                    last_heartbeat_activation = Instant::now();
+                    activator.activate_after(Duration::from_secs(60));
+                }
 
                 // Capture current frontiers.
                 let frontiers = frontiers.borrow().clone();
