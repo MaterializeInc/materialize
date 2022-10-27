@@ -252,7 +252,6 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
 
         // Create read capabilities for all objects.
         for (time, id_bundle) in id_bundles {
-            // We do compute first, and they may result in additional storage policy effects.
             for (compute_instance, compute_ids) in id_bundle.compute_ids {
                 for id in compute_ids {
                     let mut read_capability = Self::default_read_capability(compaction_window_ms);
