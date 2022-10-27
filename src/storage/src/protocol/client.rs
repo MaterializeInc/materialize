@@ -403,17 +403,20 @@ where
                 let mut new_uppers = Vec::new();
 
                 for (id, new_shard_upper) in list {
-                    if let Some((frontier, shard_frontiers)) = self.uppers.get_mut(&id) {
-                        let old_upper = frontier.frontier().to_owned();
-                        let shard_upper = &mut shard_frontiers[shard_id];
-                        frontier.update_iter(shard_upper.iter().map(|t| (t.clone(), -1)));
-                        frontier.update_iter(new_shard_upper.iter().map(|t| (t.clone(), 1)));
-                        shard_upper.join_assign(&new_shard_upper);
+                    let (frontier, shard_frontiers) = match self.uppers.get_mut(&id) {
+                        Some(uppers) => uppers,
+                        None => panic!("PartitionedStorageClient received FrontierUppers response for absent identifier {id}"),
+                    };
 
-                        let new_upper = frontier.frontier();
-                        if PartialOrder::less_than(&old_upper.borrow(), &new_upper) {
-                            new_uppers.push((id, new_upper.to_owned()));
-                        }
+                    let old_upper = frontier.frontier().to_owned();
+                    let shard_upper = &mut shard_frontiers[shard_id];
+                    frontier.update_iter(shard_upper.iter().map(|t| (t.clone(), -1)));
+                    frontier.update_iter(new_shard_upper.iter().map(|t| (t.clone(), 1)));
+                    shard_upper.join_assign(&new_shard_upper);
+
+                    let new_upper = frontier.frontier();
+                    if PartialOrder::less_than(&old_upper.borrow(), &new_upper) {
+                        new_uppers.push((id, new_upper.to_owned()));
                     }
                 }
 

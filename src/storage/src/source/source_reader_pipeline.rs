@@ -66,7 +66,7 @@ use crate::source::reclock::{ReclockBatch, ReclockFollower, ReclockOperator};
 use crate::source::types::SourceOutput;
 use crate::source::types::SourceReaderError;
 use crate::source::types::{
-    AsyncSourceToken, SourceMessage, SourceMetrics, SourceReader, SourceReaderMetrics, SourceToken,
+    AsyncSourceToken, SourceMessage, SourceMetrics, SourceReader, SourceReaderMetrics,
 };
 use crate::source::types::{MaybeLength, SourceMessageType};
 use crate::source::util::async_source;
@@ -160,7 +160,7 @@ pub fn create_raw_source<G, S: 'static, R>(
         Vec<timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>>,
         timely::dataflow::Stream<G, SourceError>,
     ),
-    Option<Rc<dyn Any>>,
+    Rc<dyn Any>,
 )
 where
     G: Scope<Timestamp = Timestamp> + Clone,
@@ -175,8 +175,7 @@ where
         config.worker_id,
         config.worker_count,
     );
-    let (resume_stream, resume_token) =
-        super::resumption::resumption_operator(scope, config.clone(), calc);
+    let resume_stream = super::resumption::resumption_operator(scope, config.clone(), calc);
 
     let reclock_follower = {
         let upper_ts = config.resume_upper.as_option().copied().unwrap();
@@ -201,10 +200,10 @@ where
         &resume_stream,
     );
 
-    let (remap_stream, remap_token) =
+    let remap_stream =
         remap_operator::<G, S>(scope, config.clone(), batch_upper_summaries, &resume_stream);
 
-    let ((reclocked_stream, reclocked_err_stream), _reclock_token) = reclock_operator::<G, S>(
+    let (reclocked_stream, reclocked_err_stream) = reclock_operator::<G, S>(
         scope,
         config.clone(),
         reclock_follower,
@@ -212,11 +211,12 @@ where
         remap_stream,
     );
 
-    let health_token = health_operator(scope, config, health_stream);
+    health_operator(scope, config, health_stream);
 
-    let token = Rc::new((source_reader_token, remap_token, resume_token, health_token));
-
-    ((reclocked_stream, reclocked_err_stream), Some(token))
+    (
+        (reclocked_stream, reclocked_err_stream),
+        Rc::new(source_reader_token),
+    )
 }
 
 /// A type-alias that represents actual data coming out of the source reader.
@@ -471,7 +471,7 @@ fn source_reader_operator<G, S: 'static>(
     connection_context: ConnectionContext,
     reclock_follower: ReclockFollower,
     resume_stream: &timely::dataflow::Stream<G, ()>,
-) -> (SourceReaderStreams<G, S>, Option<AsyncSourceToken>)
+) -> (SourceReaderStreams<G, S>, AsyncSourceToken)
 where
     G: Scope<Timestamp = Timestamp>,
     S: SourceReader,
@@ -805,7 +805,7 @@ where
             batch_upper_summaries: summary_stream,
             health_stream,
         },
-        Some(capability),
+        capability,
     )
 }
 
@@ -818,8 +818,7 @@ fn health_operator<G>(
     scope: &G,
     config: RawSourceCreationConfig,
     health_stream: timely::dataflow::Stream<G, (usize, HealthStatus)>,
-) -> Rc<dyn Any>
-where
+) where
     G: Scope<Timestamp = Timestamp>,
 {
     let RawSourceCreationConfig {
@@ -850,19 +849,13 @@ where
 
     let mut last_reported_status = overall_status(&healths).clone();
 
-    let shutdown_token = Rc::new(());
-    let weak_token = Rc::downgrade(&shutdown_token);
-
     health_op.build_async(
         scope.clone(),
-        move |mut _capabilities, _frontiers, scheduler| async move {
+        move |capabilities, _frontiers, scheduler| async move {
+            assert!(capabilities.is_empty());
             let mut buffer = Vec::new();
             info!("Health for source {source_id} initialized to: {last_reported_status:?}");
             while scheduler.notified().await {
-                if weak_token.upgrade().is_none() {
-                    return;
-                }
-
                 input.for_each(|_cap, rows| {
                     rows.swap(&mut buffer);
                     for (worker_id, health_event) in buffer.drain(..) {
@@ -883,8 +876,6 @@ where
             }
         },
     );
-
-    shutdown_token
 }
 
 /// Mints new contents for the remap shard based on summaries about the source
@@ -897,10 +888,7 @@ fn remap_operator<G, S: 'static>(
     config: RawSourceCreationConfig,
     batch_upper_summaries: timely::dataflow::Stream<G, BatchUpperSummary>,
     resume_stream: &timely::dataflow::Stream<G, ()>,
-) -> (
-    timely::dataflow::Stream<G, (PartitionId, Timestamp, MzOffset)>,
-    Rc<dyn Any>,
-)
+) -> timely::dataflow::Stream<G, (PartitionId, Timestamp, MzOffset)>
 where
     G: Scope<Timestamp = Timestamp>,
     S: SourceReader,
@@ -944,8 +932,6 @@ where
         // introspect its frontier.
         vec![Antichain::new()],
     );
-
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
     remap_op.build(move |capabilities| async move {
         if !active_worker {
@@ -1012,17 +998,11 @@ where
         // The last frontier we compacted the remap shard to, starting at [0].
         let mut last_compaction_since = Antichain::from_elem(Timestamp::default());
 
-        tokio::pin!(shutdown_rx);
         let mut input_frontier = Antichain::from_elem(Timestamp::default());
         loop {
             // AsyncInputHandle::next is cancel safe
             tokio::select! {
                 biased;
-                // Make sure we don't accidentally mint new updates when this source has
-                // been dropped. This way, we also make sure to not react to spurious
-                // frontier advancements to `[]` that happen when the input source operator
-                // is shutting down.
-                _ = shutdown_rx.as_mut() => return,
                 _ = async {
                     if let Err(wait_time) = timestamper.next_mint_timestamp() {
                         tokio::time::sleep(wait_time).await;
@@ -1114,7 +1094,7 @@ where
         }
     });
 
-    (remap_stream, Rc::new(shutdown_tx))
+    remap_stream
 }
 
 /// Receives un-timestamped batches from the source reader and updates to the
@@ -1127,11 +1107,8 @@ fn reclock_operator<G, S: 'static>(
     batches: timely::dataflow::Stream<G, SourceMessageBatch<S::Key, S::Value, S::Diff>>,
     remap_trace_updates: timely::dataflow::Stream<G, (PartitionId, Timestamp, MzOffset)>,
 ) -> (
-    (
-        Vec<timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>>,
-        timely::dataflow::Stream<G, SourceError>,
-    ),
-    Option<SourceToken>,
+    Vec<timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>>,
+    timely::dataflow::Stream<G, SourceError>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
@@ -1454,6 +1431,10 @@ where
 
                 cap_set.downgrade(new_ts_upper);
             }
+
+            if ingest_frontier.is_empty() && remap_upper.is_empty() {
+                cap_set.downgrade(&[]);
+            }
         }
     });
 
@@ -1467,7 +1448,7 @@ where
         (u64::cast_from(output), data)
     });
 
-    ((ok_streams, err_stream), None)
+    (ok_streams, err_stream)
 }
 
 /// Take `message` and assign it the appropriate timestamps and push it into the

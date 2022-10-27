@@ -9,9 +9,7 @@
 
 //! Logic related to the creation of dataflow sinks.
 
-use std::any::Any;
 use std::cell::RefCell;
-use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -28,7 +26,7 @@ use tokio::sync::Mutex;
 
 use crate::controller::CollectionMetadata;
 use crate::source::persist_source;
-use crate::storage_state::{SinkToken, StorageState};
+use crate::storage_state::StorageState;
 use crate::types::errors::DataflowError;
 use crate::types::sinks::{SinkEnvelope, StorageSinkConnection, StorageSinkDesc};
 
@@ -38,20 +36,10 @@ use crate::types::sinks::{SinkEnvelope, StorageSinkConnection, StorageSinkDesc};
 pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
     scope: &mut G,
     storage_state: &mut StorageState,
-    tokens: &mut std::collections::BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
-    import_ids: BTreeSet<GlobalId>,
     sink_id: GlobalId,
     sink: &StorageSinkDesc<CollectionMetadata, ShardId>,
 ) {
     let sink_render = get_sink_render_for(&sink.connection);
-
-    // put together tokens that belong to the export
-    let mut needed_tokens = Vec::new();
-    for import_id in import_ids {
-        if let Some(token) = tokens.get(&import_id) {
-            needed_tokens.push(Rc::clone(token))
-        }
-    }
 
     let (ok_collection, err_collection, source_token) = persist_source::persist_source(
         scope,
@@ -64,7 +52,6 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
         // Copy the logic in DeltaJoin/Get/Join to start.
         |_timer, count| count > 1_000_000,
     );
-    needed_tokens.push(source_token);
 
     // TODO(teskje): Remove envelope-wrapping once the Kafka sink has been
     // moved to STORAGE.
@@ -78,7 +65,7 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
         now_fn: storage_state.now.clone(),
     };
 
-    let sink_token = sink_render.render_continuous_sink(
+    sink_render.render_continuous_sink(
         storage_state,
         sink,
         sink_id,
@@ -87,13 +74,7 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
         healthchecker_args,
     );
 
-    if let Some(sink_token) = sink_token {
-        needed_tokens.push(sink_token);
-    }
-
-    storage_state
-        .sink_tokens
-        .insert(sink_id, SinkToken::new(Box::new(needed_tokens)));
+    storage_state.sink_tokens.insert(sink_id, source_token);
 }
 
 #[allow(clippy::borrowed_box)]
@@ -240,8 +221,7 @@ where
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
         healthchecker_args: HealthcheckerArgs,
-    ) -> Option<Rc<dyn Any>>
-    where
+    ) where
         G: Scope<Timestamp = Timestamp>;
 }
 

@@ -88,19 +88,10 @@ pub struct StorageState {
     pub persist_clients: Arc<Mutex<PersistClientCache>>,
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.
-    pub sink_tokens: HashMap<GlobalId, SinkToken>,
+    pub sink_tokens: HashMap<GlobalId, Rc<dyn Any>>,
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
     pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
-}
-
-/// A token that keeps a sink alive.
-pub struct SinkToken(Box<dyn Any>);
-impl SinkToken {
-    /// Create new token
-    pub fn new(t: Box<dyn Any>) -> Self {
-        Self(t)
-    }
 }
 
 impl<'w, A: Allocate> Worker<'w, A> {
@@ -207,28 +198,41 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         ))),
                     );
 
+                    self.storage_state.reported_frontiers.insert(
+                        export.id,
+                        Antichain::from_elem(mz_repr::Timestamp::minimum()),
+                    );
+
                     crate::render::build_export_dataflow(
                         self.timely_worker,
                         &mut self.storage_state,
                         export.id,
                         export.description,
                     );
-
-                    self.storage_state.reported_frontiers.insert(
-                        export.id,
-                        Antichain::from_elem(mz_repr::Timestamp::minimum()),
-                    );
                 }
             }
             StorageCommand::AllowCompaction(list) => {
+                let state = &mut self.storage_state;
                 for (id, frontier) in list {
+                    let reported_frontier = match state.reported_frontiers.get(&id) {
+                        Some(frontier) => frontier,
+                        None => panic!(
+                            "storaged received AllowCompaction command for absent identifier {id}"
+                        ),
+                    };
+                    // An empty compaction frontier indicates that no one is interested in reading
+                    // this source any more so we should immediately drop any tokens for it
                     if frontier.is_empty() {
-                        // Indicates that we may drop `id`, as there are no more valid times to read.
-                        // Clean up per-source / per-sink state.
-                        self.storage_state.source_uppers.remove(&id);
-                        self.storage_state.reported_frontiers.remove(&id);
-                        self.storage_state.source_tokens.remove(&id);
-                        self.storage_state.sink_tokens.remove(&id);
+                        state.source_tokens.remove(&id);
+                        state.sink_tokens.remove(&id);
+
+                        // Dropping the tokens above will cause dataflows to finish any pending
+                        // work and reach the empty frontier. If this has already happened (e.g
+                        // because the source terminated) we can free its state.
+                        if reported_frontier.is_empty() {
+                            state.source_uppers.remove(&id);
+                            state.reported_frontiers.remove(&id);
+                        }
                     }
                 }
             }
@@ -246,17 +250,17 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// with the understanding if that if made durable (and ack'd back to the workers) the source will
     /// in fact progress with this write frontier.
     pub fn report_frontier_progress(&mut self, response_tx: &ResponseSender) {
+        let state = &mut self.storage_state;
         let mut new_uppers = Vec::new();
+        let mut ids_to_drop = Vec::new();
 
         // Check if any observed frontier should advance the reported frontiers.
-        for (id, frontier) in self
-            .storage_state
+        for (id, frontier) in state
             .source_uppers
             .iter()
-            .chain(self.storage_state.sink_write_frontiers.iter())
+            .chain(&state.sink_write_frontiers)
         {
-            let reported_frontier = self
-                .storage_state
+            let reported_frontier = state
                 .reported_frontiers
                 .get_mut(id)
                 .expect("Reported frontier missing!");
@@ -268,7 +272,23 @@ impl<'w, A: Allocate> Worker<'w, A> {
             if PartialOrder::less_than(reported_frontier, &observed_frontier) {
                 new_uppers.push((*id, observed_frontier.clone()));
                 reported_frontier.clone_from(&observed_frontier);
+
+                // If the dataflow terminated we need to check if there is still interest in
+                // reading it, in which case we have to keep its state around. Otherwise we can
+                // free its state.
+                if observed_frontier.is_empty()
+                    && !state.source_tokens.contains_key(id)
+                    && !state.sink_tokens.contains_key(id)
+                {
+                    ids_to_drop.push(*id);
+                }
             }
+        }
+
+        for id in ids_to_drop.iter() {
+            state.source_uppers.remove(id);
+            state.sink_write_frontiers.remove(id);
+            state.reported_frontiers.remove(id);
         }
 
         if !new_uppers.is_empty() {

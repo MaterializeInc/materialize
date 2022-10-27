@@ -99,8 +99,6 @@
 //! roughly "as correct as possible" even when errors are present in the errs
 //! stream. This reduces the amount of recomputation that must be performed
 //! if/when the errors are retracted.
-use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
 
 use mz_persist_client::ShardId;
 use timely::communication::Allocate;
@@ -161,7 +159,6 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     export.storage_metadata,
                     source_data,
                     storage_state,
-                    Rc::clone(&token),
                 );
             }
 
@@ -191,16 +188,7 @@ pub fn build_export_dataflow<A: Allocate>(
                 timely::dataflow::scopes::Child<TimelyWorker<A>, _>,
                 mz_repr::Timestamp,
             > = region;
-            let mut tokens = BTreeMap::new();
-            let import_ids = BTreeSet::new();
-            crate::render::sinks::render_sink(
-                region,
-                storage_state,
-                &mut tokens,
-                import_ids,
-                id,
-                &description,
-            );
+            crate::render::sinks::render_sink(region, storage_state, id, &description);
         })
     });
 }

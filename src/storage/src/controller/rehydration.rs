@@ -15,7 +15,7 @@
 //! communicating with the underlying client, it will reconnect the client and
 //! replay the command stream.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -76,7 +76,8 @@ where
             response_tx,
             sources: BTreeMap::new(),
             sinks: BTreeMap::new(),
-            uppers: HashMap::new(),
+            uppers: BTreeMap::new(),
+            sinces: BTreeMap::new(),
             initialized: false,
             persist,
         };
@@ -116,7 +117,9 @@ struct RehydrationTask<T> {
     /// The exports that have been observed.
     sinks: BTreeMap<GlobalId, CreateSinkCommand<T>>,
     /// The upper frontier information received.
-    uppers: HashMap<GlobalId, Antichain<T>>,
+    uppers: BTreeMap<GlobalId, Antichain<T>>,
+    /// The since frontier information received.
+    sinces: BTreeMap<GlobalId, Antichain<T>>,
     /// Set to `true` once [`StorageCommand::InitializationComplete`] has been
     /// observed.
     initialized: bool,
@@ -310,9 +313,17 @@ where
             }
             StorageCommand::AllowCompaction(frontiers) => {
                 for (id, frontier) in frontiers {
-                    if frontier.is_empty() {
+                    if frontier.is_empty() && self.uppers[id].is_empty() {
                         self.sources.remove(id);
+                        self.sinks.remove(id);
                         self.uppers.remove(id);
+                        self.sinces.remove(id);
+                    } else {
+                        let since = match self.sinces.get_mut(id) {
+                            Some(since) => since,
+                            None => panic!("RehydratingStorageClient received AllowCompaction command for absent identifier {id}"),
+                        };
+                        since.clone_from(frontier);
                     }
                 }
             }
@@ -328,6 +339,12 @@ where
                     if let Some(reported) = self.uppers.get_mut(&id) {
                         if PartialOrder::less_than(reported, &new_upper) {
                             reported.clone_from(&new_upper);
+                            if new_upper.is_empty() && self.sinces[&id].is_empty() {
+                                self.sources.remove(&id);
+                                self.sinks.remove(&id);
+                                self.uppers.remove(&id);
+                                self.sinces.remove(&id);
+                            }
                             new_uppers.push((id, new_upper));
                         }
                     } else {

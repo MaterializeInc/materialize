@@ -290,7 +290,7 @@ where
             // Depending on the type of _raw_ source produced for the given source
             // connection, render the _decode_ part of the pipeline, that turns a raw data
             // stream into a `DecodeResult`.
-            let (results, extra_token) = match ok_source {
+            let results = match ok_source {
                 SourceType::Delimited(source) => render_decode_delimited(
                     &source,
                     key_encoding,
@@ -308,21 +308,15 @@ where
                     storage_state.decode_metrics.clone(),
                     &storage_state.connection_context,
                 ),
-                SourceType::Row(source) => (
-                    source.map(|r| DecodeResult {
-                        key: None,
-                        value: Some(Ok((r.value, r.diff))),
-                        position: r.position,
-                        upstream_time_millis: r.upstream_time_millis,
-                        partition: r.partition,
-                        metadata: Row::default(),
-                    }),
-                    None,
-                ),
+                SourceType::Row(source) => source.map(|r| DecodeResult {
+                    key: None,
+                    value: Some(Ok((r.value, r.diff))),
+                    position: r.position,
+                    upstream_time_millis: r.upstream_time_millis,
+                    partition: r.partition,
+                    metadata: Row::default(),
+                }),
             };
-            if let Some(tok) = extra_token {
-                needed_tokens.push(Rc::new(tok));
-            }
 
             // render envelopes
             match &envelope {

@@ -365,7 +365,7 @@ pub fn render_decode_delimited<G>(
     metadata_items: Vec<IncludedColumnSource>,
     metrics: DecodeMetrics,
     connection_context: &ConnectionContext,
-) -> (Stream<G, DecodeResult>, Option<Box<dyn Any + Send + Sync>>)
+) -> Stream<G, DecodeResult>
 where
     G: Scope,
 {
@@ -461,7 +461,7 @@ where
             }
         }
     });
-    (results, None)
+    results
 }
 
 /// Decode arbitrary chunks of bytes into rows.
@@ -486,7 +486,7 @@ pub fn render_decode<G>(
     metadata_items: Vec<IncludedColumnSource>,
     metrics: DecodeMetrics,
     connection_context: &ConnectionContext,
-) -> (Stream<G, DecodeResult>, Option<Box<dyn Any + Send + Sync>>)
+) -> Stream<G, DecodeResult>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -666,7 +666,7 @@ where
             }
         }
     });
-    (results, None)
+    results
 }
 
 fn to_metadata_row(
