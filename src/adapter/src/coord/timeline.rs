@@ -16,7 +16,6 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use timely::progress::Timestamp as TimelyTimestamp;
-use timely::PartialOrder;
 
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::CollectionPlan;
@@ -681,10 +680,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 .apply_write(now, |ts| self.catalog.persist_timestamp(&timeline, ts))
                 .await;
             let read_ts = oracle.read_ts();
-            if let Some(time) = read_holds.min_time() {
-                if time.less_than(&read_ts) {
-                    read_holds = self.update_read_hold(read_holds, read_ts).await;
-                }
+            if read_holds.times().any(|time| time.less_than(&read_ts)) {
+                read_holds = self.update_read_hold(read_holds, read_ts).await;
             }
             self.global_timelines
                 .insert(timeline, TimelineState { oracle, read_holds });

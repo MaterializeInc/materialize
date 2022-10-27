@@ -14,14 +14,14 @@
 //! the controller from compacting the associated collections, and ensures that they
 //! remain "readable" at a specific time, as long as the hold is held.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::hash::Hash;
 
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 
 use mz_compute_client::controller::ComputeInstanceId;
 
-use mz_ore::option::OptionExt;
 use mz_repr::{GlobalId, Timestamp};
 use mz_stash::Append;
 use mz_storage::controller::ReadPolicy;
@@ -66,20 +66,25 @@ impl<T: timely::progress::Timestamp> ReadCapability<T> {
 /// Relevant information for acquiring or releasing a bundle of read holds.
 #[derive(Clone)]
 pub(crate) struct ReadHolds<T> {
-    holds: BTreeMap<T, CollectionIdBundle>,
+    holds: HashMap<Antichain<T>, CollectionIdBundle>,
 }
 
-impl<T: Ord> ReadHolds<T> {
+impl<T: Eq + Hash + Ord> ReadHolds<T> {
     /// Return empty `ReadHolds`.
     pub fn new() -> Self {
         ReadHolds {
-            holds: BTreeMap::default(),
+            holds: HashMap::new(),
         }
     }
 
     /// Returns whether the `ReadHolds` is empty.
     pub fn is_empty(&self) -> bool {
         self.holds.is_empty()
+    }
+
+    /// Returns an iterator over all times at which a read hold exists.
+    pub fn times(&self) -> impl Iterator<Item = &Antichain<T>> {
+        self.holds.keys()
     }
 
     /// Return a `CollectionIdBundle` containing all the IDs in the `ReadHolds`.
@@ -93,7 +98,7 @@ impl<T: Ord> ReadHolds<T> {
     }
 
     /// Returns an iterator over all storage ids and the time at which their read hold exists.
-    pub fn storage_ids(&self) -> impl Iterator<Item = (&T, &GlobalId)> {
+    pub fn storage_ids(&self) -> impl Iterator<Item = (&Antichain<T>, &GlobalId)> {
         self.holds
             .iter()
             .flat_map(|(time, id_bundle)| std::iter::repeat(time).zip(id_bundle.storage_ids.iter()))
@@ -103,7 +108,12 @@ impl<T: Ord> ReadHolds<T> {
     /// read hold exists.
     pub fn compute_ids(
         &self,
-    ) -> impl Iterator<Item = (&ComputeInstanceId, impl Iterator<Item = (&T, &GlobalId)>)> {
+    ) -> impl Iterator<
+        Item = (
+            &ComputeInstanceId,
+            impl Iterator<Item = (&Antichain<T>, &GlobalId)>,
+        ),
+    > {
         let compute_instances: BTreeSet<_> = self
             .holds
             .iter()
@@ -162,11 +172,6 @@ impl<T: Ord> ReadHolds<T> {
             id_bundle.compute_ids.remove(compute_instance);
         }
         self.holds.retain(|_, id_bundle| !id_bundle.is_empty());
-    }
-
-    /// Return the minimum time of all holds.
-    pub fn min_time(&self) -> Option<&T> {
-        self.holds.keys().min()
     }
 }
 
@@ -227,7 +232,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
     ) {
         let mut compute_policy_updates: BTreeMap<ComputeInstanceId, Vec<_>> = BTreeMap::new();
         let mut storage_policy_updates = Vec::new();
-        let mut id_bundles = BTreeMap::new();
+        let mut id_bundles = HashMap::new();
 
         // Update the Coordinator's timeline read hold state and organize all id bundles by time.
         for (timeline, id_bundle) in self.partition_ids_by_timeline(id_bundle) {
@@ -240,7 +245,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                     let TimelineState { read_holds, .. } =
                         self.ensure_timeline_state(timeline).await;
                     for (time, id_bundle) in &new_read_holds.holds {
-                        id_bundles.insert(Some(*time), id_bundle.clone());
+                        id_bundles.insert(Some(time.clone()), id_bundle.clone());
                     }
                     read_holds.extend(new_read_holds);
                 }
@@ -255,8 +260,10 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             for (compute_instance, compute_ids) in id_bundle.compute_ids {
                 for id in compute_ids {
                     let mut read_capability = Self::default_read_capability(compaction_window_ms);
-                    if let Some(time) = time {
-                        read_capability.holds.update_iter(Some((time, 1)));
+                    if let Some(time) = &time {
+                        read_capability
+                            .holds
+                            .update_iter(time.iter().map(|t| (*t, 1)));
                     }
                     self.read_capability.insert(id, read_capability);
                     compute_policy_updates
@@ -268,8 +275,10 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
 
             for id in id_bundle.storage_ids {
                 let mut read_capability = Self::default_read_capability(compaction_window_ms);
-                if let Some(time) = time {
-                    read_capability.holds.update_iter(Some((time, 1)));
+                if let Some(time) = &time {
+                    read_capability
+                        .holds
+                        .update_iter(time.iter().map(|t| (*t, 1)));
                 }
                 self.read_capability.insert(id, read_capability);
                 storage_policy_updates.push((id, self.read_capability[&id].policy()));
@@ -337,13 +346,9 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             let collection = self.controller.storage.collection(*id).unwrap();
             let read_frontier = collection.read_capabilities.frontier();
             let time = if read_frontier.less_equal(&time) {
-                time
+                Antichain::from_elem(time)
             } else {
-                read_frontier
-                    .to_owned()
-                    .first()
-                    .owned()
-                    .unwrap_or(mz_repr::Timestamp::MAX)
+                read_frontier.to_owned()
             };
             read_holds
                 .holds
@@ -358,13 +363,9 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 let collection = compute.collection(*compute_instance, *id).unwrap();
                 let read_frontier = collection.read_frontier();
                 let time = if read_frontier.less_equal(&time) {
-                    time
+                    Antichain::from_elem(time)
                 } else {
-                    read_frontier
-                        .to_owned()
-                        .first()
-                        .owned()
-                        .unwrap_or(mz_repr::Timestamp::MAX)
+                    read_frontier.to_owned()
                 };
                 read_holds
                     .holds
@@ -394,7 +395,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         let mut policy_changes = Vec::new();
         for (time, id) in read_holds.storage_ids() {
             let read_needs = self.read_capability.get_mut(id).unwrap();
-            read_needs.holds.update_iter(Some((*time, 1)));
+            read_needs.holds.update_iter(time.iter().map(|t| (*t, 1)));
             policy_changes.push((*id, read_needs.policy()));
         }
         self.controller
@@ -408,7 +409,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             let mut compute = self.controller.active_compute();
             for (time, id) in compute_ids {
                 let read_needs = self.read_capability.get_mut(id).unwrap();
-                read_needs.holds.update_iter(Some((*time, 1)));
+                read_needs.holds.update_iter(time.iter().map(|t| (*t, 1)));
                 policy_changes.push((*id, read_needs.policy()));
             }
             compute
@@ -439,10 +440,10 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         let mut compute_policy_changes: BTreeMap<_, Vec<_>> = BTreeMap::new();
 
         for (old_time, id_bundle) in read_holds.holds {
-            if old_time < new_time {
+            if old_time.less_than(&new_time) {
                 new_read_holds
                     .holds
-                    .entry(new_time)
+                    .entry(Antichain::from_elem(new_time))
                     .or_default()
                     .extend(&id_bundle);
                 for id in id_bundle.storage_ids {
@@ -459,7 +460,9 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                     );
                     let read_needs = self.read_capability.get_mut(&id).unwrap();
                     read_needs.holds.update_iter(Some((new_time, 1)));
-                    read_needs.holds.update_iter(Some((old_time, -1)));
+                    read_needs
+                        .holds
+                        .update_iter(old_time.iter().map(|t| (*t, -1)));
                     storage_policy_changes.push((id, read_needs.policy()));
                 }
 
@@ -479,7 +482,9 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                         );
                         let read_needs = self.read_capability.get_mut(&id).unwrap();
                         read_needs.holds.update_iter(Some((new_time, 1)));
-                        read_needs.holds.update_iter(Some((old_time, -1)));
+                        read_needs
+                            .holds
+                            .update_iter(old_time.iter().map(|t| (*t, -1)));
                         compute_policy_changes
                             .entry(compute_instance)
                             .or_default()
@@ -525,7 +530,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         for (time, id) in read_holds.storage_ids() {
             // It's possible that a concurrent DDL statement has already dropped this GlobalId
             if let Some(read_needs) = self.read_capability.get_mut(id) {
-                read_needs.holds.update_iter(Some((*time, -1)));
+                read_needs.holds.update_iter(time.iter().map(|t| (*t, -1)));
                 policy_changes.push((*id, read_needs.policy()));
             }
         }
@@ -541,7 +546,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             for (time, id) in compute_ids {
                 // It's possible that a concurrent DDL statement has already dropped this GlobalId
                 if let Some(read_needs) = self.read_capability.get_mut(id) {
-                    read_needs.holds.update_iter(Some((*time, -1)));
+                    read_needs.holds.update_iter(time.iter().map(|t| (*t, -1)));
                     policy_changes.push((*id, read_needs.policy()));
                 }
             }
