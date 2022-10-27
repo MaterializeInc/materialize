@@ -536,6 +536,30 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
             metrics.state.apply_spine_fast_path.inc();
             return Ok(());
         }
+
+        // Otherwise, try our lenient application of a compaction result.
+        let mut batches = Vec::new();
+        trace.map_batches(|b| batches.push(b.clone()));
+        match apply_compaction_lenient(metrics, batches, &res.output) {
+            Ok(batches) => {
+                let mut new_trace = Trace::default();
+                new_trace.downgrade_since(trace.since());
+                for batch in batches {
+                    // Ignore merge_reqs because whichever process generated
+                    // this diff is assigned the work.
+                    let _merge_reqs = new_trace.push_batch(batch.clone());
+                }
+                *trace = new_trace;
+                metrics.state.apply_spine_slow_path_lenient.inc();
+                return Ok(());
+            }
+            Err(err) => {
+                return Err(format!(
+                    "lenient compaction result apply unexpectedly failed: {}",
+                    err
+                ))
+            }
+        }
     }
 
     // Something complicated is going on, so reconstruct the Trace from scratch.
@@ -627,6 +651,128 @@ fn sniff_compaction<'a, T: Timestamp + Lattice>(
     }
 
     Some((compaction_inputs, compaction_output.clone()))
+}
+
+/// Apply a compaction diff that doesn't exactly line up with the set of
+/// HollowBatches.
+///
+/// Because of the way Spine internally optimizes only _some_ empty batches
+/// (immediately merges them in), we can end up in a situation where a
+/// compaction res applied on another copy of state, but when we replay all of
+/// the state diffs against a new Spine locally, it merges empty batches
+/// differently in-mem and we can't exactly apply the compaction diff. Example:
+///
+/// - compact: [1,2),[2,3) -> [1,3)
+/// - this spine: [0,2),[2,3) (0,1 is empty)
+///
+/// Ideally, we'd figure out a way to avoid this, but nothing immediately comes
+/// to mind. In the meantime, force the application (otherwise the shard is
+/// stuck and we can't do anything with it) by manually splitting the empty
+/// batch back out. For the example above:
+///
+/// - [0,1),[1,3) (0,1 is empty)
+///
+/// This can only happen when the batch needing to be split is empty, so error
+/// out if it isn't because that means something unexpected is going on.
+///
+/// TODO: This implementation is certainly not correct if T is actually only
+/// partially ordered.
+fn apply_compaction_lenient<'a, T: Timestamp + Lattice>(
+    metrics: &Metrics,
+    mut trace: Vec<HollowBatch<T>>,
+    replacement: &'a HollowBatch<T>,
+) -> Result<Vec<HollowBatch<T>>, String> {
+    let mut overlapping_batches = Vec::new();
+    trace.retain(|b| {
+        let before_replacement = PartialOrder::less_equal(b.desc.upper(), replacement.desc.lower());
+        let after_replacement = PartialOrder::less_equal(replacement.desc.upper(), b.desc.lower());
+        let overlaps_replacement = !(before_replacement || after_replacement);
+        if overlaps_replacement {
+            overlapping_batches.push(b.clone());
+            false
+        } else {
+            true
+        }
+    });
+
+    {
+        let first_overlapping_batch = match overlapping_batches.first() {
+            Some(x) => x,
+            None => return Err("replacement didn't overlap any batches".into()),
+        };
+        if PartialOrder::less_than(
+            first_overlapping_batch.desc.lower(),
+            replacement.desc.lower(),
+        ) {
+            if first_overlapping_batch.len > 0 {
+                return Err(format!(
+                    "overlapping batch was unexpectedly non-empty: {:?}",
+                    first_overlapping_batch
+                ));
+            }
+            let desc = Description::new(
+                first_overlapping_batch.desc.lower().clone(),
+                replacement.desc.lower().clone(),
+                first_overlapping_batch.desc.since().clone(),
+            );
+            trace.push(HollowBatch {
+                desc,
+                parts: Vec::new(),
+                len: 0,
+                runs: Vec::new(),
+            });
+            metrics.state.apply_spine_slow_path_lenient_adjustment.inc();
+        }
+    }
+
+    {
+        let last_overlapping_batch = match overlapping_batches.last() {
+            Some(x) => x,
+            None => return Err("replacement didn't overlap any batches".into()),
+        };
+        if PartialOrder::less_than(
+            replacement.desc.upper(),
+            last_overlapping_batch.desc.upper(),
+        ) {
+            if last_overlapping_batch.len > 0 {
+                return Err(format!(
+                    "overlapping batch was unexpectedly non-empty: {:?}",
+                    last_overlapping_batch
+                ));
+            }
+            let desc = Description::new(
+                replacement.desc.upper().clone(),
+                last_overlapping_batch.desc.upper().clone(),
+                last_overlapping_batch.desc.since().clone(),
+            );
+            trace.push(HollowBatch {
+                desc,
+                parts: Vec::new(),
+                len: 0,
+                runs: Vec::new(),
+            });
+            metrics.state.apply_spine_slow_path_lenient_adjustment.inc();
+        }
+    }
+    trace.push(replacement.clone());
+
+    // We just inserted stuff at the end, so re-sort them into place.
+    trace.sort_by(|a, b| a.desc.lower().elements().cmp(b.desc.lower().elements()));
+
+    // This impl is a touch complex, so sanity check our work.
+    let mut expected_lower = &Antichain::from_elem(T::minimum());
+    for b in trace.iter() {
+        if b.desc.lower() != expected_lower {
+            return Err(format!(
+                "lower {:?} did not match expected {:?}: {:?}",
+                b.desc.lower(),
+                expected_lower,
+                trace
+            ));
+        }
+        expected_lower = b.desc.upper();
+    }
+    Ok(trace)
 }
 
 impl ProtoStateFieldDiffs {
@@ -754,5 +900,143 @@ impl<'a> Iterator for ProtoStateFieldDiffsIter<'a> {
         };
         self.diff_idx += 1;
         Some(Ok((field, diff)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_build_info::DUMMY_BUILD_INFO;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_ore::now::SYSTEM_TIME;
+
+    use super::*;
+
+    #[test]
+    fn apply_lenient() {
+        #[track_caller]
+        fn testcase(
+            replacement: (u64, u64, u64, usize),
+            spine: &[(u64, u64, u64, usize)],
+            expected: Result<&[(u64, u64, u64, usize)], &str>,
+        ) {
+            fn batch(x: &(u64, u64, u64, usize)) -> HollowBatch<u64> {
+                let (lower, upper, since, len) = x;
+                let desc = Description::new(
+                    Antichain::from_elem(*lower),
+                    Antichain::from_elem(*upper),
+                    Antichain::from_elem(*since),
+                );
+                HollowBatch {
+                    desc,
+                    parts: Vec::new(),
+                    len: *len,
+                    runs: Vec::new(),
+                }
+            }
+            let replacement = batch(&replacement);
+            let batches = spine.iter().map(batch).collect::<Vec<_>>();
+
+            let metrics = Metrics::new(
+                &PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
+                &MetricsRegistry::new(),
+            );
+            let actual = apply_compaction_lenient(&metrics, batches, &replacement);
+            let expected = match expected {
+                Ok(batches) => Ok(batches.iter().map(batch).collect::<Vec<_>>()),
+                Err(err) => Err(err.to_owned()),
+            };
+            assert_eq!(actual, expected);
+        }
+
+        // Exact swap of N batches
+        testcase(
+            (0, 3, 0, 100),
+            &[(0, 1, 0, 0), (1, 2, 0, 0), (2, 3, 0, 0)],
+            Ok(&[(0, 3, 0, 100)]),
+        );
+
+        // Swap out the middle of a batch
+        testcase(
+            (1, 2, 0, 100),
+            &[(0, 3, 0, 0)],
+            Ok(&[(0, 1, 0, 0), (1, 2, 0, 100), (2, 3, 0, 0)]),
+        );
+
+        // Split batch at replacement lower
+        testcase(
+            (2, 4, 0, 100),
+            &[(0, 3, 0, 0), (3, 4, 0, 0)],
+            Ok(&[(0, 2, 0, 0), (2, 4, 0, 100)]),
+        );
+
+        // Err: split batch at replacement lower not empty
+        testcase(
+            (2, 4, 0, 100),
+            &[(0, 3, 0, 1), (3, 4, 0, 0)],
+            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }, parts: [], len: 1, runs: [] }")
+        );
+
+        // Split batch at replacement lower (untouched batch before the split one)
+        testcase(
+            (2, 4, 0, 100),
+            &[(0, 1, 0, 0), (1, 3, 0, 0), (3, 4, 0, 0)],
+            Ok(&[(0, 1, 0, 0), (1, 2, 0, 0), (2, 4, 0, 100)]),
+        );
+
+        // Split batch at replacement lower (since is preserved)
+        testcase(
+            (2, 4, 0, 100),
+            &[(0, 3, 200, 0), (3, 4, 0, 0)],
+            Ok(&[(0, 2, 200, 0), (2, 4, 0, 100)]),
+        );
+
+        // Split batch at replacement upper
+        testcase(
+            (0, 2, 0, 100),
+            &[(0, 1, 0, 0), (1, 4, 0, 0)],
+            Ok(&[(0, 2, 0, 100), (2, 4, 0, 0)]),
+        );
+
+        // Err: split batch at replacement upper not empty
+        testcase(
+            (0, 2, 0, 100),
+            &[(0, 1, 0, 0), (1, 4, 0, 1)],
+            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [4] }, since: Antichain { elements: [0] } }, parts: [], len: 1, runs: [] }")
+        );
+
+        // Split batch at replacement upper (untouched batch after the split one)
+        testcase(
+            (0, 2, 0, 100),
+            &[(0, 1, 0, 0), (1, 3, 0, 0), (3, 4, 0, 0)],
+            Ok(&[(0, 2, 0, 100), (2, 3, 0, 0), (3, 4, 0, 0)]),
+        );
+
+        // Split batch at replacement upper (since is preserved)
+        testcase(
+            (0, 2, 0, 100),
+            &[(0, 1, 0, 0), (1, 4, 200, 0)],
+            Ok(&[(0, 2, 0, 100), (2, 4, 200, 0)]),
+        );
+
+        // Split batch at replacement lower and upper
+        testcase(
+            (2, 6, 0, 100),
+            &[(0, 3, 0, 0), (3, 5, 0, 0), (5, 8, 0, 0)],
+            Ok(&[(0, 2, 0, 0), (2, 6, 0, 100), (6, 8, 0, 0)]),
+        );
+
+        // Replacement doesn't overlap (after)
+        testcase(
+            (2, 3, 0, 100),
+            &[(0, 1, 0, 0)],
+            Err("replacement didn't overlap any batches"),
+        );
+
+        // Replacement doesn't overlap (before, though this would never happen in practice)
+        testcase(
+            (2, 3, 0, 100),
+            &[(4, 5, 0, 0)],
+            Err("replacement didn't overlap any batches"),
+        );
     }
 }

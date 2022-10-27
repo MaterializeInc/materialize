@@ -880,6 +880,8 @@ impl CodecMetrics {
 pub struct StateMetrics {
     pub(crate) apply_spine_fast_path: IntCounter,
     pub(crate) apply_spine_slow_path: IntCounter,
+    pub(crate) apply_spine_slow_path_lenient: IntCounter,
+    pub(crate) apply_spine_slow_path_lenient_adjustment: IntCounter,
     pub(crate) apply_spine_slow_path_with_reconstruction: IntCounter,
     pub(crate) update_state_fast_path: IntCounter,
     pub(crate) update_state_slow_path: IntCounter,
@@ -896,6 +898,14 @@ impl StateMetrics {
             apply_spine_slow_path: registry.register(metric!(
                 name: "mz_persist_state_apply_spine_slow_path",
                 help: "count of spine diff applications that hit the slow path",
+            )),
+            apply_spine_slow_path_lenient: registry.register(metric!(
+                name: "mz_persist_state_apply_spine_slow_path_lenient",
+                help: "count of spine diff applications that hit the lenient compaction apply path",
+            )),
+            apply_spine_slow_path_lenient_adjustment: registry.register(metric!(
+                name: "mz_persist_state_apply_spine_slow_path_lenient_adjustment",
+                help: "count of adjustments made by the lenient compaction apply path",
             )),
             apply_spine_slow_path_with_reconstruction: registry.register(metric!(
                 name: "mz_persist_state_apply_spine_slow_path_with_reconstruction",
