@@ -25,20 +25,23 @@ CREATE CLUSTER foo REPLICAS (), REPLICAS()
 
 # Creating cluster w/ remote replica works.
 
-statement ok
+statement error must specify as many REMOTE addresses as COMPUTE addresses
 CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234;']))
 
+statement ok
+CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234;'], COMPUTE ['localhost:1235']))
+
 statement error cluster 'foo' already exists
-CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234']))
+CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE ['localhost:1235']))
 
 statement error cannot create multiple replicas named 'r1' on cluster 'bar'
-CREATE CLUSTER bar REPLICAS (r1 (REMOTE ['localhost:1234']), r1 (REMOTE ['localhost:1234']))
+CREATE CLUSTER bar REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE ['localhost:1235']), r1 (REMOTE ['localhost:1234'], COMPUTE ['localhost:1235']))
 
 statement error REMOTE specified more than once
-CREATE CLUSTER bar REPLICAS (r1 (REMOTE ['localhost:1234'], REMOTE ['localhost:1234']))
+CREATE CLUSTER bar REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE ['localhost:1235'], REMOTE ['localhost:1234'], COMPUTE ['localhost:1235']))
 
 statement ok
-CREATE CLUSTER bar REPLICAS (r1 (REMOTE ['localhost:1235']), r2 (REMOTE ['localhost:1236']))
+CREATE CLUSTER bar REPLICAS (r1 (REMOTE ['localhost:1235'], COMPUTE ['localhost:1245']), r2 (REMOTE ['localhost:1236'], COMPUTE ['localhost:1246']))
 
 query TT rowsort
 SELECT * FROM mz_clusters
@@ -68,14 +71,14 @@ default
 statement error only one of REMOTE or SIZE may be specified
 CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234'], SIZE 'small'))
 
-statement error must specify as many REMOTE addresses as COMPUTE addresses for multi-process replicas
+statement error must specify as many REMOTE addresses as COMPUTE addresses
 CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234', 'localhost:4567'], COMPUTE [], WORKERS 1))
 
-statement error must specify as many REMOTE addresses as COMPUTE addresses for multi-process replicas
+statement error must specify as many REMOTE addresses as COMPUTE addresses
 CREATE CLUSTER baz REPLICAS (r1 (REMOTE [], COMPUTE ['localhost:1234', 'localhost:4567']))
 
 statement error WORKERS must be greater 0
-CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE [], WORKERS 0))
+CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE ['localhost:4567'], WORKERS 0))
 
 # SIZE + Remote options produce error
 statement error cannot specify SIZE and WORKERS
@@ -288,7 +291,7 @@ statement ok
 DROP CLUSTER foo CASCADE
 
 statement ok
-CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234']))
+CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE ['localhost:678']))
 
 statement ok
 CREATE DEFAULT INDEX IN CLUSTER baz ON v
@@ -305,13 +308,13 @@ SELECT name FROM mz_indexes WHERE name NOT LIKE 'mz_%';
 
 # Test that dropping a cluster and re-creating it with the same name is valid if introspection sources are enabled
 statement ok
-CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234'], INTROSPECTION INTERVAL '1s'))
+CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE ['localhost:1237'], INTROSPECTION INTERVAL '1s'))
 
 statement ok
 DROP CLUSTER foo CASCADE
 
 statement ok
-CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234'], INTROSPECTION INTERVAL '1s'))
+CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE ['localhost:1237'], INTROSPECTION INTERVAL '1s'))
 
 statement ok
 DROP CLUSTER foo CASCADE
