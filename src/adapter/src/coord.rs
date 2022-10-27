@@ -474,7 +474,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // This is disabled for the moment because it has unusual upper
         // advancement behavior.
         // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
-        let status_collection_id = if false {
+        let source_status_collection_id = if false {
             Some(self.catalog.resolve_builtin_storage_collection(
                 &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
             ))
@@ -541,7 +541,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 desc: source.desc.clone(),
                                 data_source,
                                 since: None,
-                                status_collection_id,
+                                status_collection_id: source_status_collection_id,
                             },
                         )])
                         .await

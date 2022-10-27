@@ -144,7 +144,7 @@ impl<T> From<RelationDesc> for CollectionDescription<T> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExportDescription<T = mz_repr::Timestamp> {
-    pub sink: StorageSinkDesc<(), T>,
+    pub sink: StorageSinkDesc<(), GlobalId, T>,
     /// The address of a `storaged` process on which to install the sink or the
     /// settings for spinning up a controller-managed process.
     pub host_config: StorageHostConfig,
@@ -1097,6 +1097,16 @@ where
                 .initial_as_of
                 .maybe_fast_forward(&from_since);
 
+            let status_id = if let Some(status_collection_id) = description.sink.status_id {
+                Some(
+                    self.collection(status_collection_id)?
+                        .collection_metadata
+                        .data_shard,
+                )
+            } else {
+                None
+            };
+
             let cmd = CreateSinkCommand {
                 id,
                 description: StorageSinkDesc {
@@ -1105,6 +1115,7 @@ where
                     connection: description.sink.connection,
                     envelope: description.sink.envelope,
                     as_of,
+                    status_id,
                     from_storage_metadata,
                 },
             };

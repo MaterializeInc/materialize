@@ -419,6 +419,16 @@ impl<S: Append + 'static> Coordinator<S> {
         // Validate `sink.from` is in fact a storage collection
         self.controller.storage.collection(sink.from)?;
 
+        // This is disabled for the moment because we want to attempt to roll out the change slowly as we're
+        // stressing persist in a new way.
+        let status_id = if false {
+            Some(self.catalog.resolve_builtin_storage_collection(
+                &crate::catalog::builtin::MZ_SINK_STATUS_HISTORY,
+            ))
+        } else {
+            None
+        };
+
         // The AsOf is used to determine at what time to snapshot reading from the persist collection.  This is
         // primarily relevant when we do _not_ want to include the snapshot in the sink.  Choosing now will mean
         // that only things going forward are exported.
@@ -445,6 +455,7 @@ impl<S: Append + 'static> Coordinator<S> {
             connection,
             envelope: Some(sink.envelope),
             as_of,
+            status_id,
             from_storage_metadata: (),
         };
 
