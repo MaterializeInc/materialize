@@ -2781,9 +2781,7 @@ impl<S: Append> Catalog<S> {
     ) -> Result<(), Error> {
         let mut storage = self.storage().await;
         let mut tx = storage.transaction().await?;
-        for id in migration_metadata.user_drop_ops.drain(..) {
-            tx.remove_item(id)?;
-        }
+        tx.remove_items(migration_metadata.user_drop_ops.drain(..).collect())?;
         for (id, schema_id, name) in migration_metadata.user_create_ops.drain(..) {
             let item = self.get_entry(&id).item();
             let serialized_item = Self::serialize_item(item);

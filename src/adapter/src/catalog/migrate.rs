@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use semver::Version;
+use std::collections::BTreeMap;
 
 use mz_ore::collections::CollectionExt;
 use mz_sql::ast::display::AstDisplay;
@@ -22,6 +23,7 @@ fn rewrite_items<F, S: Append>(tx: &mut Transaction<S>, mut f: F) -> Result<(), 
 where
     F: FnMut(&mut mz_sql::ast::Statement<Raw>) -> Result<(), anyhow::Error>,
 {
+    let mut updated_items = BTreeMap::new();
     let items = tx.loaded_items();
     for (id, name, SerializedCatalogItem::V1 { create_sql }) in items {
         let mut stmt = mz_sql::parse::parse(&create_sql)?.into_element();
@@ -32,8 +34,9 @@ where
             create_sql: stmt.to_ast_string_stable(),
         };
 
-        tx.update_item(id, &name.item, &serialized_item)?;
+        updated_items.insert(id, (name.item, serialized_item));
     }
+    tx.update_items(updated_items)?;
     Ok(())
 }
 
