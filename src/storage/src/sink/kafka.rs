@@ -725,7 +725,7 @@ impl KafkaSinkState {
         }
 
         // Only actually used for retriable errors.
-        return Retry::default()
+        Retry::default()
             .clamp_backoff(Duration::from_secs(60 * 10))
             .retry_async(|_| async {
                 let progress_topic = self.progress_topic.clone();
@@ -745,7 +745,7 @@ impl KafkaSinkState {
                 .await
                 .unwrap_or_else(|e| bail!(e))
             })
-            .await;
+            .await
     }
 
     async fn send_progress_record(&self, transaction_id: Timestamp) {
