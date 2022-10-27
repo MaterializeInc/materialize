@@ -376,6 +376,7 @@ def workflow_test_builtin_migration(c: Composition) -> None:
         # Random commit before pg_proc was updated.
         Materialized(
             image="materialize/materialized:devel-aa4128c9c485322f90ab0af2b9cb4d16e1c470c0",
+            default_size=1,
         ),
         Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
     ):

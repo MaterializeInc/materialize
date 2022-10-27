@@ -15,7 +15,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Optional
+from typing import List, Optional
 
 from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
@@ -35,15 +35,22 @@ class StartMz(MzcomposeAction):
         ]
     )
 
-    def __init__(self, tag: Optional[str] = None) -> None:
+    def __init__(
+        self, tag: Optional[str] = None, environment_extra: List[str] = []
+    ) -> None:
         self.tag = tag
+        self.environment_extra = environment_extra
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
         image = f"materialize/materialized:{self.tag}" if self.tag is not None else None
         print(f"Starting Mz using image {image}")
-        mz = Materialized(image=image, options=StartMz.DEFAULT_MZ_OPTIONS)
+        mz = Materialized(
+            image=image,
+            options=StartMz.DEFAULT_MZ_OPTIONS,
+            environment_extra=self.environment_extra,
+        )
 
         with c.override(mz):
             # Work around https://github.com/MaterializeInc/materialize/issues/15725

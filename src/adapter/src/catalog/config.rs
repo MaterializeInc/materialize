@@ -69,12 +69,14 @@ impl Default for ClusterReplicaSizeMap {
         //     "4": {"scale": 1, "workers": 4},
         //     /// ...
         //     "32": {"scale": 1, "workers": 32}
-        //     /// Testing with multiple processes on a single machine is a novelty, so
-        //     /// we don't bother providing many options.
-        //     "2-2": {"scale": 2, "workers": 2},
+        //     /// Testing with multiple processes on a single machine
         //     "2-4": {"scale": 2, "workers": 4},
+        //     /// Used in mzcompose tests
+        //     "2-2": {"scale": 2, "workers": 2},
+        //     ...
+        //     "16-16": {"scale": 16, "workers": 16},
         //     /// Used in the shared_fate cloudtest tests
-        //     "1-1": {"scale": 1, "workers": 1},
+        //     "2-1": {"scale": 2, "workers": 1},
         //     ...
         //     "16-1": {"scale": 16, "workers": 1},
         // }
@@ -104,17 +106,18 @@ impl Default for ClusterReplicaSizeMap {
                     workers: NonZeroUsize::new(1).unwrap(),
                 },
             );
+
+            inner.insert(
+                format!("{scale}-{scale}"),
+                ComputeReplicaAllocation {
+                    memory_limit: None,
+                    cpu_limit: None,
+                    scale: NonZeroUsize::new(scale).unwrap(),
+                    workers: NonZeroUsize::new(scale).unwrap(),
+                },
+            );
         }
 
-        inner.insert(
-            "2-2".to_string(),
-            ComputeReplicaAllocation {
-                memory_limit: None,
-                cpu_limit: None,
-                scale: NonZeroUsize::new(2).unwrap(),
-                workers: NonZeroUsize::new(2).unwrap(),
-            },
-        );
         inner.insert(
             "2-4".to_string(),
             ComputeReplicaAllocation {
