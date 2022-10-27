@@ -54,7 +54,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
 use mz_storage::controller::{ReadPolicy, StorageController, StorageError};
 
-use crate::command::{CommunicationConfig, DataflowDescription, ProcessId, ReplicaId};
+use crate::command::{DataflowDescription, ProcessId, ReplicaId};
 use crate::logging::{LogVariant, LogView};
 use crate::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
@@ -413,7 +413,13 @@ where
 
         self.instances.insert(
             id,
-            Instance::new(self.build_info, arranged_logs, max_result_size),
+            Instance::new(
+                id,
+                self.build_info,
+                arranged_logs,
+                max_result_size,
+                self.orchestrator.clone(),
+            ),
         );
 
         if self.initialized {
@@ -531,53 +537,13 @@ where
     ComputeGrpcClient: ComputeClient<T>,
 {
     /// Adds replicas of an instance.
-    pub async fn add_replica_to_instance(
+    pub fn add_replica_to_instance(
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
         config: ComputeReplicaConfig,
     ) -> Result<(), ComputeError> {
-        let (addrs, communication_config) = match config.location {
-            ComputeReplicaLocation::Remote {
-                addrs,
-                compute_addrs,
-                workers,
-            } => {
-                let addrs = addrs.into_iter().collect();
-                let comm = CommunicationConfig {
-                    workers: workers.get(),
-                    process: 0,
-                    addresses: compute_addrs.into_iter().collect(),
-                };
-                (addrs, comm)
-            }
-            ComputeReplicaLocation::Managed {
-                allocation,
-                availability_zone,
-                ..
-            } => {
-                let service = self
-                    .compute
-                    .orchestrator
-                    .ensure_replica(instance_id, replica_id, allocation, availability_zone)
-                    .await?;
-
-                let addrs = service.addresses("controller");
-                let comm = CommunicationConfig {
-                    workers: allocation.workers.get(),
-                    process: 0,
-                    addresses: service.addresses("compute"),
-                };
-                (addrs, comm)
-            }
-        };
-
-        self.instance(instance_id)?.add_replica(
-            replica_id,
-            addrs,
-            config.logging,
-            communication_config,
-        )
+        self.instance(instance_id)?.add_replica(replica_id, config)
     }
 
     /// Removes a replica from an instance, including its service in the orchestrator.
@@ -585,19 +551,8 @@ where
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
-        config: ComputeReplicaConfig,
     ) -> Result<(), ComputeError> {
-        if let ComputeReplicaLocation::Managed { .. } = config.location {
-            self.compute
-                .orchestrator
-                .drop_replica(instance_id, replica_id)
-                .await?;
-        }
-
-        self.instance(instance_id)
-            .unwrap()
-            .remove_replica(replica_id)
-            .await
+        self.instance(instance_id)?.remove_replica(replica_id).await
     }
 
     /// Create and maintain the described dataflows, and initialize state for their output.
