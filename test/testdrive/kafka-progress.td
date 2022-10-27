@@ -23,8 +23,14 @@ one
 > SELECT * from data
 one
 
-! CREATE SOURCE d
+# Ensure that we can select from automatically generated remap collection
+> SELECT * FROM data_progress
+0 1
+
+> CREATE SOURCE d
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT TEXT
   EXPOSE PROGRESS AS exposed_progress_data;
-contains:PROGRESS subsources not yet supported
+
+> SELECT * FROM exposed_progress_data
+0 1

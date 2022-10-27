@@ -353,11 +353,6 @@ pub fn plan_create_source(
         progress_subsource,
     } = &stmt;
 
-    // TODO: enable progress subsources.
-    if progress_subsource.is_some() {
-        sql_bail!("[internal error] should have errored in purification");
-    }
-
     let envelope = envelope.clone().unwrap_or(Envelope::None);
 
     const SAFE_WITH_OPTIONS: &[CreateSourceOptionName] = &[CreateSourceOptionName::Size];
@@ -1030,6 +1025,21 @@ pub fn plan_create_source(
         timestamp_interval,
     };
 
+    let progress_subsource = progress_subsource
+        .as_ref()
+        .map(|name| match name {
+            DeferredObjectName::Named(name) => match name {
+                ResolvedObjectName::Object { id, .. } => Ok(*id),
+                ResolvedObjectName::Cte { .. } | ResolvedObjectName::Error => {
+                    sql_bail!("[internal error] invalid target id")
+                }
+            },
+            DeferredObjectName::Deferred(_) => {
+                sql_bail!("[internal error] progress subsource must be named during purification")
+            }
+        })
+        .transpose()?;
+
     let if_not_exists = *if_not_exists;
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.clone())?)?;
     let create_sql = normalize::create_statement(scx, Statement::CreateSource(stmt))?;
@@ -1057,6 +1067,7 @@ pub fn plan_create_source(
             // Currently no source reads from another source
             source_imports: BTreeSet::new(),
             subsource_exports,
+            progress_subsource,
         }),
         desc,
     };

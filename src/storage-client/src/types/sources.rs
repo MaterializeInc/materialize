@@ -23,6 +23,7 @@ use dec::OrderedDecimal;
 use differential_dataflow::lattice::Lattice;
 use globset::{Glob, GlobBuilder};
 use itertools::Itertools;
+use once_cell::sync::Lazy;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
@@ -1433,6 +1434,18 @@ pub struct KafkaSourceConnection {
     pub include_headers: Option<IncludedColumnPos>,
 }
 
+pub static KAFKA_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+    RelationDesc::empty()
+        .with_column(
+            "partition",
+            ScalarType::Range {
+                element_type: Box::new(ScalarType::Numeric { max_scale: None }),
+            }
+            .nullable(false),
+        )
+        .with_column("offset", ScalarType::UInt64.nullable(true))
+});
+
 impl SourceConnection for KafkaSourceConnection {
     fn name(&self) -> &'static str {
         "kafka"
@@ -1443,15 +1456,7 @@ impl SourceConnection for KafkaSourceConnection {
     }
 
     fn timestamp_desc(&self) -> RelationDesc {
-        RelationDesc::empty()
-            .with_column(
-                "partition",
-                ScalarType::Range {
-                    element_type: Box::new(ScalarType::Numeric { max_scale: None }),
-                }
-                .nullable(false),
-            )
-            .with_column("offset", ScalarType::UInt64.nullable(true))
+        KAFKA_PROGRESS_DESC.clone()
     }
 
     fn num_outputs(&self) -> usize {
@@ -1930,6 +1935,14 @@ pub struct KinesisSourceConnection {
     pub aws: AwsConfig,
 }
 
+pub static KINESIS_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+    //  In the future, kinesis will have a more complex ts
+    // RelationDesc::empty()
+    //     .with_column("shard_id", ScalarType::Int32.nullable(false))
+    //     .with_column("sequence_number", ScalarType::UInt64.nullable(true))
+    RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true))
+});
+
 impl SourceConnection for KinesisSourceConnection {
     fn name(&self) -> &'static str {
         "kinesis"
@@ -1940,11 +1953,7 @@ impl SourceConnection for KinesisSourceConnection {
     }
 
     fn timestamp_desc(&self) -> RelationDesc {
-        //  In the future, kinesis will have a more complex ts
-        // RelationDesc::empty()
-        //     .with_column("shard_id", ScalarType::Int32.nullable(false))
-        //     .with_column("sequence_number", ScalarType::UInt64.nullable(true))
-        RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true))
+        KINESIS_PROGRESS_DESC.clone()
     }
 
     fn num_outputs(&self) -> usize {
@@ -2026,6 +2035,9 @@ impl Arbitrary for PostgresSourceConnection {
     }
 }
 
+pub static PG_PROGRESS_DESC: Lazy<RelationDesc> =
+    Lazy::new(|| RelationDesc::empty().with_column("lsn", ScalarType::UInt64.nullable(true)));
+
 impl SourceConnection for PostgresSourceConnection {
     fn name(&self) -> &'static str {
         "postgres"
@@ -2036,7 +2048,7 @@ impl SourceConnection for PostgresSourceConnection {
     }
 
     fn timestamp_desc(&self) -> RelationDesc {
-        RelationDesc::empty().with_column("lsn", ScalarType::UInt64.nullable(true))
+        PG_PROGRESS_DESC.clone()
     }
 
     fn num_outputs(&self) -> usize {
@@ -2156,6 +2168,9 @@ pub struct LoadGeneratorSourceConnection {
     pub tick_micros: Option<u64>,
 }
 
+pub static LOAD_GEN_PROGRESS_DESC: Lazy<RelationDesc> =
+    Lazy::new(|| RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true)));
+
 impl SourceConnection for LoadGeneratorSourceConnection {
     fn name(&self) -> &'static str {
         "load-generator"
@@ -2166,7 +2181,7 @@ impl SourceConnection for LoadGeneratorSourceConnection {
     }
 
     fn timestamp_desc(&self) -> RelationDesc {
-        RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true))
+        LOAD_GEN_PROGRESS_DESC.clone()
     }
 
     fn num_outputs(&self) -> usize {
@@ -2487,6 +2502,9 @@ pub struct TestScriptSourceConnection {
     pub desc_json: String,
 }
 
+pub static TEST_SCRIPT_PROGRESS_DESC: Lazy<RelationDesc> =
+    Lazy::new(|| RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true)));
+
 impl SourceConnection for TestScriptSourceConnection {
     fn name(&self) -> &'static str {
         "testscript"
@@ -2497,7 +2515,7 @@ impl SourceConnection for TestScriptSourceConnection {
     }
 
     fn timestamp_desc(&self) -> RelationDesc {
-        RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true))
+        TEST_SCRIPT_PROGRESS_DESC.clone()
     }
 
     fn num_outputs(&self) -> usize {
@@ -2540,6 +2558,10 @@ pub struct S3SourceConnection {
     pub compression: Compression,
 }
 
+pub static S3_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+    RelationDesc::empty().with_column("byte_offset", ScalarType::UInt64.nullable(true))
+});
+
 impl SourceConnection for S3SourceConnection {
     fn name(&self) -> &'static str {
         "s3"
@@ -2550,7 +2572,7 @@ impl SourceConnection for S3SourceConnection {
     }
 
     fn timestamp_desc(&self) -> RelationDesc {
-        RelationDesc::empty().with_column("byte_offset", ScalarType::UInt64.nullable(true))
+        S3_PROGRESS_DESC.clone()
     }
 
     fn num_outputs(&self) -> usize {
