@@ -325,6 +325,11 @@ where
             .remove(&id)
             .expect("replica not found");
 
+        // In case the replica crashes and we receive a drop replica request
+        // at the same time, the cleanup request will race with the rehydration.
+        // Hence we also have to stop a pending rehydration request.
+        self.compute.failed_replicas.remove(&id);
+
         Ok(())
     }
 
