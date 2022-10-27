@@ -475,7 +475,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         for read_txn in pending_read_txns {
             if let Some((timestamp, Some(timeline))) = &read_txn.timestamp {
-                let timestamp_oracle = self.get_timestamp_oracle_mut(&timeline);
+                let timestamp_oracle = self.get_timestamp_oracle_mut(timeline);
                 let read_ts = timestamp_oracle.read_ts();
                 if timestamp <= &read_ts {
                     ready_txns.push(read_txn.txn);
