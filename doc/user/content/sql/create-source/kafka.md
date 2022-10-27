@@ -230,17 +230,20 @@ To start consuming a Kafka stream from a specific offset, you can use the `START
 
 ```sql
 CREATE SOURCE kafka_offset
-  -- Start reading from the earliest offset in the first partition,
-  -- the second partition at 10, and the third partition at 100
-  FROM KAFKA CONNECTION kafka_connection (TOPIC 'data', START OFFSET=[0,10,100])
+  FROM KAFKA CONNECTION kafka_connection (
+    TOPIC 'data',
+    -- Start reading from the earliest offset in the first partition,
+    -- the second partition at 10, and the third partition at 100.
+    START OFFSET (0, 10, 100)
+  )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   WITH (SIZE = '3xsmall');
 ```
 
 Note that:
 
-- If fewer offsets than partitions are provided, the remaining partitions will start at offset 0. This is true if you provide `START OFFSET=1` or `START OFFSET=[1, ...]`.
-- If more offsets than partitions are provided, then any partitions added later will incorrectly be read from that offset. So, if you have a single partition, but you provide `START OFFSET=[1,2]`, when you add the second partition you will miss the first 2 records of data.
+- If fewer offsets than partitions are provided, the remaining partitions will start at offset 0. This is true if you provide `START OFFSET (1)` or `START OFFSET (1, ...)`.
+- If more offsets than partitions are provided, then any partitions added later will incorrectly be read from that offset. So, if you have a single partition, but you provide `START OFFSET (1, 2)`, when you add the second partition you will miss the first 2 records of data.
 
 #### Time-based offsets
 

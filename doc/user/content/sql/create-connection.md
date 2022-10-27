@@ -35,7 +35,9 @@ Field                       | Value            | Required | Description
 `SSL CERTIFICATE`           | secret or `text` | ✓        | Your SSL certificate in PEM format. Required for SSL client authentication.
 `SSL KEY`                   | secret           | ✓        | Your SSL certificate's key in PEM format. Required for SSL client authentication.
 
-##### Example
+##### Examples
+
+Create an SSL-authenticated Kafka connection:
 
 ```sql
 CREATE SECRET kafka_ssl_crt AS '<BROKER_SSL_CRT>';
@@ -45,6 +47,14 @@ CREATE CONNECTION kafka_connection TO KAFKA (
     BROKER 'rp-f00000bar.data.vectorized.cloud:30365',
     SSL KEY = SECRET kafka_ssl_key,
     SSL CERTIFICATE = SECRET kafka_ssl_crt
+);
+```
+
+Create a connection to multiple Kafka brokers:
+
+```sql
+CREATE CONNECTION kafka_connection TO KAFKA (
+    BROKERS ('broker1:9092', 'broker2:9092')
 );
 ```
 
