@@ -36,30 +36,30 @@ function toHumanBytes(n) {
 /// as of this writing, that only applies to separate threads, for CPU profiles.
 function collateStacks(profile, symbols, anyAnnotation) {
     function trieStep(node, name) {
-	for (const child of node.children) {
-	    if (child.name == name) {
-		return child;
-	    }
-	}
-	node.children.push({name: name, value: 0, children: []});
-	return node.children[node.children.length - 1];
+        for (const child of node.children) {
+            if (child.name == name) {
+                return child;
+            }
+        }
+        node.children.push({name: name, value: 0, children: []});
+        return node.children[node.children.length - 1];
     }
     let root = {name: "", value: 0, children: []};
     for (let stack of profile) {
-	let curNode = root;
-	curNode.value += stack.weight;
-	if (anyAnnotation) {
-	    const anno = stack.annotation || "unknown";
-	    curNode = trieStep(curNode, anno);
-	    curNode.value += stack.weight;
-	}
-	for (let addr of stack.addresses) {
-	    const path = symbols[addr] || [addr];
-	    for (const name of path) {
-		curNode = trieStep(curNode, name);
-		curNode.value += stack.weight;
-	    }
-	}
+        let curNode = root;
+        curNode.value += stack.weight;
+        if (anyAnnotation) {
+            const anno = stack.annotation || "unknown";
+            curNode = trieStep(curNode, anno);
+            curNode.value += stack.weight;
+        }
+        for (let addr of stack.addresses) {
+            const path = symbols[addr] || [addr];
+            for (const name of path) {
+                curNode = trieStep(curNode, name);
+                curNode.value += stack.weight;
+            }
+        }
     }
     return root;
 }
@@ -95,33 +95,33 @@ function collateStacks(profile, symbols, anyAnnotation) {
 function parseMzfg(input) {
     let lines = input.split('\n');
     if (lines.length != 0 && lines[lines.length - 1] == "") {
-	// ignore trailing newline
-	lines.pop();
+        // ignore trailing newline
+        lines.pop();
     }
     let i = 0;
     
     // parse header
     let header = {};
     while (i < lines.length) {
-	const line = lines[i];
-	++i;
-	if (line.length == 0) {
-	    break;
-	}
-	
-	const separatorIdx = line.indexOf(': ');
-	if (separatorIdx == -1) {
-	    throw "Invalid header line: " + line;
-	}
-	const fieldName = line.slice(0, separatorIdx);
-	const fieldValue = line.slice(separatorIdx + 2);
-	header[fieldName] = fieldValue;
+        const line = lines[i];
+        ++i;
+        if (line.length == 0) {
+            break;
+        }
+        
+        const separatorIdx = line.indexOf(': ');
+        if (separatorIdx == -1) {
+            throw "Invalid header line: " + line;
+        }
+        const fieldName = line.slice(0, separatorIdx);
+        const fieldValue = line.slice(separatorIdx + 2);
+        header[fieldName] = fieldValue;
     }
 
     // validate header
     const version = header["mz_fg_version"];
     if (version != 1) {
-	throw "Unrecognized version: " + version;
+        throw "Unrecognized version: " + version;
     }
 
     // parse stacks
@@ -129,28 +129,28 @@ function parseMzfg(input) {
     let anyAnnotation = false;
     const stackRegex = /^(?<addresses>(0x[\da-fA-F]{1,16};)*) (?<weight>\d+(\.\d*)?)( (?<annotation>.*))?$/;
     while (i < lines.length) {
-	const line = lines[i];
-	++i;
-	if (line.length == 0) {
-	    break;
-	}
+        const line = lines[i];
+        ++i;
+        if (line.length == 0) {
+            break;
+        }
 
-	const parsedLine = stackRegex.exec(line);
-	if (!parsedLine) {
-	    throw "Invalid stack trace line: " + line;
-	}
-	
-	let addresses = parsedLine.groups['addresses'].split(';');
-	// ignore the trailing semicolon
-	addresses.pop();
-	const weight = parseFloat(parsedLine.groups['weight']);
-	let annotation = null;
-	if (parsedLine.groups['annotation']) {
-	    annotation = parsedLine.groups['annotation'];
-	    anyAnnotation = true;
-	}
+        const parsedLine = stackRegex.exec(line);
+        if (!parsedLine) {
+            throw "Invalid stack trace line: " + line;
+        }
+        
+        let addresses = parsedLine.groups['addresses'].split(';');
+        // ignore the trailing semicolon
+        addresses.pop();
+        const weight = parseFloat(parsedLine.groups['weight']);
+        let annotation = null;
+        if (parsedLine.groups['annotation']) {
+            annotation = parsedLine.groups['annotation'];
+            anyAnnotation = true;
+        }
 
-	stacks.push({annotation: annotation, addresses: addresses, weight: weight});
+        stacks.push({annotation: annotation, addresses: addresses, weight: weight});
     }
 
     // parse symbols
@@ -158,19 +158,19 @@ function parseMzfg(input) {
     let names = {};
     
     while (i < lines.length) {
-	const line = lines[i];
-	++i;
+        const line = lines[i];
+        ++i;
 
-	const parsedLine = symbolRegex.exec(line);
-	if (!parsedLine) {
-	    throw "Invalid symbol line: " + line;
-	}
+        const parsedLine = symbolRegex.exec(line);
+        if (!parsedLine) {
+            throw "Invalid symbol line: " + line;
+        }
 
-	let path = parsedLine.groups['names'].split(';');
-	// ignore the trailing comma
-	path.pop();
-	const addr = parsedLine.groups['address'];
-	names[addr] = path;
+        let path = parsedLine.groups['names'].split(';');
+        // ignore the trailing comma
+        path.pop();
+        const addr = parsedLine.groups['address'];
+        names[addr] = path;
     }
 
     return {names: names, stacks: stacks, anyAnnotation: anyAnnotation, header: header};
@@ -180,21 +180,21 @@ function renderExtra(extra) {
     let div = document.getElementById("extras");
     div.textContent = '';
     for (const extraKey in extra) {
-	let domLine = document.createElement("p");
-	const text = document.createTextNode(extraKey + ": " + extra[extraKey]);
-	domLine.appendChild(text);
-	div.appendChild(domLine);
+        let domLine = document.createElement("p");
+        const text = document.createTextNode(extraKey + ": " + extra[extraKey]);
+        domLine.appendChild(text);
+        div.appendChild(domLine);
     }
 }
 
 function renderPageFromMzfg(mzfg) {
     try {
-	let parsedMzfg = parseMzfg(mzfg);
-	let data = collateStacks(parsedMzfg.stacks, parsedMzfg.names, parsedMzfg.anyAnnotation);
-	renderFlamegraph(data, parsedMzfg.header['display_bytes']);
-	renderExtra(parsedMzfg.header);
+        let parsedMzfg = parseMzfg(mzfg);
+        let data = collateStacks(parsedMzfg.stacks, parsedMzfg.names, parsedMzfg.anyAnnotation);
+        renderFlamegraph(data, parsedMzfg.header['display_bytes']);
+        renderExtra(parsedMzfg.header);
     } catch(error) {
-	alert("Error: " + error);
+        alert("Error: " + error);
     }
 }
 
@@ -241,7 +241,7 @@ function renderFlamegraph(data, displayBytes) {
 function loadFile(ev) {
     const file = ev.target.files[0];
     file.text().then((mzfg) => {
-	renderPageFromMzfg(mzfg);
+        renderPageFromMzfg(mzfg);
     });
 }
 
