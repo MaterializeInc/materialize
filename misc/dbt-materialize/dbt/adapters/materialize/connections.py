@@ -40,10 +40,11 @@ class MaterializeCredentials(PostgresCredentials):
             "user",
             "database",
             "schema",
-            "keepalives_idle",
-            "connect_timeout",
             "cluster",
             "sslmode",
+            "keepalives_idle",
+            "connect_timeout",
+            "retries",
         )
 
 

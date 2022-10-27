@@ -18,7 +18,6 @@ default:
   outputs:
     dev:
       type: materialize
-      threads: 1
       host: instance.region.aws.materialize.cloud
       port: 6875
       user: user@domain.com
@@ -27,10 +26,10 @@ default:
       schema: dbt_user
       cluster: dbt_user
       sslmode: require
+      keepalives_idle: 10
 
     prod:
       type: materialize
-      threads: 1
       host: instance.region.aws.materialize.cloud
       port: 6875
       user: user@domain.com
