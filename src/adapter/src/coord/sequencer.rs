@@ -878,7 +878,6 @@ impl<S: Append + 'static> Coordinator<S> {
             self.controller
                 .active_compute()
                 .add_replica_to_instance(instance_id, replica_id, replica.config)
-                .await
                 .unwrap();
         }
 
@@ -1031,7 +1030,6 @@ impl<S: Append + 'static> Coordinator<S> {
         self.controller
             .active_compute()
             .add_replica_to_instance(instance_id, replica_id, replica_concrete_config)
-            .await
             .unwrap();
 
         if !log_source_ids.is_empty() {
@@ -1677,7 +1675,10 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut instance_replica_drop_sets = Vec::with_capacity(plan.names.len());
         for compute_name in plan.names {
             let instance = self.catalog.resolve_compute_instance(&compute_name)?;
-            instance_replica_drop_sets.push((instance.id, instance.replicas_by_id.clone()));
+            instance_replica_drop_sets.push((
+                instance.id,
+                instance.replicas_by_id.keys().cloned().collect::<Vec<_>>(),
+            ));
             for replica_name in instance.replica_id_by_name.keys() {
                 ops.push(catalog::Op::DropComputeReplica {
                     name: replica_name.to_string(),
@@ -1716,10 +1717,8 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await?;
         for (instance_id, replicas) in instance_replica_drop_sets {
-            for (replica_id, replica) in replicas {
-                self.drop_replica(instance_id, replica_id, replica.config)
-                    .await
-                    .unwrap();
+            for replica_id in replicas {
+                self.drop_replica(instance_id, replica_id).await.unwrap();
             }
             self.controller.compute.drop_instance(instance_id);
         }
@@ -1773,11 +1772,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 )
             }
 
-            replicas_to_drop.push((
-                instance.id,
-                replica_id,
-                instance.replicas_by_id[&replica_id].clone(),
-            ));
+            replicas_to_drop.push((instance.id, replica_id));
         }
 
         ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
@@ -1785,10 +1780,8 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await?;
 
-        for (compute_id, replica_id, replica) in replicas_to_drop {
-            self.drop_replica(compute_id, replica_id, replica.config)
-                .await
-                .unwrap();
+        for (compute_id, replica_id) in replicas_to_drop {
+            self.drop_replica(compute_id, replica_id).await.unwrap();
         }
 
         Ok(ExecuteResponse::DroppedComputeReplica)
@@ -1798,7 +1791,6 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
-        replica_config: ComputeReplicaConfig,
     ) -> Result<(), anyhow::Error> {
         if let Some(Some(metadata)) = self.transient_replica_metadata.insert(replica_id, None) {
             let retraction = self
@@ -1810,7 +1802,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
         self.controller
             .active_compute()
-            .drop_replica(instance_id, replica_id, replica_config)
+            .drop_replica(instance_id, replica_id)
             .await?;
         Ok(())
     }

@@ -170,7 +170,7 @@ def workflow_test_github_12251(c: Composition) -> None:
     c.sql(
         """
         DROP CLUSTER IF EXISTS cluster1 CASCADE;
-        CREATE CLUSTER cluster1 REPLICAS (replica1 (REMOTE ['computed_1:2100'], WORKERS 2));
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (REMOTE ['computed_1:2100'], COMPUTE ['computed_1:2102'], WORKERS 2));
         SET cluster = cluster1;
         """
     )

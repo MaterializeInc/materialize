@@ -215,7 +215,7 @@ contains:cannot show indexes on materialize.public.foo_primary_idx because it is
 
 > SET CLUSTER TO default
 
-> CREATE CLUSTER clstr REPLICAS (r1 (REMOTE ['localhost:1234']))
+> CREATE CLUSTER clstr REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE ['localhost:1235']))
 > CREATE DEFAULT INDEX IN CLUSTER clstr ON foo;
 > SET CLUSTER TO mz_introspection
 > SHOW INDEXES IN CLUSTER clstr WHERE on = 'foo'

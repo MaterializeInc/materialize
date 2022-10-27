@@ -29,9 +29,10 @@ use enum_kinds::EnumKind;
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     AstInfo, ColumnDef, CreateConnection, CreateSinkConnection, CreateSourceConnection,
-    CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, Envelope, Expr, Format, Ident,
-    KeyConstraint, Query, SelectItem, SourceIncludeMetadata, TableAlias, TableConstraint,
-    TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, DeferredObjectName, Envelope,
+    Expr, Format, Ident, KeyConstraint, Query, SelectItem, SourceIncludeMetadata, TableAlias,
+    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -462,7 +463,7 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub if_not_exists: bool,
     pub key_constraint: Option<KeyConstraint>,
     pub with_options: Vec<CreateSourceOption<T>>,
-    pub subsources: Option<CreateSourceSubsources<T>>,
+    pub subsources: Option<CreateReferencedSubsources<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
@@ -513,45 +514,33 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
 }
 impl_display_t!(CreateSourceStatement);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// A selected subsource in a FOR TABLES (..) statement
-pub enum CreateSourceSubsource<T: AstInfo> {
-    /// An unaliased subbsource
-    Bare(UnresolvedObjectName),
-    /// An subbsource aliased to a different name
-    Aliased(UnresolvedObjectName, UnresolvedObjectName),
-    /// An subbsource fully resolved to the target catalog object it will be written to
-    Resolved(UnresolvedObjectName, T::ObjectName),
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateSourceSubsource<T: AstInfo> {
+    pub reference: UnresolvedObjectName,
+    pub subsource: Option<DeferredObjectName<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceSubsource<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            Self::Bare(name) => f.write_node(name),
-            Self::Aliased(name, alias) => {
-                f.write_node(name);
-                f.write_str(" AS ");
-                f.write_node(alias);
-            }
-            Self::Resolved(name, target) => {
-                f.write_node(name);
-                f.write_str(" INTO ");
-                f.write_node(target);
-            }
+        f.write_node(&self.reference);
+        if let Some(subsource) = &self.subsource {
+            f.write_str(" AS ");
+            f.write_node(subsource);
         }
     }
 }
 impl_display_t!(CreateSourceSubsource);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CreateSourceSubsources<T: AstInfo> {
+pub enum CreateReferencedSubsources<T: AstInfo> {
     /// A subset defined with FOR TABLES (...)
     Subset(Vec<CreateSourceSubsource<T>>),
     /// FOR ALL TABLES
     All,
 }
 
-impl<T: AstInfo> AstDisplay for CreateSourceSubsources<T> {
+impl<T: AstInfo> AstDisplay for CreateReferencedSubsources<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             Self::Subset(subsources) => {
@@ -563,7 +552,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceSubsources<T> {
         }
     }
 }
-impl_display_t!(CreateSourceSubsources);
+impl_display_t!(CreateReferencedSubsources);
 
 /// `CREATE SUBSOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

@@ -236,7 +236,7 @@ static VALID_CASTS: Lazy<HashMap<(ScalarBaseType, ScalarBaseType), CastImpl>> = 
         // UINT16
         (UInt16, UInt32) => Implicit: CastUint16ToUint32(func::CastUint16ToUint32),
         (UInt16, UInt64) => Implicit: CastUint16ToUint64(func::CastUint16ToUint64),
-        (UInt16, Int16) => Implicit: CastUint16ToInt16(func::CastUint16ToInt16),
+        (UInt16, Int16) => Assignment: CastUint16ToInt16(func::CastUint16ToInt16),
         (UInt16, Int32) => Implicit: CastUint16ToInt32(func::CastUint16ToInt32),
         (UInt16, Int64) => Implicit: CastUint16ToInt64(func::CastUint16ToInt64),
         (UInt16, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
