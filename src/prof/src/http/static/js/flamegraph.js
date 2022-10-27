@@ -99,7 +99,7 @@ function parseMzfg(input) {
         lines.pop();
     }
     let i = 0;
-    
+
     // parse header
     let header = {};
     while (i < lines.length) {
@@ -108,7 +108,7 @@ function parseMzfg(input) {
         if (line.length == 0) {
             break;
         }
-        
+
         const separatorIdx = line.indexOf(': ');
         if (separatorIdx == -1) {
             throw "Invalid header line: " + line;
@@ -139,7 +139,7 @@ function parseMzfg(input) {
         if (!parsedLine) {
             throw "Invalid stack trace line: " + line;
         }
-        
+
         let addresses = parsedLine.groups['addresses'].split(';');
         // ignore the trailing semicolon
         addresses.pop();
@@ -156,7 +156,7 @@ function parseMzfg(input) {
     // parse symbols
     const symbolRegex = /^(?<address>0x[\da-fA-F]{1,16}) (?<names>.+)$/;
     let names = {};
-    
+
     while (i < lines.length) {
         const line = lines[i];
         ++i;
