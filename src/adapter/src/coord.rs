@@ -544,7 +544,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // This is disabled for the moment because it has unusual upper
         // advancement behavior.
         // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
-        let source_status_history_shard = if self.catalog.config().unsafe_mode {
+        let source_status_collection_id = if self.catalog.config().unsafe_mode {
             Some(self.catalog.resolve_builtin_storage_collection(
                 &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
             ))
@@ -598,7 +598,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                     source_exports,
                                     host_config: ingestion.host_config.clone(),
                                 }),
-                                source_status_history_shard,
+                                source_status_collection_id,
                             )
                         }
                         DataSourceDesc::Source => (DataSource::Other, None),

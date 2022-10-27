@@ -904,7 +904,7 @@ where
                 let mut append_ts = timestamp;
                 'retry_loop: loop {
                     // We don't actually care so much about the timestamp we append at; it's best-effort.
-                    // Ensure that the append timestamp is past the current upper, and the new upper
+                    // Ensure that the append timestamp is not less than the current upper, and the new upper
                     // is past that timestamp. (Unless we've advanced to the empty antichain, but in
                     // that case we're already in trouble.)
                     for t in recent_upper.elements() {

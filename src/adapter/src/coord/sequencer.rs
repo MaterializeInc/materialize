@@ -507,7 +507,7 @@ impl<S: Append + 'static> Coordinator<S> {
         {
             Ok(()) => {
                 for (source_id, source) in sources {
-                    let source_status_history_shard = if self.catalog.config().unsafe_mode {
+                    let source_status_collection_id = if self.catalog.config().unsafe_mode {
                         Some(self.catalog.resolve_builtin_storage_collection(
                             &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
                         ))
@@ -545,7 +545,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                     source_exports,
                                     host_config: ingestion.host_config,
                                 }),
-                                source_status_history_shard,
+                                source_status_collection_id,
                             )
                         }
                         DataSourceDesc::Source => (DataSource::Other, None),
