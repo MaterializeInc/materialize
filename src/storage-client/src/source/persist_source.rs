@@ -264,6 +264,9 @@ where
 
         let read = read
             .expect("could not open persist client")
+            .open_leased_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(data_shard)
+            .await
+            .expect("could not open persist shard");
             .open_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(data_shard)
             .await;
 
@@ -420,7 +423,7 @@ where
             .open(metadata.persist_location.clone())
             .await
             .expect("could not open persist client")
-            .open_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(data_shard)
+            .open_leased_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(data_shard)
             .await
             .expect("could not open persist shard")
             .batch_fetcher()
