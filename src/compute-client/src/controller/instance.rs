@@ -180,33 +180,35 @@ where
 
     /// Receives the next response from any replica of this instance.
     ///
+    /// Returns `Err` if receiving from a replica has failed, to signal that it is in need of
+    /// rehydration.
+    ///
     /// This method is cancellation safe.
-    pub async fn recv(&mut self) -> (ReplicaId, ComputeResponse<T>) {
+    pub async fn recv(&mut self) -> Result<(ReplicaId, ComputeResponse<T>), ReplicaId> {
         // Receive responses from any of the replicas, and take appropriate
         // action.
-        loop {
-            let response = self
-                .replicas
-                .iter_mut()
-                .map(|(id, replica)| async { (*id, replica.recv().await) })
-                .collect::<FuturesUnordered<_>>()
-                .next()
-                .await;
+        let response = self
+            .replicas
+            .iter_mut()
+            .map(|(id, replica)| async { (*id, replica.recv().await) })
+            .collect::<FuturesUnordered<_>>()
+            .next()
+            .await;
 
-            match response {
-                None => {
-                    // There were no replicas in the set. Block forever to
-                    // communicate that no response is ready.
-                    future::pending().await
-                }
-                Some((replica_id, None)) => {
-                    // A replica has failed and requires rehydration.
-                    self.failed_replicas.insert(replica_id);
-                }
-                Some((replica_id, Some(response))) => {
-                    // A replica has produced a response. Return it.
-                    return (replica_id, response);
-                }
+        match response {
+            None => {
+                // There were no replicas in the set. Block forever to
+                // communicate that no response is ready.
+                future::pending().await
+            }
+            Some((replica_id, None)) => {
+                // A replica has failed and requires rehydration.
+                self.failed_replicas.insert(replica_id);
+                Err(replica_id)
+            }
+            Some((replica_id, Some(response))) => {
+                // A replica has produced a response. Return it.
+                Ok((replica_id, response))
             }
         }
     }
