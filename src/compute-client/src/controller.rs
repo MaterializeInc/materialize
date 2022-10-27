@@ -483,18 +483,20 @@ where
         }
 
         // `Instance::recv` is cancellation safe, so it is safe to construct this `select_all`.
-        let receives = self.instances.iter_mut().map(|(id, instance)| {
-            Box::pin(
-                instance
-                    .recv()
-                    .map(|(replica_id, resp)| (*id, replica_id, resp)),
-            )
-        });
-        let ((instance_id, replica_id, resp), _index, _remaining) =
-            future::select_all(receives).await;
+        let receives = self
+            .instances
+            .iter_mut()
+            .map(|(id, instance)| Box::pin(instance.recv().map(|result| (*id, result))));
+        let ((instance_id, result), _index, _remaining) = future::select_all(receives).await;
 
-        self.replica_heartbeats.insert(replica_id, Utc::now());
-        self.stashed_response = Some((instance_id, replica_id, resp));
+        if let Ok((replica_id, resp)) = result {
+            self.replica_heartbeats.insert(replica_id, Utc::now());
+            self.stashed_response = Some((instance_id, replica_id, resp));
+        } else {
+            // There is nothing to do here. `recv` has already added the failed replica to
+            // `instance.failed_replicas`, so it will be rehydrated in the next call to
+            // `ActiveComputeController::process`.
+        }
     }
 
     /// Listen for changes to compute services reported by the orchestrator.
