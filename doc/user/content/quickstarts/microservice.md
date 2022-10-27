@@ -405,14 +405,16 @@ In a future iteration, we'll make this demo more interactive.
 1. [Set up Docker and Docker compose](/quickstarts/#setup), if you haven't
    already.
 
-1. Clone the Materialize demos repository:
+1. Clone the Materialize demos GitHub repository and checkout the `lts` branch:
 
     ```shell
     git clone https://github.com/MaterializeInc/demos.git
+
+    git checkout lts
     ```
 
     You can also view the demo's code on
-    [GitHub](https://github.com/MaterializeInc/demos/tree/main/billing).
+    [GitHub](https://github.com/MaterializeInc/demos/tree/lts/billing).
 
 1. Download and start all of the components we've listed above by running:
 

@@ -249,10 +249,12 @@ In a future iteration, we'll make this demo more interactive.
     Python 3.7.5
     ```
 
-1. Clone the Materialize demos repository:
+1. Clone the Materialize demos GitHub repository and checkout the `lts` branch:
 
     ```shell
     git clone https://github.com/MaterializeInc/demos.git
+
+    git checkout lts
     ```
 
 1. Move to the `demos/http-logs` directory:
@@ -262,7 +264,7 @@ In a future iteration, we'll make this demo more interactive.
     ```
 
     You can also find the demo's code on
-    [GitHub](https://github.com/MaterializeInc/demos/tree/main/http-logs).
+    [GitHub](https://github.com/MaterializeInc/demos/tree/lts/http-logs).
 
 1. Download and start all of the components we've listed above by running:
 
