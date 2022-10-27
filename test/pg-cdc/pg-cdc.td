@@ -242,16 +242,21 @@ escaped_text_table    subsource <null>
 large_text            subsource <null>
 multipart_pk          subsource <null>
 mz_source             postgres  <NUMBER>
+mz_source_progress    subsource <null>
 no_replica_identity   subsource <null>
 nonpk_table           subsource <null>
 nulls_table           subsource <null>
 pk_table              subsource <null>
 "space table"         subsource <null>
+test_slot_source_progress subsource <null>
 trailing_space_nopk   subsource <null>
 trailing_space_pk     subsource <null>
 types_table           subsource <null>
 utf<NUMBER>_table     subsource <null>
 таблица               subsource <null>
+
+> SELECT * FROM mz_source_progress
+<NUMBER>
 
 $ set-regex match=[0-9]+|_[a-f0-9]+ replacement=<SUPPRESSED>
 

@@ -56,3 +56,6 @@ contains:Unable to validate AWS credentials
 > SELECT * FROM f_view
 "here is a test string"
 "here is a second test string"
+
+> SELECT * FROM f_progress
+0 1
