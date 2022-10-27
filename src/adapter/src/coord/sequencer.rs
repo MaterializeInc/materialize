@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use maplit::btreeset;
+use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpointSpec;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, OwnedMutexGuard};
 use tracing::{event, warn, Level};
@@ -588,13 +589,31 @@ impl<S: Append + 'static> Coordinator<S> {
         let connection_gid = self.catalog.allocate_user_id().await?;
         let mut connection = plan.connection.connection.clone();
 
-        if let mz_storage::types::connections::Connection::Ssh(ref mut ssh) = connection {
-            let keyset = SshKeyset::new()?;
-            self.secrets_controller
-                .ensure(connection_gid, &keyset.to_bytes())
-                .await?;
+        match connection {
+            mz_storage::types::connections::Connection::Ssh(ref mut ssh) => {
+                let keyset = SshKeyset::new()?;
+                self.secrets_controller
+                    .ensure(connection_gid, &keyset.to_bytes())
+                    .await?;
 
-            ssh.public_keys = Some(keyset.public_keys());
+                ssh.public_keys = Some(keyset.public_keys());
+            }
+            mz_storage::types::connections::Connection::AwsPrivateLink(ref privatelink) => {
+                self.cloud_resource_controller
+                    .as_ref()
+                    .ok_or(AdapterError::Unsupported(
+                        "PrivateLink connections are only allowed in cloud.",
+                    ))?
+                    .ensure_vpc_endpoint(
+                        connection_gid,
+                        VpcEndpointSpec {
+                            aws_service_name: privatelink.service_name.to_owned(),
+                            availability_zone_ids: privatelink.availability_zones.to_owned(),
+                        },
+                    )
+                    .await?;
+            }
+            _ => {}
         }
 
         let ops = vec![catalog::Op::CreateItem {

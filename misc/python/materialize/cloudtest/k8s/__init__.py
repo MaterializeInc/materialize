@@ -16,6 +16,7 @@ from kubernetes.client import (
     AppsV1Api,
     CoreV1Api,
     RbacAuthorizationV1Api,
+    V1ClusterRole,
     V1ConfigMap,
     V1Deployment,
     V1Pod,
@@ -217,6 +218,28 @@ class K8sConfigMap(K8sResource):
 
         core_v1_api.create_namespaced_config_map(
             body=self.config_map, namespace=self.namespace()
+        )
+
+
+class K8sClusterRole(K8sResource):
+    role: V1ClusterRole
+
+    def kind(self) -> str:
+        return "clusterrole"
+
+    def create(self) -> None:
+        rbac_api = self.rbac_api()
+
+        # kubectl delete all -all does not clean up role bindings
+        try:
+            assert self.role.metadata is not None
+            assert self.role.metadata.name is not None
+            rbac_api.delete_cluster_role(name=self.role.metadata.name)
+        except ApiException:
+            pass
+
+        rbac_api.create_cluster_role(
+            body=self.role,
         )
 
 

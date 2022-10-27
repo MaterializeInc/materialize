@@ -673,6 +673,7 @@ impl Runner {
                 now: SYSTEM_TIME.clone(),
             },
             secrets_controller: Arc::clone(&orchestrator) as Arc<dyn SecretsController>,
+            cloud_resource_controller: None,
             // Setting the port to 0 means that the OS will automatically
             // allocate an available port.
             sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),

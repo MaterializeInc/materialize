@@ -78,6 +78,7 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::StreamExt;
 use itertools::Itertools;
+use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpointSpec;
 use mz_ore::retry::Retry;
 use rand::seq::SliceRandom;
 use timely::progress::Timestamp as _;
@@ -88,6 +89,7 @@ use tracing::{info, span, warn, Level};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
+use mz_cloud_resources::CloudResourceController;
 use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId};
 use mz_ore::cast::CastFrom;
@@ -236,6 +238,7 @@ pub struct Config<S> {
     pub metrics_registry: MetricsRegistry,
     pub now: NowFn,
     pub secrets_controller: Arc<dyn SecretsController>,
+    pub cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
     pub availability_zones: Vec<String>,
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     pub storage_host_sizes: StorageHostSizeMap,
@@ -361,6 +364,10 @@ pub struct Coordinator<S> {
     /// an arbitrary secret storage engine.
     secrets_controller: Arc<dyn SecretsController>,
 
+    /// Handle to a manager that can create and delete kubernetes resources
+    /// (ie: VpcEndpoint objects)
+    cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
+
     /// Extra context to pass through to connection creation.
     connection_context: ConnectionContext,
 
@@ -483,6 +490,7 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         info!("coordinator init: installing existing objects in catalog");
+        let mut privatelink_connections = HashMap::new();
         for entry in &entries {
             info!(
                 "coordinator init: installing {} {}",
@@ -665,12 +673,41 @@ impl<S: Append + 'static> Coordinator<S> {
                         },
                     );
                 }
+                CatalogItem::Connection(catalog_connection) => {
+                    if let mz_storage::types::connections::Connection::AwsPrivateLink(conn) =
+                        &catalog_connection.connection
+                    {
+                        privatelink_connections.insert(
+                            entry.id(),
+                            VpcEndpointSpec {
+                                aws_service_name: conn.service_name.clone(),
+                                availability_zone_ids: conn.availability_zones.clone(),
+                            },
+                        );
+                    }
+                }
                 // Nothing to do for these cases
                 CatalogItem::Log(_)
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
-                | CatalogItem::Secret(_)
-                | CatalogItem::Connection(_) => {}
+                | CatalogItem::Secret(_) => {}
+            }
+        }
+
+        if let Some(cloud_resource_controller) = &self.cloud_resource_controller {
+            // Clean up any extraneous VpcEndpoints that shouldn't exist.
+            let existing_vpc_endpoints = cloud_resource_controller.list_vpc_endpoints().await?;
+            let desired_vpc_endpoints = privatelink_connections.keys().cloned().collect();
+            let vpc_endpoints_to_remove = existing_vpc_endpoints.difference(&desired_vpc_endpoints);
+            for id in vpc_endpoints_to_remove {
+                cloud_resource_controller.delete_vpc_endpoint(*id).await?;
+            }
+
+            // Ensure desired VpcEndpoints are up to date.
+            for (id, spec) in privatelink_connections {
+                cloud_resource_controller
+                    .ensure_vpc_endpoint(id, spec)
+                    .await?;
             }
         }
 
@@ -896,6 +933,7 @@ pub async fn serve<S: Append + 'static>(
         metrics_registry,
         now,
         secrets_controller,
+        cloud_resource_controller,
         cluster_replica_sizes,
         storage_host_sizes,
         default_storage_host_size,
@@ -1016,6 +1054,7 @@ pub async fn serve<S: Append + 'static>(
                 write_lock_wait_group: VecDeque::new(),
                 pending_writes: Vec::new(),
                 secrets_controller,
+                cloud_resource_controller,
                 connection_context,
                 transient_replica_metadata: HashMap::new(),
                 storage_usage_client,

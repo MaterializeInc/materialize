@@ -28,6 +28,7 @@ use tower_http::cors::AllowOrigin;
 use mz_adapter::catalog::storage::BootstrapArgs;
 use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageHostSizeMap};
 use mz_build_info::{build_info, BuildInfo};
+use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::metrics::MetricsRegistry;
@@ -84,6 +85,8 @@ pub struct Config {
     pub controller: ControllerConfig,
     /// Secrets controller configuration.
     pub secrets_controller: Arc<dyn SecretsController>,
+    /// VpcEndpoint controller configuration.
+    pub cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
 
     // === Adapter options. ===
     /// The PostgreSQL URL for the adapter stash.
@@ -282,6 +285,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         metrics_registry: config.metrics_registry.clone(),
         now: config.now,
         secrets_controller: config.secrets_controller,
+        cloud_resource_controller: config.cloud_resource_controller,
         cluster_replica_sizes: config.cluster_replica_sizes,
         storage_host_sizes: config.storage_host_sizes,
         default_storage_host_size: config.default_storage_host_size,

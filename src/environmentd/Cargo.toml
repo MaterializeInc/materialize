@@ -32,6 +32,7 @@ libc = "0.2.135"
 mime = "0.3.16"
 mz-build-info = { path = "../build-info" }
 mz-adapter = { path = "../adapter" }
+mz-cloud-resources = { path = "../cloud-resources" }
 mz-controller = { path = "../controller" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-http-util = { path = "../http-util" }
