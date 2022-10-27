@@ -272,10 +272,10 @@ where
         // (especially in aggregate). This heuristic is something we'll need to
         // tune over time.
         let should_compact = req.inputs.len() >= self.cfg.compaction_heuristic_min_inputs
-            || req.inputs.iter().map(|x| x.len).sum::<usize>()
-                >= self.cfg.compaction_heuristic_min_updates
             || req.inputs.iter().map(|x| x.parts.len()).sum::<usize>()
-                >= self.cfg.compaction_heuristic_min_inputs;
+                >= self.cfg.compaction_heuristic_min_parts
+            || req.inputs.iter().map(|x| x.len).sum::<usize>()
+                >= self.cfg.compaction_heuristic_min_updates;
         if !should_compact {
             self.metrics.compaction.skipped.inc();
             return None;
@@ -285,6 +285,11 @@ where
         let new_compaction_sender = self.sender.clone();
 
         self.metrics.compaction.requested.inc();
+        // NB: we intentionally pass along the input machine, as it ought to come from the
+        // writer that generated the compaction request / maintenance. this machine has a
+        // spine structure that generated the request, so it has a much better chance of
+        // merging and committing the result than a machine kept up-to-date through state
+        // diffs, which may have a different spine structure less amendable to merging.
         let send = new_compaction_sender.send((req, machine.clone(), compaction_completed_sender));
         if let Err(e) = send {
             // In the steady state we expect this to always succeed, but during

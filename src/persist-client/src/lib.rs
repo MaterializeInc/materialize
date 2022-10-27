@@ -213,6 +213,10 @@ pub struct PersistConfig {
     /// if any of the heuristic criteria are met (they are OR'd).
     pub compaction_heuristic_min_inputs: usize,
     /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
+    /// if the number of batch parts is at least this many. Compaction is performed
+    /// if any of the heuristic criteria are met (they are OR'd).
+    pub compaction_heuristic_min_parts: usize,
+    /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
     /// if the number of updates is at least this many. Compaction is performed
     /// if any of the heuristic criteria are met (they are OR'd).
     pub compaction_heuristic_min_updates: usize,
@@ -289,6 +293,7 @@ impl PersistConfig {
             compaction_enabled: !compaction_disabled,
             compaction_memory_bound_bytes: 1024 * MB,
             compaction_heuristic_min_inputs: 8,
+            compaction_heuristic_min_parts: 8,
             compaction_heuristic_min_updates: 1024,
             compaction_concurrency_limit: 5,
             compaction_minimum_timeout: Duration::from_secs(90),
