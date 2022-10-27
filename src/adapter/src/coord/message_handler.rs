@@ -469,7 +469,7 @@ impl<S: Append + 'static> Coordinator<S> {
     ///   containing timeline has advanced to that point in the future.
     ///   2. Confirming that we are still the current leader before sending results to the client.
     async fn message_linearize_reads(&mut self, pending_read_txns: Vec<PendingReadTxn>) {
-        let mut shortest_wait = 0.into();
+        let mut shortest_wait = Duration::from_millis(0);
         let mut ready_txns = Vec::new();
         let mut deferred_txns = Vec::new();
 
@@ -480,7 +480,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 if timestamp <= &read_ts {
                     ready_txns.push(read_txn.txn);
                 } else {
-                    let wait = timestamp.saturating_sub(read_ts);
+                    let wait = Duration::from_millis(timestamp.saturating_sub(read_ts).into());
                     if wait < shortest_wait {
                         shortest_wait = wait;
                     }
@@ -510,10 +510,10 @@ impl<S: Append + 'static> Coordinator<S> {
 
         if !deferred_txns.is_empty() {
             // Cap wait time to 1s.
-            let remaining_ms = std::cmp::min(shortest_wait, 1_000.into());
+            let remaining_ms = std::cmp::min(shortest_wait, Duration::from_millis(1_000));
             let internal_cmd_tx = self.internal_cmd_tx.clone();
             task::spawn(|| "deferred_read_txns", async move {
-                tokio::time::sleep(Duration::from_millis(remaining_ms.into())).await;
+                tokio::time::sleep(remaining_ms).await;
                 // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
                 let result = internal_cmd_tx.send(Message::LinearizeReads(deferred_txns));
                 if let Err(e) = result {
