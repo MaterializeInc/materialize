@@ -31,11 +31,11 @@ use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
 use timely::PartialOrder;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 use tokio::sync::{mpsc, oneshot, TryAcquireError};
 use tokio::task::JoinHandle;
 use tracing::log::warn;
-use tracing::{debug, debug_span, info, trace, Instrument, Span};
+use tracing::{debug, debug_span, trace, Instrument, Span};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::batch::BatchParts;
@@ -77,7 +77,7 @@ pub struct CompactRes<T> {
 pub struct Compactor<K, V, T, D> {
     cfg: PersistConfig,
     metrics: Arc<Metrics>,
-    sender: UnboundedSender<(CompactReq<T>, Machine<K, V, T, D>, oneshot::Sender<()>)>,
+    sender: Sender<(CompactReq<T>, Machine<K, V, T, D>, oneshot::Sender<()>)>,
     _phantom: PhantomData<fn() -> D>,
 }
 
@@ -95,7 +95,9 @@ where
         writer_id: WriterId,
     ) -> Self {
         let (compact_req_sender, mut compact_req_receiver) =
-            mpsc::unbounded_channel::<(CompactReq<T>, Machine<K, V, T, D>, oneshot::Sender<()>)>();
+            mpsc::channel::<(CompactReq<T>, Machine<K, V, T, D>, oneshot::Sender<()>)>(
+                cfg.compaction_queue_size,
+            );
         let concurrency_limit = Arc::new(tokio::sync::Semaphore::new(
             cfg.compaction_concurrency_limit,
         ));
@@ -290,11 +292,10 @@ where
         // spine structure that generated the request, so it has a much better chance of
         // merging and committing the result than a machine kept up-to-date through state
         // diffs, which may have a different spine structure less amendable to merging.
-        let send = new_compaction_sender.send((req, machine.clone(), compaction_completed_sender));
-        if let Err(e) = send {
-            // In the steady state we expect this to always succeed, but during
-            // shutdown it is possible the destination task has already spun down
-            info!("compact_and_apply_background failed to send request: {}", e);
+        let send =
+            new_compaction_sender.try_send((req, machine.clone(), compaction_completed_sender));
+        if let Err(_) = send {
+            self.metrics.compaction.dropped.inc();
             return None;
         }
 

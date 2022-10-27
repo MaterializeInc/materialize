@@ -223,6 +223,9 @@ pub struct PersistConfig {
     /// In Compactor::compact_and_apply_background, the maximum number of concurrent
     /// compaction requests that can execute for a given shard.
     pub compaction_concurrency_limit: usize,
+    /// In Compactor::compact_and_apply_background, the maximum number of pending
+    /// compaction requests to queue.
+    pub compaction_queue_size: usize,
     /// In Compactor::compact_and_apply_background, the minimum amount of time to
     /// allow a compaction request to run before timing it out. A request may be
     /// given a timeout greater than this value depending on the inputs' size
@@ -296,6 +299,7 @@ impl PersistConfig {
             compaction_heuristic_min_parts: 8,
             compaction_heuristic_min_updates: 1024,
             compaction_concurrency_limit: 5,
+            compaction_queue_size: 20,
             compaction_minimum_timeout: Duration::from_secs(90),
             consensus_connection_pool_max_size: 50,
             writer_lease_duration: Duration::from_secs(60 * 15),
