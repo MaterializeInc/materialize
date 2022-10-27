@@ -453,9 +453,9 @@ impl<S: Append + 'static> Coordinator<S> {
         // Validate `sink.from` is in fact a storage collection
         self.controller.storage.collection(sink.from)?;
 
-        // This is disabled for the moment because we want to attempt to roll out the change slowly as we're
+        // This is in unsafe mode for the moment because we want to attempt to roll out the change slowly as we're
         // stressing persist in a new way.
-        let status_id = if false {
+        let status_id = if self.catalog.config().unsafe_mode {
             Some(self.catalog.resolve_builtin_storage_collection(
                 &crate::catalog::builtin::MZ_SINK_STATUS_HISTORY,
             ))
