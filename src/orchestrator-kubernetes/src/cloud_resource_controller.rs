@@ -46,7 +46,7 @@ impl CloudResourceController for KubernetesOrchestrator {
                 labels: Some(labels),
                 name: Some(name.clone()),
                 namespace: Some(self.kubernetes_namespace.clone()),
-                // TODO owner references?
+                // TODO owner references https://github.com/MaterializeInc/cloud/issues/4408
                 //owner_references: todo!(),
                 ..Default::default()
             },

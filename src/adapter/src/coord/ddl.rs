@@ -412,12 +412,15 @@ impl<S: Append + 'static> Coordinator<S> {
             if let Err(e) = self
                 .cloud_resource_controller
                 .as_ref()
-                .expect("PrivateLink connections are only allowed in cloud.")
+                .ok_or(AdapterError::Unsupported(
+                    "PrivateLink connections are only allowed in cloud.",
+                ))
+                .unwrap()
                 .delete_vpc_endpoint(vpc_endpoint)
                 .await
             {
                 warn!("Dropping VPC Endpoints has encountered an error: {}", e);
-                // TODO reschedule this?
+                // TODO reschedule this https://github.com/MaterializeInc/cloud/issues/4407
             }
         }
     }

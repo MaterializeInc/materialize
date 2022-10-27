@@ -695,7 +695,6 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         if let Some(cloud_resource_controller) = &self.cloud_resource_controller {
-            // TODO don't block here? How do we avoid deleting any new ones then?
             // Clean up any extraneous VpcEndpoints that shouldn't exist.
             let existing_vpc_endpoints = cloud_resource_controller.list_vpc_endpoints().await?;
             let desired_vpc_endpoints = privatelink_connections.keys().cloned().collect();

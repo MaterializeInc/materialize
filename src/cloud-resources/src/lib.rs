@@ -15,7 +15,6 @@ use std::fmt::Debug;
 use async_trait::async_trait;
 
 use mz_repr::GlobalId;
-//use mz_storage::types::connections::AwsPrivateLinkConnection;
 
 pub mod crd;
 

@@ -601,7 +601,9 @@ impl<S: Append + 'static> Coordinator<S> {
             mz_storage::types::connections::Connection::AwsPrivateLink(ref privatelink) => {
                 self.cloud_resource_controller
                     .as_ref()
-                    .expect("PrivateLink connections are only allowed in cloud.")
+                    .ok_or(AdapterError::Unsupported(
+                        "PrivateLink connections are only allowed in cloud.",
+                    ))?
                     .ensure_vpc_endpoint(
                         connection_gid,
                         VpcEndpointSpec {
