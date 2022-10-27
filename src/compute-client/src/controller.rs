@@ -620,12 +620,13 @@ where
     ///   * A `PeekResponse::Canceled` affirming that the peek was canceled.
     ///
     ///   * No `PeekResponse` at all.
-    pub async fn cancel_peeks(
+    pub fn cancel_peeks(
         &mut self,
         instance_id: ComputeInstanceId,
         uuids: BTreeSet<Uuid>,
     ) -> Result<(), ComputeError> {
-        self.instance(instance_id)?.cancel_peeks(uuids).await
+        self.instance(instance_id)?.cancel_peeks(uuids);
+        Ok(())
     }
 
     /// Assign a read policy to specific identifiers.

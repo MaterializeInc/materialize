@@ -677,9 +677,7 @@ where
     }
 
     /// Cancels existing peek requests.
-    pub async fn cancel_peeks(&mut self, uuids: BTreeSet<Uuid>) -> Result<(), ComputeError> {
-        self.remove_peeks(&uuids).await?;
-
+    pub fn cancel_peeks(&mut self, uuids: BTreeSet<Uuid>) {
         // Enqueue the response to the cancelation.
         for uuid in &uuids {
             let otel_ctx = self
@@ -704,7 +702,6 @@ where
         }
 
         self.compute.send(ComputeCommand::CancelPeeks { uuids });
-        Ok(())
     }
 
     /// Assigns a read policy to specific identifiers.
