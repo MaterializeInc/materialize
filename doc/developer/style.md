@@ -122,6 +122,104 @@ Some key principles to highlight are:
 * Avoid contractions and spell out words in full.
 * Word choices to be mindful of: find vs. exists, may vs. can vs. might.
 
+## Log message style
+
+We use the [`tracing` crate](https://docs.rs/tracing/latest/tracing/)'s log
+macros. Observe the following guidelines:
+
+  * Use sentence fragment style (no initial capitalization and no terminating
+    period). Say "beginning operation", not "Beginning operation."
+
+  * Prefer structured fields to string formatting when it may be valuable to
+    search by the value of said field, e.g.:
+
+    ```
+    fn handle_persist_thingy(shard_id: ShardId) {
+        // Preferred.
+        info!(shard_id = ?the_shard, "handling persist thingy");
+        // Acceptable.
+        info!("handling persist thingy for shard {}", shard_id);
+    }
+    ```
+
+    (We're still working on deploying the log aggregator that will allow for
+    searching by structured fields.)
+
+Messages at each level must meet the indicated standard:
+
+* **`ERROR`**: Reports an error that certainly indicates data corruption, data
+  loss, unavailability, or an invariant violation that results in undefined
+  behavior.
+
+  Use *judiciously*. These errors are reported to Sentry. The goal is to
+  eventually have every occurrence of an `error!` log message in production to
+  automatically start an incident and page the on-call engineer.
+
+  Consider instead using `panic!` or `unreachable!`. The scenarios in which a
+  correctness invariant is violated but it is safe to proceed without crashing
+  are quite rare.
+
+  Examples:
+
+  * A referenced collection is not present in the storage controller.
+  * A source ingested the deletion of a record that does not exist, causing a
+    "negative multiplicity."
+
+* **`WARN`**: Either:
+
+    * Like an `ERROR`, but where there is some uncertainty about the error
+      condition.
+    * A recoverable error that is still unexpected.
+
+  These warnings are not reported to Sentry and do not require urgent attention
+  on our end, but they should be the first events looked at when a problem has
+  been identified.
+
+  Any changes to the occurrence of `WARN`-level log events that are noticed
+  during release qualification should be investigated before proceeding with the
+  release.
+
+  * A cancellation request was received for an unknown peek.
+  * A Kafka source cannot connect to any of its brokers.
+
+* **`INFO`**: Reports normal system status changes. Messages at this level are
+  likely to be of interest to the support or engineering team during an
+  investigation of a problem, but do not otherwise require attention.
+
+  Examples:
+
+  * A process has started listening for incoming connections.
+  * A view was created.
+  * A view was dropped.
+
+* **`DEBUG`**: Like `INFO`, but for events where the likelihood of usefulness
+  is too low for the event to be emitted by default.
+
+  The idea is that when you are debugging a problem in a particular crate or
+  module, you can temporarily enable `DEBUG`-level logs for that specific
+  crate or module in the affected environment.
+
+  Examples:
+
+  * An HTTP request was routed through a proxy specified by the `http_proxy`
+    environment variable.
+  * An S3 object downloaded by an S3 source had an invalid `Content-Encoding`
+    header that was ignored, but the object was nonetheless decoded
+    successfully.
+
+* **`TRACE`**: Like `DEBUG`, but for events that meet an even lower standard of
+  relevance or importance.
+
+  Enabling `TRACE` logs can generate multiple gigabytes of log messages per
+  hour. Use extreme caution when enabling this log level. You should generally
+  only enable this log level when developing locally, and only for a single
+  module at a time.
+
+  Examples:
+
+  * A Kafka source consumed a message.
+  * A SQL client issued a command.
+
 
 ## Rust style
 
