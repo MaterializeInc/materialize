@@ -123,14 +123,16 @@ Putting this all together, our deployment looks like this:
    and 8GB memory. Running Docker for Mac with less resources may cause the demo
    to fail.
 
-1. Clone the Materialize demos repository:
+1. Clone the Materialize demos GitHub repository and checkout the `lts` branch:
 
     ```shell
     git clone https://github.com/MaterializeInc/demos.git
+
+    git checkout lts
     ```
 
    You can also view the demo's code on
-   [GitHub](https://github.com/MaterializeInc/demos/tree/main/chbench).
+   [GitHub](https://github.com/MaterializeInc/demos/tree/lts/chbench).
 
 1. Download and start all of the components we've listed above by running:
 
