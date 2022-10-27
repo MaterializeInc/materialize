@@ -13,16 +13,15 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use chrono::{DateTime, NaiveDateTime, Utc};
+use differential_dataflow::lattice::Lattice;
 use timely::progress::Antichain;
-use timely::PartialOrder;
 use tokio::sync::Mutex;
 use tracing::trace;
 
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::read::{Listen, ListenEvent};
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{PersistLocation, ShardId};
+use mz_persist_client::{PersistLocation, ShardId, Upper};
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 
 use crate::types::sources::SourceData;
@@ -42,8 +41,6 @@ pub struct Healthchecker {
     ///
     /// The schema used matches the one used in regular sources and tables.
     write_handle: WriteHandle<SourceData, (), Timestamp, i64>,
-    /// A listener to tail the Healthchecker shard for new updates
-    listener: Listen<SourceData, (), Timestamp, i64>,
     /// The function that should be used to get the current time when updating upper
     now: NowFn,
 }
@@ -68,27 +65,18 @@ impl Healthchecker {
             .await
             .context("error creating persist client for Healthchecker")?;
 
-        let (write_handle, read_handle) = persist_client
-            .open(status_shard_id)
+        let write_handle = persist_client
+            .open_writer(status_shard_id)
             .await
             .context("error opening Healthchecker persist shard")?;
 
         let upper = write_handle.upper().clone();
-
-        // We don't need access to the old history so start at `upper`.
-        let listener = read_handle
-            .clone()
-            .await
-            .listen(upper.clone())
-            .await
-            .expect("since <= as_of asserted");
 
         Ok(Self {
             sink_id,
             current_status: None,
             upper,
             write_handle,
-            listener,
             now,
         })
     }
@@ -115,11 +103,17 @@ impl Healthchecker {
         );
         // Only update status if it is a valid transition
         if SinkStatus::can_transition(self.current_status.as_ref(), &status_update) {
+            let ts = (self.now)();
+            let update = self.prepare_row(&status_update, ts);
+            let mut ts = Timestamp::from(ts);
             loop {
-                let next_ts = (self.now)();
-                let new_upper = Antichain::from_elem(Timestamp::from(next_ts).step_forward());
+                // Make sure `ts` is at least at self.upper
+                for elem in self.upper.elements() {
+                    ts.join_assign(elem);
+                }
+                let new_upper = Antichain::from_elem(ts.step_forward());
 
-                let updates = self.prepare_row_update(&status_update, next_ts);
+                let updates = vec![((update.clone(), ()), ts, 1)];
                 match self
                     .write_handle
                     .compare_and_append(updates.iter(), self.upper.clone(), new_upper.clone())
@@ -131,19 +125,18 @@ impl Healthchecker {
                         self.current_status = Some(status_update);
                         break;
                     }
-                    Ok(Ok(Err(actual_upper))) => {
+                    Ok(Ok(Err(Upper(actual_upper)))) => {
                         trace!(
                             "Had to retry updating status, old upper {:?}, new upper {:?}",
                             &self.upper,
                             &actual_upper
                         );
-                        // Sync to the new upper, go to the loop again
-                        self.sync(&actual_upper.0).await;
-                        // If we can't transition to the new status after the sync, no need to do anything else
-                        if !SinkStatus::can_transition(self.current_status.as_ref(), &status_update)
-                        {
-                            break;
-                        }
+                        // Try again with the new upper.
+                        // N.B.  This works because we only have one active worker per sink so don't have to worry about
+                        //       transitions for a particular sink being valid.  If we have multiple workers, we'd need
+                        //       to keep track of the current state and re-aggregate / check if transition is valid --
+                        //       like we do for sources.
+                        self.upper = actual_upper;
                     }
                     Ok(Err(invalid_use)) => panic!("compare_and_append failed: {invalid_use}"),
                     // An external error means that the operation might have succeeded or failed but we
@@ -155,73 +148,13 @@ impl Healthchecker {
                     // * If it failed, then we'll succeed on retry and proceed normally.
                     Err(external_err) => {
                         trace!("compare_and_append in update_status failed: {external_err}");
-                        continue;
                     }
                 };
             }
         }
     }
 
-    /// Synchronizes internal state with state in the storage collection up until a given timestamp
-    async fn sync(&mut self, target_upper: &Antichain<Timestamp>) {
-        while PartialOrder::less_than(&self.upper, target_upper) {
-            for event in self.listener.next().await {
-                match event {
-                    ListenEvent::Progress(new_upper) => {
-                        self.upper = new_upper;
-                    }
-                    ListenEvent::Updates(updates) => {
-                        self.process_collection_updates(updates);
-                    }
-                }
-            }
-        }
-    }
-
-    /// Process any updates that might be in the collection to update current status
-    /// Currently assumes that the collection only contains assertions (rows with diff = 1)
-    fn process_collection_updates(
-        &mut self,
-        mut updates: Vec<(
-            (Result<SourceData, String>, Result<(), String>),
-            Timestamp,
-            i64,
-        )>,
-    ) {
-        // Sort by timestamp and diff
-        updates.sort_by(|(_, t1, d1), (_, t2, d2)| (t1, d1).cmp(&(t2, d2)));
-        for ((source_data, _), ts, _diff) in updates {
-            trace!("Reading from snapshot at time {}: {:?}", ts, &source_data);
-            let row = source_data
-                .expect("failed to deserialize row")
-                .0
-                .expect("status collection should not have errors");
-            let row_vec = row.unpack();
-            let row_source_id = row_vec[1].unwrap_str();
-            let row_status = row_vec[2].unwrap_str();
-            let row_error = {
-                let err = row_vec[3];
-                if err.is_null() {
-                    None
-                } else {
-                    Some(err.unwrap_str())
-                }
-            };
-
-            if self.sink_id.to_string() == row_source_id {
-                self.current_status = Some(
-                    SinkStatus::try_from_status_error(row_status, row_error)
-                        .expect("invalid status and error"),
-                );
-            }
-        }
-    }
-
-    fn prepare_row_update(
-        &self,
-        status_update: &SinkStatus,
-        ts: u64,
-    ) -> Vec<((SourceData, ()), Timestamp, i64)> {
+    fn prepare_row(&self, status_update: &SinkStatus, ts: u64) -> SourceData {
         let timestamp = NaiveDateTime::from_timestamp(
             (ts / 1000)
                 .try_into()
@@ -242,12 +175,7 @@ impl Healthchecker {
         let metadata = Datum::Null;
         let row = Row::pack_slice(&[timestamp, sink_id, status, error, metadata]);
 
-        vec![(
-            (SourceData(Ok(row)), ()),
-            ts.try_into()
-                .expect("timestamp does not fit into MzTimestamp"),
-            1,
-        )]
+        SourceData(Ok(row))
     }
 }
 
@@ -309,18 +237,6 @@ impl SinkStatus {
                 | old @ SinkStatus::Running
                 | old @ SinkStatus::Stalled(_),
             ) => old != new_status,
-        }
-    }
-
-    fn try_from_status_error(status: &str, error: Option<&str>) -> Result<Self, String> {
-        match status {
-            "setup" => Ok(SinkStatus::Setup),
-            "starting" => Ok(SinkStatus::Starting),
-            "running" => Ok(SinkStatus::Running),
-            "stalled" => Ok(SinkStatus::Stalled(error.unwrap_or_default().into())),
-            "failed" => Ok(SinkStatus::Failed(error.unwrap_or_default().into())),
-            "dropped" => Ok(SinkStatus::Dropped),
-            _ => Err(format!("{status} is not a valid SourceStatus")),
         }
     }
 }
