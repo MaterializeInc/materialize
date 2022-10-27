@@ -469,17 +469,22 @@ impl<S: Append + 'static> Coordinator<S> {
     ///   containing timeline has advanced to that point in the future.
     ///   2. Confirming that we are still the current leader before sending results to the client.
     async fn message_linearize_reads(&mut self, pending_read_txns: Vec<PendingReadTxn>) {
+        let mut shortest_wait = 0.into();
         let mut ready_txns = Vec::new();
         let mut deferred_txns = Vec::new();
 
         for read_txn in pending_read_txns {
-            if let Some((timestamp, Some(timeline))) = read_txn.timestamp.clone() {
+            if let Some((timestamp, Some(timeline))) = &read_txn.timestamp {
                 let timestamp_oracle = self.get_timestamp_oracle_mut(&timeline);
                 let read_ts = timestamp_oracle.read_ts();
-                if timestamp <= read_ts {
+                if timestamp <= &read_ts {
                     ready_txns.push(read_txn.txn);
                 } else {
-                    deferred_txns.push((read_txn, timestamp.saturating_sub(read_ts)));
+                    let wait = timestamp.saturating_sub(read_ts);
+                    if wait < shortest_wait {
+                        shortest_wait = wait;
+                    }
+                    deferred_txns.push(read_txn);
                 }
             } else {
                 ready_txns.push(read_txn.txn);
@@ -504,8 +509,6 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         if !deferred_txns.is_empty() {
-            let (deferred_txns, wait_times): (Vec<_>, Vec<_>) = deferred_txns.into_iter().unzip();
-            let shortest_wait = wait_times.into_iter().min().unwrap_or_else(|| 0.into());
             // Cap wait time to 1s.
             let remaining_ms = std::cmp::min(shortest_wait, 1_000.into());
             let internal_cmd_tx = self.internal_cmd_tx.clone();
