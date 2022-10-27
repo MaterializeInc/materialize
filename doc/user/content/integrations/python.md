@@ -80,7 +80,6 @@ import sys
 dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
 conn = psycopg3.connect(dsn)
 
-conn = psycopg3.connect(dsn)
 with conn.cursor() as cur:
     for row in cur.stream("SUBSCRIBE t"):
         print(row)
@@ -157,8 +156,6 @@ dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_
 conn = psycopg2.connect(dsn)
 conn.autocommit = True
 
-cur = conn.cursor()
-
 with conn.cursor() as cur:
     cur.execute("CREATE SOURCE counter FROM LOAD GENERATOR COUNTER;")
 
@@ -180,8 +177,6 @@ import sys
 dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
 conn = psycopg2.connect(dsn)
 conn.autocommit = True
-
-cur = conn.cursor()
 
 with conn.cursor() as cur:
     cur.execute("CREATE VIEW market_orders_2 AS " \
