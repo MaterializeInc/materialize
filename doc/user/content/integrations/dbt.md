@@ -89,6 +89,8 @@ dbt manages all your connection configurations (or, profiles) in a file called [
           # for the connection
           cluster: <prod_cluster>
           sslmode: require
+          keepalives_idle: 0 # default 0 seconds
+          connect_timeout: 10 # default 10 seconds
         dev:
           type: materialize
           threads: 1
@@ -248,7 +250,7 @@ Component                            | Value     | Description
 ##### Creating a multi-column index
 ```sql
 {{ config(materialized='view',
-          indexes=[{'columns': ['col_a'], 'cluster': 'cluster_a'}]) }}
+          indexes=[{'columns': ['col_a','col_b'], 'cluster': 'cluster_a'}]) }}
 ```
 
 ##### Creating a default index

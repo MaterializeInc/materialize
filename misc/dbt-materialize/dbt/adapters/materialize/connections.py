@@ -27,11 +27,24 @@ SUPPORTED_MATERIALIZE_VERSIONS = ">=0.20.0"
 
 @dataclass
 class MaterializeCredentials(PostgresCredentials):
-    cluster: Optional[str] = None
+    cluster: Optional[str] = "default"
 
     @property
     def type(self):
         return "materialize"
+
+    def _connection_keys(self):
+        return (
+            "host",
+            "port",
+            "user",
+            "database",
+            "schema",
+            "keepalives_idle",
+            "connect_timeout",
+            "cluster",
+            "sslmode",
+        )
 
 
 class MaterializeConnectionManager(PostgresConnectionManager):
