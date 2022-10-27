@@ -31,11 +31,11 @@ use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
 use timely::PartialOrder;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 use tokio::sync::{mpsc, oneshot, TryAcquireError};
 use tokio::task::JoinHandle;
 use tracing::log::warn;
-use tracing::{debug, debug_span, info, trace, Instrument, Span};
+use tracing::{debug, debug_span, trace, Instrument, Span};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::batch::BatchParts;
@@ -74,46 +74,44 @@ pub struct CompactRes<T> {
 /// merging adjacent batches. Logical compaction is advancing timestamps to a
 /// new since and consolidating the resulting updates.
 #[derive(Debug, Clone)]
-pub struct Compactor<T, D> {
+pub struct Compactor<K, V, T, D> {
     cfg: PersistConfig,
     metrics: Arc<Metrics>,
-    sender: UnboundedSender<(CompactReq<T>, oneshot::Sender<()>)>,
+    sender: Sender<(CompactReq<T>, Machine<K, V, T, D>, oneshot::Sender<()>)>,
     _phantom: PhantomData<fn() -> D>,
 }
 
-impl<T, D> Compactor<T, D>
+impl<K, V, T, D> Compactor<K, V, T, D>
 where
+    K: Debug + Codec,
+    V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send,
 {
-    pub fn new<K, V>(
-        machine: Machine<K, V, T, D>,
+    pub fn new(
+        cfg: PersistConfig,
+        metrics: Arc<Metrics>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         writer_id: WriterId,
-    ) -> Self
-    where
-        K: Debug + Codec,
-        V: Debug + Codec,
-    {
+    ) -> Self {
         let (compact_req_sender, mut compact_req_receiver) =
-            mpsc::unbounded_channel::<(CompactReq<T>, oneshot::Sender<()>)>();
+            mpsc::channel::<(CompactReq<T>, Machine<K, V, T, D>, oneshot::Sender<()>)>(
+                cfg.compaction_queue_size,
+            );
         let concurrency_limit = Arc::new(tokio::sync::Semaphore::new(
-            machine.cfg.compaction_concurrency_limit,
+            cfg.compaction_concurrency_limit,
         ));
-        let metrics = Arc::clone(&machine.metrics);
-        let cfg = machine.cfg.clone();
 
         // spin off a single task responsible for executing compaction requests.
         // work is enqueued into the task through a channel
         let _worker_handle = mz_ore::task::spawn(|| "PersistCompactionWorker", async move {
-            while let Some((req, completer)) = compact_req_receiver.recv().await {
+            while let Some((req, mut machine, completer)) = compact_req_receiver.recv().await {
                 assert_eq!(req.shard_id, machine.shard_id());
 
                 let cfg = machine.cfg.clone();
                 let blob = Arc::clone(&machine.state_versions.blob);
                 let metrics = Arc::clone(&machine.metrics);
                 let cpu_heavy_runtime = Arc::clone(&cpu_heavy_runtime);
-                let mut machine = machine.clone();
                 let writer_id = writer_id.clone();
                 let permit = {
                     let inner = Arc::clone(&concurrency_limit);
@@ -268,6 +266,7 @@ where
     pub fn compact_and_apply_background(
         &self,
         req: CompactReq<T>,
+        machine: &Machine<K, V, T, D>,
     ) -> Option<oneshot::Receiver<()>> {
         // Run some initial heuristics to ignore some requests for compaction.
         // We don't gain much from e.g. compacting two very small batches that
@@ -275,6 +274,8 @@ where
         // (especially in aggregate). This heuristic is something we'll need to
         // tune over time.
         let should_compact = req.inputs.len() >= self.cfg.compaction_heuristic_min_inputs
+            || req.inputs.iter().map(|x| x.parts.len()).sum::<usize>()
+                >= self.cfg.compaction_heuristic_min_parts
             || req.inputs.iter().map(|x| x.len).sum::<usize>()
                 >= self.cfg.compaction_heuristic_min_updates;
         if !should_compact {
@@ -286,11 +287,15 @@ where
         let new_compaction_sender = self.sender.clone();
 
         self.metrics.compaction.requested.inc();
-        let send = new_compaction_sender.send((req, compaction_completed_sender));
-        if let Err(e) = send {
-            // In the steady state we expect this to always succeed, but during
-            // shutdown it is possible the destination task has already spun down
-            info!("compact_and_apply_background failed to send request: {}", e);
+        // NB: we intentionally pass along the input machine, as it ought to come from the
+        // writer that generated the compaction request / maintenance. this machine has a
+        // spine structure that generated the request, so it has a much better chance of
+        // merging and committing the result than a machine kept up-to-date through state
+        // diffs, which may have a different spine structure less amendable to merging.
+        let send =
+            new_compaction_sender.try_send((req, machine.clone(), compaction_completed_sender));
+        if let Err(_) = send {
+            self.metrics.compaction.dropped.inc();
             return None;
         }
 
@@ -1042,7 +1047,7 @@ mod tests {
             ),
             inputs: vec![b0, b1],
         };
-        let res = Compactor::<u64, i64>::compact(
+        let res = Compactor::<String, (), u64, i64>::compact(
             write.cfg.clone(),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),

@@ -213,12 +213,19 @@ pub struct PersistConfig {
     /// if any of the heuristic criteria are met (they are OR'd).
     pub compaction_heuristic_min_inputs: usize,
     /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
+    /// if the number of batch parts is at least this many. Compaction is performed
+    /// if any of the heuristic criteria are met (they are OR'd).
+    pub compaction_heuristic_min_parts: usize,
+    /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
     /// if the number of updates is at least this many. Compaction is performed
     /// if any of the heuristic criteria are met (they are OR'd).
     pub compaction_heuristic_min_updates: usize,
     /// In Compactor::compact_and_apply_background, the maximum number of concurrent
     /// compaction requests that can execute for a given shard.
     pub compaction_concurrency_limit: usize,
+    /// In Compactor::compact_and_apply_background, the maximum number of pending
+    /// compaction requests to queue.
+    pub compaction_queue_size: usize,
     /// In Compactor::compact_and_apply_background, the minimum amount of time to
     /// allow a compaction request to run before timing it out. A request may be
     /// given a timeout greater than this value depending on the inputs' size
@@ -289,8 +296,10 @@ impl PersistConfig {
             compaction_enabled: !compaction_disabled,
             compaction_memory_bound_bytes: 1024 * MB,
             compaction_heuristic_min_inputs: 8,
+            compaction_heuristic_min_parts: 8,
             compaction_heuristic_min_updates: 1024,
             compaction_concurrency_limit: 5,
+            compaction_queue_size: 20,
             compaction_minimum_timeout: Duration::from_secs(90),
             consensus_connection_pool_max_size: 50,
             writer_lease_duration: Duration::from_secs(60 * 15),
@@ -471,7 +480,8 @@ impl PersistClient {
         let writer_id = WriterId::new();
         let compact = self.cfg.compaction_enabled.then(|| {
             Compactor::new(
-                machine.clone(),
+                self.cfg.clone(),
+                Arc::clone(&self.metrics),
                 Arc::clone(&self.cpu_heavy_runtime),
                 writer_id.clone(),
             )

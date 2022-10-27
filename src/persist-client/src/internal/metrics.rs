@@ -593,6 +593,7 @@ impl BatchWriteMetrics {
 #[derive(Debug)]
 pub struct CompactionMetrics {
     pub(crate) requested: IntCounter,
+    pub(crate) dropped: IntCounter,
     pub(crate) skipped: IntCounter,
     pub(crate) started: IntCounter,
     pub(crate) applied: IntCounter,
@@ -630,6 +631,10 @@ impl CompactionMetrics {
             requested: registry.register(metric!(
                 name: "mz_persist_compaction_requested",
                 help: "count of total compaction requests",
+            )),
+            dropped: registry.register(metric!(
+                name: "mz_persist_compaction_dropped",
+                help: "count of total compaction requests dropped due to a full queue",
             )),
             skipped: registry.register(metric!(
                 name: "mz_persist_compaction_skipped",
