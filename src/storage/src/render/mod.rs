@@ -102,6 +102,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+use mz_persist_client::ShardId;
 use timely::communication::Allocate;
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
@@ -174,7 +175,7 @@ pub fn build_export_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     storage_state: &mut StorageState,
     id: GlobalId,
-    description: StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,
+    description: StorageSinkDesc<CollectionMetadata, ShardId, mz_repr::Timestamp>,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let debug_name = id.to_string();

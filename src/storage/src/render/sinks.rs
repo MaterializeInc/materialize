@@ -17,10 +17,14 @@ use std::sync::Arc;
 
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::{AsCollection, Collection, Hashable};
+use mz_ore::now::NowFn;
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::{PersistLocation, ShardId};
 use timely::dataflow::Scope;
 
 use mz_interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
+use tokio::sync::Mutex;
 
 use crate::controller::CollectionMetadata;
 use crate::source::persist_source;
@@ -37,7 +41,7 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
     tokens: &mut std::collections::BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
     import_ids: BTreeSet<GlobalId>,
     sink_id: GlobalId,
-    sink: &StorageSinkDesc<CollectionMetadata>,
+    sink: &StorageSinkDesc<CollectionMetadata, ShardId>,
 ) {
     let sink_render = get_sink_render_for(&sink.connection);
 
@@ -67,12 +71,20 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
     let ok_collection =
         apply_sink_envelope(sink_id, sink, &sink_render, ok_collection.as_collection());
 
+    let healthchecker_args = HealthcheckerArgs {
+        persist_clients: Arc::clone(&storage_state.persist_clients),
+        persist_location: sink.from_storage_metadata.persist_location.clone(),
+        status_shard_id: sink.status_id,
+        now_fn: storage_state.now.clone(),
+    };
+
     let sink_token = sink_render.render_continuous_sink(
         storage_state,
         sink,
         sink_id,
         ok_collection,
         err_collection.as_collection(),
+        healthchecker_args,
     );
 
     if let Some(sink_token) = sink_token {
@@ -87,7 +99,7 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
 #[allow(clippy::borrowed_box)]
 fn apply_sink_envelope<G>(
     sink_id: GlobalId,
-    sink: &StorageSinkDesc<CollectionMetadata>,
+    sink: &StorageSinkDesc<CollectionMetadata, ShardId>,
     sink_render: &Box<dyn SinkRender<G>>,
     collection: Collection<G, Row, Diff>,
 ) -> Collection<G, (Option<Row>, Option<Row>), Diff>
@@ -196,6 +208,18 @@ where
     collection
 }
 
+/// Args for creating a healthchecker.  Not done inline because it requires async.
+pub struct HealthcheckerArgs {
+    /// persist_clients
+    pub persist_clients: Arc<Mutex<PersistClientCache>>,
+    /// location of persist
+    pub persist_location: PersistLocation,
+    /// id of status shard for updates
+    pub status_shard_id: Option<ShardId>,
+    /// now_fn
+    pub now_fn: NowFn,
+}
+
 /// A type that can be rendered as a dataflow sink.
 pub(crate) trait SinkRender<G>
 where
@@ -211,10 +235,11 @@ where
     fn render_continuous_sink(
         &self,
         storage_state: &mut StorageState,
-        sink: &StorageSinkDesc<CollectionMetadata>,
+        sink: &StorageSinkDesc<CollectionMetadata, ShardId>,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
+        healthchecker_args: HealthcheckerArgs,
     ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>;

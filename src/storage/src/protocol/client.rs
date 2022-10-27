@@ -20,6 +20,7 @@ use std::iter;
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
+use mz_persist_client::ShardId;
 use proptest::prelude::{any, Arbitrary};
 use proptest::prop_oneof;
 use proptest::strategy::{BoxedStrategy, Strategy};
@@ -188,7 +189,7 @@ impl RustType<ProtoCreateSinkCommand> for CreateSinkCommand<mz_repr::Timestamp> 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct CreateSinkCommand<T> {
     pub id: GlobalId,
-    pub description: StorageSinkDesc<CollectionMetadata, T>,
+    pub description: StorageSinkDesc<CollectionMetadata, ShardId, T>,
 }
 
 impl Arbitrary for CreateSinkCommand<mz_repr::Timestamp> {
@@ -198,7 +199,7 @@ impl Arbitrary for CreateSinkCommand<mz_repr::Timestamp> {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
             any::<GlobalId>(),
-            any::<StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>>(),
+            any::<StorageSinkDesc<CollectionMetadata, ShardId, mz_repr::Timestamp>>(),
         )
             .prop_map(|(id, description)| Self { id, description })
             .boxed()

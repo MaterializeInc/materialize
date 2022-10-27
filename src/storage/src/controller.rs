@@ -144,7 +144,7 @@ impl<T> From<RelationDesc> for CollectionDescription<T> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExportDescription<T = mz_repr::Timestamp> {
-    pub sink: StorageSinkDesc<(), T>,
+    pub sink: StorageSinkDesc<(), GlobalId, T>,
     /// The address of a `storaged` process on which to install the sink or the
     /// settings for spinning up a controller-managed process.
     pub host_config: StorageHostConfig,
@@ -1097,6 +1097,16 @@ where
                 .initial_as_of
                 .maybe_fast_forward(&from_since);
 
+            let status_id = if let Some(status_collection_id) = description.sink.status_id {
+                Some(
+                    self.collection(status_collection_id)?
+                        .collection_metadata
+                        .data_shard,
+                )
+            } else {
+                None
+            };
+
             let cmd = CreateSinkCommand {
                 id,
                 description: StorageSinkDesc {
@@ -1105,6 +1115,7 @@ where
                     connection: description.sink.connection,
                     envelope: description.sink.envelope,
                     as_of,
+                    status_id,
                     from_storage_metadata,
                 },
             };
@@ -1941,13 +1952,14 @@ mod persist_write_handles {
     use differential_dataflow::lattice::Lattice;
     use futures::stream::FuturesUnordered;
     use itertools::Itertools;
+    use mz_persist_client::Upper;
     use timely::progress::{Antichain, Timestamp};
     use tokio::sync::mpsc::UnboundedSender;
 
     use mz_persist_client::write::WriteHandle;
     use mz_persist_types::Codec64;
     use mz_repr::{Diff, GlobalId, TimestampManipulation};
-    use tracing::Instrument;
+    use tracing::{warn, Instrument};
 
     use crate::controller::StorageError;
     use crate::protocol::client::StorageResponse;
@@ -2120,7 +2132,7 @@ mod persist_write_handles {
                                         GlobalId,
                                         (tracing::Span, Vec<Update<T2>>, Antichain<T2>),
                                     >,
-                                ) -> Result<(), Vec<GlobalId>> {
+                                ) -> Result<(), Vec<(GlobalId, Antichain<T2>, Upper<T2>)>> {
                                     let futs = FuturesUnordered::new();
 
                                     // We cannot iterate through the updates and then set off a persist call
@@ -2190,9 +2202,9 @@ mod persist_write_handles {
                                                 result
                                                     .expect("Indeterminate response not resolved")
                                                     .expect("cannot append updates")
-                                                    .or(Err(*id))?;
+                                                    .map_err(|expected_upper| (*id, persist_upper, expected_upper))?;
 
-                                                Ok::<_, GlobalId>((*id, new_upper))
+                                                Ok::<_, _>((*id, new_upper))
                                             })
                                         }
                                     }
@@ -2222,7 +2234,8 @@ mod persist_write_handles {
                                 for (ids, response) in all_responses {
                                     let result = match &result {
                                         Err(bad_ids) => {
-                                            let filtered: Vec<_> = bad_ids.iter().filter(|id| ids.contains(id)).copied().collect();
+                                            warn!("CHAE UPPERS ERROR: {bad_ids:?}");
+                                            let filtered: Vec<_> = bad_ids.iter().filter(|(id, _, _)| ids.contains(id)).map(|(id, _, _)| id).cloned().collect();
                                             if filtered.is_empty() {
                                                 Ok(())
                                             } else {
