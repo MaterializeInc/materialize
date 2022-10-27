@@ -279,6 +279,22 @@ $ kafka-create-topic topic=non-keyed-input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'not-enforced-sink-${testdrive.seed}') KEY (a) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 
+# Send a create, an update, and a delete.
+$ kafka-ingest format=avro topic=non-keyed-input schema=${schema}
+{"array":[{"data":{"a":1,"b":1},"time":1,"diff":1}]}
+{"array":[{"data":{"a":1,"b":1},"time":2,"diff":-1}]}
+{"array":[{"data":{"a":1,"b":2},"time":2,"diff":1}]}
+{"array":[{"data":{"a":1,"b":2},"time":3,"diff":-1}]}
+{"com.materialize.cdc.progress":{"lower":[0],"upper":[10],"counts":[{"time":1,"count":1}, {"time":2,"count":2}, {"time":3,"count":1}]}}
+
+# Verify that the update appears as an upsert instead of a create + delete, even when keys are not enforced.
+# NB: these messages appear out of order because of the way sort-messages shuffles them; see the timestamps
+# for the "true" order.
+$ kafka-verify-data headers=materialize-timestamp format=avro topic=not-enforced-sink-${testdrive.seed} sort-messages=true
+3	{"a": 1}
+1	{"a": 1} {"a": 1, "b": 1}
+2	{"a": 1} {"a": 1, "b": 2}
+
 # Bad upsert keys
 
 ! CREATE SINK invalid_key FROM input
