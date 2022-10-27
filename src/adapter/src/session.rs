@@ -88,6 +88,7 @@ pub struct Session<T = mz_repr::Timestamp> {
     drop_sinks: Vec<ComputeSinkId>,
     notices_tx: mpsc::UnboundedSender<AdapterNotice>,
     notices_rx: mpsc::UnboundedReceiver<AdapterNotice>,
+    prev_notice: Option<AdapterNotice>,
 }
 
 impl<T: TimestampManipulation> Session<T> {
@@ -123,6 +124,7 @@ impl<T: TimestampManipulation> Session<T> {
             drop_sinks: vec![],
             notices_tx,
             notices_rx,
+            prev_notice: None,
         }
     }
 
@@ -348,6 +350,12 @@ impl<T: TimestampManipulation> Session<T> {
                     continue;
                 }
             }
+            // De-duplicate identical notices. This routinely happens for
+            // ClusterReplicaStatusChanged messages.
+            if Some(&notice) == self.prev_notice.as_ref() {
+                continue;
+            }
+            self.prev_notice = Some(notice.clone());
             return notice;
         }
     }
