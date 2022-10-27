@@ -1326,7 +1326,7 @@ impl<'a, S: Append> Transaction<'a, S> {
     /// Removes item `id` from the transaction.
     ///
     /// Runtime is linear with respect to the total number of items in the stash.
-    /// DO NOT call this function in a loop, use [`remove_items`] instead.
+    /// DO NOT call this function in a loop, use [`Self::remove_items`] instead.
     pub fn remove_item(&mut self, id: GlobalId) -> Result<(), Error> {
         let n = self.items.delete(|k, _v| k.gid == id).len();
         assert!(n <= 1);
@@ -1355,7 +1355,7 @@ impl<'a, S: Append> Transaction<'a, S> {
     /// Updates item `id` in the transaction to `item_name` and `item`.
     ///
     /// Runtime is linear with respect to the total number of items in the stash.
-    /// DO NOT call this function in a loop, use [`update_items`] instead.
+    /// DO NOT call this function in a loop, use [`Self::update_items`] instead.
     pub fn update_item(
         &mut self,
         id: GlobalId,
