@@ -145,10 +145,10 @@ CREATE MATERIALIZED VIEW active_customers AS
 
 CREATE INDEX active_customers_idx ON active_customers (guid);
 
--- The above index speeds up the following filter:
+-- This should now be very fast!
 SELECT * FROM active_customers WHERE guid = 'd868a5bf-2430-461d-a665-40418b1125e7';
 
--- An index whose key is an expression:
+-- Using indexed expressions:
 CREATE INDEX active_customers_exp_idx ON active_customers (upper(guid));
 SELECT * FROM active_customers WHERE upper(guid) = 'D868A5BF-2430-461D-A665-40418B1125E7';
 
@@ -159,7 +159,7 @@ SELECT * FROM active_customers WHERE upper(guid) = 'D868A5BF-2430-461D-A665-4041
 
 Create an index with an expression to improve query performance over a frequently used expression, and
 avoid building downstream views to apply the function like the one used in the example: `upper()`.
-Take into account that aggregations like `count()` cannot be used as index expressions.
+Take into account that aggregations like `count()` cannot be used as indexed expressions.
 
 For more details on using indexes to optimize queries, see [Optimization](../../ops/optimization/).
 

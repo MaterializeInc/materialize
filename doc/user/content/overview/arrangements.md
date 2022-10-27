@@ -118,21 +118,21 @@ If Materialize cannot detect a primary key, the default key is the full set of
 columns, in order to ensure good data distribution. Creating an unmaterialized
 view and then specifying a custom index makes the key smaller.
 
-For more infromation on when and how to create an index manually, see
-[Recommendations for query optimization in Materialize](../../ops/optimization/).
-For more in-depth information on joins, see [Joins in Materialize](https://materialize.com/joins-in-materialize/).
+For more infromation on when and how to create indexes, see
+[Optimization](../../ops/optimization/).
+For more in-depth details on joins, see [Joins in Materialize](https://materialize.com/joins-in-materialize/).
 
-### Casting the data type
+### Type casting
 
-Currently, Materialize handles implicit casts inserted in join constraints in a very [memory-intensive way](https://github.com/MaterializeInc/materialize/issues/4171).
+Currently, Materialize handles implicit casts inserted in join constraints in a very memory-intensive way {{% gh 4171 %}}.
 Until this issue
 is resolved, you can reduce memory usage by building an index on the view with
-the type changed for any queries which include implicit casts, for example,
+the type changed for any queries that include implicit casts, for example,
 when you combine 32-bit and 64-bit numbers.
 
-## Related topics
+## Related pages
 
-* [Recommendations for query optimization in Materialize](../../ops/optimization/)
+* [Optimization](../../ops/optimization/)
 * [Joins in Materialize](https://materialize.com/joins-in-materialize/)
 * [Diagnosing Using SQL](/ops/troubleshooting/)
 * [Deployment](/ops/optimization/)
