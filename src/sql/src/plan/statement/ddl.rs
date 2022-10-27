@@ -2416,15 +2416,8 @@ fn plan_replica_config(
                 .collect::<BTreeSet<String>>();
             let workers = workers.unwrap_or(1);
 
-            if remote_addrs.len() > 1 && (remote_addrs.len() != compute_addrs.len()) {
-                sql_bail!(
-                    "must specify as many REMOTE addresses as COMPUTE addresses for multi-process replicas"
-                );
-            }
-            if compute_addrs.len() > remote_addrs.len() {
-                sql_bail!(
-                    "must specify as many REMOTE addresses as COMPUTE addresses for multi-process replicas"
-                );
+            if remote_addrs.len() != compute_addrs.len() {
+                sql_bail!("must specify as many REMOTE addresses as COMPUTE addresses");
             }
 
             let workers = NonZeroUsize::new(workers.into())
