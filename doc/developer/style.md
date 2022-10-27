@@ -97,13 +97,19 @@ _Portions of this section are copied from the PostgreSQL documentation and subje
 
 For error message style, we strive to adhere to the [guidelines](https://www.postgresql.org/docs/current/error-style-guide.html) in the PostgreSQL manual, and use a format that consists of a **required** _primary_ message followed by **optional** _detail_ and _hint_ messages.
 
-**Primary message**: short, factual, and avoids reference to implementation details. Lowercase the first letter and do not end with any punctuation.
+- **Primary message**: short, factual, and avoids reference to implementation details. Lowercase the first letter and do not end with any punctuation.
 
-**Detail message**: factual, use if needed to keep the primary message short or to mention implementation details. Use complete sentences, each of which starts with a capitalized letter and ends with a period. Separate sentences with two spaces.
+- **Detail message**: factual, use if needed to keep the primary message short or to mention implementation details. Use complete sentences, each of which starts with a capitalized letter and ends with a period. Separate sentences with two spaces.
 
-**Hint message**: suggestions about what to do to fix the problem. This should be actionable, and can provide a shortlink to direct the user to more information. Use complete sentences, each of which starts with a capitalized letter and ends with a period. Separate sentences with two spaces.
+- **Hint message**: suggestions about what to do to fix the problem. This should be actionable, and can provide a shortlink to direct the user to more information. Use complete sentences, each of which starts with a capitalized letter and ends with a period. Separate sentences with two spaces.
 
-To use a shortlink in a Hint, add the shortlink to this [file](https://github.com/MaterializeInc/materialize/blob/3efb2c933e4e6c8e694afb1e794c7d8dae368e7d/ci/deploy/website.sh#L29) in your PR to add/modify the hint mesage. Be mindful that we are committed to the upkeep of the referenced link.
+```
+Primary: could not parse column "bar.foo"
+Detail: Column "bar.foo" contains an unsupported type.
+Hint: Try using CAST in the CREATE SOURCE statement or excluding this column from replication.
+```
+
+To use a shortlink in a Hint, add the shortlink to this [file](https://github.com/MaterializeInc/materialize/blob/3efb2c933e4e6c8e694afb1e794c7d8dae368e7d/ci/deploy/website.sh#L29) in your PR to add/modify the hint message. Be mindful that we are committed to the upkeep of the referenced link.
 
 Some key principles to highlight are:
 * Do not put any formatting into message texts, such as newlines.
@@ -115,6 +121,7 @@ Some key principles to highlight are:
 * Tricky words to avoid: unable, bad, illegal, unknown.
 * Avoid contractions and spell out words in full.
 * Word choices to be mindful of: find vs. exists, may vs. can vs. might.
+
 
 ## Rust style
 
