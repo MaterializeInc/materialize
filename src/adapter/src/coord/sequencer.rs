@@ -2047,7 +2047,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // sources or indexes and there is no reference to `mz_now()`.
         let timestamp_independent = source_ids.is_empty() && !source.contains_temporal();
         // For transactions that do not use AS OF, get the
-        // timestamp and timeline of the in-progress transaction or create one. If this is an AS OF
+        // timestamp of the in-progress transaction or create one. If this is an AS OF
         // query, we don't care about any possible transaction timestamp. If this is a
         // single-statement transaction (TransactionStatus::Started), we don't need to
         // worry about preventing compaction or choosing a valid timestamp for future

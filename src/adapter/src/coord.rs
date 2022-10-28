@@ -298,7 +298,7 @@ pub struct PendingTxn {
 }
 
 #[derive(Debug)]
-/// A pending read transaction waiting to be committed.
+/// A pending read transaction waiting to be linearized.
 pub enum PendingReadTxn {
     Read {
         /// The inner transaction.
