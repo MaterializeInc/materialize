@@ -23,3 +23,4 @@ pub mod operators_async_ext;
 pub mod order;
 pub mod progress;
 pub mod replay;
+pub mod scope;

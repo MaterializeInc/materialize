@@ -15,7 +15,6 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::{Send, Sync};
-use std::rc::Rc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -25,7 +24,6 @@ use prometheus::core::{AtomicI64, AtomicU64};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract};
 use timely::scheduling::activate::SyncActivator;
-use timely::scheduling::ActivateOnDrop;
 use timely::Data;
 
 use mz_avro::types::Value;
@@ -173,23 +171,6 @@ pub trait OffsetCommitter {
         &self,
         offsets: HashMap<PartitionId, MzOffset>,
     ) -> Result<(), anyhow::Error>;
-}
-
-/// A `SourceToken` manages interest in a source.
-///
-/// When the `SourceToken` is dropped the associated source will be stopped.
-pub struct SourceToken {
-    pub(crate) _activator: Rc<ActivateOnDrop<()>>,
-}
-
-/// A `AsyncSourceToken` manages interest in a source.
-///
-/// When the `AsyncSourceToken` is dropped the associated source will be stopped.
-///
-/// This type does the same thing as `SourceToken`, but operates in a way
-/// optimized for async timely operators.
-pub struct AsyncSourceToken {
-    pub(crate) _drop_closes_the_oneshot: tokio::sync::oneshot::Sender<()>,
 }
 
 pub enum NextMessage<Key, Value, Diff> {

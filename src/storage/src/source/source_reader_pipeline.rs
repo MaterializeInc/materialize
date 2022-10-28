@@ -22,11 +22,9 @@
 // https://github.com/tokio-rs/prost/issues/237
 #![allow(missing_docs)]
 
-use std::any::Any;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -37,7 +35,6 @@ use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::generic::OperatorInfo;
 use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::operators::{Broadcast, CapabilitySet, Partition};
 use timely::dataflow::Scope;
@@ -50,6 +47,7 @@ use tracing::{info, trace, warn};
 
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{GlobalId, Timestamp};
@@ -65,11 +63,8 @@ use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockFollower, ReclockOperator};
 use crate::source::types::SourceOutput;
 use crate::source::types::SourceReaderError;
-use crate::source::types::{
-    AsyncSourceToken, SourceMessage, SourceMetrics, SourceReader, SourceReaderMetrics, SourceToken,
-};
 use crate::source::types::{MaybeLength, SourceMessageType};
-use crate::source::util::async_source;
+use crate::source::types::{SourceMessage, SourceMetrics, SourceReader, SourceReaderMetrics};
 use crate::types::connections::ConnectionContext;
 use crate::types::errors::SourceError;
 use crate::types::sources::encoding::SourceDataEncoding;
@@ -156,11 +151,8 @@ pub fn create_raw_source<G, S: 'static, R>(
     connection_context: ConnectionContext,
     calc: R,
 ) -> (
-    (
-        Vec<timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>>,
-        timely::dataflow::Stream<G, SourceError>,
-    ),
-    Option<Rc<dyn Any>>,
+    Vec<timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>>,
+    timely::dataflow::Stream<G, SourceError>,
 )
 where
     G: Scope<Timestamp = Timestamp> + Clone,
@@ -175,8 +167,7 @@ where
         config.worker_id,
         config.worker_count,
     );
-    let (resume_stream, resume_token) =
-        super::resumption::resumption_operator(scope, config.clone(), calc);
+    let resume_stream = super::resumption::resumption_operator(scope, config.clone(), calc);
 
     let reclock_follower = {
         let upper_ts = config.resume_upper.as_option().copied().unwrap();
@@ -185,14 +176,11 @@ where
         ReclockFollower::new(as_of)
     };
 
-    let (
-        SourceReaderStreams {
-            batches,
-            batch_upper_summaries,
-            health_stream,
-        },
-        source_reader_token,
-    ) = source_reader_operator::<G, S>(
+    let SourceReaderStreams {
+        batches,
+        batch_upper_summaries,
+        health_stream,
+    } = source_reader_operator::<G, S>(
         scope,
         config.clone(),
         source_connection,
@@ -201,10 +189,10 @@ where
         &resume_stream,
     );
 
-    let (remap_stream, remap_token) =
+    let remap_stream =
         remap_operator::<G, S>(scope, config.clone(), batch_upper_summaries, &resume_stream);
 
-    let ((reclocked_stream, reclocked_err_stream), _reclock_token) = reclock_operator::<G, S>(
+    let (reclocked_stream, reclocked_err_stream) = reclock_operator::<G, S>(
         scope,
         config.clone(),
         reclock_follower,
@@ -212,11 +200,9 @@ where
         remap_stream,
     );
 
-    let health_token = health_operator(scope, config, health_stream);
+    health_operator(scope, config, health_stream);
 
-    let token = Rc::new((source_reader_token, remap_token, resume_token, health_token));
-
-    ((reclocked_stream, reclocked_err_stream), Some(token))
+    (reclocked_stream, reclocked_err_stream)
 }
 
 /// A type-alias that represents actual data coming out of the source reader.
@@ -471,7 +457,7 @@ fn source_reader_operator<G, S: 'static>(
     connection_context: ConnectionContext,
     reclock_follower: ReclockFollower,
     resume_stream: &timely::dataflow::Stream<G, ()>,
-) -> (SourceReaderStreams<G, S>, Option<AsyncSourceToken>)
+) -> SourceReaderStreams<G, S>
 where
     G: Scope<Timestamp = Timestamp>,
     S: SourceReader,
@@ -492,257 +478,265 @@ where
         persist_clients: _,
     } = config;
 
-    let (stream, capability) = async_source(
-        scope,
-        name.clone(),
+    let mut builder = AsyncOperatorBuilder::new(name.clone(), scope.clone());
+    let info = builder.operator_info();
+    // TODO(guswynn): should sources still be able to self-activate?
+    // probably not, so we should remove this
+    let sync_activator = scope.sync_activator_for(&info.address[..]);
+
+    let (mut output, stream) = builder.new_output();
+
+    let mut resume_input = builder.new_input_connection(
         resume_stream,
-        move |info: OperatorInfo, mut cap_set, mut resume_input, mut output| {
-            // TODO(guswynn): should sources still be able to self-activate?
-            // probably not, so we should remove this
-            let sync_activator = scope.sync_activator_for(&info.address[..]);
-
-            async move {
-                // Setup time!
-                let mut source_metrics = SourceReaderMetrics::new(&base_metrics, id);
-
-                // Required to build the initial source_upper and to ensure the offset committer
-                // operator works correctly.
-                reclock_follower
-                    .ensure_initialized_to(resume_upper.borrow())
-                    .await;
-
-                let mut source_upper = reclock_follower
-                    .source_upper_at_frontier(resume_upper.borrow())
-                    .expect("source_upper_at_frontier to be used correctly");
-
-                for (pid, offset) in source_upper.iter() {
-                    source_metrics
-                        .metrics_for_partition(pid)
-                        .source_resume_upper
-                        .set(offset.offset)
-                }
-
-                // Save this to pass into the stream creation
-                let initial_source_upper = source_upper.clone();
-
-                trace!("source_reader({id}) {worker_id}/{worker_count}: source_upper before thinning: {source_upper:?}");
-                source_upper.filter_by_partition(|pid| {
-                    crate::source::responsible_for(&id, worker_id, worker_count, pid)
-                });
-                trace!("source_reader({id}) {worker_id}/{worker_count}: source_upper after thinning: {source_upper:?}");
-
-                let (source_reader, offset_committer) = S::new(
-                    name.clone(),
-                    id,
-                    worker_id,
-                    worker_count,
-                    sync_activator,
-                    source_connection.clone(),
-                    source_upper.as_vec(),
-                    encoding,
-                    base_metrics,
-                    connection_context.clone(),
-                )
-                .expect("Failed to create source");
-
-                let offset_commit_handle = crate::source::commit::drive_offset_committer(
-                    offset_committer,
-                    id,
-                    worker_id,
-                    worker_count,
-                );
-
-                let mut source_reader = build_source_reader_stream::<G, S>(
-                    source_reader,
-                    sub_config,
-                    initial_source_upper,
-                    source_upper,
-                );
-
-                // WIP: Should we have these metrics for all three involved
-                // operators?
-                // source_metrics.operator_scheduled_counter.inc();
-
-                let mut timer = Instant::now();
-
-                // The timestamp that we use for emitting untimestamped batches.
-                // This doesn't _have_ to be wall-clock time, but it's easy
-                // enough to have these somewhat synchronized between all the
-                // workers, which ensures that downstream operators can always
-                // make progress.
-                //
-                // NOTE: This is separate from the wall-clock time that we use
-                // to timestamp messages. Though in practice they're the same,
-                // right now.
-                let mut emit_ts = Timestamp::from((*now_fn)());
-
-                // The last frontier we compacted the remap trace to, starting at [0].
-                let mut last_compaction_since = Antichain::from_elem(Timestamp::minimum());
-
-                loop {
-                    let srnf = source_reader.next();
-                    tokio::pin!(srnf);
-                    let ri = resume_input.next();
-                    tokio::pin!(ri);
-
-                    // `StreamExt::next` and `AsyncInputHandle::next` are both cancel-safe.
-                    let changes = futures::future::select(srnf, ri).await;
-                    let update = match changes {
-                        Either::Left((update, _)) => update,
-                        Either::Right((Some(Event::Progress(resume_frontier_update)), _)) => {
-                            // The first message from the resumption frontier source
-                            // could be the same frontier as the initialization frontier, so we
-                            // just move on.
-                            //
-                            // Additionally, the empty
-                            // `resumption_frontier` currently has no meaningful mapping, and
-                            // occurs only when a source is terminating.
-                            if PartialOrder::less_equal(&resume_frontier_update, &resume_upper)
-                                || resume_frontier_update.elements().is_empty()
-                            {
-                                continue;
-                            }
-
-                            let mut offset_upper = reclock_follower
-                                .source_upper_at_frontier(resume_frontier_update.borrow())
-                                .unwrap();
-                            offset_upper.filter_by_partition(|pid| {
-                                crate::source::responsible_for(&id, worker_id, worker_count, pid)
-                            });
-
-                            info!(
-                                resumption_frontier = ?resume_frontier_update,
-                                ?offset_upper,
-                                "reclock({id}) {worker_id}/{worker_count}: \
-                                calculated offset \
-                                commit frontier for resumption frontier update",
-                            );
-
-                            offset_commit_handle.commit_offsets(offset_upper.as_data_offsets());
-
-                            // Compact the in-memory remap trace shared between this
-                            // operator and the reclock operator. We do this here for convenience! The
-                            // ordering doesn't really matter.
-                            if let Some(new_compaction_since) = derive_new_compaction_since(
-                                resume_frontier_update,
-                                &last_compaction_since,
-                                1,
-                                id,
-                                "reclock",
-                                worker_id,
-                                worker_count,
-                            ) {
-                                reclock_follower.compact(new_compaction_since.clone());
-                                last_compaction_since = new_compaction_since;
-                            }
-                            continue;
-                        }
-                        _ => {
-                            continue;
-                        }
-                    };
-
-                    let update = match update {
-                        Some(update) => update,
-                        None => {
-                            return;
-                        }
-                    };
-                    let SourceReaderOperatorOutput {
-                        messages,
-                        source_errors,
-                        unconsumed_partitions,
-                        source_upper,
-                        batch_upper,
-                    } = match update {
-                        Some(update) => update,
-                        None => {
-                            trace!("source_reader({id}) {worker_id}/{worker_count}: is terminated");
-                            // We will never produce more data, clear our capabilities to
-                            // communicate this downstream.
-                            cap_set.downgrade(&[]);
-                            return;
-                        }
-                    };
-
-                    trace!(
-                        "create_source_raw({id}) {worker_id}/\
-                        {worker_count}: message_batch.len(): {:?}",
-                        messages.len()
-                    );
-                    trace!(
-                        "create_source_raw({id}) {worker_id}/{worker_count}: source_upper: {:?}",
-                        source_upper
-                    );
-
-                    // We forward only the partitions that we are responsible for to
-                    // the remap operator.
-                    let batch_upper_summary = BatchUpperSummary {
-                        batch_upper: batch_upper.clone(),
-                    };
-
-                    // Pull the upper to `max` for partitions that we are not
-                    // responsible for. That way, the downstream reclock operator
-                    // can correctly decide when a reclocked timestamp is closed. We
-                    // basically take those partitions "out of the calculation".
-                    //
-                    // TODO(guswynn): factor this into `OffsetAntichain` in a way that makes sense
-                    let mut extended_source_upper = source_upper.clone();
-                    extended_source_upper.extend(
-                        unconsumed_partitions
-                            .into_iter()
-                            .map(|pid| (pid, MzOffset { offset: u64::MAX })),
-                    );
-
-                    let source_errors = source_errors
-                        .into_iter()
-                        .map(|e| SourceError {
-                            source_id: id,
-                            error: e.inner,
-                        })
-                        .collect_vec();
-
-                    let mut batch_lower = OffsetAntichain::new();
-
-                    for (pid, messages) in &messages {
-                        // source readers are required to produce messages in order.
-                        batch_lower
-                            .insert(pid.clone(), messages.first().expect("non-empty messages").1);
-                    }
-
-                    let message_batch = SourceMessageBatch {
-                        messages,
-                        source_errors,
-                        source_upper: extended_source_upper,
-                        batch_upper: batch_upper.clone(),
-                        batch_lower,
-                    };
-
-                    let cap = cap_set.delayed(&emit_ts);
-                    {
-                        let mut output = output.activate();
-                        let mut session = output.session(&cap);
-
-                        session.give((message_batch, batch_upper_summary));
-                    }
-
-                    trace!(
-                        "create_source_raw({id}) {worker_id}/{worker_count}: \
-                        downgrading to: {:?}",
-                        emit_ts
-                    );
-                    cap_set.downgrade(&[emit_ts]);
-
-                    emit_ts = std::cmp::max(Timestamp::from((*now_fn)()), emit_ts.step_forward());
-
-                    if timer.elapsed() > YIELD_INTERVAL {
-                        timer = Instant::now();
-                        tokio::task::yield_now().await;
-                    }
-                }
-            }
-        },
+        Pipeline,
+        // The resumption frontier doesn't affect the output frontier
+        vec![Antichain::new()],
     );
+
+    builder.build(move |capabilities| async move {
+        // `capabilities` should be a single-element vector.
+        let mut cap_set = CapabilitySet::from_elem(capabilities.into_element());
+
+        // Setup time!
+        let mut source_metrics = SourceReaderMetrics::new(&base_metrics, id);
+
+        // Required to build the initial source_upper and to ensure the offset committer
+        // operator works correctly.
+        reclock_follower
+            .ensure_initialized_to(resume_upper.borrow())
+            .await;
+
+        let mut source_upper = reclock_follower
+            .source_upper_at_frontier(resume_upper.borrow())
+            .expect("source_upper_at_frontier to be used correctly");
+
+        for (pid, offset) in source_upper.iter() {
+            source_metrics
+                .metrics_for_partition(pid)
+                .source_resume_upper
+                .set(offset.offset)
+        }
+
+        // Save this to pass into the stream creation
+        let initial_source_upper = source_upper.clone();
+
+        trace!("source_reader({id}) {worker_id}/{worker_count}: source_upper before thinning: {source_upper:?}");
+        source_upper.filter_by_partition(|pid| {
+            crate::source::responsible_for(&id, worker_id, worker_count, pid)
+        });
+        trace!("source_reader({id}) {worker_id}/{worker_count}: source_upper after thinning: {source_upper:?}");
+
+        let (source_reader, offset_committer) = S::new(
+            name.clone(),
+            id,
+            worker_id,
+            worker_count,
+            sync_activator,
+            source_connection.clone(),
+            source_upper.as_vec(),
+            encoding,
+            base_metrics,
+            connection_context.clone(),
+        )
+        .expect("Failed to create source");
+
+        let offset_commit_handle = crate::source::commit::drive_offset_committer(
+            offset_committer,
+            id,
+            worker_id,
+            worker_count,
+        );
+
+        let mut source_reader = build_source_reader_stream::<G, S>(
+            source_reader,
+            sub_config,
+            initial_source_upper,
+            source_upper,
+        );
+
+        // WIP: Should we have these metrics for all three involved
+        // operators?
+        // source_metrics.operator_scheduled_counter.inc();
+
+        let mut timer = Instant::now();
+
+        // The timestamp that we use for emitting untimestamped batches.
+        // This doesn't _have_ to be wall-clock time, but it's easy
+        // enough to have these somewhat synchronized between all the
+        // workers, which ensures that downstream operators can always
+        // make progress.
+        //
+        // NOTE: This is separate from the wall-clock time that we use
+        // to timestamp messages. Though in practice they're the same,
+        // right now.
+        let mut emit_ts = Timestamp::from((*now_fn)());
+
+        // The last frontier we compacted the remap trace to, starting at [0].
+        let mut last_compaction_since = Antichain::from_elem(Timestamp::minimum());
+
+        loop {
+            let srnf = source_reader.next();
+            tokio::pin!(srnf);
+            let ri = resume_input.next();
+            tokio::pin!(ri);
+
+            // `StreamExt::next` and `AsyncInputHandle::next` are both cancel-safe.
+            let changes = futures::future::select(srnf, ri).await;
+            let update = match changes {
+                Either::Left((update, _)) => update,
+                Either::Right((Some(Event::Progress(resume_frontier_update)), _)) => {
+                    // The first message from the resumption frontier source
+                    // could be the same frontier as the initialization frontier, so we
+                    // just move on.
+                    //
+                    // Additionally, the empty
+                    // `resumption_frontier` currently has no meaningful mapping, and
+                    // occurs only when a source is terminating.
+                    if PartialOrder::less_equal(&resume_frontier_update, &resume_upper)
+                        || resume_frontier_update.elements().is_empty()
+                    {
+                        continue;
+                    }
+
+                    let mut offset_upper = reclock_follower
+                        .source_upper_at_frontier(resume_frontier_update.borrow())
+                        .unwrap();
+                    offset_upper.filter_by_partition(|pid| {
+                        crate::source::responsible_for(&id, worker_id, worker_count, pid)
+                    });
+
+                    info!(
+                        resumption_frontier = ?resume_frontier_update,
+                        ?offset_upper,
+                        "reclock({id}) {worker_id}/{worker_count}: \
+                        calculated offset \
+                        commit frontier for resumption frontier update",
+                    );
+
+                    offset_commit_handle.commit_offsets(offset_upper.as_data_offsets());
+
+                    // Compact the in-memory remap trace shared between this
+                    // operator and the reclock operator. We do this here for convenience! The
+                    // ordering doesn't really matter.
+                    if let Some(new_compaction_since) = derive_new_compaction_since(
+                        resume_frontier_update,
+                        &last_compaction_since,
+                        1,
+                        id,
+                        "reclock",
+                        worker_id,
+                        worker_count,
+                    ) {
+                        reclock_follower.compact(new_compaction_since.clone());
+                        last_compaction_since = new_compaction_since;
+                    }
+                    continue;
+                }
+                _ => {
+                    continue;
+                }
+            };
+
+            let update = match update {
+                Some(update) => update,
+                None => {
+                    return;
+                }
+            };
+            let SourceReaderOperatorOutput {
+                messages,
+                source_errors,
+                unconsumed_partitions,
+                source_upper,
+                batch_upper,
+            } = match update {
+                Some(update) => update,
+                None => {
+                    trace!("source_reader({id}) {worker_id}/{worker_count}: is terminated");
+                    // We will never produce more data, clear our capabilities to
+                    // communicate this downstream.
+                    cap_set.downgrade(&[]);
+                    return;
+                }
+            };
+
+            trace!(
+                "create_source_raw({id}) {worker_id}/\
+                {worker_count}: message_batch.len(): {:?}",
+                messages.len()
+            );
+            trace!(
+                "create_source_raw({id}) {worker_id}/{worker_count}: source_upper: {:?}",
+                source_upper
+            );
+
+            // We forward only the partitions that we are responsible for to
+            // the remap operator.
+            let batch_upper_summary = BatchUpperSummary {
+                batch_upper: batch_upper.clone(),
+            };
+
+            // Pull the upper to `max` for partitions that we are not
+            // responsible for. That way, the downstream reclock operator
+            // can correctly decide when a reclocked timestamp is closed. We
+            // basically take those partitions "out of the calculation".
+            //
+            // TODO(guswynn): factor this into `OffsetAntichain` in a way that makes sense
+            let mut extended_source_upper = source_upper.clone();
+            extended_source_upper.extend(
+                unconsumed_partitions
+                    .into_iter()
+                    .map(|pid| (pid, MzOffset { offset: u64::MAX })),
+            );
+
+            let source_errors = source_errors
+                .into_iter()
+                .map(|e| SourceError {
+                    source_id: id,
+                    error: e.inner,
+                })
+                .collect_vec();
+
+            let mut batch_lower = OffsetAntichain::new();
+
+            for (pid, messages) in &messages {
+                // source readers are required to produce messages in order.
+                batch_lower
+                    .insert(pid.clone(), messages.first().expect("non-empty messages").1);
+            }
+
+            let message_batch = SourceMessageBatch {
+                messages,
+                source_errors,
+                source_upper: extended_source_upper,
+                batch_upper: batch_upper.clone(),
+                batch_lower,
+            };
+
+            let cap = cap_set.delayed(&emit_ts);
+            {
+                let mut output = output.activate();
+                let mut session = output.session(&cap);
+
+                session.give((message_batch, batch_upper_summary));
+            }
+
+            trace!(
+                "create_source_raw({id}) {worker_id}/{worker_count}: \
+                downgrading to: {:?}",
+                emit_ts
+            );
+            cap_set.downgrade(&[emit_ts]);
+
+            emit_ts = std::cmp::max(Timestamp::from((*now_fn)()), emit_ts.step_forward());
+
+            if timer.elapsed() > YIELD_INTERVAL {
+                timer = Instant::now();
+                tokio::task::yield_now().await;
+            }
+        }
+
+    });
 
     // TODO: Roll all this into one source operator.
     let operator_name = format!("source_reader({})-demux", id);
@@ -799,14 +793,11 @@ where
         }
     });
 
-    (
-        SourceReaderStreams {
-            batches: batch_stream,
-            batch_upper_summaries: summary_stream,
-            health_stream,
-        },
-        Some(capability),
-    )
+    SourceReaderStreams {
+        batches: batch_stream,
+        batch_upper_summaries: summary_stream,
+        health_stream,
+    }
 }
 
 /// Mints new contents for the remap shard based on summaries about the source
@@ -818,8 +809,7 @@ fn health_operator<G>(
     scope: &G,
     config: RawSourceCreationConfig,
     health_stream: timely::dataflow::Stream<G, (usize, HealthStatus)>,
-) -> Rc<dyn Any>
-where
+) where
     G: Scope<Timestamp = Timestamp>,
 {
     let RawSourceCreationConfig {
@@ -850,19 +840,13 @@ where
 
     let mut last_reported_status = overall_status(&healths).clone();
 
-    let shutdown_token = Rc::new(());
-    let weak_token = Rc::downgrade(&shutdown_token);
-
     health_op.build_async(
         scope.clone(),
-        move |mut _capabilities, _frontiers, scheduler| async move {
+        move |capabilities, _frontiers, scheduler| async move {
+            assert!(capabilities.is_empty());
             let mut buffer = Vec::new();
             info!("Health for source {source_id} initialized to: {last_reported_status:?}");
             while scheduler.notified().await {
-                if weak_token.upgrade().is_none() {
-                    return;
-                }
-
                 input.for_each(|_cap, rows| {
                     rows.swap(&mut buffer);
                     for (worker_id, health_event) in buffer.drain(..) {
@@ -883,8 +867,6 @@ where
             }
         },
     );
-
-    shutdown_token
 }
 
 /// Mints new contents for the remap shard based on summaries about the source
@@ -897,10 +879,7 @@ fn remap_operator<G, S: 'static>(
     config: RawSourceCreationConfig,
     batch_upper_summaries: timely::dataflow::Stream<G, BatchUpperSummary>,
     resume_stream: &timely::dataflow::Stream<G, ()>,
-) -> (
-    timely::dataflow::Stream<G, (PartitionId, Timestamp, MzOffset)>,
-    Rc<dyn Any>,
-)
+) -> timely::dataflow::Stream<G, (PartitionId, Timestamp, MzOffset)>
 where
     G: Scope<Timestamp = Timestamp>,
     S: SourceReader,
@@ -944,8 +923,6 @@ where
         // introspect its frontier.
         vec![Antichain::new()],
     );
-
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
     remap_op.build(move |capabilities| async move {
         if !active_worker {
@@ -1012,17 +989,11 @@ where
         // The last frontier we compacted the remap shard to, starting at [0].
         let mut last_compaction_since = Antichain::from_elem(Timestamp::default());
 
-        tokio::pin!(shutdown_rx);
         let mut input_frontier = Antichain::from_elem(Timestamp::default());
         loop {
             // AsyncInputHandle::next is cancel safe
             tokio::select! {
                 biased;
-                // Make sure we don't accidentally mint new updates when this source has
-                // been dropped. This way, we also make sure to not react to spurious
-                // frontier advancements to `[]` that happen when the input source operator
-                // is shutting down.
-                _ = shutdown_rx.as_mut() => return,
                 _ = async {
                     if let Err(wait_time) = timestamper.next_mint_timestamp() {
                         tokio::time::sleep(wait_time).await;
@@ -1114,7 +1085,7 @@ where
         }
     });
 
-    (remap_stream, Rc::new(shutdown_tx))
+    remap_stream
 }
 
 /// Receives un-timestamped batches from the source reader and updates to the
@@ -1127,11 +1098,8 @@ fn reclock_operator<G, S: 'static>(
     batches: timely::dataflow::Stream<G, SourceMessageBatch<S::Key, S::Value, S::Diff>>,
     remap_trace_updates: timely::dataflow::Stream<G, (PartitionId, Timestamp, MzOffset)>,
 ) -> (
-    (
-        Vec<timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>>,
-        timely::dataflow::Stream<G, SourceError>,
-    ),
-    Option<SourceToken>,
+    Vec<timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>>,
+    timely::dataflow::Stream<G, SourceError>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
@@ -1454,6 +1422,10 @@ where
 
                 cap_set.downgrade(new_ts_upper);
             }
+
+            if ingest_frontier.is_empty() && remap_upper.is_empty() {
+                cap_set.downgrade(&[]);
+            }
         }
     });
 
@@ -1467,7 +1439,7 @@ where
         (u64::cast_from(output), data)
     });
 
-    ((ok_streams, err_stream), None)
+    (ok_streams, err_stream)
 }
 
 /// Take `message` and assign it the appropriate timestamps and push it into the

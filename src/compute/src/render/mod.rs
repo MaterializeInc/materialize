@@ -107,7 +107,7 @@ use std::sync::Arc;
 use differential_dataflow::AsCollection;
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
-use timely::dataflow::operators::InspectCore;
+use timely::dataflow::operators::{InspectCore, Leave};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Timestamp;
@@ -121,6 +121,7 @@ use mz_repr::{Diff, GlobalId, Row};
 use mz_storage::controller::CollectionMetadata;
 use mz_storage::source::persist_source;
 use mz_storage::types::errors::DataflowError;
+use mz_timely_util::scope::ScopeExt;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
@@ -171,17 +172,20 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Note: For correctness, we require that sources only emit times advanced by
                 // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
-                let (mut ok_stream, err_stream, token) = persist_source::persist_source(
-                    region,
-                    *source_id,
-                    Arc::clone(&compute_state.persist_clients),
-                    source.storage_metadata.clone(),
-                    dataflow.as_of.clone(),
-                    dataflow.until.clone(),
-                    mfp.as_mut(),
-                    // Copy the logic in DeltaJoin/Get/Join to start.
-                    |_timer, count| count > 1_000_000,
-                );
+                let ((mut ok_stream, err_stream), token) = region.region_fused(|region| {
+                    let (ok, err) = persist_source::persist_source(
+                        region,
+                        *source_id,
+                        Arc::clone(&compute_state.persist_clients),
+                        source.storage_metadata.clone(),
+                        dataflow.as_of.clone(),
+                        dataflow.until.clone(),
+                        mfp.as_mut(),
+                        // Copy the logic in DeltaJoin/Get/Join to start.
+                        |_timer, count| count > 1_000_000,
+                    );
+                    (ok.leave(), err.leave())
+                });
 
                 // If `mfp` is non-identity, we need to apply what remains.
                 // For the moment, assert that it is either trivial or `None`.

@@ -9,8 +9,6 @@
 
 //! A source that reads from an a persist shard.
 
-use std::any::Any;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Instant;
@@ -20,7 +18,7 @@ use futures::stream::StreamExt;
 use futures::Stream as FuturesStream;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::OkErr;
+use timely::dataflow::operators::{CapabilitySet, OkErr};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, Mutex};
@@ -59,13 +57,12 @@ pub fn persist_source<G, YFn>(
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (DataflowError, Timestamp, Diff)>,
-    Rc<dyn Any>,
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     YFn: Fn(Instant, usize) -> bool + 'static,
 {
-    let (stream, token) = persist_source_core(
+    let stream = persist_source_core(
         scope,
         source_id,
         persist_clients,
@@ -79,7 +76,7 @@ where
         Ok(row) => Ok((row, t, r)),
         Err(err) => Err((err, t, r)),
     });
-    (ok_stream, err_stream, token)
+    (ok_stream, err_stream)
 }
 
 /// The stream of batches from persist cannot be dropped at the discretion of
@@ -178,10 +175,7 @@ pub fn persist_source_core<G, YFn>(
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
     yield_fn: YFn,
-) -> (
-    Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
-    Rc<dyn Any>,
-)
+) -> Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     YFn: Fn(Instant, usize) -> bool + 'static,
@@ -300,16 +294,18 @@ where
 
     let mut pinned_stream = DropSafeLeaseStream::new(Box::pin(async_stream));
 
-    let (inner, token) = crate::source::util::source(
+    // TODO(petrosagg): convert to async op
+    let inner = timely::dataflow::operators::generic::operator::source(
         scope,
-        format!("persist_source {}: part distribution", source_id),
-        move |info| {
+        &format!("persist_source {}: part distribution", source_id),
+        move |capability, info| {
             let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
             let waker = futures::task::waker(waker_activator);
 
             let mut current_ts = timely::progress::Timestamp::minimum();
 
-            move |cap_set, output| {
+            let mut cap_set = CapabilitySet::from_elem(capability);
+            move |output| {
                 let mut context = Context::from_waker(&waker);
 
                 while let Poll::Ready(item) = pinned_stream.poll_next(&mut context) {
@@ -486,9 +482,6 @@ where
         Exchange::new(move |_| u64::cast_from(chosen_worker)),
     );
 
-    let last_token = Rc::new(token);
-    let token = Rc::clone(&last_token);
-
     consumed_part_builder.build(|_initial_capabilities| {
         let mut buffer = Vec::new();
 
@@ -519,9 +512,7 @@ where
         }
     });
 
-    let token = Rc::new(token);
-
-    (update_output_stream, token)
+    update_output_stream
 }
 
 // The build_async operator yields to timely whenever the Future handed to it

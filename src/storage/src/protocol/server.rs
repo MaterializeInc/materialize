@@ -96,7 +96,7 @@ pub fn serve(
             client_rx,
             storage_state: StorageState {
                 source_uppers: HashMap::new(),
-                source_tokens: HashMap::new(),
+                dataflows: HashMap::new(),
                 decode_metrics,
                 reported_frontiers: HashMap::new(),
                 ingestions: HashMap::new(),
@@ -108,7 +108,6 @@ pub fn serve(
                 timely_worker_peers,
                 connection_context: config.connection_context.clone(),
                 persist_clients,
-                sink_tokens: HashMap::new(),
                 sink_write_frontiers: HashMap::new(),
             },
         }

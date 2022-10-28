@@ -11,8 +11,6 @@
 //!
 //! See [`render_source`] for more details.
 
-use std::any::Any;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
@@ -45,21 +43,16 @@ enum SourceType<Delimited, ByteStream, RowSource> {
     Delimited(Delimited),
     /// A bytestream source
     ByteStream(ByteStream),
-    /// A source that produces Row's natively,
-    /// and skips any `render_decode` stream
-    /// adapters, and can produce
-    /// retractions
+    /// A source that produces Row's natively, and skips any `render_decode` stream adapters, and
+    /// can produce retractions
     Row(RowSource),
 }
 
-/// _Renders_ complete _differential_ [`Collection`]s
-/// that represent the final source and its errors
-/// as requested by the original `CREATE SOURCE` statement,
-/// encapsulated in the passed `SourceInstanceDesc`.
+/// _Renders_ complete _differential_ [`Collection`]s that represent the final source and its
+/// errors as requested by the original `CREATE SOURCE` statement, encapsulated in the passed
+/// `SourceInstanceDesc`.
 ///
-/// The first element in the returned tuple is the pair of [`Collection`]s,
-/// the second is a type-erased token that will keep the source
-/// alive as long as it is not dropped.
+/// Returns a list of [`Collection`]s, one per output of this source.
 ///
 /// This function is intended to implement the recipe described here:
 /// <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/platform/architecture-storage.md#source-ingestion>
@@ -70,16 +63,10 @@ pub fn render_source<G>(
     description: IngestionDescription<CollectionMetadata>,
     resume_upper: Antichain<G::Timestamp>,
     storage_state: &mut crate::storage_state::StorageState,
-) -> (
-    Vec<(Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)>,
-    Rc<dyn Any>,
-)
+) -> Vec<(Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    // Tokens that we should return from the method.
-    let mut needed_tokens: Vec<Rc<dyn Any>> = Vec::new();
-
     // Note that this `render_source` attaches a single _instance_ of a source
     // to the passed `Scope`, and this instance may be disabled if the
     // source type does not support multiple instances. `render_source`
@@ -110,9 +97,9 @@ where
 
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
-    let ((ok_sources, err_source), capability) = match connection {
+    let (ok_sources, err_source) = match connection {
         SourceConnection::Kafka(connection) => {
-            let ((oks, err), cap) = source::create_raw_source::<_, KafkaSourceReader, _>(
+            let (oks, err) = source::create_raw_source::<_, KafkaSourceReader, _>(
                 scope,
                 base_source_config,
                 connection,
@@ -120,10 +107,10 @@ where
                 resumption_calculator,
             );
             let oks: Vec<_> = oks.into_iter().map(SourceType::Delimited).collect();
-            ((oks, err), cap)
+            (oks, err)
         }
         SourceConnection::Kinesis(connection) => {
-            let ((oks, err), cap) =
+            let (oks, err) =
                 source::create_raw_source::<_, DelimitedValueSource<KinesisSourceReader>, _>(
                     scope,
                     base_source_config,
@@ -132,10 +119,10 @@ where
                     resumption_calculator,
                 );
             let oks = oks.into_iter().map(SourceType::Delimited).collect();
-            ((oks, err), cap)
+            (oks, err)
         }
         SourceConnection::S3(connection) => {
-            let ((oks, err), cap) = source::create_raw_source::<_, S3SourceReader, _>(
+            let (oks, err) = source::create_raw_source::<_, S3SourceReader, _>(
                 scope,
                 base_source_config,
                 connection,
@@ -143,10 +130,10 @@ where
                 resumption_calculator,
             );
             let oks = oks.into_iter().map(SourceType::ByteStream).collect();
-            ((oks, err), cap)
+            (oks, err)
         }
         SourceConnection::Postgres(connection) => {
-            let ((oks, err), cap) = source::create_raw_source::<_, PostgresSourceReader, _>(
+            let (oks, err) = source::create_raw_source::<_, PostgresSourceReader, _>(
                 scope,
                 base_source_config,
                 connection,
@@ -154,10 +141,10 @@ where
                 resumption_calculator,
             );
             let oks = oks.into_iter().map(SourceType::Row).collect();
-            ((oks, err), cap)
+            (oks, err)
         }
         SourceConnection::LoadGenerator(connection) => {
-            let ((oks, err), cap) = source::create_raw_source::<_, LoadGeneratorSourceReader, _>(
+            let (oks, err) = source::create_raw_source::<_, LoadGeneratorSourceReader, _>(
                 scope,
                 base_source_config,
                 connection,
@@ -165,10 +152,10 @@ where
                 resumption_calculator,
             );
             let oks = oks.into_iter().map(SourceType::Row).collect();
-            ((oks, err), cap)
+            (oks, err)
         }
         SourceConnection::TestScript(connection) => {
-            let ((oks, err), cap) = source::create_raw_source::<_, TestScriptSourceReader, _>(
+            let (oks, err) = source::create_raw_source::<_, TestScriptSourceReader, _>(
                 scope,
                 base_source_config,
                 connection,
@@ -176,13 +163,9 @@ where
                 resumption_calculator,
             );
             let oks: Vec<_> = oks.into_iter().map(SourceType::Delimited).collect();
-            ((oks, err), cap)
+            (oks, err)
         }
     };
-
-    let source_token = Rc::new(capability);
-
-    needed_tokens.push(source_token);
 
     let mut outputs = vec![];
     for ok_source in ok_sources {
@@ -194,7 +177,7 @@ where
             .pass_through("source-errors", 1)
             .as_collection()];
 
-        let (ok, err, extra_tokens) = render_source_stream(
+        let (ok, err) = render_source_stream(
             scope,
             dataflow_debug_name,
             id,
@@ -204,10 +187,9 @@ where
             error_collections,
             storage_state,
         );
-        needed_tokens.extend(extra_tokens);
         outputs.push((ok, err));
     }
-    (outputs, Rc::new(needed_tokens))
+    outputs
 }
 
 type ConcreteSourceType<G> = SourceType<
@@ -230,16 +212,10 @@ fn render_source_stream<G>(
     resume_upper: Antichain<G::Timestamp>,
     mut error_collections: Vec<Collection<G, DataflowError, Diff>>,
     storage_state: &mut crate::storage_state::StorageState,
-) -> (
-    Collection<G, Row, Diff>,
-    Collection<G, DataflowError, Diff>,
-    Vec<Rc<dyn Any>>,
-)
+) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let mut needed_tokens: Vec<Rc<dyn Any>> = vec![];
-
     let SourceDesc {
         encoding,
         envelope,
@@ -282,15 +258,13 @@ where
             };
             // TODO(petrosagg): this should move to the envelope section below and
             // made to work with a stream of Rows instead of decoding Avro directly
-            let (oks, token) =
-                render_decode_cdcv2(&ok_source, &schema, csr_client, confluent_wire_format);
-            needed_tokens.push(Rc::new(token));
+            let oks = render_decode_cdcv2(&ok_source, &schema, csr_client, confluent_wire_format);
             (oks, None)
         } else {
             // Depending on the type of _raw_ source produced for the given source
             // connection, render the _decode_ part of the pipeline, that turns a raw data
             // stream into a `DecodeResult`.
-            let (results, extra_token) = match ok_source {
+            let results = match ok_source {
                 SourceType::Delimited(source) => render_decode_delimited(
                     &source,
                     key_encoding,
@@ -308,21 +282,15 @@ where
                     storage_state.decode_metrics.clone(),
                     &storage_state.connection_context,
                 ),
-                SourceType::Row(source) => (
-                    source.map(|r| DecodeResult {
-                        key: None,
-                        value: Some(Ok((r.value, r.diff))),
-                        position: r.position,
-                        upstream_time_millis: r.upstream_time_millis,
-                        partition: r.partition,
-                        metadata: Row::default(),
-                    }),
-                    None,
-                ),
+                SourceType::Row(source) => source.map(|r| DecodeResult {
+                    key: None,
+                    value: Some(Ok((r.value, r.diff))),
+                    position: r.position,
+                    upstream_time_millis: r.upstream_time_millis,
+                    partition: r.partition,
+                    metadata: Row::default(),
+                }),
             };
-            if let Some(tok) = extra_token {
-                needed_tokens.push(Rc::new(tok));
-            }
 
             // render envelopes
             match &envelope {
@@ -337,7 +305,7 @@ where
                             let persist_clients = Arc::clone(&storage_state.persist_clients);
                             let upper_ts = resume_upper.as_option().copied().unwrap();
                             let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
-                            let (tx_source_ok_stream, tx_source_err_stream, tx_token) =
+                            let (tx_source_ok_stream, tx_source_err_stream) =
                                 persist_source::persist_source(
                                     scope,
                                     id,
@@ -353,7 +321,6 @@ where
                                 tx_source_ok_stream.as_collection(),
                                 tx_source_err_stream.as_collection(),
                             );
-                            needed_tokens.push(tx_token);
                             error_collections.push(tx_source_err);
 
                             super::debezium::render_tx(dbz_envelope, &results, tx_source_ok)
@@ -389,7 +356,8 @@ where
                     };
                     let (previous_stream, previous_token) =
                         if let Some(previous_as_of) = previous_as_of {
-                            let (stream, tok) = persist_source::persist_source_core(
+                            // TODO wrap in tokened scope
+                            let stream = persist_source::persist_source_core(
                                 scope,
                                 id,
                                 persist_clients,
@@ -407,7 +375,7 @@ where
                                 // Copy the logic in DeltaJoin/Get/Join to start.
                                 |_timer, count| count > 1_000_000,
                             );
-                            (stream, Some(tok))
+                            (stream, None.unwrap())
                         } else {
                             (std::iter::empty().to_stream(scope), None)
                         };
@@ -474,8 +442,7 @@ where
         _ => collection::concatenate(scope, error_collections),
     };
 
-    // Return the collections and any needed tokens.
-    (collection, err_collection, needed_tokens)
+    (collection, err_collection)
 }
 
 /// After handling metadata insertion, we split streams into key/value parts for convenience

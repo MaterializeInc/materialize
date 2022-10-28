@@ -12,9 +12,6 @@
 //!
 //! TODO(guswynn): link to design doc when its merged
 
-use std::any::Any;
-use std::rc::Rc;
-
 use differential_dataflow::Hashable;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::Scope;
@@ -30,17 +27,11 @@ use mz_timely_util::builder_async::OperatorBuilder;
 /// Generates a timely `Stream` with no inputs that periodically
 /// downgrades its output `Capability` _to the "resumption frontier"
 /// of the source_. It does not produce meaningful data.
-///
-/// The returned feedback `Handle` is to allow the downstream operator to
-/// communicate a frontier back to this operator, so we can shutdown when that
-/// frontier becomes the empty antichain.
-///
-/// This is useful when a source is finite or finishes for other reasons.
 pub fn resumption_operator<G, R>(
     scope: &G,
     config: RawSourceCreationConfig,
     calc: R,
-) -> (timely::dataflow::Stream<G, ()>, Rc<dyn Any>)
+) -> timely::dataflow::Stream<G, ()>
 where
     G: Scope<Timestamp = Timestamp> + Clone,
     R: ResumptionFrontierCalculator<Timestamp> + 'static,
@@ -65,7 +56,6 @@ where
 
     let mut upper = Antichain::from_elem(Timestamp::minimum());
 
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     resume_op.build(move |mut capabilities| async move {
         if !active_worker {
             return;
@@ -87,33 +77,23 @@ where
             calc.initialize_state(&mut persist_clients).await
         };
 
-        tokio::pin!(shutdown_rx);
         while !upper.is_empty() {
-            let tick_fut = interval.tick();
-            tokio::pin!(tick_fut);
-            // `tokio::time::Interval` is documented as cancel-safe and the shutdown future is
-            // not dropped since it is pinned on the stack outside of the while loop and we only
-            // select through a reference to that future.
-            match futures::future::select(tick_fut, shutdown_rx.as_mut()).await {
-                futures::future::Either::Left(_) => {
-                    // Get a new lower bound for the resumption frontier
-                    let new_upper = calc.calculate_resumption_frontier(&mut calc_state).await;
+            interval.tick().await;
+            // Get a new lower bound for the resumption frontier
+            let new_upper = calc.calculate_resumption_frontier(&mut calc_state).await;
 
-                    if PartialOrder::less_than(&upper, &new_upper) {
-                        tracing::info!(
-                            resumption_frontier = ?new_upper,
-                            "resumption({id}) {worker_id}/{worker_count}: calculated \
-                            new resumption frontier",
-                        );
+            if PartialOrder::less_than(&upper, &new_upper) {
+                tracing::info!(
+                    resumption_frontier = ?new_upper,
+                    "resumption({id}) {worker_id}/{worker_count}: calculated \
+                    new resumption frontier",
+                );
 
-                        cap_set.downgrade(&*new_upper);
-                        upper = new_upper;
-                    }
-                }
-                futures::future::Either::Right(_) => return,
+                cap_set.downgrade(&*new_upper);
+                upper = new_upper;
             }
         }
     });
 
-    (resume_stream, Rc::new(shutdown_tx))
+    resume_stream
 }

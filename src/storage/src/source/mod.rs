@@ -55,7 +55,6 @@ mod source_reader_pipeline;
 #[doc(hidden)]
 pub mod testscript;
 pub mod types;
-pub mod util;
 
 pub use delimited_value_reader::DelimitedValueSource;
 pub use generator::LoadGeneratorSourceReader;

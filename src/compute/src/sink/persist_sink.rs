@@ -40,6 +40,7 @@ use mz_storage::types::errors::DataflowError;
 use mz_storage::types::sources::SourceData;
 use mz_timely_util::activator::LimitingActivator;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
+use mz_timely_util::scope::ScopeExt;
 
 use crate::compute_state::ComputeState;
 use crate::render::sinks::SinkRender;
@@ -60,14 +61,21 @@ where
         G: Scope<Timestamp = Timestamp>,
     {
         let desired_collection = sinked_collection.map(Ok).concat(&err_collection.map(Err));
+        let mut scope = desired_collection.scope();
 
-        persist_sink(
-            sink_id,
-            &self.storage_metadata,
-            desired_collection,
-            sink.as_of.frontier.clone(),
-            compute_state,
-        )
+        let ((), token) = scope.region(|region| {
+            let desired_collection = desired_collection.enter(region);
+            region.region_fused(|fused_region| {
+                persist_sink(
+                    sink_id,
+                    &self.storage_metadata,
+                    desired_collection.enter(fused_region),
+                    sink.as_of.frontier.clone(),
+                    compute_state,
+                )
+            })
+        });
+        Some(token)
     }
 }
 
@@ -77,8 +85,7 @@ pub(crate) fn persist_sink<G>(
     desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,
     as_of: Antichain<Timestamp>,
     compute_state: &mut ComputeState,
-) -> Option<Rc<dyn Any>>
-where
+) where
     G: Scope<Timestamp = Timestamp>,
 {
     // There is no guarantee that `as_of` is beyond the persist shard's since. If it isn't,
@@ -86,7 +93,7 @@ where
     // `persist_source` to select an appropriate `as_of`. We only care about times beyond the
     // current shard upper anyway.
     let source_as_of = None;
-    let (ok_stream, err_stream, token) = mz_storage::source::persist_source::persist_source(
+    let (ok_stream, err_stream) = mz_storage::source::persist_source::persist_source(
         &desired_collection.scope(),
         sink_id,
         Arc::clone(&compute_state.persist_clients),
@@ -103,17 +110,14 @@ where
         .map(Ok)
         .concat(&err_stream.as_collection().map(Err));
 
-    Some(Rc::new((
-        install_desired_into_persist(
-            sink_id,
-            target,
-            desired_collection,
-            persist_collection,
-            as_of,
-            compute_state,
-        ),
-        token,
-    )))
+    install_desired_into_persist(
+        sink_id,
+        target,
+        desired_collection,
+        persist_collection,
+        as_of,
+        compute_state,
+    )
 }
 
 /// Continuously writes the difference between `persist_stream` and
@@ -144,8 +148,7 @@ fn install_desired_into_persist<G>(
     persist_collection: Collection<G, Result<Row, DataflowError>, Diff>,
     as_of: Antichain<Timestamp>,
     compute_state: &mut crate::compute_state::ComputeState,
-) -> Option<Rc<dyn Any>>
-where
+) where
     G: Scope<Timestamp = Timestamp>,
 {
     let persist_clients = Arc::clone(&compute_state.persist_clients);
@@ -173,7 +176,7 @@ where
     // the timestamp on feeding back using the summary.
     let (persist_feedback_handle, persist_feedback_stream) = scope.feedback(Timestamp::default());
 
-    let (batch_descriptions, mint_token) = mint_batch_descriptions(
+    let batch_descriptions = mint_batch_descriptions(
         sink_id,
         operator_name.clone(),
         target,
@@ -184,7 +187,7 @@ where
         compute_state,
     );
 
-    let (written_batches, write_token) = write_batches(
+    let written_batches = write_batches(
         sink_id.clone(),
         operator_name.clone(),
         target,
@@ -194,7 +197,7 @@ where
         Arc::clone(&persist_clients),
     );
 
-    let (append_frontier_stream, append_token) = append_batches(
+    let append_frontier_stream = append_batches(
         sink_id.clone(),
         operator_name,
         target,
@@ -204,10 +207,6 @@ where
     );
 
     append_frontier_stream.connect_loop(persist_feedback_handle);
-
-    let token = Rc::new((mint_token, write_token, append_token));
-
-    Some(token)
 }
 
 /// Whenever the frontier advances, this mints a new batch description (lower
@@ -230,10 +229,7 @@ fn mint_batch_descriptions<G>(
     as_of: Antichain<Timestamp>,
     persist_clients: Arc<Mutex<PersistClientCache>>,
     compute_state: &mut crate::compute_state::ComputeState,
-) -> (
-    Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
-    Rc<dyn Any>,
-)
+) -> Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -276,10 +272,6 @@ where
     let mut desired_input = mint_op.new_input(desired_stream, Pipeline);
     let mut persist_feedback_input =
         mint_op.new_input_connection(persist_feedback_stream, Pipeline, vec![Antichain::new()]);
-
-    // Dropping this token signals that the operator should shut down cleanly.
-    let token = Rc::new(());
-    let token_weak = Rc::downgrade(&token);
 
     mint_op.build_async(
         scope,
@@ -354,10 +346,6 @@ where
             let mut current_persist_frontier = None;
 
             while scheduler.notified().await {
-                if token_weak.upgrade().is_none() {
-                    return;
-                }
-
                 desired_input.for_each(|_cap, _data| {
                     // Just read away data.
                     // WIP: Is this idiomatic timely?
@@ -507,7 +495,7 @@ where
         output_stream.inspect(|d| trace!("batch_description: {:?}", d));
     }
 
-    (output_stream, token)
+    output_stream
 }
 
 /// Writes `desired_stream - persist_stream` to persist, but only for updates
@@ -521,10 +509,7 @@ fn write_batches<G>(
     desired_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     persist_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     persist_clients: Arc<Mutex<PersistClientCache>>,
-) -> (
-    Stream<G, WriterEnrichedHollowBatch<Timestamp>>,
-    Option<Rc<dyn Any>>,
-)
+) -> Stream<G, WriterEnrichedHollowBatch<Timestamp>>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -566,10 +551,6 @@ where
         vec![Antichain::new()],
     );
 
-    // Dropping this token signals that the operator should shut down cleanly.
-    let token = Rc::new(());
-    let token_weak = Rc::downgrade(&token);
-
     // This operator accepts the current and desired update streams for a `persist` shard.
     // It attempts to write out updates, starting from the current's upper frontier, that
     // will cause the changes of desired to be committed to persist.
@@ -607,10 +588,6 @@ where
                 .expect("could not open persist shard");
 
             while scheduler.notified().await {
-                if token_weak.upgrade().is_none() {
-                    return;
-                }
-
                 // Make sure that our write handle lease does not expire!
                 //
                 // We don't write to _Consensus_ but instead only write batch
@@ -823,7 +800,7 @@ where
         output_stream.inspect(|d| trace!("batch: {:?}", d));
     }
 
-    (output_stream, Some(token))
+    output_stream
 }
 
 /// Fuses written batches together and appends them to persist using one
@@ -838,7 +815,7 @@ fn append_batches<G>(
     batch_descriptions: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
     batches: &Stream<G, WriterEnrichedHollowBatch<Timestamp>>,
     persist_clients: Arc<Mutex<PersistClientCache>>,
-) -> (Stream<G, ()>, Option<Rc<dyn Any>>)
+) -> Stream<G, ()>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -876,10 +853,6 @@ where
         Exchange::new(move |_| hashed_id),
         vec![Antichain::new()],
     );
-
-    // Dropping this token signals that the operator should shut down cleanly.
-    let token = Rc::new(());
-    let token_weak = Rc::downgrade(&token);
 
     // This operator accepts the batch descriptions and tokens that represent
     // written batches. Written batches get appended to persist when we learn
@@ -925,10 +898,6 @@ where
                 .expect("could not open persist shard");
 
             while scheduler.notified().await {
-                if token_weak.upgrade().is_none() {
-                    return;
-                }
-
                 if !active_worker {
                     // SUBTLE: This is different from `mint_batch_description`
                     // where the non-active workers have to stay alive and keep
@@ -1103,5 +1072,5 @@ where
         },
     );
 
-    (output_stream, Some(token))
+    output_stream
 }

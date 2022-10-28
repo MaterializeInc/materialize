@@ -5,7 +5,6 @@
 
 //! Worker-local state for storage timely instances.
 
-use std::any::Any;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -60,8 +59,8 @@ pub struct StorageState {
     /// module would eventually provide one source of truth on this rather than multiple,
     /// and we should aim for that but are not there yet.
     pub source_uppers: HashMap<GlobalId, Rc<RefCell<Antichain<mz_repr::Timestamp>>>>,
-    /// Handles to created sources, keyed by ID
-    pub source_tokens: HashMap<GlobalId, Rc<dyn Any>>,
+    /// The dataflow identifiers associated with each global id
+    pub dataflows: HashMap<GlobalId, usize>,
     /// Decoding metrics reported by all dataflows.
     pub decode_metrics: DecodeMetrics,
     /// Tracks the conditional write frontiers we have reported.
@@ -86,21 +85,9 @@ pub struct StorageState {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     pub persist_clients: Arc<Mutex<PersistClientCache>>,
-    /// Tokens that should be dropped when a dataflow is dropped to clean up
-    /// associated state.
-    pub sink_tokens: HashMap<GlobalId, SinkToken>,
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
     pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
-}
-
-/// A token that keeps a sink alive.
-pub struct SinkToken(Box<dyn Any>);
-impl SinkToken {
-    /// Create new token
-    pub fn new(t: Box<dyn Any>) -> Self {
-        Self(t)
-    }
 }
 
 impl<'w, A: Allocate> Worker<'w, A> {
@@ -207,16 +194,16 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         ))),
                     );
 
+                    self.storage_state.reported_frontiers.insert(
+                        export.id,
+                        Antichain::from_elem(mz_repr::Timestamp::minimum()),
+                    );
+
                     crate::render::build_export_dataflow(
                         self.timely_worker,
                         &mut self.storage_state,
                         export.id,
                         export.description,
-                    );
-
-                    self.storage_state.reported_frontiers.insert(
-                        export.id,
-                        Antichain::from_elem(mz_repr::Timestamp::minimum()),
                     );
                 }
             }
@@ -227,8 +214,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         // Clean up per-source / per-sink state.
                         self.storage_state.source_uppers.remove(&id);
                         self.storage_state.reported_frontiers.remove(&id);
-                        self.storage_state.source_tokens.remove(&id);
-                        self.storage_state.sink_tokens.remove(&id);
+                        let dataflow_id = self
+                            .storage_state
+                            .dataflows
+                            .remove(&id)
+                            .expect("unknown id");
+                        self.timely_worker.drop_dataflow(dataflow_id);
                     }
                 }
             }

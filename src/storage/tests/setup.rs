@@ -144,7 +144,7 @@ where
 
             let storage_state = mz_storage::storage_state::StorageState {
                 source_uppers: HashMap::new(),
-                source_tokens: HashMap::new(),
+                dataflows: HashMap::new(),
                 decode_metrics,
                 reported_frontiers: HashMap::new(),
                 ingestions: HashMap::new(),
@@ -160,7 +160,6 @@ where
                     secrets_reader: Arc::new(mz_secrets::InMemorySecretsController::new()),
                 },
                 persist_clients,
-                sink_tokens: HashMap::new(),
                 sink_write_frontiers: HashMap::new(),
             };
 

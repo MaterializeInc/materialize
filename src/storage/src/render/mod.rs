@@ -99,8 +99,6 @@
 //! roughly "as correct as possible" even when errors are present in the errs
 //! stream. This reduces the amount of recomputation that must be performed
 //! if/when the errors are retracted.
-use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
 
 use mz_persist_client::ShardId;
 use timely::communication::Allocate;
@@ -135,6 +133,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
     let worker_logging = timely_worker.log_register().get("timely");
     let debug_name = id.to_string();
     let name = format!("Source dataflow: {debug_name}");
+    let dataflow_id = timely_worker.next_dataflow_index();
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         // The scope.clone() occurs to allow import in the region.
         // We build a region here to establish a pattern of a scope inside the dataflow,
@@ -143,7 +142,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
         scope.clone().region_named(&name, |region| {
             let debug_name = format!("{debug_name}-sources");
 
-            let (outputs, token) = crate::render::sources::render_source(
+            let outputs = crate::render::sources::render_source(
                 region,
                 &debug_name,
                 id,
@@ -161,13 +160,11 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     export.storage_metadata,
                     source_data,
                     storage_state,
-                    Rc::clone(&token),
                 );
             }
-
-            storage_state.source_tokens.insert(id, token);
         })
     });
+    storage_state.dataflows.insert(id, dataflow_id);
 }
 
 /// do the export dataflow thing
@@ -180,6 +177,7 @@ pub fn build_export_dataflow<A: Allocate>(
     let worker_logging = timely_worker.log_register().get("timely");
     let debug_name = id.to_string();
     let name = format!("Source dataflow: {debug_name}");
+    let dataflow_id = timely_worker.next_dataflow_index();
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         // The scope.clone() occurs to allow import in the region.
         // We build a region here to establish a pattern of a scope inside the dataflow,
@@ -191,16 +189,9 @@ pub fn build_export_dataflow<A: Allocate>(
                 timely::dataflow::scopes::Child<TimelyWorker<A>, _>,
                 mz_repr::Timestamp,
             > = region;
-            let mut tokens = BTreeMap::new();
-            let import_ids = BTreeSet::new();
-            crate::render::sinks::render_sink(
-                region,
-                storage_state,
-                &mut tokens,
-                import_ids,
-                id,
-                &description,
-            );
+            crate::render::sinks::render_sink(region, storage_state, id, &description);
         })
     });
+
+    storage_state.dataflows.insert(id, dataflow_id);
 }

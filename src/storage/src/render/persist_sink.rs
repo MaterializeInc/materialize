@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -37,7 +36,6 @@ pub fn render<G>(
     metadata: CollectionMetadata,
     source_data: Collection<G, Result<Row, DataflowError>, Diff>,
     storage_state: &mut StorageState,
-    token: Rc<dyn Any>,
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -66,8 +64,6 @@ pub fn render<G>(
         // calculation by advancing to the empty frontier.
         current_upper.borrow_mut().clear();
     }
-
-    let weak_token = Rc::downgrade(&token);
 
     let persist_clients = Arc::clone(&storage_state.persist_clients);
     persist_op.build_async(
@@ -101,7 +97,7 @@ pub fn render<G>(
             while scheduler.notified().await {
                 let input_upper = frontiers.borrow()[0].clone();
 
-                if weak_token.upgrade().is_none() || current_upper.borrow().is_empty() {
+                if current_upper.borrow().is_empty() {
                     return;
                 }
 

@@ -13,32 +13,28 @@
 //! The primary exports are [`render_decode`], [`render_decode_delimited`], and
 //! [`render_decode_cdcv2`]. See their docs for more details about their differences.
 
-use std::{
-    any::Any,
-    cell::RefCell,
-    collections::VecDeque,
-    marker::{Send, Sync},
-    rc::Rc,
-    time::Duration,
-};
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
+use std::rc::Rc;
+use std::time::Duration;
 
-use ::regex::Regex;
 use chrono::NaiveDateTime;
 use differential_dataflow::capture::YieldingIter;
 use differential_dataflow::Hashable;
 use differential_dataflow::{AsCollection, Collection};
-use mz_avro::{AvroDeserializer, GeneralDeserializer};
-use mz_expr::PartitionId;
+use regex::Regex;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::SyncActivator;
 use tokio::runtime::Handle as TokioHandle;
+use tracing::error;
 
+use mz_avro::{AvroDeserializer, GeneralDeserializer};
+use mz_expr::PartitionId;
 use mz_interchange::avro::ConfluentAvroResolver;
 use mz_repr::{adt::timestamp::CheckedTimestamp, Datum};
 use mz_repr::{Diff, Row, Timestamp};
-use tracing::error;
 
 use self::avro::AvroDecoderState;
 use self::csv::CsvDecoderState;
@@ -70,7 +66,7 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
     schema: &str,
     registry: Option<mz_ccsr::Client>,
     confluent_wire_format: bool,
-) -> (Collection<G, Row, Diff>, Box<dyn Any + Send + Sync>) {
+) -> Collection<G, Row, Diff> {
     // We will have already checked validity of the schema by now, so this can't fail.
     let mut resolver = ConfluentAvroResolver::new(schema, registry, confluent_wire_format).unwrap();
     let channel = Rc::new(RefCell::new(VecDeque::new()));
@@ -126,13 +122,19 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
             self.0.borrow_mut().pop_front()
         }
     }
-    // this operator returns a thread-safe drop-token
-    let (token, stream) =
+    // this operator returns a thread-safe drop-token but we just terminate the whole dataflow when
+    // we need to, so we'll store it along side the operator state and it will drop with it
+    let token_slot = Rc::new(Cell::new(None));
+    let (token, stream) = {
+        let token_slot = Rc::clone(&token_slot);
         differential_dataflow::capture::source::build(stream.scope(), move |ac| {
+            let _token_slot = &token_slot;
             *activator.borrow_mut() = Some(ac);
             YieldingIter::new_from(VdIterator(channel), Duration::from_millis(10))
-        });
-    (stream.as_collection(), token)
+        })
+    };
+    token_slot.set(Some(token));
+    stream.as_collection()
 }
 
 // These don't know how to find delimiters --
@@ -365,7 +367,7 @@ pub fn render_decode_delimited<G>(
     metadata_items: Vec<IncludedColumnSource>,
     metrics: DecodeMetrics,
     connection_context: &ConnectionContext,
-) -> (Stream<G, DecodeResult>, Option<Box<dyn Any + Send + Sync>>)
+) -> Stream<G, DecodeResult>
 where
     G: Scope,
 {
@@ -461,7 +463,7 @@ where
             }
         }
     });
-    (results, None)
+    results
 }
 
 /// Decode arbitrary chunks of bytes into rows.
@@ -486,7 +488,7 @@ pub fn render_decode<G>(
     metadata_items: Vec<IncludedColumnSource>,
     metrics: DecodeMetrics,
     connection_context: &ConnectionContext,
-) -> (Stream<G, DecodeResult>, Option<Box<dyn Any + Send + Sync>>)
+) -> Stream<G, DecodeResult>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -666,7 +668,7 @@ where
             }
         }
     });
-    (results, None)
+    results
 }
 
 fn to_metadata_row(
