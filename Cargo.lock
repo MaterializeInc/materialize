@@ -4006,6 +4006,7 @@ dependencies = [
  "mz-build-info",
  "mz-http-util",
  "mz-npm",
+ "mz-ore",
  "once_cell",
  "pprof",
  "serde",
