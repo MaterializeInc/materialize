@@ -18,7 +18,6 @@ use std::time::{Duration, SystemTime};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
-use mz_ore::task::spawn;
 use timely::progress::{Antichain, Timestamp};
 use tokio::task::JoinHandle;
 use tracing::{debug, info};
@@ -29,6 +28,7 @@ use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 
+use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::{CodecMismatch, InvalidUsage};
 use crate::internal::compact::CompactReq;
 use crate::internal::maintenance::{LeaseExpiration, RoutineMaintenance, WriterMaintenance};
@@ -357,9 +357,19 @@ where
         (seqno, existed, maintenance)
     }
 
-    pub async fn start_reader_heartbeat_task(self, reader_id: ReaderId) -> JoinHandle<()> {
+    pub fn start_reader_heartbeat_task(
+        self,
+        reader_id: ReaderId,
+        runtime: &CpuHeavyRuntime,
+    ) -> JoinHandle<()> {
         let mut machine = self;
-        spawn(|| "persist::heartbeat_read", async move {
+        // It's critical that these heartbeats run on time. Given that any
+        // instances of blocking work accidentally running on the common Runtime
+        // could prevent that from happening, we run them on the one that
+        // happens to be entirely under persist's control. (We should definitely
+        // fix any instances of blocking work on the common runtime, this is
+        // just persist being defensive.)
+        runtime.spawn_named(|| "persist::heartbeat_read", async move {
             let sleep_duration = machine.cfg.reader_lease_duration / 2;
             loop {
                 tokio::time::sleep(sleep_duration).await;
@@ -387,9 +397,19 @@ where
         (seqno, existed, maintenance)
     }
 
-    pub async fn start_writer_heartbeat_task(self, writer_id: WriterId) -> JoinHandle<()> {
+    pub fn start_writer_heartbeat_task(
+        self,
+        writer_id: WriterId,
+        runtime: &CpuHeavyRuntime,
+    ) -> JoinHandle<()> {
         let mut machine = self;
-        spawn(|| "persist::heartbeat_write", async move {
+        // It's critical that these heartbeats run on time. Given that any
+        // instances of blocking work accidentally running on the common Runtime
+        // could prevent that from happening, we run them on the one that
+        // happens to be entirely under persist's control. (We should definitely
+        // fix any instances of blocking work on the common runtime, this is
+        // just persist being defensive.)
+        runtime.spawn_named(|| "persist::heartbeat_write", async move {
             let sleep_duration = machine.cfg.writer_lease_duration / 2;
             loop {
                 tokio::time::sleep(sleep_duration).await;

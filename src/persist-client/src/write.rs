@@ -149,7 +149,7 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    pub(crate) async fn new(
+    pub(crate) fn new(
         cfg: PersistConfig,
         metrics: Arc<Metrics>,
         machine: Machine<K, V, T, D>,
@@ -161,19 +161,22 @@ where
         upper: Antichain<T>,
         last_heartbeat: EpochMillis,
     ) -> Self {
+        let heartbeat_task = machine
+            .clone()
+            .start_writer_heartbeat_task(writer_id.clone(), &cpu_heavy_runtime);
         WriteHandle {
             cfg,
             metrics,
-            machine: machine.clone(),
+            machine,
             gc,
             compact,
             blob,
             cpu_heavy_runtime,
-            writer_id: writer_id.clone(),
+            writer_id,
             upper,
             last_heartbeat,
             explicitly_expired: false,
-            heartbeat_task: Some(machine.start_writer_heartbeat_task(writer_id).await),
+            heartbeat_task: Some(heartbeat_task),
         }
     }
 

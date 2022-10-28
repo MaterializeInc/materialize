@@ -439,11 +439,11 @@ impl PersistClient {
             machine,
             gc,
             Arc::clone(&self.blob),
+            Arc::clone(&self.cpu_heavy_runtime),
             reader_id,
             read_cap.since,
             heartbeat_ts,
-        )
-        .await;
+        );
 
         Ok(reader)
     }
@@ -501,8 +501,7 @@ impl PersistClient {
             writer_id,
             shard_upper.0,
             heartbeat_ts,
-        )
-        .await;
+        );
         Ok(writer)
     }
 

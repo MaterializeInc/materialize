@@ -30,6 +30,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, debug_span, instrument, trace_span, warn, Instrument};
 use uuid::Uuid;
 
+use crate::async_runtime::CpuHeavyRuntime;
 use crate::fetch::{
     fetch_leased_part, BatchFetcher, LeasedBatchPart, SerdeLeasedBatchPartMetadata,
 };
@@ -414,6 +415,7 @@ where
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) gc: GarbageCollector<K, V, T, D>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
+    pub(crate) cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
     pub(crate) reader_id: ReaderId,
 
     since: Antichain<T>,
@@ -431,28 +433,33 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    pub(crate) async fn new(
+    pub(crate) fn new(
         cfg: PersistConfig,
         metrics: Arc<Metrics>,
         machine: Machine<K, V, T, D>,
         gc: GarbageCollector<K, V, T, D>,
         blob: Arc<dyn Blob + Send + Sync>,
+        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         reader_id: ReaderId,
         since: Antichain<T>,
         last_heartbeat: EpochMillis,
     ) -> Self {
+        let heartbeat_task = machine
+            .clone()
+            .start_reader_heartbeat_task(reader_id.clone(), &cpu_heavy_runtime);
         ReadHandle {
             cfg,
             metrics,
-            machine: machine.clone(),
+            machine,
             gc,
             blob,
-            reader_id: reader_id.clone(),
+            cpu_heavy_runtime,
+            reader_id,
             since,
             last_heartbeat,
             explicitly_expired: false,
             leased_seqnos: BTreeMap::new(),
-            heartbeat_task: Some(machine.start_reader_heartbeat_task(reader_id).await),
+            heartbeat_task: Some(heartbeat_task),
         }
     }
 
@@ -659,11 +666,11 @@ where
             machine,
             self.gc.clone(),
             Arc::clone(&self.blob),
+            Arc::clone(&self.cpu_heavy_runtime),
             new_reader_id,
             read_cap.since,
             heartbeat_ts,
-        )
-        .await;
+        );
         new_reader
     }
 
