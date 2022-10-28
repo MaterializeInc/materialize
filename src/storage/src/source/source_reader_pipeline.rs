@@ -802,6 +802,12 @@ where
                         session.give_vec(&mut remap_trace_batch.updates);
                     }
 
+                    // If the last remap trace closed the input, we no longer
+                    // need to (or can) advance the timestamper.
+                    if remap_trace_batch.upper.is_empty() {
+                        return;
+                    }
+
                     cap_set.downgrade(remap_trace_batch.upper);
 
                     let mut remap_trace_batch = timestamper.advance().await;
@@ -816,14 +822,6 @@ where
                     }
 
                     cap_set.downgrade(remap_trace_batch.upper);
-
-                    // Make sure we do this after writing any timestamp bindings to
-                    // the remap shard that might be needed for the reported source
-                    // uppers.
-                    if source_upper.is_empty() {
-                        cap_set.downgrade(&[]);
-                        return;
-                    }
                 }
                 Some(AsyncEvent::Progress(resume_upper)) = resume_input.next() => {
                     trace!("timely-{worker_id} remap({id}) received resume upper: {}", resume_upper.pretty());
