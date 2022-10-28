@@ -187,6 +187,30 @@ impl std::fmt::Debug for Postgres {
 }
 
 impl Postgres {
+    /// Drops all tables associated with the stash if they exist.
+    pub async fn clear(url: &str, tls: MakeTlsConnector) -> Result<(), StashError> {
+        let (client, connection) = tokio_postgres::connect(url, tls).await?;
+        mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
+            if let Err(e) = connection.await {
+                tracing::error!("postgres stash connection error: {}", e);
+            }
+        });
+        client
+            .batch_execute(
+                "
+                BEGIN;
+                DROP TABLE IF EXISTS uppers;
+                DROP TABLE IF EXISTS sinces;
+                DROP TABLE IF EXISTS data;
+                DROP TABLE IF EXISTS collections;
+                DROP TABLE IF EXISTS fence;
+                COMMIT;
+            ",
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Opens the stash stored at the specified path.
     pub async fn new(
         url: String,

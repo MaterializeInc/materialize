@@ -71,27 +71,8 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
         }
     };
     async fn connect(connstr: &str, tls: MakeTlsConnector, clear: bool) -> Postgres {
-        let (client, connection) = tokio_postgres::connect(connstr, tokio_postgres::NoTls)
-            .await
-            .unwrap();
-        mz_ore::task::spawn(|| "postgres connection", async move {
-            if let Err(e) = connection.await {
-                panic!("connection error: {}", e);
-            }
-        });
         if clear {
-            client
-                .batch_execute(
-                    "
-                    DROP TABLE IF EXISTS uppers;
-                    DROP TABLE IF EXISTS  sinces;
-                    DROP TABLE IF EXISTS  data;
-                    DROP TABLE IF EXISTS  collections;
-                    DROP TABLE IF EXISTS  fence;
-                ",
-                )
-                .await
-                .unwrap();
+            Postgres::clear(connstr, tls.clone()).await.unwrap();
         }
         Postgres::new(connstr.to_string(), None, tls).await.unwrap()
     }
