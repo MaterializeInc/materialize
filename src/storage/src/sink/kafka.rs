@@ -789,7 +789,6 @@ impl KafkaSinkState {
         mut input_frontier: Antichain<Timestamp>,
         as_of: &SinkAsOf<Timestamp>,
     ) -> bool {
-        input_frontier.extend(self.pending_rows.keys().min().cloned());
         let min_frontier = input_frontier;
 
         // If we emit a progress record before the as_of, we open ourselves to the possibility that
