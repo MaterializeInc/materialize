@@ -939,6 +939,34 @@ where
     let name = spec.to_string();
     let ecx = &ecx.with_name(&name);
     let types: Vec<_> = args.iter().map(|e| ecx.scalar_type(e)).collect();
+    //     select_impl_inner(ecx, impls, args, &types, order_by).map_err(|e| {
+    //         let types: Vec<_> = types
+    //             .into_iter()
+    //             .map(|ty| match ty {
+    //                 Some(ty) => ecx.humanize_scalar_type(&ty),
+    //                 None => "unknown".to_string(),
+    //             })
+    //             .collect();
+    //         let context = match (spec, types.as_slice()) {
+    //             (FuncSpec::Func(name), _) => {
+    //                 format!(
+    //                     "Cannot call function {}({})",
+    //                     ecx.qcx
+    //                         .scx
+    //                         .humanize_resolved_name(name)
+    //                         .expect("resolved to object"),
+    //                     types.join(", ")
+    //                 )
+    //             }
+    //             (FuncSpec::Op(name), [typ]) => format!("no overload for {} {}", name, typ),
+    //             (FuncSpec::Op(name), [ltyp, rtyp]) => {
+    //                 format!("no overload for {} {} {}", ltyp, name, rtyp)
+    //             }
+    //             (FuncSpec::Op(_), [..]) => unreachable!("non-unary non-binary operator"),
+    //         };
+    //         sql_err!("{}: {}", context, e)
+    //     })
+    // }
 
     // 4.a. Discard candidate functions for which the input types do not
     // match and cannot be converted (using an implicit conversion) to

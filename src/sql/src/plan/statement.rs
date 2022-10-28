@@ -908,6 +908,14 @@ impl<'a> StatementContext<'a> {
         self.catalog.get_owner_id(id)
     }
 
+    pub fn humanize_resolved_name(
+        &self,
+        name: &ResolvedItemName,
+    ) -> Result<PartialItemName, PlanError> {
+        let item = self.get_item_by_resolved_name(name)?;
+        Ok(self.catalog.minimal_qualification(item.name()))
+    }
+
     /// WARNING! This style of name resolution assumes the referred-to objects exists (i.e. panics
     /// if objects do not exist) so should never be used to handle user input.
     pub fn dangerous_resolve_name(&self, name: Vec<&str>) -> ResolvedItemName {
