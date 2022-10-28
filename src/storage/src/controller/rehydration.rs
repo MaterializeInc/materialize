@@ -331,12 +331,15 @@ where
                             new_uppers.push((id, new_upper));
                         }
                     } else {
-                        // We should have initialized the uppers when we first absorbed
-                        // a command, if storaged has restarted since then.
+                        // It can happen during source shutdown that we remove
+                        // the tracked upper from our state but a
+                        // `FrontierUppers` response is still on the wire.
                         //
-                        // If the controller has restarted since then, we should have
-                        // initialized them in the initial `step_rehydrate`.
-                        panic!("RehydratingStorageClient received FrontierUppers response for absent identifier {id}");
+                        // This is very fine to ignore, especially now that
+                        // these upper updates are plain `Antichains`, and not
+                        // `ChangeBatches` where we need to be extra careful
+                        // about not messing up our state.
+                        tracing::info!("RehydratingStorageClient received FrontierUppers response {new_upper:?} for absent identifier {id}");
                     }
                 }
                 if !new_uppers.is_empty() {
