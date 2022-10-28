@@ -28,6 +28,7 @@ use timely::dataflow::operators::{
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
+use timely::scheduling::Activator;
 use timely::PartialOrder;
 use tokio::sync::Mutex;
 use tracing::trace;
@@ -509,6 +510,32 @@ where
     (output_stream, token)
 }
 
+/// An activator that ignores new activation if one is already pending.
+///
+/// We use this for heartbeating the `write_batches` operator, rather than a timely `Activator`
+/// directly, to avoid accumulating more and more activations other time.
+struct LimitingActivator {
+    inner: Activator,
+    next_activation: Instant,
+}
+
+impl LimitingActivator {
+    fn new(inner: Activator) -> Self {
+        Self {
+            inner,
+            next_activation: Instant::now(),
+        }
+    }
+
+    fn activate_after(&mut self, duration: Duration) {
+        let now = Instant::now();
+        if self.next_activation < now {
+            self.next_activation = now + duration;
+            self.inner.activate_after(duration);
+        }
+    }
+}
+
 /// Writes `desired_stream - persist_stream` to persist, but only for updates
 /// that fall into batch a description that we get via `batch_descriptions`.
 /// This forwards a `HollowBatch` for any batch of updates that was written.
@@ -537,6 +564,7 @@ where
         OperatorBuilder::new(format!("{} write_batches", operator_name), scope.clone());
 
     let activator = scope.activator_for(&write_op.operator_info().address[..]);
+    let mut activator = LimitingActivator::new(activator);
 
     let (mut output, output_stream) = write_op.new_output();
 
@@ -604,8 +632,6 @@ where
                 .await
                 .expect("could not open persist shard");
 
-            let mut last_heartbeat_activation = Instant::now();
-            activator.activate_after(Duration::from_secs(60));
             while scheduler.notified().await {
                 if token_weak.upgrade().is_none() {
                     return;
@@ -624,10 +650,7 @@ where
                 // NOTE: We schedule ourselves to make sure that we keep
                 // heartbeating even in cases where there are no changes in our
                 // inputs (updates or frontier changes).
-                if last_heartbeat_activation + Duration::from_secs(60) <= Instant::now() {
-                    last_heartbeat_activation = Instant::now();
-                    activator.activate_after(Duration::from_secs(60));
-                }
+                activator.activate_after(Duration::from_secs(60));
 
                 // Capture current frontiers.
                 let frontiers = frontiers.borrow().clone();
