@@ -138,7 +138,6 @@ where
 
         instance.send(ComputeCommand::CreateTimely(Default::default()));
         instance.send(ComputeCommand::CreateInstance(InstanceConfig {
-            replica_id: Default::default(),
             logging: None,
             max_result_size,
         }));
@@ -546,10 +545,7 @@ where
         updates.insert(id, ChangeBatch::new_from(timestamp.clone(), 1));
         self.update_read_capabilities(&mut updates).await?;
 
-        let unfinished = match &target_replica {
-            Some(target) => [*target].into(),
-            None => self.compute.replicas.keys().copied().collect(),
-        };
+        let unfinished = self.compute.replicas.keys().copied().collect();
         let otel_ctx = OpenTelemetryContext::obtain();
         self.compute.peeks.insert(
             uuid,
@@ -557,6 +553,7 @@ where
                 target: id,
                 time: timestamp.clone(),
                 unfinished,
+                target_replica,
                 // TODO(guswynn): can we just hold the `tracing::Span` here instead?
                 otel_ctx: Some(otel_ctx.clone()),
             },
@@ -569,7 +566,6 @@ where
             timestamp,
             finishing,
             map_filter_project,
-            target_replica,
             // Obtain an `OpenTelemetryContext` from the thread-local tracing
             // tree to forward it on to the compute worker.
             otel_ctx,
@@ -921,7 +917,9 @@ where
             }
         };
 
-        // If this is the first response, forward it; otherwise do not.
+        // Forward the peek response, if we didn't already forward a response
+        // to this peek previously. If the peek is targeting a replica, only
+        // forward the response from that replica.
         // TODO: we could collect the other responses to assert equivalence?
         // Trades resources (memory) for reassurances; idk which is best.
         //
@@ -933,10 +931,14 @@ where
         //
         // Additionally, we just use the `otel_ctx` from the first worker to
         // respond.
-        let controller_response = peek
-            .otel_ctx
-            .take()
-            .map(|_| ComputeControllerResponse::PeekResponse(uuid, response, otel_ctx));
+        let replica_targeted = peek.target_replica.unwrap_or(replica_id) == replica_id;
+        let controller_response = if replica_targeted {
+            peek.otel_ctx
+                .take()
+                .map(|_| ComputeControllerResponse::PeekResponse(uuid, response, otel_ctx))
+        } else {
+            None
+        };
 
         // Update the per-replica tracking and draw appropriate consequences.
         peek.unfinished.remove(&replica_id);
@@ -1022,6 +1024,10 @@ struct PendingPeek<T> {
     time: T,
     /// Replicas that have yet to respond to this peek.
     unfinished: BTreeSet<ReplicaId>,
+    /// For replica-targeted peeks, this specifies the replica whose response we should pass on.
+    ///
+    /// If this value is `None`, we pass on the first response.
+    target_replica: Option<ReplicaId>,
     /// The OpenTelemetry context for this peek.
     ///
     /// This value is `Some` as long as we have not yet passed a response up the chain, and `None`

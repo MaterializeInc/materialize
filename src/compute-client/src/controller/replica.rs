@@ -162,7 +162,6 @@ where
             .await?;
 
         let cmd_spec = CommandSpecialization {
-            replica_id,
             logging_config,
             comm_config,
         };
@@ -256,7 +255,6 @@ where
 }
 
 struct CommandSpecialization {
-    replica_id: ReplicaId,
     logging_config: Option<LoggingConfig>,
     comm_config: CommunicationConfig,
 }
@@ -269,7 +267,6 @@ impl CommandSpecialization {
     fn specialize_command<T>(&self, command: &mut ComputeCommand<T>) {
         // Set new replica ID and obtain set the sinked logs specific to this replica
         if let ComputeCommand::CreateInstance(config) = command {
-            config.replica_id = self.replica_id;
             config.logging = self.logging_config.clone();
         }
 

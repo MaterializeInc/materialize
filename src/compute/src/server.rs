@@ -555,7 +555,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
         match &cmd {
             ComputeCommand::CreateInstance(config) => {
                 self.compute_state = Some(ComputeState {
-                    replica_id: config.replica_id,
                     traces: TraceManager::new(
                         self.trace_metrics.clone(),
                         self.timely_worker.index(),
