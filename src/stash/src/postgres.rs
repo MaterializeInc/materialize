@@ -433,7 +433,11 @@ impl Postgres {
                             }
                         }
                         attempt += 1;
-                        error!("tokio-postgres stash error, retry attempt {attempt}: {pgerr}");
+                        if attempt > 2 {
+                            error!("tokio-postgres stash error, retry attempt {attempt}: {pgerr}");
+                        } else {
+                            warn!("tokio-postgres stash error, retry attempt {attempt}: {pgerr}");
+                        }
                         self.client = None;
                         retry.next().await;
                     }
