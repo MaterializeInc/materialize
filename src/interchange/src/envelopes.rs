@@ -72,10 +72,9 @@ where
 
                         // Because `sort_by_key` is stable, it will not reorder equal elements. Therefore, elements with the same
                         // key will stay grouped together.
-                        buf.sort_by_key(|(t, _k, diff, _row)| (*t, *diff));
-                        for ((t, k), group) in &buf
-                            .into_iter()
-                            .group_by(|(t, k, _diff, _row)| (*t, k.clone()))
+                        buf.sort_by_key(|&(t, k, diff, _row)| (t, k, diff));
+                        for ((t, k), group) in
+                            &buf.into_iter().group_by(|&(t, k, _diff, _row)| (t, k))
                         {
                             let mut out = vec![];
                             let elts: Vec<(G::Timestamp, Option<&Row>, Diff, &Row)> =
