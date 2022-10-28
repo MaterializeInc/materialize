@@ -256,7 +256,7 @@ where
                             )))
                         } else {
                             Err(format!(
-                                "Object specified with brackets {:?} has unsupported type {}",
+                                "Object specified with brackets {:?} has unsupported type `{}`",
                                 inner_iter.collect::<Vec<_>>(),
                                 type_name
                             ))
@@ -795,7 +795,7 @@ transformations. */
 
 fn normalize_type_name(type_name: &str) -> (String, bool) {
     // Normalize the type name by stripping whitespace.
-    let mut type_name = &type_name.replace(' ', "")[..];
+    let mut type_name = &type_name.replace([' ', '\n'], "")[..];
     let mut option_found = false;
     // Eliminate outer `Box<>` from type names because they are inconsequential
     // when it comes to creating a correctly deserializable JSON string.
@@ -830,25 +830,26 @@ fn find_next_type_in_tuple(type_name: &str, prev_elem_end: usize) -> Option<(usi
     // The elements of the tuple can be a plain type, a nested tuple, or a
     // Box/Vec/Option with the argument being nested tuple.
     // `type1, (type2, type3), Vec<(type4, type5)>`
-    // Thus, the type of the next element is whatever comes before the
-    // next comma. Unless... a '(' comes from before the next comma, which
-    // means it is a nested tuple, and the type of the next element is
-    // whatever comes before the comma after the last ')'.
-    let mut current_elem_end = type_name[current_elem_begin..]
-        .find(',')
-        .unwrap_or(type_name.len());
-    if let Some(l_paren_pos) = type_name[current_elem_begin..].find('(') {
-        if l_paren_pos < current_elem_end {
-            if let Some(r_paren_pos) = type_name[current_elem_begin..].rfind(')') {
-                current_elem_end = current_elem_begin
-                    + r_paren_pos
-                    + type_name[(current_elem_begin + r_paren_pos)..]
-                        .find(',')
-                        .unwrap_or(type_name.len());
-            }
+    let mut i = current_elem_begin;
+    let mut it = type_name.chars().skip(current_elem_begin).peekable();
+    let mut paren_level = 0;
+    let mut bracket_level = 0;
+    while i < type_name.len() && !(paren_level == 0 && bracket_level == 0 && *it.peek().unwrap() == ',') {
+        if *it.peek().unwrap() == '(' {
+            paren_level += 1;
+        } else if *it.peek().unwrap() == ')' {
+            paren_level -= 1;
         }
-    };
-    Some((current_elem_begin, current_elem_end))
+        if *it.peek().unwrap() == '<' {
+            bracket_level += 1;
+        } else if *it.peek().unwrap() == '>' {
+            bracket_level -= 1;
+        }
+        i += 1;
+        it.next();
+    }
+
+    Some((current_elem_begin, i))
 }
 
 /* #endregion */
