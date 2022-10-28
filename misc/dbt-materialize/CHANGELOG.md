@@ -1,6 +1,6 @@
 # dbt-materialize Changelog
 
-## 1.2.1 - 2022-10-28
+## Unreleased - 2022-10-28
 
 * Return the correct connection keys to the user on `dbt debug`.
 
