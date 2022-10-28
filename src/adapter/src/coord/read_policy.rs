@@ -14,6 +14,7 @@
 //! the controller from compacting the associated collections, and ensures that they
 //! remain "readable" at a specific time, as long as the hold is held.
 
+use differential_dataflow::lattice::Lattice;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::Hash;
 
@@ -335,21 +336,24 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         self.read_capability.remove(id).is_some()
     }
 
+    /// Creates a `ReadHolds` struct that creates a read hold for each id in
+    /// `id_bundle`. The time of each read holds is at `time`, if possible
+    /// otherwise it is at the lowest possible time.
+    ///
+    /// This does not apply the read holds in STORAGE or COMPUTE. It is up
+    /// to the caller to apply the read holds.
     fn initialize_read_holds(
         &mut self,
         time: mz_repr::Timestamp,
         id_bundle: CollectionIdBundle,
     ) -> ReadHolds<mz_repr::Timestamp> {
         let mut read_holds = ReadHolds::new();
+        let time = Antichain::from_elem(time);
 
         for id in id_bundle.storage_ids.iter() {
             let collection = self.controller.storage.collection(*id).unwrap();
-            let read_frontier = collection.read_capabilities.frontier();
-            let time = if read_frontier.less_equal(&time) {
-                Antichain::from_elem(time)
-            } else {
-                read_frontier.to_owned()
-            };
+            let read_frontier = collection.read_capabilities.frontier().to_owned();
+            let time = time.join(&read_frontier);
             read_holds
                 .holds
                 .entry(time)
@@ -361,12 +365,8 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             let compute = self.controller.active_compute();
             for id in compute_ids.iter() {
                 let collection = compute.collection(*compute_instance, *id).unwrap();
-                let read_frontier = collection.read_frontier();
-                let time = if read_frontier.less_equal(&time) {
-                    Antichain::from_elem(time)
-                } else {
-                    read_frontier.to_owned()
-                };
+                let read_frontier = collection.read_frontier().to_owned();
+                let time = time.join(&read_frontier);
                 read_holds
                     .holds
                     .entry(time)
@@ -438,20 +438,19 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         let mut new_read_holds = ReadHolds::new();
         let mut storage_policy_changes = Vec::new();
         let mut compute_policy_changes: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        let new_time = Antichain::from_elem(new_time);
 
         for (old_time, id_bundle) in read_holds.holds {
-            if old_time.less_than(&new_time) {
+            let new_time = old_time.join(&new_time);
+            if old_time != new_time {
                 new_read_holds
                     .holds
-                    .entry(Antichain::from_elem(new_time))
+                    .entry(new_time.clone())
                     .or_default()
                     .extend(&id_bundle);
                 for id in id_bundle.storage_ids {
                     let collection = self.controller.storage.collection(id).unwrap();
-                    assert!(collection
-                                .read_capabilities
-                                .frontier()
-                                .less_equal(&new_time),
+                    assert!(collection.read_capabilities.frontier().le(&new_time.borrow()),
                             "Storage collection {:?} has read frontier {:?} not less-equal new time {:?}; old time: {:?}",
                             id,
                             collection.read_capabilities.frontier(),
@@ -459,7 +458,9 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                             old_time,
                     );
                     let read_needs = self.read_capability.get_mut(&id).unwrap();
-                    read_needs.holds.update_iter(Some((new_time, 1)));
+                    read_needs
+                        .holds
+                        .update_iter(new_time.iter().map(|t| (*t, 1)));
                     read_needs
                         .holds
                         .update_iter(old_time.iter().map(|t| (*t, -1)));
@@ -470,9 +471,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                     let compute = self.controller.active_compute();
                     for id in compute_ids {
                         let collection = compute.collection(compute_instance, id).unwrap();
-                        assert!(collection
-                                    .read_frontier()
-                                    .less_equal(&new_time),
+                        assert!(collection.read_frontier().le(&new_time.borrow()),
                                 "Compute collection {:?} (instance {:?}) has read frontier {:?} not less-equal new time {:?}; old time: {:?}",
                                 id,
                                 compute_instance,
@@ -481,7 +480,9 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                                 old_time,
                         );
                         let read_needs = self.read_capability.get_mut(&id).unwrap();
-                        read_needs.holds.update_iter(Some((new_time, 1)));
+                        read_needs
+                            .holds
+                            .update_iter(new_time.iter().map(|t| (*t, 1)));
                         read_needs
                             .holds
                             .update_iter(old_time.iter().map(|t| (*t, -1)));
