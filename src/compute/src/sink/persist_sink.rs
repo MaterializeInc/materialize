@@ -624,7 +624,7 @@ where
                 // NOTE: We schedule ourselves to make sure that we keep
                 // heartbeating even in cases where there are no changes in our
                 // inputs (updates or frontier changes).
-                if last_heartbeat_activation <= Instant::now() + Duration::from_secs(60) {
+                if last_heartbeat_activation + Duration::from_secs(60) <= Instant::now() {
                     last_heartbeat_activation = Instant::now();
                     activator.activate_after(Duration::from_secs(60));
                 }
