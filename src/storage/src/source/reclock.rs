@@ -542,7 +542,7 @@ where
         };
 
         while PartialOrder::less_than(&self.source_upper.frontier(), &new_source_upper) {
-            let (ts, upper) = self
+            let (ts, mut upper) = self
                 .clock_stream
                 .by_ref()
                 .skip_while(|(_ts, upper)| {
@@ -554,6 +554,11 @@ where
                 .next()
                 .await
                 .expect("clock stream ended without reaching the empty frontier");
+
+            // If source is closed, close remap shard as well.
+            if new_source_upper.is_empty() {
+                upper = Antichain::new();
+            }
 
             let mut updates = vec![];
             for src_ts in self.source_upper.frontier().iter().cloned() {
