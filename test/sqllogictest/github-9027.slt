@@ -89,9 +89,9 @@ Explained Query:
               lookup={ relation=0, key=[] }
               stream={ key=[], thinning=(#0, #1) }
             linear_stage[0]
-              lookup={ relation=2, key=[#0] }
-              stream={ key=[#0], thinning=() }
-            source={ relation=1, key=[#0] }
+              lookup={ relation=1, key=[#0] }
+              stream={ key=[#0], thinning=(#1) }
+            source={ relation=2, key=[] }
             ArrangeBy
               raw=true
               arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
@@ -108,12 +108,9 @@ Explained Query:
                 key_plan=id
                 Get::PassArrangements l0
                   raw=true
-            ArrangeBy
+            Get::Collection materialize.public.orders
+              filter=((#0) IS NOT NULL)
               raw=true
-              arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-              Get::Collection materialize.public.orders
-                filter=((#0) IS NOT NULL)
-                raw=true
   Where
     cte l0 =
       Join::Linear

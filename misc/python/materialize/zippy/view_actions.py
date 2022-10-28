@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import random
+from textwrap import dedent
 from typing import List, Set, Type, Union
 
 from materialize.mzcompose import Composition
@@ -56,8 +57,10 @@ class CreateView(Action):
 
             potential_froms = sources + tables + debezium_sources + pg_cdc_tables
             this_view.froms = random.sample(
-                potential_froms, min(len(potential_froms), random.randint(1, 5))
+                potential_froms,
+                min(len(potential_froms), random.randint(1, self.max_sources())),
             )
+            this_view.expensive_aggregates = self.expensive_aggregates()
 
             self.has_index = random.choice([True, False])
             self.view = this_view
@@ -68,34 +71,62 @@ class CreateView(Action):
         else:
             assert False
 
+    def max_sources(self) -> int:
+        return 5
+
+    def expensive_aggregates(self) -> bool:
+        return True
+
     def run(self, c: Composition) -> None:
         if not self.new_view:
             return
 
         some_from = random.sample(self.view.froms, 1)[0]
-        outer_join = "\n  ".join(
-            f"JOIN {f.name} USING (f1)" for f in self.view.froms[1:]
-        )
+        outer_join = " ".join(f"JOIN {f.name} USING (f1)" for f in self.view.froms[1:])
 
         index = f"> CREATE DEFAULT INDEX ON {self.view.name}" if self.has_index else ""
 
-        c.testdrive(
-            f"""
-> CREATE MATERIALIZED VIEW {self.view.name} AS
-  SELECT
-    MIN({some_from.name}.f1),
-    MAX({some_from.name}.f1),
-    COUNT({some_from.name}.f1) AS c1,
-    COUNT(DISTINCT {some_from.name}.f1) AS c2
-  FROM {self.view.froms[0].name}
-  {outer_join};
+        aggregates = [f"COUNT({some_from.name}.f1) AS c1"]
 
-{index}
-"""
+        if self.view.expensive_aggregates:
+            aggregates.extend(
+                [
+                    f"COUNT(DISTINCT {some_from.name}.f1) AS c2",
+                    f"MIN({some_from.name}.f1)",
+                    f"MAX({some_from.name}.f1)",
+                ]
+            )
+
+        aggregates = ", ".join(aggregates)
+
+        c.testdrive(
+            dedent(
+                f"""
+                > CREATE MATERIALIZED VIEW {self.view.name} AS
+                  SELECT {aggregates}
+                  FROM {self.view.froms[0].name}
+                  {outer_join}
+                """
+            )
+            + index
         )
 
     def provides(self) -> List[Capability]:
         return [self.view] if self.new_view else []
+
+
+class CreateViewSimple(CreateView):
+    """Creates a single-source view without memory-consuming aggregates"""
+
+    @classmethod
+    def require_explicit_mention(self) -> bool:
+        return True
+
+    def max_sources(self) -> int:
+        return 1
+
+    def expensive_aggregates(self) -> bool:
+        return False
 
 
 class ValidateView(Action):
@@ -115,8 +146,17 @@ class ValidateView(Action):
 
         if view_min <= view_max:
             c.testdrive(
-                f"""
-> SELECT * FROM {self.view.name} /* {view_min} {view_max} {(view_max-view_min)+1} {(view_max-view_min)+1} */ ;
-{view_min} {view_max} {(view_max-view_min)+1} {(view_max-view_min)+1}
-"""
+                dedent(
+                    f"""
+                    > SELECT * FROM {self.view.name} /* {(view_max-view_min)+1} {(view_max-view_min)+1} {view_min} {view_max} */ ;
+                    {(view_max-view_min)+1} {(view_max-view_min)+1} {view_min} {view_max}
+                """
+                )
+                if self.view.expensive_aggregates
+                else dedent(
+                    f"""
+                    > SELECT * FROM {self.view.name} /* {(view_max-view_min)+1} */ ;
+                    {(view_max-view_min)+1}
+                """
+                )
             )

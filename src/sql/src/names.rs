@@ -41,7 +41,7 @@ use crate::plan::PlanError;
 /// `FullObjectName`.
 ///
 /// [`normalize::unresolved_object_name`]: crate::normalize::unresolved_object_name
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct FullObjectName {
     /// The database name.
     pub database: RawDatabaseSpecifier,
@@ -206,7 +206,7 @@ impl fmt::Display for PartialSchemaName {
 }
 
 /// A human readable name of a database.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum RawDatabaseSpecifier {
     /// The "ambient" database, which is always present and is not named
     /// explicitly, but by omission.

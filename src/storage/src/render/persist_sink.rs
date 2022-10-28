@@ -14,8 +14,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use differential_dataflow::{Collection, Hashable};
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::Scope;
@@ -24,9 +22,12 @@ use timely::progress::Timestamp as _;
 use timely::PartialOrder;
 use tracing::trace;
 
-use crate::storage_state::StorageState;
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_timely_util::activator::LimitingActivator;
+use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
 use crate::controller::CollectionMetadata;
+use crate::storage_state::StorageState;
 use crate::types::errors::DataflowError;
 use crate::types::sources::SourceData;
 
@@ -55,6 +56,7 @@ pub fn render<G>(
     let active_write_worker = (hashed_id as usize) % scope.peers() == scope.index();
 
     let activator = scope.activator_for(&persist_op.operator_info().address[..]);
+    let mut activator = LimitingActivator::new(activator);
 
     let mut input = persist_op.new_input(&source_data.inner, Exchange::new(move |_| hashed_id));
 

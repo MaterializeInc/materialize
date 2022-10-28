@@ -15,6 +15,8 @@ from materialize.zippy.framework import Action, Capabilities, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.table_capabilities import TableExists
 
+MAX_ROWS_PER_ACTION = 10000
+
 
 class CreateTable(Action):
     """Creates a table on the Mz instance. 50% of the tables have a default index."""
@@ -85,7 +87,7 @@ class DML(Action):
 
     def __init__(self, capabilities: Capabilities) -> None:
         self.table = random.choice(capabilities.get(TableExists))
-        self.delta = random.randint(1, 100000)
+        self.delta = random.randint(1, MAX_ROWS_PER_ACTION)
 
 
 class Insert(DML):

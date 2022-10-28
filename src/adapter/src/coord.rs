@@ -78,16 +78,18 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::StreamExt;
 use itertools::Itertools;
+use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpointSpec;
 use mz_ore::retry::Retry;
 use rand::seq::SliceRandom;
 use timely::progress::Timestamp as _;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tracing::{span, warn, Level};
+use tracing::{info, span, warn, Level};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
+use mz_cloud_resources::CloudResourceController;
 use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId};
 use mz_ore::cast::CastFrom;
@@ -236,10 +238,12 @@ pub struct Config<S> {
     pub metrics_registry: MetricsRegistry,
     pub now: NowFn,
     pub secrets_controller: Arc<dyn SecretsController>,
+    pub cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
     pub availability_zones: Vec<String>,
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     pub storage_host_sizes: StorageHostSizeMap,
     pub default_storage_host_size: Option<String>,
+    pub bootstrap_system_vars: Option<String>,
     pub connection_context: ConnectionContext,
     pub storage_usage_client: StorageUsageClient,
     pub storage_usage_collection_interval: Duration,
@@ -413,6 +417,10 @@ pub struct Coordinator<S> {
     /// an arbitrary secret storage engine.
     secrets_controller: Arc<dyn SecretsController>,
 
+    /// Handle to a manager that can create and delete kubernetes resources
+    /// (ie: VpcEndpoint objects)
+    cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
+
     /// Extra context to pass through to connection creation.
     connection_context: ConnectionContext,
 
@@ -445,9 +453,12 @@ impl<S: Append + 'static> Coordinator<S> {
         builtin_migration_metadata: BuiltinMigrationMetadata,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
+        info!("coordinator init: beginning bootstrap");
+
         // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
         let mut policies_to_set: CollectionIdBundle = Default::default();
 
+        info!("coordinator init: creating compute replicas");
         for instance in self.catalog.compute_instances() {
             self.controller.compute.create_instance(
                 instance.id,
@@ -488,6 +499,7 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
+        info!("coordinator init: migrating builtin objects");
         // Migrate builtin objects.
         self.controller
             .storage
@@ -522,7 +534,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // This is disabled for the moment because it has unusual upper
         // advancement behavior.
         // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
-        let status_collection_id = if false {
+        let source_status_collection_id = if false {
             Some(self.catalog.resolve_builtin_storage_collection(
                 &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
             ))
@@ -530,7 +542,14 @@ impl<S: Append + 'static> Coordinator<S> {
             None
         };
 
+        info!("coordinator init: installing existing objects in catalog");
+        let mut privatelink_connections = HashMap::new();
         for entry in &entries {
+            info!(
+                "coordinator init: installing {} {}",
+                entry.item().typ(),
+                entry.id()
+            );
             match entry.item() {
                 // Currently catalog item rebuild assumes that sinks and
                 // indexes are always built individually and does not store information
@@ -583,7 +602,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 desc: source.desc.clone(),
                                 data_source,
                                 since: None,
-                                status_collection_id,
+                                status_collection_id: source_status_collection_id,
                             },
                         )])
                         .await
@@ -707,12 +726,41 @@ impl<S: Append + 'static> Coordinator<S> {
                         },
                     );
                 }
+                CatalogItem::Connection(catalog_connection) => {
+                    if let mz_storage::types::connections::Connection::AwsPrivateLink(conn) =
+                        &catalog_connection.connection
+                    {
+                        privatelink_connections.insert(
+                            entry.id(),
+                            VpcEndpointSpec {
+                                aws_service_name: conn.service_name.clone(),
+                                availability_zone_ids: conn.availability_zones.clone(),
+                            },
+                        );
+                    }
+                }
                 // Nothing to do for these cases
                 CatalogItem::Log(_)
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
-                | CatalogItem::Secret(_)
-                | CatalogItem::Connection(_) => {}
+                | CatalogItem::Secret(_) => {}
+            }
+        }
+
+        if let Some(cloud_resource_controller) = &self.cloud_resource_controller {
+            // Clean up any extraneous VpcEndpoints that shouldn't exist.
+            let existing_vpc_endpoints = cloud_resource_controller.list_vpc_endpoints().await?;
+            let desired_vpc_endpoints = privatelink_connections.keys().cloned().collect();
+            let vpc_endpoints_to_remove = existing_vpc_endpoints.difference(&desired_vpc_endpoints);
+            for id in vpc_endpoints_to_remove {
+                cloud_resource_controller.delete_vpc_endpoint(*id).await?;
+            }
+
+            // Ensure desired VpcEndpoints are up to date.
+            for (id, spec) in privatelink_connections {
+                cloud_resource_controller
+                    .ensure_vpc_endpoint(id, spec)
+                    .await?;
             }
         }
 
@@ -720,10 +768,12 @@ impl<S: Append + 'static> Coordinator<S> {
         self.initialize_read_policies(policies_to_set, DEFAULT_LOGICAL_COMPACTION_WINDOW_MS)
             .await;
 
+        info!("coordinator init: announcing completion of initialization to controller");
         // Announce the completion of initialization.
         self.controller.initialization_complete();
 
         // Announce primary and foreign key relationships.
+        info!("coordinator init: announcing primary and foreign key relationships");
         let mz_view_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_KEYS);
         for log in BUILTINS::logs() {
             let log_id = &self.catalog.resolve_builtin_log(log).to_string();
@@ -777,6 +827,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         // Advance all tables to the current timestamp
+        info!("coordinator init: advancing all tables to current timestamp");
         let WriteTimestamp {
             timestamp: _,
             advance_to,
@@ -795,17 +846,24 @@ impl<S: Append + 'static> Coordinator<S> {
             .unwrap();
 
         // Add builtin table updates the clear the contents of all system tables
+        info!("coordinator init: resetting system tables");
         let read_ts = self.get_local_read_ts();
         for system_table in entries
             .iter()
             .filter(|entry| entry.is_table() && entry.id().is_system())
         {
+            info!(
+                "coordinator init: resetting system table {} ({})",
+                self.catalog.resolve_full_name(system_table.name(), None),
+                system_table.id()
+            );
             let current_contents = self
                 .controller
                 .storage
                 .snapshot(system_table.id(), read_ts)
                 .await
                 .unwrap();
+            info!("coordinator init: table size {}", current_contents.len());
             let retractions = current_contents
                 .into_iter()
                 .map(|(row, diff)| BuiltinTableUpdate {
@@ -816,9 +874,11 @@ impl<S: Append + 'static> Coordinator<S> {
             builtin_table_updates.extend(retractions);
         }
 
+        info!("coordinator init: sending builtin table updates");
         self.send_builtin_table_updates(builtin_table_updates, BuiltinTableUpdateSource::DDL)
             .await;
 
+        info!("coordinator init: bootstrap complete");
         Ok(())
     }
 
@@ -926,9 +986,11 @@ pub async fn serve<S: Append + 'static>(
         metrics_registry,
         now,
         secrets_controller,
+        cloud_resource_controller,
         cluster_replica_sizes,
         storage_host_sizes,
         default_storage_host_size,
+        bootstrap_system_vars,
         mut availability_zones,
         connection_context,
         storage_usage_client,
@@ -939,6 +1001,8 @@ pub async fn serve<S: Append + 'static>(
         consolidations_rx,
     }: Config<S>,
 ) -> Result<(Handle, Client), AdapterError> {
+    info!("coordinator init: beginning");
+
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
     let (strict_serializable_reads_tx, strict_serializable_reads_rx) = mpsc::unbounded_channel();
@@ -957,6 +1021,7 @@ pub async fn serve<S: Append + 'static>(
     // Coordinator::sequence_create_compute_replica.
     availability_zones.shuffle(&mut rand::thread_rng());
 
+    info!("coordinator init: opening catalog");
     let (mut catalog, builtin_migration_metadata, builtin_table_updates) =
         Catalog::open(catalog::Config {
             storage,
@@ -970,6 +1035,7 @@ pub async fn serve<S: Append + 'static>(
             cluster_replica_sizes,
             storage_host_sizes,
             default_storage_host_size,
+            bootstrap_system_vars,
             availability_zones,
             secrets_reader: secrets_controller.reader(),
             egress_ips,
@@ -1041,6 +1107,7 @@ pub async fn serve<S: Append + 'static>(
                 write_lock_wait_group: VecDeque::new(),
                 pending_writes: Vec::new(),
                 secrets_controller,
+                cloud_resource_controller,
                 connection_context,
                 transient_replica_metadata: HashMap::new(),
                 storage_usage_client,
@@ -1064,6 +1131,7 @@ pub async fn serve<S: Append + 'static>(
         .unwrap();
     match bootstrap_rx.await.unwrap() {
         Ok(()) => {
+            info!("coordinator init: complete");
             let handle = Handle {
                 session_id,
                 start_instant,

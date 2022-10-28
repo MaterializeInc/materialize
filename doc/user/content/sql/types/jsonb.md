@@ -382,6 +382,8 @@ SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb ? 'b' AS search_for_key;
 
 #### `jsonb_array_elements`
 
+##### Expanding a JSON array
+
 ```sql
 SELECT * FROM jsonb_array_elements('[true, 1, "a", {"b": 2}, null]'::jsonb);
 ```
@@ -395,7 +397,34 @@ SELECT * FROM jsonb_array_elements('[true, 1, "a", {"b": 2}, null]'::jsonb);
  null
 ```
 
-Note that the `value` column is `jsonb`.
+##### Flattening a JSON array
+
+```sql
+SELECT * FROM flatten_json;
+```
+
+```nofmt
+ id |           json_col
+----+-------------------------------
+  1 | [{"a":1,"b":2},{"a":3,"b":4}]
+  2 | [{"a":5,"b":6},{"a":7,"b":8}]
+```
+
+```sql
+SELECT id,
+       obj->>'a' AS a,
+       obj->>'b' AS b
+FROM flatten_json, jsonb_array_elements(json_col) obj;
+```
+
+```nofmt
+ id | a | b
+----+---+---
+  1 | 1 | 2
+  1 | 3 | 4
+  2 | 5 | 6
+  2 | 7 | 8
+```
 
 <hr/>
 
@@ -414,8 +443,6 @@ SELECT * FROM jsonb_array_elements_text('[true, 1, "a", {"b": 2}, null]'::jsonb)
  {"b":2.0}
  null
 ```
-
-Note that the `value` column is `string`.
 
 <hr/>
 

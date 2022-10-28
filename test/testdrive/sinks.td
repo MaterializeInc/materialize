@@ -251,6 +251,22 @@ $ unset-regex
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
+# test already existing topic with non-default partition count
+$ kafka-create-topic topic=snk14 partitions=4
+
+> CREATE SINK snk14 FROM foo
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk14-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+
+# test already existing topic with non-default partition count -- even if arg specified
+$ kafka-create-topic topic=snk15 partitions=4
+
+> CREATE SINK snk15 FROM foo
+  INTO KAFKA CONNECTION kafka_conn (PARTITION COUNT=1, TOPIC 'testdrive-snk15-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+
 # create sink with SIZE set
 > CREATE SINK sink_with_size FROM src
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
@@ -293,6 +309,8 @@ snk10              kafka  1
 snk11              kafka  1
 snk12              kafka  1
 snk13              kafka  1
+snk14              kafka  1
+snk15              kafka  1
 sink_with_size     kafka  2
 sink_with_options  kafka  2
 snk_unsigned       kafka  1

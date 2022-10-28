@@ -12,7 +12,7 @@
 //! This module houses the handlers for statements that modify the catalog, like
 //! `ALTER`, `CREATE`, and `DROP`.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 use std::num::NonZeroUsize;
 use std::str::FromStr;
@@ -39,13 +39,13 @@ use mz_sql_parser::ast::{
     AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceStatement,
     AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
     CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    SetVariableValue, SshConnectionOption,
+    DeferredObjectName, SetVariableValue, SshConnectionOption,
 };
 use mz_storage::source::generator::as_generator;
 use mz_storage::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
 use mz_storage::types::connections::{
-    Connection, CsrConnectionHttpAuth, KafkaConnection, KafkaSecurity, KafkaTlsConfig, SaslConfig,
-    StringOrSecret, TlsIdentity,
+    AwsPrivateLinkConnection, Connection, CsrConnectionHttpAuth, KafkaConnection, KafkaSecurity,
+    KafkaTlsConfig, SaslConfig, StringOrSecret, TlsIdentity,
 };
 use mz_storage::types::sinks::{
     KafkaConsistencyConfig, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
@@ -66,17 +66,17 @@ use crate::ast::display::AstDisplay;
 use crate::ast::{
     AlterConnectionStatement, AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement,
     AlterSecretStatement, AvroSchema, AvroSchemaOption, AvroSchemaOptionName, AwsConnectionOption,
-    AwsConnectionOptionName, ClusterOption, ClusterOptionName, ColumnOption, Compression,
-    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnection,
-    CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement,
-    CreateMaterializedViewStatement, CreateRoleOption, CreateRoleStatement, CreateSchemaStatement,
-    CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
-    CreateSinkStatement, CreateSourceConnection, CreateSourceFormat, CreateSourceOption,
-    CreateSourceOptionName, CreateSourceStatement, CreateSourceSubsource, CreateSourceSubsources,
-    CreateSubsourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
-    CreateViewStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection, CsrConnectionAvro,
-    CsrConnectionOption, CsrConnectionOptionName, CsrConnectionProtobuf, CsrSeedProtobuf,
-    CsvColumns, DbzMode, DropClusterReplicasStatement, DropClustersStatement,
+    AwsConnectionOptionName, AwsPrivateLinkConnectionOption, AwsPrivateLinkConnectionOptionName,
+    ClusterOption, ClusterOptionName, ColumnOption, Compression, CreateClusterReplicaStatement,
+    CreateClusterStatement, CreateConnection, CreateConnectionStatement, CreateDatabaseStatement,
+    CreateIndexStatement, CreateMaterializedViewStatement, CreateReferencedSubsources,
+    CreateRoleOption, CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement,
+    CreateSinkConnection, CreateSinkOption, CreateSinkOptionName, CreateSinkStatement,
+    CreateSourceConnection, CreateSourceFormat, CreateSourceOption, CreateSourceOptionName,
+    CreateSourceStatement, CreateSubsourceStatement, CreateTableStatement, CreateTypeAs,
+    CreateTypeStatement, CreateViewStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
+    CsrConnectionAvro, CsrConnectionOption, CsrConnectionOptionName, CsrConnectionProtobuf,
+    CsrSeedProtobuf, CsvColumns, DbzMode, DropClusterReplicasStatement, DropClustersStatement,
     DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
     Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConfigOptionName,
     KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint, LoadGeneratorOption,
@@ -602,7 +602,7 @@ pub fn plan_create_source(
                 ProtoPostgresSourceDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
 
             // Register the available subsources
-            let mut available_subsources = HashMap::new();
+            let mut available_subsources = BTreeMap::new();
 
             for (i, table) in details.tables.iter().enumerate() {
                 let name = FullObjectName {
@@ -699,7 +699,7 @@ pub fn plan_create_source(
             let (load_generator, available_subsources) =
                 load_generator_ast_to_generator(generator, options)?;
             let available_subsources = available_subsources
-                .map(|a| HashMap::from_iter(a.into_iter().map(|(k, v)| (k, v.0))));
+                .map(|a| BTreeMap::from_iter(a.into_iter().map(|(k, v)| (k, v.0))));
             let generator = as_generator(&load_generator);
 
             let LoadGeneratorOptionExtracted { tick_interval, .. } = options.clone().try_into()?;
@@ -856,18 +856,36 @@ pub fn plan_create_source(
     };
 
     let (available_subsources, requested_subsources) = match (available_subsources, subsources) {
-        (Some(available_subsources), Some(CreateSourceSubsources::Subset(subsources))) => {
+        (Some(available_subsources), Some(CreateReferencedSubsources::Subset(subsources))) => {
             let mut requested_subsources = vec![];
             for subsource in subsources {
-                let (name, target) = match subsource {
-                    CreateSourceSubsource::Resolved(name, target) => (name, target),
-                    CreateSourceSubsource::Aliased(_, _) | CreateSourceSubsource::Bare(_) => {
-                        sql_bail!(
-                            "[internal error] subsources should be resolved during purification"
-                        )
+                let name = subsource.reference.clone();
+
+                let target = match &subsource.subsource {
+                    Some(subsource) => match subsource {
+                        DeferredObjectName::Named(target) => target.clone(),
+                        DeferredObjectName::Deferred(name) => {
+                            // TODO: remove this after the next release, we need
+                            // it only so we can load the catalog to do the
+                            // proper rewrite.
+                            let partial_subsource_name =
+                                normalize::unresolved_object_name(name.clone())?;
+                            let item = scx.catalog.resolve_item(&partial_subsource_name).unwrap();
+
+                            ResolvedObjectName::Object {
+                                id: item.id(),
+                                qualifiers: item.name().qualifiers.clone(),
+                                full_name: scx.catalog.resolve_full_name(item.name()),
+                                print_id: true,
+                            }
+                        }
+                    },
+                    None => {
+                        sql_bail!("[internal error] subsources must be named during purification")
                     }
                 };
-                requested_subsources.push((name.clone(), target));
+
+                requested_subsources.push((name, target));
             }
             (available_subsources, requested_subsources)
         }
@@ -875,10 +893,10 @@ pub fn plan_create_source(
             // Multi-output sources must have a table selection clause
             sql_bail!("This is a multi-output source. Use `FOR TABLE (..)` or `FOR ALL TABLES` to select which ones to ingest");
         }
-        (None, Some(_)) | (Some(_), Some(CreateSourceSubsources::All)) => {
+        (None, Some(_)) | (Some(_), Some(CreateReferencedSubsources::All)) => {
             sql_bail!("[internal error] subsources should be resolved during purification")
         }
-        (None, None) => (HashMap::<FullObjectName, usize>::new(), vec![]),
+        (None, None) => (BTreeMap::new(), vec![]),
     };
 
     let mut subsource_exports = HashMap::new();
@@ -895,6 +913,7 @@ pub fn plan_create_source(
                 sql_bail!("[internal error] invalid target id")
             }
         };
+
         // TODO(petrosagg): This is the point where we would normally look into the catalog for the
         // item with ID `target` and verify that its RelationDesc is identical to the type of the
         // dataflow output. We can't do that here however because the subsources are created in the
@@ -902,7 +921,7 @@ pub fn plan_create_source(
         // provisional catalogs are made available to the planner we could do the check. For now
         // we don't allow users to manually target subsources and rely on purification generating
         // correct definitions.
-        subsource_exports.insert(*target_id, *idx);
+        subsource_exports.insert(target_id, *idx);
     }
 
     let if_not_exists = *if_not_exists;
@@ -1062,7 +1081,7 @@ pub(crate) fn load_generator_ast_to_generator(
 ) -> Result<
     (
         mz_storage::types::sources::LoadGenerator,
-        Option<HashMap<FullObjectName, (usize, RelationDesc)>>,
+        Option<BTreeMap<FullObjectName, (usize, RelationDesc)>>,
     ),
     PlanError,
 > {
@@ -1072,6 +1091,9 @@ pub(crate) fn load_generator_ast_to_generator(
         }
         mz_sql_parser::ast::LoadGenerator::Counter => {
             mz_storage::types::sources::LoadGenerator::Counter
+        }
+        mz_sql_parser::ast::LoadGenerator::Datums => {
+            mz_storage::types::sources::LoadGenerator::Datums
         }
         mz_sql_parser::ast::LoadGenerator::Tpch => {
             let LoadGeneratorOptionExtracted { scale_factor, .. } = options.to_vec().try_into()?;
@@ -1110,7 +1132,7 @@ pub(crate) fn load_generator_ast_to_generator(
         }
     };
 
-    let mut available_subsources = HashMap::new();
+    let mut available_subsources = BTreeMap::new();
     let generator = as_generator(&load_generator);
     for (i, (name, desc)) in generator.views().iter().enumerate() {
         let name = FullObjectName {
@@ -1118,6 +1140,7 @@ pub(crate) fn load_generator_ast_to_generator(
             schema: match loadgen {
                 mz_sql_parser::ast::LoadGenerator::Counter => "counter".into(),
                 mz_sql_parser::ast::LoadGenerator::Auction => "auction".into(),
+                mz_sql_parser::ast::LoadGenerator::Datums => "datums".into(),
                 mz_sql_parser::ast::LoadGenerator::Tpch => "tpch".into(),
                 // Please use `snake_case` for any multi-word load generators
                 // that you add.
@@ -2393,15 +2416,8 @@ fn plan_replica_config(
                 .collect::<BTreeSet<String>>();
             let workers = workers.unwrap_or(1);
 
-            if remote_addrs.len() > 1 && (remote_addrs.len() != compute_addrs.len()) {
-                sql_bail!(
-                    "must specify as many REMOTE addresses as COMPUTE addresses for multi-process replicas"
-                );
-            }
-            if compute_addrs.len() > remote_addrs.len() {
-                sql_bail!(
-                    "must specify as many REMOTE addresses as COMPUTE addresses for multi-process replicas"
-                );
+            if remote_addrs.len() != compute_addrs.len() {
+                sql_bail!("must specify as many REMOTE addresses as COMPUTE addresses");
             }
 
             let workers = NonZeroUsize::new(workers.into())
@@ -2797,6 +2813,27 @@ impl TryFrom<AwsConnectionOptionExtracted> for AwsConfig {
     }
 }
 
+generate_extracted_config!(
+    AwsPrivateLinkConnectionOption,
+    (ServiceName, String),
+    (AvailabilityZones, Vec<String>)
+);
+
+impl TryFrom<AwsPrivateLinkConnectionOptionExtracted> for AwsPrivateLinkConnection {
+    type Error = PlanError;
+
+    fn try_from(options: AwsPrivateLinkConnectionOptionExtracted) -> Result<Self, Self::Error> {
+        Ok(AwsPrivateLinkConnection {
+            service_name: options
+                .service_name
+                .ok_or_else(|| sql_err!("SERVICE NAME option is required"))?,
+            availability_zones: options
+                .availability_zones
+                .ok_or_else(|| sql_err!("AVAILABILITY ZONES option is required"))?,
+        })
+    }
+}
+
 pub fn plan_create_connection(
     scx: &StatementContext,
     stmt: CreateConnectionStatement<Aug>,
@@ -2826,6 +2863,11 @@ pub fn plan_create_connection(
             let c = AwsConnectionOptionExtracted::try_from(with_options)?;
             let connection = AwsConfig::try_from(c)?;
             Connection::Aws(connection)
+        }
+        CreateConnection::AwsPrivateLink { with_options } => {
+            let c = AwsPrivateLinkConnectionOptionExtracted::try_from(with_options)?;
+            let connection = AwsPrivateLinkConnection::try_from(c)?;
+            Connection::AwsPrivateLink(connection)
         }
         CreateConnection::Ssh { with_options } => {
             let c = SshConnectionOptionExtracted::try_from(with_options)?;

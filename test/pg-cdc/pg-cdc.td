@@ -192,6 +192,31 @@ contains:publication "no_such_publication" does not exist
     "space table"
   );
 
+$ set-regex match=\d+ replacement=<NUMBER>
+
+> SHOW SOURCES
+conflict_table        subsource <null>
+escaped_text_table    subsource <null>
+large_text            subsource <null>
+multipart_pk          subsource <null>
+mz_source             postgres  <NUMBER>
+no_replica_identity   subsource <null>
+nonpk_table           subsource <null>
+nulls_table           subsource <null>
+pk_table              subsource <null>
+"space table"         subsource <null>
+trailing_space_nopk   subsource <null>
+trailing_space_pk     subsource <null>
+types_table           subsource <null>
+utf<NUMBER>_table     subsource <null>
+таблица               subsource <null>
+
+$ unset-regex
+
+# Dependency graph is that mz_source depends on all subsources
+! DROP SOURCE conflict_table
+contains: cannot drop materialize.public.conflict_table: still depended upon by catalog item 'materialize.public.mz_source'
+
 > SELECT * FROM no_replica_identity;
 1
 2

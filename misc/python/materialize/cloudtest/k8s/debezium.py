@@ -58,7 +58,7 @@ class DebeziumDeployment(K8sDeployment):
         ]
 
         container = V1Container(
-            name="debezium", image="debezium/connect:1.9.5.Final", env=env, ports=ports
+            name="debezium", image="debezium/connect:1.9.6.Final", env=env, ports=ports
         )
 
         template = V1PodTemplateSpec(

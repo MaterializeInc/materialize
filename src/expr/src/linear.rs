@@ -365,6 +365,44 @@ impl MapFilterProject {
         }
     }
 
+    /// Extracts an error-free MapFilterProject at the root of the expression.
+    ///
+    /// Differs from [MapFilterProject::extract_non_errors_from_expr] by taking and returning a
+    /// mutable reference.
+    pub fn extract_non_errors_from_expr_ref_mut(
+        expr: &mut MirRelationExpr,
+    ) -> (Self, &mut MirRelationExpr) {
+        // This is essentially the same code as `extract_non_errors_from_expr`, except the seemingly
+        // superfluous outer if, which works around a borrow-checker issue:
+        // https://github.com/rust-lang/rust/issues/54663
+        if matches!(expr, MirRelationExpr::Map { input: _, scalars } if scalars.iter().all(|s| !s.is_literal_err()))
+            || matches!(expr, MirRelationExpr::Filter { input: _, predicates } if predicates.iter().all(|p| !p.is_literal_err()))
+            || matches!(expr, MirRelationExpr::Project { .. })
+        {
+            match expr {
+                MirRelationExpr::Map { input, scalars }
+                    if scalars.iter().all(|s| !s.is_literal_err()) =>
+                {
+                    let (mfp, expr) = Self::extract_non_errors_from_expr_ref_mut(input);
+                    (mfp.map(scalars.iter().cloned()), expr)
+                }
+                MirRelationExpr::Filter { input, predicates }
+                    if predicates.iter().all(|p| !p.is_literal_err()) =>
+                {
+                    let (mfp, expr) = Self::extract_non_errors_from_expr_ref_mut(input);
+                    (mfp.filter(predicates.iter().cloned()), expr)
+                }
+                MirRelationExpr::Project { input, outputs } => {
+                    let (mfp, expr) = Self::extract_non_errors_from_expr_ref_mut(input);
+                    (mfp.project(outputs.iter().cloned()), expr)
+                }
+                _ => unreachable!(),
+            }
+        } else {
+            (Self::new(expr.arity()), expr)
+        }
+    }
+
     /// Removes an error-free MapFilterProject from the root of the expression.
     ///
     /// The expression will be modified to extract maps, filters, and projects
@@ -793,6 +831,7 @@ impl MapFilterProject {
             pred.permute_map(&shuffle);
         }
         for proj in project.iter_mut() {
+            assert!(shuffle[proj] < new_input_arity + map.len());
             *proj = shuffle[proj];
         }
         *self = Self::new(new_input_arity)

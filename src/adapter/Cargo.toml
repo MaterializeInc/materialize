@@ -42,6 +42,7 @@ mz-sql-parser = { path = "../sql-parser" }
 mz-stash = { path = "../stash" }
 mz-storage = { path = "../storage" }
 mz-transform = { path = "../transform" }
+mz-cloud-resources = { path = "../cloud-resources" }
 prometheus = { version = "0.13.2", default-features = false }
 prost = { version = "0.11.0", features = ["no-recursion-limit"] }
 rand = "0.8.5"

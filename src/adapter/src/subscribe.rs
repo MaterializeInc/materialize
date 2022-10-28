@@ -55,43 +55,53 @@ impl PendingSubscribe {
             SubscribeResponse::Batch(SubscribeBatch {
                 lower: _,
                 upper,
-                updates: mut rows,
+                updates,
             }) => {
-                // Sort results by time. We use stable sort here because it will produce deterministic
-                // results since the cursor will always produce rows in the same order.
-                // TODO: Is sorting necessary?
-                rows.sort_by_key(|(time, _, _)| *time);
+                match updates {
+                    Ok(mut rows) => {
+                        // Sort results by time. We use stable sort here because it will produce deterministic
+                        // results since the cursor will always produce rows in the same order.
+                        // TODO: Is sorting necessary?
+                        rows.sort_by_key(|(time, _, _)| *time);
 
-                let rows = rows
-                    .into_iter()
-                    .map(|(time, row, diff)| {
-                        let mut packer = row_buf.packer();
-                        // TODO: Change to MzTimestamp.
-                        packer.push(Datum::from(numeric::Numeric::from(time)));
-                        if self.emit_progress {
-                            // When sinking with PROGRESS, the output
-                            // includes an additional column that
-                            // indicates whether a timestamp is
-                            // complete. For regular "data" updates this
-                            // is always `false`.
-                            packer.push(Datum::False);
+                        let rows = rows
+                            .into_iter()
+                            .map(|(time, row, diff)| {
+                                let mut packer = row_buf.packer();
+                                // TODO: Change to MzTimestamp.
+                                packer.push(Datum::from(numeric::Numeric::from(time)));
+                                if self.emit_progress {
+                                    // When sinking with PROGRESS, the output
+                                    // includes an additional column that
+                                    // indicates whether a timestamp is
+                                    // complete. For regular "data" updates this
+                                    // is always `false`.
+                                    packer.push(Datum::False);
+                                }
+
+                                packer.push(Datum::Int64(diff));
+
+                                packer.extend_by_row(&row);
+
+                                row_buf.clone()
+                            })
+                            .collect();
+                        // TODO(benesch): the lack of backpressure here can result in
+                        // unbounded memory usage.
+                        let result = self.channel.send(PeekResponseUnary::Rows(rows));
+                        if result.is_err() {
+                            // TODO(benesch): we should actually drop the sink if the
+                            // receiver has gone away. E.g. form a DROP SINK command?
                         }
-
-                        packer.push(Datum::Int64(diff));
-
-                        packer.extend_by_row(&row);
-
-                        row_buf.clone()
-                    })
-                    .collect();
-                // TODO(benesch): the lack of backpressure here can result in
-                // unbounded memory usage.
-                let result = self.channel.send(PeekResponseUnary::Rows(rows));
-                if result.is_err() {
-                    // TODO(benesch): we should actually drop the sink if the
-                    // receiver has gone away. E.g. form a DROP SINK command?
+                    }
+                    Err(text) => {
+                        let result = self.channel.send(PeekResponseUnary::Error(text));
+                        if result.is_err() {
+                            // TODO(benesch): we should actually drop the sink if the
+                            // receiver has gone away. E.g. form a DROP SINK command?
+                        }
+                    }
                 }
-
                 if self.emit_progress && !upper.is_empty() {
                     assert_eq!(
                         upper.len(),

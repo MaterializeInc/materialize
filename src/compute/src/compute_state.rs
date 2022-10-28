@@ -25,6 +25,7 @@ use timely::progress::frontier::Antichain;
 use timely::progress::reachability::logging::TrackerEvent;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, Mutex};
+use uuid::Uuid;
 
 use mz_compute_client::command::{
     ComputeCommand, ComputeCommandHistory, DataflowDescription, InstanceConfig, Peek, ReplicaId,
@@ -67,9 +68,11 @@ pub struct ComputeState {
     /// equal to this frontier)
     pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
     /// Peek commands that are awaiting fulfillment.
-    pub pending_peeks: Vec<PendingPeek>,
+    pub pending_peeks: HashMap<Uuid, PendingPeek>,
     /// Tracks the frontier information that has been sent over `response_tx`.
     pub reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
+    /// Collections that were recently dropped and whose removal needs to be reported.
+    pub dropped_collections: Vec<GlobalId>,
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub compute_logger: Option<logging::compute::Logger>,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
@@ -79,6 +82,13 @@ pub struct ComputeState {
     pub command_history: ComputeCommandHistory,
     /// Max size in bytes of any result.
     pub max_result_size: u32,
+}
+
+impl ComputeState {
+    /// Return whether a collection with the given ID exists.
+    pub fn collection_exists(&self, id: GlobalId) -> bool {
+        self.traces.get(&id).is_some() || self.sink_tokens.contains_key(&id)
+    }
 }
 
 /// A wrapper around [ComputeState] with a live timely worker and response channel.
@@ -104,7 +114,9 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         use ComputeCommand::*;
-        self.compute_state.command_history.push(cmd.clone());
+        self.compute_state
+            .command_history
+            .push(cmd.clone(), &self.compute_state.pending_peeks);
         match cmd {
             CreateTimely(_) => panic!("CreateTimely must be captured before"),
             CreateInstance(config) => self.handle_create_instance(config),
@@ -175,15 +187,6 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     }
 
     fn handle_allow_compaction(&mut self, list: Vec<(GlobalId, Antichain<Timestamp>)>) {
-        // Report the final uppers for collections we allow to compact to the empty frontier, to
-        // give clients that don't observe all commands the opportunity to clean up their state for
-        // these collections.
-        //
-        // Note that we must *not* report final uppers for subscribe sinks. We do not emit
-        // `FrontierUppers` for those sinks, as their advancement is tracked through
-        // `SubscribeResponse`s.
-        let mut final_uppers = Vec::new();
-
         for (id, frontier) in list {
             if frontier.is_empty() {
                 // Indicates that we may drop `id`, as there are no more valid times to read.
@@ -209,18 +212,22 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                         logger.log(ComputeEvent::Frontier(id, *time, -1));
                     }
                 }
-                if !prev_frontier.is_empty() && !is_subscribe {
-                    final_uppers.push((id, Antichain::new()));
+
+                // We need to emit a final response reporting the dropping of this collection,
+                // unless:
+                //  * The collection is a subscribe, in which case we will emit a
+                //    `SubscribeResponse::Dropped` independently.
+                //  * The collection has already advanced to the empty frontier, in which case
+                //    the final `FrontierUppers` response already serves the purpose of reporting
+                //    the end of the dataflow.
+                if !is_subscribe && !prev_frontier.is_empty() {
+                    self.compute_state.dropped_collections.push(id);
                 }
             } else {
                 self.compute_state
                     .traces
                     .allow_compaction(id, frontier.borrow());
             }
-        }
-
-        if !final_uppers.is_empty() {
-            self.send_compute_response(ComputeResponse::FrontierUppers(final_uppers));
         }
     }
 
@@ -266,7 +273,9 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             self.send_peek_response(peek, response);
         } else {
             peek.span = span!(parent: &peek.span, Level::DEBUG, "pending peek");
-            self.compute_state.pending_peeks.push(peek);
+            self.compute_state
+                .pending_peeks
+                .insert(peek.peek.uuid, peek);
         }
     }
 
@@ -274,13 +283,13 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         let pending_peeks_len = self.compute_state.pending_peeks.len();
         let mut pending_peeks = std::mem::replace(
             &mut self.compute_state.pending_peeks,
-            Vec::with_capacity(pending_peeks_len),
+            HashMap::with_capacity(pending_peeks_len),
         );
-        for peek in pending_peeks.drain(..) {
-            if uuids.contains(&peek.peek.uuid) {
+        for (uuid, peek) in pending_peeks.drain() {
+            if uuids.contains(&uuid) {
                 self.send_peek_response(peek, PeekResponse::Canceled);
             } else {
-                self.compute_state.pending_peeks.push(peek);
+                self.compute_state.pending_peeks.insert(uuid, peek);
             }
         }
     }
@@ -604,22 +613,45 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         }
     }
 
+    /// Report dropped collections to the controller.
+    pub fn report_dropped_collections(&mut self) {
+        let dropped_collections = std::mem::take(&mut self.compute_state.dropped_collections);
+
+        // TODO(teske): It is, in fact, wrong to report the dropping of a collection before it has
+        // advanced to the empty frontier by announcing that it has advanced to the empty
+        // frontier. We should introduce a new compute response variant that has the right
+        // semantics.
+        let new_uppers: Vec<_> = dropped_collections
+            .into_iter()
+            .filter(|id| {
+                // The collection might have been temporarily dropped and re-created during
+                // reconciliation. In this case, announcing its removal would confuse the controller.
+                !self.compute_state.collection_exists(*id)
+            })
+            .map(|id| (id, Antichain::new()))
+            .collect();
+
+        if !new_uppers.is_empty() {
+            self.send_compute_response(ComputeResponse::FrontierUppers(new_uppers));
+        }
+    }
+
     /// Scan pending peeks and attempt to retire each.
     pub fn process_peeks(&mut self) {
         let mut upper = Antichain::new();
         let pending_peeks_len = self.compute_state.pending_peeks.len();
         let mut pending_peeks = std::mem::replace(
             &mut self.compute_state.pending_peeks,
-            Vec::with_capacity(pending_peeks_len),
+            HashMap::with_capacity(pending_peeks_len),
         );
-        for mut peek in pending_peeks.drain(..) {
+        for (uuid, mut peek) in pending_peeks.drain() {
             if let Some(response) =
                 peek.seek_fulfillment(&mut upper, self.compute_state.max_result_size)
             {
                 let _span = tracing::info_span!(parent: &peek.span,  "process_peek").entered();
                 self.send_peek_response(peek, response);
             } else {
-                self.compute_state.pending_peeks.push(peek);
+                self.compute_state.pending_peeks.insert(uuid, peek);
             }
         }
     }
@@ -647,7 +679,9 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     /// Scan the shared subscribe response buffer, and forward results along.
     pub fn process_subscribes(&mut self) {
         let mut subscribe_responses = self.compute_state.subscribe_response_buffer.borrow_mut();
-        for (sink_id, response) in subscribe_responses.drain(..) {
+        for (sink_id, mut response) in subscribe_responses.drain(..) {
+            response
+                .to_error_if_exceeds(usize::try_from(self.compute_state.max_result_size).unwrap());
             self.send_compute_response(ComputeResponse::SubscribeResponse(sink_id, response));
         }
     }

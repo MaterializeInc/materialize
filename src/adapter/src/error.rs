@@ -476,7 +476,10 @@ impl fmt::Display for AdapterError {
 
 impl From<anyhow::Error> for AdapterError {
     fn from(e: anyhow::Error) -> AdapterError {
-        AdapterError::Unstructured(e)
+        match e.downcast_ref::<PlanError>() {
+            Some(plan_error) => AdapterError::PlanError(plan_error.clone()),
+            None => AdapterError::Unstructured(e),
+        }
     }
 }
 

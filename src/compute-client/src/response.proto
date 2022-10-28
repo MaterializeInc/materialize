@@ -69,7 +69,19 @@ message ProtoSubscribeBatch {
         int64 diff = 3;
     }
 
+    message ProtoSubscribeBatchContents {
+         oneof kind {
+             ProtoSubscribeUpdates updates = 1;
+             string error = 2;
+         }
+     }
+
+     message ProtoSubscribeUpdates {
+         repeated ProtoUpdate updates = 1;
+     }
+
     mz_repr.antichain.ProtoU64Antichain lower = 1;
     mz_repr.antichain.ProtoU64Antichain upper = 2;
-    repeated ProtoUpdate updates = 3;
+    reserved 3;
+    ProtoSubscribeBatchContents updates = 4;
 }

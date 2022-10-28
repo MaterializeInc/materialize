@@ -9,9 +9,7 @@
 
 //! Profiling HTTP endpoints.
 
-use std::cell::RefCell;
 use std::env;
-use std::fmt::Write;
 use std::time::Duration;
 
 use askama::Template;
@@ -82,9 +80,7 @@ struct ProfTemplate<'a> {
 struct FlamegraphTemplate<'a> {
     version: &'a str,
     title: &'a str,
-    data_json: &'a str,
-    display_bytes: bool,
-    extras: &'a [&'a str],
+    mzfg: &'a str,
 }
 
 #[allow(clippy::drop_copy)]
@@ -123,35 +119,21 @@ fn flamegraph(
     stacks: StackProfile,
     title: &str,
     display_bytes: bool,
-    extras: &[&str],
+    extras: &[(&str, &str)],
     build_info: &BuildInfo,
 ) -> impl IntoResponse {
-    let collated = crate::collate_stacks(stacks);
-    let data_json = RefCell::new(String::new());
-    collated.dfs(
-        |node| {
-            write!(
-                data_json.borrow_mut(),
-                "{{\"name\": \"{}\",\"value\":{},\"children\":[",
-                node.name,
-                node.weight
-            )
-            .unwrap(); // String's `std::fmt::Write` implementation never fails
-        },
-        |_node, is_last| {
-            data_json.borrow_mut().push_str("]}");
-            if !is_last {
-                data_json.borrow_mut().push(',');
-            }
-        },
-    );
-    let data_json = &*data_json.borrow();
+    let mut header_extra = vec![];
+    if display_bytes {
+        header_extra.push(("display_bytes", "1"));
+    }
+    for (k, v) in extras {
+        header_extra.push((k, v));
+    }
+    let mzfg = stacks.to_mzfg(true, &header_extra);
     mz_http_util::template_response(FlamegraphTemplate {
         version: build_info.version,
         title,
-        data_json,
-        display_bytes,
-        extras,
+        mzfg: &mzfg,
     })
 }
 
@@ -208,8 +190,6 @@ mod disabled {
 
 #[cfg(all(not(target_os = "macos"), feature = "jemalloc"))]
 mod enabled {
-    use std::borrow::Cow;
-    use std::fmt::Write;
     use std::io::{BufReader, Read};
     use std::sync::Arc;
 
@@ -222,8 +202,7 @@ mod enabled {
     use serde::Deserialize;
     use tokio::sync::Mutex;
 
-    use crate::jemalloc::{parse_jeheap, JemallocProfCtl, PROF_CTL};
-    use crate::symbolicate;
+    use crate::jemalloc::{parse_jeheap, JemallocProfCtl, JemallocStats, PROF_CTL};
 
     use super::{flamegraph, time_prof, MemProfilingStatus, ProfTemplate};
     use mz_build_info::BuildInfo;
@@ -256,6 +235,30 @@ mod enabled {
     ) -> impl IntoResponse {
         let prof_ctl = PROF_CTL.as_ref().unwrap();
         let merge_threads = threads.as_deref() == Some("merge");
+
+        fn render_jemalloc_stats(stats: &JemallocStats) -> Vec<(&str, String)> {
+            vec![
+                (
+                    "Allocated",
+                    HumanFormattedBytes(stats.allocated).to_string(),
+                ),
+                (
+                    "In active pages",
+                    HumanFormattedBytes(stats.active).to_string(),
+                ),
+                (
+                    "Allocated for allocator metadata",
+                    HumanFormattedBytes(stats.metadata).to_string(),
+                ),
+                // Don't print `stats.resident` since it is a bit hard to interpret;
+                // see `man jemalloc` for details.
+                (
+                    "Bytes unused, but retained by allocator",
+                    HumanFormattedBytes(stats.retained).to_string(),
+                ),
+            ]
+        }
+
         match action.as_str() {
             "activate" => {
                 {
@@ -275,7 +278,7 @@ mod enabled {
                 };
                 Ok(render_template(prof_ctl, build_info).await.into_response())
             }
-            "dump_file" => {
+            "dump_jeheap" => {
                 let mut borrow = prof_ctl.lock().await;
                 let mut f = borrow
                     .dump()
@@ -292,7 +295,7 @@ mod enabled {
                 )
                     .into_response())
             }
-            "dump_symbolicated_file" => {
+            "dump_sym_mzfg" => {
                 let mut borrow = prof_ctl.lock().await;
                 let f = borrow
                     .dump()
@@ -300,35 +303,21 @@ mod enabled {
                 let r = BufReader::new(f);
                 let stacks = parse_jeheap(r)
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-                let syms = symbolicate(&stacks);
-                let mut s = String::new();
-                // Emitting the format expected by Brendan Gregg's flamegraph tool.
-                //
-                // foo;bar;quux 30
-                // foo;bar;asdf 40
-                //
-                // etc.
-                for (stack, _anno) in stacks.iter() {
-                    for (i, addr) in stack.addrs.iter().enumerate() {
-                        let syms = match syms.get(addr) {
-                            Some(syms) => Cow::Borrowed(syms),
-                            None => Cow::Owned(vec!["???".to_string()]),
-                        };
-                        for (j, sym) in syms.iter().enumerate() {
-                            if j != 0 || i != 0 {
-                                s.push_str(";");
-                            }
-                            s.push_str(&*sym);
-                        }
-                    }
-                    writeln!(&mut s, " {}", stack.weight).unwrap();
-                }
+                let stats = borrow
+                    .stats()
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                let stats_rendered = render_jemalloc_stats(&stats);
+                let stats_rendered = stats_rendered
+                    .iter()
+                    .map(|(k, v)| (*k, v.as_str()))
+                    .collect::<Vec<_>>();
+                let mzfg = stacks.to_mzfg(true, &stats_rendered);
                 Ok((
                     HeaderMap::from_iter([(
                         CONTENT_DISPOSITION,
-                        HeaderValue::from_static("attachment; filename=\"mz.fg\""),
+                        HeaderValue::from_static("attachment; filename=\"trace.mzfg\""),
                     )]),
-                    s,
+                    mzfg,
                 )
                     .into_response())
             }
@@ -343,23 +332,10 @@ mod enabled {
                 let stats = borrow
                     .stats()
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-                let stats_rendered = &[
-                    format!("Allocated: {}", HumanFormattedBytes(stats.allocated)),
-                    format!("In active pages: {}", HumanFormattedBytes(stats.active)),
-                    format!(
-                        "Allocated for allocator metadata: {}",
-                        HumanFormattedBytes(stats.metadata)
-                    ),
-                    // Don't print `stats.resident` since it is a bit hard to interpret;
-                    // see `man jemalloc` for details.
-                    format!(
-                        "Bytes unused, but retained by allocator: {}",
-                        HumanFormattedBytes(stats.retained)
-                    ),
-                ];
+                let stats_rendered = render_jemalloc_stats(&stats);
                 let stats_rendered = stats_rendered
                     .iter()
-                    .map(String::as_str)
+                    .map(|(k, v)| (*k, v.as_str()))
                     .collect::<Vec<_>>();
                 Ok(
                     flamegraph(stacks, "Heap Flamegraph", true, &stats_rendered, build_info)

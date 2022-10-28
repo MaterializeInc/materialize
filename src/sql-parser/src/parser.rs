@@ -88,6 +88,22 @@ pub fn parse_data_type(sql: &str) -> Result<RawDataType, ParserError> {
     }
 }
 
+/// Parses a SQL string containing a `SET` variable value.
+pub fn parse_set_variable_value(sql: &str) -> Result<SetVariableValue, ParserError> {
+    let tokens = lexer::lex(sql)?;
+    let mut parser = Parser::new(sql, tokens);
+    let value = parser.parse_set_variable_value()?;
+    if parser.next_token().is_some() {
+        parser_err!(
+            parser,
+            parser.peek_prev_pos(),
+            "extra token after SET variable value"
+        )
+    } else {
+        Ok(value)
+    }
+}
+
 macro_rules! maybe {
     ($e:expr) => {{
         if let Some(v) = $e {
@@ -1927,9 +1943,18 @@ impl<'a> Parser<'a> {
             TO => true,
             _ => unreachable!(),
         };
-        let connection =
-            match self.expect_one_of_keywords(&[AWS, KAFKA, CONFLUENT, POSTGRES, SSH])? {
-                AWS => {
+        let connection = match self
+            .expect_one_of_keywords(&[AWS, KAFKA, CONFLUENT, POSTGRES, SSH])?
+        {
+            AWS => {
+                if self.parse_keyword(PRIVATELINK) {
+                    if expect_paren {
+                        self.expect_token(&Token::LParen)?;
+                    }
+                    let with_options = self
+                        .parse_comma_separated(Parser::parse_aws_privatelink_connection_option)?;
+                    CreateConnection::AwsPrivateLink { with_options }
+                } else {
                     if expect_paren {
                         self.expect_token(&Token::LParen)?;
                     }
@@ -1937,42 +1962,43 @@ impl<'a> Parser<'a> {
                         self.parse_comma_separated(Parser::parse_aws_connection_option)?;
                     CreateConnection::Aws { with_options }
                 }
-                KAFKA => {
-                    if expect_paren {
-                        self.expect_token(&Token::LParen)?;
-                    }
-                    let with_options =
-                        self.parse_comma_separated(Parser::parse_kafka_connection_option)?;
-                    CreateConnection::Kafka { with_options }
+            }
+            KAFKA => {
+                if expect_paren {
+                    self.expect_token(&Token::LParen)?;
                 }
-                CONFLUENT => {
-                    self.expect_keywords(&[SCHEMA, REGISTRY])?;
-                    if expect_paren {
-                        self.expect_token(&Token::LParen)?;
-                    }
-                    let with_options =
-                        self.parse_comma_separated(Parser::parse_csr_connection_option)?;
-                    CreateConnection::Csr { with_options }
+                let with_options =
+                    self.parse_comma_separated(Parser::parse_kafka_connection_option)?;
+                CreateConnection::Kafka { with_options }
+            }
+            CONFLUENT => {
+                self.expect_keywords(&[SCHEMA, REGISTRY])?;
+                if expect_paren {
+                    self.expect_token(&Token::LParen)?;
                 }
-                POSTGRES => {
-                    if expect_paren {
-                        self.expect_token(&Token::LParen)?;
-                    }
-                    let with_options =
-                        self.parse_comma_separated(Parser::parse_postgres_connection_option)?;
-                    CreateConnection::Postgres { with_options }
+                let with_options =
+                    self.parse_comma_separated(Parser::parse_csr_connection_option)?;
+                CreateConnection::Csr { with_options }
+            }
+            POSTGRES => {
+                if expect_paren {
+                    self.expect_token(&Token::LParen)?;
                 }
-                SSH => {
-                    self.expect_keyword(TUNNEL)?;
-                    if expect_paren {
-                        self.expect_token(&Token::LParen)?;
-                    }
-                    let with_options =
-                        self.parse_comma_separated(Parser::parse_ssh_connection_option)?;
-                    CreateConnection::Ssh { with_options }
+                let with_options =
+                    self.parse_comma_separated(Parser::parse_postgres_connection_option)?;
+                CreateConnection::Postgres { with_options }
+            }
+            SSH => {
+                self.expect_keyword(TUNNEL)?;
+                if expect_paren {
+                    self.expect_token(&Token::LParen)?;
                 }
-                _ => unreachable!(),
-            };
+                let with_options =
+                    self.parse_comma_separated(Parser::parse_ssh_connection_option)?;
+                CreateConnection::Ssh { with_options }
+            }
+            _ => unreachable!(),
+        };
         if expect_paren {
             self.expect_token(&Token::RParen)?;
         }
@@ -2200,6 +2226,26 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_aws_privatelink_connection_option(
+        &mut self,
+    ) -> Result<AwsPrivateLinkConnectionOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[SERVICE, AVAILABILITY])? {
+            SERVICE => {
+                self.expect_keyword(NAME)?;
+                AwsPrivateLinkConnectionOptionName::ServiceName
+            }
+            AVAILABILITY => {
+                self.expect_keyword(ZONES)?;
+                AwsPrivateLinkConnectionOptionName::AvailabilityZones
+            }
+            _ => unreachable!(),
+        };
+        Ok(AwsPrivateLinkConnectionOption {
+            name,
+            value: self.parse_option_value()?,
+        })
+    }
+
     fn parse_ssh_connection_option(&mut self) -> Result<SshConnectionOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[HOST, PORT, USER])? {
             HOST => SshConnectionOptionName::Host,
@@ -2257,21 +2303,11 @@ impl<'a> Parser<'a> {
 
         let subsources = if self.parse_keywords(&[FOR, TABLES]) {
             self.expect_token(&Token::LParen)?;
-            let subsources = self.parse_comma_separated(|parser| {
-                let name = parser.parse_object_name()?;
-                let subsource = if parser.parse_keyword(INTO) {
-                    CreateSourceSubsource::Resolved(name, parser.parse_raw_name()?)
-                } else if parser.parse_keyword(AS) {
-                    CreateSourceSubsource::Aliased(name, parser.parse_object_name()?)
-                } else {
-                    CreateSourceSubsource::Bare(name)
-                };
-                Ok(subsource)
-            })?;
+            let subsources = self.parse_comma_separated(Parser::parse_subsource_references)?;
             self.expect_token(&Token::RParen)?;
-            Some(CreateSourceSubsources::Subset(subsources))
+            Some(CreateReferencedSubsources::Subset(subsources))
         } else if self.parse_keywords(&[FOR, ALL, TABLES]) {
-            Some(CreateSourceSubsources::All)
+            Some(CreateReferencedSubsources::All)
         } else {
             None
         };
@@ -2298,6 +2334,20 @@ impl<'a> Parser<'a> {
             with_options,
             subsources,
         }))
+    }
+
+    fn parse_subsource_references(&mut self) -> Result<CreateSourceSubsource<Raw>, ParserError> {
+        let reference = self.parse_object_name()?;
+        let subsource = if self.parse_one_of_keywords(&[AS, INTO]).is_some() {
+            Some(self.parse_deferred_object_name()?)
+        } else {
+            None
+        };
+
+        Ok(CreateSourceSubsource {
+            reference,
+            subsource,
+        })
     }
 
     /// Parses the column section of a CREATE SOURCE statement which can be
@@ -2527,12 +2577,14 @@ impl<'a> Parser<'a> {
             }
             LOAD => {
                 self.expect_keyword(GENERATOR)?;
-                let generator = match self.expect_one_of_keywords(&[COUNTER, AUCTION, TPCH])? {
-                    COUNTER => LoadGenerator::Counter,
-                    AUCTION => LoadGenerator::Auction,
-                    TPCH => LoadGenerator::Tpch,
-                    _ => unreachable!(),
-                };
+                let generator =
+                    match self.expect_one_of_keywords(&[COUNTER, AUCTION, TPCH, DATUMS])? {
+                        COUNTER => LoadGenerator::Counter,
+                        AUCTION => LoadGenerator::Auction,
+                        TPCH => LoadGenerator::Tpch,
+                        DATUMS => LoadGenerator::Datums,
+                        _ => unreachable!(),
+                    };
                 let options = if self.consume_token(&Token::LParen) {
                     let options =
                         self.parse_comma_separated(Parser::parse_load_generator_option)?;
@@ -3991,6 +4043,13 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_deferred_object_name(&mut self) -> Result<DeferredObjectName<Raw>, ParserError> {
+        Ok(match self.parse_raw_name()? {
+            named @ RawObjectName::Id(..) => DeferredObjectName::Named(named),
+            RawObjectName::Name(name) => DeferredObjectName::Deferred(name),
+        })
+    }
+
     fn parse_raw_name(&mut self) -> Result<RawObjectName, ParserError> {
         if self.consume_token(&Token::LBracket) {
             let id = match self.next_token() {
@@ -4542,13 +4601,47 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_set_variable_value(&mut self) -> Result<SetVariableValue, ParserError> {
-        let token = self.peek_token();
-        Ok(match (self.parse_value(), token) {
-            (Ok(value), _) => SetVariableValue::Literal(value),
-            (Err(_), Some(Token::Keyword(DEFAULT))) => SetVariableValue::Default,
-            (Err(_), Some(Token::Keyword(kw))) => SetVariableValue::Ident(kw.into_ident()),
-            (Err(_), Some(Token::Ident(id))) => SetVariableValue::Ident(Ident::new(id)),
-            (Err(_), other) => self.expected(self.peek_pos(), "variable value", other)?,
+        let parse_ident_or_keyword = |parser: &mut Self| match parser.next_token() {
+            Some(Token::Keyword(keyword)) => Ok(keyword.into_ident()),
+            Some(Token::Ident(ident)) => Ok(Ident::new(ident)),
+            other => parser.expected(parser.peek_prev_pos(), "identifier or keyword", other),
+        };
+
+        let curr_pos = self.peek_pos();
+        let curr_token = self.peek_token();
+
+        Ok(match self.parse_value() {
+            Ok(value) => match self.peek_token() {
+                Some(Token::Comma) => {
+                    self.next_token();
+                    let mut values = vec![value];
+                    values.append(&mut self.parse_comma_separated(Self::parse_value)?);
+                    SetVariableValue::Literals(values)
+                }
+                _ => SetVariableValue::Literal(value),
+            },
+            Err(_) => match curr_token {
+                Some(Token::Keyword(DEFAULT)) => SetVariableValue::Default,
+                Some(Token::Ident(ident)) => match self.peek_token() {
+                    Some(Token::Comma) => {
+                        self.next_token();
+                        let mut idents = vec![Ident::new(ident)];
+                        idents.append(&mut self.parse_comma_separated(parse_ident_or_keyword)?);
+                        SetVariableValue::Idents(idents)
+                    }
+                    _ => SetVariableValue::Ident(Ident::new(ident)),
+                },
+                Some(Token::Keyword(keyword)) => match self.peek_token() {
+                    Some(Token::Comma) => {
+                        self.next_token();
+                        let mut idents = vec![keyword.into_ident()];
+                        idents.append(&mut self.parse_comma_separated(parse_ident_or_keyword)?);
+                        SetVariableValue::Idents(idents)
+                    }
+                    _ => SetVariableValue::Ident(keyword.into_ident()),
+                },
+                other => self.expected(curr_pos, "variable value", other)?,
+            },
         })
     }
 

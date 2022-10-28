@@ -380,7 +380,7 @@ impl ProjectionPushdown {
 ///
 /// The `outputs` field of [MirRelationExpr::Project] is a mapping from "after"
 /// to "before". Thus, when lifting projections, you would permute on `outputs`,
-/// but you need to reverse permute when pushdown projections down.
+/// but you need to reverse permute when pushing projections down.
 fn reverse_permute<'a, I, J>(exprs: I, permutation: J)
 where
     I: Iterator<Item = &'a mut MirScalarExpr>,

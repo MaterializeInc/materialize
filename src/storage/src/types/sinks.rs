@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
+use mz_persist_client::ShardId;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -29,16 +30,17 @@ include!(concat!(env!("OUT_DIR"), "/mz_storage.types.sinks.rs"));
 
 /// A sink for updates to a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct StorageSinkDesc<S = (), T = mz_repr::Timestamp> {
+pub struct StorageSinkDesc<S = (), I = GlobalId, T = mz_repr::Timestamp> {
     pub from: GlobalId,
     pub from_desc: RelationDesc,
     pub connection: StorageSinkConnection,
     pub envelope: Option<SinkEnvelope>,
     pub as_of: SinkAsOf<T>,
+    pub status_id: Option<I>,
     pub from_storage_metadata: S,
 }
 
-impl Arbitrary for StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
+impl Arbitrary for StorageSinkDesc<CollectionMetadata, ShardId, mz_repr::Timestamp> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -49,16 +51,26 @@ impl Arbitrary for StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
             any::<StorageSinkConnection>(),
             any::<Option<SinkEnvelope>>(),
             any::<SinkAsOf<mz_repr::Timestamp>>(),
+            any::<Option<ShardId>>(),
             any::<CollectionMetadata>(),
         )
             .prop_map(
-                |(from, from_desc, connection, envelope, as_of, from_storage_metadata)| {
+                |(
+                    from,
+                    from_desc,
+                    connection,
+                    envelope,
+                    as_of,
+                    status_id,
+                    from_storage_metadata,
+                )| {
                     StorageSinkDesc {
                         from,
                         from_desc,
                         connection,
                         envelope,
                         as_of,
+                        status_id,
                         from_storage_metadata,
                     }
                 },
@@ -67,7 +79,9 @@ impl Arbitrary for StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
     }
 }
 
-impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
+impl RustType<ProtoStorageSinkDesc>
+    for StorageSinkDesc<CollectionMetadata, ShardId, mz_repr::Timestamp>
+{
     fn into_proto(&self) -> ProtoStorageSinkDesc {
         ProtoStorageSinkDesc {
             connection: Some(self.connection.into_proto()),
@@ -75,6 +89,7 @@ impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<CollectionMetadata, mz_r
             from_desc: Some(self.from_desc.into_proto()),
             envelope: self.envelope.into_proto(),
             as_of: Some(self.as_of.into_proto()),
+            status_id: self.status_id.into_proto(),
             from_storage_metadata: Some(self.from_storage_metadata.into_proto()),
         }
     }
@@ -92,6 +107,7 @@ impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<CollectionMetadata, mz_r
             as_of: proto
                 .as_of
                 .into_rust_if_some("ProtoStorageSinkDesc::as_of")?,
+            status_id: proto.status_id.into_rust()?,
             from_storage_metadata: proto
                 .from_storage_metadata
                 .into_rust_if_some("ProtoStorageSinkDesc::from_storage_metadata")?,

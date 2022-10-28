@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use maplit::btreeset;
+use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpointSpec;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, OwnedMutexGuard};
 use tracing::{event, warn, Level};
@@ -588,13 +589,31 @@ impl<S: Append + 'static> Coordinator<S> {
         let connection_gid = self.catalog.allocate_user_id().await?;
         let mut connection = plan.connection.connection.clone();
 
-        if let mz_storage::types::connections::Connection::Ssh(ref mut ssh) = connection {
-            let keyset = SshKeyset::new()?;
-            self.secrets_controller
-                .ensure(connection_gid, &keyset.to_bytes())
-                .await?;
+        match connection {
+            mz_storage::types::connections::Connection::Ssh(ref mut ssh) => {
+                let keyset = SshKeyset::new()?;
+                self.secrets_controller
+                    .ensure(connection_gid, &keyset.to_bytes())
+                    .await?;
 
-            ssh.public_keys = Some(keyset.public_keys());
+                ssh.public_keys = Some(keyset.public_keys());
+            }
+            mz_storage::types::connections::Connection::AwsPrivateLink(ref privatelink) => {
+                self.cloud_resource_controller
+                    .as_ref()
+                    .ok_or(AdapterError::Unsupported(
+                        "PrivateLink connections are only allowed in cloud.",
+                    ))?
+                    .ensure_vpc_endpoint(
+                        connection_gid,
+                        VpcEndpointSpec {
+                            aws_service_name: privatelink.service_name.to_owned(),
+                            availability_zone_ids: privatelink.availability_zones.to_owned(),
+                        },
+                    )
+                    .await?;
+            }
+            _ => {}
         }
 
         let ops = vec![catalog::Op::CreateItem {
@@ -1665,7 +1684,10 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut instance_replica_drop_sets = Vec::with_capacity(plan.names.len());
         for compute_name in plan.names {
             let instance = self.catalog.resolve_compute_instance(&compute_name)?;
-            instance_replica_drop_sets.push((instance.id, instance.replicas_by_id.clone()));
+            instance_replica_drop_sets.push((
+                instance.id,
+                instance.replicas_by_id.keys().cloned().collect::<Vec<_>>(),
+            ));
             for replica_name in instance.replica_id_by_name.keys() {
                 ops.push(catalog::Op::DropComputeReplica {
                     name: replica_name.to_string(),
@@ -1704,10 +1726,8 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await?;
         for (instance_id, replicas) in instance_replica_drop_sets {
-            for (replica_id, replica) in replicas {
-                self.drop_replica(instance_id, replica_id, replica.config)
-                    .await
-                    .unwrap();
+            for replica_id in replicas {
+                self.drop_replica(instance_id, replica_id).await.unwrap();
             }
             self.controller.compute.drop_instance(instance_id);
         }
@@ -1761,11 +1781,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 )
             }
 
-            replicas_to_drop.push((
-                instance.id,
-                replica_id,
-                instance.replicas_by_id[&replica_id].clone(),
-            ));
+            replicas_to_drop.push((instance.id, replica_id));
         }
 
         ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
@@ -1773,10 +1789,8 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await?;
 
-        for (compute_id, replica_id, replica) in replicas_to_drop {
-            self.drop_replica(compute_id, replica_id, replica.config)
-                .await
-                .unwrap();
+        for (compute_id, replica_id) in replicas_to_drop {
+            self.drop_replica(compute_id, replica_id).await.unwrap();
         }
 
         Ok(ExecuteResponse::DroppedComputeReplica)
@@ -1786,7 +1800,6 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
-        replica_config: ComputeReplicaConfig,
     ) -> Result<(), anyhow::Error> {
         if let Some(Some(metadata)) = self.transient_replica_metadata.insert(replica_id, None) {
             let retraction = self
@@ -1798,7 +1811,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
         self.controller
             .active_compute()
-            .drop_replica(instance_id, replica_id, replica_config)
+            .drop_replica(instance_id, replica_id)
             .await?;
         Ok(())
     }
@@ -1872,10 +1885,10 @@ impl<S: Append + 'static> Coordinator<S> {
         let vars = session.vars_mut();
         let (name, local) = (plan.name, plan.local);
         match plan.value {
-            SetVariableValue::Literal(Value::String(s)) => vars.set(&name, &s, local)?,
-            SetVariableValue::Literal(lit) => vars.set(&name, &lit.to_string(), local)?,
-            SetVariableValue::Ident(ident) => vars.set(&name, &ident.into_string(), local)?,
             SetVariableValue::Default => vars.reset(&name, local)?,
+            SetVariableValue::Literal(Value::String(s)) => vars.set(&name, &s, local)?, // pass-through unquoted strings
+            SetVariableValue::Ident(ident) => vars.set(&name, &ident.into_string(), local)?, // pass-through unquoted idents
+            value => vars.set(&name, &value.to_string(), local)?, // or else use the AstDisplay for SetVariableValue
         }
 
         Ok(ExecuteResponse::SetVariable { name, reset: false })
@@ -3320,18 +3333,18 @@ impl<S: Append + 'static> Coordinator<S> {
         use mz_sql::ast::{SetVariableValue, Value};
         let update_max_result_size = name == session::vars::MAX_RESULT_SIZE.name();
         let op = match value {
+            SetVariableValue::Default => catalog::Op::ResetSystemConfiguration { name },
             SetVariableValue::Literal(Value::String(value)) => {
                 catalog::Op::UpdateSystemConfiguration { name, value }
             }
-            SetVariableValue::Literal(value) => catalog::Op::UpdateSystemConfiguration {
+            SetVariableValue::Ident(ident) => catalog::Op::UpdateSystemConfiguration {
+                name,
+                value: ident.into_string(),
+            },
+            value => catalog::Op::UpdateSystemConfiguration {
                 name,
                 value: value.to_string(),
             },
-            SetVariableValue::Ident(value) => catalog::Op::UpdateSystemConfiguration {
-                name,
-                value: value.to_string(),
-            },
-            SetVariableValue::Default => catalog::Op::ResetSystemConfiguration { name },
         };
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;

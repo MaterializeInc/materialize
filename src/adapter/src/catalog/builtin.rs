@@ -1416,6 +1416,18 @@ pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinS
         .with_column("details", ScalarType::Jsonb.nullable(true)),
 });
 
+pub static MZ_SINK_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_sink_status_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    data_source: Some(IntrospectionType::SinkStatusHistory),
+    desc: RelationDesc::empty()
+        .with_column("occurred_at", ScalarType::TimestampTz.nullable(false))
+        .with_column("sink_id", ScalarType::String.nullable(false))
+        .with_column("status", ScalarType::String.nullable(false))
+        .with_column("error", ScalarType::String.nullable(true))
+        .with_column("details", ScalarType::Jsonb.nullable(true)),
+});
+
 pub static MZ_STORAGE_USAGE_BY_SHARD: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_storage_usage_by_shard",
     schema: MZ_INTERNAL_SCHEMA,
@@ -2682,6 +2694,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_INHERITS),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
+        Builtin::Source(&MZ_SINK_STATUS_HISTORY),
         Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),
         Builtin::Source(&MZ_STORAGE_SHARDS),
         Builtin::View(&MZ_STORAGE_USAGE),

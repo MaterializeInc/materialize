@@ -66,6 +66,12 @@ url = "/sql/create-sink/"
 weight= 60
 
 [[menu.main]]
+name = "Clusters"
+parent = "reference"
+url = "/sql/create-cluster/"
+weight= 65
+
+[[menu.main]]
 name = "Queries (`SELECT`)"
 parent = "reference"
 url = "/sql/select/"
@@ -88,6 +94,13 @@ name = "SQL commands"
 identifier = "commands"
 parent = "reference"
 weight = 100
+
+[[menu.main]]
+identifier = "cs_connections"
+name = "Connections"
+parent = "create-source"
+url = "/sql/create-connection/"
+weight= 100
 
 [[menu.main]]
 name = "SQL patterns"

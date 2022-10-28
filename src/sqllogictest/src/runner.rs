@@ -673,6 +673,7 @@ impl Runner {
                 now: SYSTEM_TIME.clone(),
             },
             secrets_controller: Arc::clone(&orchestrator) as Arc<dyn SecretsController>,
+            cloud_resource_controller: None,
             // Setting the port to 0 means that the OS will automatically
             // allocate an available port.
             sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -690,6 +691,7 @@ impl Runner {
             cluster_replica_sizes: Default::default(),
             bootstrap_default_cluster_replica_size: "1".into(),
             bootstrap_builtin_cluster_replica_size: "1".into(),
+            bootstrap_system_vars: None,
             storage_host_sizes: Default::default(),
             default_storage_host_size: None,
             availability_zones: Default::default(),

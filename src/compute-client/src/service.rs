@@ -106,7 +106,11 @@ pub struct PartitionedComputeState<T> {
     peek_responses: HashMap<Uuid, HashMap<usize, PeekResponse>>,
     /// Tracks in-progress `SUBSCRIBE`s, and the stashed rows we are holding
     /// back until their timestamps are complete.
-    pending_subscribes: HashMap<GlobalId, Option<(MutableAntichain<T>, Vec<(T, Row, Diff)>)>>,
+    ///
+    /// The updates may be `Err` if any of the batches have reported an error, in which case the
+    /// subscribe is permanently borked.
+    pending_subscribes:
+        HashMap<GlobalId, Option<(MutableAntichain<T>, Result<Vec<(T, Row, Diff)>, String>)>>,
 }
 
 impl<T> Partitionable<ComputeCommand<T>, ComputeResponse<T>>
@@ -274,7 +278,7 @@ where
                 let maybe_entry = self.pending_subscribes.entry(id).or_insert_with(|| {
                     let mut frontier = MutableAntichain::new();
                     frontier.update_iter(std::iter::once((T::minimum(), self.parts as i64)));
-                    Some((frontier, Vec::new()))
+                    Some((frontier, Ok(Vec::new())))
                 });
 
                 let entry = match maybe_entry {
@@ -296,26 +300,45 @@ where
                         let old_frontier = entry.0.frontier().to_owned();
                         entry.0.update_iter(lower.iter().map(|t| (t.clone(), -1)));
                         entry.0.update_iter(upper.iter().map(|t| (t.clone(), 1)));
-                        entry.1.append(&mut updates);
                         let new_frontier = entry.0.frontier().to_owned();
-                        if old_frontier != new_frontier {
-                            consolidate_updates(&mut entry.1);
-                            let mut ship = Vec::new();
-                            let mut keep = Vec::new();
-                            for (time, data, diff) in entry.1.drain(..) {
-                                if new_frontier.less_equal(&time) {
-                                    keep.push((time, data, diff));
-                                } else {
-                                    ship.push((time, data, diff));
-                                }
+                        match (&mut entry.1, &mut updates) {
+                            (Err(_), _) => {
+                                // Subscribe is borked; nothing to do.
+                                // TODO: Consider refreshing error?
                             }
-                            entry.1 = keep;
+                            (_, Err(text)) => {
+                                entry.1 = Err(text.clone());
+                            }
+                            (Ok(stashed_updates), Ok(updates)) => {
+                                stashed_updates.append(updates);
+                            }
+                        }
+
+                        // If the frontier has advanced, it is time to announce a thing.
+                        if old_frontier != new_frontier {
+                            let updates = match &mut entry.1 {
+                                Ok(stashed_updates) => {
+                                    consolidate_updates(stashed_updates);
+                                    let mut ship = Vec::new();
+                                    let mut keep = Vec::new();
+                                    for (time, data, diff) in stashed_updates.drain(..) {
+                                        if new_frontier.less_equal(&time) {
+                                            keep.push((time, data, diff));
+                                        } else {
+                                            ship.push((time, data, diff));
+                                        }
+                                    }
+                                    entry.1 = Ok(keep);
+                                    Ok(ship)
+                                }
+                                Err(text) => Err(text.clone()),
+                            };
                             Some(Ok(ComputeResponse::SubscribeResponse(
                                 id,
                                 SubscribeResponse::Batch(SubscribeBatch {
                                     lower: old_frontier,
                                     upper: new_frontier,
-                                    updates: ship,
+                                    updates,
                                 }),
                             )))
                         } else {

@@ -516,6 +516,7 @@ mz_active_peeks                                 log   <null>
 mz_scheduling_elapsed_internal                  log   <null>
 mz_raw_compute_operator_durations_internal      log   <null>
 mz_scheduling_parks_internal                    log   <null>
+mz_sink_status_history                          source <null>
 mz_source_status_history                        source <null>
 mz_storage_shards                               source <null>
 mz_worker_compute_frontiers                     log   <null>

@@ -396,6 +396,10 @@ message ProtoUnaryFunc {
         google.protobuf.Empty cast_uint32_to_mz_timestamp = 274;
         google.protobuf.Empty cast_int32_to_mz_timestamp = 275;
         google.protobuf.Empty step_mz_timestamp = 276;
+        google.protobuf.Empty cast_bool_to_int64 = 277;
+        google.protobuf.Empty cast_uint16_to_int16 = 278;
+        google.protobuf.Empty cast_uint32_to_int16 = 279;
+        google.protobuf.Empty cast_uint64_to_int16 = 280;
     }
 }
 

@@ -65,8 +65,8 @@ SHOW SOURCES;
 ```nofmt
          name         |   type    |  size
 ----------------------+-----------+---------
- table_1              | subsource | 3xsmall
- table_2              | subsource | 3xsmall
+ table_1              | subsource |
+ table_2              | subsource |
  mz_source            | postgres  | 3xsmall
 ```
 
@@ -139,7 +139,7 @@ CREATE CONNECTION pg_connection TO POSTGRES (
 );
 ```
 
-### Creating a source
+### Creating a source {#create-source-example}
 
 ```sql
 CREATE SOURCE mz_source

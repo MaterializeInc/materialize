@@ -512,8 +512,8 @@ fn test_auth_expiry() -> Result<(), Box<dyn Error>> {
     )]);
     let encoding_key = EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap())?;
 
-    const EXPIRES_IN_SECS: u64 = 2;
-    const REFRESH_BEFORE_SECS: u64 = 1;
+    const EXPIRES_IN_SECS: u64 = 5;
+    const REFRESH_BEFORE_SECS: u64 = 4;
     let frontegg_server = start_mzcloud(
         encoding_key,
         tenant_id,
@@ -591,7 +591,7 @@ fn test_auth_expiry() -> Result<(), Box<dyn Error>> {
         .store(false, Ordering::Relaxed);
     wait_for_refresh();
     // Sleep until the expiry future should resolve.
-    std::thread::sleep(Duration::from_secs(EXPIRES_IN_SECS - REFRESH_BEFORE_SECS));
+    std::thread::sleep(Duration::from_secs(EXPIRES_IN_SECS + 1));
     assert!(pg_client.query_one("SELECT current_user", &[]).is_err());
 
     Ok(())

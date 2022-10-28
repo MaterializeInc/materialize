@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use crossbeam_channel::TryRecvError;
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::ShardId;
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -68,7 +69,8 @@ pub struct StorageState {
     /// Descriptions of each installed ingestion.
     pub ingestions: HashMap<GlobalId, IngestionDescription<CollectionMetadata>>,
     /// Descriptions of each installed export.
-    pub exports: HashMap<GlobalId, StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>>,
+    pub exports:
+        HashMap<GlobalId, StorageSinkDesc<CollectionMetadata, ShardId, mz_repr::Timestamp>>,
     /// Undocumented
     pub now: NowFn,
     /// Metrics for the source-specific side of dataflows.

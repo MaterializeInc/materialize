@@ -593,6 +593,7 @@ impl BatchWriteMetrics {
 #[derive(Debug)]
 pub struct CompactionMetrics {
     pub(crate) requested: IntCounter,
+    pub(crate) dropped: IntCounter,
     pub(crate) skipped: IntCounter,
     pub(crate) started: IntCounter,
     pub(crate) applied: IntCounter,
@@ -604,6 +605,9 @@ pub struct CompactionMetrics {
     pub(crate) memory_violations: IntCounter,
     pub(crate) runs_compacted: IntCounter,
     pub(crate) chunks_compacted: IntCounter,
+    pub(crate) not_all_prefetched: IntCounter,
+    pub(crate) parts_prefetched: IntCounter,
+    pub(crate) parts_waited: IntCounter,
 
     pub(crate) applied_exact_match: IntCounter,
     pub(crate) applied_subset_match: IntCounter,
@@ -627,6 +631,10 @@ impl CompactionMetrics {
             requested: registry.register(metric!(
                 name: "mz_persist_compaction_requested",
                 help: "count of total compaction requests",
+            )),
+            dropped: registry.register(metric!(
+                name: "mz_persist_compaction_dropped",
+                help: "count of total compaction requests dropped due to a full queue",
             )),
             skipped: registry.register(metric!(
                 name: "mz_persist_compaction_skipped",
@@ -671,6 +679,18 @@ impl CompactionMetrics {
             chunks_compacted: registry.register(metric!(
                 name: "mz_persist_compaction_chunks_compacted",
                 help: "count of run chunks compacted",
+            )),
+            not_all_prefetched: registry.register(metric!(
+                name: "mz_persist_compaction_not_all_prefetched",
+                help: "count of compactions where not all inputs were prefetched",
+            )),
+            parts_prefetched: registry.register(metric!(
+                name: "mz_persist_compaction_parts_prefetched",
+                help: "count of compaction parts completely prefetched by the time they're needed",
+            )),
+            parts_waited: registry.register(metric!(
+                name: "mz_persist_compaction_parts_waited",
+                help: "count of compaction parts that had to be waited on",
             )),
             applied_exact_match: registry.register(metric!(
                 name: "mz_persist_compaction_applied_exact_match",
@@ -860,6 +880,8 @@ impl CodecMetrics {
 pub struct StateMetrics {
     pub(crate) apply_spine_fast_path: IntCounter,
     pub(crate) apply_spine_slow_path: IntCounter,
+    pub(crate) apply_spine_slow_path_lenient: IntCounter,
+    pub(crate) apply_spine_slow_path_lenient_adjustment: IntCounter,
     pub(crate) apply_spine_slow_path_with_reconstruction: IntCounter,
     pub(crate) update_state_fast_path: IntCounter,
     pub(crate) update_state_slow_path: IntCounter,
@@ -876,6 +898,14 @@ impl StateMetrics {
             apply_spine_slow_path: registry.register(metric!(
                 name: "mz_persist_state_apply_spine_slow_path",
                 help: "count of spine diff applications that hit the slow path",
+            )),
+            apply_spine_slow_path_lenient: registry.register(metric!(
+                name: "mz_persist_state_apply_spine_slow_path_lenient",
+                help: "count of spine diff applications that hit the lenient compaction apply path",
+            )),
+            apply_spine_slow_path_lenient_adjustment: registry.register(metric!(
+                name: "mz_persist_state_apply_spine_slow_path_lenient_adjustment",
+                help: "count of adjustments made by the lenient compaction apply path",
             )),
             apply_spine_slow_path_with_reconstruction: registry.register(metric!(
                 name: "mz_persist_state_apply_spine_slow_path_with_reconstruction",

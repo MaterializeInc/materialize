@@ -235,8 +235,8 @@ async fn try_run_sql(
             if &actual.len() != num_values {
                 bail!(
                     "wrong row count: expected:\n{:?}\ngot:\n{:?}\n",
-                    actual.len(),
                     num_values,
+                    actual.len(),
                 )
             } else {
                 let mut hasher = Md5::new();
@@ -292,7 +292,7 @@ pub async fn run_fail_sql(
     cmd: FailSqlCommand,
     state: &mut State,
 ) -> Result<ControlFlow, anyhow::Error> {
-    use Statement::{Commit, Rollback};
+    use Statement::{Commit, Fetch, Rollback};
 
     let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
         .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e));
@@ -326,6 +326,8 @@ pub async fn run_fail_sql(
         // been aborted, retrying COMMIT or ROLLBACK will actually start succeeding, which
         // causes testdrive to emit a confusing "query succeded but expected error" message.
         Some(Commit(_)) | Some(Rollback(_)) => false,
+        // FETCH should not be retried because it consumes data on each response.
+        Some(Fetch(_)) => false,
         Some(_) => true,
     };
 
@@ -497,6 +499,9 @@ pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error>
                 mz_pgrepr::oid::TYPE_UINT8_OID => {
                     row.get::<_, Option<Uint8>>(i).map(|x| x.0.to_string())
                 }
+                mz_pgrepr::oid::TYPE_MZ_TIMESTAMP_OID => {
+                    row.get::<_, Option<MzTimestamp>>(i).map(|x| x.0)
+                }
                 _ => bail!("unsupported SQL type in testdrive: {:?}", ty),
             },
         }
@@ -549,6 +554,18 @@ impl<'a> FromSql<'a> for Uint8 {
     }
 }
 
+struct MzTimestamp(String);
+
+impl<'a> FromSql<'a> for MzTimestamp {
+    fn from_sql(_: &Type, raw: &'a [u8]) -> Result<MzTimestamp, Box<dyn Error + Sync + Send>> {
+        Ok(MzTimestamp(std::str::from_utf8(raw)?.to_string()))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        ty.oid() == mz_pgrepr::oid::TYPE_MZ_TIMESTAMP_OID
+    }
+}
+
 struct TestdriveRow<'a>(&'a Vec<String>);
 
 impl Display for TestdriveRow<'_> {
@@ -556,7 +573,7 @@ impl Display for TestdriveRow<'_> {
         let mut cols = Vec::<String>::new();
 
         for col_str in &self.0[0..self.0.len()] {
-            if col_str.contains(' ') || col_str.contains('"') {
+            if col_str.contains(' ') || col_str.contains('"') || col_str.is_empty() {
                 cols.push(format!("{:?}", col_str));
             } else {
                 cols.push(col_str.to_string());

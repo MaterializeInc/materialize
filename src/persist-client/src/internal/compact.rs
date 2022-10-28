@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, VecDeque};
 use std::fmt::Debug;
 use std::iter::Peekable;
 use std::marker::PhantomData;
@@ -23,6 +23,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::TryFutureExt;
 use mz_ore::cast::CastFrom;
+use mz_ore::task::spawn;
 use mz_persist::indexed::columnar::{
     ColumnarRecordsBuilder, ColumnarRecordsVecBuilder, KEY_VAL_DATA_MAX_LEN,
 };
@@ -30,14 +31,15 @@ use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
 use timely::PartialOrder;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 use tokio::sync::{mpsc, oneshot, TryAcquireError};
+use tokio::task::JoinHandle;
 use tracing::log::warn;
-use tracing::{debug, debug_span, info, trace, Instrument, Span};
+use tracing::{debug, debug_span, trace, Instrument, Span};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::batch::BatchParts;
-use crate::fetch::fetch_batch_part;
+use crate::fetch::{fetch_batch_part, EncodedPart};
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::state::{HollowBatch, HollowBatchPart};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
@@ -72,46 +74,44 @@ pub struct CompactRes<T> {
 /// merging adjacent batches. Logical compaction is advancing timestamps to a
 /// new since and consolidating the resulting updates.
 #[derive(Debug, Clone)]
-pub struct Compactor<T, D> {
+pub struct Compactor<K, V, T, D> {
     cfg: PersistConfig,
     metrics: Arc<Metrics>,
-    sender: UnboundedSender<(CompactReq<T>, oneshot::Sender<()>)>,
+    sender: Sender<(CompactReq<T>, Machine<K, V, T, D>, oneshot::Sender<()>)>,
     _phantom: PhantomData<fn() -> D>,
 }
 
-impl<T, D> Compactor<T, D>
+impl<K, V, T, D> Compactor<K, V, T, D>
 where
+    K: Debug + Codec,
+    V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send,
 {
-    pub fn new<K, V>(
-        machine: Machine<K, V, T, D>,
+    pub fn new(
+        cfg: PersistConfig,
+        metrics: Arc<Metrics>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         writer_id: WriterId,
-    ) -> Self
-    where
-        K: Debug + Codec,
-        V: Debug + Codec,
-    {
+    ) -> Self {
         let (compact_req_sender, mut compact_req_receiver) =
-            mpsc::unbounded_channel::<(CompactReq<T>, oneshot::Sender<()>)>();
+            mpsc::channel::<(CompactReq<T>, Machine<K, V, T, D>, oneshot::Sender<()>)>(
+                cfg.compaction_queue_size,
+            );
         let concurrency_limit = Arc::new(tokio::sync::Semaphore::new(
-            machine.cfg.compaction_concurrency_limit,
+            cfg.compaction_concurrency_limit,
         ));
-        let metrics = Arc::clone(&machine.metrics);
-        let cfg = machine.cfg.clone();
 
         // spin off a single task responsible for executing compaction requests.
         // work is enqueued into the task through a channel
         let _worker_handle = mz_ore::task::spawn(|| "PersistCompactionWorker", async move {
-            while let Some((req, completer)) = compact_req_receiver.recv().await {
+            while let Some((req, mut machine, completer)) = compact_req_receiver.recv().await {
                 assert_eq!(req.shard_id, machine.shard_id());
 
                 let cfg = machine.cfg.clone();
                 let blob = Arc::clone(&machine.state_versions.blob);
                 let metrics = Arc::clone(&machine.metrics);
                 let cpu_heavy_runtime = Arc::clone(&cpu_heavy_runtime);
-                let mut machine = machine.clone();
                 let writer_id = writer_id.clone();
                 let permit = {
                     let inner = Arc::clone(&concurrency_limit);
@@ -266,6 +266,7 @@ where
     pub fn compact_and_apply_background(
         &self,
         req: CompactReq<T>,
+        machine: &Machine<K, V, T, D>,
     ) -> Option<oneshot::Receiver<()>> {
         // Run some initial heuristics to ignore some requests for compaction.
         // We don't gain much from e.g. compacting two very small batches that
@@ -273,6 +274,8 @@ where
         // (especially in aggregate). This heuristic is something we'll need to
         // tune over time.
         let should_compact = req.inputs.len() >= self.cfg.compaction_heuristic_min_inputs
+            || req.inputs.iter().map(|x| x.parts.len()).sum::<usize>()
+                >= self.cfg.compaction_heuristic_min_parts
             || req.inputs.iter().map(|x| x.len).sum::<usize>()
                 >= self.cfg.compaction_heuristic_min_updates;
         if !should_compact {
@@ -284,11 +287,15 @@ where
         let new_compaction_sender = self.sender.clone();
 
         self.metrics.compaction.requested.inc();
-        let send = new_compaction_sender.send((req, compaction_completed_sender));
-        if let Err(e) = send {
-            // In the steady state we expect this to always succeed, but during
-            // shutdown it is possible the destination task has already spun down
-            info!("compact_and_apply_background failed to send request: {}", e);
+        // NB: we intentionally pass along the input machine, as it ought to come from the
+        // writer that generated the compaction request / maintenance. this machine has a
+        // spine structure that generated the request, so it has a much better chance of
+        // merging and committing the result than a machine kept up-to-date through state
+        // diffs, which may have a different spine structure less amendable to merging.
+        let send =
+            new_compaction_sender.try_send((req, machine.clone(), compaction_completed_sender));
+        if let Err(_) = send {
+            self.metrics.compaction.dropped.inc();
             return None;
         }
 
@@ -530,6 +537,15 @@ where
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
     ) -> Result<(Vec<HollowBatchPart>, Vec<usize>, usize), anyhow::Error> {
+        // TODO: Figure out a more principled way to allocate our memory budget.
+        // Currently, we give any excess budget to write parallelism. If we had
+        // to pick between 100% towards writes vs 100% towards reads, then reads
+        // is almost certainly better, but the ideal is probably somewhere in
+        // between the two.
+        //
+        // For now, invent some some extra budget out of thin air for prefetch.
+        let prefetch_budget_bytes = 2 * cfg.blob_target_size;
+
         let mut compaction_runs = vec![];
         let mut compaction_parts_count = 0;
         let mut total_updates = 0;
@@ -541,25 +557,39 @@ where
 
         let mut remaining_updates_by_run = vec![0; runs.len()];
         let mut runs: Vec<_> = runs
-            .iter()
-            .map(|(part_desc, parts)| (part_desc, parts.into_iter()))
+            .into_iter()
+            .map(|(part_desc, parts)| {
+                (
+                    part_desc,
+                    parts
+                        .into_iter()
+                        .map(|x| CompactionPart::Queued(x))
+                        .collect::<VecDeque<_>>(),
+                )
+            })
             .collect();
 
         let mut timings = Timings::default();
 
+        start_prefetches(prefetch_budget_bytes, &mut runs, shard_id, &blob, &metrics);
+
+        let all_prefetched = runs
+            .iter()
+            .all(|(_, x)| x.iter().all(|x| x.is_prefetched()));
+        if !all_prefetched {
+            metrics.compaction.not_all_prefetched.inc();
+        }
+
         // populate our heap with the updates from the first part of each run
         for (index, (part_desc, parts)) in runs.iter_mut().enumerate() {
-            if let Some(part) = parts.next() {
+            if let Some(part) = parts.pop_front() {
                 let start = Instant::now();
-                let mut part = fetch_batch_part(
-                    shard_id,
-                    blob.as_ref(),
-                    &metrics,
-                    &metrics.read.compaction,
-                    &part.key,
-                    part_desc,
-                )
-                .await?;
+                let mut part = part
+                    .join(shard_id, blob.as_ref(), &metrics, part_desc)
+                    .await?;
+                // Ideally we'd hook into start_prefetches here, too, but runs
+                // is mutable borrowed. Not the end of the world. Instead do it
+                // once after this initial heap population.
                 timings.part_fetching += start.elapsed();
                 let start = Instant::now();
                 while let Some((k, v, mut t, d)) = part.next() {
@@ -575,6 +605,8 @@ where
             }
         }
 
+        start_prefetches(prefetch_budget_bytes, &mut runs, shard_id, &blob, &metrics);
+
         // repeatedly pull off the least element from our heap, refilling from the originating run
         // if needed. the heap will be exhausted only when all parts from all input runs have been
         // consumed.
@@ -583,17 +615,18 @@ where
             if remaining_updates_by_run[index] == 0 {
                 // repopulate from the originating run, if any parts remain
                 let (part_desc, parts) = &mut runs[index];
-                if let Some(part) = parts.next() {
+                if let Some(part) = parts.pop_front() {
                     let start = Instant::now();
-                    let mut part = fetch_batch_part(
-                        shard_id,
-                        blob.as_ref(),
-                        &metrics,
-                        &metrics.read.compaction,
-                        &part.key,
-                        part_desc,
-                    )
-                    .await?;
+                    let mut part = part
+                        .join(shard_id, blob.as_ref(), &metrics, part_desc)
+                        .await?;
+                    // start_prefetches is O(n) so calling it here is O(n^2). N
+                    // is the number of things we're about to fetch over the
+                    // network, so if it's big enough for N^2 to matter, we've
+                    // got bigger problems. It might be possible to do make this
+                    // overall linear, but the bookkeeping would be pretty
+                    // subtle.
+                    start_prefetches(prefetch_budget_bytes, &mut runs, shard_id, &blob, &metrics);
                     timings.part_fetching += start.elapsed();
                     let start = Instant::now();
                     while let Some((k, v, mut t, d)) = part.next() {
@@ -847,12 +880,128 @@ impl<'a, T> Iterator for HollowBatchRunIter<'a, T> {
     }
 }
 
+#[derive(Debug)]
+enum CompactionPart<'a, T> {
+    Queued(&'a HollowBatchPart),
+    Prefetched(usize, JoinHandle<Result<EncodedPart<T>, anyhow::Error>>),
+}
+
+impl<'a, T: Timestamp + Lattice + Codec64> CompactionPart<'a, T> {
+    fn is_prefetched(&self) -> bool {
+        match self {
+            CompactionPart::Queued(_) => false,
+            CompactionPart::Prefetched(_, _) => true,
+        }
+    }
+
+    async fn join(
+        self,
+        shard_id: &ShardId,
+        blob: &(dyn Blob + Send + Sync),
+        metrics: &Metrics,
+        part_desc: &Description<T>,
+    ) -> Result<EncodedPart<T>, anyhow::Error> {
+        match self {
+            CompactionPart::Prefetched(_, task) => {
+                if task.is_finished() {
+                    metrics.compaction.parts_prefetched.inc();
+                } else {
+                    metrics.compaction.parts_waited.inc();
+                }
+                task.await.map_err(anyhow::Error::new)?
+            }
+            CompactionPart::Queued(part) => {
+                metrics.compaction.parts_waited.inc();
+                fetch_batch_part(
+                    shard_id,
+                    blob,
+                    metrics,
+                    &metrics.read.compaction,
+                    &part.key,
+                    part_desc,
+                )
+                .await
+            }
+        }
+    }
+}
+
+fn start_prefetches<T: Timestamp + Lattice + Codec64>(
+    mut prefetch_budget_bytes: usize,
+    runs: &mut Vec<(&Description<T>, VecDeque<CompactionPart<'_, T>>)>,
+    shard_id: &ShardId,
+    blob: &Arc<dyn Blob + Send + Sync>,
+    metrics: &Arc<Metrics>,
+) {
+    // First account for how much budget has already been used
+    for (_, run) in runs.iter() {
+        for part in run.iter() {
+            if let CompactionPart::Prefetched(cost_bytes, _) = part {
+                prefetch_budget_bytes = prefetch_budget_bytes.saturating_sub(*cost_bytes);
+            }
+        }
+    }
+
+    // Then iterate through parts in a certain order (attempting to match the
+    // order in which they'll be fetched), prefetching until we run out of
+    // budget.
+    //
+    // The order used here is the first part of each run, then the second, etc.
+    // There's a bunch of heuristics we could use here, but we'd get it exactly
+    // correct if we stored on HollowBatchPart the actual kv bounds of data
+    // contained in each part and go in sorted order of that. This information
+    // would also be useful for pushing MFP down into persist reads, so it seems
+    // like we might want to do it at some point. As a result, don't think too
+    // hard about this heuristic at first.
+    let max_run_len = runs.iter().map(|(_, x)| x.len()).max().unwrap_or_default();
+    for idx in 0..max_run_len {
+        for (part_desc, run) in runs.iter_mut() {
+            let c_part = match run.get_mut(idx) {
+                Some(x) => x,
+                None => continue,
+            };
+            let part = match c_part {
+                CompactionPart::Queued(x) => x,
+                CompactionPart::Prefetched(_, _) => continue,
+            };
+            let cost_bytes = part.encoded_size_bytes;
+            if prefetch_budget_bytes < cost_bytes {
+                return;
+            }
+            prefetch_budget_bytes -= cost_bytes;
+            let span = debug_span!("compaction::prefetch");
+            let shard_id = *shard_id;
+            let blob = Arc::clone(blob);
+            let metrics = Arc::clone(metrics);
+            let part_key = part.key.clone();
+            let part_desc = part_desc.clone();
+            let handle = spawn(
+                || "persist::compaction::prefetch",
+                async move {
+                    fetch_batch_part(
+                        &shard_id,
+                        blob.as_ref(),
+                        &metrics,
+                        &metrics.read.compaction,
+                        &part_key,
+                        &part_desc,
+                    )
+                    .await
+                }
+                .instrument(span),
+            );
+            *c_part = CompactionPart::Prefetched(cost_bytes, handle);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::internal::paths::PartialBatchKey;
     use crate::PersistLocation;
     use timely::progress::Antichain;
 
-    use crate::tests::{all_ok, expect_fetch_part, new_test_client_cache};
+    use crate::tests::{all_ok, expect_fetch_part, new_test_client, new_test_client_cache};
 
     use super::*;
 
@@ -898,7 +1047,7 @@ mod tests {
             ),
             inputs: vec![b0, b1],
         };
-        let res = Compactor::<u64, i64>::compact(
+        let res = Compactor::<String, (), u64, i64>::compact(
             write.cfg.clone(),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
@@ -920,5 +1069,100 @@ mod tests {
         .await;
         assert_eq!(part.desc, res.output.desc);
         assert_eq!(updates, all_ok(&data, 10));
+    }
+
+    #[tokio::test]
+    async fn prefetches() {
+        let desc = Description::new(
+            Antichain::from_elem(0u64),
+            Antichain::new(),
+            Antichain::new(),
+        );
+        let input_parts = (0..=9)
+            .map(|encoded_size_bytes| HollowBatchPart {
+                key: PartialBatchKey("".into()),
+                encoded_size_bytes,
+            })
+            .collect::<Vec<_>>();
+        let parse = |x: &str| {
+            x.split('|')
+                .map(|run| {
+                    let parts = run
+                        .split(',')
+                        .map(|x| {
+                            let encoded_size_bytes = x.get(1..).unwrap().parse::<usize>().unwrap();
+                            match x.get(..1).unwrap() {
+                                " " => CompactionPart::Queued(&input_parts[encoded_size_bytes]),
+                                "f" => CompactionPart::Prefetched(
+                                    encoded_size_bytes,
+                                    spawn(|| "", async {
+                                        tokio::time::sleep(Duration::from_secs(1_000_000)).await;
+                                        unreachable!("boom")
+                                    }),
+                                ),
+                                x => panic!("unknown {}", x),
+                            }
+                        })
+                        .collect::<VecDeque<_>>();
+                    (&desc, parts)
+                })
+                .collect::<Vec<_>>()
+        };
+        let print = |x: &Vec<(&Description<u64>, VecDeque<CompactionPart<'_, u64>>)>| {
+            x.iter()
+                .map(|(_, x)| {
+                    x.iter()
+                        .map(|x| match x {
+                            CompactionPart::Queued(x) => format!(" {}", x.encoded_size_bytes),
+                            CompactionPart::Prefetched(x, _) => format!("f{}", x),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+                .collect::<Vec<_>>()
+                .join("|")
+        };
+
+        let client = new_test_client().await;
+
+        let shard_id = ShardId::new();
+        let blob = &client.blob;
+        let metrics = &client.metrics;
+
+        // NB: In the below, parts within a run are separated by `,` and runs
+        // are separated by `|`. Example: `r0p0,r0p1|r1p0|r2p0,r2p1,r2p2`
+
+        // Enough budget for none, some, and all parts of a single run
+        let mut runs = parse(" 1, 1, 1");
+        start_prefetches(0, &mut runs, &shard_id, blob, metrics);
+        assert_eq!(print(&runs), " 1, 1, 1");
+
+        let mut runs = parse(" 1, 1, 1");
+        start_prefetches(1, &mut runs, &shard_id, blob, metrics);
+        assert_eq!(print(&runs), "f1, 1, 1");
+
+        let mut runs = parse(" 1, 1, 1");
+        start_prefetches(3, &mut runs, &shard_id, blob, metrics);
+        assert_eq!(print(&runs), "f1,f1,f1");
+
+        // Budget partially covers some part (which is then not prefetched)
+        let mut runs = parse(" 1| 2| 2");
+        start_prefetches(4, &mut runs, &shard_id, blob, metrics);
+        assert_eq!(print(&runs), "f1|f2| 2");
+
+        // Runs of length > 1
+        let mut runs = parse(" 1, 1, 1, 1| 1| 1, 1, 1");
+        start_prefetches(5, &mut runs, &shard_id, blob, metrics);
+        assert_eq!(print(&runs), "f1,f1, 1, 1|f1|f1,f1, 1");
+
+        // Some budget is already used from a previous call
+        let mut runs = parse(" 1| 1|f1,f1");
+        start_prefetches(3, &mut runs, &shard_id, blob, metrics);
+        assert_eq!(print(&runs), "f1| 1|f1,f1");
+
+        // Sanity check budget has gone down (no panics)
+        let mut runs = parse(" 1| 1|f9");
+        start_prefetches(1, &mut runs, &shard_id, blob, metrics);
+        assert_eq!(print(&runs), " 1| 1|f9");
     }
 }

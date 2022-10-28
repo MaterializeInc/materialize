@@ -8,11 +8,6 @@ menu:
 
 `INSERT` writes values to [user-defined tables](../create-table).
 
-{{< warning >}}
-At the moment, tables do not persist any data that is inserted. This means that restarting a
-Materialize instance will lose any data that was previously stored in a table.
-{{< /warning >}}
-
 ## Conceptual framework
 
 You might want to `INSERT` data into tables when:
@@ -35,11 +30,6 @@ _query_ | A [`SELECT`](../select) statements whose returned rows you want to wri
 ## Details
 
 The optional `RETURNING` clause causes `INSERT` to return values based on each inserted row.
-
-### Restrictions
-
-Tables do not persist any data that is inserted. This means that restarting a
-Materialize instance will lose any data that was previously stored in a table.
 
 ## Examples
 

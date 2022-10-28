@@ -98,6 +98,7 @@ impl MetadataExport<mz_repr::Timestamp> for MetadataExportFetcher {
 pub enum IntrospectionType {
     /// We're not responsible for appending to this collection automatically, but we should
     /// automatically bump the write frontier from time to time.
+    SinkStatusHistory,
     SourceStatusHistory,
     ShardMapping,
 }
@@ -143,7 +144,7 @@ impl<T> From<RelationDesc> for CollectionDescription<T> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExportDescription<T = mz_repr::Timestamp> {
-    pub sink: StorageSinkDesc<(), T>,
+    pub sink: StorageSinkDesc<(), GlobalId, T>,
     /// The address of a `storaged` process on which to install the sink or the
     /// settings for spinning up a controller-managed process.
     pub host_config: StorageHostConfig,
@@ -291,7 +292,28 @@ pub trait StorageController: Debug + Send {
         policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>,
     ) -> Result<(), StorageError>;
 
-    /// Accept write frontier updates from the compute layer.
+    /// Ingests write frontier updates for collections that this controller
+    /// maintains and potentially generates updates to read capabilities, which
+    /// are passed on to [`StorageController::update_read_capabilities`].
+    ///
+    /// These updates come from the entity that is responsible for writing to
+    /// the collection, and in turn advancing its `upper` (aka
+    /// `write_frontier`). The most common such "writers" are:
+    ///
+    /// * `storaged` instances, for source ingestions
+    ///
+    /// * introspection collections (which this controller writes to)
+    ///
+    /// * Tables (which are written to by this controller)
+    ///
+    /// * Materialized Views, which are running inside COMPUTE, and for which
+    /// COMPUTE sends updates to this storage controller
+    ///
+    /// The so-called "implied capability" is a read capability for a collection
+    /// that is updated based on the write frontier and the collections
+    /// [`ReadPolicy`]. Advancing the write frontier might change this implied
+    /// capability, which in turn might change the overall `since` (a
+    /// combination of all read capabilities) of a collection.
     async fn update_write_frontiers(
         &mut self,
         updates: &[(GlobalId, Antichain<Self::Timestamp>)],
@@ -950,8 +972,9 @@ where
                             self.truncate_managed_collection(id).await;
                             self.initialize_shard_mapping().await;
                         }
-                        IntrospectionType::SourceStatusHistory => {
-                            // nothing to do: only storaged writes rows to the collection
+                        IntrospectionType::SourceStatusHistory
+                        | IntrospectionType::SinkStatusHistory => {
+                            // nothing to do: only storaged writes rows to these collections
                         }
                     }
                 }
@@ -1074,6 +1097,16 @@ where
                 .initial_as_of
                 .maybe_fast_forward(&from_since);
 
+            let status_id = if let Some(status_collection_id) = description.sink.status_id {
+                Some(
+                    self.collection(status_collection_id)?
+                        .collection_metadata
+                        .data_shard,
+                )
+            } else {
+                None
+            };
+
             let cmd = CreateSinkCommand {
                 id,
                 description: StorageSinkDesc {
@@ -1082,6 +1115,7 @@ where
                     connection: description.sink.connection,
                     envelope: description.sink.envelope,
                     as_of,
+                    status_id,
                     from_storage_metadata,
                 },
             };
@@ -1904,7 +1938,7 @@ mod persist_read_handles {
             match self.tx.send((tracing::Span::current(), cmd)) {
                 Ok(()) => (), // All good!
                 Err(e) => {
-                    tracing::error!("could not forward command: {:?}", e);
+                    tracing::trace!("could not forward command: {:?}", e);
                 }
             }
         }
@@ -1913,7 +1947,7 @@ mod persist_read_handles {
 
 mod persist_write_handles {
 
-    use std::collections::{BTreeMap, VecDeque};
+    use std::collections::{BTreeMap, HashSet, VecDeque};
 
     use differential_dataflow::lattice::Lattice;
     use futures::stream::FuturesUnordered;
@@ -2013,7 +2047,9 @@ mod persist_write_handles {
                                             }
                                         }
                                         PersistWorkerCmd::Append(updates, response) => {
+                                            let mut ids = HashSet::new();
                                             for (id, update, upper) in updates {
+                                                ids.insert(id);
                                                 let (old_span, updates, old_upper) =
                                                     all_updates.entry(id).or_insert_with(|| {
                                                         (
@@ -2036,7 +2072,7 @@ mod persist_write_handles {
                                                 updates.extend(update);
                                                 old_upper.join_assign(&Antichain::from_elem(upper));
                                             }
-                                            all_responses.push(response);
+                                            all_responses.push((ids, response));
                                         }
                                         PersistWorkerCmd::MonotonicAppend(updates, response) => {
                                             let mut updates_outer = Vec::with_capacity(updates.len());
@@ -2194,9 +2230,20 @@ mod persist_write_handles {
                                 let result =
                                     append_work(&mut frontier_responses, &mut write_handles, all_updates).await;
 
-                                // It is not an error for the other end to hang up.
-                                for response in all_responses {
-                                    let _ = response.send(result.clone().map_err(StorageError::InvalidUppers));
+                                for (ids, response) in all_responses {
+                                    let result = match &result {
+                                        Err(bad_ids) => {
+                                            let filtered: Vec<_> = bad_ids.iter().filter(|id| ids.contains(id)).copied().collect();
+                                            if filtered.is_empty() {
+                                                Ok(())
+                                            } else {
+                                                Err(StorageError::InvalidUppers(filtered))
+                                            }
+                                        }
+                                        Ok(()) => Ok(()),
+                                    };
+                                    // It is not an error for the other end to hang up.
+                                    let _ = response.send(result);
                                 }
 
                                 if shutdown {
@@ -2273,7 +2320,7 @@ mod persist_write_handles {
             match self.tx.send((tracing::Span::current(), cmd)) {
                 Ok(()) => (), // All good!
                 Err(e) => {
-                    tracing::error!("could not forward command: {:?}", e);
+                    tracing::trace!("could not forward command: {:?}", e);
                 }
             }
         }

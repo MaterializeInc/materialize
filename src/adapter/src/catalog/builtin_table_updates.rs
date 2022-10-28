@@ -344,6 +344,9 @@ impl CatalogState {
                     }
                     mz_storage::types::connections::Connection::Postgres { .. } => "postgres",
                     mz_storage::types::connections::Connection::Aws(..) => "aws",
+                    mz_storage::types::connections::Connection::AwsPrivateLink(..) => {
+                        "aws-privatelink"
+                    }
                     mz_storage::types::connections::Connection::Ssh { .. } => "ssh-tunnel",
                 }),
             ]),
@@ -366,7 +369,8 @@ impl CatalogState {
             }
             mz_storage::types::connections::Connection::Csr(_)
             | mz_storage::types::connections::Connection::Postgres(_)
-            | mz_storage::types::connections::Connection::Aws(_) => {}
+            | mz_storage::types::connections::Connection::Aws(_)
+            | mz_storage::types::connections::Connection::AwsPrivateLink(_) => {}
         };
         updates
     }

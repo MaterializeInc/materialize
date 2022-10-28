@@ -15,23 +15,27 @@
 <div id="wrapper">
     <div id="header">
       <h1>{{ title }}</h1>
-      <form id="search-form">
+      <form id="search-form" onsubmit="download('trace.mzfg', mzfg)">
             <button id="reset-zoom-button" type="button">Reset zoom</button>
             <div class="separator"></div>
             <input id="search-input" type="text" placeholder="Filter...">
             <button id="clear-button" type="button">Clear</button>
+            <input id="load-file" type="file" />
+            <button id="save-file" type="submit">Save current trace</button>
         </form>
     </div>
     <div id="chart"></div>
     <div id="extras">
-      {% for extra_line in extras %}
-      <p>{{ extra_line }}</p>
-      {% endfor %}
     </div>
     <div id="details"></div>
 </div>
 
 <script>
-renderFlamegraph({{ data_json|safe }}, {{ display_bytes|json }});
+  let mzfg = {{mzfg|json|safe}};
+  renderPageFromMzfg(mzfg);
+
+  document.getElementById('load-file').addEventListener('change', ev => {
+      loadFile(ev);
+  });
 </script>
 {% endblock %}
