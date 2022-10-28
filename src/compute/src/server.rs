@@ -565,7 +565,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         std::cell::RefCell::new(Vec::new()),
                     ),
                     sink_write_frontiers: HashMap::new(),
-                    pending_peeks: Vec::new(),
+                    pending_peeks: HashMap::new(),
                     reported_frontiers: HashMap::new(),
                     dropped_collections: Vec::new(),
                     compute_logger: None,
@@ -816,7 +816,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         if let Some(compute_state) = &mut self.compute_state {
             let mut command_history = ComputeCommandHistory::default();
             for command in new_commands.iter() {
-                command_history.push(command.clone());
+                command_history.push(command.clone(), &compute_state.pending_peeks);
             }
             compute_state.command_history = command_history;
         }
