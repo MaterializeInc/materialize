@@ -365,29 +365,30 @@ impl<T: TimestampManipulation> Session<T> {
     /// Sets the transaction ops to `TransactionOps::None`. Must only be used after
     /// verifying that no transaction anomalies will occur if cleared.
     pub fn clear_transaction_ops(&mut self) {
+        let _ = self.take_transaction_ops();
+    }
+
+    /// Sets the transaction ops to `TransactionOps::None`, returning the old ops
+    /// if any existed. Must only be used after verifying that no transaction
+    /// anomalies will occur if cleared.
+    pub fn take_transaction_ops(&mut self) -> Option<TransactionOps<T>> {
         if let Some(txn) = self.transaction.inner_mut() {
-            txn.ops = TransactionOps::None;
+            Some(std::mem::replace(&mut txn.ops, TransactionOps::None))
+        } else {
+            None
         }
     }
 
-    /// Returns the transaction's read timestamp, if set. Also returns the
-    /// transaction's timeline, if one exists.
+    /// Returns the transaction's read timestamp, if set.
     ///
     /// Returns `None` if there is no active transaction, or if the active
     /// transaction is not a read transaction.
     pub fn get_transaction_timestamp(&self) -> Option<T> {
-        // If the transaction already has a peek timestamp, use it. Otherwise generate
-        // one. We generate one even though we could check here that the transaction
-        // isn't in some other conflicting state because we want all of that logic to
-        // reside in add_transaction_ops.
         match self.transaction.inner() {
-            Some(Transaction {
-                pcx: _,
-                ops: TransactionOps::Peeks(ts),
-                write_lock_guard: _,
-                access: _,
-            }) => ts.clone().map(|(ts, _)| ts),
-            _ => None,
+            Some(Transaction { ops, .. }) => {
+                ops.get_read_timestamp_and_timeline().map(|(ts, _)| ts)
+            }
+            None => None,
         }
     }
 
@@ -804,6 +805,19 @@ pub enum TransactionOps<T> {
     /// This transaction has had a write (`INSERT`, `UPDATE`, `DELETE`) and must
     /// only do other writes, or reads whose timestamp is None (i.e. constants).
     Writes(Vec<WriteOp>),
+}
+
+impl<T: TimestampManipulation> TransactionOps<T> {
+    /// Returns the transaction's read timestamp, if set and read timeline,
+    /// if one exists.
+    ///
+    /// Returns `None` if there if the transaction ops is not a read transaction.
+    pub fn get_read_timestamp_and_timeline(&self) -> Option<(T, Option<Timeline>)> {
+        match self {
+            Self::Peeks(ts) => ts.clone(),
+            _ => None,
+        }
+    }
 }
 
 /// An `INSERT` waiting to be committed.

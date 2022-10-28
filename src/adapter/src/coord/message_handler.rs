@@ -30,8 +30,8 @@ use crate::coord::appends::{BuiltinTableUpdateSource, Deferred};
 use crate::{catalog, AdapterNotice};
 
 use crate::coord::{
-    Coordinator, CreateSourceStatementReady, Message, PendingReadTxn, PendingTxn, ReplicaMetadata,
-    SendDiffs, SinkConnectionReady,
+    Coordinator, CreateSourceStatementReady, Message, PendingReadTxn, ReplicaMetadata, SendDiffs,
+    SinkConnectionReady,
 };
 
 impl<S: Append + 'static> Coordinator<S> {
@@ -474,11 +474,11 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut deferred_txns = Vec::new();
 
         for read_txn in pending_read_txns {
-            if let Some((timestamp, Some(timeline))) = &read_txn.timestamp {
+            if let Some((timestamp, Some(timeline))) = &read_txn.timestamp() {
                 let timestamp_oracle = self.get_timestamp_oracle_mut(timeline);
                 let read_ts = timestamp_oracle.read_ts();
                 if timestamp <= &read_ts {
-                    ready_txns.push(read_txn.txn);
+                    ready_txns.push(read_txn);
                 } else {
                     let wait = Duration::from_millis(timestamp.saturating_sub(read_ts).into());
                     if wait < shortest_wait {
@@ -487,7 +487,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     deferred_txns.push(read_txn);
                 }
             } else {
-                ready_txns.push(read_txn.txn);
+                ready_txns.push(read_txn);
             }
         }
 
@@ -496,15 +496,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 .confirm_leadership()
                 .await
                 .expect("unable to confirm leadership");
-            for PendingTxn {
-                client_transmitter,
-                response,
-                mut session,
-                action,
-            } in ready_txns
-            {
-                session.vars_mut().end_transaction(action);
-                client_transmitter.send(response, session);
+            for ready_txn in ready_txns {
+                ready_txn.finish();
             }
         }
 

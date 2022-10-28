@@ -34,7 +34,7 @@ use mz_expr::{
 use mz_ore::ssh_key::SshKeyset;
 use mz_ore::task;
 use mz_repr::explain_new::Explainee;
-use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, ScalarType, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
 use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails};
 use mz_sql::names::QualifiedObjectName;
@@ -1936,7 +1936,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     == &IsolationLevel::StrictSerializable =>
             {
                 self.strict_serializable_reads_tx
-                    .send(PendingReadTxn {
+                    .send(PendingReadTxn::Read {
                         txn: PendingTxn {
                             client_transmitter: tx,
                             response,
@@ -2929,14 +2929,12 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
-        let ts = self.get_local_read_ts();
-        let ts = MirScalarExpr::literal_ok(Datum::from(ts), ScalarType::MzTimestamp);
         let peek_response = match self
             .sequence_peek(
                 &mut session,
                 PeekPlan {
                     source: selection,
-                    when: QueryWhen::AtTimestamp(ts),
+                    when: QueryWhen::Immediately,
                     finishing,
                     copy_to: None,
                 },
@@ -2953,6 +2951,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let timeout_dur = *session.vars().statement_timeout();
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();
+        let strict_serializable_reads_tx = self.strict_serializable_reads_tx.clone();
         task::spawn(|| format!("sequence_read_then_write:{id}"), async move {
             let arena = RowArena::new();
             let diffs = match peek_response {
@@ -3075,6 +3074,46 @@ impl<S: Append + 'static> Coordinator<S> {
             } else {
                 diffs
             };
+
+            // We need to clear out the read ops so the write doesn't fail in a
+            // read only transaction.
+            let ops = session.take_transaction_ops();
+            if let Some(ops) = ops {
+                let ts = ops.get_read_timestamp_and_timeline();
+                // No matter what isolation level the client is using, we must linearize this
+                // read. The write will be performed right after this, as part of a single
+                // transaction, so the write must have a timestamp greater than or equal to the
+                // read.
+                //
+                // Note: It's only OK for the write to have a greater timestamp than the read
+                // because the write lock prevents any other writes from happening in between
+                // the read and write.
+                if let Some((read_ts, Some(timeline))) = ts {
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    let result = strict_serializable_reads_tx.send(PendingReadTxn::ReadThenWrite {
+                        tx,
+                        timestamp: (read_ts, timeline),
+                    });
+                    // It is not an error for these results to be ready after `strict_serializable_reads_rx` has been dropped.
+                    if let Err(e) = result {
+                        warn!(
+                            "strict_serializable_reads_tx dropped before we could send: {:?}",
+                            e
+                        );
+                        return;
+                    }
+                    let result = rx.await;
+                    // It is not an error for these results to be ready after `tx` has been dropped.
+                    if let Err(e) = result {
+                        warn!(
+                        "tx used to linearize read in read then write transaction dropped before we could send: {:?}",
+                        e
+                    );
+                        return;
+                    }
+                }
+            }
+
             // It is not an error for these results to be ready after `internal_cmd_rx` has been dropped.
             let result = internal_cmd_tx.send(Message::SendDiffs(SendDiffs {
                 session,

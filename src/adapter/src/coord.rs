@@ -299,11 +299,55 @@ pub struct PendingTxn {
 
 #[derive(Debug)]
 /// A pending read transaction waiting to be committed.
-pub struct PendingReadTxn {
-    /// The inner transaction.
-    txn: PendingTxn,
-    /// The timestamp of the transaction, if one exists.
-    timestamp: Option<(mz_repr::Timestamp, Option<Timeline>)>,
+pub enum PendingReadTxn {
+    Read {
+        /// The inner transaction.
+        txn: PendingTxn,
+        /// The timestamp of the transaction, if one exists.
+        timestamp: Option<(mz_repr::Timestamp, Option<Timeline>)>,
+    },
+    ReadThenWrite {
+        /// Channel used to alert the transaction that the read has been linearized.
+        tx: oneshot::Sender<()>,
+        /// Timestamp and timeline of the read.
+        timestamp: (mz_repr::Timestamp, Timeline),
+    },
+}
+
+impl PendingReadTxn {
+    /// Return the timestamp and timeline of the pending transaction, if one exists.
+    pub fn timestamp(&self) -> Option<(mz_repr::Timestamp, Option<Timeline>)> {
+        match &self {
+            PendingReadTxn::Read { timestamp, .. } => timestamp.clone(),
+            PendingReadTxn::ReadThenWrite {
+                timestamp: (timestamp, timeline),
+                ..
+            } => Some((*timestamp, Some(timeline.clone()))),
+        }
+    }
+
+    /// Alert the client that the read has been linearized.
+    pub fn finish(self) {
+        match self {
+            PendingReadTxn::Read {
+                txn:
+                    PendingTxn {
+                        client_transmitter,
+                        response,
+                        mut session,
+                        action,
+                    },
+                ..
+            } => {
+                session.vars_mut().end_transaction(action);
+                client_transmitter.send(response, session);
+            }
+            PendingReadTxn::ReadThenWrite { tx, .. } => {
+                // Ignore errors if the caller has hung up.
+                let _ = tx.send(());
+            }
+        }
+    }
 }
 
 /// Glues the external world to the Timely workers.
