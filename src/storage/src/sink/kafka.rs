@@ -784,10 +784,6 @@ impl KafkaSinkState {
     /// This will emit a progress record to the progress topic if the frontier
     /// advanced and advance the maintained write frontier, which will in turn
     /// unblock compaction of timestamp bindings in sources.
-    ///
-    /// *NOTE*: Progress records will only be emitted when
-    /// `KafkaSinkConnection.consistency` points to a progress topic. The
-    /// write frontier will be advanced regardless.
     async fn maybe_emit_progress(
         &mut self,
         mut input_frontier: Antichain<Timestamp>,
