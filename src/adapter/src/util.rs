@@ -7,10 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::fmt::Debug;
+
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
 use mz_compute_client::controller::ComputeInstanceId;
+use mz_ore::halt;
 use mz_ore::soft_assert;
 use mz_repr::{GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql::names::FullObjectName;
@@ -19,7 +22,7 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     CreateIndexStatement, FetchStatement, Ident, Raw, RawClusterName, RawObjectName, Statement,
 };
-use mz_stash::Append;
+use mz_stash::{Append, StashError};
 
 use crate::catalog::Catalog;
 use crate::command::{Command, Response};
@@ -230,4 +233,54 @@ pub fn describe<S: Append>(
 pub struct ComputeSinkId {
     pub compute_instance: ComputeInstanceId,
     pub global_id: GlobalId,
+}
+
+pub trait ResultExt<T> {
+    // Like [`Result::expect`], but terminates the process with `halt` instead
+    // of `panic` if the underlying error is a condition that should halt the
+    // rather than panic the process.
+    fn unwrap_or_terminate(self, context: &str) -> T;
+}
+
+impl<T, E> ResultExt<T> for Result<T, E>
+where
+    E: ShouldHalt + Debug,
+{
+    fn unwrap_or_terminate(self, context: &str) -> T {
+        match self {
+            Ok(t) => t,
+            Err(e) if e.should_halt() => halt!("{context}: {e:?}"),
+            Err(e) => panic!("{context}: {e:?}"),
+        }
+    }
+}
+
+/// A trait for errors that should halt rather than panic the process.
+trait ShouldHalt {
+    /// Reports whether the error should halt rather than panic the process.
+    fn should_halt(&self) -> bool;
+}
+
+impl ShouldHalt for AdapterError {
+    fn should_halt(&self) -> bool {
+        match self {
+            AdapterError::Catalog(e) => e.should_halt(),
+            _ => false,
+        }
+    }
+}
+
+impl ShouldHalt for crate::catalog::Error {
+    fn should_halt(&self) -> bool {
+        match &self.kind {
+            crate::catalog::ErrorKind::Stash(e) => e.should_halt(),
+            _ => false,
+        }
+    }
+}
+
+impl ShouldHalt for StashError {
+    fn should_halt(&self) -> bool {
+        self.is_fence()
+    }
 }

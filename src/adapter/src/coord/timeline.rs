@@ -31,6 +31,7 @@ use crate::client::ConnectionId;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
 use crate::coord::Coordinator;
+use crate::util::ResultExt;
 use crate::AdapterError;
 
 /// Timestamps used by writes in an Append command.
@@ -249,7 +250,7 @@ impl<T: TimestampManipulation> DurableTimestampOracle<T> {
             self.durable_timestamp = ts.step_forward_by(&self.persist_interval);
             persist_fn(self.durable_timestamp.clone())
                 .await
-                .expect("can't persist timestamp");
+                .unwrap_or_terminate("can't persist timestamp");
         }
     }
 }

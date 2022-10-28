@@ -27,6 +27,7 @@ use mz_stash::Append;
 
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred};
+use crate::util::ResultExt;
 use crate::{catalog, AdapterNotice};
 
 use crate::coord::{
@@ -460,7 +461,7 @@ impl<S: Append + 'static> Coordinator<S> {
             |_| Ok(()),
         )
         .await
-        .expect("updating compute instance status cannot fail");
+        .unwrap_or_terminate("updating compute instance status cannot fail");
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -468,7 +469,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog
             .confirm_leadership()
             .await
-            .expect("unable to confirm leadership");
+            .unwrap_or_terminate("unable to confirm leadership");
         for PendingTxn {
             client_transmitter,
             response,

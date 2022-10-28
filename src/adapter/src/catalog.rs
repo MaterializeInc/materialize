@@ -82,7 +82,7 @@ use crate::catalog::storage::{BootstrapArgs, Transaction};
 use crate::client::ConnectionId;
 use crate::session::vars::SystemVars;
 use crate::session::{PreparedStatement, Session, User, DEFAULT_DATABASE_NAME};
-use crate::util::index_sql;
+use crate::util::{index_sql, ResultExt};
 use crate::{AdapterError, DUMMY_AVAILABILITY_ZONE};
 
 use self::builtin::BuiltinSource;
@@ -406,7 +406,9 @@ impl CatalogState {
         replica_id: u64,
     ) {
         for (variant, source_id) in &logging.sources {
-            let oid = self.allocate_oid().expect("cannot return error here");
+            let oid = self
+                .allocate_oid()
+                .unwrap_or_terminate("cannot return error here");
             // TODO(lh): Once we get rid of legacy active logs, we should refactor the
             // CatalogItem::Log. For now  we just use the log variant to lookup the unique CatalogItem
             // in BUILTINS.
@@ -448,7 +450,9 @@ impl CatalogState {
 
             match item {
                 Ok(item) => {
-                    let oid = self.allocate_oid().expect("cannot return error here");
+                    let oid = self
+                        .allocate_oid()
+                        .unwrap_or_terminate("cannot return error here");
                     let view_name = QualifiedObjectName {
                         qualifiers: ObjectQualifiers {
                             database_spec: ResolvedDatabaseSpecifier::Ambient,
@@ -686,7 +690,9 @@ impl CatalogState {
             // The OID counter is an i32, and could plausibly be exhausted.
             // Preallocating OIDs for each logging index is eminently
             // doable, but annoying enough that we don't bother now.
-            let oid = self.allocate_oid().expect("cannot return error here");
+            let oid = self
+                .allocate_oid()
+                .unwrap_or_terminate("cannot return error here");
             let log_id = self.resolve_builtin_log(log);
             self.insert_item(
                 index_id,
@@ -5074,7 +5080,7 @@ impl<S: Append> Catalog<S> {
                     .expect("builtin logs should fit into u64"),
             )
             .await
-            .expect("cannot fail to allocate system ids");
+            .unwrap_or_terminate("cannot fail to allocate system ids");
         BUILTINS::logs().zip(system_ids.into_iter()).collect()
     }
 
@@ -5093,7 +5099,7 @@ impl<S: Append> Catalog<S> {
             .await
             .allocate_system_ids(log_amount)
             .await
-            .expect("cannot fail to allocate system ids");
+            .unwrap_or_terminate("cannot fail to allocate system ids");
 
         DEFAULT_LOG_VIEWS
             .clone()
@@ -5120,7 +5126,7 @@ impl<S: Append> Catalog<S> {
             .await
             .allocate_system_ids(log_amount)
             .await
-            .expect("cannot fail to allocate system ids");
+            .unwrap_or_terminate("cannot fail to allocate system ids");
 
         DEFAULT_LOG_VARIANTS
             .clone()
