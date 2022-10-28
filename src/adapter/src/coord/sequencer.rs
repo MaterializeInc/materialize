@@ -3075,42 +3075,39 @@ impl<S: Append + 'static> Coordinator<S> {
                 diffs
             };
 
-            // We need to clear out the read ops so the write doesn't fail in a
+            // We need to clear out the read ops so the write doesn't fail due to a
             // read only transaction.
-            let ops = session.take_transaction_ops();
-            if let Some(ops) = ops {
-                let ts = ops.get_read_timestamp_and_timeline();
-                // No matter what isolation level the client is using, we must linearize this
-                // read. The write will be performed right after this, as part of a single
-                // transaction, so the write must have a timestamp greater than or equal to the
-                // read.
-                //
-                // Note: It's only OK for the write to have a greater timestamp than the read
-                // because the write lock prevents any other writes from happening in between
-                // the read and write.
-                if let Some((read_ts, Some(timeline))) = ts {
-                    let (tx, rx) = tokio::sync::oneshot::channel();
-                    let result = strict_serializable_reads_tx.send(PendingReadTxn::ReadThenWrite {
-                        tx,
-                        timestamp: (read_ts, timeline),
-                    });
-                    // It is not an error for these results to be ready after `strict_serializable_reads_rx` has been dropped.
-                    if let Err(e) = result {
-                        warn!(
-                            "strict_serializable_reads_tx dropped before we could send: {:?}",
-                            e
-                        );
-                        return;
-                    }
-                    let result = rx.await;
-                    // It is not an error for these results to be ready after `tx` has been dropped.
-                    if let Err(e) = result {
-                        warn!(
+            let read_ops = session.take_transaction_read_ops();
+            // No matter what isolation level the client is using, we must linearize this
+            // read. The write will be performed right after this, as part of a single
+            // transaction, so the write must have a timestamp greater than or equal to the
+            // read.
+            //
+            // Note: It's only OK for the write to have a greater timestamp than the read
+            // because the write lock prevents any other writes from happening in between
+            // the read and write.
+            if let Some((read_ts, Some(timeline))) = read_ops {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let result = strict_serializable_reads_tx.send(PendingReadTxn::ReadThenWrite {
+                    tx,
+                    timestamp: (read_ts, timeline),
+                });
+                // It is not an error for these results to be ready after `strict_serializable_reads_rx` has been dropped.
+                if let Err(e) = result {
+                    warn!(
+                        "strict_serializable_reads_tx dropped before we could send: {:?}",
+                        e
+                    );
+                    return;
+                }
+                let result = rx.await;
+                // It is not an error for these results to be ready after `tx` has been dropped.
+                if let Err(e) = result {
+                    warn!(
                         "tx used to linearize read in read then write transaction dropped before we could send: {:?}",
                         e
                     );
-                        return;
-                    }
+                    return;
                 }
             }
 
