@@ -761,7 +761,7 @@ impl KafkaSinkState {
 
     /// Asserts that the write frontier has not yet advanced beyond `t`.
     fn assert_progress(&self, ts: &Timestamp) {
-        assert!(self.write_frontier.borrow().less_equal(ts));
+        assert!(self.write_frontier.borrow().less_than(ts));
     }
 
     /// Updates the latest progress update timestamp to `latest_update_ts` if it
