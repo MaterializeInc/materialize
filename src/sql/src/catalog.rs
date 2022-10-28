@@ -296,6 +296,10 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
 
     /// Returns the name of `object_id`. For use only in error messages and notices.
     fn get_object_name(&self, object_id: &ObjectId) -> String;
+
+    /// Returns the minimal qualification required to unambiguously specify
+    /// `qualified_name`.
+    fn minimal_qualification(&self, qualified_name: &QualifiedItemName) -> PartialItemName;
 }
 
 /// Configuration associated with a catalog.

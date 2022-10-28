@@ -7220,46 +7220,11 @@ impl ConnCatalog<'_> {
     ) -> Result<&QualifiedItemName, SqlCatalogError> {
         self.resolve_item(name).map(|entry| entry.name())
     }
-
-    /// returns a `PartialItemName` with the minimum amount of qualifiers to unambiguously resolve
-    /// the object.
-    fn minimal_qualification(&self, qualified_name: &QualifiedItemName) -> PartialItemName {
-        let database_id = match &qualified_name.qualifiers.database_spec {
-            ResolvedDatabaseSpecifier::Ambient => None,
-            ResolvedDatabaseSpecifier::Id(id)
-                if self.database.is_some() && self.database == Some(*id) =>
-            {
-                None
-            }
-            ResolvedDatabaseSpecifier::Id(id) => Some(id.clone()),
-        };
-
-        let schema_spec = if database_id.is_none()
-            && self.resolve_item_name(&PartialItemName {
-                database: None,
-                schema: None,
-                item: qualified_name.item.clone(),
-            }) == Ok(qualified_name)
-        {
-            None
-        } else {
-            // If `search_path` does not contain `full_name.schema`, the
-            // `PartialName` must contain it.
-            Some(qualified_name.qualifiers.schema_spec.clone())
-        };
-
-        let res = PartialItemName {
-            database: database_id.map(|id| self.get_database(&id).name().to_string()),
-            schema: schema_spec.map(|spec| {
-                self.get_schema(&qualified_name.qualifiers.database_spec, &spec)
-                    .name()
-                    .schema
-                    .clone()
-            }),
-            item: qualified_name.item.clone(),
-        };
-        assert_eq!(self.resolve_item_name(&res), Ok(qualified_name));
-        res
+    fn resolve_function_name(
+        &self,
+        name: &PartialItemName,
+    ) -> Result<&QualifiedItemName, SqlCatalogError> {
+        self.resolve_function(name).map(|entry| entry.name())
     }
 }
 
@@ -7683,6 +7648,55 @@ impl SessionCatalog for ConnCatalog<'_> {
                 self.resolve_full_name(name).to_string()
             }
         }
+    }
+
+    /// Returns a [`PartialItemName`] with the minimum amount of qualifiers to unambiguously resolve
+    /// the object.
+    fn minimal_qualification(&self, qualified_name: &QualifiedItemName) -> PartialItemName {
+        let database_id = match &qualified_name.qualifiers.database_spec {
+            ResolvedDatabaseSpecifier::Ambient => None,
+            ResolvedDatabaseSpecifier::Id(id)
+                if self.database.is_some() && self.database == Some(*id) =>
+            {
+                None
+            }
+            ResolvedDatabaseSpecifier::Id(id) => Some(id.clone()),
+        };
+
+        let schema_spec = if database_id.is_none()
+            && self.resolve_item_name(&PartialItemName {
+                database: None,
+                schema: None,
+                item: qualified_name.item.clone(),
+            }) == Ok(qualified_name)
+            || self.resolve_function_name(&PartialItemName {
+                database: None,
+                schema: None,
+                item: qualified_name.item.clone(),
+            }) == Ok(qualified_name)
+        {
+            None
+        } else {
+            // If `search_path` does not contain `full_name.schema`, the
+            // `PartialName` must contain it.
+            Some(qualified_name.qualifiers.schema_spec.clone())
+        };
+
+        let res = PartialItemName {
+            database: database_id.map(|id| self.get_database(&id).name().to_string()),
+            schema: schema_spec.map(|spec| {
+                self.get_schema(&qualified_name.qualifiers.database_spec, &spec)
+                    .name()
+                    .schema
+                    .clone()
+            }),
+            item: qualified_name.item.clone(),
+        };
+        assert!(
+            self.resolve_item_name(&res) == Ok(qualified_name)
+                || self.resolve_function_name(&res) == Ok(qualified_name)
+        );
+        res
     }
 }
 
