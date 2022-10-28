@@ -27,7 +27,7 @@ use tokio_postgres::SimpleQueryMessage;
 use tracing::{error, info, warn};
 
 use mz_expr::{MirScalarExpr, PartitionId};
-use mz_ore::task;
+use mz_ore::{halt, task};
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 
@@ -409,15 +409,15 @@ async fn postgres_replication_loop_inner(
             }
             Err(ReplicationError::Indefinite(e)) => {
                 // TODO: In the future we probably want to handle this more gracefully,
-                // to avoid stressing out any monitoring tools,
-                // but for now panicking is the easiest way to dump the data in the pipe.
+                // but for now halting is the easiest way to dump the data in the pipe.
                 // The restarted storaged instance will restart the snapshot fresh, which will
                 // avoid any inconsistencies. Note that if the same lsn is chosen in the
                 // next snapshotting, the remapped timestamp chosen will be the same for
                 // both instances of storaged.
-                panic!(
+                halt!(
                     "replication snapshot for source {} failed: {}",
-                    &task_info.source_id, e
+                    &task_info.source_id,
+                    e
                 );
             }
             Err(ReplicationError::Definite(e)) => {

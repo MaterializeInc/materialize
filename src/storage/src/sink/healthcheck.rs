@@ -18,6 +18,7 @@ use timely::progress::Antichain;
 use tokio::sync::Mutex;
 use tracing::trace;
 
+use mz_ore::halt;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriteHandle;
@@ -81,8 +82,8 @@ impl Healthchecker {
         })
     }
 
-    /// Report a SinkStatus::Stalled and then panic with the same message
-    pub async fn report_stall_and_panic<S>(hc: Option<&mut Self>, msg: S) -> !
+    /// Report a SinkStatus::Stalled and then halt with the same message.
+    pub async fn report_stall_and_halt<S>(hc: Option<&mut Self>, msg: S) -> !
     where
         S: ToString + std::fmt::Debug,
     {
@@ -92,7 +93,7 @@ impl Healthchecker {
                 .await;
         }
 
-        panic!("{msg:?}")
+        halt!("{msg:?}")
     }
 
     /// Process a [`SinkStatus`] emitted by a sink

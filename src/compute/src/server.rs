@@ -38,6 +38,7 @@ use mz_compute_client::command::{
 };
 use mz_compute_client::response::ComputeResponse;
 use mz_compute_client::service::ComputeClient;
+use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
@@ -198,7 +199,13 @@ impl ClusterClient<PartitionedClient> {
         let timely = self.timely_container.lock().unwrap().take();
         let timely = match timely {
             Some(existing) => {
-                assert_eq!(existing.comm_config, comm_config);
+                if comm_config != existing.comm_config {
+                    halt!(
+                        "new timely configuration does not match existing timely configuration:\n{:?}\nvs\n{:?}",
+                        comm_config,
+                        existing.comm_config,
+                    );
+                }
                 info!("Timely already initialized; re-using.");
                 existing
             }
@@ -746,7 +753,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     }
                     ComputeCommand::CreateInstance(new_config) => {
                         // Cluster creation should not be performed again!
-                        assert_eq!(old_config, Some(new_config));
+                        if Some(new_config) != old_config {
+                            halt!(
+                                "new instance configuration does not match existing instance configuration:\n{:?}\nvs\n{:?}",
+                                new_config,
+                                old_config,
+                            );
+                        }
 
                         // Ensure we retain the logging sink dataflows.
                         if let Some(logging) = &new_config.logging {

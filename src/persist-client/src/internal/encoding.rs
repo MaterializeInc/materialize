@@ -21,6 +21,8 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use uuid::Uuid;
 
+use mz_ore::halt;
+
 use crate::error::CodecMismatch;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::state::{
@@ -75,9 +77,10 @@ pub(crate) fn parse_id(id_prefix: char, id_type: &str, encoded: &str) -> Result<
 // references, too.
 fn check_applier_version(build_version: &Version, applier_version: &Version) {
     if build_version < applier_version {
-        panic!(
+        halt!(
             "{} received persist state from the future {}",
-            build_version, applier_version
+            build_version,
+            applier_version,
         );
     }
 }
@@ -748,6 +751,8 @@ impl<T: Timestamp + Codec64> From<SerdeWriterEnrichedHollowBatch> for WriterEnri
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::Ordering;
+
     use mz_persist::location::SeqNo;
     use mz_persist_types::Codec;
 
@@ -776,6 +781,7 @@ mod tests {
         // But we can't read it back using v1 because v1 might corrupt it by
         // losing or misinterpreting something written out by a future version
         // of code.
+        mz_ore::process::PANIC_ON_HALT.store(true, Ordering::SeqCst);
         let v1_res = std::panic::catch_unwind(|| State::<(), (), u64, i64>::decode(&v1, &buf));
         assert!(v1_res.is_err());
     }
@@ -803,6 +809,7 @@ mod tests {
         // But we can't read it back using v1 because v1 might corrupt it by
         // losing or misinterpreting something written out by a future version
         // of code.
+        mz_ore::process::PANIC_ON_HALT.store(true, Ordering::SeqCst);
         let v1_res = std::panic::catch_unwind(|| StateDiff::<u64>::decode(&v1, &buf));
         assert!(v1_res.is_err());
     }

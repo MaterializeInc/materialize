@@ -464,8 +464,14 @@ pub struct StashError {
 }
 
 impl StashError {
-    // Returns whether the error is unrecoverable (retrying will never succeed).
+    /// Reports whether the error is unrecoverable (retrying will never
+    /// succeed).
     pub fn is_unrecoverable(&self) -> bool {
+        matches!(self.inner, InternalStashError::Fence(_))
+    }
+
+    /// Reports whether the error is a fence error.
+    pub fn is_fence(&self) -> bool {
         matches!(self.inner, InternalStashError::Fence(_))
     }
 }

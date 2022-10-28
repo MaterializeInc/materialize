@@ -21,6 +21,7 @@ use timely::progress::Timestamp as _;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, Mutex};
 
+use mz_ore::halt;
 use mz_ore::now::NowFn;
 use mz_repr::{GlobalId, Timestamp};
 
@@ -333,11 +334,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             // If we've been asked to create an ingestion that is
                             // already installed, the descriptions must match
                             // exactly.
-                            assert_eq!(
-                                *existing, ingestion.description,
-                                "New ingestion with same ID {:?}",
-                                ingestion.id,
-                            );
+                            if *existing != ingestion.description {
+                                halt!(
+                                    "new ingestion with ID {} does not match existing ingestion:\n{:?}\nvs\n{:?}",
+                                    ingestion.id,
+                                    ingestion.description,
+                                    existing,
+                                );
+                            }
                             false
                         } else {
                             true
