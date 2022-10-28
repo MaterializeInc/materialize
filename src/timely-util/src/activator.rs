@@ -246,7 +246,7 @@ impl LimitingActivator {
 
     pub fn activate_after(&mut self, duration: Duration) {
         let now = Instant::now();
-        if self.next_activation < now {
+        if self.next_activation <= now {
             self.next_activation = now + duration;
             self.inner.activate_after(duration);
         }
