@@ -27,7 +27,7 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, Mutex};
 
 use mz_compute_client::command::{
-    ComputeCommand, ComputeCommandHistory, DataflowDescription, InstanceConfig, Peek, ReplicaId,
+    ComputeCommand, ComputeCommandHistory, DataflowDescription, InstanceConfig, Peek,
 };
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::plan::Plan;
@@ -51,8 +51,6 @@ use crate::logging::compute::ComputeEvent;
 /// This state is restricted to the COMPUTE state, the deterministic, idempotent work
 /// done between data ingress and egress.
 pub struct ComputeState {
-    /// The ID of the replica this worker belongs to.
-    pub replica_id: ReplicaId,
     /// The traces available for sharing across dataflows.
     pub traces: TraceManager,
     /// Tokens that should be dropped when a dataflow is dropped to clean up
@@ -230,13 +228,6 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
     #[tracing::instrument(level = "debug", skip(self))]
     fn handle_peek(&mut self, peek: Peek) {
-        // Only handle peeks that are not targeted at a different replica.
-        if let Some(target) = peek.target_replica {
-            if target != self.compute_state.replica_id {
-                return;
-            }
-        }
-
         // Acquire a copy of the trace suitable for fulfilling the peek.
         let mut trace_bundle = self.compute_state.traces.get(&peek.id).unwrap().clone();
         let timestamp_frontier = Antichain::from_elem(peek.timestamp);
