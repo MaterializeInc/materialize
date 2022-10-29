@@ -3120,7 +3120,10 @@ impl<S: Append> Catalog<S> {
         // TODO(benesch): this check here is not sufficiently protective. It'd
         // be very easy for a code path to accidentally avoid this check by
         // calling `resolve_compute_instance(session.vars().cluster()`.
-        if session.user().name != SYSTEM_USER.name && session.vars().cluster() == SYSTEM_USER.name {
+        if session.user().name != SYSTEM_USER.name
+            && session.user().name != INTROSPECTION_USER.name
+            && session.vars().cluster() == SYSTEM_USER.name
+        {
             coord_bail!(
                 "system cluster '{}' cannot execute user queries",
                 SYSTEM_USER.name
