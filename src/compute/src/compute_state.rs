@@ -5,7 +5,6 @@
 
 //! Worker-local state for compute timely instances.
 
-use std::any::Any;
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 use std::num::NonZeroUsize;
@@ -46,6 +45,7 @@ use tracing::{span, Level};
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::compute::ComputeEvent;
+use crate::render::DataflowToken;
 
 /// Worker-local state that is maintained across dataflows.
 ///
@@ -92,7 +92,7 @@ impl ComputeState {
 }
 
 /// A wrapper around [ComputeState] with a live timely worker and response channel.
-pub struct ActiveComputeState<'a, A: Allocate> {
+pub struct ActiveComputeState<'a, A: Allocate + 'static> {
     /// The underlying Timely worker.
     pub timely_worker: &'a mut TimelyWorker<A>,
     /// The compute state itself.
@@ -104,12 +104,12 @@ pub struct ActiveComputeState<'a, A: Allocate> {
 /// A token that keeps a sink alive.
 pub struct SinkToken {
     /// The underlying token.
-    pub token: Box<dyn Any>,
+    pub token: DataflowToken,
     /// Whether the sink token is keeping a subscribe alive.
     pub is_subscribe: bool,
 }
 
-impl<'a, A: Allocate> ActiveComputeState<'a, A> {
+impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     /// Entrypoint for applying a compute command.
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
@@ -515,25 +515,25 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             let id = logging.active_logs[&log];
             self.compute_state
                 .traces
-                .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
+                .set(id, TraceBundle::new(trace, errs.clone(), token));
         }
         for (log, (trace, token)) in r_traces {
             let id = logging.active_logs[&log];
             self.compute_state
                 .traces
-                .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
+                .set(id, TraceBundle::new(trace, errs.clone(), token));
         }
         for (log, (trace, token)) in d_traces {
             let id = logging.active_logs[&log];
             self.compute_state
                 .traces
-                .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
+                .set(id, TraceBundle::new(trace, errs.clone(), token));
         }
         for (log, (trace, token)) in c_traces {
             let id = logging.active_logs[&log];
             self.compute_state
                 .traces
-                .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
+                .set(id, TraceBundle::new(trace, errs.clone(), token));
         }
 
         // Initialize frontier reporting for all logging indexes and sinks.

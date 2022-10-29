@@ -10,7 +10,6 @@
 //! Logic related to the creation of dataflow sinks.
 
 use std::any::Any;
-use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use differential_dataflow::Collection;
@@ -24,6 +23,7 @@ use mz_storage::types::errors::DataflowError;
 
 use crate::compute_state::SinkToken;
 use crate::render::context::Context;
+use crate::render::DataflowToken;
 
 impl<G> Context<G, Row, Timestamp>
 where
@@ -33,20 +33,11 @@ where
     pub(crate) fn export_sink(
         &mut self,
         compute_state: &mut crate::compute_state::ComputeState,
-        tokens: &mut std::collections::BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
-        import_ids: BTreeSet<GlobalId>,
+        dataflow_token: &DataflowToken,
         sink_id: GlobalId,
         sink: &ComputeSinkDesc<CollectionMetadata>,
     ) {
         let sink_render = get_sink_render_for(&sink.connection);
-
-        // put together tokens that belong to the export
-        let mut needed_tokens = Vec::new();
-        for import_id in import_ids {
-            if let Some(token) = tokens.get(&import_id) {
-                needed_tokens.push(Rc::clone(token))
-            }
-        }
 
         // TODO[btv] - We should determine the key and permutation to use during planning,
         // rather than at runtime.
@@ -79,13 +70,13 @@ where
         );
 
         if let Some(sink_token) = sink_token {
-            needed_tokens.push(sink_token);
+            dataflow_token.hold_legacy_token(sink_token);
         }
 
         compute_state.sink_tokens.insert(
             sink_id,
             SinkToken {
-                token: Box::new(needed_tokens),
+                token: dataflow_token.clone(),
                 is_subscribe: matches!(sink.connection, ComputeSinkConnection::Subscribe(_)),
             },
         );

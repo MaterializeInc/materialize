@@ -16,11 +16,13 @@ use mz_repr::{Diff, Row, Timestamp};
 use mz_storage::controller::CollectionMetadata;
 
 use crate::compute_state::ComputeState;
+use crate::render::DataflowToken;
 
 pub(crate) fn persist_sink<G>(
     target_id: GlobalId,
     target: &CollectionMetadata,
     compute_state: &mut ComputeState,
+    dataflow_token: &DataflowToken,
     log_collection: Collection<G, Row, Diff>,
 ) where
     G: Scope<Timestamp = Timestamp>,
@@ -31,10 +33,14 @@ pub(crate) fn persist_sink<G>(
     let token =
         crate::sink::persist_sink(target_id, target, desired_collection, as_of, compute_state);
 
+    if let Some(token) = token {
+        dataflow_token.hold_legacy_token(token);
+    }
+
     compute_state.sink_tokens.insert(
         target_id,
         crate::compute_state::SinkToken {
-            token: Box::new(token),
+            token: dataflow_token.clone(),
             is_subscribe: false,
         },
     );

@@ -298,7 +298,10 @@ impl CommandReceiverQueue {
     /// Block until a command is available.
     /// This method takes the worker as an argument such that it can step timely while no result
     /// is available.
-    fn recv<A: Allocate>(&mut self, worker: &mut Worker<A>) -> Result<ComputeCommand, RecvError> {
+    fn recv<A: Allocate + 'static>(
+        &mut self,
+        worker: &mut Worker<A>,
+    ) -> Result<ComputeCommand, RecvError> {
         while self.is_empty() {
             worker.timely_worker.step_or_park(None);
         }
@@ -328,7 +331,7 @@ type PartitionedClient = Partitioned<
 ///
 /// Much of this state can be viewed as local variables for the worker thread,
 /// holding state that persists across function calls.
-struct Worker<'w, A: Allocate> {
+struct Worker<'w, A: Allocate + 'static> {
     /// The underlying Timely worker.
     timely_worker: &'w mut TimelyWorker<A>,
     /// The channel over which communication handles for newly connected clients
@@ -342,7 +345,7 @@ struct Worker<'w, A: Allocate> {
     persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
 }
 
-impl<'w, A: Allocate> Worker<'w, A> {
+impl<'w, A: Allocate + 'static> Worker<'w, A> {
     /// Waits for client connections and runs them to completion.
     pub fn run(&mut self) {
         let mut shutdown = false;

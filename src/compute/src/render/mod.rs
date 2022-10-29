@@ -100,7 +100,8 @@
 //! stream. This reduces the amount of recomputation that must be performed
 //! if/when the errors are retracted.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::any::Any;
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -137,12 +138,64 @@ pub mod sinks;
 mod threshold;
 mod top_k;
 
+/// A token that expresses interest in the execution of a dataflow, perhaps because it is producing
+/// outputs that are useful to others.
+///
+/// When dropped the identified dataflow will be removed from the worker and will no longer be
+/// scheduled.
+#[derive(Clone)]
+pub struct DataflowToken {
+    inner: Rc<RefCell<DataflowTokenInner>>,
+}
+
+impl DataflowToken {
+    /// Constructs a dataflow token that corresponds to the next dataflow constructed on this
+    /// worker.
+    pub fn for_next_dataflow<A: Allocate + 'static>(worker: &TimelyWorker<A>) -> Self {
+        let mut worker = worker.clone();
+        let dataflow_id = worker.next_dataflow_index();
+        Self {
+            inner: Rc::new(RefCell::new(DataflowTokenInner {
+                dependencies: Vec::new(),
+                legacy_tokens: Vec::new(),
+                drop_logic: Box::new(move || worker.drop_dataflow(dataflow_id)),
+            })),
+        }
+    }
+
+    /// Declares a dependency of this dataflow to the execution of `dep`. Keeping this dataflow
+    /// alive will ensure the dependent dataflow is also kept alive.
+    pub fn add_dependency(&self, dep: DataflowToken) {
+        self.inner.borrow_mut().dependencies.push(dep);
+    }
+
+    /// Adds a legacy operator-local token to be held by this dataflow token.
+    pub fn hold_legacy_token(&self, dep: Rc<dyn Any>) {
+        self.inner.borrow_mut().legacy_tokens.push(dep);
+    }
+}
+
+struct DataflowTokenInner {
+    /// Tokens for the dataflows producing useful inputs for this dataflow.
+    dependencies: Vec<DataflowToken>,
+    /// Legacy per-operator tokens for this dataflow.
+    legacy_tokens: Vec<Rc<dyn Any>>,
+    /// The logic that drops the dataflow managed by this token.
+    drop_logic: Box<dyn FnMut()>,
+}
+
+impl Drop for DataflowTokenInner {
+    fn drop(&mut self) {
+        (self.drop_logic)()
+    }
+}
+
 /// Assemble the "compute"  side of a dataflow, i.e. all but the sources.
 ///
 /// This method imports sources from provided assets, and then builds the remaining
 /// dataflow using "compute-local" assets like shared arrangements, and producing
 /// both arrangements and sinks.
-pub fn build_compute_dataflow<A: Allocate>(
+pub fn build_compute_dataflow<A: Allocate + 'static>(
     timely_worker: &mut TimelyWorker<A>,
     compute_state: &mut ComputeState,
     dataflow: DataflowDescription<Plan, CollectionMetadata>,
@@ -150,6 +203,7 @@ pub fn build_compute_dataflow<A: Allocate>(
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
 
+    let dataflow_token = DataflowToken::for_next_dataflow(timely_worker);
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         // The scope.clone() occurs to allow import in the region.
         // We build a region here to establish a pattern of a scope inside the dataflow,
@@ -160,8 +214,6 @@ pub fn build_compute_dataflow<A: Allocate>(
                 &dataflow,
                 scope.addr().into_element(),
             );
-            let mut tokens = BTreeMap::new();
-
             // Import declared sources into the rendering context.
             for (source_id, (source, _monotonic)) in dataflow.source_imports.iter() {
                 let mut mfp = source.arguments.operators.clone().map(|ops| {
@@ -171,7 +223,7 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Note: For correctness, we require that sources only emit times advanced by
                 // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
-                let (mut ok_stream, err_stream, token) = persist_source::persist_source(
+                let (mut ok_stream, err_stream, source_token) = persist_source::persist_source(
                     region,
                     *source_id,
                     Arc::clone(&compute_state.persist_clients),
@@ -182,6 +234,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     // Copy the logic in DeltaJoin/Get/Join to start.
                     |_timer, count| count > 1_000_000,
                 );
+                dataflow_token.hold_legacy_token(source_token);
 
                 // If `mfp` is non-identity, we need to apply what remains.
                 // For the moment, assert that it is either trivial or `None`.
@@ -197,10 +250,6 @@ pub fn build_compute_dataflow<A: Allocate>(
                     );
                 }
 
-                // TODO(petrosagg): this is just wrapping an Arc<T> into an Rc<Arc<T>> to make the
-                // type checker happy. We should decide what we want our tokens to look like
-                let token = Rc::new(token) as Rc<dyn std::any::Any>;
-
                 let (oks, errs) = (ok_stream.as_collection(), err_stream.as_collection());
 
                 // Associate collection bundle with the source identifier.
@@ -208,13 +257,18 @@ pub fn build_compute_dataflow<A: Allocate>(
                     mz_expr::Id::Global(*source_id),
                     crate::render::CollectionBundle::from_collections(oks, errs),
                 );
-                // Associate returned tokens with the source identifier.
-                tokens.insert(*source_id, token);
             }
 
             // Import declared indexes into the rendering context.
             for (idx_id, idx) in &dataflow.index_imports {
-                context.import_index(compute_state, &mut tokens, scope, region, *idx_id, &idx.0);
+                context.import_index(
+                    compute_state,
+                    &dataflow_token,
+                    scope,
+                    region,
+                    *idx_id,
+                    &idx.0,
+                );
             }
 
             // We first determine indexes and sinks to export, then build the declared object, and
@@ -225,14 +279,14 @@ pub fn build_compute_dataflow<A: Allocate>(
             let indexes = dataflow
                 .index_exports
                 .iter()
-                .map(|(idx_id, (idx, _typ))| (*idx_id, dataflow.depends_on(idx.on_id), idx.clone()))
+                .map(|(idx_id, (idx, _typ))| (*idx_id, idx.clone()))
                 .collect::<Vec<_>>();
 
             // Determine sinks to export
             let sinks = dataflow
                 .sink_exports
                 .iter()
-                .map(|(sink_id, sink)| (*sink_id, dataflow.depends_on(sink.from), sink.clone()))
+                .map(|(sink_id, sink)| (*sink_id, sink.clone()))
                 .collect::<Vec<_>>();
 
             // Build declared objects.
@@ -241,13 +295,13 @@ pub fn build_compute_dataflow<A: Allocate>(
             }
 
             // Export declared indexes.
-            for (idx_id, imports, idx) in indexes {
-                context.export_index(compute_state, &mut tokens, imports, idx_id, &idx);
+            for (idx_id, idx) in indexes {
+                context.export_index(compute_state, &dataflow_token, idx_id, &idx);
             }
 
             // Export declared sinks.
-            for (sink_id, imports, sink) in sinks {
-                context.export_sink(compute_state, &mut tokens, imports, sink_id, &sink);
+            for (sink_id, sink) in sinks {
+                context.export_sink(compute_state, &dataflow_token, sink_id, &sink);
             }
         });
     })
@@ -304,21 +358,21 @@ where
     pub(crate) fn import_index(
         &mut self,
         compute_state: &mut ComputeState,
-        tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
+        dataflow_token: &DataflowToken,
         scope: &mut G,
         region: &mut Child<'g, G, T>,
         idx_id: GlobalId,
         idx: &IndexDesc,
     ) {
         if let Some(traces) = compute_state.traces.get_mut(&idx_id) {
-            let token = traces.to_drop().clone();
-            let (ok_arranged, ok_button) = traces.oks_mut().import_frontier_core(
+            dataflow_token.add_dependency(traces.token().clone());
+            let (ok_arranged, _ok_button) = traces.oks_mut().import_frontier_core(
                 scope,
                 &format!("Index({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
                 self.until.clone(),
             );
-            let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
+            let (err_arranged, _err_button) = traces.errs_mut().import_frontier_core(
                 scope,
                 &format!("ErrIndex({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
@@ -332,10 +386,6 @@ where
                     idx.key.clone(),
                     ArrangementFlavor::Trace(idx_id, ok_arranged, err_arranged),
                 ),
-            );
-            tokens.insert(
-                idx_id,
-                Rc::new((ok_button.press_on_drop(), err_button.press_on_drop(), token)),
             );
         } else {
             panic!(
@@ -368,18 +418,10 @@ where
     pub(crate) fn export_index(
         &mut self,
         compute_state: &mut ComputeState,
-        tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
-        import_ids: BTreeSet<GlobalId>,
+        dataflow_token: &DataflowToken,
         idx_id: GlobalId,
         idx: &IndexDesc,
     ) {
-        // put together tokens that belong to the export
-        let mut needed_tokens = Vec::new();
-        for import_id in import_ids {
-            if let Some(token) = tokens.get(&import_id) {
-                needed_tokens.push(Rc::clone(token));
-            }
-        }
         let bundle = self.lookup_id(Id::Global(idx_id)).unwrap_or_else(|| {
             panic!(
                 "Arrangement alarmingly absent! id: {:?}",
@@ -390,7 +432,7 @@ where
             Some(ArrangementFlavor::Local(oks, errs)) => {
                 compute_state.traces.set(
                     idx_id,
-                    TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
+                    TraceBundle::new(oks.trace, errs.trace, dataflow_token.clone()),
                 );
             }
             Some(ArrangementFlavor::Trace(gid, _, _)) => {

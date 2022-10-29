@@ -9,9 +9,7 @@
 
 //! Management of arrangements across dataflows.
 
-use std::any::Any;
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::time::Instant;
 
 use differential_dataflow::trace::TraceReader;
@@ -25,6 +23,7 @@ use mz_ore::metrics::{
 };
 use mz_repr::{GlobalId, Timestamp};
 
+use crate::render::DataflowToken;
 use crate::typedefs::{ErrsHandle, KeysValsHandle};
 
 /// Base metrics for arrangements.
@@ -187,36 +186,20 @@ impl TraceManager {
     }
 }
 
-/// Bundles together traces for the successful computations (`oks`), the
-/// failed computations (`errs`), additional tokens that should share
-/// the lifetime of the bundled traces (`to_drop`), and a permutation
+/// Bundles together traces for the successful computations (`oks`), the failed computations
+/// (`errs`), the dataflow token producing the boundled traces (`token`), and a permutation
 /// describing how to reconstruct the original row (`permutation`).
 #[derive(Clone)]
 pub struct TraceBundle {
     oks: KeysValsHandle,
     errs: ErrsHandle,
-    to_drop: Option<Rc<dyn Any>>,
+    token: DataflowToken,
 }
 
 impl TraceBundle {
     /// Constructs a new trace bundle out of an `oks` trace and `errs` trace.
-    pub fn new(oks: KeysValsHandle, errs: ErrsHandle) -> TraceBundle {
-        TraceBundle {
-            oks,
-            errs,
-            to_drop: None,
-        }
-    }
-
-    /// Adds tokens to be dropped when the trace bundle is dropped.
-    pub fn with_drop<T>(self, to_drop: T) -> TraceBundle
-    where
-        T: 'static,
-    {
-        TraceBundle {
-            to_drop: Some(Rc::new(Box::new(to_drop))),
-            ..self
-        }
+    pub fn new(oks: KeysValsHandle, errs: ErrsHandle, token: DataflowToken) -> TraceBundle {
+        TraceBundle { oks, errs, token }
     }
 
     /// Returns a mutable reference to the `oks` trace.
@@ -229,8 +212,8 @@ impl TraceBundle {
         &mut self.errs
     }
 
-    /// Returns a reference to the `to_drop` tokens.
-    pub fn to_drop(&self) -> &Option<Rc<dyn Any>> {
-        &self.to_drop
+    /// Returns a reference to the dataflow token producing this trace bundle.
+    pub fn token(&self) -> &DataflowToken {
+        &self.token
     }
 }
