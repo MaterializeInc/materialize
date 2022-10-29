@@ -4,7 +4,6 @@
 
 * Return the correct connection keys to the user on `dbt debug`.
 
-* Fail on index creation if the index already exists.
 
 * Disallow the `cluster` option for `view` materializations. In the new
   architecture, only materialized views and indexes are associated with a
