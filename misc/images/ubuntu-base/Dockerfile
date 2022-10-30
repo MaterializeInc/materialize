@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM ubuntu:jammy-20221003
+FROM ubuntu:jammy-20221020
 
 # Ensure any Rust binaries that crash print a backtrace.
 ENV RUST_BACKTRACE=1
