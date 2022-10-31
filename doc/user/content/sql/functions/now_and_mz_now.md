@@ -14,7 +14,7 @@ By contrast, `mz_now()` returns the logical time at which the query was executed
 
 For example, at 9pm, Materialize may choose to execute a query as of logical time 8:30pm, perhaps because data for 8:30–9pm has not yet arrived. In this scenario, `now()` would return 9pm, while `mz_now()` would return 8:30pm.
 
-`mz_now()`'s typical uses are:
+The typical uses of `mz_now()` are:
 
 * **Query timestamp introspection**
 
