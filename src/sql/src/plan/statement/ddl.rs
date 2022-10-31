@@ -656,7 +656,8 @@ pub fn plan_create_source(
                 let mut column_casts = vec![];
                 for (i, column) in table.columns.iter().enumerate() {
                     let ty = mz_pgrepr::Type::from_oid_and_typmod(column.type_oid, column.type_mod)
-                        .map_err(|e| sql_err!("{}", e))?;
+                        .expect("table with unsupported types filtered out during purification");
+
                     let data_type = scx.resolve_type(ty)?;
                     let scalar_type = query::scalar_type_from_sql(scx, &data_type)?;
 
@@ -681,13 +682,21 @@ pub fn plan_create_source(
                 table_casts.push(column_casts);
             }
 
+            let details =
+                PostgresSourceDetails::from_proto(details).map_err(|e| sql_err!("{}", e))?;
+
+            assert_eq!(
+                details.tables.len(),
+                table_casts.len(),
+                "assume each table has the appropriate table casts"
+            );
+
             let connection = GenericSourceConnection::Postgres(PostgresSourceConnection {
                 connection,
                 connection_id: connection_item.id(),
                 table_casts,
                 publication: publication.expect("validated exists during purification"),
-                details: PostgresSourceDetails::from_proto(details)
-                    .map_err(|e| sql_err!("{}", e))?,
+                details,
             });
 
             // The postgres source only outputs data to its subsources. The catalog object

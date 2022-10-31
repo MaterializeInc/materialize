@@ -13,6 +13,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail};
 use futures::{FutureExt, StreamExt};
+use itertools::Itertools;
 use once_cell::sync::Lazy;
 use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
@@ -255,7 +256,7 @@ impl SourceReader for PostgresSourceReader {
         if active_read_worker {
             let mut source_tables = HashMap::new();
             let tables_iter = connection.details.tables.iter();
-            for (i, (desc, casts)) in tables_iter.zip(connection.table_casts).enumerate() {
+            for (i, (desc, casts)) in tables_iter.zip_eq(connection.table_casts).enumerate() {
                 let source_table = SourceTable {
                     output_index: i + 1,
                     desc: desc.clone(),

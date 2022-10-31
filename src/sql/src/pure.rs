@@ -331,6 +331,15 @@ pub async fn purify_create_source(
                 None => {}
             };
 
+            // Only tables requested by this source should survive into being
+            // serialized into `PostgresSourceDetails`, otherwise we incur
+            // complexity of dealing with unsupported types that are not
+            // actually referenced.
+            let tables: Vec<_> = validated_requested_subsources
+                .iter()
+                .map(|(_, _, table)| (*table).clone())
+                .collect();
+
             // Now that we have an explicit list of validated requested subsources we can create them
             for (i, (upstream_name, subsource_name, table)) in
                 validated_requested_subsources.into_iter().enumerate()
