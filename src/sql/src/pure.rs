@@ -34,10 +34,10 @@ use mz_repr::{strconv, GlobalId};
 use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    ColumnDef, ColumnOption, ColumnOptionDef, CsrConnection, CsrSeedAvro, CsrSeedProtobuf,
-    CsrSeedProtobufSchema, DbzMode, DeferredObjectName, Envelope, Ident, KafkaConfigOption,
-    KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection, PgConfigOption,
-    PgConfigOptionName, ReaderSchemaSelectionStrategy, TableConstraint, UnresolvedObjectName,
+    ColumnDef, CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode,
+    DeferredObjectName, Envelope, Ident, KafkaConfigOption, KafkaConfigOptionName, KafkaConnection,
+    KafkaSourceConnection, PgConfigOption, PgConfigOptionName, ReaderSchemaSelectionStrategy,
+    UnresolvedObjectName,
 };
 use mz_storage_client::types::connections::aws::AwsConfig;
 use mz_storage_client::types::connections::{Connection, ConnectionContext};
@@ -51,7 +51,7 @@ use crate::ast::{
 use crate::catalog::{ErsatzCatalog, SessionCatalog};
 use crate::kafka_util;
 use crate::kafka_util::KafkaConfigOptionExtracted;
-use crate::names::{Aug, RawDatabaseSpecifier, ResolvedObjectName};
+use crate::names::{Aug, RawDatabaseSpecifier};
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
@@ -426,19 +426,12 @@ pub async fn purify_create_source(
 
                 // Create the targeted AST node for the original CREATE SOURCE statement
                 let transient_id = GlobalId::Transient(u64::cast_from(i));
-                let partial_subsource_name =
-                    normalize::unresolved_object_name(subsource_name.clone())?;
-                let qualified_subsource_name =
-                    scx.allocate_qualified_name(partial_subsource_name.clone())?;
-                let full_subsource_name = scx.allocate_full_name(partial_subsource_name)?;
+                let subsource =
+                    scx.allocate_resolved_object_name(transient_id, subsource_name.clone())?;
+
                 targeted_subsources.push(CreateSourceSubsource {
                     reference: upstream_name,
-                    subsource: Some(DeferredObjectName::Named(ResolvedObjectName::Object {
-                        id: transient_id,
-                        qualifiers: qualified_subsource_name.qualifiers,
-                        full_name: full_subsource_name,
-                        print_id: true,
-                    })),
+                    subsource: Some(DeferredObjectName::Named(subsource)),
                 });
 
                 // Create the subsource statement
@@ -548,59 +541,15 @@ pub async fn purify_create_source(
             for (i, (upstream_name, subsource_name, desc)) in
                 validated_requested_subsources.into_iter().enumerate()
             {
-                // Figure out the schema of the subsource
-                let mut columns = vec![];
-                for (column_name, column_type) in desc.iter() {
-                    let name = Ident::new(column_name.as_str().to_owned());
-
-                    let ty = mz_pgrepr::Type::from(&column_type.scalar_type);
-                    let data_type = scx.resolve_type(ty)?;
-
-                    let options = if !column_type.nullable {
-                        vec![ColumnOptionDef {
-                            name: None,
-                            option: ColumnOption::NotNull,
-                        }]
-                    } else {
-                        vec![]
-                    };
-
-                    columns.push(ColumnDef {
-                        name,
-                        data_type,
-                        collation: None,
-                        options,
-                    });
-                }
-
-                let mut table_constraints = vec![];
-                for key in desc.typ().keys.iter() {
-                    let mut col_names = vec![];
-                    for col_idx in key {
-                        col_names.push(columns[*col_idx].name.clone());
-                    }
-                    table_constraints.push(TableConstraint::Unique {
-                        name: None,
-                        columns: col_names,
-                        is_primary: false,
-                    });
-                }
+                let (columns, table_constraints) = scx.relation_desc_into_table_defs(desc)?;
 
                 // Create the targeted AST node for the original CREATE SOURCE statement
                 let transient_id = GlobalId::Transient(u64::cast_from(i));
-                let partial_subsource_name =
-                    normalize::unresolved_object_name(subsource_name.clone())?;
-                let qualified_subsource_name =
-                    scx.allocate_qualified_name(partial_subsource_name.clone())?;
-                let full_subsource_name = scx.allocate_full_name(partial_subsource_name)?;
+                let subsource =
+                    scx.allocate_resolved_object_name(transient_id, subsource_name.clone())?;
                 targeted_subsources.push(CreateSourceSubsource {
                     reference: upstream_name,
-                    subsource: Some(DeferredObjectName::Named(ResolvedObjectName::Object {
-                        id: transient_id,
-                        qualifiers: qualified_subsource_name.qualifiers,
-                        full_name: full_subsource_name,
-                        print_id: true,
-                    })),
+                    subsource: Some(DeferredObjectName::Named(subsource)),
                 });
 
                 // Create the subsource statement
