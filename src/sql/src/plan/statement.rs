@@ -16,7 +16,8 @@ use std::collections::BTreeMap;
 
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
-    RawObjectName, ShowStatement, UnresolvedDatabaseName, UnresolvedSchemaName,
+    ColumnDef, RawObjectName, ShowStatement, TableConstraint, UnresolvedDatabaseName,
+    UnresolvedSchemaName,
 };
 use mz_storage_client::types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
 
@@ -500,6 +501,24 @@ impl<'a> StatementContext<'a> {
         })
     }
 
+    // Creates a `ResolvedObjectName::Object` from a `GlobalId` and an
+    // `UnresolvedObjectName`.
+    pub fn allocate_resolved_object_name(
+        &self,
+        id: GlobalId,
+        name: UnresolvedObjectName,
+    ) -> Result<ResolvedObjectName, PlanError> {
+        let partial = normalize::unresolved_object_name(name)?;
+        let qualified = self.allocate_qualified_name(partial.clone())?;
+        let full_name = self.allocate_full_name(partial)?;
+        Ok(ResolvedObjectName::Object {
+            id,
+            qualifiers: qualified.qualifiers,
+            full_name,
+            print_id: true,
+        })
+    }
+
     pub fn active_database(&self) -> Option<&DatabaseId> {
         self.catalog.active_database()
     }
@@ -706,5 +725,49 @@ impl<'a> StatementContext<'a> {
                 sql_bail!("cannot specify both SSH TUNNEL and AWS PRIVATELINK");
             }
         }
+    }
+
+    pub fn relation_desc_into_table_defs(
+        &self,
+        desc: &RelationDesc,
+    ) -> Result<(Vec<ColumnDef<Aug>>, Vec<TableConstraint<Aug>>), PlanError> {
+        let mut columns = vec![];
+        for (column_name, column_type) in desc.iter() {
+            let name = Ident::new(column_name.as_str().to_owned());
+
+            let ty = mz_pgrepr::Type::from(&column_type.scalar_type);
+            let data_type = self.resolve_type(ty)?;
+
+            let options = if !column_type.nullable {
+                vec![mz_sql_parser::ast::ColumnOptionDef {
+                    name: None,
+                    option: mz_sql_parser::ast::ColumnOption::NotNull,
+                }]
+            } else {
+                vec![]
+            };
+
+            columns.push(ColumnDef {
+                name,
+                data_type,
+                collation: None,
+                options,
+            });
+        }
+
+        let mut table_constraints = vec![];
+        for key in desc.typ().keys.iter() {
+            let mut col_names = vec![];
+            for col_idx in key {
+                col_names.push(columns[*col_idx].name.clone());
+            }
+            table_constraints.push(TableConstraint::Unique {
+                name: None,
+                columns: col_names,
+                is_primary: false,
+            });
+        }
+
+        Ok((columns, table_constraints))
     }
 }
