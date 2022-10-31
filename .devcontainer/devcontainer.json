@@ -2,6 +2,9 @@
 // https://github.com/microsoft/vscode-dev-containers/tree/v0.238.0/containers/rust-postgres
 {
   "name": "Materialize",
+  "hostRequirements": {
+    "storage": "64gb"
+  },
   "dockerComposeFile": "docker-compose.yml",
   "service": "mz",
   "workspaceFolder": "/workspace",
