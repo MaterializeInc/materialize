@@ -51,7 +51,7 @@ jobs:
         uses: ForAllSecure/mcode-action@v1
         with:
           mayhem-token: ${{ secrets.MAYHEM_TOKEN }}
-          args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.TOKENIZE_MAYHEMFILE }} --duration 1100
+          args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.TOKENIZE_MAYHEMFILE }} --duration 600
           sarif-output: sarif
 
       - name: Upload SARIF file(s)
