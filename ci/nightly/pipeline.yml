@@ -549,7 +549,5 @@ steps:
     #  - "**/Cargo.toml"
     #  - "**/*.rs"
     timeout_in_minutes: 30
-    # https://github.com/est31/cargo-udeps/issues/103
-    soft_fail: true
     agents:
       queue: linux-x86_64

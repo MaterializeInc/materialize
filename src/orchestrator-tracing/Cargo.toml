@@ -12,7 +12,7 @@ async-trait = "0.1.57"
 clap = { version = "3.2.20", features = ["env", "derive"] }
 futures-core = "0.3.21"
 http = "0.2.8"
-humantime = "2.1.0"
+humantime = { version = "2.1.0", optional = true }
 mz-orchestrator = { path = "../orchestrator" }
 mz-ore = { path = "../ore", features = ["tracing_"] }
 mz-repr = { path = "../repr", optional = true }
@@ -20,4 +20,4 @@ tracing-subscriber = { version = "0.3.16", default-features = false }
 opentelemetry = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git", features = ["rt-tokio", "trace"] }
 
 [features]
-tokio-console = ["mz-ore/tokio-console", "mz-repr"]
+tokio-console = ["mz-ore/tokio-console", "mz-repr", "humantime"]

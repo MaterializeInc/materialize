@@ -15,7 +15,6 @@ async-trait = "0.1.57"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3.24"
 mz-ore = { path = "../ore" }
-mz-persist-types = { path = "../persist-types" }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 rand = "0.8.5"
 rusqlite = { version = "0.28.0", features = ["bundled"] }
