@@ -745,10 +745,13 @@ where
     #[tracing::instrument(level = "debug", skip(self))]
     async fn remove_write_frontiers(&mut self, replica_id: ReplicaId) -> Result<(), ComputeError> {
         let mut storage_read_capability_changes = BTreeMap::default();
-        for collection in self.compute.collections.values_mut() {
+        let mut dropped_collection_ids = Vec::new();
+        for (id, collection) in self.compute.collections.iter_mut() {
             let last_upper = collection.replica_write_frontiers.remove(&replica_id);
 
             if let Some(frontier) = last_upper {
+                dropped_collection_ids.push(id.clone());
+
                 // Update read holds on storage dependencies.
                 for storage_id in &collection.storage_dependencies {
                     let update = storage_read_capability_changes
@@ -763,6 +766,7 @@ where
                 .update_read_capabilities(&mut storage_read_capability_changes)
                 .await?;
         }
+        self.update_dropped_collections(dropped_collection_ids).await?;
 
         Ok(())
     }
@@ -885,6 +889,26 @@ where
         }
     }
 
+    /// Cleans up collection state, if necessary, in response to drop operations targeted 
+    /// at a replica and given collections (via reporting of an empty frontier).
+    async fn update_dropped_collections(&mut self, dropped_collection_ids: Vec<GlobalId>) -> Result<(), ComputeError> {
+        for id in dropped_collection_ids {
+            // clean up the given collection if all replica frontiers are empty
+            let collection = self
+                .compute
+                .collections
+                .get(&id)
+                .ok_or(ComputeError::IdentifierMissing(id))?;
+            if collection
+                .replica_write_frontiers
+                .values()
+                .all(|t| t.is_empty()) {
+                    self.compute.collections.remove(&id);
+            }
+        }
+        Ok(())
+    }
+
     async fn handle_frontier_uppers(
         &mut self,
         list: Vec<(GlobalId, Antichain<T>)>,
@@ -899,7 +923,14 @@ where
             .filter(|(id, _)| self.compute.collections.contains_key(id))
             .collect();
 
-        self.update_write_frontiers(replica_id, &updates).await
+        self.update_write_frontiers(replica_id, &updates).await?;
+
+        let dropped_collections: Vec<_> = updates
+            .iter()
+            .filter(|(_, frontier)| frontier.is_empty())
+            .map(|(id, _)| id.clone())
+            .collect();
+        self.update_dropped_collections(dropped_collections).await
     }
 
     async fn handle_peek_response(
