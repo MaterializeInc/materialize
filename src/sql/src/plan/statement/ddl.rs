@@ -59,9 +59,9 @@ use mz_storage_client::types::sources::encoding::{
 use mz_storage_client::types::sources::{
     GenericSourceConnection, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope,
     KinesisSourceConnection, LoadGenerator, LoadGeneratorSourceConnection,
-    PostgresSourceConnection, PostgresSourceDetails, ProtoPostgresSourceDetails,
-    S3SourceConnection, SourceDesc, SourceEnvelope, TestScriptSourceConnection, Timeline,
-    UnplannedSourceEnvelope, UpsertStyle,
+    PostgresSourceConnection, PostgresSourcePublicationDetails,
+    ProtoPostgresSourcePublicationDetails, S3SourceConnection, SourceDesc, SourceEnvelope,
+    TestScriptSourceConnection, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 
 use crate::ast::display::AstDisplay;
@@ -371,7 +371,7 @@ pub fn plan_create_source(
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
-    let (external_connection, encoding, available_subsources) = match connection {
+    let (mut external_connection, encoding, available_subsources) = match connection {
         CreateSourceConnection::Kafka(mz_sql_parser::ast::KafkaSourceConnection {
             connection:
                 mz_sql_parser::ast::KafkaConnection {
@@ -603,30 +603,19 @@ pub fn plan_create_source(
                 .as_ref()
                 .ok_or_else(|| sql_err!("internal error: Postgres source missing details"))?;
             let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
-            let details =
-                ProtoPostgresSourceDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
+            let details = ProtoPostgresSourcePublicationDetails::decode(&*details)
+                .map_err(|e| sql_err!("{}", e))?;
 
             // Register the available subsources
             let mut available_subsources = BTreeMap::new();
-
-            for (i, table) in details.tables.iter().enumerate() {
-                let name = FullObjectName {
-                    database: RawDatabaseSpecifier::Name(connection.database.clone()),
-                    schema: table.namespace.clone(),
-                    item: table.name.clone(),
-                };
-                // The zero-th output is the main output
-                // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
-                // to handle the main source and the subsources uniformly
-                available_subsources.insert(name, i + 1);
-            }
 
             // Here we will generate the cast expressions required to convert the text encoded
             // columns into the appropriate target types, creating a Vec<MirScalarExpr> per table.
             // The postgres source reader will then eval each of those on the incoming rows based
             // on the target table
-            let mut table_casts = vec![];
-            for table in details.tables.iter() {
+            let mut table_casts = HashMap::new();
+
+            for (i, table) in details.tables.iter().enumerate() {
                 // First, construct an expression context where the expression is evaluated on an
                 // imaginary row which has the same number of columns as the upstream table but all
                 // of the types are text
@@ -658,8 +647,40 @@ pub fn plan_create_source(
                 // column and casts it to the appropriate target type
                 let mut column_casts = vec![];
                 for (i, column) in table.columns.iter().enumerate() {
-                    let ty = mz_pgrepr::Type::from_oid_and_typmod(column.type_oid, column.type_mod)
-                        .map_err(|e| sql_err!("{}", e))?;
+                    let ty = match mz_pgrepr::Type::from_oid_and_typmod(
+                        column.type_oid,
+                        column.type_mod,
+                    ) {
+                        Ok(t) => t,
+                        // If this reference survived purification, we
+                        // do not expect it to be from a table that the
+                        // user will consume., i.e. expect this table to
+                        // be filtered out of table casts.
+                        Err(_) => {
+                            column_casts.push(
+                                HirScalarExpr::CallVariadic {
+                                    func: mz_expr::VariadicFunc::ErrorIfNull,
+                                    exprs: vec![
+                                        HirScalarExpr::literal_null(ScalarType::String),
+                                        HirScalarExpr::literal(
+                                            mz_repr::Datum::from(
+                                                format!(
+                                                    "Unsupported type with OID {}",
+                                                    column.type_oid
+                                                )
+                                                .as_str(),
+                                            ),
+                                            ScalarType::String,
+                                        ),
+                                    ],
+                                }
+                                .lower_uncorrelated()
+                                .expect("no correlation"),
+                            );
+                            continue;
+                        }
+                    };
+
                     let data_type = scx.resolve_type(ty)?;
                     let scalar_type = query::scalar_type_from_sql(scx, &data_type)?;
 
@@ -681,16 +702,30 @@ pub fn plan_create_source(
                     );
                     column_casts.push(cast_expr);
                 }
-                table_casts.push(column_casts);
+                let r = table_casts.insert(i + 1, column_casts);
+                assert!(r.is_none(), "cannot have table defined multiple times");
+
+                let name = FullObjectName {
+                    database: RawDatabaseSpecifier::Name(connection.database.clone()),
+                    schema: table.namespace.clone(),
+                    item: table.name.clone(),
+                };
+
+                // The zero-th output is the main output
+                // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
+                // to handle the main source and the subsources uniformly
+                available_subsources.insert(name, i + 1);
             }
+
+            let publication_details = PostgresSourcePublicationDetails::from_proto(details)
+                .map_err(|e| sql_err!("{}", e))?;
 
             let connection = GenericSourceConnection::Postgres(PostgresSourceConnection {
                 connection,
                 connection_id: connection_item.id(),
                 table_casts,
                 publication: publication.expect("validated exists during purification"),
-                details: PostgresSourceDetails::from_proto(details)
-                    .map_err(|e| sql_err!("{}", e))?,
+                publication_details,
             });
 
             // The postgres source only outputs data to its subsources. The catalog object
@@ -735,6 +770,87 @@ pub fn plan_create_source(
             (connection, encoding, None)
         }
     };
+
+    let (available_subsources, requested_subsources) = match (available_subsources, subsources) {
+        (Some(available_subsources), Some(CreateReferencedSubsources::Subset(subsources))) => {
+            let mut requested_subsources = vec![];
+            for subsource in subsources {
+                let name = subsource.reference.clone();
+
+                let target = match &subsource.subsource {
+                    Some(subsource) => match subsource {
+                        DeferredObjectName::Named(target) => target.clone(),
+                        DeferredObjectName::Deferred(name) => {
+                            // TODO: remove this after the next release, we need
+                            // it only so we can load the catalog to do the
+                            // proper rewrite.
+                            let partial_subsource_name =
+                                normalize::unresolved_object_name(name.clone())?;
+                            let item = scx.catalog.resolve_item(&partial_subsource_name).unwrap();
+
+                            ResolvedObjectName::Object {
+                                id: item.id(),
+                                qualifiers: item.name().qualifiers.clone(),
+                                full_name: scx.catalog.resolve_full_name(item.name()),
+                                print_id: true,
+                            }
+                        }
+                    },
+                    None => {
+                        sql_bail!("[internal error] subsources must be named during purification")
+                    }
+                };
+
+                requested_subsources.push((name, target));
+            }
+            (available_subsources, requested_subsources)
+        }
+        (Some(_), None) => {
+            // Multi-output sources must have a table selection clause
+            sql_bail!("This is a multi-output source. Use `FOR TABLE (..)` or `FOR ALL TABLES` to select which ones to ingest");
+        }
+        (None, Some(_)) | (Some(_), Some(CreateReferencedSubsources::All)) => {
+            sql_bail!("[internal error] subsources should be resolved during purification")
+        }
+        (None, None) => (BTreeMap::new(), vec![]),
+    };
+
+    let mut subsource_exports = HashMap::new();
+    for (name, target) in requested_subsources {
+        let name = normalize::full_name(name)?;
+        let idx = match available_subsources.get(&name) {
+            Some(idx) => idx,
+            None => sql_bail!("Requested non-existent subtable: {name}"),
+        };
+
+        let target_id = match target {
+            ResolvedObjectName::Object { id, .. } => id,
+            ResolvedObjectName::Cte { .. } | ResolvedObjectName::Error => {
+                sql_bail!("[internal error] invalid target id")
+            }
+        };
+
+        // TODO(petrosagg): This is the point where we would normally look into the catalog for the
+        // item with ID `target` and verify that its RelationDesc is identical to the type of the
+        // dataflow output. We can't do that here however because the subsources are created in the
+        // same transaction as this source and they are not yet in the catalog. In the future, when
+        // provisional catalogs are made available to the planner we could do the check. For now
+        // we don't allow users to manually target subsources and rely on purification generating
+        // correct definitions.
+        subsource_exports.insert(target_id, *idx);
+    }
+
+    if let GenericSourceConnection::Postgres(PostgresSourceConnection { table_casts, .. }) =
+        &mut external_connection
+    {
+        // Now that we know which subsources sources we want, we can remove all
+        // unused table casts from this connection; this represents the
+        // authoritative statement about which publication tables should be
+        // used within storage.
+        let used_pos: HashSet<_> = subsource_exports.values().collect();
+        table_casts.retain(|pos, _| used_pos.contains(pos));
+    }
+
     let (key_desc, value_desc) = encoding.desc()?;
 
     let mut key_envelope = get_key_envelope(include_metadata, &envelope, &encoding)?;
@@ -863,75 +979,6 @@ pub fn plan_create_source(
         metadata_columns: metadata_column_types,
         timestamp_interval,
     };
-
-    let (available_subsources, requested_subsources) = match (available_subsources, subsources) {
-        (Some(available_subsources), Some(CreateReferencedSubsources::Subset(subsources))) => {
-            let mut requested_subsources = vec![];
-            for subsource in subsources {
-                let name = subsource.reference.clone();
-
-                let target = match &subsource.subsource {
-                    Some(subsource) => match subsource {
-                        DeferredObjectName::Named(target) => target.clone(),
-                        DeferredObjectName::Deferred(name) => {
-                            // TODO: remove this after the next release, we need
-                            // it only so we can load the catalog to do the
-                            // proper rewrite.
-                            let partial_subsource_name =
-                                normalize::unresolved_object_name(name.clone())?;
-                            let item = scx.catalog.resolve_item(&partial_subsource_name).unwrap();
-
-                            ResolvedObjectName::Object {
-                                id: item.id(),
-                                qualifiers: item.name().qualifiers.clone(),
-                                full_name: scx.catalog.resolve_full_name(item.name()),
-                                print_id: true,
-                            }
-                        }
-                    },
-                    None => {
-                        sql_bail!("[internal error] subsources must be named during purification")
-                    }
-                };
-
-                requested_subsources.push((name, target));
-            }
-            (available_subsources, requested_subsources)
-        }
-        (Some(_), None) => {
-            // Multi-output sources must have a table selection clause
-            sql_bail!("This is a multi-output source. Use `FOR TABLE (..)` or `FOR ALL TABLES` to select which ones to ingest");
-        }
-        (None, Some(_)) | (Some(_), Some(CreateReferencedSubsources::All)) => {
-            sql_bail!("[internal error] subsources should be resolved during purification")
-        }
-        (None, None) => (BTreeMap::new(), vec![]),
-    };
-
-    let mut subsource_exports = HashMap::new();
-    for (name, target) in requested_subsources {
-        let name = normalize::full_name(name)?;
-        let idx = match available_subsources.get(&name) {
-            Some(idx) => idx,
-            None => sql_bail!("Requested non-existent subtable: {name}"),
-        };
-
-        let target_id = match target {
-            ResolvedObjectName::Object { id, .. } => id,
-            ResolvedObjectName::Cte { .. } | ResolvedObjectName::Error => {
-                sql_bail!("[internal error] invalid target id")
-            }
-        };
-
-        // TODO(petrosagg): This is the point where we would normally look into the catalog for the
-        // item with ID `target` and verify that its RelationDesc is identical to the type of the
-        // dataflow output. We can't do that here however because the subsources are created in the
-        // same transaction as this source and they are not yet in the catalog. In the future, when
-        // provisional catalogs are made available to the planner we could do the check. For now
-        // we don't allow users to manually target subsources and rely on purification generating
-        // correct definitions.
-        subsource_exports.insert(target_id, *idx);
-    }
 
     let if_not_exists = *if_not_exists;
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.clone())?)?;

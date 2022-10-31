@@ -40,7 +40,7 @@ use mz_sql_parser::ast::{
 };
 use mz_storage_client::types::connections::aws::AwsConfig;
 use mz_storage_client::types::connections::{Connection, ConnectionContext};
-use mz_storage_client::types::sources::PostgresSourceDetails;
+use mz_storage_client::types::sources::PostgresSourcePublicationDetails;
 
 use crate::ast::{
     AvroSchema, CreateReferencedSubsources, CreateSourceConnection, CreateSourceFormat,
@@ -294,7 +294,7 @@ pub async fn purify_create_source(
             let config = connection
                 .config(&*connection_context.secrets_reader)
                 .await?;
-            let tables = mz_postgres_util::publication_info(&config, &publication)
+            let publication_tables = mz_postgres_util::publication_info(&config, &publication)
                 .await
                 .map_err(|cause| PlanError::FetchingPostgresPublicationInfoFailed {
                     cause: Arc::new(cause),
@@ -305,7 +305,7 @@ pub async fn purify_create_source(
             let mut validated_requested_subsources = vec![];
             match requested_subsources {
                 Some(CreateReferencedSubsources::All) => {
-                    for table in &tables {
+                    for table in &publication_tables {
                         let upstream_name = UnresolvedObjectName::qualified(&[
                             &connection.database,
                             &table.namespace,
@@ -321,7 +321,7 @@ pub async fn purify_create_source(
 
                     // An index from table name -> schema name -> database name -> PostgresTableDesc
                     let mut tables_by_name = HashMap::new();
-                    for table in &tables {
+                    for table in &publication_tables {
                         tables_by_name
                             .entry(table.name.clone())
                             .or_insert_with(HashMap::new)
@@ -400,8 +400,8 @@ pub async fn purify_create_source(
 
             // Remove any old detail references
             options.retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
-            let details = PostgresSourceDetails {
-                tables,
+            let details = PostgresSourcePublicationDetails {
+                tables: publication_tables,
                 slot: format!(
                     "materialize_{}",
                     Uuid::new_v4().to_string().replace('-', "")

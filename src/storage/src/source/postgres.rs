@@ -246,21 +246,33 @@ impl SourceConnectionBuilder for PostgresSourceConnection {
 
         if active_read_worker {
             let mut source_tables = HashMap::new();
-            let tables_iter = self.details.tables.iter();
-            for (i, (desc, casts)) in tables_iter.zip(self.table_casts).enumerate() {
-                let source_table = SourceTable {
-                    output_index: i + 1,
-                    desc: desc.clone(),
-                    casts,
-                };
-                source_tables.insert(desc.oid, source_table);
+            let tables_iter = self.publication_details.tables.iter();
+
+            for (i, desc) in tables_iter.enumerate() {
+                let output_index = i + 1;
+                // We maintain descriptions for all tables in the publication,
+                // but only casts for those we aim to use (and have validated
+                // that their types are ingestable). This also prevents us from
+                // creating snapshots for tables in the publication that are
+                // not referenced in the source.
+                match self.table_casts.get(&output_index) {
+                    Some(casts) => {
+                        let source_table = SourceTable {
+                            output_index,
+                            desc: desc.clone(),
+                            casts: casts.to_vec(),
+                        };
+                        source_tables.insert(desc.oid, source_table);
+                    }
+                    None => continue,
+                }
             }
 
             let task_info = PostgresTaskInfo {
                 source_id,
                 connection_config,
                 publication: self.publication,
-                slot: self.details.slot,
+                slot: self.publication_details.slot,
                 /// Our cursor into the WAL
                 lsn: start_offset.offset.into(),
                 metrics: PgSourceMetrics::new(&metrics, source_id),

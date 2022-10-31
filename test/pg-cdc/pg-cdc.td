@@ -92,6 +92,11 @@ INSERT INTO conflict_schema.conflict_table VALUES ('234');
 
 CREATE TABLE "space table" ("space column" INTEGER);
 
+CREATE TYPE an_enum AS ENUM ('var0', 'var1');
+
+CREATE TABLE enum_table (a an_enum);
+ALTER TABLE enum_table REPLICA IDENTITY FULL;
+
 #
 # Test that slots created for replication sources are deleted on DROP
 #
@@ -173,10 +178,19 @@ exact:failed to fetch publication information from PostgreSQL database
 # TODO: assert on `detail` here.
 exact:failed to fetch publication information from PostgreSQL database
 
+! CREATE SOURCE "mz_source"
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES (
+    "enum_table"
+  );
+contains: uses unrecognized type
 
 #
 # Establish direct replication
 #
+#
+# Note: This implicitly tests that enum_table being part of the publication does not
+# prevent us from using other tables as subsources.
 #
 # TODO: This should produce an error because we included the `no_replica_identity` table
 > CREATE SOURCE "mz_source"
