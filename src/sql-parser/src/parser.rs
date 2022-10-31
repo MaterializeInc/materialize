@@ -2242,7 +2242,7 @@ impl<'a> Parser<'a> {
         };
         Ok(AwsPrivateLinkConnectionOption {
             name,
-            value: self.parse_option_value()?,
+            value: self.parse_optional_option_value()?,
         })
     }
 
