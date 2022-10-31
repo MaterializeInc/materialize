@@ -203,6 +203,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
             }
 
             self.report_frontier_progress(&response_tx);
+            for (id, frontier) in &self.storage_state.sink_write_frontiers {
+                let handle = &self.storage_state.sink_handles[id];
+                let frontier = frontier.borrow();
+                handle.downgrade_since(frontier.clone());
+            }
 
             // Handle any received commands.
             let mut cmds = vec![];
