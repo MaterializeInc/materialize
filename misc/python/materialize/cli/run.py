@@ -138,6 +138,8 @@ def main() -> int:
                 environment_file.write_text(environment_id)
 
             command += [
+                f"--orchestrator=process",
+                f"--orchestrator-process-secrets-directory={mzdata}/secrets",
                 f"--persist-consensus-url={args.postgres}?options=--search_path=consensus",
                 f"--persist-blob-url=file://{mzdata}/persist/blob",
                 f"--adapter-stash-url={args.postgres}?options=--search_path=adapter",

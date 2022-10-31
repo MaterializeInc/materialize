@@ -618,6 +618,7 @@ fn format_row(row: &Row, types: &[Type], mode: Mode, sort: &Sort) -> Vec<String>
 impl Runner {
     pub async fn start(config: &RunConfig<'_>) -> Result<Self, anyhow::Error> {
         let temp_dir = tempfile::tempdir()?;
+        let environment_id = format!("environment-{}-0", Uuid::new_v4());
         let (consensus_uri, adapter_stash_url, storage_stash_url) = {
             let postgres_url = &config.postgres_url;
             let (client, conn) = tokio_postgres::connect(postgres_url, NoTls).await?;
@@ -647,7 +648,8 @@ impl Runner {
                 image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
                 port_allocator: Arc::new(PortAllocator::new(2100, 2200)),
                 suppress_output: false,
-                data_dir: temp_dir.path().to_path_buf(),
+                environment_id: environment_id.clone(),
+                secrets_dir: temp_dir.path().join("secrets"),
                 command_wrapper: vec![],
             })
             .await?,
@@ -692,7 +694,7 @@ impl Runner {
             persisted_introspection: true,
             metrics_registry,
             now,
-            environment_id: format!("environment-{}-0", Uuid::from_u128(0)),
+            environment_id,
             cluster_replica_sizes: Default::default(),
             bootstrap_default_cluster_replica_size: "1".into(),
             bootstrap_builtin_cluster_replica_size: "1".into(),
