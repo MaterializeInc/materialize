@@ -41,8 +41,6 @@ dbt-materialize:
       cluster: [cluster] # default 'default'
       sslmode: require
       keepalives_idle: 0 # default 0
-      connect_timeout: 10 # default 10 seconds
-      retries: 1 # default 1 retry on error/timeout when opening connections
 
 ```
 
