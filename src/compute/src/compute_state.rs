@@ -120,6 +120,11 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         self.compute_state
             .command_history
             .push(cmd.clone(), &self.compute_state.pending_peeks);
+        self.compute_state.metrics.command_history_size.set(
+            i64::try_from(self.compute_state.command_history.len()).expect(
+                "The compute command history size must be non-negative and fit a 64-bit number",
+            ),
+        );
         match cmd {
             CreateTimely(_) => panic!("CreateTimely must be captured before"),
             CreateInstance(config) => self.handle_create_instance(config),

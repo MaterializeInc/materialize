@@ -831,6 +831,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 command_history.push(command.clone(), &compute_state.pending_peeks);
             }
             compute_state.command_history = command_history;
+            compute_state.metrics.command_history_size.set(
+                i64::try_from(compute_state.command_history.len()).expect(
+                    "The compute command history size must be non-negative and fit a 64-bit number",
+                ),
+            );
         }
         Ok(())
     }

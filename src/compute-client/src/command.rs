@@ -990,6 +990,11 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         }
     }
 
+    /// Obtains the length of this compute command history in number of commands.
+    pub fn len(&self) -> usize {
+        self.commands.len()
+    }
+
     /// Reduces `self.history` to a minimal form.
     ///
     /// This action not only simplifies the issued history, but importantly reduces the instructions
