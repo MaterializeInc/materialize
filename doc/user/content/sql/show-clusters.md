@@ -51,8 +51,7 @@ The following characteristics apply to the `mz_introspection` cluster:
 ### `mz_system` system cluster
 
 A system cluster named `mz_system` will be pre-installed in every environment.
-This cluster is used for different system administration tasks, like billing
-and monitoring.
+This cluster is used for various internal system monitoring tasks.
 
 The following characteristics apply to the `mz_system` cluster:
 
