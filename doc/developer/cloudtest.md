@@ -48,6 +48,13 @@ To run a single test:
 ./pytest -k test_name_goes_here
 ```
 
+⚠️ By default, `cloudtest` builds Materialize in release mode. You can instead
+build in debug mode by passing the `--dev` flag:
+
+```
+./pytest --dev [-k TEST]
+```
+
 ## Checking K8s cluster status
 
 ```
@@ -60,6 +67,18 @@ This command removes almost all resources from the K8s cluster, so that a test c
 
 ```
 kubectl --context kind-kind delete all --all
+```
+
+# Interactive development
+
+`cloudtest` is the recommended tool for deploying a local build of Materialize
+to Kubernetes, where you can manually connect to the cluster and run tests.
+
+Use the `test_wait` workflow, which does nothing but wait for the default
+cluster to become ready:
+
+```
+./pytest --dev -k test_wait
 ```
 
 # Writing tests
