@@ -141,6 +141,8 @@ impl SinkHandle {
                 }
                 read_handle.maybe_downgrade_since(&new_since).await;
             }
+
+            read_handle.expire().await;
         });
 
         SinkHandle {
