@@ -17,15 +17,15 @@ menu:
 
 ## Pre-installed clusters
 
-Materialize has several pre-installed clusters that are used to improve the user
-experience, as well as support system administration tasks.
+When you enable a Materialize region, several clusters that are used to improve
+the user experience, as well as support system administration tasks, will be
+pre-installed.
 
 ### `default` cluster
 
-When you enable a Materialize region, a cluster named `default` with a single
-`xsmall` [replica](/overview/key-concepts/#cluster-replicas) named `r1` will be
-pre-installed. You can modify or drop this cluster or its replicas at any
-time.
+A cluster named `default` with a single `xsmall` [replica](/overview/key-concepts/#cluster-replicas)
+named `r1` will be pre-installed in every environment. You can modify or drop
+this cluster or its replicas at any time.
 
 {{< note >}}
 The default value for the `cluster` session parameter is `default`.
@@ -35,11 +35,11 @@ to choose a valid cluster in order to run `SELECT` queries.
 
 ### `mz_introspection` system cluster
 
-When you enable a Materialize region, a system cluster named `mz_introspection` 
-will be pre-installed in every environment. This cluster has several indexes 
-installed to speed up common introspection queries, like `SHOW` commands and
-queries using the system catalog. It is recommended to switch to the `mz_introspection`
-cluster for improved performance when executing these statements.
+A system cluster named `mz_introspection` will be pre-installed in every
+environment. This cluster has several indexes installed to speed up common
+introspection queries, like `SHOW` commands and queries using the system
+catalog. It is recommended to switch to the `mz_introspection` cluster for
+improved performance when executing these statements.
 
 The following characteristics apply to the `mz_introspection` cluster:
 
@@ -50,8 +50,7 @@ The following characteristics apply to the `mz_introspection` cluster:
 
 ### `mz_system` system cluster
 
-When you enable a Materialize region, a system cluster named `mz_system` 
-will be pre-installed in every environment.
+A system cluster named `mz_system` will be pre-installed in every environment.
 This cluster is used for different system administration tasks, like billing
 and monitoring.
 
