@@ -377,16 +377,16 @@ CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name:
 parse-statement
 CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES ('use1-az1', 'use1-az4'))
 ----
-CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES('use1-az1', 'use1-az4'))
+CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME = 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES = ('use1-az1', 'use1-az4'))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("privatelinkconn")]), connection: AwsPrivateLink { with_options: [AwsPrivateLinkConnectionOption { name: ServiceName, value: Value(String("com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc")) }, AwsPrivateLinkConnectionOption { name: AvailabilityZones, value: Sequence([Value(String("use1-az1")), Value(String("use1-az4"))]) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("privatelinkconn")]), connection: AwsPrivateLink { with_options: [AwsPrivateLinkConnectionOption { name: ServiceName, value: Some(Value(String("com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc"))) }, AwsPrivateLinkConnectionOption { name: AvailabilityZones, value: Some(Sequence([Value(String("use1-az1")), Value(String("use1-az4"))])) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CONNECTION privatelinkconn FOR AWS PRIVATELINK SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES ('use1-az1', 'use1-az4')
 ----
-CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES('use1-az1', 'use1-az4'))
+CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME = 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES = ('use1-az1', 'use1-az4'))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("privatelinkconn")]), connection: AwsPrivateLink { with_options: [AwsPrivateLinkConnectionOption { name: ServiceName, value: Value(String("com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc")) }, AwsPrivateLinkConnectionOption { name: AvailabilityZones, value: Sequence([Value(String("use1-az1")), Value(String("use1-az4"))]) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("privatelinkconn")]), connection: AwsPrivateLink { with_options: [AwsPrivateLinkConnectionOption { name: ServiceName, value: Some(Value(String("com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc"))) }, AwsPrivateLinkConnectionOption { name: AvailabilityZones, value: Some(Sequence([Value(String("use1-az1")), Value(String("use1-az4"))])) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CONNECTION pgconn FOR postgres HOST foo, PORT 1234, SSL CERTIFICATE AUTHORITY 'foo', SSH TUNNEL tun
