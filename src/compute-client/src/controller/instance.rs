@@ -969,30 +969,34 @@ where
                 // If this batch advances the subscribe's frontier, we emit all updates at times
                 // greater or equal to the last frontier (to avoid emitting duplicate updates).
                 // let old_upper_bound = entry.bounds.upper.clone();
-                let lower = self
+                let prev_frontier = self
                     .compute
                     .subscribes
                     .remove(&subscribe_id)
                     .unwrap_or_else(Antichain::new);
 
-                if PartialOrder::less_than(&lower, &upper) {
+                if PartialOrder::less_than(&prev_frontier, &upper) {
                     if !upper.is_empty() {
                         // This subscribe can produce more data. Keep tracking it.
                         self.compute.subscribes.insert(subscribe_id, upper.clone());
                     }
 
                     if let Ok(updates) = updates.as_mut() {
-                        updates.retain(|(time, _data, _diff)| lower.less_equal(time));
+                        updates.retain(|(time, _data, _diff)| prev_frontier.less_equal(time));
                     }
                     Some(ComputeControllerResponse::SubscribeResponse(
                         subscribe_id,
                         SubscribeResponse::Batch(SubscribeBatch {
-                            lower,
+                            lower: prev_frontier,
                             upper,
                             updates,
                         }),
                     ))
                 } else {
+                    if !prev_frontier.is_empty() {
+                        // This subscribe can produce more data. Keep tracking it.
+                        self.compute.subscribes.insert(subscribe_id, prev_frontier);
+                    }
                     None
                 }
             }
