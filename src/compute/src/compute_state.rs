@@ -31,6 +31,7 @@ use mz_compute_client::command::{
     ComputeCommand, ComputeCommandHistory, DataflowDescription, InstanceConfig, Peek, ReplicaId,
 };
 use mz_compute_client::logging::LoggingConfig;
+use mz_compute_client::metrics::ComputeMetrics;
 use mz_compute_client::plan::Plan;
 use mz_compute_client::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use mz_ore::cast::CastFrom;
@@ -82,6 +83,8 @@ pub struct ComputeState {
     pub command_history: ComputeCommandHistory,
     /// Max size in bytes of any result.
     pub max_result_size: u32,
+    /// Metrics for this replica.
+    pub metrics: ComputeMetrics,
 }
 
 impl ComputeState {
