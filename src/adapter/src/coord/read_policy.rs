@@ -153,7 +153,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                         .read_frontier()
                         .to_owned();
                     let TimelineState { read_holds, .. } =
-                        self.ensure_timeline_state(timeline).await;
+                        self.ensure_timeline_state(&timeline).await;
                     if !initial_frontier.less_equal(&read_holds.time) {
                         // This error *SHOULD* be fatal, but it is not currently maintained and cannot merge as an assert.
                         tracing::error!("Compute collection {:?} (instance {:?}) has read frontier {:?} not less-equal to read_hold.time: {:?}",
@@ -202,7 +202,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                     .read_capabilities
                     .frontier()
                     .to_owned();
-                let TimelineState { read_holds, .. } = self.ensure_timeline_state(timeline).await;
+                let TimelineState { read_holds, .. } = self.ensure_timeline_state(&timeline).await;
                 if !initial_frontier.less_equal(&read_holds.time) {
                     // This error *SHOULD* be fatal, but it is not currently maintained and cannot merge as an assert.
                     tracing::error!("Storage collection {:?} has read frontier {:?} not less-equal to read_hold.time: {:?}",

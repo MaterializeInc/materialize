@@ -9,7 +9,7 @@
 
 //! A mechanism to ensure that a sequence of writes and reads proceed correctly through timestamps.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::time::Duration;
 
@@ -17,11 +17,11 @@ use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::PartialOrder;
-use tracing::warn;
+use tracing::error;
 
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::CollectionPlan;
-use mz_ore::now::{to_datetime, EpochMillis};
+use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_repr::{GlobalId, Timestamp, TimestampManipulation};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_stash::Append;
@@ -68,14 +68,14 @@ struct TimestampOracleState<T> {
 struct TimestampOracle<T> {
     state: TimestampOracleState<T>,
     next: Box<dyn Fn() -> T>,
-    max_increase: T,
+    max_increase: Option<T>,
 }
 
 impl<T: TimestampManipulation> TimestampOracle<T> {
     /// Create a new timeline, starting at the indicated time. `next` generates
     /// new timestamps when invoked. The timestamps have no requirements, and can
     /// retreat from previous invocations.
-    pub fn new<F>(initially: T, next: F, max_increase: T) -> Self
+    pub fn new<F>(initially: T, next: F, max_increase: Option<T>) -> Self
     where
         F: Fn() -> T + 'static,
     {
@@ -98,13 +98,16 @@ impl<T: TimestampManipulation> TimestampOracle<T> {
         if next.less_equal(&self.state.write_ts) {
             next = self.state.write_ts.step_forward();
         }
-        // Cap how much we advance the write timestamp by for any single increment. This is to
-        // help protect against scenarios where a clock may jump forward by a large amount and
-        // then jump backwards.
-        next = std::cmp::min(
-            next,
-            self.state.write_ts.step_forward_by(&self.max_increase),
-        );
+        if let Some(max_increase) = &self.max_increase {
+            // Cap how much we advance the write timestamp by for any single increment. This is to
+            // help protect against scenarios where a clock may jump forward by a large amount and
+            // then jump backwards.
+            let cap = self.state.write_ts.step_forward_by(max_increase);
+            if cap.less_than(&next) {
+                error!("Tried to increase write timestamp from {:?} to {next:?}; instead capping increase to {cap:?}", self.state.write_ts);
+                next = cap;
+            }
+        }
         assert!(self.state.read_ts.less_than(&next));
         assert!(self.state.write_ts.less_than(&next));
         self.state.write_ts = next.clone();
@@ -186,7 +189,7 @@ impl<T: TimestampManipulation> DurableTimestampOracle<T> {
         initially: T,
         next: F,
         persist_interval: T,
-        max_increase: T,
+        max_increase: Option<T>,
         persist_fn: impl FnOnce(T) -> Fut,
     ) -> Self
     where
@@ -344,7 +347,7 @@ impl<S: Append + 'static> Coordinator<S> {
     pub(crate) async fn apply_local_write(&mut self, timestamp: Timestamp) {
         let now = self.now().into();
         if timestamp > now {
-            warn!("Setting local read timestamp to {timestamp} which is ahead of now, {now}");
+            error!("Setting local read timestamp to {timestamp} which is ahead of now, {now}");
         }
         self.global_timelines
             .get_mut(&Timeline::EpochMilliseconds)
@@ -358,29 +361,61 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     /// Ensures that a global timeline state exists for `timeline`.
-    pub(crate) async fn ensure_timeline_state(
-        &mut self,
-        timeline: Timeline,
+    pub(crate) async fn ensure_timeline_state<'a>(
+        &'a mut self,
+        timeline: &'a Timeline,
     ) -> &mut TimelineState<Timestamp> {
-        if !self.global_timelines.contains_key(&timeline) {
-            self.global_timelines.insert(
+        Self::ensure_timeline_state_with_initial_time(
+            timeline,
+            Timestamp::minimum(),
+            self.catalog.config().now.clone(),
+            |ts| self.catalog.persist_timestamp(&timeline, ts),
+            &mut self.global_timelines,
+        )
+        .await
+    }
+
+    /// Ensures that a global timeline state exists for `timeline`, with an initial time
+    /// of `initially`.
+    pub(crate) async fn ensure_timeline_state_with_initial_time<'a, Fut>(
+        timeline: &'a Timeline,
+        initially: Timestamp,
+        now: NowFn,
+        persist_fn: impl FnOnce(Timestamp) -> Fut,
+        global_timelines: &'a mut BTreeMap<Timeline, TimelineState<Timestamp>>,
+    ) -> &'a mut TimelineState<Timestamp>
+    where
+        Fut: Future<Output = Result<(), crate::catalog::Error>>,
+    {
+        if !global_timelines.contains_key(&timeline) {
+            let oracle = if timeline == &Timeline::EpochMilliseconds {
+                DurableTimestampOracle::new(
+                    initially,
+                    move || (now)().into(),
+                    *TIMESTAMP_PERSIST_INTERVAL,
+                    Some(*TIMESTAMP_MAX_INCREASE),
+                    persist_fn,
+                )
+                .await
+            } else {
+                DurableTimestampOracle::new(
+                    initially,
+                    Timestamp::minimum,
+                    *TIMESTAMP_PERSIST_INTERVAL,
+                    None,
+                    persist_fn,
+                )
+                .await
+            };
+            global_timelines.insert(
                 timeline.clone(),
                 TimelineState {
-                    oracle: DurableTimestampOracle::new(
-                        Timestamp::minimum(),
-                        Timestamp::minimum,
-                        *TIMESTAMP_PERSIST_INTERVAL,
-                        *TIMESTAMP_MAX_INCREASE,
-                        |ts| self.catalog.persist_timestamp(&timeline, ts),
-                    )
-                    .await,
-                    read_holds: ReadHolds::new(Timestamp::minimum()),
+                    oracle,
+                    read_holds: ReadHolds::new(initially),
                 },
             );
         }
-        self.global_timelines
-            .get_mut(&timeline)
-            .expect("inserted above")
+        global_timelines.get_mut(&timeline).expect("inserted above")
     }
 
     pub(crate) fn remove_storage_ids_from_timeline<I>(&mut self, ids: I) -> Vec<Timeline>
