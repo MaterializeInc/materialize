@@ -1860,6 +1860,7 @@ pub const PG_PROC: BuiltinView = BuiltinView {
     mz_functions.oid,
     mz_functions.name AS proname,
     mz_schemas.oid AS pronamespace,
+    NULL::pg_catalog.oid AS proowner,
     NULL::pg_catalog.text AS proargdefaults
 FROM mz_catalog.mz_functions
 JOIN mz_catalog.mz_schemas ON mz_functions.schema_id = mz_schemas.id
