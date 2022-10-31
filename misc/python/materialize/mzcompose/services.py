@@ -31,7 +31,7 @@ DEFAULT_MZ_VOLUMES = [
     "tmp:/share/tmp",
 ]
 
-DEFAULT_SIZE = 1
+DEFAULT_SIZE = 4
 
 
 class Materialized(Service):

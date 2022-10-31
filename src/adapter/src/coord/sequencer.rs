@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use maplit::btreeset;
+use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpointSpec;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, OwnedMutexGuard};
 use tracing::{event, warn, Level};
@@ -56,6 +57,10 @@ use mz_storage::controller::{CollectionDescription, DataSource, ReadPolicy, Stor
 use mz_storage::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage::types::sources::{IngestionDescription, SourceExport};
 
+use crate::catalog::builtin::{
+    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_INTROSPECTION_COMPUTE_INSTANCE,
+    MZ_INTROSPECTION_ROLE, MZ_SYSTEM_COMPUTE_INSTANCE, PG_CATALOG_SCHEMA,
+};
 use crate::catalog::{
     self, Catalog, CatalogItem, ComputeInstance, Connection, DataSourceDesc, Ingestion,
     SerializedComputeReplicaLocation, StorageSinkConnectionState, SYSTEM_USER,
@@ -91,6 +96,13 @@ impl<S: Append + 'static> Coordinator<S> {
         event!(Level::TRACE, plan = format!("{:?}", plan));
         let responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
         tx.set_allowed(responses);
+
+        if session.user().name == MZ_INTROSPECTION_ROLE.name {
+            if let Err(e) = self.mz_introspection_user_privilege_hack(&session, &plan, &depends_on)
+            {
+                return tx.send(Err(e), session);
+            }
+        }
 
         match plan {
             Plan::CreateSource(plan) => {
@@ -588,13 +600,31 @@ impl<S: Append + 'static> Coordinator<S> {
         let connection_gid = self.catalog.allocate_user_id().await?;
         let mut connection = plan.connection.connection.clone();
 
-        if let mz_storage::types::connections::Connection::Ssh(ref mut ssh) = connection {
-            let keyset = SshKeyset::new()?;
-            self.secrets_controller
-                .ensure(connection_gid, &keyset.to_bytes())
-                .await?;
+        match connection {
+            mz_storage::types::connections::Connection::Ssh(ref mut ssh) => {
+                let keyset = SshKeyset::new()?;
+                self.secrets_controller
+                    .ensure(connection_gid, &keyset.to_bytes())
+                    .await?;
 
-            ssh.public_keys = Some(keyset.public_keys());
+                ssh.public_keys = Some(keyset.public_keys());
+            }
+            mz_storage::types::connections::Connection::AwsPrivateLink(ref privatelink) => {
+                self.cloud_resource_controller
+                    .as_ref()
+                    .ok_or(AdapterError::Unsupported(
+                        "PrivateLink connections are only allowed in cloud.",
+                    ))?
+                    .ensure_vpc_endpoint(
+                        connection_gid,
+                        VpcEndpointSpec {
+                            aws_service_name: privatelink.service_name.to_owned(),
+                            availability_zone_ids: privatelink.availability_zones.to_owned(),
+                        },
+                    )
+                    .await?;
+            }
+            _ => {}
         }
 
         let ops = vec![catalog::Op::CreateItem {
@@ -1677,7 +1707,10 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut instance_replica_drop_sets = Vec::with_capacity(plan.names.len());
         for compute_name in plan.names {
             let instance = self.catalog.resolve_compute_instance(&compute_name)?;
-            instance_replica_drop_sets.push((instance.id, instance.replicas_by_id.clone()));
+            instance_replica_drop_sets.push((
+                instance.id,
+                instance.replicas_by_id.keys().cloned().collect::<Vec<_>>(),
+            ));
             for replica_name in instance.replica_id_by_name.keys() {
                 ops.push(catalog::Op::DropComputeReplica {
                     name: replica_name.to_string(),
@@ -1716,10 +1749,8 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await?;
         for (instance_id, replicas) in instance_replica_drop_sets {
-            for (replica_id, replica) in replicas {
-                self.drop_replica(instance_id, replica_id, replica.config)
-                    .await
-                    .unwrap();
+            for replica_id in replicas {
+                self.drop_replica(instance_id, replica_id).await.unwrap();
             }
             self.controller.compute.drop_instance(instance_id);
         }
@@ -1773,11 +1804,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 )
             }
 
-            replicas_to_drop.push((
-                instance.id,
-                replica_id,
-                instance.replicas_by_id[&replica_id].clone(),
-            ));
+            replicas_to_drop.push((instance.id, replica_id));
         }
 
         ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
@@ -1785,10 +1812,8 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await?;
 
-        for (compute_id, replica_id, replica) in replicas_to_drop {
-            self.drop_replica(compute_id, replica_id, replica.config)
-                .await
-                .unwrap();
+        for (compute_id, replica_id) in replicas_to_drop {
+            self.drop_replica(compute_id, replica_id).await.unwrap();
         }
 
         Ok(ExecuteResponse::DroppedComputeReplica)
@@ -1798,7 +1823,6 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
-        replica_config: ComputeReplicaConfig,
     ) -> Result<(), anyhow::Error> {
         if let Some(Some(metadata)) = self.transient_replica_metadata.insert(replica_id, None) {
             let retraction = self
@@ -1810,7 +1834,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
         self.controller
             .active_compute()
-            .drop_replica(instance_id, replica_id, replica_config)
+            .drop_replica(instance_id, replica_id)
             .await?;
         Ok(())
     }
@@ -3385,6 +3409,116 @@ impl<S: Append + 'static> Coordinator<S> {
         }
         self.transient_id_counter += 1;
         Ok(GlobalId::Transient(id))
+    }
+
+    /// TODO(jkosh44) This function will verify the privileges for the mz_introspection user.
+    ///  All of the privileges are hard coded into this function. In the future if we ever add
+    ///  a more robust privileges framework, then this function should be replaced with that
+    ///  framework.
+    fn mz_introspection_user_privilege_hack(
+        &self,
+        session: &Session,
+        plan: &Plan,
+        depends_on: &Vec<GlobalId>,
+    ) -> Result<(), AdapterError> {
+        if session.user().name != MZ_INTROSPECTION_ROLE.name {
+            return Ok(());
+        }
+
+        match plan {
+            Plan::Subscribe(_)
+            | Plan::Peek(_)
+            | Plan::CopyFrom(_)
+            | Plan::SendRows(_)
+            | Plan::Explain(_)
+            | Plan::ShowAllVariables
+            | Plan::ShowVariable(_)
+            | Plan::SetVariable(_)
+            | Plan::ResetVariable(_)
+            | Plan::StartTransaction(_)
+            | Plan::CommitTransaction
+            | Plan::AbortTransaction
+            | Plan::EmptyQuery
+            | Plan::Declare(_)
+            | Plan::Fetch(_)
+            | Plan::Close(_)
+            | Plan::Prepare(_)
+            | Plan::Execute(_)
+            | Plan::Deallocate(_) => {}
+
+            Plan::CreateConnection(_)
+            | Plan::CreateDatabase(_)
+            | Plan::CreateSchema(_)
+            | Plan::CreateRole(_)
+            | Plan::CreateComputeInstance(_)
+            | Plan::CreateComputeReplica(_)
+            | Plan::CreateSource(_)
+            | Plan::CreateSecret(_)
+            | Plan::CreateSink(_)
+            | Plan::CreateTable(_)
+            | Plan::CreateView(_)
+            | Plan::CreateMaterializedView(_)
+            | Plan::CreateIndex(_)
+            | Plan::CreateType(_)
+            | Plan::DiscardTemp
+            | Plan::DiscardAll
+            | Plan::DropDatabase(_)
+            | Plan::DropSchema(_)
+            | Plan::DropRoles(_)
+            | Plan::DropComputeInstances(_)
+            | Plan::DropComputeReplicas(_)
+            | Plan::DropItems(_)
+            | Plan::SendDiffs(_)
+            | Plan::Insert(_)
+            | Plan::AlterNoop(_)
+            | Plan::AlterIndexSetOptions(_)
+            | Plan::AlterIndexResetOptions(_)
+            | Plan::AlterSink(_)
+            | Plan::AlterSource(_)
+            | Plan::AlterItemRename(_)
+            | Plan::AlterSecret(_)
+            | Plan::AlterSystemSet(_)
+            | Plan::AlterSystemReset(_)
+            | Plan::AlterSystemResetAll(_)
+            | Plan::ReadThenWrite(_)
+            | Plan::Raise(_)
+            | Plan::RotateKeys(_) => {
+                return Err(AdapterError::Unauthorized(
+                    "user 'mz_introspection' is unauthorized to perform this action".into(),
+                ))
+            }
+        }
+
+        if let Ok(active_compute_instance) = self.catalog.active_compute_instance(session) {
+            let active_compute_instance = active_compute_instance.name();
+            if (matches!(plan, Plan::Peek(_)) || matches!(plan, Plan::Subscribe(_)))
+                && active_compute_instance != MZ_INTROSPECTION_COMPUTE_INSTANCE.name
+                && active_compute_instance != MZ_SYSTEM_COMPUTE_INSTANCE.name
+            {
+                return Err(AdapterError::Unauthorized(format!(
+                    "user 'mz_introspection' is unauthorized to use cluster {active_compute_instance}",
+                )));
+            }
+        }
+
+        for id in depends_on {
+            let entry = self.catalog.get_entry(id);
+            let full_name = self
+                .catalog
+                .resolve_full_name(entry.name(), Some(session.conn_id()));
+            let schema = &full_name.schema;
+            if schema != MZ_CATALOG_SCHEMA
+                && schema != PG_CATALOG_SCHEMA
+                && schema != MZ_INTERNAL_SCHEMA
+                && schema != INFORMATION_SCHEMA
+            {
+                return Err(AdapterError::Unauthorized(format!(
+                    "user 'mz_introspection' is unauthorized to interact with object {full_name}",
+                )));
+            }
+        }
+
+        Ok(())
     }
 }
 

@@ -1957,6 +1957,7 @@ impl<S: Append> Catalog<S> {
     /// Returns the catalog, metadata about builtin objects that have
     /// changed schemas since last restart, and a list of updates to builtin
     /// tables that describe the initial state of the catalog.
+    #[tracing::instrument(level = "info", skip_all)]
     pub async fn open(
         config: Config<'_, S>,
     ) -> Result<
@@ -2780,9 +2781,7 @@ impl<S: Append> Catalog<S> {
     ) -> Result<(), Error> {
         let mut storage = self.storage().await;
         let mut tx = storage.transaction().await?;
-        for id in migration_metadata.user_drop_ops.drain(..) {
-            tx.remove_item(id)?;
-        }
+        tx.remove_items(migration_metadata.user_drop_ops.drain(..).collect())?;
         for (id, schema_id, name) in migration_metadata.user_create_ops.drain(..) {
             let item = self.get_entry(&id).item();
             let serialized_item = Self::serialize_item(item);
@@ -3121,7 +3120,10 @@ impl<S: Append> Catalog<S> {
         // TODO(benesch): this check here is not sufficiently protective. It'd
         // be very easy for a code path to accidentally avoid this check by
         // calling `resolve_compute_instance(session.vars().cluster()`.
-        if session.user().name != SYSTEM_USER.name && session.vars().cluster() == SYSTEM_USER.name {
+        if session.user().name != SYSTEM_USER.name
+            && session.user().name != INTROSPECTION_USER.name
+            && session.vars().cluster() == SYSTEM_USER.name
+        {
             coord_bail!(
                 "system cluster '{}' cannot execute user queries",
                 SYSTEM_USER.name

@@ -80,6 +80,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut replication_slots_to_drop: Vec<(mz_postgres_util::Config, String)> = vec![];
         let mut secrets_to_drop = vec![];
         let mut timelines_to_drop = vec![];
+        let mut vpc_endpoints_to_drop = vec![];
 
         for op in &ops {
             if let catalog::Op::DropItem(id) = op {
@@ -129,12 +130,17 @@ impl<S: Append + 'static> Coordinator<S> {
                         secrets_to_drop.push(*id);
                     }
                     CatalogItem::Connection(catalog::Connection { connection, .. }) => {
-                        // SSH connections have an associated secret that should be dropped
                         match connection {
+                            // SSH connections have an associated secret that should be dropped
                             mz_storage::types::connections::Connection::Ssh(_) => {
                                 secrets_to_drop.push(*id);
                             }
-                            _ => {}
+                            // PrivateLink connections have an associated VpcEndpoint K8S resource
+                            // that should be dropped
+                            mz_storage::types::connections::Connection::AwsPrivateLink(_) => {
+                                vpc_endpoints_to_drop.push(*id);
+                            }
+                            _ => (),
                         }
                     }
                     _ => (),
@@ -238,6 +244,9 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             if !secrets_to_drop.is_empty() {
                 self.drop_secrets(secrets_to_drop).await;
+            }
+            if !vpc_endpoints_to_drop.is_empty() {
+                self.drop_vpc_endpoints(vpc_endpoints_to_drop).await;
             }
 
             // We don't want to block the coordinator on an external postgres server, so
@@ -398,6 +407,24 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
+    async fn drop_vpc_endpoints(&mut self, vpc_endpoints: Vec<GlobalId>) {
+        for vpc_endpoint in vpc_endpoints {
+            if let Err(e) = self
+                .cloud_resource_controller
+                .as_ref()
+                .ok_or(AdapterError::Unsupported(
+                    "PrivateLink connections are only allowed in cloud.",
+                ))
+                .unwrap()
+                .delete_vpc_endpoint(vpc_endpoint)
+                .await
+            {
+                warn!("Dropping VPC Endpoints has encountered an error: {}", e);
+                // TODO reschedule this https://github.com/MaterializeInc/cloud/issues/4407
+            }
+        }
+    }
+
     /// Removes all temporary items created by the specified connection, though
     /// not the temporary schema itself.
     pub(crate) async fn drop_temp_items(&mut self, session: &Session) {
@@ -418,6 +445,16 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<(), AdapterError> {
         // Validate `sink.from` is in fact a storage collection
         self.controller.storage.collection(sink.from)?;
+
+        // This is disabled for the moment because we want to attempt to roll out the change slowly as we're
+        // stressing persist in a new way.
+        let status_id = if false {
+            Some(self.catalog.resolve_builtin_storage_collection(
+                &crate::catalog::builtin::MZ_SINK_STATUS_HISTORY,
+            ))
+        } else {
+            None
+        };
 
         // The AsOf is used to determine at what time to snapshot reading from the persist collection.  This is
         // primarily relevant when we do _not_ want to include the snapshot in the sink.  Choosing now will mean
@@ -445,6 +482,7 @@ impl<S: Append + 'static> Coordinator<S> {
             connection,
             envelope: Some(sink.envelope),
             as_of,
+            status_id,
             from_storage_metadata: (),
         };
 

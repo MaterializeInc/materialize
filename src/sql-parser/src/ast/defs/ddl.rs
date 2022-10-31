@@ -728,6 +728,37 @@ impl<T: AstInfo> AstDisplay for AwsConnectionOption<T> {
 impl_display_t!(AwsConnectionOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AwsPrivateLinkConnectionOptionName {
+    ServiceName,
+    AvailabilityZones,
+}
+
+impl AstDisplay for AwsPrivateLinkConnectionOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            AwsPrivateLinkConnectionOptionName::ServiceName => "SERVICE NAME",
+            AwsPrivateLinkConnectionOptionName::AvailabilityZones => "AVAILABILITY ZONES",
+        })
+    }
+}
+impl_display!(AwsPrivateLinkConnectionOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// An option in a `CREATE CONNECTION...AWS PRIVATELINK`.
+pub struct AwsPrivateLinkConnectionOption<T: AstInfo> {
+    pub name: AwsPrivateLinkConnectionOptionName,
+    pub value: WithOptionValue<T>,
+}
+
+impl<T: AstInfo> AstDisplay for AwsPrivateLinkConnectionOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        f.write_node(&self.value);
+    }
+}
+impl_display_t!(AwsPrivateLinkConnectionOption);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SshConnectionOptionName {
     Host,
     Port,
@@ -768,6 +799,9 @@ pub enum CreateConnection<T: AstInfo> {
     Aws {
         with_options: Vec<AwsConnectionOption<T>>,
     },
+    AwsPrivateLink {
+        with_options: Vec<AwsPrivateLinkConnectionOption<T>>,
+    },
     Kafka {
         with_options: Vec<KafkaConnectionOption<T>>,
     },
@@ -802,6 +836,11 @@ impl<T: AstInfo> AstDisplay for CreateConnection<T> {
             }
             Self::Aws { with_options } => {
                 f.write_str("AWS (");
+                f.write_node(&display::comma_separated(with_options));
+                f.write_str(")");
+            }
+            Self::AwsPrivateLink { with_options } => {
+                f.write_str("AWS PRIVATELINK (");
                 f.write_node(&display::comma_separated(with_options));
                 f.write_str(")");
             }

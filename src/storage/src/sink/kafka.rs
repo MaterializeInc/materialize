@@ -13,7 +13,6 @@ use std::cmp;
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,6 +20,7 @@ use anyhow::{anyhow, bail, Context};
 use differential_dataflow::{Collection, Hashable};
 use futures::{StreamExt, TryFutureExt};
 use itertools::Itertools;
+use mz_persist_client::ShardId;
 use prometheus::core::AtomicU64;
 use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
@@ -38,7 +38,6 @@ use timely::dataflow::operators::generic::{InputHandle, OutputHandle};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as _};
-use timely::scheduling::Activator;
 use timely::PartialOrder;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::Mutex;
@@ -54,12 +53,11 @@ use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, Gau
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_timely_util::async_op;
-use mz_timely_util::operators_async_ext::OperatorBuilderExt;
+use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 
-use super::KafkaBaseMetrics;
 use crate::controller::CollectionMetadata;
-use crate::render::sinks::SinkRender;
+use crate::render::sinks::{HealthcheckerArgs, SinkRender};
+use crate::sink::{Healthchecker, KafkaBaseMetrics, SinkStatus};
 use crate::storage_state::StorageState;
 use crate::types::connections::{ConnectionContext, PopulateClientConfig};
 use crate::types::errors::DataflowError;
@@ -93,12 +91,13 @@ where
     fn render_continuous_sink(
         &self,
         storage_state: &mut StorageState,
-        sink: &StorageSinkDesc<CollectionMetadata>,
+        sink: &StorageSinkDesc<CollectionMetadata, ShardId>,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
         _err_collection: Collection<G, DataflowError, Diff>,
+        healthchecker_args: HealthcheckerArgs,
     ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>,
@@ -130,6 +129,7 @@ where
             Rc::clone(&shared_frontier),
             &storage_state.sink_metrics.kafka,
             &storage_state.connection_context,
+            healthchecker_args,
         );
 
         storage_state
@@ -260,17 +260,6 @@ impl ProducerContext for SinkProducerContext {
     }
 }
 
-struct KafkaSinkToken {
-    shutdown_flag: Arc<AtomicBool>,
-}
-
-impl Drop for KafkaSinkToken {
-    fn drop(&mut self) {
-        debug!("dropping kafka sink");
-        self.shutdown_flag.store(true, Ordering::SeqCst);
-    }
-}
-
 #[derive(Clone)]
 struct KafkaTxProducer {
     name: String,
@@ -338,53 +327,57 @@ impl KafkaTxProducer {
     {
         self.inner.send(record)
     }
-}
 
-#[derive(Debug, Clone)]
-struct ProgressInitState {
-    topic: String,
-    key: String,
-    progress_client_config: rdkafka::ClientConfig,
-}
-
-impl ProgressInitState {
-    fn to_running(self, gate_ts: Rc<Cell<Option<Timestamp>>>) -> ProgressRunningState {
-        ProgressRunningState {
-            topic: self.topic,
-            key: self.key,
-            gate_ts,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct ProgressRunningState {
-    topic: String,
-    key: String,
-    gate_ts: Rc<Cell<Option<Timestamp>>>,
-}
-
-#[derive(Debug, Clone)]
-enum KafkaSinkStateEnum {
-    // Initialize ourselves as a transactional producer with Kafka
-    // Note that this only runs once across all workers - it should only execute
-    // for the worker that will actually be publishing to kafka
-    Init(Option<ProgressInitState>),
-    Running(Option<ProgressRunningState>),
-}
-
-impl KafkaSinkStateEnum {
-    fn unwrap_running(&self) -> Option<&ProgressRunningState> {
-        match self {
-            Self::Init(_) => panic!("KafkaSink unexpected in Init state"),
-            Self::Running(c) => c.as_ref(),
+    async fn retry_on_txn_error<'a, F, Fut, T>(&self, f: F) -> Result<T, String>
+    where
+        F: Fn(KafkaTxProducer) -> Fut,
+        Fut: Future<Output = KafkaResult<T>>,
+    {
+        let stream = Retry::default()
+            .clamp_backoff(BACKOFF_CLAMP)
+            .into_retry_stream();
+        tokio::pin!(stream);
+        loop {
+            stream.next().await;
+            match f(self.clone()).await {
+                Ok(result) => return Ok(result),
+                Err(KafkaError::Transaction(e)) if e.txn_requires_abort() => {
+                    info!("error requiring txn abort in kafka sink: {:?}", e);
+                    self.abort_active_txn().await?;
+                    return Err(format!(
+                        "shutting down due error requiring txn abort in kafka sink: {e:?}"
+                    ));
+                }
+                Err(KafkaError::Transaction(e)) if e.is_retriable() => {
+                    info!("retriable error in kafka sink: {e:?}; will retry");
+                    continue;
+                }
+                Err(e) => {
+                    return Err(format!("shutting down due to non-retriable error: {e:?}"));
+                }
+            }
         }
     }
 
-    fn gate_ts(&self) -> Option<Timestamp> {
-        match self {
-            Self::Init(_) | Self::Running(None) => None,
-            Self::Running(Some(ProgressRunningState { gate_ts, .. })) => gate_ts.get(),
+    async fn abort_active_txn(&self) -> Result<(), String> {
+        let stream = Retry::default()
+            .clamp_backoff(BACKOFF_CLAMP)
+            .into_retry_stream();
+        tokio::pin!(stream);
+        loop {
+            stream.next().await;
+            info!("Attempting to abort kafka transaction");
+            match self.abort_transaction().await {
+                Ok(()) => return Ok(()),
+                Err(KafkaError::Transaction(e)) if e.is_retriable() => {
+                    continue;
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "non-retriable error while aborting kafka transaction: {e:?}"
+                    ));
+                }
+            }
         }
     }
 }
@@ -394,11 +387,16 @@ struct KafkaSinkState {
     topic: String,
     metrics: Arc<SinkMetrics>,
     producer: KafkaTxProducer,
-    activator: timely::scheduling::Activator,
     pending_rows: HashMap<Timestamp, Vec<EncodedRow>>,
     ready_rows: VecDeque<(Timestamp, Vec<EncodedRow>)>,
     retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
-    sink_state: KafkaSinkStateEnum,
+
+    progress_topic: String,
+    progress_key: String,
+    progress_client_config: rdkafka::ClientConfig,
+
+    healthchecker: Arc<Mutex<Option<Healthchecker>>>,
+    gate_ts: Rc<Cell<Option<Timestamp>>>,
 
     /// Timestamp of the latest progress record that was written out to Kafka.
     latest_progress_ts: Timestamp,
@@ -420,10 +418,10 @@ impl KafkaSinkState {
         sink_name: String,
         sink_id: &GlobalId,
         worker_id: String,
-        activator: Activator,
         write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
         metrics: &KafkaBaseMetrics,
         connection_context: &ConnectionContext,
+        gate_ts: Rc<Cell<Option<Timestamp>>>,
     ) -> Self {
         let transactional_id = format!("mz-producer-{sink_id}-{worker_id}");
         let config =
@@ -453,22 +451,19 @@ impl KafkaSinkState {
             timeout: Duration::from_secs(5),
         };
 
-        let sink_state = KafkaSinkStateEnum::Init(Some(ProgressInitState {
-            topic: connection.progress.topic,
-            key: format!("mz-sink-{sink_id}"),
-            progress_client_config,
-        }));
-
         KafkaSinkState {
             name: sink_name,
             topic: connection.topic,
             metrics,
             producer,
-            activator,
             pending_rows: HashMap::new(),
             ready_rows: VecDeque::new(),
             retry_manager,
-            sink_state,
+            progress_topic: connection.progress.topic,
+            progress_key: format!("mz-sink-{sink_id}"),
+            progress_client_config,
+            healthchecker: Arc::new(Mutex::new(None)),
+            gate_ts,
             latest_progress_ts: Timestamp::minimum(),
             write_frontier,
         }
@@ -532,53 +527,6 @@ impl KafkaSinkState {
         config
     }
 
-    async fn retry_on_txn_error<'a, F, Fut, T>(&self, f: F) -> T
-    where
-        F: Fn(KafkaTxProducer) -> Fut,
-        Fut: Future<Output = KafkaResult<T>>,
-    {
-        Retry::default()
-            .clamp_backoff(BACKOFF_CLAMP)
-            .retry_async(|_| async {
-                match f(self.producer.clone()).await {
-                    Ok(result) => Ok(result),
-                    Err(KafkaError::Transaction(e)) if e.txn_requires_abort() => {
-                        info!("error requiring txn abort in kafka sink: {:?}", e);
-                        let () = self.abort_active_txn().await;
-                        panic!("shutting down due error requiring txn abort in kafka sink: {e:?}");
-                    }
-                    Err(KafkaError::Transaction(e)) if e.is_retriable() => {
-                        info!("retriable error in kafka sink: {e:?}; will retry");
-                        Err(KafkaError::Transaction(e))
-                    }
-                    Err(e) => {
-                        panic!("shutting down due to non-retriable error: {e:?}");
-                    }
-                }
-            })
-            .await
-            .expect("retries infinitely")
-    }
-
-    async fn abort_active_txn(&self) {
-        Retry::default()
-            .clamp_backoff(BACKOFF_CLAMP)
-            .retry_async(|_| async {
-                info!("Attempting to abort kafka transaction");
-                match self.producer.abort_transaction().await {
-                    Ok(()) => Ok(()),
-                    Err(KafkaError::Transaction(e)) if e.is_retriable() => {
-                        Err(KafkaError::Transaction(e))
-                    }
-                    Err(e) => {
-                        panic!("non-retriable error while aborting kafka transaction: {e:?}");
-                    }
-                }
-            })
-            .await
-            .expect("retries infinitely");
-    }
-
     async fn send<'a, K, P>(&self, mut record: BaseRecord<'a, K, P>)
     where
         K: ToBytes + ?Sized,
@@ -609,7 +557,11 @@ impl KafkaSinkState {
                         continue;
                     } else {
                         // We've received an error that is not transient
-                        panic!("fatal error while producing message in {}: {e}", self.name,);
+                        Healthchecker::report_stall_and_panic(
+                            self.healthchecker.lock().await.as_mut(),
+                            format!("fatal error while producing message in {}: {e}", self.name,),
+                        )
+                        .await;
                     }
                 }
             }
@@ -772,50 +724,38 @@ impl KafkaSinkState {
             Ok(latest_ts)
         }
 
-        if let KafkaSinkStateEnum::Init(Some(ProgressInitState {
-            topic,
-            key,
-            progress_client_config,
-        })) = &self.sink_state
-        {
-            // Only actually used for retriable errors.
-            return Retry::default()
-                .clamp_backoff(Duration::from_secs(60 * 10))
-                .retry_async(|_| async {
-                    let topic = topic.clone();
-                    let key = key.clone();
-                    let progress_client_config = progress_client_config.clone();
-                    task::spawn_blocking(
-                        || format!("get_latest_ts:{}", self.name),
-                        move || {
-                            get_latest_ts(
-                                &topic,
-                                &key,
-                                &progress_client_config,
-                                Duration::from_secs(10),
-                            )
-                        },
-                    )
-                    .await
-                    .unwrap_or_else(|e| bail!(e))
-                })
-                .await;
-        }
-        Ok(None)
+        // Only actually used for retriable errors.
+        Retry::default()
+            .clamp_backoff(Duration::from_secs(60 * 10))
+            .retry_async(|_| async {
+                let progress_topic = self.progress_topic.clone();
+                let progress_key = self.progress_key.clone();
+                let progress_client_config = self.progress_client_config.clone();
+                task::spawn_blocking(
+                    || format!("get_latest_ts:{}", self.name),
+                    move || {
+                        get_latest_ts(
+                            &progress_topic,
+                            &progress_key,
+                            &progress_client_config,
+                            Duration::from_secs(10),
+                        )
+                    },
+                )
+                .await
+                .unwrap_or_else(|e| bail!(e))
+            })
+            .await
     }
 
-    async fn send_progress_record(
-        &self,
-        transaction_id: Timestamp,
-        progress: &ProgressRunningState,
-    ) {
+    async fn send_progress_record(&self, transaction_id: Timestamp) {
         let encoded = serde_json::to_vec(&ProgressRecord {
             timestamp: transaction_id,
         })
         .expect("serialization to vec cannot fail");
-        let record = BaseRecord::to(&progress.topic)
+        let record = BaseRecord::to(&self.progress_topic)
             .payload(&encoded)
-            .key(&progress.key);
+            .key(&self.progress_key);
         self.send(record).await
     }
 
@@ -896,19 +836,42 @@ impl KafkaSinkState {
 
             if min_frontier > self.latest_progress_ts {
                 // record the write frontier in the progress topic.
-                if let Some(progress_state) = self.sink_state.unwrap_running() {
-                    self.retry_on_txn_error(|p| p.begin_transaction()).await;
+                let () = match self
+                    .producer
+                    .retry_on_txn_error(|p| p.begin_transaction())
+                    .await
+                {
+                    Ok(()) => (),
+                    Err(err) => {
+                        Healthchecker::report_stall_and_panic(
+                            self.healthchecker.lock().await.as_mut(),
+                            err,
+                        )
+                        .await
+                    }
+                };
 
-                    info!(
-                        "{}: sending progress for gate ts: {:?}",
-                        &self.name, min_frontier
-                    );
-                    self.send_progress_record(min_frontier, progress_state)
-                        .await;
+                info!(
+                    "{}: sending progress for gate ts: {:?}",
+                    &self.name, min_frontier
+                );
+                self.send_progress_record(min_frontier).await;
 
-                    self.retry_on_txn_error(|p| p.commit_transaction()).await;
-                    progress_emitted = true;
-                }
+                let () = match self
+                    .producer
+                    .retry_on_txn_error(|p| p.commit_transaction())
+                    .await
+                {
+                    Ok(()) => (),
+                    Err(err) => {
+                        Healthchecker::report_stall_and_panic(
+                            self.healthchecker.lock().await.as_mut(),
+                            err,
+                        )
+                        .await
+                    }
+                };
+                progress_emitted = true;
                 self.latest_progress_ts = min_frontier;
             }
 
@@ -950,6 +913,7 @@ fn kafka<G>(
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     metrics: &KafkaBaseMetrics,
     connection_context: &ConnectionContext,
+    healthchecker_args: HealthcheckerArgs,
 ) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -1015,6 +979,7 @@ where
         write_frontier,
         metrics,
         connection_context,
+        healthchecker_args,
     )
 }
 
@@ -1039,26 +1004,25 @@ pub fn produce_to_kafka<G>(
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     metrics: &KafkaBaseMetrics,
     connection_context: &ConnectionContext,
+    healthchecker_args: HealthcheckerArgs,
 ) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
 {
     let scope = stream.scope();
-    let mut builder = OperatorBuilder::new(name.clone(), scope.clone());
-    let activator = scope.activator_for(&builder.operator_info().address[..]);
+    let mut builder = AsyncOperatorBuilder::new(name.clone(), scope.clone());
 
-    let shutdown_flag = Arc::new(AtomicBool::new(false));
-    let shutdown_flag_clone = Arc::clone(&shutdown_flag);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
     let mut s = KafkaSinkState::new(
         connection,
         name,
         &id,
         scope.index().to_string(),
-        activator,
         write_frontier,
         metrics,
         connection_context,
+        Rc::clone(&shared_gate_ts),
     );
 
     let mut vector = Vec::new();
@@ -1075,227 +1039,262 @@ where
 
     let mut input = builder.new_input(&stream, Exchange::new(move |_| hashed_id));
 
-    builder.build_async(
-        scope,
-        async_op!(|_initial_capabilities, frontiers| {
-            if shutdown_flag_clone.load(Ordering::SeqCst) {
-                debug!("shutting down sink: {}", &s.name);
+    builder.build(move |_capabilities| async move {
+        if !is_active_worker {
+            return;
+        }
 
-                // Approximately one last attempt to push anything pending to kafka before closing.
-                if !shutdown_flush.get() {
-                    debug!("flushing kafka producer for sink: {}", &s.name);
-                    let _ = s.producer.flush().await;
-                    shutdown_flush.set(true);
-                }
-
-                // NOTE: This is somewhat subtle, but we never downgrade our
-                // write frontier to the empty frontier when we're shutting
-                // down. We might be shutting down for any number of reasons,
-                // most of them probably not because our source is finished.
-                // Meaning in most cases it would be wrong to advance our write
-                // frontier to the empty frontier.
-                //
-                // This note is here because a previous version of the code
-                // _did_ downgrade to the empty frontier here.
-                return false;
-            }
-            // Panic if there's not exactly once element in the frontier like we expect.
-            let frontier = frontiers.clone().into_element();
-
-            if is_active_worker {
-                if let KafkaSinkStateEnum::Init(ref init) = s.sink_state {
-                    s.retry_on_txn_error(|p| p.init_transactions()).await;
-
-                    let latest_ts = s
-                        .determine_latest_progress_record()
-                        .await
-                        .expect("determining latest progress record");
-                    info!(
-                        "{}: initial as_of: {:?}, latest progress record: {:?}",
-                        s.name, as_of.frontier, latest_ts
-                    );
-                    shared_gate_ts.set(latest_ts);
-
-                    let progress_state = init
-                        .clone()
-                        .map(|init| init.to_running(Rc::clone(&shared_gate_ts)));
-
-                    if let Some(gate) = latest_ts {
-                        assert!(
-                            PartialOrder::less_equal(&as_of.frontier, &Antichain::from_elem(gate)),
-                            "{}: some element of the Sink as_of frontier is too \
-                                far advanced for our output-gating timestamp: \
-                                as_of {:?}, gate_ts: {:?}",
-                            s.name,
-                            as_of.frontier,
-                            gate
-                        );
-                        s.maybe_update_progress(&gate);
-                    }
-
-                    s.sink_state = KafkaSinkStateEnum::Running(progress_state);
-                }
-            }
-
-            // Queue all pending rows waiting to be sent to kafka
-            input.for_each(|_, rows| {
-                assert!(is_active_worker);
-                rows.swap(&mut vector);
-                for ((key, value), time, diff) in vector.drain(..) {
-                    let should_emit = if as_of.strict {
-                        as_of.frontier.less_than(&time)
-                    } else {
-                        as_of.frontier.less_equal(&time)
-                    };
-
-                    let previously_published = Some(time) <= s.sink_state.gate_ts();
-
-                    if !should_emit || previously_published {
-                        // Skip stale data for already published timestamps
-                        continue;
-                    }
-
-                    assert!(diff >= 0, "can't sink negative multiplicities");
-                    if diff == 0 {
-                        // Explicitly refuse to send no-op records
-                        continue;
-                    };
-                    let diff = diff as usize;
-
-                    let rows = s.pending_rows.entry(time).or_default();
-                    rows.push(EncodedRow {
-                        key,
-                        value,
-                        count: diff,
-                    });
-                    s.metrics.rows_queued.inc();
-                }
-            });
-
-            // Move any newly closed timestamps from pending to ready
-            let mut closed_ts: Vec<Timestamp> = s
-                .pending_rows
-                .iter()
-                .filter(|(ts, _)| !frontier.less_equal(*ts))
-                .map(|(&ts, _)| ts)
-                .collect();
-            closed_ts.sort_unstable();
-            closed_ts.into_iter().for_each(|ts| {
-                let rows = s.pending_rows.remove(&ts).unwrap();
-                s.ready_rows.push_back((ts, rows));
-            });
-
-            while let Some((ts, rows)) = s.ready_rows.front() {
-                assert!(is_active_worker);
-
-                info!(
-                    "Beginning transaction for {:?} with {:?} rows",
-                    ts,
-                    rows.len()
-                );
-                s.retry_on_txn_error(|p| p.begin_transaction()).await;
-
-                let mut repeat_counter = 0;
-                for encoded_row in rows {
-                    let record = BaseRecord::to(&s.topic);
-                    let record = match encoded_row.value.as_ref() {
-                        Some(r) => record.payload(r),
-                        None => record,
-                    };
-                    let record = match encoded_row.key.as_ref() {
-                        Some(r) => record.key(r),
-                        None => record,
-                    };
-
-                    let ts_bytes = ts.to_string().into_bytes();
-                    let record = record.headers(OwnedHeaders::new().insert(Header {
-                        key: "materialize-timestamp",
-                        value: Some(&ts_bytes),
-                    }));
-
-                    s.send(record).await;
-
-                    // advance to the next repetition of this row, or the next row if all
-                    // repetitions are exhausted
-                    repeat_counter += 1;
-                    if repeat_counter == encoded_row.count {
-                        repeat_counter = 0;
-                        s.metrics.rows_queued.dec();
-                    }
-                }
-
-                // Flush to make sure that errored messages have been properly retried before
-                // sending progress records and commit transactions.
-                s.flush().await;
-
-                if let Some(progress_state) = s.sink_state.unwrap_running() {
-                    s.send_progress_record(*ts, progress_state).await;
-                }
-
-                info!("Committing transaction for {:?}", ts,);
-                s.retry_on_txn_error(|p| p.commit_transaction()).await;
-
-                s.flush().await;
-
-                // sanity check for the continuous updating
-                // of the write frontier below
-                s.assert_progress(ts);
-                progress_update.replace(ts.clone());
-
-                s.ready_rows.pop_front();
-            }
-
-            // Update our state based on any progress we may have sent.  This
-            // call is required for us to periodically write progress updates
-            // even without new data coming in.
-            if let Some(ts) = progress_update.take() {
-                s.maybe_update_progress(&ts);
-            }
-
-            // If we don't have ready rows, our write frontier equals the minimum
-            // of the input frontier and any stashed timestamps.
-            // While we still have ready rows that we're emitting, hold the write
-            // frontier at the previous time.
-            //
-            // Only one worker receives all the updates and we don't want the
-            // other workers to also emit progress.
-            if is_active_worker {
-                let progress_emitted = s.maybe_emit_progress(frontier.clone(), &as_of).await;
-                if progress_emitted {
-                    // Don't flush if we know there were no records emitted.
-                    // It has a noticeable negative performance impact.
-                    s.flush().await;
-                }
-            }
-
-            // We want debug_assert but also to print out if we would have failed the assertion in release mode
-            let in_flight_count = s.producer.inner.in_flight_count();
-            let sends_flushed = s.retry_manager.lock().await.sends_flushed();
-            if cfg!(debug_assertions) {
-                assert_eq!(in_flight_count, 0);
-                assert!(sends_flushed);
+        let mut healthchecker =
+            if let Some(status_shard_id) = healthchecker_args.status_shard_id {
+                let mut hc = Healthchecker::new(
+                    id,
+                    &healthchecker_args.persist_clients,
+                    healthchecker_args.persist_location.clone(),
+                    status_shard_id,
+                    healthchecker_args.now_fn.clone(),
+                )
+                .await
+                .expect("error initializing healthchecker");
+                hc.update_status(SinkStatus::Starting).await;
+                Some(hc)
             } else {
-                if in_flight_count != 0 {
-                    error!("Producer has {:?} messages in flight", in_flight_count);
+                None
+            };
+
+        let () = match s
+            .producer
+            .retry_on_txn_error(|p| p.init_transactions())
+            .await
+        {
+            Ok(()) => (),
+            Err(err) => {
+                Healthchecker::report_stall_and_panic(healthchecker.as_mut(), err).await
+            }
+        };
+
+        let latest_ts = match s.determine_latest_progress_record().await {
+            Ok(latest_ts) => latest_ts,
+            Err(e) => {
+                Healthchecker::report_stall_and_panic(
+                    healthchecker.as_mut(),
+                    format!("determining latest progress record {e:?}"),
+                )
+                .await
+            }
+        };
+        info!(
+            "{}: initial as_of: {:?}, latest progress record: {:?}",
+            s.name, as_of.frontier, latest_ts
+        );
+        shared_gate_ts.set(latest_ts);
+
+        if let Some(gate) = latest_ts {
+            assert!(
+                PartialOrder::less_equal(&as_of.frontier, &Antichain::from_elem(gate)),
+                "{}: some element of the Sink as_of frontier is too \
+                    far advanced for our output-gating timestamp: \
+                    as_of {:?}, gate_ts: {:?}",
+                s.name,
+                as_of.frontier,
+                gate
+            );
+            s.maybe_update_progress(&gate);
+        }
+
+        if let Some(ref mut healthchecker) = healthchecker.as_mut() {
+            healthchecker.update_status(SinkStatus::Running).await;
+        }
+        *s.healthchecker.lock().await = healthchecker;
+
+        tokio::pin!(shutdown_rx);
+        loop {
+            tokio::select! {
+                _ = shutdown_rx.as_mut() => {
+                    debug!("shutting down sink: {}", &s.name);
+
+                    // Approximately one last attempt to push anything pending to kafka before closing.
+                    if !shutdown_flush.get() {
+                        debug!("flushing kafka producer for sink: {}", &s.name);
+                        let _ = s.producer.flush().await;
+                        shutdown_flush.set(true);
+                    }
+
+                    // NOTE: This is somewhat subtle, but we never downgrade our
+                    // write frontier to the empty frontier when we're shutting
+                    // down. We might be shutting down for any number of reasons,
+                    // most of them probably not because our source is finished.
+                    // Meaning in most cases it would be wrong to advance our write
+                    // frontier to the empty frontier.
+                    //
+                    // This note is here because a previous version of the code
+                    // _did_ downgrade to the empty frontier here.
+                    return;
                 }
-                if !sends_flushed {
-                    error!("Retry manager has not flushed sends");
+                Some(event) = input.next() => {
+                    match event {
+                        Event::Data(_, rows) => {
+                            // Queue all pending rows waiting to be sent to kafka
+                            assert!(is_active_worker);
+                            rows.swap(&mut vector);
+                            for ((key, value), time, diff) in vector.drain(..) {
+                                let should_emit = if as_of.strict {
+                                    as_of.frontier.less_than(&time)
+                                } else {
+                                    as_of.frontier.less_equal(&time)
+                                };
+
+                                let previously_published = Some(time) <= s.gate_ts.get();
+
+                                if !should_emit || previously_published {
+                                    // Skip stale data for already published timestamps
+                                    continue;
+                                }
+
+                                assert!(diff >= 0, "can't sink negative multiplicities");
+                                if diff == 0 {
+                                    // Explicitly refuse to send no-op records
+                                    continue;
+                                };
+                                let diff = diff as usize;
+
+                                let rows = s.pending_rows.entry(time).or_default();
+                                rows.push(EncodedRow {
+                                    key,
+                                    value,
+                                    count: diff,
+                                });
+                                s.metrics.rows_queued.inc();
+                            }
+                        }
+                        Event::Progress(frontier) => {
+                            // Move any newly closed timestamps from pending to ready
+                            let mut closed_ts: Vec<Timestamp> = s
+                                .pending_rows
+                                .iter()
+                                .filter(|(ts, _)| !frontier.less_equal(*ts))
+                                .map(|(&ts, _)| ts)
+                                .collect();
+                            closed_ts.sort_unstable();
+                            closed_ts.into_iter().for_each(|ts| {
+                                let rows = s.pending_rows.remove(&ts).unwrap();
+                                s.ready_rows.push_back((ts, rows));
+                            });
+
+                            while let Some((ts, rows)) = s.ready_rows.front() {
+                                assert!(is_active_worker);
+
+                                info!(
+                                    "Beginning transaction for {:?} with {:?} rows",
+                                    ts,
+                                    rows.len()
+                                );
+                                let () = match s.producer
+                                    .retry_on_txn_error(|p| p.begin_transaction())
+                                    .await {
+                                        Ok(()) => (),
+                                        Err(err) => Healthchecker::report_stall_and_panic(s.healthchecker.lock().await.as_mut(), err).await,
+                                    };
+
+                                let mut repeat_counter = 0;
+                                for encoded_row in rows {
+                                    let record = BaseRecord::to(&s.topic);
+                                    let record = match encoded_row.value.as_ref() {
+                                        Some(r) => record.payload(r),
+                                        None => record,
+                                    };
+                                    let record = match encoded_row.key.as_ref() {
+                                        Some(r) => record.key(r),
+                                        None => record,
+                                    };
+
+                                    let ts_bytes = ts.to_string().into_bytes();
+                                    let record =
+                                        record.headers(OwnedHeaders::new().insert(Header {
+                                            key: "materialize-timestamp",
+                                            value: Some(&ts_bytes),
+                                        }));
+
+                                    s.send(record).await;
+
+                                    // advance to the next repetition of this row, or the next row if all
+                                    // repetitions are exhausted
+                                    repeat_counter += 1;
+                                    if repeat_counter == encoded_row.count {
+                                        repeat_counter = 0;
+                                        s.metrics.rows_queued.dec();
+                                    }
+                                }
+
+                                // Flush to make sure that errored messages have been properly retried before
+                                // sending progress records and commit transactions.
+                                s.flush().await;
+
+                                s.send_progress_record(*ts).await;
+
+                                info!("Committing transaction for {:?}", ts,);
+                                let () = match s.producer
+                                    .retry_on_txn_error(|p| p.commit_transaction())
+                                    .await {
+                                        Ok(()) => (),
+                                        Err(err) => Healthchecker::report_stall_and_panic(s.healthchecker.lock().await.as_mut(), err).await,
+                                    };
+
+                                s.flush().await;
+
+                                // sanity check for the continuous updating
+                                // of the write frontier below
+                                s.assert_progress(ts);
+                                progress_update.replace(ts.clone());
+
+                                s.ready_rows.pop_front();
+                            }
+
+                            // Update our state based on any progress we may have sent.  This
+                            // call is required for us to periodically write progress updates
+                            // even without new data coming in.
+                            if let Some(ts) = progress_update.take() {
+                                s.maybe_update_progress(&ts);
+                            }
+
+                            // If we don't have ready rows, our write frontier equals the minimum
+                            // of the input frontier and any stashed timestamps.
+                            // While we still have ready rows that we're emitting, hold the write
+                            // frontier at the previous time.
+                            //
+                            // Only one worker receives all the updates and we don't want the
+                            // other workers to also emit progress.
+                            if is_active_worker {
+                                let progress_emitted =
+                                    s.maybe_emit_progress(frontier.clone(), &as_of).await;
+                                if progress_emitted {
+                                    // Don't flush if we know there were no records emitted.
+                                    // It has a noticeable negative performance impact.
+                                    s.flush().await;
+                                }
+                            }
+
+                            // We want debug_assert but also to print out if we would have failed the assertion in release mode
+                            let in_flight_count = s.producer.inner.in_flight_count();
+                            let sends_flushed = s.retry_manager.lock().await.sends_flushed();
+                            if cfg!(debug_assertions) {
+                                assert_eq!(in_flight_count, 0);
+                                assert!(sends_flushed);
+                            } else {
+                                if in_flight_count != 0 {
+                                    error!("Producer has {:?} messages in flight", in_flight_count);
+                                }
+                                if !sends_flushed {
+                                    error!("Retry manager has not flushed sends");
+                                }
+                            }
+                        }
+                    }
                 }
             }
+        }
+    });
 
-            if !s.pending_rows.is_empty() {
-                // We have some more rows that we need to wait for frontiers to advance before we
-                // can write them out. Let's make sure to reschedule with a small delay to give the
-                // system time to advance.
-                s.activator.activate_after(Duration::from_millis(100));
-                return true;
-            }
-
-            false
-        }),
-    );
-
-    Rc::new(KafkaSinkToken { shutdown_flag })
+    Rc::new(shutdown_tx)
 }
 
 /// Encodes a stream of `(Option<Row>, Option<Row>)` updates using the specified encoder.

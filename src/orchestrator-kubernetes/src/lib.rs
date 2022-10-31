@@ -32,12 +32,14 @@ use kube::ResourceExt;
 use maplit::btreemap;
 use sha2::{Digest, Sha256};
 
+use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_orchestrator::LabelSelector as MzLabelSelector;
 use mz_orchestrator::{
     LabelSelectionLogic, NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments,
     ServiceConfig, ServiceEvent, ServiceStatus,
 };
 
+pub mod cloud_resource_controller;
 pub mod secrets;
 pub mod util;
 
@@ -86,6 +88,7 @@ pub struct KubernetesOrchestrator {
     kubernetes_namespace: String,
     config: KubernetesOrchestratorConfig,
     secret_api: Api<Secret>,
+    vpc_endpoint_api: Api<VpcEndpoint>,
 }
 
 impl fmt::Debug for KubernetesOrchestrator {
@@ -104,7 +107,8 @@ impl KubernetesOrchestrator {
             client: client.clone(),
             kubernetes_namespace,
             config,
-            secret_api: Api::default_namespaced(client),
+            secret_api: Api::default_namespaced(client.clone()),
+            vpc_endpoint_api: Api::default_namespaced(client),
         })
     }
 }

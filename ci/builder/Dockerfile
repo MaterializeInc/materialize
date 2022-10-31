@@ -48,6 +48,7 @@ RUN gpg --import crosstool.asc \
     && rm crosstool.asc \
     && echo "trusted-key 09f6dd5f1f30ef2e" >> ~/.gnupg/gpg.conf \
     && mkdir crosstool \
+    # TODO(teske): Remove the CT_ZLIB_VERSION workaround below when we upgrade crosstools. \
     && curl -fsSL http://crosstool-ng.org/download/crosstool-ng/crosstool-ng-1.25.0.tar.xz > crosstool.tar.xz \
     && curl -fsSL http://crosstool-ng.org/download/crosstool-ng/crosstool-ng-1.25.0.tar.xz.sig > crosstool.sig \
     && gpg --verify crosstool.sig crosstool.tar.xz \
@@ -60,6 +61,8 @@ COPY crosstool-$ARCH_GCC.defconfig ./
 
 RUN DEFCONFIG=crosstool-$ARCH_GCC.defconfig ct-ng defconfig \
     && rm crosstool-$ARCH_GCC.defconfig \
+    # https://github.com/crosstool-ng/crosstool-ng/issues/1832 \
+    && sed -i 's/CT_ZLIB_VERSION="1.2.12"/CT_ZLIB_VERSION="1.2.13"/g' .config \
     && ct-ng build
 
 # Import the cross-compiling toolchain into a fresh image, omitting the
@@ -148,10 +151,10 @@ RUN mkdir rust \
         ;; \
     esac \
     && rm -rf rust \
-    && cargo install --root /usr/local --version "=1.33.1" cargo-deb \
-    && cargo install --root /usr/local --version "=0.9.1" cargo-deny \
-    && cargo install --root /usr/local --version "=0.1.10" cargo2junit \
-    && cargo install --root /usr/local --version "=0.1.26" cargo-udeps  --features=vendored-openssl \
+    && cargo install --root /usr/local --version "=1.40.5" cargo-deb \
+    && cargo install --root /usr/local --version "=0.12.2" cargo-deny \
+    && cargo install --root /usr/local --version "=0.1.12" cargo2junit \
+    && cargo install --root /usr/local --version "=0.1.34" cargo-udeps  --features=vendored-openssl \
     && cargo install --root /usr/local --version "=0.2.15" --no-default-features --features=s3,openssl/vendored sccache
 
 # Link the system lld into the cross-compiling sysroot.

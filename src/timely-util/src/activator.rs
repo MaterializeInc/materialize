@@ -12,6 +12,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use timely::dataflow::Scope;
 use timely::scheduling::{Activator, SyncActivator};
 
@@ -222,5 +223,32 @@ impl ArcActivatorInner {
 
     fn ack(&mut self) {
         self.activated = 0;
+    }
+}
+
+/// An activator that ignores new activations if one is already pending.
+pub struct LimitingActivator {
+    inner: Activator,
+    next_activation: Instant,
+}
+
+impl LimitingActivator {
+    pub fn new(inner: Activator) -> Self {
+        Self {
+            inner,
+            next_activation: Instant::now(),
+        }
+    }
+
+    pub fn activate(&mut self) {
+        self.activate_after(Duration::ZERO);
+    }
+
+    pub fn activate_after(&mut self, duration: Duration) {
+        let now = Instant::now();
+        if self.next_activation <= now {
+            self.next_activation = now + duration;
+            self.inner.activate_after(duration);
+        }
     }
 }

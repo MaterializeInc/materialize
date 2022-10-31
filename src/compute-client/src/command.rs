@@ -209,42 +209,6 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
     }
 }
 
-impl<T> ComputeCommand<T> {
-    /// Indicates which global ids should start and cease frontier tracking.
-    ///
-    /// Identifiers added to `start` will install frontier tracking, and identifiers
-    /// added to `cease` will uninstall frontier tracking.
-    pub fn frontier_tracking(&self, start: &mut Vec<GlobalId>, cease: &mut Vec<GlobalId>) {
-        match self {
-            ComputeCommand::CreateDataflows(dataflows) => {
-                for dataflow in dataflows.iter() {
-                    for (sink_id, _) in dataflow.sink_exports.iter() {
-                        start.push(*sink_id)
-                    }
-                    for (index_id, _) in dataflow.index_exports.iter() {
-                        start.push(*index_id);
-                    }
-                }
-            }
-            ComputeCommand::AllowCompaction(frontiers) => {
-                for (id, frontier) in frontiers.iter() {
-                    if frontier.is_empty() {
-                        cease.push(*id);
-                    }
-                }
-            }
-            ComputeCommand::CreateInstance(config) => {
-                if let Some(logging_config) = &config.logging {
-                    start.extend(logging_config.log_identifiers());
-                }
-            }
-            _ => {
-                // Other commands have no known impact on frontier tracking.
-            }
-        }
-    }
-}
-
 /// An abstraction allowing us to name different replicas.
 pub type ReplicaId = u64;
 
@@ -254,8 +218,6 @@ pub type ProcessId = i64;
 #[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize)]
 /// Configuration sent to new compute instances.
 pub struct InstanceConfig {
-    /// The instance's replica ID.
-    pub replica_id: ReplicaId,
     /// Optionally, request the installation of logging sources.
     pub logging: Option<LoggingConfig>,
     /// Max size in bytes of any result.
@@ -276,7 +238,6 @@ pub struct CommunicationConfig {
 impl RustType<ProtoInstanceConfig> for InstanceConfig {
     fn into_proto(&self) -> ProtoInstanceConfig {
         ProtoInstanceConfig {
-            replica_id: self.replica_id,
             logging: self.logging.into_proto(),
             max_result_size: self.max_result_size,
         }
@@ -284,7 +245,6 @@ impl RustType<ProtoInstanceConfig> for InstanceConfig {
 
     fn from_proto(proto: ProtoInstanceConfig) -> Result<Self, TryFromProtoError> {
         Ok(Self {
-            replica_id: proto.replica_id,
             logging: proto.logging.into_rust()?,
             max_result_size: proto.max_result_size,
         })
@@ -924,11 +884,6 @@ pub struct Peek<T = mz_repr::Timestamp> {
     pub finishing: RowSetFinishing,
     /// Linear operation to apply in-line on each result.
     pub map_filter_project: mz_expr::SafeMfpPlan,
-    /// Target replica of this peek.
-    ///
-    /// If `Some`, the peek is only handled by the given replica.
-    /// If `None`, the peek is handled by all replicas.
-    pub target_replica: Option<ReplicaId>,
     /// An `OpenTelemetryContext` to forward trace information along
     /// to the compute worker to allow associating traces between
     /// the compute controller and the compute worker.
@@ -953,7 +908,6 @@ impl RustType<ProtoPeek> for Peek {
             timestamp: self.timestamp.into(),
             finishing: Some(self.finishing.into_proto()),
             map_filter_project: Some(self.map_filter_project.into_proto()),
-            target_replica: self.target_replica,
             otel_ctx: self.otel_ctx.clone().into(),
         }
     }
@@ -975,7 +929,6 @@ impl RustType<ProtoPeek> for Peek {
             map_filter_project: x
                 .map_filter_project
                 .into_rust_if_some("ProtoPeek::map_filter_project")?,
-            target_replica: x.target_replica,
             otel_ctx: x.otel_ctx.into(),
         })
     }
@@ -1011,9 +964,17 @@ pub struct ComputeCommandHistory<T = mz_repr::Timestamp> {
 
 impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
     /// Add a command to the history.
-    pub fn push(&mut self, command: ComputeCommand<T>) {
+    ///
+    /// This action will reduce the history every time it doubles while retaining the
+    /// provided peeks.
+    pub fn push<V>(
+        &mut self,
+        command: ComputeCommand<T>,
+        peeks: &std::collections::HashMap<uuid::Uuid, V>,
+    ) {
         self.commands.push(command);
         if self.commands.len() > 2 * self.reduced_count {
+            self.retain_peeks(peeks);
             self.reduce();
         }
     }

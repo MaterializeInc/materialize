@@ -92,6 +92,135 @@ not entirely consistent on the finer points, so don't worry about being exact.
 But please at least capitalize the obvious keywords, like `SELECT`, `INSERT`,
 `FROM`, `WHERE`, `AS`, `AND`, etc.
 
+### Error message style
+_Portions of this section are copied from the PostgreSQL documentation and subject to the PostgreSQL license, a copy of which is available in the LICENSE file at the root of this repository._
+
+For error message style, we strive to adhere to the [guidelines](https://www.postgresql.org/docs/current/error-style-guide.html) in the PostgreSQL manual, and use a format that consists of a **required** _primary_ message followed by **optional** _detail_ and _hint_ messages.
+
+- **Primary message**: short, factual, and avoids reference to implementation details. Lowercase the first letter and do not end with any punctuation.
+
+- **Detail message**: factual, use if needed to keep the primary message short or to mention implementation details. Use complete sentences, each of which starts with a capitalized letter and ends with a period. Separate sentences with two spaces.
+
+- **Hint message**: suggestions about what to do to fix the problem. This should be actionable, and can provide a shortlink to direct the user to more information. Use complete sentences, each of which starts with a capitalized letter and ends with a period. Separate sentences with two spaces.
+
+```
+Primary: could not parse column "bar.foo"
+Detail: Column "bar.foo" contains an unsupported type.
+Hint: Try using CAST in the CREATE SOURCE statement or excluding this column from replication.
+```
+
+To use a shortlink in a Hint, add the shortlink to this [file](https://github.com/MaterializeInc/materialize/blob/3efb2c933e4e6c8e694afb1e794c7d8dae368e7d/ci/deploy/website.sh#L29) in your PR to add/modify the hint message. Be mindful that we are committed to the upkeep of the referenced link.
+
+Some key principles to highlight are:
+* Do not put any formatting into message texts, such as newlines.
+* Use quotes to delimit file names, user-supplied identifiers, and other variables that might contain words.
+* Use double quotes when quoting is appropriate.
+* Use past tense if an attempt to do something failed, but could perhaps succeed next time (perhaps after fixing some problem). Use present tense if the failure is certainly permanent.
+* When citing the name of an object, state what kind of object it is.
+* Avoid mentioning called function names. Instead say what the code was trying to do.
+* Tricky words to avoid: unable, bad, illegal, unknown.
+* Avoid contractions and spell out words in full.
+* Word choices to be mindful of: find vs. exists, may vs. can vs. might.
+
+## Log message style
+
+We use the [`tracing` crate](https://docs.rs/tracing/latest/tracing/)'s log
+macros. Observe the following guidelines:
+
+  * Use sentence fragment style (no initial capitalization and no terminating
+    period). Say "beginning operation", not "Beginning operation."
+
+  * Prefer structured fields to string formatting when it may be valuable to
+    search by the value of said field, e.g.:
+
+    ```
+    fn handle_persist_thingy(shard_id: ShardId) {
+        // Preferred.
+        info!(shard_id = ?the_shard, "handling persist thingy");
+        // Acceptable.
+        info!("handling persist thingy for shard {}", shard_id);
+    }
+    ```
+
+    (We're still working on deploying the log aggregator that will allow for
+    searching by structured fields.)
+
+Messages at each level must meet the indicated standard:
+
+* **`ERROR`**: Reports an error that certainly indicates data corruption, data
+  loss, unavailability, or an invariant violation that results in undefined
+  behavior.
+
+  Use *judiciously*. These errors are reported to Sentry. The goal is to
+  eventually have every occurrence of an `error!` log message in production to
+  automatically start an incident and page the on-call engineer.
+
+  Consider instead using `panic!` or `unreachable!`. The scenarios in which a
+  correctness invariant is violated but it is safe to proceed without crashing
+  are quite rare.
+
+  Examples:
+
+  * A referenced collection is not present in the storage controller.
+  * A source ingested the deletion of a record that does not exist, causing a
+    "negative multiplicity."
+
+* **`WARN`**: Either:
+
+    * Like an `ERROR`, but where there is some uncertainty about the error
+      condition.
+    * A recoverable error that is still unexpected.
+
+  These warnings are not reported to Sentry and do not require urgent attention
+  on our end, but they should be the first events looked at when a problem has
+  been identified.
+
+  Any changes to the occurrence of `WARN`-level log events that are noticed
+  during release qualification should be investigated before proceeding with the
+  release.
+
+  * A cancellation request was received for an unknown peek.
+  * A Kafka source cannot connect to any of its brokers.
+
+* **`INFO`**: Reports normal system status changes. Messages at this level are
+  likely to be of interest to the support or engineering team during an
+  investigation of a problem, but do not otherwise require attention.
+
+  Examples:
+
+  * A process has started listening for incoming connections.
+  * A view was created.
+  * A view was dropped.
+
+* **`DEBUG`**: Like `INFO`, but for events where the likelihood of usefulness
+  is too low for the event to be emitted by default.
+
+  The idea is that when you are debugging a problem in a particular crate or
+  module, you can temporarily enable `DEBUG`-level logs for that specific
+  crate or module in the affected environment.
+
+  Examples:
+
+  * An HTTP request was routed through a proxy specified by the `http_proxy`
+    environment variable.
+  * An S3 object downloaded by an S3 source had an invalid `Content-Encoding`
+    header that was ignored, but the object was nonetheless decoded
+    successfully.
+
+* **`TRACE`**: Like `DEBUG`, but for events that meet an even lower standard of
+  relevance or importance.
+
+  Enabling `TRACE` logs can generate multiple gigabytes of log messages per
+  hour. Use extreme caution when enabling this log level. You should generally
+  only enable this log level when developing locally, and only for a single
+  module at a time.
+
+  Examples:
+
+  * A Kafka source consumed a message.
+  * A SQL client issued a command.
+
+
 ## Rust style
 
 [Clippy] and [rustfmt] are enforced via CI, and they are quite opinionated on

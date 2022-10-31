@@ -37,6 +37,11 @@ pub fn initialize_networking(
         process,
         addresses,
     } = config;
+    info!(
+        process = process,
+        "initializing network for multi-process timely instance, with {} processes",
+        addresses.len()
+    );
     let sockets_result = create_sockets(addresses.clone(), *process);
     match sockets_result.and_then(|sockets| {
         initialize_networking_from_sockets(sockets, *process, *workers, Box::new(|_| None))
@@ -75,7 +80,7 @@ fn create_sockets(
         }
     }
 
-    info!(worker = my_index, "initialization complete");
+    info!(process = my_index, "initialization complete");
 
     Ok(results)
 }
@@ -131,24 +136,25 @@ fn start_connections(
     // Thus, in between connection attempts, check whether a previously-established connection has
     // gone away; if so, we clear it and retry it again later.
     while let Some(i) = results.iter().position(|r| r.is_none()) {
+        info!(process = my_index, "Attempting to connect to process {i}");
         match TcpStream::connect(&addresses[i]) {
             Ok(mut s) => {
                 s.set_nodelay(true).expect("set_nodelay call failed");
 
                 s.write_all(&my_index.to_ne_bytes())
-                    .expect("failed to send worker index");
+                    .expect("failed to send process index");
 
                 // This is necessary for `gc_broken_connections`; it will be unset
                 // before actually trying to use the sockets.
                 s.set_nonblocking(true)
                     .expect("set_nonblocking(true) call failed");
 
-                info!(worker = my_index, "Connected to process {i}");
+                info!(process = my_index, "Connected to process {i}");
                 results[i] = Some(s);
             }
             Err(err) => {
                 info!(
-                    worker = my_index,
+                    process = my_index,
                     "error connecting to process {i}: {err}; will retry"
                 );
                 sleep(Duration::from_secs(1));
@@ -173,7 +179,9 @@ fn await_connections(
     let listener = TcpListener::bind(&addresses[my_index][..])?;
 
     while results.iter().any(|r| r.is_none()) {
+        info!(process = my_index, "Awaiting connection from peers");
         let mut stream = listener.accept()?.0;
+        info!(process = my_index, "Accepted connection from peer");
         stream.set_nodelay(true).expect("set_nodelay call failed");
         let mut buffer = [0u8; 8];
         stream.read_exact(&mut buffer)?;
@@ -188,10 +196,10 @@ fn await_connections(
         assert!(identifier >= (my_index + 1));
         assert!(identifier < addresses.len());
         if results[identifier - my_index - 1].is_some() {
-            warn!(worker = my_index, "New incarnation of peer {identifier}");
+            warn!(process = my_index, "New incarnation of peer {identifier}");
         }
         results[identifier - my_index - 1] = Some(stream);
-        info!(worker = my_index, "connection from process {}", identifier);
+        info!(process = my_index, "connection from process {}", identifier);
 
         // If a peer failed, it's better that we detect it now than spin up Timely
         // and immediately crash.

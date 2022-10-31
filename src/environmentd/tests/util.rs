@@ -216,6 +216,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             now: SYSTEM_TIME.clone(),
         },
         secrets_controller: Arc::clone(&orchestrator) as Arc<dyn SecretsController>,
+        cloud_resource_controller: None,
         sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         internal_sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),

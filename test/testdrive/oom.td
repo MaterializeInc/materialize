@@ -38,6 +38,18 @@ contains:result exceeds max size of 128 B
 ! INSERT INTO t1 SELECT * FROM t1;
 contains:result exceeds max size of 128 B
 
+> INSERT INTO t1 SELECT * FROM generate_series(1, 100);
+
+> BEGIN
+
+> DECLARE c CURSOR FOR SUBSCRIBE t1;
+
+# No output should be produced. Instead an error .. notice?
+! FETCH 1 c;
+contains:result exceeds max size of 128 B
+
+> ROLLBACK;
+
 # Constants with less than or equal to 10,000 rows will be evaluated in environmentd. Anything in excess of this will
 # be sent to computed to be executed. Therefore, we need to set the size high enough such that it will be evaluated by
 # computed to test the computed side of things.

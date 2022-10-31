@@ -139,7 +139,7 @@ CREATE CONNECTION pg_connection TO POSTGRES (
 );
 ```
 
-### Creating a source
+### Creating a source {#create-source-example}
 
 ```sql
 CREATE SOURCE mz_source

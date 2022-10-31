@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 use std::iter::once;
 use std::time::Duration;
@@ -1323,6 +1323,12 @@ impl<'a, S: Append> Transaction<'a, S> {
         }
     }
 
+    /// Removes item `id` from the transaction.
+    ///
+    /// Returns an error if `id` is not found.
+    ///
+    /// Runtime is linear with respect to the total number of items in the stash.
+    /// DO NOT call this function in a loop, use [`Self::remove_items`] instead.
     pub fn remove_item(&mut self, id: GlobalId) -> Result<(), Error> {
         let n = self.items.delete(|k, _v| k.gid == id).len();
         assert!(n <= 1);
@@ -1333,6 +1339,29 @@ impl<'a, S: Append> Transaction<'a, S> {
         }
     }
 
+    /// Removes all items in `ids` from the transaction.
+    ///
+    /// Returns an error if any id in `ids` is not found.
+    ///
+    /// NOTE: On error, there still may be some items removed from the transaction. It is
+    /// up to the called to either abort the transaction or commit.
+    pub fn remove_items(&mut self, ids: BTreeSet<GlobalId>) -> Result<(), Error> {
+        let n = self.items.delete(|k, _v| ids.contains(&k.gid)).len();
+        if n == ids.len() {
+            Ok(())
+        } else {
+            let item_gids = self.items.items().keys().map(|k| k.gid).collect();
+            let mut unknown = ids.difference(&item_gids);
+            Err(SqlCatalogError::UnknownItem(unknown.join(", ")).into())
+        }
+    }
+
+    /// Updates item `id` in the transaction to `item_name` and `item`.
+    ///
+    /// Returns an error if `id` is not found.
+    ///
+    /// Runtime is linear with respect to the total number of items in the stash.
+    /// DO NOT call this function in a loop, use [`Self::update_items`] instead.
     pub fn update_item(
         &mut self,
         id: GlobalId,
@@ -1355,6 +1384,39 @@ impl<'a, S: Append> Transaction<'a, S> {
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownItem(id.to_string()).into())
+        }
+    }
+
+    /// Updates all items with ids matching the keys of `items` in the transaction, to the
+    /// corresponding value in `items`.
+    ///
+    /// Returns an error if any id in `ids` is not found.
+    ///
+    /// NOTE: On error, there still may be some items updated in the transaction. It is
+    /// up to the called to either abort the transaction or commit.
+    pub fn update_items(
+        &mut self,
+        items: BTreeMap<GlobalId, (String, SerializedCatalogItem)>,
+    ) -> Result<(), Error> {
+        let n = self.items.update(|k, v| {
+            if let Some((item_name, item)) = items.get(&k.gid) {
+                Some(ItemValue {
+                    schema_id: v.schema_id,
+                    name: item_name.clone(),
+                    definition: item.clone(),
+                })
+            } else {
+                None
+            }
+        })?;
+        let n = usize::try_from(n).expect("Must be positive and fit in usize");
+        if n == items.len() {
+            Ok(())
+        } else {
+            let update_ids: BTreeSet<_> = items.into_keys().collect();
+            let item_ids: BTreeSet<_> = self.items.items().keys().map(|k| k.gid).collect();
+            let mut unknown = update_ids.difference(&item_ids);
+            Err(SqlCatalogError::UnknownItem(unknown.join(", ")).into())
         }
     }
 

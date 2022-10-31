@@ -380,6 +380,16 @@ impl Config {
                 tempfile.set_permissions(std::fs::Permissions::from_mode(0o400))?;
 
                 let mut builder = openssh::SessionBuilder::default();
+
+                // Bastion hosts (and therefore keys) tend to change,
+                // so we don't want to lock ourselves into trusting
+                // only the first we see. In any case, recording
+                // a known host would only last as long as the life
+                // of a storage pod, so it doesn't offer any
+                // protection.
+                builder.known_hosts_check(openssh::KnownHosts::Accept);
+                builder.user_known_hosts_file("/dev/null");
+
                 builder.user(user.clone()).port(*port).keyfile(&path);
                 let session = builder.connect(host).await?;
 

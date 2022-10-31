@@ -328,6 +328,16 @@ Map (coalesce(text_to_char(text_to_char("a")), text_to_char(text_to_varchar("a")
 
 EOF
 
+query T multiline
+EXPLAIN RAW PLAN FOR
+    SELECT coalesce('a'::char, 'a'::text, 'a'::varchar);
+----
+Map (coalesce(text_to_char(text_to_char("a")), text_to_char("a"), text_to_char(text_to_varchar("a"))))
+  Constant
+    - ()
+
+EOF
+
 query T
 SELECT 1::smallint::smallint;
 ----
@@ -1447,3 +1457,132 @@ true
 
 query error OID out of range
 SELECT 120129019392::bigint::oid;
+
+# Check that our non-linear type promotion structure works as intended.
+# Whenever you have a uint and an int, you unify their types by selecting the
+# narrowest integer-like that the uint can be implicitly cast to. In the case
+# of 64-bit uints, this means casting the values to numeric.
+
+query TT
+SELECT pg_typeof(1::smallint + 1::uint2), 1::smallint + 1::uint2;
+----
+integer  2
+
+query TT
+SELECT pg_typeof(1::smallint + 1::uint4), 1::smallint + 1::uint4;
+----
+bigint  2
+
+query TT
+SELECT pg_typeof(1::smallint + 1::uint8), 1::smallint + 1::uint8;
+----
+numeric  2
+
+query TT
+SELECT pg_typeof(1::integer + 1::uint2), 1::integer + 1::uint2;
+----
+integer  2
+
+query TT
+SELECT pg_typeof(1::integer + 1::uint4), 1::integer + 1::uint4;
+----
+bigint  2
+
+query TT
+SELECT pg_typeof(1::integer + 1::uint8), 1::integer + 1::uint8;
+----
+numeric  2
+
+query TT
+SELECT pg_typeof(1::bigint + 1::uint2), 1::bigint + 1::uint2;
+----
+bigint  2
+
+query TT
+SELECT pg_typeof(1::bigint + 1::uint4), 1::bigint + 1::uint4;
+----
+bigint  2
+
+query TT
+SELECT pg_typeof(1::bigint + 1::uint8), 1::bigint + 1::uint8;
+----
+numeric  2
+
+query T
+SELECT 9223372036854775807::bigint / 18446744073709551615::uint8;
+----
+0.499999999999999999972894945687862389148
+
+query T
+SELECT 18446744073709551615::uint8 / 9223372036854775807::bigint;
+----
+2.00000000000000000010842021724855044341
+
+query T
+select pg_typeof(coalesce(1::uint4, 1::int));
+----
+bigint
+
+query T
+select pg_typeof(coalesce(1::uint4, 1::int, 1::numeric));
+----
+numeric
+
+query T
+select pg_typeof(coalesce(1::uint8, 1::int));
+----
+numeric
+
+query T
+SELECT pg_typeof(coalesce(1::uint4, 1::int, 1::numeric, 1::double));
+----
+double precision
+
+# These types were not converted because the function's parameters are
+# polymorphic without enfocing a relationship between the arguments, and we only
+# aggressively cast ints and uints to a wider type in cases where it exactly
+# selects a function.
+
+query T multiline
+EXPLAIN RAW PLAN FOR
+SELECT jsonb_object_agg(1::uint8, 2::int);
+----
+Reduce aggregates=[jsonb_object_agg(row(row(uint8_to_text(integer_to_uint8(1)), jsonb_or_null_to_jsonb(integer_to_numeric(2)))))]
+  Constant
+    - ()
+
+EOF
+
+# This would fail to plan if we blithely unified all args into the best common
+# int/uint; the second argument to lag does not support numeric types.
+
+query T
+WITH t (f1, f2, f3) AS (VALUES (1::uint8, 'a', 1.0))
+SELECT lag(f1, 1::int) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+----
+NULL
+
+query T
+WITH t (f1, f2, f3) AS (VALUES (1::uint8, 'a', 1.0))
+SELECT pg_typeof(lag(f1, 1::int) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1))
+FROM t
+----
+uint8
+
+# However, polymorphic type resolution can still appropriately upcast values,
+# while leaving other types alone.
+
+query T
+WITH t (f1, f2, f3) AS (VALUES (1::uint8, 'a', 1.0))
+SELECT lag(f1, 1::int, 0::int) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
+FROM t
+----
+0
+
+query T
+WITH t (f1, f2, f3) AS (VALUES (1::uint8, 'a', 1.0))
+SELECT pg_typeof(lag(f1, 1::int, 0::int) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1))
+FROM t
+----
+numeric

@@ -39,6 +39,7 @@ use url::Url;
 use uuid::Uuid;
 
 use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageHostSizeMap};
+use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
 use mz_environmentd::{TlsConfig, TlsMode, BUILD_INFO};
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
@@ -465,6 +466,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         runtime.block_on(mz_ore::tracing::configure(
             "environmentd",
             &args.tracing,
+            mz_service::tracing::mz_sentry_event_filter,
             (BUILD_INFO.version, BUILD_INFO.sha, BUILD_INFO.time),
         ))?;
 
@@ -544,7 +546,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     };
 
     // Configure controller.
-    let (orchestrator, secrets_controller) = match args.orchestrator {
+    let (orchestrator, secrets_controller, cloud_resource_controller) = match args.orchestrator {
         OrchestratorKind::Kubernetes => {
             let orchestrator = Arc::new(
                 runtime
@@ -567,7 +569,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             );
             (
                 Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
-                orchestrator as Arc<dyn SecretsController>,
+                Arc::clone(&orchestrator) as Arc<dyn SecretsController>,
+                Some(orchestrator as Arc<dyn CloudResourceController>),
             )
         }
         OrchestratorKind::Process => {
@@ -597,6 +600,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             (
                 Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
                 orchestrator as Arc<dyn SecretsController>,
+                None,
             )
         }
     };
@@ -719,6 +723,7 @@ max log level: {max_log_level}",
         adapter_stash_url: args.adapter_stash_url,
         controller,
         secrets_controller,
+        cloud_resource_controller,
         unsafe_mode: args.unsafe_mode,
         persisted_introspection: args.persisted_introspection,
         metrics_registry,

@@ -29,7 +29,7 @@ EXPLAIN SHOW SCHEMAS
 ----
 Explained Query (fast path):
   Project (#3)
-    Filter ((#0) IS NULL OR (1 = uint8_to_double(#0)))
+    Filter ((#0) IS NULL OR (1 = bigint_to_numeric(#0)))
       ReadExistingIndex mz_internal.mz_show_schemas_ind
 
 Used Indexes:
@@ -42,7 +42,7 @@ EXPLAIN SHOW CONNECTIONS
 ----
 Explained Query (fast path):
   Project (#3, #4)
-    Filter (3 = uint8_to_double(#0))
+    Filter (3 = bigint_to_numeric(#0))
       ReadExistingIndex mz_internal.mz_show_connections_ind
 
 Used Indexes:
@@ -55,7 +55,7 @@ EXPLAIN SHOW TABLES
 ----
 Explained Query (fast path):
   Project (#3)
-    Filter (3 = uint8_to_double(#0))
+    Filter (3 = bigint_to_numeric(#0))
       ReadExistingIndex mz_internal.mz_show_tables_ind
 
 Used Indexes:
@@ -68,7 +68,7 @@ EXPLAIN SHOW SOURCES
 ----
 Explained Query (fast path):
   Project (#3, #4, #6)
-    Filter (3 = uint8_to_double(#0))
+    Filter (3 = bigint_to_numeric(#0))
       ReadExistingIndex mz_internal.mz_show_sources_ind
 
 Used Indexes:
@@ -81,7 +81,7 @@ EXPLAIN SHOW VIEWS
 ----
 Explained Query (fast path):
   Project (#3)
-    Filter (3 = uint8_to_double(#0))
+    Filter (3 = bigint_to_numeric(#0))
       ReadExistingIndex mz_internal.mz_show_views_ind
 
 Used Indexes:
@@ -94,7 +94,7 @@ EXPLAIN SHOW MATERIALIZED VIEWS
 ----
 Explained Query (fast path):
   Project (#2, #3)
-    Filter (3 = uint8_to_double(#0))
+    Filter (3 = bigint_to_numeric(#0))
       ReadExistingIndex mz_internal.mz_show_materialized_views_ind
 
 Used Indexes:
@@ -107,7 +107,7 @@ EXPLAIN SHOW INDEXES
 ----
 Explained Query (fast path):
   Project (#3..=#6)
-    Filter NOT("s%" ~~(#0)) AND (3 = uint8_to_double(#1))
+    Filter NOT("s%" ~~(#0)) AND (3 = bigint_to_numeric(#1))
       ReadExistingIndex mz_internal.mz_show_indexes_ind
 
 Used Indexes:
@@ -120,7 +120,7 @@ EXPLAIN SHOW SINKS
 ----
 Explained Query (fast path):
   Project (#3, #4, #6)
-    Filter (3 = uint8_to_double(#0))
+    Filter (3 = bigint_to_numeric(#0))
       ReadExistingIndex mz_internal.mz_show_sinks_ind
 
 Used Indexes:
@@ -133,7 +133,7 @@ EXPLAIN SHOW TYPES
 ----
 Explained Query (fast path):
   Project (#3)
-    Filter (3 = uint8_to_double(#0))
+    Filter (3 = bigint_to_numeric(#0))
       ReadExistingIndex mz_internal.mz_show_types_ind
 
 Used Indexes:
@@ -146,7 +146,7 @@ EXPLAIN SHOW OBJECTS
 ----
 Explained Query (fast path):
   Project (#3, #4)
-    Filter (3 = uint8_to_double(#0))
+    Filter (3 = bigint_to_numeric(#0))
       ReadExistingIndex mz_internal.mz_show_all_objects_ind
 
 Used Indexes:
@@ -197,7 +197,7 @@ EXPLAIN SHOW SECRETS
 ----
 Explained Query (fast path):
   Project (#2)
-    Filter (3 = uint8_to_double(#0))
+    Filter (3 = bigint_to_numeric(#0))
       ReadExistingIndex mz_internal.mz_show_secrets_ind
 
 Used Indexes:

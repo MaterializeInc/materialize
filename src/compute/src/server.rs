@@ -44,6 +44,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistConfig;
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::local::LocalClient;
+use tracing::info;
 
 use crate::communication::initialize_networking;
 use crate::compute_state::ActiveComputeState;
@@ -141,6 +142,7 @@ impl ClusterClient<PartitionedClient> {
     }
 
     fn build_timely(&mut self, comm_config: CommunicationConfig) -> Result<TimelyContainer, Error> {
+        info!("Building timely container with config {comm_config:?}");
         let (client_txs, client_rxs): (Vec<_>, Vec<_>) = (0..comm_config.workers)
             .map(|_| crossbeam_channel::unbounded())
             .unzip();
@@ -197,6 +199,7 @@ impl ClusterClient<PartitionedClient> {
         let timely = match timely {
             Some(existing) => {
                 assert_eq!(existing.comm_config, comm_config);
+                info!("Timely already initialized; re-using.");
                 existing
             }
             None => self.build_timely(comm_config)?,
@@ -552,7 +555,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
         match &cmd {
             ComputeCommand::CreateInstance(config) => {
                 self.compute_state = Some(ComputeState {
-                    replica_id: config.replica_id,
                     traces: TraceManager::new(
                         self.trace_metrics.clone(),
                         self.timely_worker.index(),
@@ -562,7 +564,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         std::cell::RefCell::new(Vec::new()),
                     ),
                     sink_write_frontiers: HashMap::new(),
-                    pending_peeks: Vec::new(),
+                    pending_peeks: HashMap::new(),
                     reported_frontiers: HashMap::new(),
                     dropped_collections: Vec::new(),
                     compute_logger: None,
@@ -813,7 +815,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         if let Some(compute_state) = &mut self.compute_state {
             let mut command_history = ComputeCommandHistory::default();
             for command in new_commands.iter() {
-                command_history.push(command.clone());
+                command_history.push(command.clone(), &compute_state.pending_peeks);
             }
             compute_state.command_history = command_history;
         }
