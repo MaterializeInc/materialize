@@ -67,6 +67,10 @@ class Materialized(Service):
                 "MZ_UNSAFE_MODE=1",
                 "MZ_EXPERIMENTAL=1",
                 f"MZ_PERSIST_BLOB_URL={persist_blob_url}",
+                f"MZ_ORCHESTRATOR=process",
+                f"MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY={data_directory}/secrets",
+                # TODO(benesch): remove this legacy environment variable once
+                # the upgrade tests no longer test v0.33.
                 f"MZ_ORCHESTRATOR_PROCESSDATA_DIRECTORY={data_directory}",
                 # Please think twice before forwarding additional environment
                 # variables from the host, as it's easy to write tests that are

@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{HashMap, HashSet};
+use std::env;
 use std::ffi::OsStr;
 use std::fmt::Debug;
 use std::fs::Permissions;
@@ -53,9 +54,10 @@ pub struct ProcessOrchestratorConfig {
     pub port_allocator: Arc<PortAllocator>,
     /// Whether to supress output from spawned subprocesses.
     pub suppress_output: bool,
-    /// The directory in which the orchestrator should look for process
-    /// lock files and store secrets.
-    pub data_dir: PathBuf,
+    /// The ID of the environment under orchestration.
+    pub environment_id: String,
+    /// The directory in which to store secrets.
+    pub secrets_dir: PathBuf,
     /// A command to wrap the child command invocation
     pub command_wrapper: Vec<String>,
 }
@@ -75,7 +77,7 @@ pub struct ProcessOrchestrator {
     port_allocator: Arc<PortAllocator>,
     suppress_output: bool,
     namespaces: Mutex<HashMap<String, Arc<dyn NamespacedOrchestrator>>>,
-    data_dir: PathBuf,
+    metadata_dir: PathBuf,
     secrets_dir: PathBuf,
     command_wrapper: Vec<String>,
 }
@@ -87,11 +89,15 @@ impl ProcessOrchestrator {
             image_dir,
             port_allocator,
             suppress_output,
-            data_dir,
+            environment_id,
+            secrets_dir,
             command_wrapper,
         }: ProcessOrchestratorConfig,
     ) -> Result<ProcessOrchestrator, anyhow::Error> {
-        let secrets_dir = data_dir.join("secrets");
+        let metadata_dir = env::temp_dir().join(format!("environmentd-{environment_id}"));
+        fs::create_dir_all(&metadata_dir)
+            .await
+            .context("creating metadata directory")?;
         fs::create_dir_all(&secrets_dir)
             .await
             .context("creating secrets directory")?;
@@ -103,7 +109,7 @@ impl ProcessOrchestrator {
             port_allocator,
             suppress_output,
             namespaces: Mutex::new(HashMap::new()),
-            data_dir: fs::canonicalize(data_dir).await?,
+            metadata_dir: fs::canonicalize(metadata_dir).await?,
             secrets_dir: fs::canonicalize(secrets_dir).await?,
             command_wrapper,
         })
@@ -120,7 +126,7 @@ impl Orchestrator for ProcessOrchestrator {
                 port_allocator: Arc::clone(&self.port_allocator),
                 suppress_output: self.suppress_output,
                 supervisors: Arc::new(Mutex::new(HashMap::new())),
-                data_dir: self.data_dir.clone(),
+                metadata_dir: self.metadata_dir.clone(),
                 secrets_dir: self.secrets_dir.clone(),
                 command_wrapper: self.command_wrapper.clone(),
             })
@@ -135,7 +141,7 @@ struct NamespacedProcessOrchestrator {
     port_allocator: Arc<PortAllocator>,
     suppress_output: bool,
     supervisors: Arc<Mutex<HashMap<String, Vec<AbortOnDrop>>>>,
-    data_dir: PathBuf,
+    metadata_dir: PathBuf,
     secrets_dir: PathBuf,
     command_wrapper: Vec<String>,
 }
@@ -185,10 +191,11 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         let mut port_metadata_file_locations = vec![None; scale_in.get()];
         for i in 0..(scale_in.get()) {
             let process_file_name = format!("{}-{}-{}", self.namespace, id, i);
-            let pid_file_location = self.data_dir.join(format!("{}.pid", process_file_name));
+            let pid_file_location = self.metadata_dir.join(format!("{}.pid", process_file_name));
             pid_file_locations[i] = Some(pid_file_location.clone());
-            let port_metadata_file_location =
-                self.data_dir.join(format!("{}.ports", process_file_name));
+            let port_metadata_file_location = self
+                .metadata_dir
+                .join(format!("{}.ports", process_file_name));
             port_metadata_file_locations[i] = Some(port_metadata_file_location.clone());
 
             if let (Ok(pid), Ok(port_metadata)) = (
@@ -269,7 +276,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         // Now create all the processes that weren't detected as being still alive
         let peers = processes
             .iter()
-            .map(|ports| ("localhost".to_string(), ports.clone()))
+            .map(|ports| ("127.0.0.1".to_string(), ports.clone()))
             .collect::<Vec<_>>();
         for i in 0..scale_in.get() {
             if !processes_exist[i] {
@@ -494,7 +501,7 @@ impl Service for ProcessService {
     fn addresses(&self, port: &str) -> Vec<String> {
         self.processes
             .iter()
-            .map(|p| format!("localhost:{}", p[port]))
+            .map(|p| format!("127.0.0.1:{}", p[port]))
             .collect()
     }
 }
