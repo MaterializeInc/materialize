@@ -1009,10 +1009,12 @@ pub async fn serve<S: Append + 'static>(
             for (timeline, initial_timestamp) in initial_timestamps {
                 let oracle = if timeline == Timeline::EpochMilliseconds {
                     let now = now.clone();
+                    let initial_timestamp = std::cmp::max(initial_timestamp, (now)().into());
                     handle.block_on(timeline::DurableTimestampOracle::new(
                         initial_timestamp,
                         move || (now)().into(),
                         *timeline::TIMESTAMP_PERSIST_INTERVAL,
+                        *timeline::TIMESTAMP_MAX_INCREASE,
                         |ts| catalog.persist_timestamp(&timeline, ts),
                     ))
                 } else {
@@ -1020,6 +1022,7 @@ pub async fn serve<S: Append + 'static>(
                         initial_timestamp,
                         Timestamp::minimum,
                         *timeline::TIMESTAMP_PERSIST_INTERVAL,
+                        *timeline::TIMESTAMP_MAX_INCREASE,
                         |ts| catalog.persist_timestamp(&timeline, ts),
                     ))
                 };

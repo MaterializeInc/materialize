@@ -17,6 +17,7 @@ use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::PartialOrder;
+use tracing::warn;
 
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::CollectionPlan;
@@ -67,13 +68,14 @@ struct TimestampOracleState<T> {
 struct TimestampOracle<T> {
     state: TimestampOracleState<T>,
     next: Box<dyn Fn() -> T>,
+    max_increase: T,
 }
 
 impl<T: TimestampManipulation> TimestampOracle<T> {
     /// Create a new timeline, starting at the indicated time. `next` generates
     /// new timestamps when invoked. The timestamps have no requirements, and can
     /// retreat from previous invocations.
-    pub fn new<F>(initially: T, next: F) -> Self
+    pub fn new<F>(initially: T, next: F, max_increase: T) -> Self
     where
         F: Fn() -> T + 'static,
     {
@@ -83,6 +85,7 @@ impl<T: TimestampManipulation> TimestampOracle<T> {
                 write_ts: initially,
             },
             next: Box::new(next),
+            max_increase,
         }
     }
 
@@ -95,6 +98,13 @@ impl<T: TimestampManipulation> TimestampOracle<T> {
         if next.less_equal(&self.state.write_ts) {
             next = self.state.write_ts.step_forward();
         }
+        // Cap how much we advance the write timestamp by for any single increment. This is to
+        // help protect against scenarios where a clock may jump forward by a large amount and
+        // then jump backwards.
+        next = std::cmp::min(
+            next,
+            self.state.write_ts.step_forward_by(&self.max_increase),
+        );
         assert!(self.state.read_ts.less_than(&next));
         assert!(self.state.write_ts.less_than(&next));
         self.state.write_ts = next.clone();
@@ -143,6 +153,14 @@ pub static TIMESTAMP_PERSIST_INTERVAL: Lazy<mz_repr::Timestamp> = Lazy::new(|| {
         .expect("15 seconds can fit into `Timestamp`")
 });
 
+/// Max amount we can increase a timestamp by at once.
+pub static TIMESTAMP_MAX_INCREASE: Lazy<mz_repr::Timestamp> = Lazy::new(|| {
+    Duration::from_secs(10)
+        .as_millis()
+        .try_into()
+        .expect("10 seconds can fit into `Timestamp`")
+});
+
 /// A type that wraps a [`TimestampOracle`] and provides durable timestamps. This allows us to
 /// recover a timestamp that is larger than all previous timestamps on restart. The protocol
 /// is based on timestamp recovery from Percolator <https://research.google/pubs/pub36726/>. We
@@ -168,6 +186,7 @@ impl<T: TimestampManipulation> DurableTimestampOracle<T> {
         initially: T,
         next: F,
         persist_interval: T,
+        max_increase: T,
         persist_fn: impl FnOnce(T) -> Fut,
     ) -> Self
     where
@@ -175,7 +194,7 @@ impl<T: TimestampManipulation> DurableTimestampOracle<T> {
         Fut: Future<Output = Result<(), crate::catalog::Error>>,
     {
         let mut oracle = Self {
-            timestamp_oracle: TimestampOracle::new(initially.clone(), next),
+            timestamp_oracle: TimestampOracle::new(initially.clone(), next, max_increase),
             durable_timestamp: initially.clone(),
             persist_interval,
         };
@@ -323,6 +342,10 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Peek the current timestamp used for operations on local inputs. Used to determine how much
     /// to block group commits by.
     pub(crate) async fn apply_local_write(&mut self, timestamp: Timestamp) {
+        let now = self.now().into();
+        if timestamp > now {
+            warn!("Setting local read timestamp to {timestamp} which is ahead of now, {now}");
+        }
         self.global_timelines
             .get_mut(&Timeline::EpochMilliseconds)
             .expect("no realtime timeline")
@@ -347,6 +370,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         Timestamp::minimum(),
                         Timestamp::minimum,
                         *TIMESTAMP_PERSIST_INTERVAL,
+                        *TIMESTAMP_MAX_INCREASE,
                         |ts| self.catalog.persist_timestamp(&timeline, ts),
                     )
                     .await,
