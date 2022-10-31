@@ -679,6 +679,33 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
         vec![(1i64.to_le_bytes().to_vec(), "v5".to_string(), 1)]
     );
 
+    // Test `set`.
+    let items = TABLE.peek_one(stash).await?;
+    let mut table = TableTransaction::new(items, uniqueness_violation);
+    // Uniqueness violation.
+    table
+        .set(2i64.to_le_bytes().to_vec(), Some("v5".to_string()))
+        .unwrap_err();
+    table
+        .set(3i64.to_le_bytes().to_vec(), Some("v6".to_string()))
+        .unwrap();
+    table.set(2i64.to_le_bytes().to_vec(), None).unwrap();
+    table.set(1i64.to_le_bytes().to_vec(), None).unwrap();
+    let pending = table.pending();
+    assert_eq!(
+        pending,
+        vec![
+            (1i64.to_le_bytes().to_vec(), "v5".to_string(), -1),
+            (3i64.to_le_bytes().to_vec(), "v6".to_string(), 1),
+        ]
+    );
+    commit(stash, collection, pending).await?;
+    let items = TABLE.peek_one(stash).await?;
+    assert_eq!(
+        items,
+        BTreeMap::from([(3i64.to_le_bytes().to_vec(), "v6".to_string())])
+    );
+
     Ok(())
 }
 
