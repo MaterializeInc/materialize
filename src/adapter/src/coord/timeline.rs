@@ -369,7 +369,7 @@ impl<S: Append + 'static> Coordinator<S> {
             timeline,
             Timestamp::minimum(),
             self.catalog.config().now.clone(),
-            |ts| self.catalog.persist_timestamp(&timeline, ts),
+            |ts| self.catalog.persist_timestamp(timeline, ts),
             &mut self.global_timelines,
         )
         .await
@@ -387,7 +387,7 @@ impl<S: Append + 'static> Coordinator<S> {
     where
         Fut: Future<Output = Result<(), crate::catalog::Error>>,
     {
-        if !global_timelines.contains_key(&timeline) {
+        if !global_timelines.contains_key(timeline) {
             let oracle = if timeline == &Timeline::EpochMilliseconds {
                 DurableTimestampOracle::new(
                     initially,
@@ -415,7 +415,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 },
             );
         }
-        global_timelines.get_mut(&timeline).expect("inserted above")
+        global_timelines.get_mut(timeline).expect("inserted above")
     }
 
     pub(crate) fn remove_storage_ids_from_timeline<I>(&mut self, ids: I) -> Vec<Timeline>
