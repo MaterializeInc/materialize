@@ -239,8 +239,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         for (timeline, id_bundle) in self.partition_ids_by_timeline(id_bundle) {
             match timeline {
                 Some(timeline) => {
-                    let TimelineState { oracle, .. } =
-                        self.ensure_timeline_state(&timeline.clone()).await;
+                    let TimelineState { oracle, .. } = self.ensure_timeline_state(&timeline).await;
                     let read_ts = oracle.read_ts();
                     let new_read_holds = self.initialize_read_holds(read_ts, id_bundle);
                     let TimelineState { read_holds, .. } =
