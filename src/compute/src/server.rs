@@ -142,14 +142,19 @@ impl ClusterClient<PartitionedClient> {
         }
     }
 
-    fn build_timely(&mut self, comm_config: CommunicationConfig) -> Result<TimelyContainer, Error> {
+    async fn build_timely(
+        &mut self,
+        comm_config: CommunicationConfig,
+    ) -> Result<TimelyContainer, Error> {
         info!("Building timely container with config {comm_config:?}");
         let (client_txs, client_rxs): (Vec<_>, Vec<_>) = (0..comm_config.workers)
             .map(|_| crossbeam_channel::unbounded())
             .unzip();
         let client_rxs: Mutex<Vec<_>> = Mutex::new(client_rxs.into_iter().map(Some).collect());
 
-        let (builders, other) = initialize_networking(&comm_config).map_err(|e| anyhow!("{e}"))?;
+        let (builders, other) = initialize_networking(&comm_config)
+            .await
+            .map_err(|e| anyhow!("{e}"))?;
 
         let workers = comm_config.workers;
         let trace_metrics = self.trace_metrics.clone();
@@ -186,7 +191,7 @@ impl ClusterClient<PartitionedClient> {
         })
     }
 
-    fn build(&mut self, comm_config: CommunicationConfig) -> Result<(), Error> {
+    async fn build(&mut self, comm_config: CommunicationConfig) -> Result<(), Error> {
         let workers = comm_config.workers;
 
         // Check if we can reuse the existing timely instance.
@@ -209,7 +214,7 @@ impl ClusterClient<PartitionedClient> {
                 info!("Timely already initialized; re-using.");
                 existing
             }
-            None => self.build_timely(comm_config)?,
+            None => self.build_timely(comm_config).await?,
         };
 
         let (command_txs, command_rxs): (Vec<_>, Vec<_>) =
@@ -258,7 +263,7 @@ impl GenericClient<ComputeCommand, ComputeResponse> for ClusterClient<Partitione
         // Changing this debug statement requires changing the replica-isolation test
         tracing::debug!("ClusterClient send={:?}", &cmd);
         match cmd {
-            ComputeCommand::CreateTimely(comm_config) => self.build(comm_config),
+            ComputeCommand::CreateTimely(comm_config) => self.build(comm_config).await,
             ComputeCommand::DropInstance => {
                 self.inner.as_mut().expect("intialized").send(cmd).await?;
                 self.inner = None;
