@@ -47,7 +47,6 @@ class MaterializeCredentials(PostgresCredentials):
             "retries",
         )
 
-
 class MaterializeConnectionManager(PostgresConnectionManager):
     TYPE = "materialize"
 
