@@ -19,6 +19,8 @@
   {% set database = information_schema.database %}
   {{ adapter.verify_database(database) }}
 
+  {%- set cluster = 'mz_introspection' -%}
+
   {%- call statement('catalog', fetch_result=True) -%}
         select
             d.name as table_database,

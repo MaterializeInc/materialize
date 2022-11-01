@@ -91,6 +91,14 @@
 
 -- In the dbt-adapter we extend the Relation class to include sinks and indexes
 {% macro materialize__list_relations_without_caching(schema_relation) %}
+
+  --TODO(morsapaes) Remove logging
+  {{ log("On cluster: " ~ target.cluster) }}
+
+  {%- set cluster = 'mz_introspection' -%}
+
+  {% do log(cluster) %}
+
   {% call statement('list_relations_without_caching', fetch_result=True) -%}
     select
         d.name as database,
@@ -103,4 +111,15 @@
     where type in ('table', 'source', 'view', 'materialized-view', 'index', 'sink')
   {% endcall %}
   {{ return(load_result('list_relations_without_caching').table) }}
+{% endmacro %}
+
+{% macro materialize__list_schemas(database) %}
+  {%- set cluster = 'mz_introspection' -%}
+  {% if database -%}
+    {{ adapter.verify_database(database) }}
+  {%- endif -%}
+  {% call statement('list_schemas', fetch_result=True, auto_begin=False) %}
+    select distinct name as nspname from mz_schemas
+  {% endcall %}
+  {{ return(load_result('list_schemas').table) }}
 {% endmacro %}
