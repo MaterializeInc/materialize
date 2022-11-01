@@ -2,7 +2,7 @@
 
 ## 1.2.1 - 2022-11-01
 
-* Return the correct connection keys to the user on `dbt debug`.
+* Add `cluster` to the connection parameters returned on `dbt debug`.
 
 
 * Disallow the `cluster` option for `view` materializations. In the new
