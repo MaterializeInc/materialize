@@ -302,7 +302,7 @@ impl PersistConfig {
             compaction_queue_size: 20,
             compaction_minimum_timeout: Duration::from_secs(90),
             consensus_connection_pool_max_size: 50,
-            writer_lease_duration: Duration::from_secs(60 * 15),
+            writer_lease_duration: 60 * Duration::from_secs(60),
             reader_lease_duration: Self::DEFAULT_READ_LEASE_DURATION,
         }
     }
