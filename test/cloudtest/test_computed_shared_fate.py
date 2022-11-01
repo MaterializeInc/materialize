@@ -10,6 +10,8 @@
 import subprocess
 from textwrap import dedent
 
+import pytest
+
 from materialize.cloudtest.application import MaterializeApplication
 
 # We would like to use large clusters here, e.g. SIZE=16, in order to get a pronounced
