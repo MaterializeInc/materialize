@@ -78,10 +78,7 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::StreamExt;
 use itertools::Itertools;
-use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpointSpec;
-use mz_ore::retry::Retry;
 use rand::seq::SliceRandom;
-use timely::progress::Timestamp as _;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
@@ -89,12 +86,14 @@ use tracing::{info, span, warn, Level};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
+use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpointSpec;
 use mz_cloud_resources::CloudResourceController;
 use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
+use mz_ore::retry::Retry;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{stack, task};
@@ -123,7 +122,7 @@ use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, PendingWriteTxn}
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::metrics::Metrics;
 use crate::coord::peek::PendingPeek;
-use crate::coord::read_policy::{ReadCapability, ReadHolds};
+use crate::coord::read_policy::ReadCapability;
 use crate::coord::timeline::{TimelineState, WriteTimestamp};
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, Session};
@@ -1059,30 +1058,17 @@ pub async fn serve<S: Append + 'static>(
         .name("coordinator".to_string())
         .spawn(move || {
             let mut timestamp_oracles = BTreeMap::new();
-            for (timeline, initial_timestamp) in initial_timestamps {
-                let oracle = if timeline == Timeline::EpochMilliseconds {
-                    let now = now.clone();
-                    handle.block_on(timeline::DurableTimestampOracle::new(
-                        initial_timestamp,
-                        move || (now)().into(),
-                        *timeline::TIMESTAMP_PERSIST_INTERVAL,
-                        |ts| catalog.persist_timestamp(&timeline, ts),
-                    ))
-                } else {
-                    handle.block_on(timeline::DurableTimestampOracle::new(
-                        initial_timestamp,
-                        Timestamp::minimum,
-                        *timeline::TIMESTAMP_PERSIST_INTERVAL,
-                        |ts| catalog.persist_timestamp(&timeline, ts),
-                    ))
-                };
-                timestamp_oracles.insert(
-                    timeline,
-                    TimelineState {
-                        oracle,
-                        read_holds: ReadHolds::new(),
-                    },
-                );
+            for (timeline, mut initial_timestamp) in initial_timestamps {
+                if timeline == Timeline::EpochMilliseconds {
+                    initial_timestamp = std::cmp::max(initial_timestamp, (now)().into());
+                }
+                handle.block_on(Coordinator::<S>::ensure_timeline_state_with_initial_time(
+                    &timeline,
+                    initial_timestamp,
+                    now.clone(),
+                    |ts| catalog.persist_timestamp(&timeline, ts),
+                    &mut timestamp_oracles,
+                ));
             }
 
             let segment_client =

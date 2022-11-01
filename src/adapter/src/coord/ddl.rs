@@ -462,7 +462,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let timeline = self
             .get_timeline(sink.from)
             .unwrap_or(Timeline::EpochMilliseconds);
-        let now = self.ensure_timeline_state(timeline).await.oracle.read_ts();
+        let now = self.ensure_timeline_state(&timeline).await.oracle.read_ts();
         let frontier = Antichain::from_elem(now);
         let as_of = SinkAsOf {
             frontier,
