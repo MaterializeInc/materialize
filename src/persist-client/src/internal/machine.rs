@@ -721,6 +721,9 @@ where
                 return x;
             }
             Err(err) => {
+                if err.is_timeout() {
+                    metrics.timeouts.inc();
+                }
                 if retry.attempt() >= INFO_MIN_ATTEMPTS {
                     info!(
                         "external operation {} failed, retrying in {:?}: {:#}",

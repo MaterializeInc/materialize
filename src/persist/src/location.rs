@@ -257,6 +257,14 @@ impl From<deadpool_postgres::PoolError> for ExternalError {
     }
 }
 
+impl From<tokio::time::error::Elapsed> for ExternalError {
+    fn from(x: tokio::time::error::Elapsed) -> Self {
+        ExternalError::Indeterminate(Indeterminate {
+            inner: anyhow::Error::new(x),
+        })
+    }
+}
+
 impl From<tokio::task::JoinError> for ExternalError {
     fn from(x: tokio::task::JoinError) -> Self {
         ExternalError::Indeterminate(Indeterminate {

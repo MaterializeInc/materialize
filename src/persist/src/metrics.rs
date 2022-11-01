@@ -16,6 +16,7 @@ use mz_ore::metrics::{Counter, IntCounter, MetricsRegistry, UIntGauge};
 #[derive(Debug, Clone)]
 pub struct PostgresConsensusMetrics {
     pub(crate) connpool_size: UIntGauge,
+    pub(crate) connpool_connections_created: IntCounter,
     pub(crate) connpool_acquires: IntCounter,
     pub(crate) connpool_acquire_seconds: Counter,
 }
@@ -27,6 +28,10 @@ impl PostgresConsensusMetrics {
             connpool_size: registry.register(metric!(
                 name: "mz_persist_postgres_connpool_size",
                 help: "number of connections currently in pool",
+            )),
+            connpool_connections_created: registry.register(metric!(
+                name: "mz_persist_postgres_connpool_connections_created",
+                help: "number of connections created",
             )),
             connpool_acquires: registry.register(metric!(
                 name: "mz_persist_postgres_connpool_acquires",

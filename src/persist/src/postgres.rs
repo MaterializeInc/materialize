@@ -25,12 +25,13 @@ use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
 use postgres_openssl::MakeTlsConnector;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracing::debug;
 
 use crate::error::Error;
 use crate::location::{Consensus, ExternalError, SeqNo, VersionedData};
 use crate::metrics::PostgresConsensusMetrics;
+use crate::timeout::TimeoutExt;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS consensus (
@@ -84,6 +85,8 @@ pub struct PostgresConsensusConfig {
     connection_pool_max_size: usize,
     metrics: PostgresConsensusMetrics,
 }
+
+const TIMEOUT: Duration = Duration::from_secs(60);
 
 impl PostgresConsensusConfig {
     const EXTERNAL_TESTS_POSTGRES_URL: &'static str =
@@ -158,57 +161,73 @@ impl PostgresConsensus {
             },
         );
 
+        let connections_created = config.metrics.connpool_connections_created.clone();
         let pool = Pool::builder(manager)
             .max_size(config.connection_pool_max_size)
-            .post_create(Hook::async_fn(|client, _| {
+            .post_create(Hook::async_fn(move |client, _| {
+                let connections_created = connections_created.clone();
                 Box::pin(async move {
+                    connections_created.inc();
                     debug!("opened new consensus postgres connection");
-                    client.batch_execute(
+                    let res = client.batch_execute(
                         "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE",
-                    ).await.map_err(|e| HookError::Abort(HookErrorCause::Backend(e)))
+                    ).timeout(TIMEOUT).await;
+
+                    match res {
+                        Ok(Ok(_)) => Ok(()),
+                        Ok(Err(err)) => Err(HookError::Abort(HookErrorCause::Backend(err))),
+                        Err(err) => Err(HookError::Abort(HookErrorCause::Message(err.to_string()))),
+                    }
                 })
             }))
             .build()
             .expect("postgres connection pool built with incorrect parameters");
 
-        let mut client = pool.get().await?;
+        let _ = async {
+            let mut client = pool.get().await?;
 
-        let tx = client.transaction().await?;
-        let version: String = tx.query_one("SELECT version()", &[]).await?.get(0);
-        // Only get the advisory lock on Postgres (but not Cockroach which doesn't
-        // support this function and (we suspect) doesn't have this bug anyway). Use
-        // this construction (not cockroach instead of yes postgres) to avoid
-        // accidentally not executing in Postgres.
-        let is_cockroach = version.starts_with("CockroachDB");
-        if !is_cockroach {
-            // Obtain an advisory lock before attempting to create the schema. This is
-            // necessary to work around concurrency bugs in `CREATE TABLE IF NOT EXISTS`
-            // in PostgreSQL.
-            //
-            // See: https://github.com/MaterializeInc/materialize/issues/12560
-            // See: https://www.postgresql.org/message-id/CA%2BTgmoZAdYVtwBfp1FL2sMZbiHCWT4UPrzRLNnX1Nb30Ku3-gg%40mail.gmail.com
-            // See: https://stackoverflow.com/a/29908840
-            //
-            // The lock ID was randomly generated.
-            tx.batch_execute("SELECT pg_advisory_xact_lock(135664303235462630);")
-                .await?;
+            let tx = client.transaction().await?;
+            let version: String = tx.query_one("SELECT version()", &[]).await?.get(0);
+            // Only get the advisory lock on Postgres (but not Cockroach which doesn't
+            // support this function and (we suspect) doesn't have this bug anyway). Use
+            // this construction (not cockroach instead of yes postgres) to avoid
+            // accidentally not executing in Postgres.
+            let is_cockroach = version.starts_with("CockroachDB");
+            if !is_cockroach {
+                // Obtain an advisory lock before attempting to create the schema. This is
+                // necessary to work around concurrency bugs in `CREATE TABLE IF NOT EXISTS`
+                // in PostgreSQL.
+                //
+                // See: https://github.com/MaterializeInc/materialize/issues/12560
+                // See: https://www.postgresql.org/message-id/CA%2BTgmoZAdYVtwBfp1FL2sMZbiHCWT4UPrzRLNnX1Nb30Ku3-gg%40mail.gmail.com
+                // See: https://stackoverflow.com/a/29908840
+                //
+                // The lock ID was randomly generated.
+                tx.batch_execute("SELECT pg_advisory_xact_lock(135664303235462630);")
+                    .await?;
+            }
+
+            tx.batch_execute(SCHEMA).await?;
+
+            if is_cockroach {
+                // The `consensus` table creates and deletes rows at a high frequency, generating many
+                // tombstoned rows. If Cockroach's GC interval is set high (the default is 25h) and
+                // these tombstones accumulate, scanning over the table will take increasingly and
+                // prohibitively long.
+                //
+                // See: https://github.com/MaterializeInc/materialize/issues/13975
+                // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
+                tx.batch_execute("ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;")
+                    .await?;
+            }
+
+            tx.commit().await?;
+
+            Ok::<_, ExternalError>(())
         }
+        .timeout(TIMEOUT)
+        .await?;
 
-        tx.batch_execute(SCHEMA).await?;
-
-        if is_cockroach {
-            // The `consensus` table creates and deletes rows at a high frequency, generating many
-            // tombstoned rows. If Cockroach's GC interval is set high (the default is 25h) and
-            // these tombstones accumulate, scanning over the table will take increasingly and
-            // prohibitively long.
-            //
-            // See: https://github.com/MaterializeInc/materialize/issues/13975
-            // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
-            tx.batch_execute("ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;")
-                .await?;
-        }
-
-        tx.commit().await?;
         Ok(PostgresConsensus {
             pool,
             metrics: config.metrics,
@@ -305,11 +324,15 @@ impl Consensus for PostgresConsensus {
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1";
-        let row = {
+        let row = async {
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
-            client.query_opt(&statement, &[&key]).await?
-        };
+            let result = client.query_opt(&statement, &[&key]).await?;
+            Ok::<_, ExternalError>(result)
+        }
+        .timeout(TIMEOUT)
+        .await??;
+
         let row = match row {
             None => return Ok(None),
             Some(row) => row,
@@ -352,14 +375,19 @@ impl Consensus for PostgresConsensus {
                        WHERE shard = $1
                        ORDER BY sequence_number DESC LIMIT 1) = $4;
             "#;
-            let client = self.get_connection().await?;
-            let statement = client.prepare_cached(q).await?;
-            client
-                .execute(
-                    &statement,
-                    &[&key, &new.seqno, &new.data.as_ref(), &expected],
-                )
-                .await?
+            async {
+                let client = self.get_connection().await?;
+                let statement = client.prepare_cached(q).await?;
+                let result = client
+                    .execute(
+                        &statement,
+                        &[&key, &new.seqno, &new.data.as_ref(), &expected],
+                    )
+                    .await?;
+                Ok::<u64, ExternalError>(result)
+            }
+            .timeout(TIMEOUT)
+            .await??
         } else {
             // Insert the new row as long as no other row exists for the same shard.
             let q = "INSERT INTO consensus SELECT $1, $2, $3 WHERE
@@ -367,11 +395,16 @@ impl Consensus for PostgresConsensus {
                          SELECT * FROM consensus WHERE shard = $1
                      )
                      ON CONFLICT DO NOTHING";
-            let client = self.get_connection().await?;
-            let statement = client.prepare_cached(q).await?;
-            client
-                .execute(&statement, &[&key, &new.seqno, &new.data.as_ref()])
-                .await?
+            async {
+                let client = self.get_connection().await?;
+                let statement = client.prepare_cached(q).await?;
+                let result = client
+                    .execute(&statement, &[&key, &new.seqno, &new.data.as_ref()])
+                    .await?;
+                Ok::<u64, ExternalError>(result)
+            }
+            .timeout(TIMEOUT)
+            .await??
         };
 
         if result == 1 {
@@ -390,6 +423,7 @@ impl Consensus for PostgresConsensus {
     }
 
     async fn scan(&self, key: &str, from: SeqNo) -> Result<Vec<VersionedData>, ExternalError> {
+        // TODO: rewrite query to be paged so each call can have a timeout
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 AND sequence_number >= $2
              ORDER BY sequence_number";
@@ -412,12 +446,12 @@ impl Consensus for PostgresConsensus {
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+        // TODO: rewrite query to be paged so each call can have a timeout
         let q = "DELETE FROM consensus
                 WHERE shard = $1 AND sequence_number < $2 AND
                 EXISTS(
                     SELECT * FROM consensus WHERE shard = $1 AND sequence_number >= $2
                 )";
-
         let result = {
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;

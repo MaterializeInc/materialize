@@ -148,6 +148,7 @@ struct MetricsVecs {
     retry_finished: IntCounterVec,
     retry_retries: IntCounterVec,
     retry_sleep_seconds: CounterVec,
+    retry_timeouts: IntCounterVec,
 
     encode_count: IntCounterVec,
     encode_seconds: CounterVec,
@@ -252,6 +253,11 @@ impl MetricsVecs {
             retry_sleep_seconds: registry.register(metric!(
                 name: "mz_persist_retry_sleep_seconds",
                 help: "time spent in retry loop backoff",
+                var_labels: ["op"],
+            )),
+            retry_timeouts: registry.register(metric!(
+                name: "mz_persist_retry_timeouts",
+                help: "count of retries due to connection timeouts",
                 var_labels: ["op"],
             )),
 
@@ -364,6 +370,7 @@ impl MetricsVecs {
             finished: self.retry_finished.with_label_values(&[name]),
             retries: self.retry_retries.with_label_values(&[name]),
             sleep_seconds: self.retry_sleep_seconds.with_label_values(&[name]),
+            timeouts: self.retry_timeouts.with_label_values(&[name]),
         }
     }
 
@@ -495,6 +502,7 @@ pub struct RetryMetrics {
     pub(crate) finished: IntCounter,
     pub(crate) retries: IntCounter,
     pub(crate) sleep_seconds: Counter,
+    pub(crate) timeouts: IntCounter,
 }
 
 impl RetryMetrics {
