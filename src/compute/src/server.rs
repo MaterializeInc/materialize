@@ -151,7 +151,9 @@ impl ClusterClient<PartitionedClient> {
             .unzip();
         let client_rxs: Mutex<Vec<_>> = Mutex::new(client_rxs.into_iter().map(Some).collect());
 
-        let (builders, other) = initialize_networking(&comm_config).await.map_err(|e| anyhow!("{e}"))?;
+        let (builders, other) = initialize_networking(&comm_config)
+            .await
+            .map_err(|e| anyhow!("{e}"))?;
 
         let workers = comm_config.workers;
         let trace_metrics = self.trace_metrics.clone();
