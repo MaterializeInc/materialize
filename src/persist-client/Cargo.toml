@@ -38,7 +38,7 @@ futures = "0.3.24"
 futures-util = "0.3"
 humantime = "2.1.0"
 mz-build-info = { path = "../build-info" }
-mz-ore = { path = "../ore" }
+mz-ore = { path = "../ore", features = ["tracing"] }
 mz-persist = { path = "../persist" }
 mz-persist-types = { path = "../persist-types" }
 mz-proto = { path = "../proto" }
