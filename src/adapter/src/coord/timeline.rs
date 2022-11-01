@@ -9,17 +9,18 @@
 
 //! A mechanism to ensure that a sequence of writes and reads proceed correctly through timestamps.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use timely::progress::Timestamp as TimelyTimestamp;
+use tracing::error;
 
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::CollectionPlan;
-use mz_ore::now::{to_datetime, EpochMillis};
+use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_repr::{GlobalId, Timestamp, TimestampManipulation};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_stash::Append;
@@ -323,6 +324,10 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Peek the current timestamp used for operations on local inputs. Used to determine how much
     /// to block group commits by.
     pub(crate) async fn apply_local_write(&mut self, timestamp: Timestamp) {
+        let now = self.now().into();
+        if timestamp > now {
+            error!("Setting local read timestamp to {timestamp} which is ahead of now, {now}");
+        }
         self.global_timelines
             .get_mut(&Timeline::EpochMilliseconds)
             .expect("no realtime timeline")
@@ -335,28 +340,59 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     /// Ensures that a global timeline state exists for `timeline`.
-    pub(crate) async fn ensure_timeline_state(
-        &mut self,
-        timeline: Timeline,
+    pub(crate) async fn ensure_timeline_state<'a>(
+        &'a mut self,
+        timeline: &'a Timeline,
     ) -> &mut TimelineState<Timestamp> {
-        if !self.global_timelines.contains_key(&timeline) {
-            self.global_timelines.insert(
+        Self::ensure_timeline_state_with_initial_time(
+            timeline,
+            Timestamp::minimum(),
+            self.catalog.config().now.clone(),
+            |ts| self.catalog.persist_timestamp(timeline, ts),
+            &mut self.global_timelines,
+        )
+        .await
+    }
+
+    /// Ensures that a global timeline state exists for `timeline`, with an initial time
+    /// of `initially`.
+    pub(crate) async fn ensure_timeline_state_with_initial_time<'a, Fut>(
+        timeline: &'a Timeline,
+        initially: Timestamp,
+        now: NowFn,
+        persist_fn: impl FnOnce(Timestamp) -> Fut,
+        global_timelines: &'a mut BTreeMap<Timeline, TimelineState<Timestamp>>,
+    ) -> &'a mut TimelineState<Timestamp>
+    where
+        Fut: Future<Output = Result<(), crate::catalog::Error>>,
+    {
+        if !global_timelines.contains_key(timeline) {
+            let oracle = if timeline == &Timeline::EpochMilliseconds {
+                DurableTimestampOracle::new(
+                    initially,
+                    move || (now)().into(),
+                    *TIMESTAMP_PERSIST_INTERVAL,
+                    persist_fn,
+                )
+                .await
+            } else {
+                DurableTimestampOracle::new(
+                    initially,
+                    Timestamp::minimum,
+                    *TIMESTAMP_PERSIST_INTERVAL,
+                    persist_fn,
+                )
+                .await
+            };
+            global_timelines.insert(
                 timeline.clone(),
                 TimelineState {
-                    oracle: DurableTimestampOracle::new(
-                        Timestamp::minimum(),
-                        Timestamp::minimum,
-                        *TIMESTAMP_PERSIST_INTERVAL,
-                        |ts| self.catalog.persist_timestamp(&timeline, ts),
-                    )
-                    .await,
+                    oracle,
                     read_holds: ReadHolds::new(),
                 },
             );
         }
-        self.global_timelines
-            .get_mut(&timeline)
-            .expect("inserted above")
+        global_timelines.get_mut(timeline).expect("inserted above")
     }
 
     pub(crate) fn remove_storage_ids_from_timeline<I>(&mut self, ids: I) -> Vec<Timeline>
