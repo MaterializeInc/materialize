@@ -345,7 +345,7 @@ impl KafkaTxProducer {
                     info!("error requiring txn abort in kafka sink: {:?}", e);
                     self.abort_active_txn().await?;
                     return Err(format!(
-                        "shutting down due error requiring txn abort in kafka sink: {e:?}"
+                        "shutting down due to error requiring txn abort in kafka sink: {e:?}"
                     ));
                 }
                 Err(KafkaError::Transaction(e)) if e.is_retriable() => {
@@ -557,9 +557,9 @@ impl KafkaSinkState {
                         continue;
                     } else {
                         // We've received an error that is not transient
-                        Healthchecker::report_stall_and_panic(
+                        Healthchecker::report_stall_and_halt(
                             self.healthchecker.lock().await.as_mut(),
-                            format!("fatal error while producing message in {}: {e}", self.name,),
+                            format!("fatal error while producing message in {}: {e}", self.name),
                         )
                         .await;
                     }
@@ -843,7 +843,7 @@ impl KafkaSinkState {
                 {
                     Ok(()) => (),
                     Err(err) => {
-                        Healthchecker::report_stall_and_panic(
+                        Healthchecker::report_stall_and_halt(
                             self.healthchecker.lock().await.as_mut(),
                             err,
                         )
@@ -864,7 +864,7 @@ impl KafkaSinkState {
                 {
                     Ok(()) => (),
                     Err(err) => {
-                        Healthchecker::report_stall_and_panic(
+                        Healthchecker::report_stall_and_halt(
                             self.healthchecker.lock().await.as_mut(),
                             err,
                         )
@@ -1068,14 +1068,14 @@ where
         {
             Ok(()) => (),
             Err(err) => {
-                Healthchecker::report_stall_and_panic(healthchecker.as_mut(), err).await
+                Healthchecker::report_stall_and_halt(healthchecker.as_mut(), err).await
             }
         };
 
         let latest_ts = match s.determine_latest_progress_record().await {
             Ok(latest_ts) => latest_ts,
             Err(e) => {
-                Healthchecker::report_stall_and_panic(
+                Healthchecker::report_stall_and_halt(
                     healthchecker.as_mut(),
                     format!("determining latest progress record {e:?}"),
                 )
@@ -1192,7 +1192,7 @@ where
                                     .retry_on_txn_error(|p| p.begin_transaction())
                                     .await {
                                         Ok(()) => (),
-                                        Err(err) => Healthchecker::report_stall_and_panic(s.healthchecker.lock().await.as_mut(), err).await,
+                                        Err(err) => Healthchecker::report_stall_and_halt(s.healthchecker.lock().await.as_mut(), err).await,
                                     };
 
                                 let mut repeat_counter = 0;
@@ -1236,7 +1236,7 @@ where
                                     .retry_on_txn_error(|p| p.commit_transaction())
                                     .await {
                                         Ok(()) => (),
-                                        Err(err) => Healthchecker::report_stall_and_panic(s.healthchecker.lock().await.as_mut(), err).await,
+                                        Err(err) => Healthchecker::report_stall_and_halt(s.healthchecker.lock().await.as_mut(), err).await,
                                     };
 
                                 s.flush().await;

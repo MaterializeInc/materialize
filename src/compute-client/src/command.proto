@@ -51,8 +51,7 @@ message ProtoComputeCommand {
 
 message ProtoInstanceConfig {
     mz_compute_client.logging.ProtoLoggingConfig logging = 1;
-    uint64 replica_id = 2;
-    uint32 max_result_size = 3;
+    uint32 max_result_size = 2;
 }
 
 message ProtoCommunicationConfig {
@@ -124,8 +123,7 @@ message ProtoPeek {
     uint64 timestamp = 4;
     mz_expr.relation.ProtoRowSetFinishing finishing = 5;
     mz_expr.linear.ProtoSafeMfpPlan map_filter_project = 6;
-    optional uint64 target_replica = 7;
-    map<string, string> otel_ctx = 8;
+    map<string, string> otel_ctx = 7;
 }
 
 message ProtoUpdateMaxResultSize {

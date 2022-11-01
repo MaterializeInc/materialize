@@ -38,6 +38,7 @@ use mz_compute_client::command::{
 };
 use mz_compute_client::response::ComputeResponse;
 use mz_compute_client::service::ComputeClient;
+use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
@@ -141,14 +142,19 @@ impl ClusterClient<PartitionedClient> {
         }
     }
 
-    fn build_timely(&mut self, comm_config: CommunicationConfig) -> Result<TimelyContainer, Error> {
+    async fn build_timely(
+        &mut self,
+        comm_config: CommunicationConfig,
+    ) -> Result<TimelyContainer, Error> {
         info!("Building timely container with config {comm_config:?}");
         let (client_txs, client_rxs): (Vec<_>, Vec<_>) = (0..comm_config.workers)
             .map(|_| crossbeam_channel::unbounded())
             .unzip();
         let client_rxs: Mutex<Vec<_>> = Mutex::new(client_rxs.into_iter().map(Some).collect());
 
-        let (builders, other) = initialize_networking(&comm_config).map_err(|e| anyhow!("{e}"))?;
+        let (builders, other) = initialize_networking(&comm_config)
+            .await
+            .map_err(|e| anyhow!("{e}"))?;
 
         let workers = comm_config.workers;
         let trace_metrics = self.trace_metrics.clone();
@@ -185,7 +191,7 @@ impl ClusterClient<PartitionedClient> {
         })
     }
 
-    fn build(&mut self, comm_config: CommunicationConfig) -> Result<(), Error> {
+    async fn build(&mut self, comm_config: CommunicationConfig) -> Result<(), Error> {
         let workers = comm_config.workers;
 
         // Check if we can reuse the existing timely instance.
@@ -198,11 +204,17 @@ impl ClusterClient<PartitionedClient> {
         let timely = self.timely_container.lock().unwrap().take();
         let timely = match timely {
             Some(existing) => {
-                assert_eq!(existing.comm_config, comm_config);
+                if comm_config != existing.comm_config {
+                    halt!(
+                        "new timely configuration does not match existing timely configuration:\n{:?}\nvs\n{:?}",
+                        comm_config,
+                        existing.comm_config,
+                    );
+                }
                 info!("Timely already initialized; re-using.");
                 existing
             }
-            None => self.build_timely(comm_config)?,
+            None => self.build_timely(comm_config).await?,
         };
 
         let (command_txs, command_rxs): (Vec<_>, Vec<_>) =
@@ -251,7 +263,7 @@ impl GenericClient<ComputeCommand, ComputeResponse> for ClusterClient<Partitione
         // Changing this debug statement requires changing the replica-isolation test
         tracing::debug!("ClusterClient send={:?}", &cmd);
         match cmd {
-            ComputeCommand::CreateTimely(comm_config) => self.build(comm_config),
+            ComputeCommand::CreateTimely(comm_config) => self.build(comm_config).await,
             ComputeCommand::DropInstance => {
                 self.inner.as_mut().expect("intialized").send(cmd).await?;
                 self.inner = None;
@@ -555,7 +567,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
         match &cmd {
             ComputeCommand::CreateInstance(config) => {
                 self.compute_state = Some(ComputeState {
-                    replica_id: config.replica_id,
                     traces: TraceManager::new(
                         self.trace_metrics.clone(),
                         self.timely_worker.index(),
@@ -747,7 +758,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     }
                     ComputeCommand::CreateInstance(new_config) => {
                         // Cluster creation should not be performed again!
-                        assert_eq!(old_config, Some(new_config));
+                        if Some(new_config) != old_config {
+                            halt!(
+                                "new instance configuration does not match existing instance configuration:\n{:?}\nvs\n{:?}",
+                                new_config,
+                                old_config,
+                            );
+                        }
 
                         // Ensure we retain the logging sink dataflows.
                         if let Some(logging) = &new_config.logging {

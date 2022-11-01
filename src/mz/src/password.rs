@@ -9,15 +9,17 @@
 
 use std::collections::HashMap;
 
-use crate::{FronteggAppPassword, ValidProfile, API_FRONTEGG_TOKEN_AUTH_URL};
+use crate::configuration::ValidProfile;
+use crate::{FronteggAppPassword, API_FRONTEGG_TOKEN_AUTH_URL};
+use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use reqwest::Client;
 
 /// Get Frontegg API tokens using an access token
 pub(crate) async fn list_passwords(
     client: &Client,
-    valid_profile: &ValidProfile,
-) -> Result<Vec<FronteggAppPassword>, reqwest::Error> {
+    valid_profile: &ValidProfile<'_>,
+) -> Result<Vec<FronteggAppPassword>> {
     let authorization: String = format!("Bearer {}", valid_profile.frontegg_auth.access_token);
 
     let mut headers = HeaderMap::new();
@@ -35,7 +37,9 @@ pub(crate) async fn list_passwords(
         .headers(headers)
         .json(&body)
         .send()
-        .await?
+        .await
+        .context("failed to communicate with server")?
         .json::<Vec<FronteggAppPassword>>()
         .await
+        .context("failed to parse results from server")
 }

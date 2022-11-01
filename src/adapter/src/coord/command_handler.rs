@@ -35,7 +35,7 @@ use crate::coord::peek::PendingPeek;
 use crate::coord::{ConnMeta, Coordinator, CreateSourceStatementReady, Message, PendingTxn};
 use crate::error::AdapterError;
 use crate::session::{PreparedStatement, Session, TransactionStatus};
-use crate::util::ClientTransmitter;
+use crate::util::{ClientTransmitter, ResultExt};
 
 impl<S: Append + 'static> Coordinator<S> {
     pub(crate) async fn handle_command(&mut self, cmd: Command) {
@@ -537,7 +537,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.drop_temp_items(session).await;
         self.catalog
             .drop_temporary_schema(session.conn_id())
-            .expect("unable to drop temporary schema");
+            .unwrap_or_terminate("unable to drop temporary schema");
         self.metrics.active_sessions.dec();
         self.active_conns.remove(&session.conn_id());
         self.cancel_pending_peeks(session.conn_id());

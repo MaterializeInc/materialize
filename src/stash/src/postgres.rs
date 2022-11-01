@@ -76,9 +76,9 @@ struct PreparedStatements {
     iter: Statement,
     seal: Statement,
     compact: Statement,
-    consolidate_consolidation: Statement,
-    consolidate_insert: Statement,
     consolidate_delete: Statement,
+    consolidate_consolidate: Statement,
+    consolidate_cleanup: Statement,
     update_many: Statement,
 }
 
@@ -143,17 +143,17 @@ impl<'a> CountedStatements<'a> {
         self.inc("compact");
         &self.stmts.compact
     }
-    fn consolidate_consolidation(&self) -> &Statement {
-        self.inc("consolidate_consolidation");
-        &self.stmts.consolidate_consolidation
-    }
-    fn consolidate_insert(&self) -> &Statement {
-        self.inc("consolidate_insert");
-        &self.stmts.consolidate_insert
-    }
     fn consolidate_delete(&self) -> &Statement {
         self.inc("consolidate_delete");
         &self.stmts.consolidate_delete
+    }
+    fn consolidate_consolidate(&self) -> &Statement {
+        self.inc("consolidate_consolidate");
+        &self.stmts.consolidate_consolidate
+    }
+    fn consolidate_cleanup(&self) -> &Statement {
+        self.inc("consolidate_cleanup");
+        &self.stmts.consolidate_cleanup
     }
     fn update_many(&self) -> &Statement {
         self.inc("update_many");
@@ -187,6 +187,30 @@ impl std::fmt::Debug for Postgres {
 }
 
 impl Postgres {
+    /// Drops all tables associated with the stash if they exist.
+    pub async fn clear(url: &str, tls: MakeTlsConnector) -> Result<(), StashError> {
+        let (client, connection) = tokio_postgres::connect(url, tls).await?;
+        mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
+            if let Err(e) = connection.await {
+                tracing::error!("postgres stash connection error: {}", e);
+            }
+        });
+        client
+            .batch_execute(
+                "
+                BEGIN;
+                DROP TABLE IF EXISTS uppers;
+                DROP TABLE IF EXISTS sinces;
+                DROP TABLE IF EXISTS data;
+                DROP TABLE IF EXISTS collections;
+                DROP TABLE IF EXISTS fence;
+                COMMIT;
+            ",
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Opens the stash stored at the specified path.
     pub async fn new(
         url: String,
@@ -346,21 +370,37 @@ impl Postgres {
         let compact = client
             .prepare("UPDATE sinces SET since = $1 WHERE collection_id = $2")
             .await?;
-        let consolidate_consolidation = client
-            .prepare(
-                "DELETE FROM data
-                 WHERE collection_id = $1 AND time <= $2
-                 RETURNING key, value, diff",
-            )
-            .await?;
-        let consolidate_insert = client
-            .prepare(
-                "INSERT INTO data (collection_id, key, value, time, diff)
-                VALUES ($1, $2, $3, $4, $5)",
-            )
-            .await?;
         let consolidate_delete = client
             .prepare("DELETE FROM data WHERE collection_id = $1")
+            .await?;
+        // For all entries before the current since, consolidate diffs into the
+        // current since, ignoring kv pairs whose diffs consolidated to
+        // 0. Note that this does create situations where the current since can
+        // have a +1 and -1 diff for some kv pair if, say, an entry was deleted
+        // (which happens at the current since and results in a diff=-1) and
+        // then consolidation causes the diff=+1 entry that created the item to
+        // get its timestamp bumped to the current since. These will be cleanup
+        // up during the next consolidation after the since has advanced, and
+        // are not a correctness problem. This could possibly be improved if
+        // there were a primary/unique key constraint on (collection, time, key,
+        // value), which would allow the use of INSERT ON CONFLICT. However 1)
+        // Cockroach doesn't currently support jsonb types in unique key
+        // constraints and 2) even if you create a computed (STORED) column on
+        // key and value and make a PK on those, some benchmarks got worse than
+        // this current solution.
+        let consolidate_consolidate = client
+            .prepare(
+                "
+                    INSERT INTO data (collection_id, key, value, time, diff)
+                    SELECT $1, key, value, $2, sum(diff) FROM data
+                    WHERE collection_id = $1 AND time < $2
+                    GROUP BY key, value
+                    HAVING sum(diff) != 0
+                ",
+            )
+            .await?;
+        let consolidate_cleanup = client
+            .prepare("DELETE FROM data WHERE collection_id = $1 AND time < $2")
             .await?;
         let update_many = client
             .prepare(
@@ -378,9 +418,9 @@ impl Postgres {
             iter,
             seal,
             compact,
-            consolidate_consolidation,
-            consolidate_insert,
             consolidate_delete,
+            consolidate_consolidate,
+            consolidate_cleanup,
             update_many,
         });
         Ok(())
@@ -648,7 +688,7 @@ impl Postgres {
         Ok(())
     }
 
-    async fn consolidate_batch_tx(
+    async fn consolidate_batch_tx_new(
         stmts: &CountedStatements<'_>,
         tx: &Transaction<'_>,
         collections: &[Id],
@@ -659,35 +699,10 @@ impl Postgres {
                 let since = Self::since_tx(stmts, tx, *collection_id).await?;
                 match since.into_option() {
                     Some(since) => {
-                        let mut updates = tx
-                            .query(stmts.consolidate_consolidation(), &[&collection_id, &since])
-                            .map_err(StashError::from)
-                            .await?
-                            .into_iter()
-                            .map(|row| {
-                                let key: Value = row.try_get("key")?;
-                                let value: Value = row.try_get("value")?;
-                                let diff: Diff = row.try_get("diff")?;
-                                let key = serde_json::to_vec(&key)?;
-                                let value = serde_json::to_vec(&value)?;
-                                Ok::<_, StashError>(((key, value), since, diff))
-                            })
-                            .collect::<Result<Vec<_>, _>>()?;
-                        differential_dataflow::consolidation::consolidate_updates(&mut updates);
-                        let updates =
-                            updates
-                                .into_iter()
-                                .map(|((key, value), time, diff)| async move {
-                                    let key: Value = serde_json::from_slice(&key)?;
-                                    let value: Value = serde_json::from_slice(&value)?;
-                                    tx.execute(
-                                        stmts.consolidate_insert(),
-                                        &[&collection_id, &key, &value, &time, &diff],
-                                    )
-                                    .map_err(StashError::from)
-                                    .await
-                                });
-                        try_join_all(updates).await?;
+                        tx.execute(stmts.consolidate_consolidate(), &[&collection_id, &since])
+                            .await?;
+                        tx.execute(stmts.consolidate_cleanup(), &[&collection_id, &since])
+                            .await?;
                     }
                     None => {
                         tx.execute(stmts.consolidate_delete(), &[&collection_id])
@@ -965,7 +980,7 @@ impl Stash for Postgres {
         let collections = collections.to_vec();
         self.transact(|stmts, tx| {
             let collections = collections.clone();
-            Box::pin(async move { Self::consolidate_batch_tx(stmts, tx, &collections).await })
+            Box::pin(async move { Self::consolidate_batch_tx_new(stmts, tx, &collections).await })
         })
         .await
     }

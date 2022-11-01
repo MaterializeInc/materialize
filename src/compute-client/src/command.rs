@@ -218,8 +218,6 @@ pub type ProcessId = i64;
 #[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize)]
 /// Configuration sent to new compute instances.
 pub struct InstanceConfig {
-    /// The instance's replica ID.
-    pub replica_id: ReplicaId,
     /// Optionally, request the installation of logging sources.
     pub logging: Option<LoggingConfig>,
     /// Max size in bytes of any result.
@@ -240,7 +238,6 @@ pub struct CommunicationConfig {
 impl RustType<ProtoInstanceConfig> for InstanceConfig {
     fn into_proto(&self) -> ProtoInstanceConfig {
         ProtoInstanceConfig {
-            replica_id: self.replica_id,
             logging: self.logging.into_proto(),
             max_result_size: self.max_result_size,
         }
@@ -248,7 +245,6 @@ impl RustType<ProtoInstanceConfig> for InstanceConfig {
 
     fn from_proto(proto: ProtoInstanceConfig) -> Result<Self, TryFromProtoError> {
         Ok(Self {
-            replica_id: proto.replica_id,
             logging: proto.logging.into_rust()?,
             max_result_size: proto.max_result_size,
         })
@@ -888,11 +884,6 @@ pub struct Peek<T = mz_repr::Timestamp> {
     pub finishing: RowSetFinishing,
     /// Linear operation to apply in-line on each result.
     pub map_filter_project: mz_expr::SafeMfpPlan,
-    /// Target replica of this peek.
-    ///
-    /// If `Some`, the peek is only handled by the given replica.
-    /// If `None`, the peek is handled by all replicas.
-    pub target_replica: Option<ReplicaId>,
     /// An `OpenTelemetryContext` to forward trace information along
     /// to the compute worker to allow associating traces between
     /// the compute controller and the compute worker.
@@ -917,7 +908,6 @@ impl RustType<ProtoPeek> for Peek {
             timestamp: self.timestamp.into(),
             finishing: Some(self.finishing.into_proto()),
             map_filter_project: Some(self.map_filter_project.into_proto()),
-            target_replica: self.target_replica,
             otel_ctx: self.otel_ctx.clone().into(),
         }
     }
@@ -939,7 +929,6 @@ impl RustType<ProtoPeek> for Peek {
             map_filter_project: x
                 .map_filter_project
                 .into_rust_if_some("ProtoPeek::map_filter_project")?,
-            target_replica: x.target_replica,
             otel_ctx: x.otel_ctx.into(),
         })
     }

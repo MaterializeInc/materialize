@@ -467,6 +467,7 @@ class Composition:
         env_extra: Dict[str, str] = {},
         capture: bool = False,
         stdin: Optional[str] = None,
+        entrypoint: Optional[str] = None,
     ) -> subprocess.CompletedProcess:
         """Run a one-off command in a service.
 
@@ -490,6 +491,7 @@ class Composition:
         self.invoke("up", "--detach", "--scale", f"{service}=0", service)
         return self.invoke(
             "run",
+            *(["--entrypoint", entrypoint] if entrypoint else []),
             *(f"-e{k}={v}" for k, v in env_extra.items()),
             *(["--detach"] if detach else []),
             *(["--rm"] if rm else []),

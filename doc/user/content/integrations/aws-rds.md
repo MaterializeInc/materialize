@@ -14,6 +14,9 @@ As an account with the `rds_superuser` role, make these changes to the upstream 
 1. Create a custom RDS parameter group with your instance and associate it with your instance. You will not be able to set custom parameters on the default RDS parameter groups.
 
 1. In the custom RDS parameter group, set the `rds.logical_replication` static parameter to `1`.
+{{< note >}}
+If you change this setting for an existing RDS database, you will need to reboot the instance for it to take effect.
+{{</ note >}}
 
 1. The Materialize instance will need access to connect to the upstream database. This is usually controlled by IP address. If you are hosting your own installation of Materialize, add the instance's IP address in the security group for the RDS instance.
 
