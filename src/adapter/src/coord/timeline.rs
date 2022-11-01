@@ -68,14 +68,13 @@ struct TimestampOracleState<T> {
 struct TimestampOracle<T> {
     state: TimestampOracleState<T>,
     next: Box<dyn Fn() -> T>,
-    max_increase: Option<T>,
 }
 
 impl<T: TimestampManipulation> TimestampOracle<T> {
     /// Create a new timeline, starting at the indicated time. `next` generates
     /// new timestamps when invoked. The timestamps have no requirements, and can
     /// retreat from previous invocations.
-    pub fn new<F>(initially: T, next: F, max_increase: Option<T>) -> Self
+    pub fn new<F>(initially: T, next: F) -> Self
     where
         F: Fn() -> T + 'static,
     {
@@ -85,7 +84,6 @@ impl<T: TimestampManipulation> TimestampOracle<T> {
                 write_ts: initially,
             },
             next: Box::new(next),
-            max_increase,
         }
     }
 
@@ -97,16 +95,6 @@ impl<T: TimestampManipulation> TimestampOracle<T> {
         let mut next = (self.next)();
         if next.less_equal(&self.state.write_ts) {
             next = self.state.write_ts.step_forward();
-        }
-        if let Some(max_increase) = &self.max_increase {
-            // Cap how much we advance the write timestamp by for any single increment. This is to
-            // help protect against scenarios where a clock may jump forward by a large amount and
-            // then jump backwards.
-            let cap = self.state.write_ts.step_forward_by(max_increase);
-            if cap.less_than(&next) {
-                error!("Tried to increase write timestamp from {:?} to {next:?}; instead capping increase to {cap:?}", self.state.write_ts);
-                next = cap;
-            }
         }
         assert!(self.state.read_ts.less_than(&next));
         assert!(self.state.write_ts.less_than(&next));
@@ -156,14 +144,6 @@ pub static TIMESTAMP_PERSIST_INTERVAL: Lazy<mz_repr::Timestamp> = Lazy::new(|| {
         .expect("15 seconds can fit into `Timestamp`")
 });
 
-/// Max amount we can increase a timestamp by at once.
-pub static TIMESTAMP_MAX_INCREASE: Lazy<mz_repr::Timestamp> = Lazy::new(|| {
-    Duration::from_secs(10)
-        .as_millis()
-        .try_into()
-        .expect("10 seconds can fit into `Timestamp`")
-});
-
 /// A type that wraps a [`TimestampOracle`] and provides durable timestamps. This allows us to
 /// recover a timestamp that is larger than all previous timestamps on restart. The protocol
 /// is based on timestamp recovery from Percolator <https://research.google/pubs/pub36726/>. We
@@ -189,7 +169,6 @@ impl<T: TimestampManipulation> DurableTimestampOracle<T> {
         initially: T,
         next: F,
         persist_interval: T,
-        max_increase: Option<T>,
         persist_fn: impl FnOnce(T) -> Fut,
     ) -> Self
     where
@@ -197,7 +176,7 @@ impl<T: TimestampManipulation> DurableTimestampOracle<T> {
         Fut: Future<Output = Result<(), crate::catalog::Error>>,
     {
         let mut oracle = Self {
-            timestamp_oracle: TimestampOracle::new(initially.clone(), next, max_increase),
+            timestamp_oracle: TimestampOracle::new(initially.clone(), next),
             durable_timestamp: initially.clone(),
             persist_interval,
         };
@@ -393,7 +372,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     initially,
                     move || (now)().into(),
                     *TIMESTAMP_PERSIST_INTERVAL,
-                    Some(*TIMESTAMP_MAX_INCREASE),
                     persist_fn,
                 )
                 .await
@@ -402,7 +380,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     initially,
                     Timestamp::minimum,
                     *TIMESTAMP_PERSIST_INTERVAL,
-                    None,
                     persist_fn,
                 )
                 .await
