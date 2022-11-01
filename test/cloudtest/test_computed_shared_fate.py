@@ -10,8 +10,6 @@
 import subprocess
 from textwrap import dedent
 
-import pytest
-
 from materialize.cloudtest.application import MaterializeApplication
 
 # We would like to use large clusters here, e.g. SIZE=16, in order to get a pronounced
@@ -107,7 +105,7 @@ def kill_computed(mz: MaterializeApplication, compute_id: int) -> None:
         pass
 
 
-def test_kill_all_computeds(mz: MaterializeApplication) -> None:  # type: ignore
+def test_kill_all_computeds(mz: MaterializeApplication) -> None:
     """Kill all computeds"""
     populate(mz, 1)
 
