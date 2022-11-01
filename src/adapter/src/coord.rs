@@ -92,7 +92,7 @@ use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::NowFn;
+use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -906,7 +906,14 @@ impl<S: Append + 'static> Coordinator<S> {
         // Watcher that listens for and reports compute service status changes.
         let mut compute_events = self.controller.compute.watch_services();
 
-        self.schedule_storage_usage_collection().await;
+        self.schedule_storage_usage_collection(
+            self.catalog
+                .most_recent_storage_usage_collection()
+                .await
+                .unwrap()
+                .unwrap_or(EpochMillis::MIN),
+        )
+        .await;
 
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is

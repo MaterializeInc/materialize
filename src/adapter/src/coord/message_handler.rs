@@ -123,17 +123,16 @@ impl<S: Append + 'static> Coordinator<S> {
         if let Err(err) = self.catalog_transact(None, ops, |_| Ok(())).await {
             tracing::warn!("Failed to update storage metrics: {:?}", err);
         }
-        self.schedule_storage_usage_collection().await;
+        self.schedule_storage_usage_collection(collection_timestamp)
+            .await;
     }
 
-    pub async fn schedule_storage_usage_collection(&self) {
-        let previous_collection_ts = self
-            .catalog
-            .most_recent_storage_usage_collection()
-            .await
-            .expect("unable to get storage usage")
-            .unwrap_or(EpochMillis::MIN);
-        let time_since_previous_collection = self.now().saturating_sub(previous_collection_ts);
+    pub async fn schedule_storage_usage_collection(
+        &self,
+        previous_collection_timestamp: EpochMillis,
+    ) {
+        let time_since_previous_collection =
+            self.now().saturating_sub(previous_collection_timestamp);
         let next_collection_interval = self
             .storage_usage_collection_interval
             .saturating_sub(Duration::from_millis(time_since_previous_collection));
