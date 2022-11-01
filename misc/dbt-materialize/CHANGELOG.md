@@ -1,6 +1,9 @@
 # dbt-materialize Changelog
 
-## Unreleased - 2022-10-16
+## Unreleased - 2022-10-28
+
+* Return the correct connection keys to the user on `dbt debug`.
+
 
 * Disallow the `cluster` option for `view` materializations. In the new
   architecture, only materialized views and indexes are associated with a

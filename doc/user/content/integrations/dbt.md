@@ -248,7 +248,7 @@ Component                            | Value     | Description
 ##### Creating a multi-column index
 ```sql
 {{ config(materialized='view',
-          indexes=[{'columns': ['col_a'], 'cluster': 'cluster_a'}]) }}
+          indexes=[{'columns': ['col_a','col_b'], 'cluster': 'cluster_a'}]) }}
 ```
 
 ##### Creating a default index
