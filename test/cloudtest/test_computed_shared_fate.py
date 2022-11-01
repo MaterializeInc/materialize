@@ -105,7 +105,13 @@ def kill_computed(mz: MaterializeApplication, compute_id: int) -> None:
         pass
 
 
-def test_kill_all_computeds(mz: MaterializeApplication) -> None:
+pytest.skip(
+    "Start of multi-process clusters is unreliable, see gh#14689",
+    allow_module_level=True,
+)
+
+
+def test_kill_all_computeds(mz: MaterializeApplication) -> None:  # type: ignore
     """Kill all computeds"""
     populate(mz, 1)
 
