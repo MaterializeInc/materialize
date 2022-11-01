@@ -46,6 +46,14 @@ class StartMz(MzcomposeAction):
         mz = Materialized(image=image, options=StartMz.DEFAULT_MZ_OPTIONS)
 
         with c.override(mz):
+            # Work around https://github.com/MaterializeInc/materialize/issues/15725
+            # by cleaning up Process Orchestrator metadata on restart
+            c.run(
+                "materialized",
+                "-c",
+                "rm -rf /mzdata/*.pid /mzdata/*.ports",
+                entrypoint="bash",
+            )
             c.up("materialized")
 
         c.wait_for_materialized()
