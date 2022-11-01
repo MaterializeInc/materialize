@@ -88,6 +88,8 @@ def validate(mz: MaterializeApplication, seed: int) -> None:
         ),
         no_reset=True,
         seed=seed,
+        # Longer timeout to account for CrashLoopBackOff
+        default_timeout=600,
     )
 
 
@@ -103,12 +105,6 @@ def kill_computed(mz: MaterializeApplication, compute_id: int) -> None:
     except subprocess.CalledProcessError:
         # The computed process or container most likely has stopped already or is on its way
         pass
-
-
-pytest.skip(
-    "Start of multi-process clusters is unreliable, see gh#14689",
-    allow_module_level=True,
-)
 
 
 def test_kill_all_computeds(mz: MaterializeApplication) -> None:  # type: ignore

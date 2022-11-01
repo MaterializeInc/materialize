@@ -49,6 +49,7 @@ class Testdrive(K8sPod):
         input: Optional[str] = None,
         no_reset: bool = False,
         seed: Optional[int] = None,
+        default_timeout: int = 300,
     ) -> None:
         wait(condition="condition=Ready", resource="pod/testdrive")
         subprocess.run(
@@ -65,7 +66,7 @@ class Testdrive(K8sPod):
                 "--materialize-internal-url=postgres://materialize:materialize@environmentd:6877/materialize",
                 "--kafka-addr=redpanda:9092",
                 "--schema-registry-url=http://redpanda:8081",
-                "--default-timeout=300s",
+                f"--default-timeout={default_timeout}s",
                 "--var=replicas=1",
                 "--var=size=1",
                 *([f"--aws-region={self.aws_region}"] if self.aws_region else []),
