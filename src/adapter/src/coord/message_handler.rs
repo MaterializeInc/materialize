@@ -18,7 +18,6 @@ use tracing::{event, warn, Level};
 
 use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceStatus};
 use mz_controller::ControllerResponse;
-use mz_ore::now::EpochMillis;
 use mz_ore::task;
 use mz_persist_client::ShardId;
 use mz_sql::ast::Statement;
@@ -123,16 +122,15 @@ impl<S: Append + 'static> Coordinator<S> {
         if let Err(err) = self.catalog_transact(None, ops, |_| Ok(())).await {
             tracing::warn!("Failed to update storage metrics: {:?}", err);
         }
-        self.schedule_storage_usage_collection(collection_timestamp)
-            .await;
+        self.catalog
+            .set_most_recent_storage_usage_collection(collection_timestamp);
+        self.schedule_storage_usage_collection();
     }
 
-    pub async fn schedule_storage_usage_collection(
-        &self,
-        previous_collection_timestamp: EpochMillis,
-    ) {
-        let time_since_previous_collection =
-            self.now().saturating_sub(previous_collection_timestamp);
+    pub fn schedule_storage_usage_collection(&self) {
+        let time_since_previous_collection = self
+            .now()
+            .saturating_sub(self.catalog.most_recent_storage_usage_collection());
         let next_collection_interval = self
             .storage_usage_collection_interval
             .saturating_sub(Duration::from_millis(time_since_previous_collection));

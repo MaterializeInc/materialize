@@ -179,6 +179,7 @@ pub struct CatalogState {
     oid_counter: u32,
     cluster_replica_sizes: ClusterReplicaSizeMap,
     storage_host_sizes: StorageHostSizeMap,
+    most_recent_storage_usage_collection: EpochMillis,
     default_storage_host_size: Option<String>,
     availability_zones: Vec<String>,
     system_configuration: SystemVars,
@@ -2000,6 +2001,7 @@ impl<S: Append> Catalog<S> {
                 oid_counter: FIRST_USER_OID,
                 cluster_replica_sizes: config.cluster_replica_sizes,
                 storage_host_sizes: config.storage_host_sizes,
+                most_recent_storage_usage_collection: EpochMillis::MIN,
                 default_storage_host_size: config.default_storage_host_size,
                 availability_zones: config.availability_zones,
                 system_configuration: SystemVars::default(),
@@ -2442,9 +2444,16 @@ impl<S: Append> Catalog<S> {
             builtin_table_updates.push(catalog.state.pack_audit_log_update(&event)?);
         }
 
+        // To avoid reading over storage_usage() multiple times, do both the
+        // table updates and most-recent-timestamp calculations on a single
+        // iterator.
         let storage_usage_events = catalog.storage().await.storage_usage().await?;
         for event in storage_usage_events {
             builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
+            let ts = event.timestamp();
+            if ts > catalog.state.most_recent_storage_usage_collection {
+                catalog.state.most_recent_storage_usage_collection = ts;
+            }
         }
 
         for ip in &catalog.state.egress_ips {
@@ -5143,14 +5152,12 @@ impl<S: Append> Catalog<S> {
         self.state.system_config()
     }
 
-    pub async fn most_recent_storage_usage_collection(&self) -> Result<Option<EpochMillis>, Error> {
-        Ok(self
-            .storage()
-            .await
-            .storage_usage()
-            .await?
-            .map(|usage| usage.timestamp())
-            .max())
+    pub fn most_recent_storage_usage_collection(&self) -> EpochMillis {
+        self.state.most_recent_storage_usage_collection
+    }
+
+    pub fn set_most_recent_storage_usage_collection(&mut self, ts: EpochMillis) {
+        self.state.most_recent_storage_usage_collection = ts;
     }
 }
 
