@@ -77,7 +77,7 @@
     {%- endif %}
     index
     {% if index_config.name -%}
-      if not exists "{{ index_config.name }}"
+      "{{ index_config.name }}"
     {%- endif %}
     {% if cluster -%}
       in cluster {{ cluster }}

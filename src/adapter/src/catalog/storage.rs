@@ -1236,21 +1236,16 @@ impl<'a, S: Append> Transaction<'a, S> {
         let next_id = id
             .checked_add(1)
             .ok_or_else(|| Error::new(ErrorKind::IdExhaustion))?;
-        let diff = self.id_allocator.update(|k, _v| {
-            if k.name == key {
-                Some(IdAllocValue { next_id })
-            } else {
-                None
-            }
-        })?;
-        assert_eq!(diff, 1);
+        let prev = self
+            .id_allocator
+            .set(IdAllocKey { name: key }, Some(IdAllocValue { next_id }))?;
+        assert!(prev.is_some());
         Ok(id)
     }
 
     pub fn remove_database(&mut self, id: &DatabaseId) -> Result<(), Error> {
-        let n = self.databases.delete(|k, _v| k.id == id.0).len();
-        assert!(n <= 1);
-        if n == 1 {
+        let prev = self.databases.set(DatabaseKey { id: id.0 }, None)?;
+        if prev.is_some() {
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownDatabase(id.to_string()).into())
@@ -1262,9 +1257,8 @@ impl<'a, S: Append> Transaction<'a, S> {
         database_id: &DatabaseId,
         schema_id: &SchemaId,
     ) -> Result<(), Error> {
-        let n = self.schemas.delete(|k, _v| k.id == schema_id.0).len();
-        assert!(n <= 1);
-        if n == 1 {
+        let prev = self.schemas.set(SchemaKey { id: schema_id.0 }, None)?;
+        if prev.is_some() {
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownSchema(format!("{}.{}", database_id.0, schema_id.0)).into())
@@ -1330,9 +1324,8 @@ impl<'a, S: Append> Transaction<'a, S> {
     /// Runtime is linear with respect to the total number of items in the stash.
     /// DO NOT call this function in a loop, use [`Self::remove_items`] instead.
     pub fn remove_item(&mut self, id: GlobalId) -> Result<(), Error> {
-        let n = self.items.delete(|k, _v| k.gid == id).len();
-        assert!(n <= 1);
-        if n == 1 {
+        let prev = self.items.set(ItemKey { gid: id }, None)?;
+        if prev.is_some() {
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownItem(id.to_string()).into())
@@ -1421,14 +1414,11 @@ impl<'a, S: Append> Transaction<'a, S> {
     }
 
     pub fn update_user_version(&mut self, version: u64) -> Result<(), Error> {
-        let n = self.configs.update(|k, _v| {
-            if k == USER_VERSION {
-                Some(ConfigValue { value: version })
-            } else {
-                None
-            }
-        })?;
-        assert_eq!(n, 1);
+        let prev = self.configs.set(
+            USER_VERSION.to_string(),
+            Some(ConfigValue { value: version }),
+        )?;
+        assert!(prev.is_some());
         Ok(())
     }
 
@@ -1474,8 +1464,7 @@ impl<'a, S: Append> Transaction<'a, S> {
         let value = ServerConfigurationValue {
             value: value.to_string(),
         };
-        self.system_configurations.delete(|k, _v| k == &key);
-        self.system_configurations.insert(key, value)?;
+        self.system_configurations.set(key, Some(value))?;
         Ok(())
     }
 
@@ -1484,7 +1473,9 @@ impl<'a, S: Append> Transaction<'a, S> {
         let key = ServerConfigurationKey {
             name: name.to_string(),
         };
-        self.system_configurations.delete(|k, _v| k == &key);
+        self.system_configurations
+            .set(key, None)
+            .expect("cannot have uniqueness violation");
     }
 
     /// Removes all persisted system configurations.
@@ -1494,8 +1485,11 @@ impl<'a, S: Append> Transaction<'a, S> {
 
     pub fn remove_timestamp(&mut self, timeline: Timeline) {
         let timeline_str = timeline.to_string();
-        let n = self.timestamps.delete(|k, _v| k.id == timeline_str).len();
-        assert_eq!(n, 1);
+        let prev = self
+            .timestamps
+            .set(TimestampKey { id: timeline_str }, None)
+            .expect("cannot have uniqueness violation");
+        assert!(prev.is_some());
     }
 
     #[tracing::instrument(level = "debug", skip_all)]

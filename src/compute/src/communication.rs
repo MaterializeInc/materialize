@@ -22,6 +22,7 @@ use std::thread;
 use std::thread::sleep;
 use std::time::Duration;
 
+use mz_ore::task::spawn_blocking;
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::allocator::GenericBuilder;
 use tracing::{info, trace, warn};
@@ -29,7 +30,7 @@ use tracing::{info, trace, warn};
 use mz_compute_client::command::CommunicationConfig;
 
 /// Creates communication mesh from cluster config
-pub fn initialize_networking(
+pub async fn initialize_networking(
     config: &CommunicationConfig,
 ) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), String> {
     let CommunicationConfig {
@@ -42,7 +43,13 @@ pub fn initialize_networking(
         "initializing network for multi-process timely instance, with {} processes",
         addresses.len()
     );
-    let sockets_result = create_sockets(addresses.clone(), *process);
+    let sockets_result = spawn_blocking(|| "computed networking setup", {
+        let addresses = addresses.clone();
+        let process = *process;
+        move || create_sockets(addresses, process)
+    })
+    .await
+    .map_err(|e| format!("JoinError: {e}"))?;
     match sockets_result.and_then(|sockets| {
         initialize_networking_from_sockets(sockets, *process, *workers, Box::new(|_| None))
     }) {

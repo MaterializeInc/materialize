@@ -71,27 +71,8 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
         }
     };
     async fn connect(connstr: &str, tls: MakeTlsConnector, clear: bool) -> Postgres {
-        let (client, connection) = tokio_postgres::connect(connstr, tokio_postgres::NoTls)
-            .await
-            .unwrap();
-        mz_ore::task::spawn(|| "postgres connection", async move {
-            if let Err(e) = connection.await {
-                panic!("connection error: {}", e);
-            }
-        });
         if clear {
-            client
-                .batch_execute(
-                    "
-                    DROP TABLE IF EXISTS uppers;
-                    DROP TABLE IF EXISTS  sinces;
-                    DROP TABLE IF EXISTS  data;
-                    DROP TABLE IF EXISTS  collections;
-                    DROP TABLE IF EXISTS  fence;
-                ",
-                )
-                .await
-                .unwrap();
+            Postgres::clear(connstr, tls.clone()).await.unwrap();
         }
         Postgres::new(connstr.to_string(), None, tls).await.unwrap()
     }
@@ -696,6 +677,33 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
     assert_eq!(
         items,
         vec![(1i64.to_le_bytes().to_vec(), "v5".to_string(), 1)]
+    );
+
+    // Test `set`.
+    let items = TABLE.peek_one(stash).await?;
+    let mut table = TableTransaction::new(items, uniqueness_violation);
+    // Uniqueness violation.
+    table
+        .set(2i64.to_le_bytes().to_vec(), Some("v5".to_string()))
+        .unwrap_err();
+    table
+        .set(3i64.to_le_bytes().to_vec(), Some("v6".to_string()))
+        .unwrap();
+    table.set(2i64.to_le_bytes().to_vec(), None).unwrap();
+    table.set(1i64.to_le_bytes().to_vec(), None).unwrap();
+    let pending = table.pending();
+    assert_eq!(
+        pending,
+        vec![
+            (1i64.to_le_bytes().to_vec(), "v5".to_string(), -1),
+            (3i64.to_le_bytes().to_vec(), "v6".to_string(), 1),
+        ]
+    );
+    commit(stash, collection, pending).await?;
+    let items = TABLE.peek_one(stash).await?;
+    assert_eq!(
+        items,
+        BTreeMap::from([(3i64.to_le_bytes().to_vec(), "v6".to_string())])
     );
 
     Ok(())

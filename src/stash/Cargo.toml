@@ -7,7 +7,7 @@ rust-version.workspace = true
 publish = false
 
 [[bench]]
-name = "sqlite"
+name = "postgres"
 harness = false
 
 [dependencies]
@@ -27,6 +27,7 @@ tracing = "0.1.37"
 
 [dev-dependencies]
 anyhow = "1.0.65"
+criterion = { version = "0.4.0", features = ["async_tokio"] }
 mz-postgres-util = { path = "../postgres-util" }
 tempfile = "3.2.0"
 tokio = { version = "1.20.2", features = ["macros"] }

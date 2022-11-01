@@ -747,13 +747,16 @@ impl_display!(AwsPrivateLinkConnectionOptionName);
 /// An option in a `CREATE CONNECTION...AWS PRIVATELINK`.
 pub struct AwsPrivateLinkConnectionOption<T: AstInfo> {
     pub name: AwsPrivateLinkConnectionOptionName,
-    pub value: WithOptionValue<T>,
+    pub value: Option<WithOptionValue<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for AwsPrivateLinkConnectionOption<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.name);
-        f.write_node(&self.value);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
     }
 }
 impl_display_t!(AwsPrivateLinkConnectionOption);

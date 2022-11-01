@@ -180,33 +180,35 @@ where
 
     /// Receives the next response from any replica of this instance.
     ///
+    /// Returns `Err` if receiving from a replica has failed, to signal that it is in need of
+    /// rehydration.
+    ///
     /// This method is cancellation safe.
-    pub async fn recv(&mut self) -> (ReplicaId, ComputeResponse<T>) {
+    pub async fn recv(&mut self) -> Result<(ReplicaId, ComputeResponse<T>), ReplicaId> {
         // Receive responses from any of the replicas, and take appropriate
         // action.
-        loop {
-            let response = self
-                .replicas
-                .iter_mut()
-                .map(|(id, replica)| async { (*id, replica.recv().await) })
-                .collect::<FuturesUnordered<_>>()
-                .next()
-                .await;
+        let response = self
+            .replicas
+            .iter_mut()
+            .map(|(id, replica)| async { (*id, replica.recv().await) })
+            .collect::<FuturesUnordered<_>>()
+            .next()
+            .await;
 
-            match response {
-                None => {
-                    // There were no replicas in the set. Block forever to
-                    // communicate that no response is ready.
-                    future::pending().await
-                }
-                Some((replica_id, None)) => {
-                    // A replica has failed and requires rehydration.
-                    self.failed_replicas.insert(replica_id);
-                }
-                Some((replica_id, Some(response))) => {
-                    // A replica has produced a response. Return it.
-                    return (replica_id, response);
-                }
+        match response {
+            None => {
+                // There were no replicas in the set. Block forever to
+                // communicate that no response is ready.
+                future::pending().await
+            }
+            Some((replica_id, None)) => {
+                // A replica has failed and requires rehydration.
+                self.failed_replicas.insert(replica_id);
+                Err(replica_id)
+            }
+            Some((replica_id, Some(response))) => {
+                // A replica has produced a response. Return it.
+                Ok((replica_id, response))
             }
         }
     }
@@ -967,30 +969,34 @@ where
                 // If this batch advances the subscribe's frontier, we emit all updates at times
                 // greater or equal to the last frontier (to avoid emitting duplicate updates).
                 // let old_upper_bound = entry.bounds.upper.clone();
-                let lower = self
+                let prev_frontier = self
                     .compute
                     .subscribes
                     .remove(&subscribe_id)
                     .unwrap_or_else(Antichain::new);
 
-                if PartialOrder::less_than(&lower, &upper) {
+                if PartialOrder::less_than(&prev_frontier, &upper) {
                     if !upper.is_empty() {
                         // This subscribe can produce more data. Keep tracking it.
                         self.compute.subscribes.insert(subscribe_id, upper.clone());
                     }
 
                     if let Ok(updates) = updates.as_mut() {
-                        updates.retain(|(time, _data, _diff)| lower.less_equal(time));
+                        updates.retain(|(time, _data, _diff)| prev_frontier.less_equal(time));
                     }
                     Some(ComputeControllerResponse::SubscribeResponse(
                         subscribe_id,
                         SubscribeResponse::Batch(SubscribeBatch {
-                            lower,
+                            lower: prev_frontier,
                             upper,
                             updates,
                         }),
                     ))
                 } else {
+                    if !prev_frontier.is_empty() {
+                        // This subscribe can produce more data. Keep tracking it.
+                        self.compute.subscribes.insert(subscribe_id, prev_frontier);
+                    }
                     None
                 }
             }
