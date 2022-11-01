@@ -26,6 +26,7 @@ use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType, TimestampManipulation};
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, StatementDesc};
 use mz_sql_parser::ast::TransactionIsolationLevel;
+use mz_storage::types::sources::Timeline;
 
 use crate::catalog::{INTERNAL_USER_NAMES, SYSTEM_USER};
 use crate::client::ConnectionId;
@@ -377,22 +378,34 @@ impl<T: TimestampManipulation> Session<T> {
         }
     }
 
+    /// If the current transaction ops belong to a read, then sets the
+    /// transaction timestamp to `None`, returning the old timestamp if
+    /// any existed. Must only be used after verifying that no transaction
+    /// anomalies will occur if cleared.
+    pub fn take_transaction_read_ops(&mut self) -> Option<(T, Option<Timeline>)> {
+        if let Some(Transaction {
+            ops: TransactionOps::Peeks(ts),
+            ..
+        }) = self.transaction.inner_mut()
+        {
+            std::mem::take(ts)
+        } else {
+            None
+        }
+    }
+
     /// Returns the transaction's read timestamp, if set.
     ///
     /// Returns `None` if there is no active transaction, or if the active
     /// transaction is not a read transaction.
     pub fn get_transaction_timestamp(&self) -> Option<T> {
-        // If the transaction already has a peek timestamp, use it. Otherwise generate
-        // one. We generate one even though we could check here that the transaction
-        // isn't in some other conflicting state because we want all of that logic to
-        // reside in add_transaction_ops.
         match self.transaction.inner() {
             Some(Transaction {
                 pcx: _,
                 ops: TransactionOps::Peeks(ts),
                 write_lock_guard: _,
                 access: _,
-            }) => ts.clone(),
+            }) => ts.clone().map(|(ts, _)| ts),
             _ => None,
         }
     }
@@ -804,7 +817,7 @@ pub enum TransactionOps<T> {
     /// is Some, it must only do other peeks. However, if the value is None
     /// (i.e. the values are constants), the transaction can still perform
     /// writes.
-    Peeks(Option<T>),
+    Peeks(Option<(T, Option<Timeline>)>),
     /// This transaction has done a `SUBSCRIBE` and must do nothing else.
     Subscribe,
     /// This transaction has had a write (`INSERT`, `UPDATE`, `DELETE`) and must

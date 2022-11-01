@@ -31,7 +31,7 @@ use crate::util::ResultExt;
 use crate::{catalog, AdapterNotice};
 
 use crate::coord::{
-    Coordinator, CreateSourceStatementReady, Message, PendingTxn, ReplicaMetadata, SendDiffs,
+    Coordinator, CreateSourceStatementReady, Message, PendingReadTxn, ReplicaMetadata, SendDiffs,
     SinkConnectionReady,
 };
 
@@ -465,20 +465,55 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn message_linearize_reads(&mut self, pending_read_txns: Vec<PendingTxn>) {
-        self.catalog
-            .confirm_leadership()
-            .await
-            .unwrap_or_terminate("unable to confirm leadership");
-        for PendingTxn {
-            client_transmitter,
-            response,
-            mut session,
-            action,
-        } in pending_read_txns
-        {
-            session.vars_mut().end_transaction(action);
-            client_transmitter.send(response, session);
+    /// Linearizes sending the results of a read transaction by,
+    ///   1. Holding back any results that were executed at some point in the future, until the
+    ///   containing timeline has advanced to that point in the future.
+    ///   2. Confirming that we are still the current leader before sending results to the client.
+    async fn message_linearize_reads(&mut self, pending_read_txns: Vec<PendingReadTxn>) {
+        let mut shortest_wait = Duration::from_millis(0);
+        let mut ready_txns = Vec::new();
+        let mut deferred_txns = Vec::new();
+
+        for read_txn in pending_read_txns {
+            if let Some((timestamp, Some(timeline))) = &read_txn.timestamp() {
+                let timestamp_oracle = self.get_timestamp_oracle_mut(timeline);
+                let read_ts = timestamp_oracle.read_ts();
+                if timestamp <= &read_ts {
+                    ready_txns.push(read_txn);
+                } else {
+                    let wait = Duration::from_millis(timestamp.saturating_sub(read_ts).into());
+                    if wait < shortest_wait {
+                        shortest_wait = wait;
+                    }
+                    deferred_txns.push(read_txn);
+                }
+            } else {
+                ready_txns.push(read_txn);
+            }
+        }
+
+        if !ready_txns.is_empty() {
+            self.catalog
+                .confirm_leadership()
+                .await
+                .unwrap_or_terminate("unable to confirm leadership");
+            for ready_txn in ready_txns {
+                ready_txn.finish();
+            }
+        }
+
+        if !deferred_txns.is_empty() {
+            // Cap wait time to 1s.
+            let remaining_ms = std::cmp::min(shortest_wait, Duration::from_millis(1_000));
+            let internal_cmd_tx = self.internal_cmd_tx.clone();
+            task::spawn(|| "deferred_read_txns", async move {
+                tokio::time::sleep(remaining_ms).await;
+                // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
+                let result = internal_cmd_tx.send(Message::LinearizeReads(deferred_txns));
+                if let Err(e) = result {
+                    warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                }
+            });
         }
     }
 }

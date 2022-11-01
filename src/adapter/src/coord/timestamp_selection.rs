@@ -19,6 +19,7 @@ use mz_repr::explain_new::ExprHumanizer;
 use mz_repr::{RowArena, ScalarType, Timestamp};
 use mz_sql::plan::QueryWhen;
 use mz_stash::Append;
+use mz_storage::types::sources::Timeline;
 
 use crate::coord::dataflows::{prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
@@ -33,14 +34,14 @@ impl<S: Append + 'static> Coordinator<S> {
     /// traces. Each has a `since` and `upper` frontier, and are only valid
     /// after `since` and sure to be available not after `upper`.
     ///
-    /// The set of storage and compute IDs used when determining the timestamp
-    /// are also returned.
+    /// The timeline that `id_bundle` belongs to is also returned, if one exists.
     pub(crate) fn determine_timestamp(
         &mut self,
         session: &Session,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
         compute_instance: ComputeInstanceId,
+        timeline: &Option<Timeline>,
     ) -> Result<Timestamp, AdapterError> {
         // Each involved trace has a validity interval `[since, upper)`.
         // The contents of a trace are only guaranteed to be correct when
@@ -65,33 +66,24 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         let isolation_level = session.vars().transaction_isolation();
-        let timeline = self.validate_timeline(id_bundle.iter())?;
         let use_timestamp_oracle = isolation_level == &vars::IsolationLevel::StrictSerializable
             && timeline.is_some()
             && when.advance_to_global_ts();
 
         let upper = self.largest_not_in_advance_of_upper(id_bundle);
 
-        if use_timestamp_oracle {
-            let timeline = timeline.expect("checked that timeline exists above");
-            let timestamp_oracle = self.get_timestamp_oracle_mut(&timeline);
-            candidate.join_assign(&timestamp_oracle.read_ts());
-        } else {
-            if when.advance_to_since() {
-                candidate.advance_by(since.borrow());
-            }
-            if when.advance_to_upper() {
-                candidate.join_assign(&upper);
-            }
+        if when.advance_to_since() {
+            candidate.advance_by(since.borrow());
         }
 
-        if use_timestamp_oracle && when == &QueryWhen::Immediately {
-            assert!(
-                since.less_equal(&candidate),
-                "the strict serializable isolation level guarantees that the timestamp chosen \
-                ({candidate}) is greater than or equal to since ({:?}) via read holds",
-                since
-            )
+        if use_timestamp_oracle {
+            let timeline = timeline
+                .clone()
+                .expect("checked that timeline exists above");
+            let timestamp_oracle = self.get_timestamp_oracle_mut(&timeline);
+            candidate.join_assign(&timestamp_oracle.read_ts());
+        } else if when.advance_to_upper() {
+            candidate.join_assign(&upper);
         }
 
         // If the timestamp is greater or equal to some element in `since` we are

@@ -179,7 +179,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     RemovePendingPeeks {
         conn_id: ConnectionId,
     },
-    LinearizeReads(Vec<PendingTxn>),
+    LinearizeReads(Vec<PendingReadTxn>),
     StorageUsageFetch,
     StorageUsageUpdate(HashMap<Option<ShardId>, u64>),
     Consolidate(Vec<mz_stash::Id>),
@@ -301,6 +301,59 @@ pub struct PendingTxn {
     action: EndTransactionAction,
 }
 
+#[derive(Debug)]
+/// A pending read transaction waiting to be linearized.
+pub enum PendingReadTxn {
+    Read {
+        /// The inner transaction.
+        txn: PendingTxn,
+        /// The timestamp of the transaction, if one exists.
+        timestamp: Option<(mz_repr::Timestamp, Option<Timeline>)>,
+    },
+    ReadThenWrite {
+        /// Channel used to alert the transaction that the read has been linearized.
+        tx: oneshot::Sender<()>,
+        /// Timestamp and timeline of the read.
+        timestamp: (mz_repr::Timestamp, Timeline),
+    },
+}
+
+impl PendingReadTxn {
+    /// Return the timestamp and timeline of the pending transaction, if one exists.
+    pub fn timestamp(&self) -> Option<(mz_repr::Timestamp, Option<Timeline>)> {
+        match &self {
+            PendingReadTxn::Read { timestamp, .. } => timestamp.clone(),
+            PendingReadTxn::ReadThenWrite {
+                timestamp: (timestamp, timeline),
+                ..
+            } => Some((*timestamp, Some(timeline.clone()))),
+        }
+    }
+
+    /// Alert the client that the read has been linearized.
+    pub fn finish(self) {
+        match self {
+            PendingReadTxn::Read {
+                txn:
+                    PendingTxn {
+                        client_transmitter,
+                        response,
+                        mut session,
+                        action,
+                    },
+                ..
+            } => {
+                session.vars_mut().end_transaction(action);
+                client_transmitter.send(response, session);
+            }
+            PendingReadTxn::ReadThenWrite { tx, .. } => {
+                // Ignore errors if the caller has hung up.
+                let _ = tx.send(());
+            }
+        }
+    }
+}
+
 /// Glues the external world to the Timely workers.
 pub struct Coordinator<S> {
     /// The controller for the storage and compute layers.
@@ -313,7 +366,7 @@ pub struct Coordinator<S> {
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
 
     /// Channel for strict serializable reads ready to commit.
-    strict_serializable_reads_tx: mpsc::UnboundedSender<PendingTxn>,
+    strict_serializable_reads_tx: mpsc::UnboundedSender<PendingReadTxn>,
 
     /// Channel for catalog stash consolidations.
     consolidations_tx: mpsc::UnboundedSender<Vec<mz_stash::Id>>,
@@ -836,7 +889,7 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn serve(
         mut self,
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
-        mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingTxn>,
+        mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingReadTxn>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
         mut consolidations_rx: mpsc::UnboundedReceiver<Vec<mz_stash::Id>>,
     ) {
@@ -1027,7 +1080,7 @@ pub async fn serve<S: Append + 'static>(
                     timeline,
                     TimelineState {
                         oracle,
-                        read_holds: ReadHolds::new(initial_timestamp),
+                        read_holds: ReadHolds::new(),
                     },
                 );
             }
