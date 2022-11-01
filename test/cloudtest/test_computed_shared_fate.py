@@ -88,8 +88,6 @@ def validate(mz: MaterializeApplication, seed: int) -> None:
         ),
         no_reset=True,
         seed=seed,
-        # Longer timeout to account for CrashLoopBackOff
-        default_timeout=1200,
     )
 
 
