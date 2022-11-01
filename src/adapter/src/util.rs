@@ -71,6 +71,11 @@ impl<T: Transmittable> ClientTransmitter<T> {
             see ClientTransmitter::set_allowed"
         );
 
+        crate::coord::timeout::add_idle_in_transaction_session_timeout(
+            &self.internal_cmd_tx,
+            &session,
+        );
+
         // If we were not able to send a message, we must clean up the session
         // ourselves. Return it to the caller for disposal.
         if let Err(res) = self.tx.take().unwrap().send(Response { result, session }) {

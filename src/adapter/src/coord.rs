@@ -94,6 +94,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
+use mz_ore::task::AbortOnDropHandle;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{stack, task};
@@ -124,14 +125,16 @@ use crate::coord::metrics::Metrics;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::ReadCapability;
 use crate::coord::timeline::{TimelineState, WriteTimestamp};
+use crate::coord::timeout::{Timeout, TimeoutOperation};
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, Session};
 use crate::subscribe::PendingSubscribe;
-use crate::util::{ClientTransmitter, CompletedClientTransmitter};
+use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId};
 use crate::AdapterNotice;
 
 pub(crate) mod id_bundle;
 pub(crate) mod peek;
+pub(crate) mod timeout;
 
 mod appends;
 mod command_handler;
@@ -182,6 +185,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     StorageUsageFetch,
     StorageUsageUpdate(HashMap<Option<ShardId>, u64>),
     Consolidate(Vec<mz_stash::Id>),
+    Timeout(TimeoutOperation),
 }
 
 #[derive(Derivative)]
@@ -260,22 +264,46 @@ pub struct ReplicaMetadata {
 }
 
 /// Metadata about an active connection.
-struct ConnMeta {
-    /// A watch channel shared with the client to inform the client of
-    /// cancellation requests. The coordinator sets the contained value to
-    /// `Canceled::Canceled` whenever it receives a cancellation request that
-    /// targets this connection. It is the client's responsibility to check this
-    /// value when appropriate and to reset the value to
-    /// `Canceled::NotCanceled` before starting a new operation.
-    cancel_tx: Arc<watch::Sender<Canceled>>,
-    /// Pgwire specifies that every connection have a 32-bit secret associated
-    /// with it, that is known to both the client and the server. Cancellation
-    /// requests are required to authenticate with the secret of the connection
-    /// that they are targeting.
-    secret_key: u32,
+#[derive(Debug)]
+enum ConnMeta {
+    /// Connection is active.
+    Active {
+        /// A watch channel shared with the client to inform the client of
+        /// cancellation requests. The coordinator sets the contained value to
+        /// `Canceled::Canceled` whenever it receives a cancellation request that
+        /// targets this connection. It is the client's responsibility to check this
+        /// value when appropriate and to reset the value to
+        /// `Canceled::NotCanceled` before starting a new operation.
+        cancel_tx: Arc<watch::Sender<Canceled>>,
+        /// Pgwire specifies that every connection have a 32-bit secret associated
+        /// with it, that is known to both the client and the server. Cancellation
+        /// requests are required to authenticate with the secret of the connection
+        /// that they are targeting.
+        secret_key: u32,
 
-    /// Channel on which to send notices to a session.
-    notice_tx: mpsc::UnboundedSender<AdapterNotice>,
+        /// Channel on which to send notices to a session.
+        notice_tx: mpsc::UnboundedSender<AdapterNotice>,
+
+        /// Sinks that will need to be dropped when the current transaction, if
+        /// any, is cleared.
+        drop_sinks: Vec<ComputeSinkId>,
+
+        /// Active timeouts running for this connection.
+        active_timeouts: HashMap<Timeout, AbortOnDropHandle<()>>,
+    },
+    /// Connection has been terminated by the Coordinator. The session will be
+    /// notified upon the next request.
+    Terminated(AdapterError),
+}
+
+impl ConnMeta {
+    /// Returns the drop sinks for this connection if any exist.
+    pub(crate) fn drop_sinks_mut(&mut self) -> Option<&mut Vec<ComputeSinkId>> {
+        match self {
+            Self::Active { drop_sinks, .. } => Some(drop_sinks),
+            Self::Terminated(_) => None,
+        }
+    }
 }
 
 struct TxnReads {

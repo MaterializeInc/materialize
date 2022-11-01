@@ -135,6 +135,8 @@ pub enum AdapterError {
     ///
     /// Note this differs slightly from PG's implementation/semantics.
     StatementTimeout,
+    /// An idle session in a transaction has timed out.
+    IdleInTransactionSessionTimeout,
     /// An error occurred in a SQL catalog operation.
     SqlCatalog(mz_sql::catalog::CatalogError),
     /// The transaction is in single-subscribe mode.
@@ -394,6 +396,12 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::StatementTimeout => {
                 write!(f, "canceling statement due to statement timeout")
+            }
+            AdapterError::IdleInTransactionSessionTimeout => {
+                write!(
+                    f,
+                    "terminating connection due to idle-in-transaction timeout"
+                )
             }
             AdapterError::RecursionLimit(e) => e.fmt(f),
             AdapterError::RelationOutsideTimeDomain { .. } => {

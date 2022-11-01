@@ -1832,8 +1832,6 @@ fn test_load_generator() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_introspection_user_permissions() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let config = util::Config::default();
     let server = util::start_server(config)?;
 
@@ -1888,6 +1886,33 @@ fn test_introspection_user_permissions() -> Result<(), Box<dyn Error>> {
     assert!(introspection_client
         .query("SELECT * FROM pg_catalog.pg_namespace", &[])
         .is_err());
+
+    Ok(())
+}
+
+#[test]
+fn test_idle_in_transaction_session_timeout() -> Result<(), Box<dyn Error>> {
+    let config = util::Config::default();
+    let server = util::start_server(config)?;
+
+    let mut client = server.connect(postgres::NoTls)?;
+
+    client.batch_execute("SET idle_in_transaction_session_timeout TO '1ms'")?;
+    client.batch_execute("BEGIN")?;
+    std::thread::sleep(Duration::from_millis(2));
+    let error = client.query("SELECT 1", &[]).unwrap_err();
+    assert!(
+        error.is_closed(),
+        "error should indicate that client is closed: {error:?}"
+    );
+
+    // session should not be timed out if it's not idle.
+    let mut client = server.connect(postgres::NoTls)?;
+    client.batch_execute("SET idle_in_transaction_session_timeout TO '5ms'")?;
+    client.batch_execute("BEGIN")?;
+    client.query("SELECT generate_series(0, 10001)", &[])?;
+    client.query("SELECT 1", &[])?;
+    client.batch_execute("COMMIT")?;
 
     Ok(())
 }

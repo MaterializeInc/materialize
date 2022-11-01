@@ -427,12 +427,16 @@ impl<S: Append + 'static> Coordinator<S> {
 
     /// Removes all temporary items created by the specified connection, though
     /// not the temporary schema itself.
-    pub(crate) async fn drop_temp_items(&mut self, session: &Session) {
-        let ops = self.catalog.drop_temp_item_ops(session.conn_id());
+    pub(crate) async fn drop_temp_items(
+        &mut self,
+        session: Option<&Session>,
+        conn_id: &ConnectionId,
+    ) {
+        let ops = self.catalog.drop_temp_item_ops(conn_id);
         if ops.is_empty() {
             return;
         }
-        self.catalog_transact(Some(session), ops, |_| Ok(()))
+        self.catalog_transact(session, ops, |_| Ok(()))
             .await
             .expect("unable to drop temporary items for conn_id");
     }

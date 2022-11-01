@@ -30,6 +30,7 @@ use crate::coord::appends::{BuiltinTableUpdateSource, Deferred};
 use crate::util::ResultExt;
 use crate::{catalog, AdapterNotice};
 
+use crate::coord::timeout::TimeoutOperation;
 use crate::coord::{
     Coordinator, CreateSourceStatementReady, Message, PendingReadTxn, ReplicaMetadata, SendDiffs,
     SinkConnectionReady,
@@ -69,7 +70,7 @@ impl<S: Append + 'static> Coordinator<S> {
             // in any situation where you use it, you must also have a code
             // path that responds to the client (e.g. reporting an error).
             Message::RemovePendingPeeks { conn_id } => {
-                self.cancel_pending_peeks(conn_id);
+                self.cancel_pending_peeks(&conn_id);
             }
             Message::LinearizeReads(pending_read_txns) => {
                 self.message_linearize_reads(pending_read_txns).await;
@@ -82,6 +83,9 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             Message::Consolidate(collections) => {
                 self.consolidate(&collections).await;
+            }
+            Message::Timeout(timeout) => {
+                self.message_timeout(timeout).await;
             }
         }
     }
@@ -513,6 +517,18 @@ impl<S: Append + 'static> Coordinator<S> {
                     warn!("internal_cmd_rx dropped before we could send: {:?}", e);
                 }
             });
+        }
+    }
+
+    async fn message_timeout(&mut self, timeout: TimeoutOperation) {
+        match timeout {
+            TimeoutOperation::Add((timeout, handle, start)) => {
+                self.add_timeout(timeout, handle, start)
+            }
+            TimeoutOperation::Remove(timeout) => {
+                let _ = self.remove_timeout(&timeout);
+            }
+            TimeoutOperation::Handle(timeout) => self.handle_timeout(timeout).await,
         }
     }
 }

@@ -107,6 +107,52 @@ pub enum Command {
     },
 }
 
+impl Command {
+    /// Return reference to session associated with command, if one exists.
+    pub fn session(&self) -> Option<&Session> {
+        match self {
+            Command::Startup { session, .. }
+            | Command::Declare { session, .. }
+            | Command::Describe { session, .. }
+            | Command::VerifyPreparedStatement { session, .. }
+            | Command::Execute { session, .. }
+            | Command::StartTransaction { session, .. }
+            | Command::Commit { session, .. }
+            | Command::DumpCatalog { session, .. }
+            | Command::CopyRows { session, .. }
+            | Command::Terminate { session, .. } => Some(session),
+            Command::CancelRequest { .. } => None,
+        }
+    }
+
+    /// Try and send an error to the client on a best effort basis, if a client is waiting
+    /// for a response.
+    pub fn try_send_error(self, error: AdapterError) {
+        // All of the tx are different types, so a macro makes this a bit
+        // more concise.
+        macro_rules! send_error {
+            ($tx:expr, $session:expr, $error:expr) => {{
+                let _ = $tx.send(Response {
+                    session: $session,
+                    result: Err($error),
+                });
+            }};
+        }
+        match self {
+            Command::Startup { session, tx, .. } => send_error!(tx, session, error),
+            Command::Declare { session, tx, .. } => send_error!(tx, session, error),
+            Command::Describe { session, tx, .. } => send_error!(tx, session, error),
+            Command::VerifyPreparedStatement { session, tx, .. } => send_error!(tx, session, error),
+            Command::Execute { session, tx, .. } => send_error!(tx, session, error),
+            Command::StartTransaction { session, tx, .. } => send_error!(tx, session, error),
+            Command::Commit { session, tx, .. } => send_error!(tx, session, error),
+            Command::DumpCatalog { session, tx, .. } => send_error!(tx, session, error),
+            Command::CopyRows { session, tx, .. } => send_error!(tx, session, error),
+            Command::Terminate { .. } | Command::CancelRequest { .. } => {}
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Response<T> {
     pub result: Result<T, AdapterError>,

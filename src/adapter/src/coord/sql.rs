@@ -16,8 +16,9 @@ use mz_sql::plan::StatementDesc;
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_stash::Append;
 
-use crate::coord::Coordinator;
-use crate::session::{Session, TransactionStatus};
+use crate::client::ConnectionId;
+use crate::coord::{ConnMeta, Coordinator};
+use crate::session::Session;
 use crate::util::describe;
 use crate::AdapterError;
 
@@ -139,17 +140,15 @@ impl<S: Append + 'static> Coordinator<S> {
 
     /// Handle removing in-progress transaction state regardless of the end action
     /// of the transaction.
-    pub(crate) async fn clear_transaction(
-        &mut self,
-        session: &mut Session,
-    ) -> TransactionStatus<mz_repr::Timestamp> {
-        let (drop_sinks, txn) = session.clear_transaction();
-        self.drop_compute_sinks(drop_sinks).await;
+    pub(crate) async fn clear_transaction(&mut self, conn_id: &ConnectionId) {
+        if let Some(ConnMeta::Active { drop_sinks, .. }) = self.active_conns.get_mut(conn_id) {
+            let drop_sinks = std::mem::take(drop_sinks);
+            self.drop_compute_sinks(drop_sinks).await;
+        }
 
         // Release this transaction's compaction hold on collections.
-        if let Some(txn_reads) = self.txn_reads.remove(&session.conn_id()) {
+        if let Some(txn_reads) = self.txn_reads.remove(conn_id) {
             self.release_read_hold(&txn_reads.read_holds).await;
         }
-        txn
     }
 }

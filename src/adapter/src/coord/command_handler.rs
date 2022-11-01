@@ -10,6 +10,7 @@
 //! Logic for  processing client [`Command`]s. Each [`Command`] is initiated by a
 //! client via some external Materialize API (ex: HTTP and psql).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use mz_ore::tracing::OpenTelemetryContext;
@@ -32,6 +33,7 @@ use crate::command::{
 use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::metrics;
 use crate::coord::peek::PendingPeek;
+
 use crate::coord::{ConnMeta, Coordinator, CreateSourceStatementReady, Message, PendingTxn};
 use crate::error::AdapterError;
 use crate::session::{PreparedStatement, Session, TransactionStatus};
@@ -39,6 +41,28 @@ use crate::util::{ClientTransmitter, ResultExt};
 
 impl<S: Append + 'static> Coordinator<S> {
     pub(crate) async fn handle_command(&mut self, cmd: Command) {
+        if let Some(session) = cmd.session() {
+            if let Some(metadata) = self.active_conns.get(&session.conn_id()) {
+                if let ConnMeta::Terminated(_) = metadata {
+                    let error = match self
+                        .active_conns
+                        .remove(&session.conn_id())
+                        .expect("key checked above")
+                    {
+                        ConnMeta::Terminated(error) => error,
+                        _ => unreachable!("variant checked above"),
+                    };
+                    cmd.try_send_error(error);
+                    return;
+                }
+            }
+        }
+
+        crate::coord::timeout::remove_idle_in_transaction_session_timeout(
+            &self.internal_cmd_tx,
+            &cmd,
+        );
+
         match cmd {
             Command::Startup {
                 session,
@@ -96,7 +120,6 @@ impl<S: Append + 'static> Coordinator<S> {
             Command::DumpCatalog { session, tx } => {
                 // TODO(benesch): when we have RBAC, dumping the catalog should
                 // require superuser permissions.
-
                 let _ = tx.send(Response {
                     result: Ok(self.catalog.dump()),
                     session,
@@ -204,10 +227,12 @@ impl<S: Append + 'static> Coordinator<S> {
         self.metrics.active_sessions.inc();
         self.active_conns.insert(
             session.conn_id(),
-            ConnMeta {
+            ConnMeta::Active {
                 cancel_tx,
                 secret_key,
                 notice_tx: session.retain_notice_transmitter(),
+                drop_sinks: Vec::new(),
+                active_timeouts: HashMap::new(),
             },
         );
 
@@ -471,11 +496,16 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
     /// the named `conn_id`.
     fn handle_cancel(&mut self, conn_id: ConnectionId, secret_key: u32) {
-        if let Some(conn_meta) = self.active_conns.get(&conn_id) {
+        if let Some(ConnMeta::Active {
+            secret_key: conn_secret_key,
+            cancel_tx,
+            ..
+        }) = self.active_conns.get(&conn_id)
+        {
             // If the secret key specified by the client doesn't match the
             // actual secret key for the target connection, we treat this as a
             // rogue cancellation request and ignore it.
-            if conn_meta.secret_key != secret_key {
+            if conn_secret_key != &secret_key {
                 return;
             }
 
@@ -513,12 +543,12 @@ impl<S: Append + 'static> Coordinator<S> {
             }
 
             // Inform the target session (if it asks) about the cancellation.
-            let _ = conn_meta.cancel_tx.send(Canceled::Canceled);
+            let _ = cancel_tx.send(Canceled::Canceled);
 
             for PendingPeek {
                 sender: rows_tx,
                 conn_id: _,
-            } in self.cancel_pending_peeks(conn_id)
+            } in self.cancel_pending_peeks(&conn_id)
             {
                 // Cancel messages can be sent after the connection has hung
                 // up, but before the connection's state has been cleaned up.
@@ -532,14 +562,64 @@ impl<S: Append + 'static> Coordinator<S> {
     ///
     /// This cleans up any state in the coordinator associated with the session.
     async fn handle_terminate(&mut self, session: &mut Session) {
-        self.clear_transaction(session).await;
+        let conn_id = session.conn_id();
+        self.terminate_connection(SessionOrError::Session(session), &conn_id)
+            .await;
+    }
 
-        self.drop_temp_items(session).await;
-        self.catalog
-            .drop_temporary_schema(session.conn_id())
-            .unwrap_or_terminate("unable to drop temporary schema");
-        self.metrics.active_sessions.dec();
-        self.active_conns.remove(&session.conn_id());
-        self.cancel_pending_peeks(session.conn_id());
+    /// This cleans up any state in the coordinator associated with a client session.
+    pub(crate) async fn terminate_connection_error(
+        &mut self,
+        error: AdapterError,
+        conn_id: &ConnectionId,
+    ) {
+        self.terminate_connection(SessionOrError::Error(error), conn_id)
+            .await;
+    }
+
+    /// This cleans up any state in the coordinator associated with a client session.
+    /// Must either provide a session object to clean up or an error to be
+    /// returned to the session at a later point.
+    async fn terminate_connection(
+        &mut self,
+        session_or_error: SessionOrError<'_>,
+        conn_id: &ConnectionId,
+    ) {
+        if self.active_conns.get(conn_id).is_some() {
+            self.clear_transaction(conn_id).await;
+
+            self.drop_temp_items(session_or_error.session(), conn_id)
+                .await;
+            self.catalog
+                .drop_temporary_schema(conn_id)
+                .unwrap_or_terminate("unable to drop temporary schema");
+            self.metrics.active_sessions.dec();
+            self.active_conns.remove(conn_id);
+            self.cancel_pending_peeks(conn_id);
+        }
+
+        match session_or_error {
+            SessionOrError::Session(session) => {
+                let _ = session.clear_transaction();
+            }
+            SessionOrError::Error(error) => {
+                self.active_conns
+                    .insert(conn_id.clone(), ConnMeta::Terminated(error));
+            }
+        }
+    }
+}
+
+enum SessionOrError<'a> {
+    Session(&'a mut Session),
+    Error(AdapterError),
+}
+
+impl SessionOrError<'_> {
+    fn session(&self) -> Option<&Session> {
+        match self {
+            SessionOrError::Session(session) => Some(session),
+            SessionOrError::Error(_) => None,
+        }
     }
 }

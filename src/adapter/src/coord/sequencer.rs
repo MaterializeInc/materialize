@@ -69,8 +69,8 @@ use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::dataflows::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
 use crate::coord::{
-    peek, Coordinator, Message, PendingReadTxn, PendingTxn, SendDiffs, SinkConnectionReady,
-    TxnReads, DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+    peek, ConnMeta, Coordinator, Message, PendingReadTxn, PendingTxn, SendDiffs,
+    SinkConnectionReady, TxnReads, DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
 };
 use crate::error::AdapterError;
 use crate::explain_new::optimizer_trace::OptimizerTrace;
@@ -341,14 +341,21 @@ impl<S: Append + 'static> Coordinator<S> {
                 );
             }
             Plan::DiscardTemp => {
-                self.drop_temp_items(&session).await;
+                self.drop_temp_items(Some(&session), &session.conn_id())
+                    .await;
                 tx.send(Ok(ExecuteResponse::DiscardedTemp), session);
             }
             Plan::DiscardAll => {
                 let ret = if let TransactionStatus::Started(_) = session.transaction() {
-                    self.drop_temp_items(&session).await;
-                    let drop_sinks = session.reset();
-                    self.drop_compute_sinks(drop_sinks).await;
+                    self.drop_temp_items(Some(&session), &session.conn_id())
+                        .await;
+                    if let Some(ConnMeta::Active { drop_sinks, .. }) =
+                        self.active_conns.get_mut(&session.conn_id())
+                    {
+                        let drop_sinks = std::mem::take(drop_sinks);
+                        self.drop_compute_sinks(drop_sinks).await;
+                    }
+                    session.reset();
                     Ok(ExecuteResponse::DiscardedAll)
                 } else {
                     Err(AdapterError::OperationProhibitsTransaction(
@@ -1990,7 +1997,8 @@ impl<S: Append + 'static> Coordinator<S> {
         ),
         AdapterError,
     > {
-        let txn = self.clear_transaction(session).await;
+        self.clear_transaction(&session.conn_id()).await;
+        let txn = session.clear_transaction();
 
         if let EndTransactionAction::Commit = action {
             if let (Some(mut ops), write_lock_guard) = txn.into_ops_and_lock_guard() {
@@ -2363,10 +2371,15 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         let (sink_id, sink_desc) = dataflow.sink_exports.iter().next().unwrap();
-        session.add_drop_sink(ComputeSinkId {
-            compute_instance: compute_instance_id,
-            global_id: *sink_id,
-        });
+        self.active_conns
+            .get_mut(&session.conn_id())
+            .expect("must exist for active transaction")
+            .drop_sinks_mut()
+            .expect("must exist for active transaction")
+            .push(ComputeSinkId {
+                compute_instance: compute_instance_id,
+                global_id: *sink_id,
+            });
         let arity = sink_desc.from_desc.arity();
         let (tx, rx) = mpsc::unbounded_channel();
         self.metrics.active_subscribes.inc();
