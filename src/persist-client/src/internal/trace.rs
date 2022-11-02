@@ -247,7 +247,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
         fn covers<T: PartialOrder>(b0: &FueledMergeReq<T>, b1: &FueledMergeReq<T>) -> bool {
             PartialOrder::less_equal(b0.desc.lower(), b1.desc.lower())
                 && PartialOrder::less_equal(b1.desc.upper(), b0.desc.upper())
-                && b0.desc.since() == b1.desc.since()
+                && PartialOrder::less_equal(b1.desc.since(), b0.desc.since())
         }
 
         let mut ret = Vec::<FueledMergeReq<T>>::with_capacity(merge_reqs.len());
