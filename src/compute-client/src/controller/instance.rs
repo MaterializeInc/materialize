@@ -799,10 +799,12 @@ where
                 compute_net.push((key, update));
             } else {
                 // Storage presumably, but verify.
-                storage_todo
-                    .entry(key)
-                    .or_insert_with(ChangeBatch::new)
-                    .extend(update.drain())
+                if self.storage_controller.collection(key).is_ok() {
+                    storage_todo
+                        .entry(key)
+                        .or_insert_with(ChangeBatch::new)
+                        .extend(update.drain())
+                }
             }
         }
 
