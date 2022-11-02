@@ -766,9 +766,7 @@ where
                 .update_read_capabilities(&mut storage_read_capability_changes)
                 .await?;
         }
-        self.update_dropped_collections(dropped_collection_ids).await?;
-
-        Ok(())
+        self.update_dropped_collections(dropped_collection_ids)
     }
 
     /// Applies `updates`, propagates consequences through other read capabilities, and sends an appropriate compaction command.
@@ -889,9 +887,12 @@ where
         }
     }
 
-    /// Cleans up collection state, if necessary, in response to drop operations targeted 
+    /// Cleans up collection state, if necessary, in response to drop operations targeted
     /// at a replica and given collections (via reporting of an empty frontier).
-    async fn update_dropped_collections(&mut self, dropped_collection_ids: Vec<GlobalId>) -> Result<(), ComputeError> {
+    fn update_dropped_collections(
+        &mut self,
+        dropped_collection_ids: Vec<GlobalId>,
+    ) -> Result<(), ComputeError> {
         for id in dropped_collection_ids {
             // clean up the given collection if all replica frontiers are empty
             let collection = self
@@ -899,11 +900,13 @@ where
                 .collections
                 .get(&id)
                 .ok_or(ComputeError::IdentifierMissing(id))?;
+            let empty = Antichain::new();
             if collection
                 .replica_write_frontiers
                 .values()
-                .all(|t| t.is_empty()) {
-                    self.compute.collections.remove(&id);
+                .all(|frontier| *frontier == empty)
+            {
+                self.compute.collections.remove(&id);
             }
         }
         Ok(())
@@ -925,12 +928,13 @@ where
 
         self.update_write_frontiers(replica_id, &updates).await?;
 
+        let empty = Antichain::new();
         let dropped_collections: Vec<_> = updates
             .iter()
-            .filter(|(_, frontier)| frontier.is_empty())
+            .filter(|(_, frontier)| *frontier == empty)
             .map(|(id, _)| id.clone())
             .collect();
-        self.update_dropped_collections(dropped_collections).await
+        self.update_dropped_collections(dropped_collections)
     }
 
     async fn handle_peek_response(
