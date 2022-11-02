@@ -598,7 +598,7 @@ pub fn plan_create_source(
             let PgConfigOptionExtracted {
                 details,
                 publication,
-                text_columns: _,
+                text_columns,
                 seen: _,
             } = options.clone().try_into()?;
 
@@ -697,14 +697,22 @@ pub fn plan_create_source(
                 "assume each table has the appropriate table casts"
             );
 
+            let text_cols = text_columns
+                .into_iter()
+                .map(|r| match r {
+                    PgReference::Oid(oid) => oid,
+                    PgReference::Name(_) => unreachable!("normalized during purification"),
+                })
+                .collect();
+
             let connection = GenericSourceConnection::Postgres(PostgresSourceConnection {
                 connection,
                 connection_id: connection_item.id(),
                 table_casts,
                 publication: publication.expect("validated exists during purification"),
                 details,
+                text_cols,
             });
-
             // The postgres source only outputs data to its subsources. The catalog object
             // representing the source itself is just an empty relation with no columns
             let encoding = SourceDataEncoding::Single(DataEncoding::new(

@@ -203,6 +203,7 @@ message ProtoPostgresSourceConnection {
     string publication = 2;
     ProtoPostgresSourceDetails details = 4;
     repeated ProtoPostgresTableCast table_casts = 5;
+    repeated uint32 text_cols = 7;
 }
 
 message ProtoPostgresSourceDetails {

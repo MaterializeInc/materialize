@@ -200,6 +200,8 @@ struct PostgresTaskInfo {
     /// Channel to receive lsn's from the PgOffsetCommitter
     /// that are safe to send status updates for.
     offset_rx: Receiver<HashMap<PartitionId, MzOffset>>,
+    /// Oids of types that should be treated as strings
+    text_cols: HashSet<u32>,
 }
 
 impl SourceReader for PostgresSourceReader {
@@ -277,6 +279,7 @@ impl SourceReader for PostgresSourceReader {
                 row_sender: RowSender::new(dataflow_tx.clone(), consumer_activator),
                 sender: dataflow_tx,
                 offset_rx,
+                text_cols: connection.text_cols,
             };
 
             task::spawn(
@@ -610,7 +613,7 @@ impl PostgresTaskInfo {
             mz_postgres_util::publication_info(
                 &self.connection_config,
                 &self.publication,
-                &HashSet::new()
+                &self.text_cols
             )
             .await
         );
