@@ -46,7 +46,7 @@ pub(super) struct Replica<T> {
     /// Location of the replica
     pub location: ComputeReplicaLocation,
     /// The logging config specific to this replica.
-    pub logging_config: Option<LoggingConfig>,
+    pub logging_config: LoggingConfig,
 }
 
 impl<T> Replica<T>
@@ -59,7 +59,7 @@ where
         instance_id: ComputeInstanceId,
         build_info: &'static BuildInfo,
         location: ComputeReplicaLocation,
-        logging_config: Option<LoggingConfig>,
+        logging_config: LoggingConfig,
         orchestrator: ComputeOrchestrator,
     ) -> Self {
         // Launch a task to handle communication with the replica
@@ -115,7 +115,7 @@ struct ReplicaTask<T> {
     /// Location
     location: ComputeReplicaLocation,
     /// Logging
-    logging_config: Option<LoggingConfig>,
+    logging_config: LoggingConfig,
     /// The build information for this process.
     build_info: &'static BuildInfo,
     /// A channel upon which commands intended for the replica are delivered.
@@ -255,7 +255,7 @@ where
 }
 
 struct CommandSpecialization {
-    logging_config: Option<LoggingConfig>,
+    logging_config: LoggingConfig,
     comm_config: CommunicationConfig,
 }
 

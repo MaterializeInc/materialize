@@ -134,8 +134,8 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     }
 
     fn handle_create_instance(&mut self, config: InstanceConfig) {
-        if let Some(logging) = config.logging {
-            self.initialize_logging(&logging);
+        if config.logging.enable_logging {
+            self.initialize_logging(&config.logging);
         }
     }
 
@@ -503,32 +503,32 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
         // Install traces as maintained indexes
         for (log, (trace, token)) in t_traces {
-            let id = logging.active_logs[&log];
+            let id = logging.index_logs[&log];
             self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
         }
         for (log, (trace, token)) in r_traces {
-            let id = logging.active_logs[&log];
+            let id = logging.index_logs[&log];
             self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
         }
         for (log, (trace, token)) in d_traces {
-            let id = logging.active_logs[&log];
+            let id = logging.index_logs[&log];
             self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
         }
         for (log, (trace, token)) in c_traces {
-            let id = logging.active_logs[&log];
+            let id = logging.index_logs[&log];
             self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
         }
 
         // Initialize frontier reporting for all logging indexes and sinks.
-        let index_ids = logging.active_logs.values().copied();
+        let index_ids = logging.index_logs.values().copied();
         let sink_ids = logging.sink_logs.values().map(|(id, _)| *id);
         for id in index_ids.chain(sink_ids) {
             self.compute_state.reported_frontiers.insert(

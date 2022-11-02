@@ -87,7 +87,7 @@ pub fn construct<A: Allocate>(
         // Do we need to construct the common reachability common dataflow?
         let common_needed = logs_active
             .iter()
-            .any(|variant| config.active_logs.contains_key(variant))
+            .any(|variant| config.index_logs.contains_key(variant))
             || sink_common;
 
         let mut result = std::collections::HashMap::new();
@@ -171,7 +171,7 @@ pub fn construct<A: Allocate>(
             }
 
             for variant in logs_active {
-                if config.active_logs.contains_key(&variant) {
+                if config.index_logs.contains_key(&variant) {
                     let key = variant.index_by();
                     let (_, value) = permutation_for_arrangement::<HashMap<_, _>>(
                         &key.iter()

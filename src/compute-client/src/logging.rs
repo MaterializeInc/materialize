@@ -22,13 +22,24 @@ use mz_storage::controller::CollectionMetadata;
 include!(concat!(env!("OUT_DIR"), "/mz_compute_client.logging.rs"));
 
 /// Logging configuration.
-#[derive(Arbitrary, Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// Setting `enable_logging` to `false` specifies that logging is disabled.
+///
+/// Ideally we'd want to instead signal disabled logging by leaving both `index_logs` and
+/// `sink_logs` empty. Unfortunately, we have to always provide `index_logs`, because we must
+/// install the logging dataflows even on replicas that have logging disabled. See
+/// <https://github.com/MaterializeInc/materialize/issues/15799>.
+/// TODO(teskje): Clean this up once we remove the arranged introspection sources.
+#[derive(Arbitrary, Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoggingConfig {
+    /// The logging interval in nanoseconds
     pub interval_ns: u128,
-    /// Logs to keep in an arrangement
-    pub active_logs: BTreeMap<LogVariant, GlobalId>,
+    /// Whether logging is enabled
+    pub enable_logging: bool,
     /// Whether we should report logs for the log-processing dataflows
     pub log_logging: bool,
+    /// Logs to keep in an arrangement
+    pub index_logs: BTreeMap<LogVariant, GlobalId>,
     /// Logs to be written to persist
     pub sink_logs: BTreeMap<LogVariant, (GlobalId, CollectionMetadata)>,
 }
@@ -36,7 +47,7 @@ pub struct LoggingConfig {
 impl LoggingConfig {
     /// Announce the identifiers the logging config will populate.
     pub fn log_identifiers<'a>(&'a self) -> impl Iterator<Item = GlobalId> + 'a {
-        let it1 = self.active_logs.values().cloned();
+        let it1 = self.index_logs.values().cloned();
         let it2 = self.sink_logs.values().map(|(id, _)| *id);
         it1.chain(it2)
     }
@@ -46,8 +57,9 @@ impl RustType<ProtoLoggingConfig> for LoggingConfig {
     fn into_proto(&self) -> ProtoLoggingConfig {
         ProtoLoggingConfig {
             interval_ns: Some(self.interval_ns.into_proto()),
-            active_logs: self.active_logs.into_proto(),
+            enable_logging: self.enable_logging,
             log_logging: self.log_logging,
+            index_logs: self.index_logs.into_proto(),
             sink_logs: self.sink_logs.into_proto(),
         }
     }
@@ -57,8 +69,9 @@ impl RustType<ProtoLoggingConfig> for LoggingConfig {
             interval_ns: proto
                 .interval_ns
                 .into_rust_if_some("ProtoLoggingConfig::interval_ns")?,
-            active_logs: proto.active_logs.into_rust()?,
+            enable_logging: proto.enable_logging,
             log_logging: proto.log_logging,
+            index_logs: proto.index_logs.into_rust()?,
             sink_logs: proto.sink_logs.into_rust()?,
         })
     }
@@ -89,9 +102,9 @@ impl ProtoMapEntry<LogVariant, (GlobalId, CollectionMetadata)> for ProtoSinkLog 
     }
 }
 
-impl ProtoMapEntry<LogVariant, GlobalId> for ProtoActiveLog {
+impl ProtoMapEntry<LogVariant, GlobalId> for ProtoIndexLog {
     fn from_rust<'a>(entry: (&'a LogVariant, &'a GlobalId)) -> Self {
-        ProtoActiveLog {
+        ProtoIndexLog {
             key: Some(entry.0.into_proto()),
             value: Some(entry.1.into_proto()),
         }
@@ -99,8 +112,8 @@ impl ProtoMapEntry<LogVariant, GlobalId> for ProtoActiveLog {
 
     fn into_rust(self) -> Result<(LogVariant, GlobalId), TryFromProtoError> {
         Ok((
-            self.key.into_rust_if_some("ProtoActiveLog::key")?,
-            self.value.into_rust_if_some("ProtoActiveLog::value")?,
+            self.key.into_rust_if_some("ProtoIndexLog::key")?,
+            self.value.into_rust_if_some("ProtoIndexLog::value")?,
         ))
     }
 }

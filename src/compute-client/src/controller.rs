@@ -545,21 +545,23 @@ where
         replica_id: ReplicaId,
         config: ComputeReplicaConfig,
     ) -> Result<(), ComputeError> {
-        let logging_config = if let Some(interval) = config.logging.interval {
-            let mut sink_logs = BTreeMap::new();
-            for (variant, id) in config.logging.sources {
-                let storage_meta = self.storage.collection(id)?.collection_metadata.clone();
-                sink_logs.insert(variant, (id, storage_meta));
-            }
+        let (enable_logging, interval_ns) = match config.logging.interval {
+            Some(interval) => (true, interval.as_nanos()),
+            None => (false, 1_000_000_000),
+        };
 
-            Some(LoggingConfig {
-                interval_ns: interval.as_nanos(),
-                active_logs: Default::default(),
-                log_logging: config.logging.log_logging,
-                sink_logs,
-            })
-        } else {
-            None
+        let mut sink_logs = BTreeMap::new();
+        for (variant, id) in config.logging.sources {
+            let storage_meta = self.storage.collection(id)?.collection_metadata.clone();
+            sink_logs.insert(variant, (id, storage_meta));
+        }
+
+        let logging_config = LoggingConfig {
+            interval_ns,
+            enable_logging,
+            log_logging: config.logging.log_logging,
+            index_logs: Default::default(),
+            sink_logs,
         };
 
         self.instance(instance_id)?

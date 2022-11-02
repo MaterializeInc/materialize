@@ -458,7 +458,7 @@ pub fn construct<A: Allocate>(
 
         let mut result = std::collections::HashMap::new();
         for (variant, collection) in logs {
-            if config.active_logs.contains_key(&variant) {
+            if config.index_logs.contains_key(&variant) {
                 let key = variant.index_by();
                 let (_, value) = permutation_for_arrangement::<HashMap<_, _>>(
                     &key.iter()

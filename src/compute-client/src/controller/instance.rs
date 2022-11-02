@@ -138,7 +138,7 @@ where
 
         instance.send(ComputeCommand::CreateTimely(Default::default()));
         instance.send(ComputeCommand::CreateInstance(InstanceConfig {
-            logging: None,
+            logging: Default::default(),
             max_result_size,
         }));
 
@@ -231,21 +231,17 @@ where
         &mut self,
         id: ReplicaId,
         location: ComputeReplicaLocation,
-        mut logging_config: Option<LoggingConfig>,
+        mut logging_config: LoggingConfig,
     ) -> Result<(), ComputeError> {
-        let maintained_logs = if let Some(logging) = &mut logging_config {
-            // Initialize state for per-replica log collections.
-            for (log_id, _) in logging.sink_logs.values() {
-                self.compute
-                    .collections
-                    .insert(*log_id, CollectionState::new_log_collection());
-            }
+        // Initialize state for per-replica log collections.
+        for (log_id, _) in logging_config.sink_logs.values() {
+            self.compute
+                .collections
+                .insert(*log_id, CollectionState::new_log_collection());
+        }
 
-            logging.active_logs = self.compute.arranged_logs.clone();
-            logging.log_identifiers().collect()
-        } else {
-            BTreeSet::new()
-        };
+        logging_config.index_logs = self.compute.arranged_logs.clone();
+        let maintained_logs: BTreeSet<_> = logging_config.log_identifiers().collect();
 
         // Initialize frontier tracking the new replica.
         let mut updates = Vec::new();
