@@ -22,7 +22,7 @@ use mz_build_info::BuildInfo;
 use mz_ore::retry::Retry;
 use mz_service::client::GenericClient;
 
-use crate::command::{CommunicationConfig, ComputeCommand, ReplicaId};
+use crate::command::{CommunicationConfig, ComputeCommand, ComputeStartupEpoch, ReplicaId};
 use crate::logging::LoggingConfig;
 use crate::response::ComputeResponse;
 use crate::service::{ComputeClient, ComputeGrpcClient};
@@ -61,6 +61,7 @@ where
         location: ComputeReplicaLocation,
         logging_config: LoggingConfig,
         orchestrator: ComputeOrchestrator,
+        epoch: ComputeStartupEpoch,
     ) -> Self {
         // Launch a task to handle communication with the replica
         // asynchronously. This isolates the main controller thread from
@@ -78,6 +79,7 @@ where
                 orchestrator,
                 command_rx,
                 response_tx,
+                epoch,
             }
             .run(),
         );
@@ -124,6 +126,9 @@ struct ReplicaTask<T> {
     response_tx: UnboundedSender<ComputeResponse<T>>,
     /// Orchestrator responsible for setting up computeds
     orchestrator: ComputeOrchestrator,
+    /// A number (technically, pair of numbers) identifying this incarnation of the replica.
+    /// The semantics of this don't matter, except that it must strictly increase.
+    epoch: ComputeStartupEpoch,
 }
 
 impl<T> ReplicaTask<T>
@@ -154,6 +159,7 @@ where
             command_rx,
             response_tx,
             orchestrator,
+            epoch,
         } = self;
 
         let is_managed = matches!(location, ComputeReplicaLocation::Managed { .. });
@@ -164,6 +170,7 @@ where
         let cmd_spec = CommandSpecialization {
             logging_config,
             comm_config,
+            epoch,
         };
 
         let res = run_message_loop(
@@ -264,6 +271,7 @@ where
 struct CommandSpecialization {
     logging_config: LoggingConfig,
     comm_config: CommunicationConfig,
+    epoch: ComputeStartupEpoch,
 }
 
 impl CommandSpecialization {
@@ -277,8 +285,9 @@ impl CommandSpecialization {
             config.logging = self.logging_config.clone();
         }
 
-        if let ComputeCommand::CreateTimely(comm_config) = command {
+        if let ComputeCommand::CreateTimely { comm_config, epoch } = command {
             *comm_config = self.comm_config.clone();
+            *epoch = self.epoch;
         }
     }
 }

@@ -31,7 +31,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
-use std::fmt;
+use std::fmt::{self};
 use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -67,7 +67,6 @@ mod orchestrator;
 mod replica;
 
 pub use mz_orchestrator::ServiceStatus as ComputeInstanceStatus;
-
 /// An abstraction allowing us to name different compute instances.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum ComputeInstanceId {
@@ -326,6 +325,8 @@ pub struct ComputeController<T> {
     stashed_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
     /// Times we have last received responses from replicas.
     replica_heartbeats: BTreeMap<ReplicaId, DateTime<Utc>>,
+    /// A number that increases on every `environmentd` restart.
+    envd_epoch: i64,
 }
 
 impl<T> ComputeController<T> {
@@ -334,6 +335,7 @@ impl<T> ComputeController<T> {
         build_info: &'static BuildInfo,
         orchestrator: Arc<dyn NamespacedOrchestrator>,
         computed_image: String,
+        envd_epoch: i64,
     ) -> Self {
         Self {
             instances: BTreeMap::new(),
@@ -342,6 +344,7 @@ impl<T> ComputeController<T> {
             initialized: false,
             stashed_response: None,
             replica_heartbeats: BTreeMap::new(),
+            envd_epoch,
         }
     }
 
@@ -419,6 +422,7 @@ where
                 arranged_logs,
                 max_result_size,
                 self.orchestrator.clone(),
+                self.envd_epoch,
             ),
         );
 

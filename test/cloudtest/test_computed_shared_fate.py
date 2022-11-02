@@ -10,14 +10,9 @@
 import subprocess
 from textwrap import dedent
 
-import pytest
-
 from materialize.cloudtest.application import MaterializeApplication
 
-# We would like to use large clusters here, e.g. SIZE=16, in order to get a pronounced
-# "thundering herd" effect when restarting, but due to https://github.com/MaterializeInc/materialize/issues/14689
-# clusters of sizes 8 and 16 can not be reliably started, let alone restarted.
-CLUSTER_SIZE = 4
+CLUSTER_SIZE = 8
 
 
 def populate(mz: MaterializeApplication, seed: int) -> None:
@@ -105,13 +100,7 @@ def kill_computed(mz: MaterializeApplication, compute_id: int) -> None:
         pass
 
 
-pytest.skip(
-    "Start of multi-process clusters is unreliable, see gh#14689",
-    allow_module_level=True,
-)
-
-
-def test_kill_all_computeds(mz: MaterializeApplication) -> None:  # type: ignore
+def test_kill_all_computeds(mz: MaterializeApplication) -> None:
     """Kill all computeds"""
     populate(mz, 1)
 

@@ -36,6 +36,16 @@ message ProtoComputeCommand {
         repeated mz_proto.ProtoU128 uuids = 1;
     }
 
+    message ProtoComputeStartupEpoch {
+        int64 envd = 1;
+        uint64 replica = 2;
+    }
+
+    message ProtoCreateTimely {
+        ProtoCommunicationConfig comm_config = 1;
+        ProtoComputeStartupEpoch epoch = 2;
+    }
+
     oneof kind {
         ProtoInstanceConfig create_instance = 1;
         google.protobuf.Empty drop_instance = 2;
@@ -45,7 +55,7 @@ message ProtoComputeCommand {
         ProtoCancelPeeks cancel_peeks = 6;
         google.protobuf.Empty initialization_complete = 7;
         ProtoUpdateMaxResultSize update_max_result_size = 8;
-        ProtoCommunicationConfig create_timely = 9;
+        ProtoCreateTimely create_timely = 9;
     }
 }
 
