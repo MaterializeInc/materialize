@@ -56,7 +56,7 @@ impl StackProfile {
             }
             write!(&mut builder, " {weight}").unwrap();
             if let Some(anno) = anno {
-                write!(&mut builder, "{anno}").unwrap()
+                write!(&mut builder, " {anno}").unwrap()
             }
             writeln!(&mut builder, "").unwrap();
         }
