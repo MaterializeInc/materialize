@@ -93,9 +93,14 @@ INSERT INTO conflict_schema.conflict_table VALUES ('234');
 CREATE TABLE "space table" ("space column" INTEGER);
 
 CREATE TYPE an_enum AS ENUM ('var0', 'var1');
-
 CREATE TABLE enum_table (a an_enum);
+INSERT INTO enum_table VALUES ('var1'), ('var0');
 ALTER TABLE enum_table REPLICA IDENTITY FULL;
+
+CREATE TYPE another_enum AS ENUM ('var2', 'var3');
+CREATE TABLE another_enum_table (a another_enum);
+INSERT INTO another_enum_table VALUES ('var2'), ('var3');
+ALTER TABLE another_enum_table REPLICA IDENTITY FULL;
 
 #
 # Test that slots created for replication sources are deleted on DROP
@@ -469,6 +474,75 @@ DELETE FROM conflict_schema.conflict_table;
 
 > SELECT COUNT(*) FROM conflict_table;
 0
+
+#
+# Support enum values as strings
+#
+#
+! CREATE SOURCE enum_source
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'mz_source',
+    TEXT COLUMNS [not_an_enum]
+  )
+  FOR TABLES (
+    "enum_table"
+  );
+contains: expect an unambiguous reference to a type
+
+! CREATE SOURCE enum_source
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'mz_source',
+    TEXT COLUMNS [9999999]
+  )
+  FOR TABLES (
+    "enum_table"
+  );
+contains: expect a valid OID
+
+! CREATE SOURCE enum_source
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'mz_source',
+    TEXT COLUMNS [foo.bar.qux]
+  )
+  FOR TABLES (
+    "enum_table"
+  );
+contains: incorrect qualification
+
+! CREATE SOURCE enum_source
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'mz_source',
+    TEXT COLUMNS [an_enum, an_enum]
+  )
+  FOR TABLES (
+    "enum_table"
+  );
+contains: multiple TEXT COLUMNS references refer to oid
+
+> CREATE SOURCE enum_source
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'mz_source',
+    TEXT COLUMNS [an_enum]
+  )
+  FOR TABLES (
+    "enum_table"
+  );
+
+$ set-regex match=\d+ replacement=<NUMBER>
+> SELECT * FROM (SHOW SOURCES) WHERE name LIKE 'enum%';
+enum_source             postgres  <NUMBER>
+enum_table              subsource <null>
+
+$ unset-regex
+
+> SELECT * FROM enum_table
+var0
+var1
+
+#
+# Cleanup
+#
+#
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP PUBLICATION mz_source;

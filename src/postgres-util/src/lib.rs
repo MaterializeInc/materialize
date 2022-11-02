@@ -124,6 +124,20 @@ pub async fn get_typname_oid(
     Ok(row.get("oid"))
 }
 
+/// Validates that the provided oid correlates to a type in the upstream
+/// Postgres database's catalog.
+///
+/// # Errors
+///
+/// - If the supplied oid does not refer to type in `pg_type`.
+pub async fn validate_type_oid(config: &Config, oid: u32) -> Result<bool, anyhow::Error> {
+    let client = config.connect("postgres_type_info").await?;
+    let row = client
+        .query_one("SELECT true FROM pg_type WHERE oid = $1", &[&oid])
+        .await?;
+    Ok(row.get("oid"))
+}
+
 /// Fetches table schema information from an upstream Postgres source for all
 /// tables that are part of a publication, given a connection string and the
 /// publication name.

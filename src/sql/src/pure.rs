@@ -307,20 +307,31 @@ pub async fn purify_create_source(
                         let typname = match &t[..] {
                             [item] => (None, item.as_str()),
                             [schema, item] => (Some(schema.as_str()), item.as_str()),
-                            _ => bail!("incorrect qualification for referenece in TEXT COLUMNS; expectd <schema.>?<item>, but got {} layers of qualification", t.len()),
+                            _ => bail!("incorrect qualification for referenece in TEXT COLUMNS; expected <schema.>?<item>, but got {} layers of qualification", t.len()),
                         };
                         let oid = mz_postgres_util::get_typname_oid(&config, typname)
                             .await
                             .map_err(|e| {
                                 anyhow!(
-                                "expected unambiguous reference to a type, but received error {}",
+                                "TEXT COLUMNS arguments expect an unambiguous reference to a type, but received error '{}'",
                                 e
                             )
                             })?;
                         *pg_ref = PgReference::Oid(oid);
                         oid
                     }
-                    PgReference::Oid(oid) => *oid,
+                    PgReference::Oid(oid) => {
+                        let _ = mz_postgres_util::validate_type_oid(&config, *oid)
+                            .await
+                            .map_err(|e| {
+                                anyhow!(
+                            "TEXT COLUMNS arguments expect a valid OID, but received error '{}'",
+                            e
+                        )
+                            })?;
+
+                        *oid
+                    }
                 };
 
                 let new = text_column_oids.insert(oid);
