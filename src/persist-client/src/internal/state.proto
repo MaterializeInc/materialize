@@ -49,6 +49,7 @@ message ProtoLeasedReaderState {
 
 message ProtoCriticalReaderState {
     ProtoU64Antichain since = 1;
+    bytes token = 2;
 }
 
 message ProtoWriterState {

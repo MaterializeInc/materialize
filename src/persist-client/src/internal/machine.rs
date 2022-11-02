@@ -189,11 +189,12 @@ where
     pub async fn register_critical_reader(
         &mut self,
         reader_id: &CriticalReaderId,
+        token: [u8; 8],
     ) -> CriticalReaderState<T> {
         let metrics = Arc::clone(&self.metrics);
         let (_seqno, state, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, state| {
-                state.register_critical_reader(reader_id)
+                state.register_critical_reader(reader_id, token)
             })
             .await;
         state
@@ -1356,9 +1357,10 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let reader_id = args.expect("reader_id");
+        let zero = <u64 as Codec64>::encode(&(0 as u64));
         let state = datadriven
             .machine
-            .register_critical_reader(&reader_id)
+            .register_critical_reader(&reader_id, zero)
             .await;
         Ok(format!(
             "{} {:?}\n",

@@ -494,16 +494,18 @@ impl PersistClient {
     /// return a handle with its `since` frontier set to the initial value of
     /// `Antichain::from_elem(T::minimum())`.
     #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
-    pub async fn open_critical_since<K, V, T, D>(
+    pub async fn open_critical_since<K, V, T, D, OT, F>(
         &self,
         shard_id: ShardId,
         reader_id: CriticalReaderId,
+        token: OT,
     ) -> Result<SinceHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
+        OT: Codec64,
     {
         let state_versions = StateVersions::new(
             self.cfg.clone(),
@@ -520,8 +522,9 @@ impl PersistClient {
         .await?;
         let gc = GarbageCollector::new(machine.clone());
 
-        let state = machine.register_critical_reader(&reader_id).await;
-        let handle = SinceHandle::new(machine, gc, reader_id, state.since);
+        let token = OT::encode(&token);
+        let state = machine.register_critical_reader(&reader_id, token).await;
+        let handle = SinceHandle::new(machine, gc, reader_id, state.since, token);
 
         Ok(handle)
     }

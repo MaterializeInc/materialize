@@ -53,6 +53,7 @@ pub struct LeasedReaderState<T> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct CriticalReaderState<T> {
     pub since: Antichain<T>,
+    pub token: [u8; 8],
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -210,12 +211,14 @@ where
     pub fn register_critical_reader(
         &mut self,
         reader_id: &CriticalReaderId,
+        token: [u8; 8],
     ) -> ControlFlow<Infallible, CriticalReaderState<T>> {
         let state = match self.critical_readers.get(reader_id) {
             Some(state) => state.clone(),
             None => {
                 let state = CriticalReaderState {
                     since: self.trace.since().clone(),
+                    token,
                 };
                 self.critical_readers
                     .insert(reader_id.clone(), state.clone());
