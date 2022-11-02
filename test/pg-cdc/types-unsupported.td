@@ -28,4 +28,4 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 # Todo: add test for detail and hint once testdrive supports that
 ! CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR ALL TABLES;
-contains: column "person.current_mood" uses unrecognized type
+regex: source encountered the following unrecognized types:\n"public\.mood"

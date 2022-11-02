@@ -182,7 +182,15 @@ contains:publication "no_such_publication" does not exist
   FOR TABLES (
     "enum_table"
   );
-contains: uses unrecognized type
+regex: unrecognized types:\n"public\.an_enum"
+
+! CREATE SOURCE "mz_source"
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES (
+    "enum_table",
+    "another_enum_table"
+  );
+regex: unrecognized types:\n"public\.an_enum"\n"public\.another_enum"
 
 #
 # Establish direct replication

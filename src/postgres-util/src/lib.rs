@@ -124,18 +124,25 @@ pub async fn get_typname_oid(
     Ok(row.get("oid"))
 }
 
-/// Validates that the provided oid correlates to a type in the upstream
-/// Postgres database's catalog.
+/// Gets the schema qualified name of the type with the supplied OID.
 ///
 /// # Errors
 ///
-/// - If the supplied oid does not refer to type in `pg_type`.
-pub async fn validate_type_oid(config: &Config, oid: u32) -> Result<bool, anyhow::Error> {
-    let client = config.connect("postgres_type_info").await?;
-    let row = client
-        .query_one("SELECT true FROM pg_type WHERE oid = $1", &[&oid])
-        .await?;
-    Ok(row.get("oid"))
+/// - If the supplied OID does not belong a type in the upstream Postgres
+///   database's catalog.
+pub async fn get_oid_typname(config: &Config, oid: u32) -> Result<(String, String), anyhow::Error> {
+    let client = config.connect("pg_get_oid_typname").await?;
+
+    let query = "
+        SELECT nspname, typname
+        FROM pg_type
+            JOIN pg_namespace
+            ON pg_type.typnamespace = pg_namespace.oid
+        WHERE pg_type.oid = $1";
+
+    let row = client.query_one(query, &[&oid]).await?;
+
+    Ok((row.get("nspname"), row.get("typname")))
 }
 
 /// Fetches table schema information from an upstream Postgres source for all

@@ -321,7 +321,7 @@ pub async fn purify_create_source(
                         oid
                     }
                     PgReference::Oid(oid) => {
-                        let _ = mz_postgres_util::validate_type_oid(&config, *oid)
+                        let _ = mz_postgres_util::get_oid_typname(&config, *oid)
                             .await
                             .map_err(|e| {
                                 anyhow!(
@@ -402,6 +402,9 @@ pub async fn purify_create_source(
                 .map(|(_, _, table)| (*table).clone())
                 .collect();
 
+            // Aggregate all unrecognized types.
+            let mut unrecognized_types = HashSet::new();
+
             // Now that we have an explicit list of validated requested subsources we can create them
             for (i, (upstream_name, subsource_name, table)) in
                 validated_requested_subsources.into_iter().enumerate()
@@ -410,13 +413,16 @@ pub async fn purify_create_source(
                 let mut columns = vec![];
                 for c in table.columns.iter() {
                     let name = Ident::new(c.name.clone());
-                    let ty = mz_pgrepr::Type::from_oid_and_typmod(c.type_oid, c.type_mod).map_err(
-                        |e| PlanError::UnrecognizedTypeInPostgresSource {
-                            table: subsource_name.to_string(),
-                            column: name.to_string(),
-                            e,
-                        },
-                    )?;
+                    let ty = match mz_pgrepr::Type::from_oid_and_typmod(c.type_oid, c.type_mod) {
+                        // Only continue purifiying if we have not yet encountered
+                        // any unrecognized types
+                        Ok(t) if unrecognized_types.is_empty() => t,
+                        Ok(_) => continue,
+                        Err(_) => {
+                            unrecognized_types.insert(c.type_oid);
+                            continue;
+                        }
+                    };
                     let data_type = scx.resolve_type(ty)?;
 
                     columns.push(ColumnDef {
@@ -461,6 +467,22 @@ pub async fn purify_create_source(
                 };
                 subsources.push((transient_id, subsource));
             }
+
+            if !unrecognized_types.is_empty() {
+                let mut unrecognized_type_names = vec![];
+                for oid in unrecognized_types.into_iter().sorted() {
+                    match mz_postgres_util::get_oid_typname(&config, oid).await {
+                        Ok(t) => unrecognized_type_names.push(t),
+                        // OID must have been deleted from upstream PG database
+                        Err(_) => continue,
+                    }
+                }
+                return Err(PlanError::UnrecognizedTypeInPostgresSource {
+                    unrecognized_types: unrecognized_type_names,
+                }
+                .into());
+            }
+
             *requested_subsources = Some(CreateReferencedSubsources::Subset(targeted_subsources));
 
             // Remove any old detail references
