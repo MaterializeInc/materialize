@@ -4222,6 +4222,7 @@ dependencies = [
  "clap",
  "fallible-iterator",
  "futures",
+ "itertools",
  "junit-report",
  "md-5",
  "mz-build-info",
