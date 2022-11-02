@@ -361,36 +361,35 @@ where
         let mut machine = self;
         spawn(|| "persist::heartbeat_read", async move {
             let sleep_duration = machine.cfg.reader_lease_duration / 2;
-            let mut last_wakeup = Instant::now();
             loop {
+                let before_sleep = Instant::now();
                 tokio::time::sleep(sleep_duration).await;
-                let wakeup = Instant::now();
 
-                let elapsed_since_last_wakeup = wakeup - last_wakeup;
-                if elapsed_since_last_wakeup > machine.cfg.reader_lease_duration {
+                let elapsed_since_before_sleeping = before_sleep.elapsed();
+                if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
                     warn!(
                         "reader ({}) of shard ({}) went {}s between heartbeats",
                         reader_id,
                         machine.shard_id(),
-                        elapsed_since_last_wakeup.as_secs_f64()
+                        elapsed_since_before_sleeping.as_secs_f64()
                     );
                 }
 
+                let before_heartbeat = Instant::now();
                 let (_seqno, existed, _maintenance) = machine
                     .heartbeat_reader(&reader_id, (machine.cfg.now)())
                     .await;
 
-                let elapsed_since_this_wakeup = Instant::now() - wakeup;
-                if elapsed_since_this_wakeup > Duration::from_secs(60) {
+                let elapsed_since_heartbeat = before_heartbeat.elapsed();
+                if elapsed_since_heartbeat > Duration::from_secs(60) {
                     warn!(
                         "reader ({}) of shard ({}) heartbeat call took {}s",
                         reader_id,
                         machine.shard_id(),
-                        elapsed_since_this_wakeup.as_secs_f64(),
+                        elapsed_since_heartbeat.as_secs_f64(),
                     );
                 }
 
-                last_wakeup = wakeup;
                 if !existed {
                     return;
                 }
@@ -416,36 +415,35 @@ where
         let mut machine = self;
         spawn(|| "persist::heartbeat_write", async move {
             let sleep_duration = machine.cfg.writer_lease_duration / 4;
-            let mut last_wakeup = Instant::now();
             loop {
+                let before_sleep = Instant::now();
                 tokio::time::sleep(sleep_duration).await;
-                let wakeup = Instant::now();
 
-                let elapsed_since_last_wakeup = wakeup - last_wakeup;
-                if elapsed_since_last_wakeup > machine.cfg.writer_lease_duration {
+                let elapsed_since_before_sleeping = before_sleep.elapsed();
+                if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
                     warn!(
                         "writer ({}) of shard ({}) went {}s between heartbeats",
                         writer_id,
                         machine.shard_id(),
-                        elapsed_since_last_wakeup.as_secs_f64()
+                        elapsed_since_before_sleeping.as_secs_f64()
                     );
                 }
 
+                let before_heartbeat = Instant::now();
                 let (_seqno, existed, _maintenance) = machine
                     .heartbeat_writer(&writer_id, (machine.cfg.now)())
                     .await;
 
-                let elapsed_since_this_wakeup = Instant::now() - wakeup;
-                if elapsed_since_this_wakeup > Duration::from_secs(60) {
+                let elapsed_since_heartbeat = before_heartbeat.elapsed();
+                if elapsed_since_heartbeat > Duration::from_secs(60) {
                     warn!(
                         "writer ({}) of shard ({}) heartbeat call took {}s",
                         writer_id,
                         machine.shard_id(),
-                        elapsed_since_this_wakeup.as_secs_f64(),
+                        elapsed_since_heartbeat.as_secs_f64(),
                     );
                 }
 
-                last_wakeup = wakeup;
                 if !existed {
                     return;
                 }
