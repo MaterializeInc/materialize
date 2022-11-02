@@ -41,11 +41,22 @@ pub enum StateFieldValDiff<V> {
     Delete(V),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 #[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 pub struct StateFieldDiff<K, V> {
     pub key: K,
     pub val: StateFieldValDiff<V>,
+}
+
+impl<K: Debug, V: Debug> std::fmt::Debug for StateFieldDiff<K, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StateFieldDiff")
+            // In the cases we've seen in the wild, it's been more useful to
+            // have the val printed first.
+            .field("val", &self.val)
+            .field("key", &self.key)
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -460,24 +471,28 @@ fn diff_field_spine<T: Timestamp + Lattice>(
 // want to revisit this.
 fn apply_diffs_spine<T: Timestamp + Lattice>(
     metrics: &Metrics,
-    diffs: Vec<StateFieldDiff<HollowBatch<T>, ()>>,
+    mut diffs: Vec<StateFieldDiff<HollowBatch<T>, ()>>,
     trace: &mut Trace<T>,
 ) -> Result<(), String> {
-    match &diffs[..] {
-        // Fast-path: no diffs.
-        [] => return Ok(()),
-
-        // Fast-path: batch insert.
-        [StateFieldDiff {
-            key,
-            val: StateFieldValDiff::Insert(()),
-        }] => {
-            // Ignore merge_reqs because whichever process generated this diff is
-            // assigned the work.
-            let _merge_reqs = trace.push_batch(key.clone());
+    // Another special case: sniff out a newly inserted batch (one whose lower
+    // lines up with the current upper) and handle that now. Then fall through
+    // to the rest of the handling on whatever is left.
+    if let Some(insert) = sniff_insert(&mut diffs, trace.upper()) {
+        // Ignore merge_reqs because whichever process generated this diff is
+        // assigned the work.
+        let _merge_reqs = trace.push_batch(insert);
+        // If this insert was the only thing in diffs, then return now instead
+        // of falling through to the "no diffs" case in the match so we can inc
+        // the apply_spine_fast_path metric.
+        if diffs.is_empty() {
             metrics.state.apply_spine_fast_path.inc();
             return Ok(());
         }
+    }
+
+    match &diffs[..] {
+        // Fast-path: no diffs.
+        [] => return Ok(()),
 
         // Fast-path: batch insert with both new and most recent batch empty.
         // Spine will happily merge these empty batches together without a call
@@ -540,6 +555,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
         // Otherwise, try our lenient application of a compaction result.
         let mut batches = Vec::new();
         trace.map_batches(|b| batches.push(b.clone()));
+
         match apply_compaction_lenient(metrics, batches, &res.output) {
             Ok(batches) => {
                 let mut new_trace = Trace::default();
@@ -614,9 +630,24 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
     Ok(())
 }
 
+fn sniff_insert<T: Timestamp + Lattice>(
+    diffs: &mut Vec<StateFieldDiff<HollowBatch<T>, ()>>,
+    upper: &Antichain<T>,
+) -> Option<HollowBatch<T>> {
+    for idx in 0..diffs.len() {
+        match &diffs[idx] {
+            StateFieldDiff {
+                key,
+                val: StateFieldValDiff::Insert(()),
+            } if key.desc.lower() == upper => return Some(diffs.remove(idx).key),
+            _ => continue,
+        }
+    }
+    None
+}
+
 // TODO: Instead of trying to sniff out a compaction from diffs, should we just
 // be explicit?
-#[allow(dead_code)]
 fn sniff_compaction<'a, T: Timestamp + Lattice>(
     diffs: &'a [StateFieldDiff<HollowBatch<T>, ()>],
 ) -> Option<(Vec<&'a HollowBatch<T>>, HollowBatch<T>)> {
@@ -905,11 +936,112 @@ impl<'a> Iterator for ProtoStateFieldDiffsIter<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::ControlFlow::Continue;
+
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::now::SYSTEM_TIME;
 
+    use crate::ShardId;
+
     use super::*;
+
+    // Regression test for the apply_diffs_spine special case that sniffs out an
+    // insert, applies it, and then lets the remaining diffs (if any) fall
+    // through to the rest of the code. See #15493.
+    #[test]
+    fn regression_15493_sniff_insert() {
+        fn hb(lower: u64, upper: u64, len: usize) -> HollowBatch<u64> {
+            HollowBatch {
+                desc: Description::new(
+                    Antichain::from_elem(lower),
+                    Antichain::from_elem(upper),
+                    Antichain::from_elem(0),
+                ),
+                parts: Vec::new(),
+                len,
+                runs: Vec::new(),
+            }
+        }
+
+        // The bug handled here is essentially a set of batches that look like
+        // the pattern matched by `apply_lenient` _plus_ an insert. In
+        // apply_diffs_spine, we use `sniff_insert` to steal the insert out of
+        // the diffs and fall back to the rest of the logic to handle the
+        // remaining diffs.
+        //
+        // Concretely, something like (the numbers are truncated versions of the
+        // actual bug posted in the issue):
+        // - spine: [0][7094664]0, [7094664][7185234]100
+        // - diffs: [0][6805359]0 del, [6805359][7083793]0 del, [0][7083793]0 ins,
+        //   [7185234][7185859]20 ins
+        //
+        // Where this allows us to handle the [7185234,7185859) and then
+        // apply_lenient handles splitting up [0,7094664) so we can apply the
+        // [0,6805359)+[6805359,7083793)->[0,7083793) swap.
+
+        let batches_before = vec![hb(0, 7094664, 0), hb(7094664, 7185234, 100)];
+
+        let diffs = vec![
+            StateFieldDiff {
+                key: hb(0, 6805359, 0),
+                val: StateFieldValDiff::Delete(()),
+            },
+            StateFieldDiff {
+                key: hb(6805359, 7083793, 0),
+                val: StateFieldValDiff::Delete(()),
+            },
+            StateFieldDiff {
+                key: hb(0, 7083793, 0),
+                val: StateFieldValDiff::Insert(()),
+            },
+            StateFieldDiff {
+                key: hb(7185234, 7185859, 20),
+                val: StateFieldValDiff::Insert(()),
+            },
+        ];
+
+        // Ideally this first batch would be [0][7083793], [7083793,7094664]
+        // here because `apply_lenient` splits it out, but when `apply_lenient`
+        // reconstructs the trace, Spine happens to (deterministically) collapse
+        // them back together. The main value of this test is that the
+        // `apply_diffs_spine` call below doesn't return an Err, so don't worry
+        // too much about this, it's just a sanity check.
+        let batches_after = vec![
+            hb(0, 7094664, 0),
+            hb(7094664, 7185234, 100),
+            hb(7185234, 7185859, 20),
+        ];
+
+        let version = DUMMY_BUILD_INFO.semver_version();
+        let state = State::<(), (), u64, i64>::new(version.clone(), ShardId([0u8; 16]));
+        let state = state.clone_apply(&version, &mut |_seqno, state| {
+            for b in batches_before.iter() {
+                let _merge_reqs = state.trace.push_batch(b.clone());
+            }
+            Continue::<(), ()>(())
+        });
+        let mut state = match state {
+            Continue((_, x)) => x,
+            _ => unreachable!(),
+        };
+
+        let metrics = Metrics::new(
+            &PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
+            &MetricsRegistry::new(),
+        );
+        assert_eq!(
+            apply_diffs_spine(&metrics, diffs, &mut state.collections.trace),
+            Ok(())
+        );
+
+        let mut actual = Vec::new();
+        state
+            .collections
+            .trace
+            .map_batches(|b| actual.push(b.clone()));
+        assert_eq!(actual, batches_after);
+    }
 
     #[test]
     fn apply_lenient() {
