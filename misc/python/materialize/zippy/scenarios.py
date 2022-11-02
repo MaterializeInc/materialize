@@ -18,6 +18,7 @@ from materialize.zippy.kafka_actions import (
     KafkaStart,
 )
 from materialize.zippy.mz_actions import KillComputed, KillStoraged, MzStart, MzStop
+from materialize.zippy.peek_actions import PeekCancellation
 from materialize.zippy.pg_cdc_actions import CreatePostgresCdcTable
 from materialize.zippy.postgres_actions import (
     CreatePostgresTable,
@@ -55,6 +56,7 @@ class KafkaSources(Scenario):
             CreateSink: 5,
             ValidateView: 10,
             Ingest: 100,
+            PeekCancellation: 5,
         }
 
 
@@ -137,6 +139,7 @@ class ClusterReplicas(Scenario):
             ValidateView: 20,
             Ingest: 50,
             DML: 50,
+            PeekCancellation: 5,
         }
 
 
