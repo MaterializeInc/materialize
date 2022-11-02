@@ -39,7 +39,7 @@ _src_name_  | The name for the source.
 
 Field                                | Value     | Description
 -------------------------------------|-----------|-------------------------------------
-`SIZE`                               | `text`    | **Required.** The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`.
+`SIZE`                               | `text`    | **Required.** The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`, `xlarge`.
 
 ## Description
 
