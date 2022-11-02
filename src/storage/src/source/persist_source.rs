@@ -248,11 +248,26 @@ where
             .lock()
             .await
             .open(persist_location_stream)
-            .await
+            .await;
+
+        // This is a moment where we may have dropped our source if our token
+        // has been dropped, but if we still hold it we should be good to go.
+        if weak_handle_token.upgrade().is_none() {
+            return;
+        }
+
+        let read = read
             .expect("could not open persist client")
             .open_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(data_shard)
-            .await
-            .expect("could not open persist shard");
+            .await;
+
+        // This is a moment where we may have dropped our source if our token
+        // has been dropped, but if we still hold it we should be good to go.
+        if weak_handle_token.upgrade().is_none() {
+            return;
+        }
+
+        let read = read.expect("could not open persist shard");
 
         let as_of_stream = as_of_stream.unwrap_or_else(|| read.since().clone());
 
@@ -270,21 +285,20 @@ where
         // `as_of`.
         yield (Vec::new(), as_of_stream.clone());
 
+        let subscription = read.subscribe(as_of_stream.clone()).await;
+
         // This is a moment where we may have let persist compact if our token
         // has been dropped, but if we still hold it we should be good to go.
         if weak_handle_token.upgrade().is_none() {
             return;
         }
 
-        let mut subscription = read
-            .subscribe(as_of_stream.clone())
-            .await
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{source_id}: {} cannot serve requested as_of {:?}: {:?}",
-                    data_shard, as_of_stream, e
-                )
-            });
+        let mut subscription = subscription.unwrap_or_else(|e| {
+            panic!(
+                "{source_id}: {} cannot serve requested as_of {:?}: {:?}",
+                data_shard, as_of_stream, e
+            )
+        });
 
         let mut done = false;
         while !done {
