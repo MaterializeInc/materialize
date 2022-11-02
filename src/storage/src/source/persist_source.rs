@@ -224,6 +224,13 @@ where
         mpsc::UnboundedReceiver<SerdeLeasedBatchPart>,
     ) = mpsc::unbounded_channel();
 
+    // We want our async task to notice if we have dropped the token, as we may have reported
+    // the dataflow complete and advanced the read frontier of the persist collection, making
+    // it unsafe to attempt to open a subscription at `as_of`, leading to a crash. This token
+    // reveals whether we are still live to the async stream.
+    let handle_creation_token = Arc::new(());
+    let weak_handle_token = Arc::downgrade(&handle_creation_token);
+
     let until_clone = until.clone();
     // This is a generator that sets up an async `Stream` that can be continuously polled to get the
     // values that are `yield`-ed from it's body.
@@ -241,11 +248,26 @@ where
             .lock()
             .await
             .open(persist_location_stream)
-            .await
+            .await;
+
+        // This is a moment where we may have dropped our source if our token
+        // has been dropped, but if we still hold it we should be good to go.
+        if weak_handle_token.upgrade().is_none() {
+            return;
+        }
+
+        let read = read
             .expect("could not open persist client")
             .open_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(data_shard)
-            .await
-            .expect("could not open persist shard");
+            .await;
+
+        // This is a moment where we may have dropped our source if our token
+        // has been dropped, but if we still hold it we should be good to go.
+        if weak_handle_token.upgrade().is_none() {
+            return;
+        }
+
+        let read = read.expect("could not open persist shard");
 
         let as_of_stream = as_of_stream.unwrap_or_else(|| read.since().clone());
 
@@ -263,15 +285,20 @@ where
         // `as_of`.
         yield (Vec::new(), as_of_stream.clone());
 
-        let mut subscription = read
-            .subscribe(as_of_stream.clone())
-            .await
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{source_id}: {} cannot serve requested as_of {:?}: {:?}",
-                    data_shard, as_of_stream, e
-                )
-            });
+        let subscription = read.subscribe(as_of_stream.clone()).await;
+
+        // This is a moment where we may have let persist compact if our token
+        // has been dropped, but if we still hold it we should be good to go.
+        if weak_handle_token.upgrade().is_none() {
+            return;
+        }
+
+        let mut subscription = subscription.unwrap_or_else(|e| {
+            panic!(
+                "{source_id}: {} cannot serve requested as_of {:?}: {:?}",
+                data_shard, as_of_stream, e
+            )
+        });
 
         let mut done = false;
         while !done {
@@ -519,7 +546,7 @@ where
         }
     });
 
-    let token = Rc::new(token);
+    let token = Rc::new((token, handle_creation_token));
 
     (update_output_stream, token)
 }
