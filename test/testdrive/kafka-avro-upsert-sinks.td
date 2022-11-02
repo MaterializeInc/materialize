@@ -292,11 +292,15 @@ $ kafka-ingest format=avro topic=non-keyed-input schema=${schema}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[10],"counts":[{"time":1,"count":2}, {"time":2,"count":4}, {"time":3,"count":2}]}}
 
 # Verify that the update appears as an upsert instead of a create + delete, even when keys are not enforced.
-$ kafka-verify-data headers=materialize-timestamp format=avro topic=not-enforced-sink-${testdrive.seed}
+$ kafka-verify-data headers=materialize-timestamp format=avro topic=not-enforced-sink-${testdrive.seed} sort-messages=true
 1	{"a": 1} {"a": 1, "b": 1}
 1	{"a": 2} {"a": 2, "b": 1}
+
+$ kafka-verify-data headers=materialize-timestamp format=avro topic=not-enforced-sink-${testdrive.seed} sort-messages=true
 2	{"a": 1} {"a": 1, "b": 2}
 2	{"a": 2} {"a": 2, "b": 2}
+
+$ kafka-verify-data headers=materialize-timestamp format=avro topic=not-enforced-sink-${testdrive.seed} sort-messages=true
 3	{"a": 1}
 3	{"a": 2}
 

@@ -141,8 +141,9 @@ $ kafka-ingest format=avro topic=topic1 schema=${schema}
 $ kafka-ingest format=avro topic=topic1 schema=${schema}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[10],"counts":[{"time":1,"count":10}, {"time":2,"count":8}]}}
 
-$ kafka-verify-data headers=materialize-timestamp format=avro topic=testdrive-sink1-${testdrive.seed}
+$ kafka-verify-data headers=materialize-timestamp format=avro topic=testdrive-sink1-${testdrive.seed} sort-messages=true
 1	{"a": 1} {"a": 1, "b": 1}
+1	{"a": 10} {"a": 10, "b": 1}
 1	{"a": 2} {"a": 2, "b": 1}
 1	{"a": 3} {"a": 3, "b": 1}
 1	{"a": 4} {"a": 4, "b": 1}
@@ -151,10 +152,11 @@ $ kafka-verify-data headers=materialize-timestamp format=avro topic=testdrive-si
 1	{"a": 7} {"a": 7, "b": 1}
 1	{"a": 8} {"a": 8, "b": 1}
 1	{"a": 9} {"a": 9, "b": 1}
-1	{"a": 10} {"a": 10, "b": 1}
+
+$ kafka-verify-data headers=materialize-timestamp format=avro topic=testdrive-sink1-${testdrive.seed} sort-messages=true
 2	{"a": 0} {"a": 0, "b": 0}
+2	{"a": 15} {"a": 15, "b": 15}
 2	{"a": 2} {"a": 2, "b": 2}
 2	{"a": 3}
 2	{"a": 7}
 2	{"a": 8} {"a": 8, "b": 8}
-2	{"a": 15} {"a": 15, "b": 15}
