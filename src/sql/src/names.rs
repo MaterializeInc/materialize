@@ -1104,6 +1104,9 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 }
                 Object(object_name)
             }
+            UnresolvedObjectName(name) => {
+                UnresolvedObjectName(self.fold_unresolved_object_name(name))
+            }
             ClusterReplicas(replicas) => ClusterReplicas(
                 replicas
                     .into_iter()

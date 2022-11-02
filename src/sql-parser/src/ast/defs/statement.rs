@@ -2207,6 +2207,7 @@ pub enum WithOptionValue<T: AstInfo> {
     DataType(T::DataType),
     Secret(T::ObjectName),
     Object(T::ObjectName),
+    UnresolvedObjectName(UnresolvedObjectName),
     Sequence(Vec<WithOptionValue<T>>),
     // Special cases.
     ClusterReplicas(Vec<ReplicaDefinition<T>>),
@@ -2229,6 +2230,7 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 f.write_node(name)
             }
             WithOptionValue::Object(obj) => f.write_node(obj),
+            WithOptionValue::UnresolvedObjectName(r) => f.write_node(r),
             WithOptionValue::ClusterReplicas(replicas) => {
                 f.write_str("(");
                 f.write_node(&display::comma_separated(replicas));

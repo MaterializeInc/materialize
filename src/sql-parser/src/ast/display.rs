@@ -168,6 +168,13 @@ impl<T: AstDisplay> AstDisplay for Box<T> {
     }
 }
 
+// u32 used directly to represent, e.g., oids
+impl AstDisplay for u32 {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(self);
+    }
+}
+
 // u64 used directly to represent, e.g., type modifiers
 impl AstDisplay for u64 {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {

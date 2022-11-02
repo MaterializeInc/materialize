@@ -285,8 +285,11 @@ pub async fn purify_create_source(
                     _ => sql_bail!("{} is not a postgres connection", item.name()),
                 }
             };
-            let crate::plan::statement::PgConfigOptionExtracted { publication, .. } =
-                options.clone().try_into()?;
+            let crate::plan::statement::PgConfigOptionExtracted {
+                publication,
+                text_columns: _,
+                ..
+            } = options.clone().try_into()?;
             let publication = publication
                 .ok_or_else(|| sql_err!("POSTGRES CONNECTION must specify PUBLICATION"))?;
 

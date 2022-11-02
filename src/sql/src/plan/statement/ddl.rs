@@ -38,7 +38,7 @@ use mz_sql_parser::ast::{
     AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceStatement,
     AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
     CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    DeferredObjectName, SetVariableValue, SshConnectionOption,
+    DeferredObjectName, SetVariableValue, SshConnectionOption, UnresolvedObjectName,
 };
 use mz_storage_client::types::connections::aws::{
     AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri,
@@ -326,7 +326,12 @@ generate_extracted_config!(
     (TimestampInterval, Interval)
 );
 
-generate_extracted_config!(PgConfigOption, (Details, String), (Publication, String));
+generate_extracted_config!(
+    PgConfigOption,
+    (Details, String),
+    (Publication, String),
+    (TextColumns, Vec::<UnresolvedObjectName>, Default(vec![]))
+);
 
 pub fn plan_create_source(
     scx: &StatementContext,
@@ -596,6 +601,7 @@ pub fn plan_create_source(
             let PgConfigOptionExtracted {
                 details,
                 publication,
+                text_columns: _,
                 seen: _,
             } = options.clone().try_into()?;
 
