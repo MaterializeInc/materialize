@@ -22,6 +22,7 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
+use tokio::time::{sleep, Duration};
 
 use mz_ore::halt;
 use mz_ore::now::NowFn;
@@ -135,13 +136,24 @@ impl SinkHandle {
                 .await
                 .expect("opening reader for shard");
 
-            while let Some(mut new_since) = rx.recv().await {
-                while let Ok(newer_since) = rx.try_recv() {
-                    new_since = newer_since;
-                }
-                read_handle.maybe_downgrade_since(&new_since).await;
+            let mut downgrade_to = read_handle.since().clone();
+            'downgrading: loop {
+                tokio::select! {
+                    downgrade = rx.recv() => {
+                        if let Some(downgrade) = downgrade {
+                            downgrade_to = downgrade;
+                        } else {
+                            // The sending end of this channel has been dropped, which means
+                            // we're no longer interested in this handle.
+                            break 'downgrading;
+                        }
+                    }
+                    _ = sleep(Duration::from_secs(1)) => {}
+                };
+                read_handle.maybe_downgrade_since(&downgrade_to).await
             }
 
+            // Proactively drop our read hold.
             read_handle.expire().await;
         });
 
@@ -205,11 +217,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
             }
 
             self.report_frontier_progress(&response_tx);
-            for (id, frontier) in &self.storage_state.sink_write_frontiers {
-                let handle = &self.storage_state.sink_handles[id];
-                let frontier = frontier.borrow();
-                handle.downgrade_since(frontier.clone());
-            }
 
             // Handle any received commands.
             let mut cmds = vec![];
@@ -356,6 +363,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
         }
 
         if !new_uppers.is_empty() {
+            for (id, upper) in &new_uppers {
+                if let Some(handle) = &self.storage_state.sink_handles.get(id) {
+                    handle.downgrade_since(upper.clone());
+                }
+            }
             self.send_storage_response(response_tx, StorageResponse::FrontierUppers(new_uppers));
         }
     }
