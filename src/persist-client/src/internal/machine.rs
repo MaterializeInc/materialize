@@ -390,7 +390,7 @@ where
     pub async fn start_writer_heartbeat_task(self, writer_id: WriterId) -> JoinHandle<()> {
         let mut machine = self;
         spawn(|| "persist::heartbeat_write", async move {
-            let sleep_duration = machine.cfg.writer_lease_duration / 2;
+            let sleep_duration = machine.cfg.writer_lease_duration / 4;
             loop {
                 tokio::time::sleep(sleep_duration).await;
                 let (_seqno, existed, _maintenance) = machine
