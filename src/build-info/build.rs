@@ -14,4 +14,8 @@ fn main() {
         "cargo:rustc-env=TARGET_TRIPLE={}",
         env::var("TARGET").unwrap()
     );
+    println!(
+        "cargo:rustc-env=MZ_BUILD_UUID={}",
+        uuid::Uuid::new_v4()
+    )
 }

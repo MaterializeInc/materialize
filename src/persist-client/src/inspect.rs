@@ -24,6 +24,7 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
+use uuid::Uuid;
 
 use crate::internal::paths::{
     BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey,
@@ -35,6 +36,7 @@ const READ_ALL_BUILD_INFO: BuildInfo = BuildInfo {
     version: "10000000.0.0+test",
     sha: "0000000000000000000000000000000000000000",
     time: "",
+    uuid: Uuid::nil()
 };
 
 /// Fetches the current state of a given shard

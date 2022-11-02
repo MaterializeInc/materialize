@@ -9,6 +9,10 @@ publish = false
 [dependencies]
 compile-time-run = "0.2.12"
 semver = { version = "1.0.14", optional = true }
+uuid = "1.2.1"
+
+[build-dependencies]
+uuid = { version = "1.2.1", features = ["v4"] }
 
 [features]
 default = ["semver"]

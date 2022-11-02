@@ -12,6 +12,8 @@
 //! These types are located in a dependency-free crate so they can be used
 //! from any layer of the stack.
 
+use uuid::Uuid;
+
 /// Build information.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildInfo {
@@ -21,6 +23,8 @@ pub struct BuildInfo {
     pub sha: &'static str,
     /// The time of the build in UTC as an ISO 8601-compliant string.
     pub time: &'static str,
+    /// A UUID generated at build time
+    pub uuid: Uuid,
 }
 
 /// Dummy build information.
@@ -31,6 +35,13 @@ pub const DUMMY_BUILD_INFO: BuildInfo = BuildInfo {
     version: "0.0.0+dummy",
     sha: "0000000000000000000000000000000000000000",
     time: "",
+    uuid: Uuid::nil()
+};
+
+const UUID_STR: &str = env!("MZ_BUILD_UUID");
+pub const UUID: Uuid = match Uuid::try_parse(UUID_STR) {
+    Ok(uuid) => uuid,
+    Err(_e) => panic!("Bad MZ_BUILD_UUID"),
 };
 
 /// The target triple of the platform.
@@ -103,6 +114,7 @@ macro_rules! build_info {
                    fi"#
             ),
             time: $crate::private::run_command_str!("date", "-u", "+%Y-%m-%dT%H:%M:%SZ"),
+            uuid: $crate::UUID,
         }
     }
 }
