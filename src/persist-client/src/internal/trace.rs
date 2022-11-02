@@ -51,7 +51,6 @@ use std::fmt::Debug;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
@@ -346,20 +345,11 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
         })
     }
 
-    pub fn begin_merge(
-        b1: &Self,
-        b2: &Self,
-        compaction_frontier: Option<AntichainRef<T>>,
-    ) -> FuelingMerge<T> {
-        let mut since = b1.desc().since().join(b2.desc().since());
-        if let Some(compaction_frontier) = compaction_frontier {
-            since = since.join(&compaction_frontier.to_owned());
-        }
+    pub fn begin_merge(b1: &Self, b2: &Self) -> FuelingMerge<T> {
         let remaining_work = b1.len() + b2.len();
         FuelingMerge {
             b1: b1.clone(),
             b2: b2.clone(),
-            since,
             remaining_work,
         }
     }
@@ -447,7 +437,6 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
 pub struct FuelingMerge<T> {
     b1: SpineBatch<T>,
     b2: SpineBatch<T>,
-    since: Antichain<T>,
     remaining_work: usize,
 }
 
@@ -467,10 +456,10 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
     ///
     /// This method should only be called after `work` has been called and has
     /// not brought `fuel` to zero. Otherwise, the merge is still in progress.
-    fn done(self, merge_reqs: &mut Vec<FueledMergeReq<T>>) -> SpineBatch<T> {
+    fn done(self, merge_reqs: &mut Vec<FueledMergeReq<T>>, since: &Antichain<T>) -> SpineBatch<T> {
         let lower = self.b1.desc().lower().clone();
         let upper = self.b2.desc().upper().clone();
-        let since = self.since;
+        let since = since.clone();
 
         // Special case empty batches.
         if self.b1.is_empty() && self.b2.is_empty() {
@@ -854,7 +843,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
             let mut fuel = *fuel;
             // Pass along various logging stuffs, in case we need to report
             // success.
-            self.merging[index].work(&mut fuel, merge_reqs);
+            self.merging[index].work(&mut fuel, merge_reqs, &self.since);
             // `fuel` could have a deficit at this point, meaning we over-spent
             // when we took a merge step. We could ignore this, or maintain the
             // deficit and account future fuel against it before spending again.
@@ -890,8 +879,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
                 self.merging[index] = MergeState::Single(batch);
             }
             MergeState::Single(old) => {
-                let compaction_frontier = Some(self.since.borrow());
-                self.merging[index] = MergeState::begin_merge(old, batch, compaction_frontier);
+                self.merging[index] = MergeState::begin_merge(old, batch);
             }
             MergeState::Double(_) => {
                 panic!("Attempted to insert batch into incomplete merge!")
@@ -905,7 +893,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
         index: usize,
         merge_reqs: &mut Vec<FueledMergeReq<T>>,
     ) -> Option<SpineBatch<T>> {
-        if let Some((merged, _)) = self.merging[index].complete(merge_reqs) {
+        if let Some((merged, _)) = self.merging[index].complete(merge_reqs, &self.since) {
             Some(merged)
         } else {
             None
@@ -1056,11 +1044,12 @@ impl<T: Timestamp + Lattice> MergeState<T> {
     fn complete(
         &mut self,
         merge_reqs: &mut Vec<FueledMergeReq<T>>,
+        since: &Antichain<T>,
     ) -> Option<(SpineBatch<T>, Option<(SpineBatch<T>, SpineBatch<T>)>)> {
         match std::mem::replace(self, MergeState::Vacant) {
             MergeState::Vacant => None,
             MergeState::Single(batch) => batch.map(|b| (b, None)),
-            MergeState::Double(variant) => variant.complete(merge_reqs),
+            MergeState::Double(variant) => variant.complete(merge_reqs, since),
         }
     }
 
@@ -1078,10 +1067,15 @@ impl<T: Timestamp + Lattice> MergeState<T> {
     /// If the merge completes, the resulting batch is returned. If a batch is
     /// returned, it is the obligation of the caller to correctly install the
     /// result.
-    fn work(&mut self, fuel: &mut isize, merge_reqs: &mut Vec<FueledMergeReq<T>>) {
+    fn work(
+        &mut self,
+        fuel: &mut isize,
+        merge_reqs: &mut Vec<FueledMergeReq<T>>,
+        since: &Antichain<T>,
+    ) {
         // We only perform work for merges in progress.
         if let MergeState::Double(layer) = self {
-            layer.work(fuel, merge_reqs)
+            layer.work(fuel, merge_reqs, since)
         }
     }
 
@@ -1101,15 +1095,11 @@ impl<T: Timestamp + Lattice> MergeState<T> {
     /// batch whose upper and lower frontiers are equal. This option exists
     /// purely for bookkeeping purposes, and no computation is performed to
     /// merge the two batches.
-    fn begin_merge(
-        batch1: Option<SpineBatch<T>>,
-        batch2: Option<SpineBatch<T>>,
-        compaction_frontier: Option<AntichainRef<T>>,
-    ) -> MergeState<T> {
+    fn begin_merge(batch1: Option<SpineBatch<T>>, batch2: Option<SpineBatch<T>>) -> MergeState<T> {
         let variant = match (batch1, batch2) {
             (Some(batch1), Some(batch2)) => {
                 assert!(batch1.upper() == batch2.lower());
-                let begin_merge = SpineBatch::begin_merge(&batch1, &batch2, compaction_frontier);
+                let begin_merge = SpineBatch::begin_merge(&batch1, &batch2);
                 MergeVariant::InProgress(batch1, batch2, begin_merge)
             }
             (None, Some(x)) => MergeVariant::Complete(Some((x, None))),
@@ -1138,9 +1128,10 @@ impl<T: Timestamp + Lattice> MergeVariant<T> {
     fn complete(
         mut self,
         merge_reqs: &mut Vec<FueledMergeReq<T>>,
+        since: &Antichain<T>,
     ) -> Option<(SpineBatch<T>, Option<(SpineBatch<T>, SpineBatch<T>)>)> {
         let mut fuel = isize::max_value();
-        self.work(&mut fuel, merge_reqs);
+        self.work(&mut fuel, merge_reqs, since);
         if let MergeVariant::Complete(batch) = self {
             batch
         } else {
@@ -1152,12 +1143,18 @@ impl<T: Timestamp + Lattice> MergeVariant<T> {
     ///
     /// In case the work completes, the source batches are returned. This allows
     /// the caller to manage the released resources.
-    fn work(&mut self, fuel: &mut isize, merge_reqs: &mut Vec<FueledMergeReq<T>>) {
+    fn work(
+        &mut self,
+        fuel: &mut isize,
+        merge_reqs: &mut Vec<FueledMergeReq<T>>,
+        since: &Antichain<T>,
+    ) {
         let variant = std::mem::replace(self, MergeVariant::Complete(None));
         if let MergeVariant::InProgress(b1, b2, mut merge) = variant {
             merge.work(&b1, &b2, fuel);
             if *fuel > 0 {
-                *self = MergeVariant::Complete(Some((merge.done(merge_reqs), Some((b1, b2)))));
+                *self =
+                    MergeVariant::Complete(Some((merge.done(merge_reqs, since), Some((b1, b2)))));
             } else {
                 *self = MergeVariant::InProgress(b1, b2, merge);
             }
