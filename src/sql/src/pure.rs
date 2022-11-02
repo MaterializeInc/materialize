@@ -35,7 +35,8 @@ use mz_sql_parser::ast::{
     ColumnDef, ColumnOption, ColumnOptionDef, CsrConnection, CsrSeedAvro, CsrSeedProtobuf,
     CsrSeedProtobufSchema, DbzMode, DeferredObjectName, Envelope, Ident, KafkaConfigOption,
     KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection, PgConfigOption,
-    PgConfigOptionName, ReaderSchemaSelectionStrategy, TableConstraint, UnresolvedObjectName,
+    PgConfigOptionName, PgReference, ReaderSchemaSelectionStrategy, TableConstraint,
+    UnresolvedObjectName,
 };
 use mz_storage_client::types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
 use mz_storage_client::types::connections::{Connection, ConnectionContext};
@@ -285,7 +286,7 @@ pub async fn purify_create_source(
             };
             let crate::plan::statement::PgConfigOptionExtracted {
                 publication,
-                text_columns: _,
+                mut text_columns,
                 ..
             } = options.clone().try_into()?;
             let publication = publication
@@ -295,8 +296,54 @@ pub async fn purify_create_source(
             let config = connection
                 .config(&*connection_context.secrets_reader)
                 .await?;
+
+            // Collect the OIDs of the types we should treat as text.
+            let mut text_column_oids = HashSet::new();
+            for pg_ref in text_columns.iter_mut() {
+                let oid = match pg_ref {
+                    // If we received a name, convert it to an OID.
+                    PgReference::Name(name) => {
+                        let t = &name.0;
+                        let typname = match &t[..] {
+                            [item] => (None, item.as_str()),
+                            [schema, item] => (Some(schema.as_str()), item.as_str()),
+                            _ => bail!("incorrect qualification for referenece in TEXT COLUMNS; expectd <schema.>?<item>, but got {} layers of qualification", t.len()),
+                        };
+                        let oid = mz_postgres_util::get_typname_oid(&config, typname)
+                            .await
+                            .map_err(|e| {
+                                anyhow!(
+                                "expected unambiguous reference to a type, but received error {}",
+                                e
+                            )
+                            })?;
+                        *pg_ref = PgReference::Oid(oid);
+                        oid
+                    }
+                    PgReference::Oid(oid) => *oid,
+                };
+
+                let new = text_column_oids.insert(oid);
+                if !new {
+                    bail!("multiple TEXT COLUMNS references refer to oid {}", oid);
+                }
+            }
+
+            // Normalize options to only contain OIDs.
+            if let Some(text_cols_option) = options
+                .iter_mut()
+                .find(|option| option.name == PgConfigOptionName::TextColumns)
+            {
+                let seq = text_columns
+                    .into_iter()
+                    .map(WithOptionValue::PgReference)
+                    .collect();
+                text_cols_option.value = Some(WithOptionValue::Sequence(seq));
+            }
+
             let tables =
-                mz_postgres_util::publication_info(&config, &publication, &HashSet::new()).await?;
+                mz_postgres_util::publication_info(&config, &publication, &text_column_oids)
+                    .await?;
 
             let mut targeted_subsources = vec![];
 
