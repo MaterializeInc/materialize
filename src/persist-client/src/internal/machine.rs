@@ -13,7 +13,7 @@ use std::convert::Infallible;
 use std::fmt::Debug;
 use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -21,7 +21,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::task::spawn;
 use timely::progress::{Antichain, Timestamp};
 use tokio::task::JoinHandle;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
@@ -362,10 +362,34 @@ where
         spawn(|| "persist::heartbeat_read", async move {
             let sleep_duration = machine.cfg.reader_lease_duration / 2;
             loop {
+                let before_sleep = Instant::now();
                 tokio::time::sleep(sleep_duration).await;
+
+                let elapsed_since_before_sleeping = before_sleep.elapsed();
+                if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
+                    warn!(
+                        "reader ({}) of shard ({}) went {}s between heartbeats",
+                        reader_id,
+                        machine.shard_id(),
+                        elapsed_since_before_sleeping.as_secs_f64()
+                    );
+                }
+
+                let before_heartbeat = Instant::now();
                 let (_seqno, existed, _maintenance) = machine
                     .heartbeat_reader(&reader_id, (machine.cfg.now)())
                     .await;
+
+                let elapsed_since_heartbeat = before_heartbeat.elapsed();
+                if elapsed_since_heartbeat > Duration::from_secs(60) {
+                    warn!(
+                        "reader ({}) of shard ({}) heartbeat call took {}s",
+                        reader_id,
+                        machine.shard_id(),
+                        elapsed_since_heartbeat.as_secs_f64(),
+                    );
+                }
+
                 if !existed {
                     return;
                 }
@@ -392,10 +416,34 @@ where
         spawn(|| "persist::heartbeat_write", async move {
             let sleep_duration = machine.cfg.writer_lease_duration / 4;
             loop {
+                let before_sleep = Instant::now();
                 tokio::time::sleep(sleep_duration).await;
+
+                let elapsed_since_before_sleeping = before_sleep.elapsed();
+                if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
+                    warn!(
+                        "writer ({}) of shard ({}) went {}s between heartbeats",
+                        writer_id,
+                        machine.shard_id(),
+                        elapsed_since_before_sleeping.as_secs_f64()
+                    );
+                }
+
+                let before_heartbeat = Instant::now();
                 let (_seqno, existed, _maintenance) = machine
                     .heartbeat_writer(&writer_id, (machine.cfg.now)())
                     .await;
+
+                let elapsed_since_heartbeat = before_heartbeat.elapsed();
+                if elapsed_since_heartbeat > Duration::from_secs(60) {
+                    warn!(
+                        "writer ({}) of shard ({}) heartbeat call took {}s",
+                        writer_id,
+                        machine.shard_id(),
+                        elapsed_since_heartbeat.as_secs_f64(),
+                    );
+                }
+
                 if !existed {
                     return;
                 }
