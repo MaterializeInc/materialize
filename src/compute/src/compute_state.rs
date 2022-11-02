@@ -134,9 +134,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     }
 
     fn handle_create_instance(&mut self, config: InstanceConfig) {
-        if config.logging.enable_logging {
-            self.initialize_logging(&config.logging);
-        }
+        self.initialize_logging(&config.logging);
     }
 
     fn handle_create_dataflows(

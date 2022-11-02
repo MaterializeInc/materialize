@@ -21,6 +21,7 @@ use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::Filter;
 use timely::logging::WorkerIdentifier;
 
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
@@ -54,12 +55,19 @@ pub fn construct<A: Allocate>(
     let interval_ms = std::cmp::max(1, config.interval_ns / 1_000_000);
 
     let traces = worker.dataflow_named("Dataflow: differential logging", move |scope| {
-        let (logs, token) = Some(linked).mz_replay(
+        let (mut logs, token) = Some(linked).mz_replay(
             scope,
             "differential logs",
             Duration::from_nanos(config.interval_ns as u64),
             activator,
         );
+
+        // If logging is disabled, we still need to install the indexes, but we can leave them
+        // empty. We do so by immediately filtering all logs events.
+        // TODO(teskje): Remove this once we remove the arranged introspection sources.
+        if !config.enable_logging {
+            logs = logs.filter(|_| false);
+        }
 
         let mut demux =
             OperatorBuilder::new("Differential Logging Demux".to_string(), scope.clone());

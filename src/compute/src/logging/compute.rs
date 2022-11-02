@@ -20,6 +20,7 @@ use differential_dataflow::operators::count::CountTotal;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::Filter;
 use timely::logging::WorkerIdentifier;
 use tracing::error;
 use uuid::Uuid;
@@ -98,12 +99,19 @@ pub fn construct<A: Allocate>(
     let interval_ms = std::cmp::max(1, config.interval_ns / 1_000_000);
 
     let traces = worker.dataflow_named("Dataflow: compute logging", move |scope| {
-        let (compute_logs, token) = Some(compute).mz_replay(
+        let (mut compute_logs, token) = Some(compute).mz_replay(
             scope,
             "compute logs",
             Duration::from_nanos(config.interval_ns as u64),
             activator.clone(),
         );
+
+        // If logging is disabled, we still need to install the indexes, but we can leave them
+        // empty. We do so by immediately filtering all logs events.
+        // TODO(teskje): Remove this once we remove the arranged introspection sources.
+        if !config.enable_logging {
+            compute_logs = compute_logs.filter(|_| false);
+        }
 
         let mut demux = OperatorBuilder::new("Compute Logging Demux".to_string(), scope.clone());
         use timely::dataflow::channels::pact::Pipeline;

@@ -20,6 +20,7 @@ use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::capture::EventLink;
+use timely::dataflow::operators::Filter;
 use timely::logging::WorkerIdentifier;
 
 use mz_compute_client::logging::LoggingConfig;
@@ -67,12 +68,19 @@ pub fn construct<A: Allocate>(
 
     // A dataflow for multiple log-derived arrangements.
     let traces = worker.dataflow_named("Dataflow: timely reachability logging", move |scope| {
-        let (logs, token) = Some(linked).mz_replay(
+        let (mut logs, token) = Some(linked).mz_replay(
             scope,
             "reachability logs",
             Duration::from_nanos(config.interval_ns as u64),
             activator,
         );
+
+        // If logging is disabled, we still need to install the indexes, but we can leave them
+        // empty. We do so by immediately filtering all logs events.
+        // TODO(teskje): Remove this once we remove the arranged introspection sources.
+        if !config.enable_logging {
+            logs = logs.filter(|_| false);
+        }
 
         use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
