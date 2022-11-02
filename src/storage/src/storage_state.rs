@@ -19,8 +19,8 @@ use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp as _;
 use timely::worker::Worker as TimelyWorker;
-use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::{mpsc, Mutex};
+
+use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
 
@@ -110,7 +110,7 @@ pub struct StorageState {
 /// or environmentd will learn to hold its handles across restarts and this won't be
 /// needed.
 pub struct SinkHandle {
-    downgrade_tx: UnboundedSender<Antichain<Timestamp>>,
+    downgrade_tx: watch::Sender<Antichain<Timestamp>>,
     _handle: JoinHandle<()>,
 }
 
@@ -121,7 +121,7 @@ impl SinkHandle {
         shard_id: ShardId,
         persist_clients: Arc<Mutex<PersistClientCache>>,
     ) -> SinkHandle {
-        let (downgrade_tx, mut rx) = mpsc::unbounded_channel();
+        let (downgrade_tx, mut rx) = watch::channel(Antichain::from_elem(Timestamp::minimum()));
 
         let _handle = mz_ore::task::spawn(|| "Sink handle advancement", async move {
             let client = persist_clients
@@ -139,13 +139,16 @@ impl SinkHandle {
             let mut downgrade_to = read_handle.since().clone();
             'downgrading: loop {
                 tokio::select! {
-                    downgrade = rx.recv() => {
-                        if let Some(downgrade) = downgrade {
-                            downgrade_to = downgrade;
-                        } else {
-                            // The sending end of this channel has been dropped, which means
-                            // we're no longer interested in this handle.
-                            break 'downgrading;
+                    result = rx.changed() => {
+                        match result {
+                            Err(_) => {
+                                // The sending end of this channel has been dropped, which means
+                                // we're no longer interested in this handle.
+                                break 'downgrading;
+                            }
+                            Ok(()) => {
+                                downgrade_to = rx.borrow_and_update().clone();
+                            }
                         }
                     }
                     _ = sleep(Duration::from_secs(1)) => {}
