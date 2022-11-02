@@ -138,6 +138,7 @@ impl SinkHandle {
 
             let mut downgrade_to = read_handle.since().clone();
             'downgrading: loop {
+                // NB: all branches of the select are cancellation safe.
                 tokio::select! {
                     result = rx.changed() => {
                         match result {
@@ -366,6 +367,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
         }
 
         if !new_uppers.is_empty() {
+            // Sinks maintain a read handle over their input data, in case environmentd is unable
+            // to maintain the global read hold. It's tempting to use environmentd's AllowCompaction
+            // messages to maintain an even more conservative hold... but environmentd only sends
+            // storaged AllowCompaction messages for its own id, not for its dependencies.
             for (id, upper) in &new_uppers {
                 if let Some(handle) = &self.storage_state.sink_handles.get(id) {
                     handle.downgrade_since(upper.clone());
