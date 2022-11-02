@@ -11,7 +11,7 @@
 //!
 //! See the [crate-level documentation](crate) for details.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::iter;
 use std::path::Path;
@@ -292,7 +292,8 @@ pub async fn purify_create_source(
             let config = connection
                 .config(&*connection_context.secrets_reader)
                 .await?;
-            let tables = mz_postgres_util::publication_info(&config, &publication).await?;
+            let tables =
+                mz_postgres_util::publication_info(&config, &publication, &HashSet::new()).await?;
 
             let mut targeted_subsources = vec![];
 

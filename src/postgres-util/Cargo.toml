@@ -10,6 +10,7 @@ publish = false
 anyhow = "1.0.65"
 mz-ore = { path = "../ore", features = ["task", "ssh"] }
 mz-proto = { path = "../proto" }
+mz-pgrepr = { path = "../pgrepr" }
 openssl = { version = "0.10.42", features = ["vendored"] }
 openssh = "0.9.7"
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }

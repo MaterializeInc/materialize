@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -607,7 +607,12 @@ impl PostgresTaskInfo {
     async fn produce_snapshot(&mut self) -> Result<(), ReplicationError> {
         // Get all the relevant tables for this publication
         let publication_tables = try_indefinite!(
-            mz_postgres_util::publication_info(&self.connection_config, &self.publication).await
+            mz_postgres_util::publication_info(
+                &self.connection_config,
+                &self.publication,
+                &HashSet::new()
+            )
+            .await
         );
 
         let client = try_indefinite!(self.connection_config.clone().connect_replication().await);

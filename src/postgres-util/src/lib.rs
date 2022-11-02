@@ -9,6 +9,7 @@
 
 //! PostgreSQL utility library.
 
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::Write;
 use std::os::unix::prelude::PermissionsExt;
@@ -89,8 +90,46 @@ pub fn make_tls(config: &PostgresConfig) -> Result<MakeTlsConnector, anyhow::Err
     Ok(tls_connector)
 }
 
-/// Fetches table schema information from an upstream Postgres source for all tables that are part
-/// of a publication, given a connection string and the publication name.
+/// Gets the OID of the named type.
+///
+/// The second argument names the type to look up, and is of the form
+/// `(<schema>?, <item>)`.
+///
+/// # Errors
+///
+/// - If the supplied name does not unambiguously name a type in the upstream
+///   Postgres database's catalog.
+pub async fn get_typname_oid(
+    config: &Config,
+    (schema, item): (Option<&str>, &str),
+) -> Result<u32, anyhow::Error> {
+    let client = config.connect("postgres_type_info").await?;
+
+    let query = "
+        SELECT DISTINCT pg_type.oid
+            FROM pg_type
+            JOIN pg_namespace
+                ON pg_namespace.oid = pg_type.typnamespace
+        WHERE
+            pg_type.typname = $1";
+
+    let row = match schema {
+        Some(schema) => {
+            let query = format!("{} AND pg_namespace.nspname = $2", query);
+            client.query_one(&query, &[&item, &schema]).await?
+        }
+        None => client.query_one(query, &[&item]).await?,
+    };
+
+    Ok(row.get("oid"))
+}
+
+/// Fetches table schema information from an upstream Postgres source for all
+/// tables that are part of a publication, given a connection string and the
+/// publication name.
+///
+/// The oid of any column present in `text_cols` is rewritten to be of type
+/// `text`.
 ///
 /// # Errors
 ///
@@ -99,6 +138,7 @@ pub fn make_tls(config: &PostgresConfig) -> Result<MakeTlsConnector, anyhow::Err
 pub async fn publication_info(
     config: &Config,
     publication: &str,
+    text_cols: &HashSet<u32>,
 ) -> Result<Vec<PostgresTableDesc>, anyhow::Error> {
     let client = config.connect("postgres_publication_info").await?;
 
@@ -155,6 +195,15 @@ pub async fn publication_info(
                 let name: String = row.get("name");
                 let type_oid = row.get("typoid");
                 let type_mod: i32 = row.get("typmod");
+
+                // Replace any reference to a value in `text_cols` with the text
+                // OID.
+                let (type_oid, type_mod) = if text_cols.contains(&type_oid) {
+                    (mz_pgrepr::oid::TYPE_TEXT_OID, -1)
+                } else {
+                    (type_oid, type_mod)
+                };
+
                 let not_null: bool = row.get("not_null");
                 let primary_key = row.get("primary_key");
                 Ok(PostgresColumnDesc {

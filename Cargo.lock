@@ -3960,6 +3960,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "mz-ore",
+ "mz-pgrepr",
  "mz-proto",
  "openssh",
  "openssl",
