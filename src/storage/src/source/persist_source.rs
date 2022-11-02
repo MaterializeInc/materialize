@@ -224,6 +224,13 @@ where
         mpsc::UnboundedReceiver<SerdeLeasedBatchPart>,
     ) = mpsc::unbounded_channel();
 
+    // We want our async task to notice if we have dropped the token, as we may have reported
+    // the dataflow complete and advanced the read frontier of the persist collection, making
+    // it unsafe to attempt to open a subscription at `as_of`, leading to a crash. This token
+    // reveals whether we are still live to the async stream.
+    let handle_creation_token = Arc::new(());
+    let weak_handle_token = Arc::downgrade(&handle_creation_token);
+
     let until_clone = until.clone();
     // This is a generator that sets up an async `Stream` that can be continuously polled to get the
     // values that are `yield`-ed from it's body.
@@ -262,6 +269,12 @@ where
         // through, including the initial downgrade of the shard upper to the
         // `as_of`.
         yield (Vec::new(), as_of_stream.clone());
+
+        // This is a moment where we may have let persist compact if our token
+        // has been dropped, but if we still hold it we should be good to go.
+        if weak_handle_token.upgrade().is_none() {
+            return;
+        }
 
         let mut subscription = read
             .subscribe(as_of_stream.clone())
@@ -519,7 +532,7 @@ where
         }
     });
 
-    let token = Rc::new(token);
+    let token = Rc::new((token, handle_creation_token));
 
     (update_output_stream, token)
 }
