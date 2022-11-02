@@ -94,36 +94,34 @@ impl CriticalReaderId {
 /// means that callers can add a timeout using [tokio::time::timeout] or
 /// [tokio::time::timeout_at].
 #[derive(Debug)]
-pub struct SinceHandle<K, V, T, D, TOKEN>
+pub struct SinceHandle<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
-    TOKEN: Codec64,
 {
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) gc: GarbageCollector<K, V, T, D>,
     pub(crate) reader_id: CriticalReaderId,
-    pub(crate) token: T,
+    pub(crate) token: [u8; 8],
 
     since: Antichain<T>,
 }
 
-impl<K, V, T, D, TOKEN> SinceHandle<K, V, T, D, TOKEN>
+impl<K, V, T, D> SinceHandle<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
-    TOKEN: Codec64,
 {
     pub(crate) fn new(
         machine: Machine<K, V, T, D>,
         gc: GarbageCollector<K, V, T, D>,
         reader_id: CriticalReaderId,
         since: Antichain<T>,
-        token: TOKEN,
+        token: [u8; 8],
     ) -> Self {
         SinceHandle {
             machine,
