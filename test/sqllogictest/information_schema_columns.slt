@@ -10,6 +10,12 @@
 mode cockroach
 
 statement ok
+CREATE DATABASE other
+
+statement ok
+CREATE VIEW other.public.v AS SELECT 1 AS num, 'a' AS char
+
+statement ok
 CREATE VIEW v AS SELECT 1 AS num, 'a' AS char
 
 query TTTTTTTTT colnames,rowsort

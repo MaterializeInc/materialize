@@ -1627,7 +1627,8 @@ s.name AS nspname,
 NULL::pg_catalog.oid AS nspowner,
 NULL::pg_catalog.text[] AS nspacl
 FROM mz_catalog.mz_schemas s
-JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+WHERE s.database_id IS NULL OR d.name = pg_catalog.current_database()",
 };
 
 pub const PG_CLASS: BuiltinView = BuiltinView {
@@ -1683,7 +1684,8 @@ FROM (
         JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id
 ) AS class_objects
 JOIN mz_catalog.mz_schemas ON mz_schemas.id = class_objects.schema_id
-JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
+LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
+WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
 };
 
 pub const PG_DATABASE: BuiltinView = BuiltinView {
@@ -1729,7 +1731,9 @@ pub const PG_INDEX: BuiltinView = BuiltinView {
 FROM mz_catalog.mz_indexes
 JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id
 JOIN mz_catalog.mz_index_columns ON mz_index_columns.index_id = mz_indexes.id
-JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())
+JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_relations.schema_id
+LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
+WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()
 GROUP BY mz_indexes.oid, mz_relations.oid",
 };
 
@@ -1741,8 +1745,7 @@ pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
     NULL::pg_catalog.oid as classoid,
     0::pg_catalog.int4 as objsubid,
     NULL::pg_catalog.text as description
-FROM pg_catalog.pg_class c
-JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
+FROM pg_catalog.pg_class c",
 };
 
 pub const PG_TYPE: BuiltinView = BuiltinView {
@@ -1817,7 +1820,8 @@ FROM
             UNION ALL SELECT id, 'p' FROM mz_catalog.mz_pseudo_types
         )
             AS t ON mz_types.id = t.id
-    JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
+    LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
+    WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
 };
 
 pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
@@ -1848,7 +1852,9 @@ FROM (
 ) AS class_objects
 JOIN mz_catalog.mz_columns ON class_objects.id = mz_columns.id
 JOIN pg_catalog.pg_type ON pg_type.oid = mz_columns.type_oid
-JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
+JOIN mz_catalog.mz_schemas ON mz_schemas.id = class_objects.schema_id
+LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
+WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
     // Since this depends on pg_type, its id must be higher due to initialization
     // ordering.
 };
@@ -1864,7 +1870,8 @@ pub const PG_PROC: BuiltinView = BuiltinView {
     NULL::pg_catalog.text AS proargdefaults
 FROM mz_catalog.mz_functions
 JOIN mz_catalog.mz_schemas ON mz_functions.schema_id = mz_schemas.id
-JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
+LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
+WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
 };
 
 pub const PG_RANGE: BuiltinView = BuiltinView {
@@ -2115,8 +2122,7 @@ SELECT n.nspname AS schemaname,
     pg_catalog.pg_get_userbyid(c.relowner) AS tableowner
 FROM pg_catalog.pg_class c
 LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())
-WHERE c.relkind = ANY (ARRAY['r','p'])",
+WHERE c.relkind IN ('r', 'p')",
 };
 
 pub const PG_ACCESS_METHODS: BuiltinView = BuiltinView {
@@ -2160,7 +2166,7 @@ pub const PG_VIEWS: BuiltinView = BuiltinView {
 FROM mz_catalog.mz_views v
 LEFT JOIN mz_catalog.mz_schemas s ON s.id = v.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
-WHERE d.name = pg_catalog.current_database()",
+WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 
 pub const PG_MATVIEWS: BuiltinView = BuiltinView {
@@ -2174,7 +2180,7 @@ pub const PG_MATVIEWS: BuiltinView = BuiltinView {
 FROM mz_catalog.mz_materialized_views m
 LEFT JOIN mz_catalog.mz_schemas s ON s.id = m.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
-WHERE d.name = pg_catalog.current_database()",
+WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 
 pub const INFORMATION_SCHEMA_COLUMNS: BuiltinView = BuiltinView {
@@ -2182,7 +2188,7 @@ pub const INFORMATION_SCHEMA_COLUMNS: BuiltinView = BuiltinView {
     schema: INFORMATION_SCHEMA,
     sql: "CREATE VIEW information_schema.columns AS
 SELECT
-    d.name as table_catalog,
+    current_database() as table_catalog,
     s.name AS table_schema,
     o.name AS table_name,
     c.name AS column_name,
@@ -2194,14 +2200,15 @@ SELECT
 FROM mz_catalog.mz_columns c
 JOIN mz_catalog.mz_objects o ON o.id = c.id
 JOIN mz_catalog.mz_schemas s ON s.id = o.schema_id
-JOIN mz_catalog.mz_databases d on s.database_id = d.id",
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 
 pub const INFORMATION_SCHEMA_TABLES: BuiltinView = BuiltinView {
     name: "tables",
     schema: INFORMATION_SCHEMA,
     sql: "CREATE VIEW information_schema.tables AS SELECT
-    d.name as table_catalog,
+    current_database() as table_catalog,
     s.name AS table_schema,
     r.name AS table_name,
     CASE r.type
@@ -2211,7 +2218,8 @@ pub const INFORMATION_SCHEMA_TABLES: BuiltinView = BuiltinView {
     END AS table_type
 FROM mz_catalog.mz_relations r
 JOIN mz_catalog.mz_schemas s ON s.id = r.schema_id
-JOIN mz_catalog.mz_databases d on s.database_id = d.id",
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 
 // MZ doesn't support COLLATE so the table is filled with NULLs and made empty. pg_database hard
@@ -2293,8 +2301,7 @@ AS SELECT
     NULL::pg_catalog.text AS rolpassword,
     -- MZ doesn't have role passwords
     NULL::pg_catalog.timestamptz AS rolvaliduntil
-FROM mz_catalog.mz_roles r
-JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
+FROM mz_catalog.mz_roles r",
 };
 
 pub const MZ_SHOW_MATERIALIZED_VIEWS: BuiltinView = BuiltinView {
