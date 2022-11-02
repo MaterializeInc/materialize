@@ -1104,6 +1104,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 }
                 Object(object_name)
             }
+            PgReference(pg_ref) => PgReference(self.fold_pg_reference(pg_ref)),
             ClusterReplicas(replicas) => ClusterReplicas(
                 replicas
                     .into_iter()

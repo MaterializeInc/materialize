@@ -2131,12 +2131,29 @@ impl<T: AstInfo> AstDisplay for ShowStatementFilter<T> {
 impl_display_t!(ShowStatementFilter);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PgReference {
+    Name(UnresolvedObjectName),
+    Oid(u32),
+}
+
+impl AstDisplay for PgReference {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            PgReference::Name(name) => f.write_node(name),
+            PgReference::Oid(oid) => f.write_node(oid),
+        }
+    }
+}
+impl_display!(PgReference);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WithOptionValue<T: AstInfo> {
     Value(Value),
     Ident(Ident),
     DataType(T::DataType),
     Secret(T::ObjectName),
     Object(T::ObjectName),
+    PgReference(PgReference),
     Sequence(Vec<WithOptionValue<T>>),
     // Special cases.
     ClusterReplicas(Vec<ReplicaDefinition<T>>),
@@ -2158,6 +2175,7 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 f.write_node(name)
             }
             WithOptionValue::Object(obj) => f.write_node(obj),
+            WithOptionValue::PgReference(r) => f.write_node(r),
             WithOptionValue::ClusterReplicas(replicas) => {
                 f.write_str("(");
                 f.write_node(&display::comma_separated(replicas));

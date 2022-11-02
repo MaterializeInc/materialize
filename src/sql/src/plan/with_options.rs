@@ -17,7 +17,7 @@ use mz_repr::strconv;
 use mz_repr::GlobalId;
 use mz_storage_client::types::connections::StringOrSecret;
 
-use crate::ast::{AstInfo, IntervalValue, Value, WithOptionValue};
+use crate::ast::{AstInfo, IntervalValue, PgReference, Value, WithOptionValue};
 use crate::names::{ResolvedDataType, ResolvedObjectName};
 use crate::plan::{Aug, PlanError};
 
@@ -87,6 +87,24 @@ impl TryFromValue<WithOptionValue<Aug>> for Object {
 impl ImpliedValue for Object {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide an object")
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for PgReference {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        Ok(match v {
+            WithOptionValue::PgReference(name) => name,
+            _ => sql_bail!("must provide an object name or OID"),
+        })
+    }
+    fn name() -> String {
+        "object name or OID".to_string()
+    }
+}
+
+impl ImpliedValue for PgReference {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an object name or OID")
     }
 }
 
@@ -318,12 +336,8 @@ impl ImpliedValue for u64 {
     }
 }
 
-impl<T, V> TryFromValue<WithOptionValue<T>> for Vec<V>
-where
-    T: AstInfo,
-    V: TryFromValue<WithOptionValue<T>>,
-{
-    fn try_from_value(v: WithOptionValue<T>) -> Result<Self, PlanError> {
+impl<V: TryFromValue<WithOptionValue<Aug>>> TryFromValue<WithOptionValue<Aug>> for Vec<V> {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         match v {
             WithOptionValue::Sequence(a) => {
                 let mut out = Vec::with_capacity(a.len());
@@ -343,7 +357,7 @@ where
     }
 }
 
-impl<V: TryFromValue<Value>> ImpliedValue for Vec<V> {
+impl<V: ImpliedValue> ImpliedValue for Vec<V> {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide an array value")
     }
@@ -374,6 +388,7 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
             WithOptionValue::Ident(i) => V::try_from_value(Value::String(i.to_string())),
             WithOptionValue::Sequence(_)
             | WithOptionValue::Object(_)
+            | WithOptionValue::PgReference(_)
             | WithOptionValue::Secret(_)
             | WithOptionValue::DataType(_)
             | WithOptionValue::ClusterReplicas(_) => sql_bail!(
@@ -381,6 +396,7 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
                 match v {
                     WithOptionValue::Sequence(_) => "sequences",
                     WithOptionValue::Object(_) => "object references",
+                    WithOptionValue::PgReference(_) => "names or OIDs",
                     WithOptionValue::Secret(_) => "secrets",
                     WithOptionValue::DataType(_) => "data types",
                     WithOptionValue::ClusterReplicas(_) => "cluster replicas",

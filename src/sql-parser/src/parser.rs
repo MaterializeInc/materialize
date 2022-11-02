@@ -2606,9 +2606,23 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_pg_connection_option(&mut self) -> Result<PgConfigOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[DETAILS, PUBLICATION])? {
+        let name = match self.expect_one_of_keywords(&[DETAILS, PUBLICATION, TEXT])? {
             DETAILS => PgConfigOptionName::Details,
             PUBLICATION => PgConfigOptionName::Publication,
+            TEXT => {
+                self.expect_keyword(COLUMNS)?;
+
+                let _ = self.consume_token(&Token::Eq);
+
+                let value = self
+                    .parse_option_sequence(Parser::parse_pg_reference_value)?
+                    .map(WithOptionValue::Sequence);
+
+                return Ok(PgConfigOption {
+                    name: PgConfigOptionName::TextColumns,
+                    value,
+                });
+            }
             _ => unreachable!(),
         };
         Ok(PgConfigOption {
@@ -3357,6 +3371,20 @@ impl<'a> Parser<'a> {
         Ok(WithOptionValue::Object(self.parse_raw_name()?))
     }
 
+    fn parse_pg_reference_value(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
+        Ok(if let Some(Token::Number(oid)) = self.peek_token() {
+            let _ = self.next_token();
+            WithOptionValue::PgReference(PgReference::Oid(oid.parse::<u32>().map_err(|e| {
+                self.error(
+                    self.peek_prev_pos(),
+                    format!("Could not parse '{}' as oid: {}", oid, e),
+                )
+            })?))
+        } else {
+            WithOptionValue::PgReference(PgReference::Name(self.parse_object_name()?))
+        })
+    }
+
     fn parse_optional_option_value(&mut self) -> Result<Option<WithOptionValue<Raw>>, ParserError> {
         // The next token might be a value and might not. The only valid things
         // that indicate no value would be `)` for end-of-options , `,` for
@@ -3371,21 +3399,39 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_option_value(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
-        if self.consume_token(&Token::LParen) {
-            if self.consume_token(&Token::RParen) {
-                return Ok(WithOptionValue::Sequence(vec![]));
-            }
-            let options = self.parse_comma_separated(Parser::parse_option_value)?;
-            self.expect_token(&Token::RParen)?;
-            Ok(WithOptionValue::Sequence(options))
+    fn parse_option_sequence<T, F>(&mut self, f: F) -> Result<Option<Vec<T>>, ParserError>
+    where
+        F: FnMut(&mut Self) -> Result<T, ParserError>,
+    {
+        Ok(if self.consume_token(&Token::LParen) {
+            let options = if self.consume_token(&Token::RParen) {
+                vec![]
+            } else {
+                let options = self.parse_comma_separated(f)?;
+                self.expect_token(&Token::RParen)?;
+                options
+            };
+
+            Some(options)
         } else if self.consume_token(&Token::LBracket) {
-            if self.consume_token(&Token::RBracket) {
-                return Ok(WithOptionValue::Sequence(vec![]));
-            }
-            let options = self.parse_comma_separated(Parser::parse_option_value)?;
-            self.expect_token(&Token::RBracket)?;
-            Ok(WithOptionValue::Sequence(options))
+            let options = if self.consume_token(&Token::RBracket) {
+                vec![]
+            } else {
+                let options = self.parse_comma_separated(f)?;
+
+                self.expect_token(&Token::RBracket)?;
+                options
+            };
+
+            Some(options)
+        } else {
+            None
+        })
+    }
+
+    fn parse_option_value(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
+        if let Some(seq) = self.parse_option_sequence(Parser::parse_option_value)? {
+            Ok(WithOptionValue::Sequence(seq))
         } else if self.parse_keyword(SECRET) {
             if let Some(secret) = self.maybe_parse(Parser::parse_raw_name) {
                 Ok(WithOptionValue::Secret(secret))

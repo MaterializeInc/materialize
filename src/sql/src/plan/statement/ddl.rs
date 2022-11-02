@@ -82,7 +82,7 @@ use crate::ast::{
     DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
     Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConfigOptionName,
     KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint, LoadGeneratorOption,
-    LoadGeneratorOptionName, ObjectType, PgConfigOption, PgConfigOptionName,
+    LoadGeneratorOptionName, ObjectType, PgConfigOption, PgConfigOptionName, PgReference,
     PostgresConnectionOption, PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica,
     ReplicaDefinition, ReplicaOption, ReplicaOptionName, SourceIncludeMetadata,
     SourceIncludeMetadataType, SshConnectionOptionName, Statement, TableConstraint,
@@ -325,7 +325,12 @@ generate_extracted_config!(
     (TimestampInterval, Interval)
 );
 
-generate_extracted_config!(PgConfigOption, (Details, String), (Publication, String));
+generate_extracted_config!(
+    PgConfigOption,
+    (Details, String),
+    (Publication, String),
+    (TextColumns, Vec::<PgReference>, Default(vec![]))
+);
 
 pub fn plan_create_source(
     scx: &StatementContext,
@@ -593,6 +598,7 @@ pub fn plan_create_source(
             let PgConfigOptionExtracted {
                 details,
                 publication,
+                text_columns: _,
                 seen: _,
             } = options.clone().try_into()?;
 
