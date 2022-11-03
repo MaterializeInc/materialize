@@ -680,7 +680,7 @@ impl LogVariant {
                 .with_column(
                     "address",
                     ScalarType::List {
-                        element_type: Box::new(ScalarType::Int64),
+                        element_type: Box::new(ScalarType::UInt64),
                         custom_id: None,
                     }
                     .nullable(false),
