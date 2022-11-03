@@ -3185,6 +3185,28 @@ pub fn plan_drop_item(
             object_type,
         );
     }
+
+    // We currently prohibit dropping subsources entirely and instead rely on
+    // dropping their primary sources.
+    if item_type == CatalogItemType::Source {
+        if let Some(source_id) = catalog_entry
+            .used_by()
+            .iter()
+            .find(|id| scx.catalog.get_item(id).item_type() == CatalogItemType::Source)
+        {
+            return Err(PlanError::DropSubsource {
+                subsource: scx
+                    .catalog
+                    .resolve_full_name(catalog_entry.name())
+                    .to_string(),
+                source: scx
+                    .catalog
+                    .resolve_full_name(scx.catalog.get_item(source_id).name())
+                    .to_string(),
+            });
+        }
+    }
+
     if !cascade {
         let entry_id = catalog_entry.id();
         // When this item gets dropped it will also drop its subsources, so we need to check the
