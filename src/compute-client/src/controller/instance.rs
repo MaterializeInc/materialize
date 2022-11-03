@@ -750,7 +750,14 @@ where
             let last_upper = collection.replica_write_frontiers.remove(&replica_id);
 
             if let Some(frontier) = last_upper {
-                dropped_collection_ids.push(id.clone());
+                // if there are other replicas, let them decide the fate of the collection metadata;
+                // if this replica was the last one, though, then get rid of the collection metadata
+                // only if we reached the empty frontier
+                if collection.replica_write_frontiers.len() > 0
+                    || collection.read_frontier().to_owned() == Antichain::new()
+                {
+                    dropped_collection_ids.push(id.clone());
+                }
 
                 // Update read holds on storage dependencies.
                 for storage_id in &collection.storage_dependencies {
