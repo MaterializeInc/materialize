@@ -303,7 +303,8 @@ where
         let mut done = false;
         while !done {
             while let Ok(leased_part) = consumed_part_rx.try_recv() {
-                subscription.return_leased_part(leased_part.into());
+                subscription
+                    .return_leased_part(subscription.leased_part_from_exchangeable(leased_part));
             }
 
             let (parts, progress) = subscription.next().await;
@@ -320,7 +321,8 @@ where
         // This keeps the `ReadHandle` alive until we have confirmed each lease as read.
         mz_ore::task::spawn(|| "LeaseReturner", async move {
             while let Some(leased_part) = consumed_part_rx.recv().await {
-                subscription.return_leased_part(leased_part.into());
+                subscription
+                    .return_leased_part(subscription.leased_part_from_exchangeable(leased_part));
             }
         });
     });
@@ -424,8 +426,9 @@ where
                 let mut consumed_part_session = consumed_part_output_handle.session(&cap);
 
                 for (_idx, part) in buffer.drain(..) {
-                    let (consumed_part, fetched_part) =
-                        fetcher.fetch_leased_part(part.into()).await;
+                    let (consumed_part, fetched_part) = fetcher
+                        .fetch_leased_part(fetcher.leased_part_from_exchangeable(part))
+                        .await;
                     let fetched_part = fetched_part
                         .expect("shard_id generated for sources must match across all workers");
                     // SUBTLE: This operator yields back to timely whenever an await returns a
