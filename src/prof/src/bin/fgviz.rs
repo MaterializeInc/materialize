@@ -20,7 +20,7 @@ fn main() {
             let bytes = std::fs::read(path).expect("Failed to read supplied file");
             String::from_utf8(bytes).expect("Supplied file was not utf-8")
         })
-        .unwrap_or("".into());
+        .unwrap_or_else(|| "".into());
     let rendered = FlamegraphTemplate {
         version: &bi.human_version(),
         title: "Flamegraph Visualizer",
