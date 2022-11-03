@@ -176,6 +176,8 @@ function parseMzfg(input) {
             } else if (ch == '\\') {
                 escaping = true;
             } else if (ch == ';') {
+                // we split on un-escaped `;`, so we add the piece here
+                // and reset the buffer
                 path.push(name_buf);
                 name_buf = "";
             } else {
