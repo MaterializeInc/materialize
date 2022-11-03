@@ -241,6 +241,8 @@ pub struct PersistConfig {
     /// Length of time after a reader's last operation after which the reader
     /// may be expired.
     pub reader_lease_duration: Duration,
+    /// Length of time between critical handles' calls to downgrade since
+    pub critical_downgrade_interval: Duration,
 }
 
 // Tuning inputs:
@@ -306,6 +308,7 @@ impl PersistConfig {
             consensus_connection_pool_max_size: 50,
             writer_lease_duration: 60 * Duration::from_secs(60),
             reader_lease_duration: Self::DEFAULT_READ_LEASE_DURATION,
+            critical_downgrade_interval: Duration::from_secs(30),
         }
     }
 }
@@ -494,17 +497,17 @@ impl PersistClient {
     /// return a handle with its `since` frontier set to the initial value of
     /// `Antichain::from_elem(T::minimum())`.
     #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
-    pub async fn open_critical_since<K, V, T, D, P>(
+    pub async fn open_critical_since<K, V, T, D, O>(
         &self,
         shard_id: ShardId,
         reader_id: CriticalReaderId,
-    ) -> Result<SinceHandle<K, V, T, D, P>, InvalidUsage<T>>
+    ) -> Result<SinceHandle<K, V, T, D, O>, InvalidUsage<T>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
-        P: Clone + Codec64 + Default,
+        O: Clone + Codec64 + Default,
     {
         let state_versions = StateVersions::new(
             self.cfg.clone(),
@@ -522,14 +525,14 @@ impl PersistClient {
         let gc = GarbageCollector::new(machine.clone());
 
         let state = machine
-            .register_critical_reader(&reader_id, &P::default())
+            .register_critical_reader(&reader_id, &O::default())
             .await;
         let handle = SinceHandle::new(
             machine,
             gc,
             reader_id,
             state.since,
-            Codec64::decode(state.token),
+            Codec64::decode(state.opaque.0),
         );
 
         Ok(handle)

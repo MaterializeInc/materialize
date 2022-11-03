@@ -51,9 +51,12 @@ pub struct LeasedReaderState<T> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Opaque(pub [u8; 8]);
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct CriticalReaderState<T> {
     pub since: Antichain<T>,
-    pub token: [u8; 8],
+    pub opaque: Opaque,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -211,14 +214,14 @@ where
     pub fn register_critical_reader(
         &mut self,
         reader_id: &CriticalReaderId,
-        token: [u8; 8],
+        opaque: Opaque,
     ) -> ControlFlow<Infallible, CriticalReaderState<T>> {
         let state = match self.critical_readers.get(reader_id) {
             Some(state) => state.clone(),
             None => {
                 let state = CriticalReaderState {
                     since: self.trace.since().clone(),
-                    token,
+                    opaque,
                 };
                 self.critical_readers
                     .insert(reader_id.clone(), state.clone());
@@ -369,22 +372,24 @@ where
     pub fn compare_and_downgrade_since(
         &mut self,
         reader_id: &CriticalReaderId,
-        // WIP: newtype for [u8; 8] could be nice for readability here
-        (expected_token, expected_since): ([u8; 8], &Antichain<T>),
-        (new_token, new_since): ([u8; 8], &Antichain<T>),
-    ) -> ControlFlow<Infallible, Result<([u8; 8], Since<T>), ([u8; 8], Since<T>)>> {
+        (expected_opaque, expected_since): (Opaque, &Antichain<T>),
+        (new_opaque, new_since): (Opaque, &Antichain<T>),
+    ) -> ControlFlow<Infallible, Result<(Opaque, Since<T>), (Opaque, Since<T>)>> {
         let reader_state = self.critical_reader(reader_id);
 
-        if &reader_state.since == expected_since && reader_state.token == expected_token {
+        if &reader_state.since == expected_since && reader_state.opaque == expected_opaque {
             assert!(PartialOrder::less_than(expected_since, new_since));
             reader_state.since = new_since.clone();
-            reader_state.token = new_token;
+            reader_state.opaque = new_opaque.clone();
             self.update_since();
-            Continue(Ok((new_token.clone(), Since(new_since.clone()))))
+            Continue(Ok((new_opaque, Since(new_since.clone()))))
         } else {
             // No-op, but still commit the state change so that this gets
             // linearized.
-            Continue(Err((reader_state.token, Since(reader_state.since.clone()))))
+            Continue(Err((
+                reader_state.opaque.clone(),
+                Since(reader_state.since.clone()),
+            )))
         }
     }
 
@@ -502,14 +507,9 @@ where
     fn critical_reader(&mut self, id: &CriticalReaderId) -> &mut CriticalReaderState<T> {
         self.critical_readers
             .get_mut(id)
-            // The only (tm) ways to hit this are (1) inventing a
-            // CriticalReaderId instead of getting it from Register or (2) if a
-            // lease expired. (1) is a gross mis-use and (2) may happen if a
-            // reader did not get to heartbeat for a long time. Readers are
-            // expected to heartbeat/downgrade their since regularly.
             .unwrap_or_else(|| {
                 panic!(
-                    "LeasedReaderId({}) was expired due to inactivity. Did the machine go to sleep?",
+                    "Unknown CriticalReaderId({}). It was either never registered, or has been manually expired.",
                     id
                 )
             })

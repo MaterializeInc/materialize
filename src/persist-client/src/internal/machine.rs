@@ -38,8 +38,8 @@ use crate::internal::metrics::{
 };
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
-    CriticalReaderState, HollowBatch, LeasedReaderState, Since, State, StateCollections, Upper,
-    WriterState,
+    CriticalReaderState, HollowBatch, LeasedReaderState, Opaque, Since, State, StateCollections,
+    Upper, WriterState,
 };
 use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::StateVersions;
@@ -186,15 +186,15 @@ where
         (shard_upper, read_cap)
     }
 
-    pub async fn register_critical_reader<P: Codec64 + Default>(
+    pub async fn register_critical_reader<O: Codec64 + Default>(
         &mut self,
         reader_id: &CriticalReaderId,
-        token: &P,
+        opaque: &O,
     ) -> CriticalReaderState<T> {
         let metrics = Arc::clone(&self.metrics);
         let (_seqno, state, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, state| {
-                state.register_critical_reader(reader_id, Codec64::encode(token))
+                state.register_critical_reader(reader_id, Opaque(Codec64::encode(opaque)))
             })
             .await;
         state
@@ -364,12 +364,12 @@ where
         .await
     }
 
-    pub async fn compare_and_downgrade_since<P: Codec64>(
+    pub async fn compare_and_downgrade_since<O: Codec64>(
         &mut self,
         reader_id: &CriticalReaderId,
-        (expected_token, expected_since): (&P, &Antichain<T>),
-        (new_token, new_since): (&P, &Antichain<T>),
-    ) -> (Result<(P, Since<T>), (P, Since<T>)>, RoutineMaintenance) {
+        (expected_opaque, expected_since): (&O, &Antichain<T>),
+        (new_opaque, new_since): (&O, &Antichain<T>),
+    ) -> (Result<(O, Since<T>), (O, Since<T>)>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.metrics);
         let (_seqno, res, maintenance) = self
             .apply_unbatched_idempotent_cmd(
@@ -377,16 +377,16 @@ where
                 |_seqno, state| {
                     state.compare_and_downgrade_since(
                         reader_id,
-                        (Codec64::encode(expected_token), expected_since),
-                        (Codec64::encode(new_token), new_since),
+                        (Opaque(Codec64::encode(expected_opaque)), expected_since),
+                        (Opaque(Codec64::encode(new_opaque)), new_since),
                     )
                 },
             )
             .await;
 
         match res {
-            Ok((token, since)) => (Ok((Codec64::decode(token), since)), maintenance),
-            Err((token, since)) => (Err((Codec64::decode(token), since)), maintenance),
+            Ok((token, since)) => (Ok((Codec64::decode(token.0), since)), maintenance),
+            Err((token, since)) => (Err((Codec64::decode(token.0), since)), maintenance),
         }
     }
 

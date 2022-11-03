@@ -458,13 +458,13 @@ impl Transactor {
                 self.since.since().elements(),
                 new_since.elements()
             );
-            let expected_token = self.since.token().clone();
+            let expected_opaque = self.since.opaque().clone();
             let expected_since = self.since.since().clone();
             let res = self
                 .since
                 .maybe_compare_and_downgrade_since(
-                    (&expected_token, &expected_since),
-                    (&expected_token, &new_since),
+                    (&expected_opaque, &expected_since),
+                    (&expected_opaque, &new_since),
                 )
                 .await;
             match res {
@@ -472,7 +472,7 @@ impl Transactor {
                     // Success! Fall through and let the while loop condition
                     // exit for us.
                 }
-                Some(Err((actual_token, actual_since))) => {
+                Some(Err((actual_opaque, actual_since))) => {
                     // We raced with another maelstrom node. The since handle
                     // has updated it's internal since with the real one. Fall
                     // through and let the while loop condition handle whether
@@ -482,7 +482,7 @@ impl Transactor {
                         "raced with another maelstrom node expected=({}, {:?}) actual=({}, {:?})",
                         0,
                         expected_since.elements(),
-                        actual_token,
+                        actual_opaque,
                         &actual_since.0.elements()
                     );
                 }

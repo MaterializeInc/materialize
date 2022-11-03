@@ -28,10 +28,11 @@ use crate::critical::CriticalReaderId;
 use crate::error::CodecMismatch;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::state::{
-    CriticalReaderState, HollowBatch, HollowBatchPart, LeasedReaderState, ProtoCriticalReaderState,
-    ProtoHollowBatch, ProtoHollowBatchPart, ProtoLeasedReaderState, ProtoStateDiff,
-    ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoStateRollup, ProtoTrace,
-    ProtoU64Antichain, ProtoU64Description, ProtoWriterState, State, StateCollections, WriterState,
+    CriticalReaderState, HollowBatch, HollowBatchPart, LeasedReaderState, Opaque,
+    ProtoCriticalReaderState, ProtoHollowBatch, ProtoHollowBatchPart, ProtoLeasedReaderState,
+    ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs,
+    ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoWriterState, State,
+    StateCollections, WriterState,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, StateDiff, StateFieldDiff, StateFieldValDiff,
@@ -678,7 +679,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoCriticalReaderState> for CriticalRead
     fn into_proto(&self) -> ProtoCriticalReaderState {
         ProtoCriticalReaderState {
             since: Some(self.since.into_proto()),
-            token: Vec::from(self.token),
+            opaque: Vec::from(self.opaque.0),
         }
     }
 
@@ -687,8 +688,10 @@ impl<T: Timestamp + Codec64> RustType<ProtoCriticalReaderState> for CriticalRead
             since: proto
                 .since
                 .into_rust_if_some("ProtoCriticalReaderState::since")?,
-            token: <[u8; 8]>::try_from(proto.token.borrow())
-                .expect("internal error: could not decode CriticalReaderState token"),
+            opaque: Opaque(
+                <[u8; 8]>::try_from(proto.opaque.borrow())
+                    .expect("internal error: could not decode CriticalReaderState token"),
+            ),
         })
     }
 }

@@ -10,9 +10,11 @@
 //! Since capabilities and handles
 
 use std::fmt::Debug;
+use std::time::Duration;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use mz_ore::now::EpochMillis;
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
@@ -84,52 +86,54 @@ impl CriticalReaderId {
 ///
 /// **IMPORTANT**: The above means that if a SinceHandle is registered and then
 /// lost, the shard's since will be permanently "stuck", forever preventing
-/// logical compaction. Users are advised to durably record the intended
-/// [CriticalReaderId] _before_ registering a SinceHandle (in case the process
-/// crashes at the wrong time).
+/// logical compaction. Users are advised to durably record (preferably in code)
+/// the intended [CriticalReaderId] _before_ registering a SinceHandle (in case
+/// the process crashes at the wrong time).
 ///
-/// All async methods on ReadHandle retry for as long as they are able, but the
+/// All async methods on SinceHandle retry for as long as they are able, but the
 /// returned [std::future::Future]s implement "cancel on drop" semantics. This
 /// means that callers can add a timeout using [tokio::time::timeout] or
 /// [tokio::time::timeout_at].
 #[derive(Debug)]
-pub struct SinceHandle<K, V, T, D, P>
+pub struct SinceHandle<K, V, T, D, O>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
-    P: Codec64 + Default,
+    O: Codec64 + Default,
 {
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) gc: GarbageCollector<K, V, T, D>,
     pub(crate) reader_id: CriticalReaderId,
 
     since: Antichain<T>,
-    token: P,
+    opaque: O,
+    last_downgrade_since: EpochMillis,
 }
 
-impl<K, V, T, D, P> SinceHandle<K, V, T, D, P>
+impl<K, V, T, D, O> SinceHandle<K, V, T, D, O>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
-    P: Clone + Codec64 + Default,
+    O: Clone + Codec64 + Default,
 {
     pub(crate) fn new(
         machine: Machine<K, V, T, D>,
         gc: GarbageCollector<K, V, T, D>,
         reader_id: CriticalReaderId,
         since: Antichain<T>,
-        token: P,
+        opaque: O,
     ) -> Self {
         SinceHandle {
             machine,
             gc,
             reader_id,
             since,
-            token,
+            opaque,
+            last_downgrade_since: EpochMillis::default(),
         }
     }
 
@@ -140,62 +144,130 @@ where
         &self.since
     }
 
-    /// This handle's `token`.
-    pub fn token(&self) -> &P {
-        &self.token
+    /// This handle's `opaque`.
+    pub fn opaque(&self) -> &O {
+        &self.opaque
     }
 
-    /// WIP: update
-    /// Forwards the since capability of this handle to `new_since` iff the
-    /// current capability of this handle's [CriticalReaderId] is
-    /// `expected_since`.
+    /// Attempts to forward the since capability of this handle to `new_since` iff
+    /// the current capability and opaque value of this handle's [CriticalReaderId]
+    /// are `expected`, and [Self::maybe_compare_and_downgrade_since] chooses to
+    /// perform the downgrade.
     ///
-    /// This may trigger (asynchronous) compaction and consolidation in the
-    /// system. A `new_since` of the empty antichain "finishes" this shard,
-    /// promising that no more data will ever be read by this handle.
+    /// Users are expected to call this function frequently, but should not expect
+    /// `since` to be downgraded with each call -- this function is free to no-op
+    /// requests to perform rate-limiting for downstream services. A `None` is returned
+    /// for no-op requests, and `Some` is returned when downgrading since.
     ///
     /// Because SinceHandles are expected to live beyond process lifetimes, it's
     /// possible for the same [CriticalReaderId] to be used concurrently from
     /// multiple processes (either intentionally or something like a zombie
-    /// process). To discover this, [Self::compare_and_downgrade_since] has
-    /// "compare and set" semantics. If `expected_since` doesn't match, the
-    /// actual current value is returned and the caller must decide how to
-    /// handle it (likely a retry or a `halt!`).
+    /// process). To discover this, [Self::maybe_compare_and_downgrade_since] has
+    /// "compare and set" semantics. If `expected` does not match, either on the
+    /// opaque value or the `since`, the actual current value is returned and the
+    /// caller must decide how to handle it (likely a retry or a `halt!`).
     ///
-    /// WIP: Figure out how to get rid of the Indeterminate. It's subtle but
-    /// doable: an easier version of an analogous issue with compare_and_append
-    /// #12797.
+    /// If desired, users may use the opaque value to fence out concurrent access
+    /// of other [SinceHandle]s for a given [CriticalReaderId]. e.g.:
+    ///
+    /// ```rust,no_run
+    /// use timely::progress::Antichain;
+    /// use mz_persist_client::critical::SinceHandle;
+    /// use mz_persist_types::Codec64;
+    ///
+    /// let fencing_token: u64 = unimplemented!();
+    /// let mut since: SinceHandle<String, String, u64, i64, u64> = unimplemented!();
+    ///
+    /// let new_since: Antichain<u64> = unimplemented!();
+    /// let res = since
+    ///     .maybe_compare_and_downgrade_since(
+    ///         (&since.opaque().clone(), &since.since().clone()),
+    ///         (&fencing_token, &new_since),
+    ///     )
+    ///     .await;
+    ///
+    ///  match res {
+    ///     Some(Ok(_)) => {
+    ///         // we downgraded since!
+    ///     }
+    ///     Some(Err((actual_opaque, actual_since))) => {
+    ///         let actual_fencing_token = Codec64::decode(&actual_opaque);
+    ///         // compare `fencing_token` and `actual_fencing_token`, etc
+    ///     }
+    ///     None => {
+    ///         // no problem, we'll try again later
+    ///     }
+    ///  }
+    /// ```
+    ///
+    /// If fencing is not required and it's acceptable to have concurrent [SinceHandle] for
+    /// a given [CriticalReaderId], the opaque value can be given a default value and ignored:
+    ///
+    /// ```rust,no_run
+    /// use timely::progress::Antichain;
+    /// use mz_persist_client::critical::SinceHandle;
+    /// use mz_persist_types::Codec64;
+    ///
+    /// let mut since: SinceHandle<String, String, u64, i64, u64> = unimplemented!();
+    /// let new_since: Antichain<u64> = unimplemented!();
+    /// let res = since
+    ///     .maybe_compare_and_downgrade_since(
+    ///         (&since.opaque().clone(), &since.since().clone()),
+    ///         (&since.opaque().clone(), &new_since),
+    ///     )
+    ///     .await;
+    ///
+    ///  match res {
+    ///     Some(Ok(_)) => {
+    ///         // we downgraded since!
+    ///     }
+    ///     Some(Err((_actual_opaque, actual_since))) => {
+    ///         // we contended with another handle on `since`. this might be OK!
+    ///     }
+    ///     None => {
+    ///         // no problem, we'll try again later
+    ///     }
+    ///  }
+    /// ```
+    ///
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn maybe_compare_and_downgrade_since(
         &mut self,
-        expected: (&P, &Antichain<T>),
-        new: (&P, &Antichain<T>),
-    ) -> Option<Result<(P, Since<T>), (P, Since<T>)>> {
-        self.compare_and_downgrade_since(expected, new).await
+        expected: (&O, &Antichain<T>),
+        new: (&O, &Antichain<T>),
+    ) -> Option<Result<(O, Since<T>), (O, Since<T>)>> {
+        let elapsed_since_last_downgrade = Duration::from_millis(
+            (self.machine.cfg.now)().saturating_sub(self.last_downgrade_since),
+        );
+        if elapsed_since_last_downgrade >= self.machine.cfg.critical_downgrade_interval {
+            Some(self.compare_and_downgrade_since(expected, new).await)
+        } else {
+            None
+        }
     }
 
     async fn compare_and_downgrade_since(
         &mut self,
-        expected: (&P, &Antichain<T>),
-        new: (&P, &Antichain<T>),
-    ) -> Option<Result<(P, Since<T>), (P, Since<T>)>> {
+        expected: (&O, &Antichain<T>),
+        new: (&O, &Antichain<T>),
+    ) -> Result<(O, Since<T>), (O, Since<T>)> {
         let (res, maintenance) = self
             .machine
             .compare_and_downgrade_since(&self.reader_id, expected, new)
             .await;
         maintenance.start_performing(&self.machine, &self.gc);
-        Some(match res {
-            Ok((new_token, new_since)) => {
-                self.token = new_token.clone();
+        match res {
+            Ok((new_opaque, new_since)) => {
+                self.opaque = new_opaque.clone();
                 self.since = new_since.clone().0;
-                Ok((new_token, new_since))
+                Ok((new_opaque, new_since))
             }
-            Err((token, since)) => {
-                self.token = token.clone();
-                self.since = since.clone().0;
-                Err((token, since))
+            Err((actual_opaque, actual_since)) => {
+                self.opaque = actual_opaque.clone();
+                self.since = actual_since.clone().0;
+                Err((actual_opaque, actual_since))
             }
-        })
+        }
     }
 
     /// Politely expires this reader, releasing its since capability.

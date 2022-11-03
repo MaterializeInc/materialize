@@ -38,16 +38,22 @@ compare-and-downgrade-since expect_token=100 expect_since=(2) token=0 since=(4) 
 ----
 error: mismatch: token=0, since=Since(Antichain { elements: [2] })
 
+# Neither expected since nor token match
+compare-and-downgrade-since expect_token=100 expect_since=(3) token=0 since=(4) reader_id=c00000000-0000-0000-0000-000000000000
+----
+error: mismatch: token=0, since=Since(Antichain { elements: [2] })
+
 # Create a second reader. This gets the current since for a capability.
 register-critical-reader reader_id=c11111111-1111-1111-1111-111111111111
 ----
-v6 [2]
+v7 [2]
 
-# Shard since doesn't change until the meet (min) of all handle sinces changes.
+# Downgrade since and change the reader's fencing value
 compare-and-downgrade-since expect_token=0 expect_since=(2) token=11 since=(3) reader_id=c11111111-1111-1111-1111-111111111111
 ----
-v7 11 [3]
+v8 11 [3]
 
+# Shard since doesn't change until the meet (min) of all handle sinces changes.
 shard-desc
 ----
 since=[2] upper=[0]
@@ -56,7 +62,7 @@ since=[2] upper=[0]
 # handle's since capability, not the shard's global since
 compare-and-downgrade-since expect_token=0 expect_since=(2) token=0 since=(5) reader_id=c00000000-0000-0000-0000-000000000000
 ----
-v8 0 [5]
+v9 0 [5]
 
 shard-desc
 ----
@@ -65,7 +71,7 @@ since=[3] upper=[0]
 # Shard since unaffected by handle with since > shard since expiring.
 expire-critical-reader reader_id=c00000000-0000-0000-0000-000000000000
 ----
-v9 ok
+v10 ok
 
 shard-desc
 ----
@@ -74,12 +80,12 @@ since=[3] upper=[0]
 # Create a third handle. It gets the current since of 3.
 register-critical-reader reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v10 [3]
+v11 [3]
 
 # Shard since doesn't change until the meet (min) of all handle sinces changes.
 compare-and-downgrade-since expect_token=0 expect_since=(3) token=22 since=(10) reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v11 22 [10]
+v12 22 [10]
 
 shard-desc
 ----
@@ -91,7 +97,7 @@ since=[3] upper=[0]
 # Switch this assertion back when we re-enable this.
 expire-critical-reader reader_id=c11111111-1111-1111-1111-111111111111
 ----
-v12 ok
+v13 ok
 
 shard-desc
 ----
@@ -103,7 +109,7 @@ since=[3] upper=[0]
 # Switch this assertion back when we re-enable this.
 expire-critical-reader reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v13 ok
+v14 ok
 
 shard-desc
 ----
