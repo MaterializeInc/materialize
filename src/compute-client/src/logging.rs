@@ -729,7 +729,7 @@ impl LogVariant {
                 .with_column("id", ScalarType::Uuid.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("index_id", ScalarType::String.nullable(false))
-                .with_column("time", ScalarType::Int64.nullable(false))
+                .with_column("time", ScalarType::MzTimestamp.nullable(false))
                 .with_key(vec![0, 1]),
 
             LogVariant::Compute(ComputeLog::PeekDuration) => RelationDesc::empty()
