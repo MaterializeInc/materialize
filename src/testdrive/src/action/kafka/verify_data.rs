@@ -226,7 +226,7 @@ pub async fn run_verify_data(
             }
 
             if sort_messages {
-                actual_messages.sort_by_key(|r| format!("{:?}", r.value));
+                actual_messages.sort_by_key(|r| format!("{:?}", r));
             }
 
             if debug_print_only {

@@ -764,9 +764,34 @@ or Protobuf.
 
 #### `kafka-verify-data format=avro [sink=... | topic=...] [sort-messages=true] [partial-search=usize]`
 
-Obtains the data from the specified `sink` or `topic` and compares it to the expected data recorded in the test. The comparison algorithm is sensitive to the order in which data arrives, so `sort-messages=true` can be used along with manually pre-sorting the expected data in the test.
+Obtains the data from the specified `sink` or `topic` and compares it to the expected data recorded in the test.
 
-If `partial-search=usize` is specified, up to `partial-search` records will be read from the given topic and compared to the provided records. The records do not have to match starting at the beginning of the sink but once one record matches, the following must all match.  There are permitted to be records remaining in the topic after the matching is complete.  Note that if the topic is not required to have `partial-search` elements in it but there will be an attempt to read up to this number with a blocking read.
+The comparison algorithm is sensitive to the order in which data arrives, so `sort-messages=true` can be used
+along with manually pre-sorting the expected data in the test. The rows in the expected data section need to
+be ordered according to the following rules:
+ - earlier timestamps sort first
+ - deletes sort before inserts
+ - as all items are sorted as strings, "10" sorts before "2"
+
+It is possible to call `$ kafka-verify` multiple times on the same topic in case the test needs to check
+that the data arrives in some partial order. For example, to make sure that all of timestamp `1` arrived
+before all of timestamp `2`:
+
+```
+$ kafka-verify ... sort-messages=true
+1 {"a":"1"}
+1 {"b":"1"}
+
+$ kafka-verify ... sort-messages=true
+2 {"c":"1"}
+2 {"d":"1"}
+```
+
+If `partial-search=usize` is specified, up to `partial-search` records will be read from the given topic and
+compared to the provided records. The records do not have to match starting at the beginning of the sink but
+once one record matches, the following must all match.  There are permitted to be records remaining in the
+topic after the matching is complete.  Note that if the topic is not required to have `partial-search`
+elements in it but there will be an attempt to read up to this number with a blocking read.
 
 #### `kafka-verify-commit consumer-group-id=... topic=... partition=...
 
