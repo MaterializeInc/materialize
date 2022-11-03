@@ -218,8 +218,8 @@ pub type ProcessId = i64;
 #[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize)]
 /// Configuration sent to new compute instances.
 pub struct InstanceConfig {
-    /// Optionally, request the installation of logging sources.
-    pub logging: Option<LoggingConfig>,
+    /// Configuration of logging sources.
+    pub logging: LoggingConfig,
     /// Max size in bytes of any result.
     pub max_result_size: u32,
 }
@@ -238,14 +238,16 @@ pub struct CommunicationConfig {
 impl RustType<ProtoInstanceConfig> for InstanceConfig {
     fn into_proto(&self) -> ProtoInstanceConfig {
         ProtoInstanceConfig {
-            logging: self.logging.into_proto(),
+            logging: Some(self.logging.into_proto()),
             max_result_size: self.max_result_size,
         }
     }
 
     fn from_proto(proto: ProtoInstanceConfig) -> Result<Self, TryFromProtoError> {
         Ok(Self {
-            logging: proto.logging.into_rust()?,
+            logging: proto
+                .logging
+                .into_rust_if_some("ProtoInstanceConfig::logging")?,
             max_result_size: proto.max_result_size,
         })
     }

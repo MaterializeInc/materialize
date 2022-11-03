@@ -16,7 +16,7 @@ import "proto/src/proto.proto";
 
 package mz_compute_client.logging;
 
-message ProtoActiveLog {
+message ProtoIndexLog {
     ProtoLogVariant key = 1;
     mz_repr.global_id.ProtoGlobalId value = 2;
 }
@@ -70,7 +70,8 @@ message ProtoLogVariant {
 
 message ProtoLoggingConfig {
     mz_proto.ProtoU128 interval_ns = 1;
-    repeated ProtoActiveLog active_logs = 2;
+    bool enable_logging = 2;
     bool log_logging = 3;
-    repeated ProtoSinkLog sink_logs = 4;
+    repeated ProtoIndexLog index_logs = 4;
+    repeated ProtoSinkLog sink_logs = 5;
 }
