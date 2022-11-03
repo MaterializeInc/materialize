@@ -51,7 +51,7 @@ pub struct LeasedReaderState<T> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Opaque(pub [u8; 8]);
+pub struct Opaque(pub [u8; 8]);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CriticalReaderState<T> {
