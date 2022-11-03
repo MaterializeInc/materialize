@@ -154,7 +154,7 @@ impl SinkHandle {
                             }
                         }
                     }
-                    _ = sleep(Duration::from_secs(1)) => {}
+                    _ = sleep(Duration::from_secs(60)) => {}
                 };
                 read_handle.maybe_downgrade_since(&downgrade_to).await
             }
