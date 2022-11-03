@@ -110,6 +110,7 @@ pub fn serve(
                 persist_clients,
                 sink_tokens: HashMap::new(),
                 sink_write_frontiers: HashMap::new(),
+                sink_handles: HashMap::new(),
             },
         }
         .run()

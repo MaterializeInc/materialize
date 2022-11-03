@@ -12,25 +12,30 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crossbeam_channel::TryRecvError;
+use differential_dataflow::lattice::Lattice;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::ShardId;
+use mz_persist_client::{PersistLocation, ShardId};
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp as _;
 use timely::worker::Worker as TimelyWorker;
-use tokio::sync::{mpsc, Mutex};
+
+use tokio::sync::{mpsc, watch, Mutex};
+use tokio::task::JoinHandle;
+use tokio::time::{sleep, Duration};
 
 use mz_ore::halt;
 use mz_ore::now::NowFn;
-use mz_repr::{GlobalId, Timestamp};
+use mz_persist_client::read::ReadHandle;
+use mz_repr::{Diff, GlobalId, Timestamp};
 
 use crate::controller::CollectionMetadata;
 use crate::protocol::client::{StorageCommand, StorageResponse};
 use crate::sink::SinkBaseMetrics;
 use crate::types::connections::ConnectionContext;
 use crate::types::sinks::StorageSinkDesc;
-use crate::types::sources::IngestionDescription;
+use crate::types::sources::{IngestionDescription, SourceData};
 
 use crate::decode::metrics::DecodeMetrics;
 use crate::source::metrics::SourceBaseMetrics;
@@ -93,6 +98,84 @@ pub struct StorageState {
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
     pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
+    /// See: [SinkHandle]
+    pub sink_handles: HashMap<GlobalId, SinkHandle>,
+}
+
+/// This maintains an additional read hold on the source data for a sink, alongside
+/// the controller's hold and the handle used to read the shard internally.
+/// This is useful because environmentd's hold might expire, and the handle we use
+/// to read advances ahead of what we've successfully committed.
+/// In theory this could be stored alongside the other sink data, but this isn't
+/// intended to be a long term solution; either this should become a "critical" handle
+/// or environmentd will learn to hold its handles across restarts and this won't be
+/// needed.
+pub struct SinkHandle {
+    downgrade_tx: watch::Sender<Antichain<Timestamp>>,
+    _handle: JoinHandle<()>,
+}
+
+impl SinkHandle {
+    /// A new handle.
+    pub fn new(
+        persist_location: PersistLocation,
+        shard_id: ShardId,
+        persist_clients: Arc<Mutex<PersistClientCache>>,
+    ) -> SinkHandle {
+        let (downgrade_tx, mut rx) = watch::channel(Antichain::from_elem(Timestamp::minimum()));
+
+        let _handle = mz_ore::task::spawn(|| "Sink handle advancement", async move {
+            let client = persist_clients
+                .lock()
+                .await
+                .open(persist_location)
+                .await
+                .expect("opening persist client");
+
+            let mut read_handle: ReadHandle<SourceData, (), Timestamp, Diff> = client
+                .open_reader(shard_id)
+                .await
+                .expect("opening reader for shard");
+
+            let mut downgrade_to = read_handle.since().clone();
+            'downgrading: loop {
+                // NB: all branches of the select are cancellation safe.
+                tokio::select! {
+                    result = rx.changed() => {
+                        match result {
+                            Err(_) => {
+                                // The sending end of this channel has been dropped, which means
+                                // we're no longer interested in this handle.
+                                break 'downgrading;
+                            }
+                            Ok(()) => {
+                                // Join to avoid attempting to rewind the handle
+                                downgrade_to.join_assign(&rx.borrow_and_update());
+                            }
+                        }
+                    }
+                    _ = sleep(Duration::from_secs(60)) => {}
+                };
+                read_handle.maybe_downgrade_since(&downgrade_to).await
+            }
+
+            // Proactively drop our read hold.
+            read_handle.expire().await;
+        });
+
+        SinkHandle {
+            downgrade_tx,
+            _handle,
+        }
+    }
+
+    /// Request a downgrade of the since. This should be called regularly;
+    /// the internal task will debounce.
+    pub fn downgrade_since(&self, to: Antichain<Timestamp>) {
+        self.downgrade_tx
+            .send(to)
+            .expect("sending to downgrade task")
+    }
 }
 
 /// A token that keeps a sink alive.
@@ -208,6 +291,19 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         ))),
                     );
 
+                    self.storage_state.sink_handles.insert(
+                        export.id,
+                        SinkHandle::new(
+                            export
+                                .description
+                                .from_storage_metadata
+                                .persist_location
+                                .clone(),
+                            export.description.from_storage_metadata.data_shard,
+                            Arc::clone(&self.storage_state.persist_clients),
+                        ),
+                    );
+
                     crate::render::build_export_dataflow(
                         self.timely_worker,
                         &mut self.storage_state,
@@ -230,6 +326,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         self.storage_state.reported_frontiers.remove(&id);
                         self.storage_state.source_tokens.remove(&id);
                         self.storage_state.sink_tokens.remove(&id);
+                        self.storage_state.sink_handles.remove(&id);
                     }
                 }
             }
@@ -273,6 +370,15 @@ impl<'w, A: Allocate> Worker<'w, A> {
         }
 
         if !new_uppers.is_empty() {
+            // Sinks maintain a read handle over their input data, in case environmentd is unable
+            // to maintain the global read hold. It's tempting to use environmentd's AllowCompaction
+            // messages to maintain an even more conservative hold... but environmentd only sends
+            // storaged AllowCompaction messages for its own id, not for its dependencies.
+            for (id, upper) in &new_uppers {
+                if let Some(handle) = &self.storage_state.sink_handles.get(id) {
+                    handle.downgrade_since(upper.clone());
+                }
+            }
             self.send_storage_response(response_tx, StorageResponse::FrontierUppers(new_uppers));
         }
     }

@@ -162,6 +162,7 @@ where
                 persist_clients,
                 sink_tokens: HashMap::new(),
                 sink_write_frontiers: HashMap::new(),
+                sink_handles: HashMap::new(),
             };
 
             let (_fake_tx, fake_rx) = crossbeam_channel::bounded(1);
