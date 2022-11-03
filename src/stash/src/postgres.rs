@@ -208,6 +208,7 @@ pub struct Postgres {
     schema: Option<String>,
     tls: MakeTlsConnector,
     client: Option<Client>,
+    is_cockroach: Option<bool>,
     statements: Option<PreparedStatements>,
     epoch: Option<i64>,
     nonce: [u8; 16],
@@ -282,6 +283,7 @@ impl Postgres {
             schema,
             tls: tls.clone(),
             client: None,
+            is_cockroach: None,
             statements: None,
             epoch: None,
             // The call to rand::random here assumes that the seed source is from a secure
@@ -381,8 +383,29 @@ impl Postgres {
                 self.nonce = nonce.try_into().map_err(|_| "could not read nonce")?;
                 row.get(0)
             };
+
+            let version: String = tx.query_one("SELECT version()", &[]).await?.get(0);
+            let is_cockroach = version.starts_with("CockroachDB");
+            if is_cockroach {
+                // The `data`, `sinces`, and `uppers` tables can create and delete
+                // rows at a high frequency, generating many tombstoned rows. If
+                // Cockroach's GC interval is set high (the default is 25h) and
+                // these tombstones accumulate, scanning over the table will take
+                // increasingly and prohibitively long.
+                //
+                // See: https://github.com/MaterializeInc/materialize/issues/15842
+                // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
+                tx.batch_execute("ALTER TABLE data CONFIGURE ZONE USING gc.ttlseconds = 600;")
+                    .await?;
+                tx.batch_execute("ALTER TABLE sinces CONFIGURE ZONE USING gc.ttlseconds = 600;")
+                    .await?;
+                tx.batch_execute("ALTER TABLE uppers CONFIGURE ZONE USING gc.ttlseconds = 600;")
+                    .await?;
+            }
+
             tx.commit().await?;
             self.epoch = Some(epoch);
+            self.is_cockroach = Some(is_cockroach);
         }
 
         self.statements = Some(PreparedStatements::from(&client).await?);
