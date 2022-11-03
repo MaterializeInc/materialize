@@ -961,7 +961,9 @@ pub fn plan_index_exprs<'a>(
     for mut expr in exprs {
         transform_ast::transform_expr(scx, &mut expr)?;
         let expr = plan_expr_or_col_index(ecx, &expr)?;
-        out.push(expr.lower_uncorrelated()?);
+        let mut expr = expr.lower_uncorrelated()?;
+        expr.reduce(&on_desc.typ().column_types);
+        out.push(expr);
     }
     Ok(out)
 }
