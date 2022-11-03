@@ -14,10 +14,17 @@ use mz_prof::http::FlamegraphTemplate;
 
 fn main() {
     let bi = build_info!();
+    let mzfg = std::env::args()
+        .nth(1)
+        .map(|path| {
+            let bytes = std::fs::read(path).expect("Failed to read supplied file");
+            String::from_utf8(bytes).expect("Supplied file was not utf-8")
+        })
+        .unwrap_or("".into());
     let rendered = FlamegraphTemplate {
         version: &bi.human_version(),
         title: "Flamegraph Visualizer",
-        mzfg: "",
+        mzfg: &mzfg,
     }
     .render()
     .expect("template rendering cannot fail");
