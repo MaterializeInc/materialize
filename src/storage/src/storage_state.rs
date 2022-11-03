@@ -324,6 +324,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         self.storage_state.reported_frontiers.remove(&id);
                         self.storage_state.source_tokens.remove(&id);
                         self.storage_state.sink_tokens.remove(&id);
+                        self.storage_state.sink_handles.remove(&id);
                     }
                 }
             }
