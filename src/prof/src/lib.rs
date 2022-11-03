@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_ore::soft_assert_or_log;
 use std::{collections::BTreeMap, ffi::c_void, time::Instant};
 
 pub mod http;
@@ -68,10 +67,11 @@ impl StackProfile {
             for (addr, names) in symbols {
                 if !names.is_empty() {
                     write!(&mut builder, "{addr:#x} ").unwrap();
-                    for name in names {
-                        // The client splits on semicolons, which shouldn't
-                        // be present in symbol names.
-                        soft_assert_or_log!(!name.contains(';'), "Invalid symbol name: {name}");
+                    for mut name in names {
+                        // The client splits on semicolons, so
+                        // we have to escape them.
+                        name = name.replace('\\', "\\\\");
+                        name = name.replace(';', "\\;");
                         write!(&mut builder, "{name};").unwrap();
                     }
                     writeln!(&mut builder, "").unwrap();
