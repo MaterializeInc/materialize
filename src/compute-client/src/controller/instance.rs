@@ -904,7 +904,7 @@ where
     ) -> Result<(), ComputeError> {
         for id in dropped_collection_ids {
             // clean up the given collection if all replica frontiers are empty
-            let collection = self.compute.collection_mut(id)?;
+            let collection = self.compute.collection(id)?;
             let empty = Antichain::new();
             if collection
                 .replica_write_frontiers
