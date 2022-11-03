@@ -66,13 +66,10 @@ class Database:
     """An API to the database under test."""
 
     def __init__(
-        self,
-        port: int,
-        host: str,
-        user: str,
+        self, port: int, host: str, user: str, password: Optional[str] = None
     ) -> None:
         logging.debug(f"Initialize Database with host={host} port={port}, user={user}")
-        self.conn = pg8000.connect(host=host, port=port, user=user)
+        self.conn = pg8000.connect(host=host, port=port, user=user, password=password)
         self.conn.autocommit = True
 
     def mz_version(self) -> str:
