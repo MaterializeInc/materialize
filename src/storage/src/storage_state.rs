@@ -12,6 +12,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crossbeam_channel::TryRecvError;
+use differential_dataflow::lattice::Lattice;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistLocation, ShardId};
 use timely::communication::Allocate;
@@ -148,7 +149,8 @@ impl SinkHandle {
                                 break 'downgrading;
                             }
                             Ok(()) => {
-                                downgrade_to = rx.borrow_and_update().clone();
+                                // Join to avoid attempting to rewind the handle
+                                downgrade_to.join_assign(&rx.borrow_and_update());
                             }
                         }
                     }
