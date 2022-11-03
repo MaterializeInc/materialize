@@ -77,10 +77,10 @@ struct ProfTemplate<'a> {
 
 #[derive(Template)]
 #[template(path = "http/templates/flamegraph.html")]
-struct FlamegraphTemplate<'a> {
-    version: &'a str,
-    title: &'a str,
-    mzfg: &'a str,
+pub struct FlamegraphTemplate<'a> {
+    pub version: &'a str,
+    pub title: &'a str,
+    pub mzfg: &'a str,
 }
 
 #[allow(clippy::drop_copy)]
