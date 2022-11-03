@@ -7,12 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::{cmp, time::Duration};
 
 use async_trait::async_trait;
+use differential_dataflow::lattice::Lattice;
 use futures::future::{self, try_join3, try_join4, try_join_all, BoxFuture};
 use futures::future::{try_join, TryFutureExt};
 use futures::StreamExt;
@@ -21,6 +22,7 @@ use serde_json::Value;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::Antichain;
 use timely::PartialOrder;
+use tokio::sync::mpsc;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Statement, Transaction};
 use tracing::{error, event, warn, Level};
@@ -76,10 +78,57 @@ struct PreparedStatements {
     iter: Statement,
     seal: Statement,
     compact: Statement,
-    consolidate_delete: Statement,
-    consolidate_consolidate: Statement,
-    consolidate_cleanup: Statement,
     update_many: Statement,
+}
+
+impl PreparedStatements {
+    async fn from(client: &Client) -> Result<Self, StashError> {
+        let select_epoch = client.prepare("SELECT epoch, nonce FROM fence").await?;
+        let iter_key = client
+            .prepare(
+                "SELECT value, time, diff FROM data
+             WHERE collection_id = $1 AND key = $2",
+            )
+            .await?;
+        let since = client
+            .prepare("SELECT since FROM sinces WHERE collection_id = $1")
+            .await?;
+        let upper = client
+            .prepare("SELECT upper FROM uppers WHERE collection_id = $1")
+            .await?;
+        let collection = client
+            .prepare("SELECT collection_id FROM collections WHERE name = $1")
+            .await?;
+        let iter = client
+            .prepare(
+                "SELECT key, value, time, diff FROM data
+             WHERE collection_id = $1",
+            )
+            .await?;
+        let seal = client
+            .prepare("UPDATE uppers SET upper = $1 WHERE collection_id = $2")
+            .await?;
+        let compact = client
+            .prepare("UPDATE sinces SET since = $1 WHERE collection_id = $2")
+            .await?;
+        let update_many = client
+            .prepare(
+                "INSERT INTO data (collection_id, key, value, time, diff)
+             VALUES ($1, $2, $3, $4, $5)",
+            )
+            .await?;
+        Ok(PreparedStatements {
+            select_epoch,
+            iter_key,
+            since,
+            upper,
+            collection,
+            iter,
+            seal,
+            compact,
+            update_many,
+        })
+    }
 }
 
 // Track statement execution counts.
@@ -143,18 +192,6 @@ impl<'a> CountedStatements<'a> {
         self.inc("compact");
         &self.stmts.compact
     }
-    fn consolidate_delete(&self) -> &Statement {
-        self.inc("consolidate_delete");
-        &self.stmts.consolidate_delete
-    }
-    fn consolidate_consolidate(&self) -> &Statement {
-        self.inc("consolidate_consolidate");
-        &self.stmts.consolidate_consolidate
-    }
-    fn consolidate_cleanup(&self) -> &Statement {
-        self.inc("consolidate_cleanup");
-        &self.stmts.consolidate_cleanup
-    }
     fn update_many(&self) -> &Statement {
         self.inc("update_many");
         &self.stmts.update_many
@@ -174,6 +211,7 @@ pub struct Postgres {
     statements: Option<PreparedStatements>,
     epoch: Option<i64>,
     nonce: [u8; 16],
+    sinces_tx: mpsc::UnboundedSender<(Id, Antichain<Timestamp>)>,
 }
 
 impl std::fmt::Debug for Postgres {
@@ -236,11 +274,13 @@ impl Postgres {
         schema: Option<String>,
         tls: MakeTlsConnector,
     ) -> Result<Postgres, StashError> {
+        let (sinces_tx, sinces_rx) = mpsc::unbounded_channel();
+
         let mut conn = Postgres {
             readonly,
-            url,
+            url: url.clone(),
             schema,
-            tls,
+            tls: tls.clone(),
             client: None,
             statements: None,
             epoch: None,
@@ -248,6 +288,7 @@ impl Postgres {
             // source that will differ per thread. The docs for ThreadRng say it "is
             // automatically seeded from OsRng", which meets this requirement.
             nonce: rand::random(),
+            sinces_tx,
         };
         // Do the initial connection once here so we don't get stuck in
         // transact's retry loop if the url is bad.
@@ -275,6 +316,8 @@ impl Postgres {
             res?;
             break;
         }
+
+        Consolidator::start(url, tls, sinces_rx);
         Ok(conn)
     }
 
@@ -342,87 +385,8 @@ impl Postgres {
             self.epoch = Some(epoch);
         }
 
-        let select_epoch = client.prepare("SELECT epoch, nonce FROM fence").await?;
-        let iter_key = client
-            .prepare(
-                "SELECT value, time, diff FROM data
-                 WHERE collection_id = $1 AND key = $2",
-            )
-            .await?;
-        let since = client
-            .prepare("SELECT since FROM sinces WHERE collection_id = $1")
-            .await?;
-        let upper = client
-            .prepare("SELECT upper FROM uppers WHERE collection_id = $1")
-            .await?;
-        let collection = client
-            .prepare("SELECT collection_id FROM collections WHERE name = $1")
-            .await?;
-        let iter = client
-            .prepare(
-                "SELECT key, value, time, diff FROM data
-                 WHERE collection_id = $1",
-            )
-            .await?;
-        let seal = client
-            .prepare("UPDATE uppers SET upper = $1 WHERE collection_id = $2")
-            .await?;
-        let compact = client
-            .prepare("UPDATE sinces SET since = $1 WHERE collection_id = $2")
-            .await?;
-        let consolidate_delete = client
-            .prepare("DELETE FROM data WHERE collection_id = $1")
-            .await?;
-        // For all entries before the current since, consolidate diffs into the
-        // current since, ignoring kv pairs whose diffs consolidated to
-        // 0. Note that this does create situations where the current since can
-        // have a +1 and -1 diff for some kv pair if, say, an entry was deleted
-        // (which happens at the current since and results in a diff=-1) and
-        // then consolidation causes the diff=+1 entry that created the item to
-        // get its timestamp bumped to the current since. These will be cleanup
-        // up during the next consolidation after the since has advanced, and
-        // are not a correctness problem. This could possibly be improved if
-        // there were a primary/unique key constraint on (collection, time, key,
-        // value), which would allow the use of INSERT ON CONFLICT. However 1)
-        // Cockroach doesn't currently support jsonb types in unique key
-        // constraints and 2) even if you create a computed (STORED) column on
-        // key and value and make a PK on those, some benchmarks got worse than
-        // this current solution.
-        let consolidate_consolidate = client
-            .prepare(
-                "
-                    INSERT INTO data (collection_id, key, value, time, diff)
-                    SELECT $1, key, value, $2, sum(diff) FROM data
-                    WHERE collection_id = $1 AND time < $2
-                    GROUP BY key, value
-                    HAVING sum(diff) != 0
-                ",
-            )
-            .await?;
-        let consolidate_cleanup = client
-            .prepare("DELETE FROM data WHERE collection_id = $1 AND time < $2")
-            .await?;
-        let update_many = client
-            .prepare(
-                "INSERT INTO data (collection_id, key, value, time, diff)
-                 VALUES ($1, $2, $3, $4, $5)",
-            )
-            .await?;
+        self.statements = Some(PreparedStatements::from(&client).await?);
         self.client = Some(client);
-        self.statements = Some(PreparedStatements {
-            select_epoch,
-            iter_key,
-            since,
-            upper,
-            collection,
-            iter,
-            seal,
-            compact,
-            consolidate_delete,
-            consolidate_consolidate,
-            consolidate_cleanup,
-            update_many,
-        });
         Ok(())
     }
 
@@ -688,35 +652,23 @@ impl Postgres {
         Ok(())
     }
 
-    async fn consolidate_batch_tx_new(
+    /// Returns sinces for the requested collections.
+    async fn sinces_batch_tx(
         stmts: &CountedStatements<'_>,
         tx: &Transaction<'_>,
         collections: &[Id],
-    ) -> Result<(), StashError> {
+    ) -> Result<HashMap<Id, Antichain<Timestamp>>, StashError> {
         let mut futures = Vec::with_capacity(collections.len());
         for collection_id in collections {
             futures.push(async move {
                 let since = Self::since_tx(stmts, tx, *collection_id).await?;
-                match since.into_option() {
-                    Some(since) => {
-                        tx.execute(stmts.consolidate_consolidate(), &[&collection_id, &since])
-                            .await?;
-                        tx.execute(stmts.consolidate_cleanup(), &[&collection_id, &since])
-                            .await?;
-                    }
-                    None => {
-                        tx.execute(stmts.consolidate_delete(), &[&collection_id])
-                            .map_err(StashError::from)
-                            .await?;
-                    }
-                }
                 // Without this type assertion, we get a "type inside `async fn` body must be
                 // known in this context" error.
-                Result::<(), StashError>::Ok(())
+                Result::<_, StashError>::Ok((*collection_id, since))
             });
         }
-        try_join_all(futures).await?;
-        Ok(())
+        let sinces = HashMap::from_iter(try_join_all(futures).await?);
+        Ok(sinces)
     }
 }
 
@@ -889,7 +841,6 @@ impl Stash for Postgres {
                 ((key, value), time, diff)
             })
             .collect::<Vec<_>>();
-
         self.transact(move |stmts, tx| {
             let entries = entries.clone();
             Box::pin(async move {
@@ -978,11 +929,20 @@ impl Stash for Postgres {
 
     async fn consolidate_batch(&mut self, collections: &[Id]) -> Result<(), StashError> {
         let collections = collections.to_vec();
-        self.transact(|stmts, tx| {
-            let collections = collections.clone();
-            Box::pin(async move { Self::consolidate_batch_tx_new(stmts, tx, &collections).await })
-        })
-        .await
+        let sinces = self
+            .transact(|stmts, tx| {
+                let collections = collections.clone();
+                Box::pin(async move { Self::sinces_batch_tx(stmts, tx, &collections).await })
+            })
+            .await?;
+        // On successful transact, send consolidation sinces to the
+        // Consolidator.
+        for (id, since) in sinces {
+            self.sinces_tx
+                .send((id, since))
+                .expect("consolidator unexpectedly gone");
+        }
+        Ok(())
     }
 
     /// Reports the current since frontier.
@@ -1092,6 +1052,221 @@ impl Append for Postgres {
             })
         })
         .await?;
+        Ok(())
+    }
+}
+
+/// The Consolidator receives since advancements on a channel and
+/// transactionally consolidates them. These can safely be done at a later time
+/// in a separate connection that doesn't do leader or epoch checking because 1)
+/// having data that needs to be consolidated is not a correctness error and 2)
+/// the operations here are idempotent (can safely be run concurrently with a
+/// second stash).
+struct Consolidator {
+    url: String,
+    tls: MakeTlsConnector,
+    sinces_rx: mpsc::UnboundedReceiver<(Id, Antichain<Timestamp>)>,
+    consolidations: HashMap<Id, Antichain<Timestamp>>,
+
+    client: Option<Client>,
+    stmt_candidates: Option<Statement>,
+    stmt_consolidate: Option<Statement>,
+    stmt_cleanup: Option<Statement>,
+    stmt_delete: Option<Statement>,
+}
+
+impl Consolidator {
+    pub fn start(
+        url: String,
+        tls: MakeTlsConnector,
+        sinces_rx: mpsc::UnboundedReceiver<(Id, Antichain<Timestamp>)>,
+    ) {
+        let cons = Self {
+            url,
+            tls,
+            sinces_rx,
+            client: None,
+            stmt_candidates: None,
+            stmt_consolidate: None,
+            stmt_cleanup: None,
+            stmt_delete: None,
+            consolidations: HashMap::new(),
+        };
+        cons.spawn();
+    }
+
+    fn spawn(mut self) {
+        // Do consolidation automatically, in a separate connection, and only
+        // for things that might benefit from it (have had a negative diff
+        // applied).
+        mz_ore::task::spawn(|| "stash consolidation", async move {
+            // Wait for the next consolidation request.
+            while let Some((id, ts)) = self.sinces_rx.recv().await {
+                self.insert(id, ts);
+
+                while !self.consolidations.is_empty() {
+                    // Accumulate any pending requests that have come in during
+                    // our work so we can attempt to get the most recent since
+                    // for a quickly advancing collection.
+                    while let Ok((id, ts)) = self.sinces_rx.try_recv() {
+                        self.insert(id, ts);
+                    }
+
+                    // Pick a random key to consolidate.
+                    let id = *self.consolidations.keys().next().expect("must exist");
+                    let ts = self.consolidations.remove(&id).expect("must exist");
+
+                    // Duplicate the loop-retry-connect structure as in the
+                    // transact function by forcing reconnects anytime an error
+                    // occurs.
+                    let retry = Retry::default()
+                        .clamp_backoff(Duration::from_secs(1))
+                        .into_retry_stream();
+                    let mut retry = Box::pin(retry);
+                    let mut attempt: u64 = 0;
+                    loop {
+                        match self.consolidate(id, &ts).await {
+                            Ok(()) => break,
+                            Err(e) => {
+                                attempt += 1;
+                                error!("tokio-postgres stash consolidation error, retry attempt {attempt}: {e}");
+                                self.client = None;
+                                retry.next().await;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // Update the set of pending consolidations to the most recent since
+    // we've received for a collection.
+    fn insert(&mut self, id: Id, ts: Antichain<Timestamp>) {
+        self.consolidations
+            .entry(id)
+            .and_modify(|e| e.join_assign(&ts))
+            .or_insert(ts);
+    }
+
+    #[tracing::instrument(level = "trace", skip(self))]
+    async fn consolidate(
+        &mut self,
+        id: Id,
+        since: &Antichain<Timestamp>,
+    ) -> Result<(), StashError> {
+        if self.client.is_none() {
+            self.connect().await?;
+        }
+        let client = self.client.as_mut().unwrap();
+        let tx = client.transaction().await?;
+        let deleted = match since.borrow().as_option() {
+            Some(since) => {
+                // Only attempt to consolidate things that have been deleted
+                // (negative diff). Start by finding candidate keys.
+                let keys = tx
+                    .query(self.stmt_candidates.as_ref().unwrap(), &[&id, since])
+                    .await?
+                    .into_iter()
+                    .map(|row| row.get::<_, serde_json::Value>(0))
+                    .collect::<Vec<_>>();
+                // Generate the consolidated entries for things with non-zero diff.
+                tx.execute(
+                    self.stmt_consolidate.as_ref().unwrap(),
+                    &[&id, since, &keys],
+                )
+                .await?;
+                // Delete old entries.
+                tx.execute(self.stmt_cleanup.as_ref().unwrap(), &[&id, since, &keys])
+                    .await?
+            }
+            None => {
+                // The since is empty, so we can delete all the associated data.
+                tx.execute(self.stmt_delete.as_ref().unwrap(), &[&id])
+                    .await?
+            }
+        };
+        tx.commit().await?;
+        event!(Level::DEBUG, deleted);
+        Ok(())
+    }
+
+    async fn connect(&mut self) -> Result<(), StashError> {
+        let (client, connection) = tokio_postgres::connect(&self.url, self.tls.clone()).await?;
+        mz_ore::task::spawn(
+            || "tokio-postgres stash consolidation connection",
+            async move {
+                if let Err(e) = connection.await {
+                    tracing::error!("postgres stash connection error: {}", e);
+                }
+            },
+        );
+        // Prepare a list of keys that could potentially benefit from
+        // consolidation (diffs < 0). This doesn't handle the case where we have
+        // a diff = 2, but our current use of the stash doesn't do that, so it's
+        // not a problem.
+        //
+        // TODO: This could be taught about a LIMIT so that the amount of work
+        // done per transaction is capped, then run in a loop until all
+        // candidates are processed. We currently don't think this will be
+        // helpful because there are not many workloads where an entire large
+        // collection is being deleted and recreated. (Note: the previous
+        // consolidation method did indeed delete and recreate the entire
+        // collection each run which is a pathalogically bad workload for
+        // cockroach (see #15842), but this consolidation method would require a
+        // user to do that, which we don't expect to be the general case.)
+        self.stmt_candidates = Some(
+            client
+                .prepare(
+                    "
+                    SELECT DISTINCT key
+                    FROM data
+                    WHERE collection_id = $1 AND time < $2 AND diff < 0
+                    ",
+                )
+                .await?,
+        );
+        // For all entries before the current since, consolidate diffs into the
+        // current since, ignoring kv pairs whose diffs consolidated to
+        // 0. Note that this does create situations where the current since can
+        // have a +1 and -1 diff for some kv pair if, say, an entry was deleted
+        // (which happens at the current since and results in a diff=-1) and
+        // then consolidation causes the diff=+1 entry that created the item to
+        // get its timestamp bumped to the current since. These will be cleaned
+        // up during the next consolidation after the since has advanced, and
+        // are not a correctness problem. This could possibly be improved if
+        // there were a primary/unique key constraint on (collection, time, key,
+        // value), which would allow the use of INSERT ON CONFLICT. However 1)
+        // Cockroach doesn't currently support jsonb types in unique key
+        // constraints and 2) even if you create a computed (STORED) column on
+        // key and value and make a PK on those, some benchmarks got worse than
+        // this current solution.
+        self.stmt_consolidate = Some(
+            client
+                .prepare(
+                    "
+                    INSERT INTO data (collection_id, key, value, time, diff)
+                    SELECT $1, key, value, $2, sum(diff) FROM data
+                    WHERE collection_id = $1 AND time < $2 AND key = ANY($3)
+                    GROUP BY key, value
+                    HAVING sum(diff) != 0
+                    ",
+                )
+                .await?,
+        );
+        self.stmt_cleanup = Some(
+            client
+                .prepare(
+                    "DELETE FROM data WHERE collection_id = $1 AND time < $2 AND key = ANY($3)",
+                )
+                .await?,
+        );
+        self.stmt_delete = Some(
+            client
+                .prepare("DELETE FROM data WHERE collection_id = $1")
+                .await?,
+        );
+        self.client = Some(client);
         Ok(())
     }
 }
