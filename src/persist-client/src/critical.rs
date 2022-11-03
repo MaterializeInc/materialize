@@ -13,7 +13,6 @@ use std::fmt::Debug;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use mz_persist::location::Indeterminate;
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
@@ -94,34 +93,36 @@ impl CriticalReaderId {
 /// means that callers can add a timeout using [tokio::time::timeout] or
 /// [tokio::time::timeout_at].
 #[derive(Debug)]
-pub struct SinceHandle<K, V, T, D>
+pub struct SinceHandle<K, V, T, D, P>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
+    P: Codec64 + Default,
 {
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) gc: GarbageCollector<K, V, T, D>,
     pub(crate) reader_id: CriticalReaderId,
-    pub(crate) token: [u8; 8],
 
     since: Antichain<T>,
+    token: P,
 }
 
-impl<K, V, T, D> SinceHandle<K, V, T, D>
+impl<K, V, T, D, P> SinceHandle<K, V, T, D, P>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
+    P: Clone + Codec64 + Default,
 {
     pub(crate) fn new(
         machine: Machine<K, V, T, D>,
         gc: GarbageCollector<K, V, T, D>,
         reader_id: CriticalReaderId,
         since: Antichain<T>,
-        token: [u8; 8],
+        token: P,
     ) -> Self {
         SinceHandle {
             machine,
@@ -139,6 +140,12 @@ where
         &self.since
     }
 
+    /// This handle's `token`.
+    pub fn token(&self) -> &P {
+        &self.token
+    }
+
+    /// WIP: update
     /// Forwards the since capability of this handle to `new_since` iff the
     /// current capability of this handle's [CriticalReaderId] is
     /// `expected_since`.
@@ -159,26 +166,36 @@ where
     /// doable: an easier version of an analogous issue with compare_and_append
     /// #12797.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
-    pub async fn compare_and_downgrade_since(
+    pub async fn maybe_compare_and_downgrade_since(
         &mut self,
-        expected_since: &Antichain<T>,
-        new_since: &Antichain<T>,
-    ) -> Result<Result<(), Since<T>>, Indeterminate> {
+        expected: (&P, &Antichain<T>),
+        new: (&P, &Antichain<T>),
+    ) -> Option<Result<(P, Since<T>), (P, Since<T>)>> {
+        self.compare_and_downgrade_since(expected, new).await
+    }
+
+    async fn compare_and_downgrade_since(
+        &mut self,
+        expected: (&P, &Antichain<T>),
+        new: (&P, &Antichain<T>),
+    ) -> Option<Result<(P, Since<T>), (P, Since<T>)>> {
         let (res, maintenance) = self
             .machine
-            .compare_and_downgrade_since(&self.reader_id, expected_since, new_since)
-            .await?;
+            .compare_and_downgrade_since(&self.reader_id, expected, new)
+            .await;
         maintenance.start_performing(&self.machine, &self.gc);
-        match res {
-            Ok(x) => {
-                self.since = x.0;
-                Ok(Ok(()))
+        Some(match res {
+            Ok((new_token, new_since)) => {
+                self.token = new_token.clone();
+                self.since = new_since.clone().0;
+                Ok((new_token, new_since))
             }
-            Err(x) => {
-                self.since = x.0.clone();
-                Ok(Err(x))
+            Err((token, since)) => {
+                self.token = token.clone();
+                self.since = since.clone().0;
+                Err((token, since))
             }
-        }
+        })
     }
 
     /// Politely expires this reader, releasing its since capability.

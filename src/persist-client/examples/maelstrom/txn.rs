@@ -103,7 +103,7 @@ pub struct MaelstromVal(Vec<u64>);
 pub struct Transactor {
     shard_id: ShardId,
     client: PersistClient,
-    since: SinceHandle<MaelstromKey, MaelstromVal, u64, i64>,
+    since: SinceHandle<MaelstromKey, MaelstromVal, u64, i64, u64>,
     write: WriteHandle<MaelstromKey, MaelstromVal, u64, i64>,
 
     read_ts: u64,
@@ -458,34 +458,36 @@ impl Transactor {
                 self.since.since().elements(),
                 new_since.elements()
             );
+            let expected_token = self.since.token().clone();
             let expected_since = self.since.since().clone();
             let res = self
                 .since
-                .compare_and_downgrade_since(&expected_since, &new_since)
+                .maybe_compare_and_downgrade_since(
+                    (&expected_token, &expected_since),
+                    (&expected_token, &new_since),
+                )
                 .await;
             match res {
-                Ok(Ok(())) => {
+                Some(Ok((_token, _since))) => {
                     // Success! Fall through and let the while loop condition
                     // exit for us.
                 }
-                Err(err) => {
-                    debug!(
-                        "maybe downgraded since to {:?}: {}",
-                        new_since.elements(),
-                        err
-                    );
-                }
-                Ok(Err(actual_since)) => {
+                Some(Err((actual_token, actual_since))) => {
                     // We raced with another maelstrom node. The since handle
                     // has updated it's internal since with the real one. Fall
                     // through and let the while loop condition handle whether
                     // we should try again.
                     assert_eq!(self.since.since(), &actual_since.0);
                     debug!(
-                        "raced with another maelstrom node expected={:?} actual={:?}",
+                        "raced with another maelstrom node expected=({}, {:?}) actual=({}, {:?})",
+                        0,
                         expected_since.elements(),
+                        actual_token,
                         &actual_since.0.elements()
                     );
+                }
+                None => {
+                    // No-op call
                 }
             }
         }

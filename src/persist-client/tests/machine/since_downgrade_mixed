@@ -20,9 +20,9 @@ register-critical-reader reader_id=c00000000-0000-0000-0000-000000000000
 ----
 v2 [0]
 
-compare-and-downgrade-since expected=(0) new=(2) reader_id=c00000000-0000-0000-0000-000000000000
+compare-and-downgrade-since expect_token=0 expect_since=(0) token=0 since=(2) reader_id=c00000000-0000-0000-0000-000000000000
 ----
-v3 [2]
+v3 0 [2]
 
 shard-desc
 ----
@@ -43,9 +43,9 @@ shard-desc
 ----
 since=[2] upper=[0]
 
-compare-and-downgrade-since expected=(2) new=(5) reader_id=c00000000-0000-0000-0000-000000000000
+compare-and-downgrade-since expect_token=0 expect_since=(2) token=0 since=(5) reader_id=c00000000-0000-0000-0000-000000000000
 ----
-v6 [5]
+v6 0 [5]
 
 shard-desc
 ----

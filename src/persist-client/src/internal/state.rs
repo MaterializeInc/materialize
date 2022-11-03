@@ -369,19 +369,22 @@ where
     pub fn compare_and_downgrade_since(
         &mut self,
         reader_id: &CriticalReaderId,
-        expected_since: &Antichain<T>,
-        new_since: &Antichain<T>,
-    ) -> ControlFlow<Infallible, Result<Since<T>, Since<T>>> {
+        // WIP: newtype for [u8; 8] could be nice for readability here
+        (expected_token, expected_since): ([u8; 8], &Antichain<T>),
+        (new_token, new_since): ([u8; 8], &Antichain<T>),
+    ) -> ControlFlow<Infallible, Result<([u8; 8], Since<T>), ([u8; 8], Since<T>)>> {
         let reader_state = self.critical_reader(reader_id);
-        if &reader_state.since == expected_since {
+
+        if &reader_state.since == expected_since && reader_state.token == expected_token {
             assert!(PartialOrder::less_than(expected_since, new_since));
             reader_state.since = new_since.clone();
+            reader_state.token = new_token;
             self.update_since();
-            Continue(Ok(Since(new_since.clone())))
+            Continue(Ok((new_token.clone(), Since(new_since.clone()))))
         } else {
             // No-op, but still commit the state change so that this gets
             // linearized.
-            Continue(Err(Since(reader_state.since.clone())))
+            Continue(Err((reader_state.token, Since(reader_state.since.clone()))))
         }
     }
 
@@ -858,7 +861,7 @@ where
 }
 
 /// Wrapper for Antichain that represents a Since
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Since<T>(pub Antichain<T>);
 
 // When used as an error, Since is determinate.

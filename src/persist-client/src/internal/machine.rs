@@ -186,15 +186,15 @@ where
         (shard_upper, read_cap)
     }
 
-    pub async fn register_critical_reader(
+    pub async fn register_critical_reader<P: Codec64 + Default>(
         &mut self,
         reader_id: &CriticalReaderId,
-        token: [u8; 8],
+        token: &P,
     ) -> CriticalReaderState<T> {
         let metrics = Arc::clone(&self.metrics);
         let (_seqno, state, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, state| {
-                state.register_critical_reader(reader_id, token)
+                state.register_critical_reader(reader_id, Codec64::encode(token))
             })
             .await;
         state
@@ -364,26 +364,30 @@ where
         .await
     }
 
-    pub async fn compare_and_downgrade_since(
+    pub async fn compare_and_downgrade_since<P: Codec64>(
         &mut self,
         reader_id: &CriticalReaderId,
-        expected_since: &Antichain<T>,
-        new_since: &Antichain<T>,
-    ) -> Result<(Result<Since<T>, Since<T>>, RoutineMaintenance), Indeterminate> {
+        (expected_token, expected_since): (&P, &Antichain<T>),
+        (new_token, new_since): (&P, &Antichain<T>),
+    ) -> (Result<(P, Since<T>), (P, Since<T>)>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.metrics);
         let (_seqno, res, maintenance) = self
-            .apply_unbatched_cmd(
+            .apply_unbatched_idempotent_cmd(
                 &metrics.cmds.compare_and_downgrade_since,
                 |_seqno, state| {
-                    state.compare_and_downgrade_since(reader_id, expected_since, new_since)
+                    state.compare_and_downgrade_since(
+                        reader_id,
+                        (Codec64::encode(expected_token), expected_since),
+                        (Codec64::encode(new_token), new_since),
+                    )
                 },
             )
-            .await?;
-        let res = match res {
-            Ok(x) => x,
-            Err(x) => match x {},
-        };
-        Ok((res, maintenance))
+            .await;
+
+        match res {
+            Ok((token, since)) => (Ok((Codec64::decode(token), since)), maintenance),
+            Err((token, since)) => (Err((Codec64::decode(token), since)), maintenance),
+        }
     }
 
     pub async fn heartbeat_leased_reader(
@@ -1043,20 +1047,27 @@ pub mod datadriven {
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
-        let expected = args.expect_antichain("expected");
-        let new = args.expect_antichain("new");
+        let expected_token: u64 = args.expect("expect_token");
+        let expected_since = args.expect_antichain("expect_since");
+        let new_token: u64 = args.expect("token");
+        let new_since = args.expect_antichain("since");
         let reader_id = args.expect("reader_id");
         let (res, routine) = datadriven
             .machine
-            .compare_and_downgrade_since(&reader_id, &expected, &new)
-            .await
-            .map_err(|err| anyhow!("{:?}", err))?;
+            .compare_and_downgrade_since(
+                &reader_id,
+                (&expected_token, &expected_since),
+                (&new_token, &new_since),
+            )
+            .await;
         datadriven.routine.push(routine);
-        let handle_since = res.map_err(|err| anyhow!("{:?}", err))?;
+        let (token, since) =
+            res.map_err(|(token, since)| anyhow!("mismatch: token={}, since={:?}", token, since))?;
         Ok(format!(
-            "{} {:?}\n",
+            "{} {} {:?}\n",
             datadriven.machine.seqno(),
-            handle_since.0.elements()
+            token,
+            since.0.elements()
         ))
     }
 
@@ -1357,10 +1368,9 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let reader_id = args.expect("reader_id");
-        let zero = <u64 as Codec64>::encode(&(0 as u64));
         let state = datadriven
             .machine
-            .register_critical_reader(&reader_id, zero)
+            .register_critical_reader(&reader_id, &u64::default())
             .await;
         Ok(format!(
             "{} {:?}\n",
