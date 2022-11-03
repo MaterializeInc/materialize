@@ -750,14 +750,7 @@ where
             let last_upper = collection.replica_write_frontiers.remove(&replica_id);
 
             if let Some(frontier) = last_upper {
-                // if there are other replicas, let them decide the fate of the collection metadata;
-                // if this replica was the last one, though, then get rid of the collection metadata
-                // only if we reached the empty frontier
-                if collection.replica_write_frontiers.len() > 0
-                    || collection.read_frontier().to_owned() == Antichain::new()
-                {
-                    dropped_collection_ids.push(id.clone());
-                }
+                dropped_collection_ids.push(id.clone());
 
                 // Update read holds on storage dependencies.
                 for storage_id in &collection.storage_dependencies {
@@ -903,13 +896,14 @@ where
         dropped_collection_ids: Vec<GlobalId>,
     ) -> Result<(), ComputeError> {
         for id in dropped_collection_ids {
-            // clean up the given collection if all replica frontiers are empty
+            // clean up the given collection if read frontier is empty
+            // and all replica frontiers are empty
             let collection = self.compute.collection(id)?;
-            let empty = Antichain::new();
-            if collection
-                .replica_write_frontiers
-                .values()
-                .all(|frontier| *frontier == empty)
+            if collection.read_frontier().is_empty()
+                && collection
+                    .replica_write_frontiers
+                    .values()
+                    .all(|frontier| frontier.is_empty())
             {
                 self.compute.collections.remove(&id);
             }
@@ -933,10 +927,9 @@ where
 
         self.update_write_frontiers(replica_id, &updates).await?;
 
-        let empty = Antichain::new();
         let dropped_collections: Vec<_> = updates
             .iter()
-            .filter(|(_, frontier)| *frontier == empty)
+            .filter(|(_, frontier)| frontier.is_empty())
             .map(|(id, _)| id.clone())
             .collect();
         self.update_dropped_collections(dropped_collections)
