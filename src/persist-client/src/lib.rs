@@ -302,7 +302,7 @@ impl PersistConfig {
             compaction_queue_size: 20,
             compaction_minimum_timeout: Duration::from_secs(90),
             consensus_connection_pool_max_size: 50,
-            writer_lease_duration: 60 * Duration::from_secs(60),
+            writer_lease_duration: Duration::from_secs(20),
             reader_lease_duration: Self::DEFAULT_READ_LEASE_DURATION,
         }
     }
@@ -313,7 +313,7 @@ impl PersistConfig {
     //
     // MIGRATION: Remove this once we remove the ReaderState <->
     // ProtoReaderState migration.
-    pub(crate) const DEFAULT_READ_LEASE_DURATION: Duration = Duration::from_secs(60 * 15);
+    pub(crate) const DEFAULT_READ_LEASE_DURATION: Duration = Duration::from_secs(20);
 
     // Tuning notes: Picked arbitrarily.
     pub(crate) const NEED_ROLLUP_THRESHOLD: u64 = 128;
