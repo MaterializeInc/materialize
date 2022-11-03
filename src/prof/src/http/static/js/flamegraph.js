@@ -183,7 +183,7 @@ function parseMzfg(input) {
             }
         }
 
-        // There should be a trailing comma, but let's
+        // There should be a trailing semicolon, but let's
         // be robust in case there isn't
         if (name_buf) {
             path.push(name_buf);
