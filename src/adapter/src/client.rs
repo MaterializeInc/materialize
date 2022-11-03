@@ -7,21 +7,24 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 use std::future::Future;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
 use mz_ore::id_gen::IdAllocator;
+use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_ore::thread::JoinOnDropHandle;
 use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 
 use crate::command::{Canceled, Command, ExecuteResponse, Response, StartupResponse};
 use crate::error::AdapterError;
-use crate::session::{EndTransactionAction, PreparedStatement, Session};
+use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionId};
 
 /// An abstraction allowing us to name different connections.
 pub type ConnectionId = u32;
@@ -131,6 +134,7 @@ impl ConnClient {
             session: Some(session),
             cancel_tx: Arc::clone(&cancel_tx),
             cancel_rx,
+            timeouts: Timeout::new(),
         };
         let response = client
             .send(|tx, session| Command::Startup {
@@ -192,6 +196,7 @@ pub struct SessionClient {
     session: Option<Session>,
     cancel_tx: Arc<watch::Sender<Canceled>>,
     cancel_rx: watch::Receiver<Canceled>,
+    timeouts: Timeout,
 }
 
 impl SessionClient {
@@ -363,6 +368,44 @@ impl SessionClient {
         self.session = Some(res.session);
         res.result
     }
+
+    pub fn add_idle_in_transaction_session_timeout(&mut self) {
+        let session = self.session();
+        let timeout_dur = session.vars().idle_in_transaction_session_timeout();
+        if !timeout_dur.is_zero() {
+            let timeout_dur = timeout_dur.clone();
+            if let Some(txn) = session.transaction().inner() {
+                let txn_id = txn.id.clone();
+                let timeout = TimeoutType::IdleInTransactionSession(txn_id);
+                self.timeouts.add_timeout(timeout, timeout_dur);
+            }
+        }
+    }
+
+    pub fn remove_idle_in_transaction_session_timeout(&mut self) {
+        let session = self.session();
+        if let Some(txn) = session.transaction().inner() {
+            let txn_id = txn.id.clone();
+            self.timeouts
+                .remove_timeout(&TimeoutType::IdleInTransactionSession(txn_id));
+        }
+    }
+
+    pub async fn recv_timeout(&mut self) -> Option<TimeoutType> {
+        self.timeouts.recv().await
+    }
+
+    pub fn handle_timeout(&mut self, timeout: TimeoutType) -> Result<(), AdapterError> {
+        if self.timeouts.remove_timeout(&timeout) {
+            match timeout {
+                TimeoutType::IdleInTransactionSession(_) => {
+                    Err(AdapterError::IdleInTransactionSessionTimeout)
+                }
+            }
+        } else {
+            Ok(())
+        }
+    }
 }
 
 impl Drop for SessionClient {
@@ -377,5 +420,56 @@ impl Drop for SessionClient {
                 .send(Command::Terminate { session })
                 .expect("coordinator unexpectedly gone");
         }
+    }
+}
+
+#[derive(Hash, PartialEq, Eq, Clone, Debug)]
+pub enum TimeoutType {
+    IdleInTransactionSession(TransactionId),
+}
+
+impl Display for TimeoutType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TimeoutType::IdleInTransactionSession(txn_id) => {
+                writeln!(f, "Idle in transaction session for transaction '{txn_id}'")
+            }
+        }
+    }
+}
+
+struct Timeout {
+    tx: mpsc::UnboundedSender<TimeoutType>,
+    rx: mpsc::UnboundedReceiver<TimeoutType>,
+    active_timeouts: HashMap<TimeoutType, AbortOnDropHandle<()>>,
+}
+
+impl Timeout {
+    fn new() -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
+        Timeout {
+            tx,
+            rx,
+            active_timeouts: HashMap::new(),
+        }
+    }
+
+    async fn recv(&mut self) -> Option<TimeoutType> {
+        self.rx.recv().await
+    }
+
+    fn add_timeout(&mut self, timeout: TimeoutType, duration: Duration) {
+        let tx = self.tx.clone();
+        let timeout_key = timeout.clone();
+        let handle = mz_ore::task::spawn(|| format!("{timeout_key}"), async move {
+            tokio::time::sleep(duration).await;
+            let _ = tx.send(timeout);
+        })
+        .abort_on_drop();
+        self.active_timeouts.insert(timeout_key, handle);
+    }
+
+    fn remove_timeout(&mut self, timout: &TimeoutType) -> bool {
+        self.active_timeouts.remove(timout).is_some()
     }
 }

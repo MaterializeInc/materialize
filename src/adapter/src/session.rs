@@ -90,6 +90,7 @@ pub struct Session<T = mz_repr::Timestamp> {
     notices_tx: mpsc::UnboundedSender<AdapterNotice>,
     notices_rx: mpsc::UnboundedReceiver<AdapterNotice>,
     prev_notice: Option<AdapterNotice>,
+    next_transaction_id: TransactionId,
 }
 
 impl<T: TimestampManipulation> Session<T> {
@@ -126,6 +127,7 @@ impl<T: TimestampManipulation> Session<T> {
             notices_tx,
             notices_rx,
             prev_notice: None,
+            next_transaction_id: 0,
         }
     }
 
@@ -167,11 +169,14 @@ impl<T: TimestampManipulation> Session<T> {
 
         match self.transaction {
             TransactionStatus::Default => {
+                let id = self.next_transaction_id;
+                self.next_transaction_id = self.next_transaction_id.wrapping_add(1);
                 self.transaction = TransactionStatus::InTransaction(Transaction {
                     pcx: PlanContext::new(wall_time, self.vars.qgm_optimizations()),
                     ops: TransactionOps::None,
                     write_lock_guard: None,
                     access,
+                    id,
                 });
             }
             TransactionStatus::Started(mut txn)
@@ -198,11 +203,14 @@ impl<T: TimestampManipulation> Session<T> {
     /// number of statements, but only if no transaction has been started already.
     pub fn start_transaction_implicit(mut self, wall_time: DateTime<Utc>, stmts: usize) -> Self {
         if let TransactionStatus::Default = self.transaction {
+            let id = self.next_transaction_id;
+            self.next_transaction_id = self.next_transaction_id.wrapping_add(1);
             let txn = Transaction {
                 pcx: PlanContext::new(wall_time, self.vars.qgm_optimizations()),
                 ops: TransactionOps::None,
                 write_lock_guard: None,
                 access: None,
+                id,
             };
             match stmts {
                 1 => self.transaction = TransactionStatus::Started(txn),
@@ -405,6 +413,7 @@ impl<T: TimestampManipulation> Session<T> {
                 ops: TransactionOps::Peeks(ts),
                 write_lock_guard: _,
                 access: _,
+                id: _,
             }) => ts.clone().map(|(ts, _)| ts),
             _ => None,
         }
@@ -777,6 +786,9 @@ impl<T> TransactionStatus<T> {
     }
 }
 
+/// An abstraction allowing us to identify different transactions.
+pub type TransactionId = u64;
+
 impl<T> Default for TransactionStatus<T> {
     fn default() -> Self {
         TransactionStatus::Default
@@ -790,6 +802,11 @@ pub struct Transaction<T> {
     pub pcx: PlanContext,
     /// Transaction operations.
     pub ops: TransactionOps<T>,
+    /// Uniquely identifies the transaction on a per connection basis.
+    /// Two transactions started from separate connections may share the
+    /// same ID.
+    /// If all IDs have been exhausted, this will wrap around back to 0.
+    pub id: TransactionId,
     /// Holds the coordinator's write lock.
     write_lock_guard: Option<OwnedMutexGuard<()>>,
     /// Access mode (read only, read write).

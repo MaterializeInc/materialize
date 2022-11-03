@@ -1891,3 +1891,45 @@ fn test_introspection_user_permissions() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
+
+#[test]
+fn test_idle_in_transaction_session_timeout() -> Result<(), Box<dyn Error>> {
+    let config = util::Config::default();
+    let server = util::start_server(config)?;
+
+    let mut client = server.connect(postgres::NoTls)?;
+    client.batch_execute("SET idle_in_transaction_session_timeout TO '4ms'")?;
+    client.batch_execute("BEGIN")?;
+    std::thread::sleep(Duration::from_millis(5));
+    let error = client.query("SELECT 1", &[]).unwrap_err();
+    assert!(
+        error.is_closed(),
+        "error should indicate that client is closed: {error:?}"
+    );
+
+    // session should be timed out even if transaction has failed.
+    let mut client = server.connect(postgres::NoTls)?;
+    client.batch_execute("SET idle_in_transaction_session_timeout TO '4ms'")?;
+    client.batch_execute("BEGIN")?;
+    let error = client.batch_execute("SELECT 1/0").unwrap_err();
+    assert!(
+        !error.is_closed(),
+        "failing a transaction should not close the connection: {error:?}"
+    );
+    std::thread::sleep(Duration::from_millis(5));
+    let error = client.query("SELECT 1", &[]).unwrap_err();
+    assert!(
+        error.is_closed(),
+        "error should indicate that client is closed: {error:?}"
+    );
+
+    // session should not be timed out if it's not idle.
+    let mut client = server.connect(postgres::NoTls)?;
+    client.batch_execute("SET idle_in_transaction_session_timeout TO '4ms'")?;
+    client.batch_execute("BEGIN")?;
+    client.query("SELECT mz_internal.mz_sleep(0.5)", &[])?;
+    client.query("SELECT 1", &[])?;
+    client.batch_execute("COMMIT")?;
+
+    Ok(())
+}
