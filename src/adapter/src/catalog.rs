@@ -1961,9 +1961,10 @@ impl Catalog<Postgres> {
 impl<S: Append> Catalog<S> {
     /// Opens or creates a catalog that stores data at `path`.
     ///
-    /// Returns the catalog, metadata about builtin objects that have
-    /// changed schemas since last restart, and a list of updates to builtin
-    /// tables that describe the initial state of the catalog.
+    /// Returns the catalog, metadata about builtin objects that have changed
+    /// schemas since last restart, a list of updates to builtin tables that
+    /// describe the initial state of the catalog, and the version of the
+    /// catalog before any migrations were performed.
     #[tracing::instrument(level = "info", skip_all)]
     pub async fn open(
         config: Config<'_, S>,
@@ -1972,6 +1973,7 @@ impl<S: Append> Catalog<S> {
             Catalog<S>,
             BuiltinMigrationMetadata,
             Vec<BuiltinTableUpdate>,
+            String,
         ),
         AdapterError,
     > {
@@ -2347,18 +2349,18 @@ impl<S: Append> Catalog<S> {
             catalog.state.insert_system_configuration(&name, &value)?;
         }
 
-        if !config.skip_migrations {
-            let last_seen_version = catalog
-                .storage()
-                .await
-                .get_catalog_content_version()
-                .await?
-                // `new` means that it hasn't been initialized
-                .unwrap_or_else(|| "new".to_string());
+        let last_seen_version = catalog
+            .storage()
+            .await
+            .get_catalog_content_version()
+            .await?
+            // `new` means that it hasn't been initialized
+            .unwrap_or_else(|| "new".to_string());
 
+        if !config.skip_migrations {
             migrate::migrate(&mut catalog).await.map_err(|e| {
                 Error::new(ErrorKind::FailedMigration {
-                    last_seen_version,
+                    last_seen_version: last_seen_version.clone(),
                     this_version: catalog.config().build_info.version,
                     cause: e.to_string(),
                 })
@@ -2460,7 +2462,12 @@ impl<S: Append> Catalog<S> {
             builtin_table_updates.push(catalog.state.pack_egress_ip_update(ip)?);
         }
 
-        Ok((catalog, builtin_migration_metadata, builtin_table_updates))
+        Ok((
+            catalog,
+            builtin_migration_metadata,
+            builtin_table_updates,
+            last_seen_version,
+        ))
     }
 
     /// Loads built-in system types into the catalog.
@@ -2889,7 +2896,7 @@ impl<S: Append> Catalog<S> {
         )
         .await?;
         let secrets_reader = Arc::new(InMemorySecretsController::new());
-        let (catalog, _, _) = Catalog::open(Config {
+        let (catalog, _, _, _) = Catalog::open(Config {
             storage,
             unsafe_mode: true,
             persisted_introspection: true,

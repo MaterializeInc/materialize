@@ -13,6 +13,7 @@ mz-adapter = { path = "../adapter" }
 mz-build-info = { path = "../build-info" }
 mz-ore = { path = "../ore" }
 mz-postgres-util = { path = "../postgres-util" }
+mz-secrets = { path = "../secrets" }
 mz-stash = { path = "../stash" }
 mz-storage = { path = "../storage" }
 once_cell = "1.15.0"
