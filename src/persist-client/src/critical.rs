@@ -175,6 +175,7 @@ where
     /// use mz_persist_client::critical::SinceHandle;
     /// use mz_persist_types::Codec64;
     ///
+    /// # async {
     /// let fencing_token: u64 = unimplemented!();
     /// let mut since: SinceHandle<String, String, u64, i64, u64> = unimplemented!();
     ///
@@ -186,18 +187,18 @@ where
     ///     )
     ///     .await;
     ///
-    ///  match res {
+    /// match res {
     ///     Some(Ok(_)) => {
     ///         // we downgraded since!
     ///     }
-    ///     Some(Err((actual_opaque, actual_since))) => {
-    ///         let actual_fencing_token = Codec64::decode(&actual_opaque);
+    ///     Some(Err((actual_fencing_token, actual_since))) => {
     ///         // compare `fencing_token` and `actual_fencing_token`, etc
     ///     }
     ///     None => {
     ///         // no problem, we'll try again later
     ///     }
-    ///  }
+    /// }
+    /// # }
     /// ```
     ///
     /// If fencing is not required and it's acceptable to have concurrent [SinceHandle] for
@@ -208,6 +209,7 @@ where
     /// use mz_persist_client::critical::SinceHandle;
     /// use mz_persist_types::Codec64;
     ///
+    /// # async {
     /// let mut since: SinceHandle<String, String, u64, i64, u64> = unimplemented!();
     /// let new_since: Antichain<u64> = unimplemented!();
     /// let res = since
@@ -217,7 +219,7 @@ where
     ///     )
     ///     .await;
     ///
-    ///  match res {
+    /// match res {
     ///     Some(Ok(_)) => {
     ///         // we downgraded since!
     ///     }
@@ -227,7 +229,8 @@ where
     ///     None => {
     ///         // no problem, we'll try again later
     ///     }
-    ///  }
+    /// }
+    /// # }
     /// ```
     ///
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
