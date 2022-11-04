@@ -1054,6 +1054,10 @@ impl Stash for Postgres {
     async fn confirm_leadership(&mut self) -> Result<(), StashError> {
         self.transact(|_, _| Box::pin(async { Ok(()) })).await
     }
+
+    fn epoch(&self) -> Option<i64> {
+        self.epoch
+    }
 }
 
 impl From<tokio_postgres::Error> for StashError {

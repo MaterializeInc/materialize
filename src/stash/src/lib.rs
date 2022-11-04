@@ -392,6 +392,10 @@ pub trait Stash: std::fmt::Debug + Send {
     /// point from the invocation of this method to the return of this
     /// method. Otherwise, returns `Err`.
     async fn confirm_leadership(&mut self) -> Result<(), StashError>;
+
+    /// Returns the stash's epoch number. If `Some`, it is a number that
+    /// increases with each start of a stash.
+    fn epoch(&self) -> Option<i64>;
 }
 
 /// `StashCollection` is like a differential dataflow [`Collection`], but the
