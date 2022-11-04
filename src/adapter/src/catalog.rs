@@ -18,8 +18,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use itertools::Itertools;
+use mz_ore::metric;
 use mz_storage_client::controller::IntrospectionType;
 use once_cell::sync::Lazy;
+use prometheus::core::AtomicU64;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, Mutex, MutexGuard};
@@ -39,7 +41,7 @@ use mz_compute_client::controller::{
 use mz_compute_client::logging::{LogVariant, LogView, DEFAULT_LOG_VARIANTS, DEFAULT_LOG_VIEWS};
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
-use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, MetricsRegistry};
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_repr::{explain_new::ExprHumanizer, Diff, GlobalId, RelationDesc, ScalarType};
@@ -167,6 +169,29 @@ impl<S> Clone for Catalog<S> {
 }
 
 #[derive(Debug, Clone)]
+struct Metrics {
+    items: mz_ore::metrics::IntCounterVec,
+    compute_instances: mz_ore::metrics::IntCounterVec,
+}
+
+impl Metrics {
+    fn new(metrics_registry: &MetricsRegistry) -> Self {
+        Metrics {
+            items: metrics_registry.register(metric!(
+                    name: "mz_catalog_items",
+                    help: "mapping between internal id and external name for catalog items",
+                    var_labels: ["item"],
+            )),
+            compute_instances: metrics_registry.register(metric!(
+                    name: "mz_catalog_compute_instances",
+                    help: "mapping between internal id and external name for compute instances",
+                    var_labels: ["compute_instance"],
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct CatalogState {
     database_by_name: BTreeMap<String, DatabaseId>,
     database_by_id: BTreeMap<DatabaseId, Database>,
@@ -186,6 +211,7 @@ pub struct CatalogState {
     availability_zones: Vec<String>,
     system_configuration: SystemVars,
     egress_ips: Vec<Ipv4Addr>,
+    metrics: Metrics,
 }
 
 impl CatalogState {
@@ -573,12 +599,25 @@ impl CatalogState {
             };
         }
 
+        // WIP what heuristic should we use here?
+        //
+        // WIP metric doesn't get updated if we change the name
+        let metric = if id.is_system() {
+            None
+        } else {
+            Some(Arc::new(self.metrics.items.get_delete_on_drop_counter(
+                // WIP how do we print the fully qualified name? this currently
+                // looks like "1.3.foo".
+                vec![format!("{}: {}", id, name)],
+            )))
+        };
         let entry = CatalogEntry {
             item,
             name,
             id,
             oid,
             used_by: Vec::new(),
+            _metric: metric,
         };
         for u in entry.uses() {
             match self.entry_by_id.get_mut(u) {
@@ -724,6 +763,11 @@ impl CatalogState {
             log_indexes.insert(log.variant.clone(), index_id);
         }
 
+        let metric = Arc::new(
+            self.metrics
+                .compute_instances
+                .get_delete_on_drop_counter(vec![format!("{}: {}", id, name)]),
+        );
         self.compute_instances_by_id.insert(
             id,
             ComputeInstance {
@@ -733,6 +777,7 @@ impl CatalogState {
                 log_indexes,
                 replica_id_by_name: HashMap::new(),
                 replicas_by_id: HashMap::new(),
+                _metric: metric,
             },
         );
         assert!(self.compute_instances_by_name.insert(name, id).is_none());
@@ -1331,6 +1376,11 @@ pub struct ComputeInstance {
     pub exports: HashSet<GlobalId>,
     pub replica_id_by_name: HashMap<String, ReplicaId>,
     pub replicas_by_id: HashMap<ReplicaId, ComputeReplica>,
+
+    /// A prometheus hack to allow us to display the internal id -> external
+    /// name mapping in grafana.
+    #[serde(skip_serializing)]
+    _metric: Arc<DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -1346,6 +1396,9 @@ pub struct CatalogEntry {
     id: GlobalId,
     oid: u32,
     name: QualifiedObjectName,
+    /// A prometheus hack to allow us to display the internal id -> external
+    /// name mapping in grafana.
+    _metric: Option<Arc<DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2010,6 +2063,7 @@ impl<S: Append> Catalog<S> {
                 availability_zones: config.availability_zones,
                 system_configuration: SystemVars::default(),
                 egress_ips: config.egress_ips,
+                metrics: Metrics::new(config.metrics_registry),
             },
             transient_revision: 0,
             storage: Arc::new(Mutex::new(config.storage)),
