@@ -127,6 +127,7 @@ fn create_timely_config(args: &Args) -> Result<timely::Config, anyhow::Error> {
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::set_abort_on_panic();
+    mz_timely_util::panic::halt_on_timely_communication_panic();
     let (tracing_target_callbacks, _sentry_guard) = mz_ore::tracing::configure(
         "storaged",
         &args.tracing,
