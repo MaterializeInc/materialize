@@ -248,7 +248,6 @@ where
         // Initialize frontier tracking for the new replica
         // and clean up any dropped collections that we can
         let mut updates = Vec::new();
-        let mut dropped_collection_ids = Vec::new();
         for (compute_id, collection) in &mut self.compute.collections {
             // Skip log collections not maintained by this replica.
             if collection.log_collection && !maintained_logs.contains(compute_id) {
@@ -256,13 +255,9 @@ where
             }
 
             let read_frontier = collection.read_frontier();
-            if read_frontier.is_empty() {
-                dropped_collection_ids.push(compute_id.clone());
-            }
             updates.push((*compute_id, read_frontier.to_owned()));
         }
         self.update_write_frontiers(id, &updates).await?;
-        self.update_dropped_collections(dropped_collection_ids)?;
 
         let replica = Replica::spawn(
             id,
