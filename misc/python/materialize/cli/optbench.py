@@ -91,6 +91,12 @@ class Opt:
 
     db_pass = dict(default=None, help="DB connection password.", envvar="PGPASSWORD")
 
+    db_require_ssl = dict(
+        is_flag=True,
+        help="DB connection requires SSL.",
+        envvar="PGREQUIRESSL",
+    )
+
 
 @app.command()
 @click.argument("scenario", **Arg.scenario)
@@ -99,6 +105,7 @@ class Opt:
 @click.option("--db-host", **Opt.db_host)
 @click.option("--db-user", **Opt.db_user)
 @click.option("--db-pass", **Opt.db_pass)
+@click.option("--db-require-ssl", **Opt.db_require_ssl)
 def init(
     scenario: Scenario,
     no_indexes: bool,
@@ -106,13 +113,20 @@ def init(
     db_host: str,
     db_user: str,
     db_pass: Optional[str],
+    db_require_ssl: bool,
 ) -> None:
     """Initialize the DB under test for the given scenario."""
 
     info(f'Initializing "{scenario}" as the DB under test')
 
     try:
-        db = sql.Database(port=db_port, host=db_host, user=db_user, password=db_pass)
+        db = sql.Database(
+            port=db_port,
+            host=db_host,
+            user=db_user,
+            password=db_pass,
+            require_ssl=db_require_ssl,
+        )
 
         db.drop_database(scenario)
         db.create_database(scenario)
@@ -150,13 +164,20 @@ def run(
     db_host: str,
     db_user: str,
     db_pass: Optional[str],
+    db_require_ssl: bool,
 ) -> None:
     """Run benchmark in the DB under test for a given scenario."""
 
     info(f'Running "{scenario}" scenario')
 
     try:
-        db = sql.Database(port=db_port, host=db_host, user=db_user, password=db_pass)
+        db = sql.Database(
+            port=db_port,
+            host=db_host,
+            user=db_user,
+            password=db_pass,
+            require_ssl=db_require_ssl,
+        )
         db.set_database(scenario)
 
         df = pd.DataFrame.from_records(
