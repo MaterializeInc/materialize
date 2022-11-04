@@ -3088,6 +3088,7 @@ dependencies = [
  "enum-kinds",
  "fail",
  "futures",
+ "hex",
  "itertools",
  "maplit",
  "mz-audit-log",

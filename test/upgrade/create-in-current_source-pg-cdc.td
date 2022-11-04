@@ -38,7 +38,7 @@ INSERT INTO unused_pub_table VALUES (1);
   PASSWORD SECRET pgpass,
   DATABASE postgres;
 
-> CREATE SOURCE upgrade_pg_cdc_source_text_cols_for_all_tables
+> CREATE SOURCE upgrade_pg_cdc_source_for_all_tables
   FROM POSTGRES
   CONNECTION pgconn
   (
@@ -52,9 +52,14 @@ var1
 var0
 
 # If we do not specify a table with an unsupported data type, we do not need to
-# specify `TEXT COLUMNS`, even though the table is in the publication.
+# specify `TEXT COLUMNS`, even though the table is in the publication. Note that
+# this also tests that we do not attempt to produce snapshots of tables in the
+# publication that are not referenced in the `FOR TABLES` clause. If we did,
+# this would encounter an error during snapshot generation, wherein we could not
+# handle the enum data in cdc_enum_table
+# https://github.com/MaterializeInc/materialize/issues/15889
 
-> CREATE SOURCE upgrade_pg_cdc_source_text_cols_for_tables
+> CREATE SOURCE upgrade_pg_cdc_source_for_tables
   FROM POSTGRES
   CONNECTION pgconn
   (

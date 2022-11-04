@@ -7,16 +7,24 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::{BTreeMap, HashSet};
+
+use itertools::Itertools;
+use prost::Message;
 use semver::Version;
-use std::collections::BTreeMap;
 
 use mz_ore::collections::CollectionExt;
+use mz_proto::RustType;
 use mz_sql::ast::{
     display::AstDisplay, CreateSourceStatement, CreateSourceSubsource, DeferredObjectName,
     RawObjectName, Statement, UnresolvedObjectName,
 };
-use mz_sql::ast::{CreateReferencedSubsources, Raw};
+use mz_sql::ast::{
+    CreateReferencedSubsources, CreateSourceConnection, PgConfigOptionName, Raw, Value,
+    WithOptionValue,
+};
 use mz_stash::Append;
+use mz_storage_client::types::sources::{PostgresSourceDetails, ProtoPostgresSourceDetails};
 
 use crate::catalog::{Catalog, ConnCatalog, SerializedCatalogItem, SYSTEM_CONN_ID};
 
@@ -52,7 +60,10 @@ pub(crate) async fn migrate<S: Append>(catalog: &mut Catalog<S>) -> Result<(), a
     };
     let mut tx = storage.transaction().await?;
     // First, do basic AST -> AST transformations.
-    rewrite_items(&mut tx, |_stmt| Ok(()))?;
+    rewrite_items(&mut tx, |stmt| {
+        pg_source_details_only_referenced_tables(stmt)?;
+        Ok(())
+    })?;
 
     // Then, load up a temporary catalog with the rewritten items, and perform
     // some transformations that require introspecting the catalog. These
@@ -89,6 +100,58 @@ pub(crate) async fn migrate<S: Append>(catalog: &mut Catalog<S>) -> Result<(), a
 // ****************************************************************************
 // AST migrations -- Basic AST -> AST transformations
 // ****************************************************************************
+
+// We previously retained table information for all tables in an upstream PG
+// source's publication, even if the source did not use those tables. In the
+// work of supporting unsupported types as text, it provided a superiror UX to
+// only track the information of referenced tables. This migration applies that
+// same logic to existing sources, and only retains the table information of
+// referenced tables.
+fn pg_source_details_only_referenced_tables(
+    stmt: &mut mz_sql::ast::Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    if let Statement::CreateSource(CreateSourceStatement {
+        connection: CreateSourceConnection::Postgres { options, .. },
+        subsources: Some(CreateReferencedSubsources::Subset(create_source_subsources)),
+        ..
+    }) = stmt
+    {
+        let mut referenced_tables = HashSet::new();
+        for CreateSourceSubsource { reference, .. } in create_source_subsources {
+            // Remove database qualification
+            referenced_tables.insert(
+                reference.0[1..]
+                    .iter()
+                    .map(|i| i.as_str().to_string())
+                    .collect_vec(),
+            );
+        }
+
+        let details_value = &mut options
+            .iter_mut()
+            .find(|option| option.name == PgConfigOptionName::Details)
+            .unwrap()
+            .value;
+
+        let details_inner = match details_value {
+            Some(WithOptionValue::Value(Value::String(inner))) => inner,
+            _ => unreachable!(),
+        };
+
+        let details = hex::decode(details_inner).expect("known to be good");
+        let details = ProtoPostgresSourceDetails::decode(&*details).expect("known to be good");
+        let mut details = PostgresSourceDetails::from_proto(details).expect("known to be good");
+
+        details.tables.retain(|desc| {
+            referenced_tables.contains(&vec![desc.namespace.clone(), desc.name.clone()])
+        });
+
+        *details_value = Some(WithOptionValue::Value(Value::String(hex::encode(
+            details.into_proto().encode_to_vec(),
+        ))));
+    }
+    Ok(())
+}
 
 // ****************************************************************************
 // Semantic migrations -- Weird migrations that require access to the catalog

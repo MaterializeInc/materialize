@@ -7,6 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Drop source so that the replication slot can be reclaimed. Note that in the
+# final test that runs, this always leaks a replication slot in the running PG
+# instance. However, this behavior is necessary to ensure that PG sources can
+# be upgraded between versions.
+
+> DROP SOURCE IF EXISTS upgrade_pg_cdc_source_v_0_27_0 CASCADE
+
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 
 DROP PUBLICATION IF EXISTS upgrade_pg_cdc_publication_v_0_27_0;
