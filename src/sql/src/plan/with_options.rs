@@ -371,7 +371,7 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
     fn try_from_value(v: WithOptionValue<T>) -> Result<Self, PlanError> {
         match v {
             WithOptionValue::Value(v) => V::try_from_value(v),
-            WithOptionValue::Ident(i) => V::try_from_value(Value::String(i.to_string())),
+            WithOptionValue::Ident(i) => V::try_from_value(Value::String(i.into_string())),
             WithOptionValue::Sequence(_)
             | WithOptionValue::Object(_)
             | WithOptionValue::Secret(_)
