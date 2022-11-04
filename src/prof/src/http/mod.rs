@@ -84,7 +84,14 @@ pub struct FlamegraphTemplate<'a> {
 }
 
 #[allow(clippy::drop_copy)]
-async fn time_prof<'a>(merge_threads: bool, build_info: &BuildInfo) -> impl IntoResponse {
+async fn time_prof<'a>(
+    merge_threads: bool,
+    build_info: &BuildInfo,
+    // the time in seconds to run the profiler for
+    time_secs: u64,
+    // the sampling frequency in Hz
+    sample_freq: u32,
+) -> impl IntoResponse {
     let ctl_lock;
     cfg_if! {
         if #[cfg(any(target_os = "macos", not(feature = "jemalloc")))] {
@@ -101,16 +108,22 @@ async fn time_prof<'a>(merge_threads: bool, build_info: &BuildInfo) -> impl Into
     }
     // SAFETY: We ensure above that memory profiling is off.
     // Since we hold the mutex, nobody else can be turning it back on in the intervening time.
-    let stacks = unsafe { crate::time::prof_time(Duration::from_secs(10), 99, merge_threads) }
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let stacks = unsafe {
+        crate::time::prof_time(Duration::from_secs(time_secs), sample_freq, merge_threads)
+    }
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     // Fail with a compile error if we weren't holding the jemalloc lock.
     drop(ctl_lock);
+    let (secs_s, freq_s) = (format!("{time_secs}"), format!("{sample_freq}"));
     Ok::<_, (StatusCode, String)>(flamegraph(
         stacks,
         "CPU Time Flamegraph",
         false,
-        &[],
+        &[
+            ("Sampling time (s)", &secs_s),
+            ("Sampling frequency (Hz)", &freq_s),
+        ],
         build_info,
     ))
 }
@@ -171,15 +184,22 @@ mod disabled {
     pub struct ProfForm {
         action: String,
         threads: Option<String>,
+        time_secs: u64,
+        hz: u32,
     }
 
     pub async fn handle_post(
-        Form(ProfForm { action, threads }): Form<ProfForm>,
+        Form(ProfForm {
+            action,
+            threads,
+            time_secs,
+            hz,
+        }): Form<ProfForm>,
         build_info: &'static BuildInfo,
     ) -> impl IntoResponse {
         let merge_threads = threads.as_deref() == Some("merge");
         match action.as_ref() {
-            "time_fg" => Ok(time_prof(merge_threads, build_info).await),
+            "time_fg" => Ok(time_prof(merge_threads, build_info, time_secs, hz).await),
             _ => Err((
                 StatusCode::BAD_REQUEST,
                 format!("unrecognized `action` parameter: {}", action),
@@ -227,10 +247,17 @@ mod enabled {
     pub struct ProfForm {
         action: String,
         threads: Option<String>,
+        time_secs: u64,
+        hz: u32,
     }
 
     pub async fn handle_post(
-        Form(ProfForm { action, threads }): Form<ProfForm>,
+        Form(ProfForm {
+            action,
+            threads,
+            time_secs,
+            hz,
+        }): Form<ProfForm>,
         build_info: &'static BuildInfo,
     ) -> impl IntoResponse {
         let prof_ctl = PROF_CTL.as_ref().unwrap();
@@ -342,7 +369,9 @@ mod enabled {
                         .into_response(),
                 )
             }
-            "time_fg" => Ok(time_prof(merge_threads, build_info).await.into_response()),
+            "time_fg" => Ok(time_prof(merge_threads, build_info, time_secs, hz)
+                .await
+                .into_response()),
             x => Err((
                 StatusCode::BAD_REQUEST,
                 format!("unrecognized `action` parameter: {}", x),

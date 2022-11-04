@@ -46,6 +46,10 @@
   <div>
     <input type="checkbox" id="mergeThreads" name="threads" value="merge" />
     <label for="mergeThreads">Merge threads</label>
+    <input type="number" id="hz" name="hz" value="99" min="1" max="999" />
+    <label for="hz">Sampling rate in Hz</label>
+    <input type="number" id="timeSecs" name="time_secs" value="10" min="1" />
+    <label for="timeSecs">Time in seconds</label>
   </div>
   <div>
     <button name="action" value="time_fg">Visualize time profile (flamegraph)</button>
