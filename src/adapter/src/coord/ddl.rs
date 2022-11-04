@@ -396,6 +396,9 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         // Drop storage sources.
+        for id in &source_ids {
+            self.drop_storage_read_policy(id);
+        }
         self.controller
             .storage
             .drop_sources(source_ids)
