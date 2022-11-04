@@ -439,6 +439,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
                     //Hold onto capbility until we receive a disconnected error
                     let mut cap_opt = Some(capability);
+                    // Drop capability if we are not the leader, as our queue will
+                    // be empty and we will never use nor importantly downgrade it.
+                    if idx != 0 {
+                        cap_opt = None;
+                    }
 
                     move |output| {
                         let mut disconnected = false;
