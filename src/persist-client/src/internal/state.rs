@@ -374,7 +374,7 @@ where
         reader_id: &CriticalReaderId,
         expected_opaque: Opaque,
         (new_opaque, new_since): (Opaque, &Antichain<T>),
-    ) -> ControlFlow<Infallible, Result<Since<T>, Opaque>> {
+    ) -> ControlFlow<Infallible, Result<Since<T>, (Opaque, Since<T>)>> {
         let reader_state = self.critical_reader(reader_id);
 
         if reader_state.opaque == expected_opaque {
@@ -392,7 +392,10 @@ where
         } else {
             // No-op, but still commit the state change so that this gets
             // linearized.
-            Continue(Err(reader_state.opaque.clone()))
+            Continue(Err((
+                reader_state.opaque.clone(),
+                Since(reader_state.since.clone()),
+            )))
         }
     }
 

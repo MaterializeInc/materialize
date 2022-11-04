@@ -369,7 +369,7 @@ where
         reader_id: &CriticalReaderId,
         expected_opaque: &O,
         (new_opaque, new_since): (&O, &Antichain<T>),
-    ) -> (Result<Since<T>, O>, RoutineMaintenance) {
+    ) -> (Result<Since<T>, (O, Since<T>)>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.metrics);
         let (_seqno, res, maintenance) = self
             .apply_unbatched_idempotent_cmd(
@@ -386,7 +386,7 @@ where
 
         match res {
             Ok(since) => (Ok(since), maintenance),
-            Err(token) => (Err(Codec64::decode(token.0)), maintenance),
+            Err((opaque, since)) => (Err((Codec64::decode(opaque.0), since)), maintenance),
         }
     }
 
@@ -1056,7 +1056,9 @@ pub mod datadriven {
             .compare_and_downgrade_since(&reader_id, &expected_opaque, (&new_opaque, &new_since))
             .await;
         datadriven.routine.push(routine);
-        let since = res.map_err(|opaque| anyhow!("mismatch: opaque={}", opaque))?;
+        let since = res.map_err(|(opaque, since)| {
+            anyhow!("mismatch: opaque={} since={:?}", opaque, since.0.elements())
+        })?;
         Ok(format!(
             "{} {} {:?}\n",
             datadriven.machine.seqno(),

@@ -265,7 +265,8 @@ where
                 self.since = since.0.clone();
                 Ok(since)
             }
-            Err(actual_opaque) => {
+            Err((actual_opaque, since)) => {
+                self.since = since.0;
                 self.opaque = actual_opaque.clone();
                 Err(actual_opaque)
             }

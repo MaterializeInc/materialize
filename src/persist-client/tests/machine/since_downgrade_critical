@@ -31,7 +31,7 @@ since=[2] upper=[0]
 # Expected opaque doesn't match
 compare-and-downgrade-since expect_opaque=100 opaque=0 since=(4) reader_id=c00000000-0000-0000-0000-000000000000
 ----
-error: mismatch: opaque=0
+error: mismatch: opaque=0 since=[2]
 
 # Create a second reader. This gets the current since for a capability.
 register-critical-reader reader_id=c11111111-1111-1111-1111-111111111111
