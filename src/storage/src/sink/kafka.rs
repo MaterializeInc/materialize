@@ -320,12 +320,15 @@ impl KafkaTxProducer {
     fn send<'a, K, P>(
         &self,
         record: BaseRecord<'a, K, P>,
-    ) -> Result<(), (KafkaError, BaseRecord<'a, K, P>)>
+    ) -> Result<(), (KafkaError, Box<BaseRecord<'a, K, P>>)>
     where
         K: ToBytes + ?Sized,
         P: ToBytes + ?Sized,
     {
-        self.inner.send(record)
+        self.inner
+            .send(record)
+            // box the entire record the rdkakfa crate gives us back
+            .map_err(|(e, record)| (e, Box::new(record)))
     }
 
     async fn retry_on_txn_error<'a, F, Fut, T>(&self, f: F) -> Result<T, String>
@@ -546,7 +549,7 @@ impl KafkaSinkState {
                     return;
                 }
                 Err((e, rec)) => {
-                    record = rec;
+                    record = *rec;
                     self.metrics.message_send_errors_counter.inc();
 
                     if let KafkaError::MessageProduction(RDKafkaErrorCode::QueueFull) = e {
