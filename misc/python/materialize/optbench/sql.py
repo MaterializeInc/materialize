@@ -9,6 +9,7 @@
 
 import logging
 import re
+import ssl
 from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
@@ -70,9 +71,20 @@ class Database:
         port: int,
         host: str,
         user: str,
+        password: Optional[str],
+        require_ssl: bool,
     ) -> None:
         logging.debug(f"Initialize Database with host={host} port={port}, user={user}")
-        self.conn = pg8000.connect(host=host, port=port, user=user)
+
+        if require_ssl:
+            # verify_mode=ssl.CERT_REQUIRED is the default
+            ssl_context = ssl.create_default_context()
+        else:
+            ssl_context = None
+
+        self.conn = pg8000.connect(
+            host=host, port=port, user=user, password=password, ssl_context=ssl_context
+        )
         self.conn.autocommit = True
 
     def mz_version(self) -> str:
