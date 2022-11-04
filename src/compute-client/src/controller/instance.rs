@@ -245,8 +245,10 @@ where
             BTreeSet::new()
         };
 
-        // Initialize frontier tracking the new replica.
+        // Initialize frontier tracking the new replica
+        // and clean up any dropped collections that we can
         let mut updates = Vec::new();
+        let mut dropped_collection_ids = Vec::new();
         for (compute_id, collection) in &mut self.compute.collections {
             // Skip log collections not maintained by this replica.
             if collection.log_collection && !maintained_logs.contains(compute_id) {
@@ -254,9 +256,13 @@ where
             }
 
             let read_frontier = collection.read_frontier();
+            if read_frontier.is_empty() {
+                dropped_collection_ids.push(compute_id.clone());
+            }
             updates.push((*compute_id, read_frontier.to_owned()));
         }
         self.update_write_frontiers(id, &updates).await?;
+        self.update_dropped_collections(dropped_collection_ids)?;
 
         let replica = Replica::spawn(
             id,
@@ -433,6 +439,11 @@ where
                         compute_dependencies.clone(),
                     ),
                 );
+                println!(
+                    "Inserted collection id {} -- count(collections) = {}",
+                    export_id,
+                    self.compute.collections.len()
+                );
                 updates.push((export_id, as_of.clone()));
             }
             // Initialize tracking of replica frontiers.
@@ -571,6 +582,11 @@ where
             otel_ctx,
         }));
 
+        println!(
+            "Peeked collection id {} --- count(collections) = {}",
+            id,
+            self.compute.collections.len()
+        );
         Ok(())
     }
 
@@ -766,7 +782,10 @@ where
                 .update_read_capabilities(&mut storage_read_capability_changes)
                 .await?;
         }
-        self.update_dropped_collections(dropped_collection_ids)
+        if !dropped_collection_ids.is_empty() {
+            self.update_dropped_collections(dropped_collection_ids)?;
+        }
+        Ok(())
     }
 
     /// Applies `updates`, propagates consequences through other read capabilities, and sends an appropriate compaction command.
@@ -808,23 +827,26 @@ where
             }
         }
 
-        // Translate our net compute actions into `AllowCompaction` commands.
+        // Translate our net compute actions into `AllowCompaction` commands
+        // and a list of collections that are potentially ready to be dropped
         let mut compaction_commands = Vec::new();
+        let mut dropped_collection_ids = Vec::new();
         for (id, change) in compute_net.iter_mut() {
+            let frontier = self.compute.collection(*id)?.read_frontier();
+            if frontier.is_empty() {
+                dropped_collection_ids.push(id.clone());
+            }
             if !change.is_empty() {
-                let frontier = self
-                    .compute
-                    .collection(*id)
-                    .unwrap()
-                    .read_capabilities
-                    .frontier()
-                    .to_owned();
+                let frontier = frontier.to_owned();
                 compaction_commands.push((*id, frontier));
             }
         }
         if !compaction_commands.is_empty() {
             self.compute
                 .send(ComputeCommand::AllowCompaction(compaction_commands));
+        }
+        if !dropped_collection_ids.is_empty() {
+            self.update_dropped_collections(dropped_collection_ids)?;
         }
 
         // We may have storage consequences to process.
@@ -906,6 +928,11 @@ where
                     .all(|frontier| frontier.is_empty())
             {
                 self.compute.collections.remove(&id);
+                println!(
+                    "Removed collection id {} --- count(collections): {}",
+                    id,
+                    self.compute.collections.len()
+                );
             }
         }
         Ok(())
