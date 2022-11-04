@@ -1039,10 +1039,19 @@ impl PostgresTaskInfo {
                             // check the name, type_oid, and type_mod explicitly and error if any
                             // of them differ
                             for (src, rel) in info.desc.columns.iter().zip(relation.columns()) {
+                                let mut rel_typoid = u32::try_from(rel.type_id()).unwrap();
+                                let mut rel_typmod = rel.type_modifier();
+
+                                // Rewrite these columns to text if that is how
+                                // we're treating them.
+                                if self.text_cols.contains(&rel_typoid) {
+                                    rel_typoid = mz_pgrepr::oid::TYPE_TEXT_OID;
+                                    rel_typmod = -1;
+                                };
+
                                 let same_name = src.name == rel.name().unwrap();
-                                let rel_typoid = u32::try_from(rel.type_id()).unwrap();
                                 let same_typoid = src.type_oid == rel_typoid;
-                                let same_typmod = src.type_mod == rel.type_modifier();
+                                let same_typmod = src.type_mod == rel_typmod;
 
                                 if !same_name || !same_typoid || !same_typmod {
                                     error!(

@@ -12,7 +12,7 @@ from materialize.mzcompose.services import Materialized, Postgres, TestCerts, Te
 
 SERVICES = [
     Materialized(volumes_extra=["secrets:/share/secrets"]),
-    Testdrive(default_timeout='10s'),
+    Testdrive(),
     TestCerts(),
     Postgres(),
 ]

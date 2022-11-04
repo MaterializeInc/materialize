@@ -4326,6 +4326,7 @@ dependencies = [
  "mz-ore",
  "mz-persist-client",
  "mz-pgcopy",
+ "mz-pgrepr",
  "mz-pid-file",
  "mz-postgres-util",
  "mz-prof",
