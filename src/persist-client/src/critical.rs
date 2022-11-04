@@ -150,22 +150,24 @@ where
     }
 
     /// Attempts to forward the since capability of this handle to `new_since` iff
-    /// the current capability and opaque value of this handle's [CriticalReaderId]
-    /// are `expected`, and [Self::maybe_compare_and_downgrade_since] chooses to
-    /// perform the downgrade.
+    /// the opaque value of this handle's [CriticalReaderId] is `expected`, and
+    /// [Self::maybe_compare_and_downgrade_since] chooses to perform the downgrade.
     ///
     /// Users are expected to call this function frequently, but should not expect
     /// `since` to be downgraded with each call -- this function is free to no-op
     /// requests to perform rate-limiting for downstream services. A `None` is returned
     /// for no-op requests, and `Some` is returned when downgrading since.
     ///
+    /// When returning `Some(since)`, `since` will be set to the most recent value
+    /// known for this critical reader ID, and is guaranteed to be `!less_than(new_since)`.
+    ///
     /// Because SinceHandles are expected to live beyond process lifetimes, it's
     /// possible for the same [CriticalReaderId] to be used concurrently from
     /// multiple processes (either intentionally or something like a zombie
     /// process). To discover this, [Self::maybe_compare_and_downgrade_since] has
-    /// "compare and set" semantics. If `expected` does not match, either on the
-    /// opaque value or the `since`, the actual current value is returned and the
-    /// caller must decide how to handle it (likely a retry or a `halt!`).
+    /// "compare and set" semantics over an opaque value. If the `expected` opaque
+    /// value does not match state, an `Err` is returned and the caller must decide
+    /// how to handle it (likely a retry or a `halt!`).
     ///
     /// If desired, users may use the opaque value to fence out concurrent access
     /// of other [SinceHandle]s for a given [CriticalReaderId]. e.g.:
@@ -182,7 +184,7 @@ where
     /// let new_since: Antichain<u64> = unimplemented!();
     /// let res = since
     ///     .maybe_compare_and_downgrade_since(
-    ///         (&since.opaque().clone(), &since.since().clone()),
+    ///         &since.opaque().clone(),
     ///         (&fencing_token, &new_since),
     ///     )
     ///     .await;
@@ -191,7 +193,7 @@ where
     ///     Some(Ok(_)) => {
     ///         // we downgraded since!
     ///     }
-    ///     Some(Err((actual_fencing_token, actual_since))) => {
+    ///     Some(Err(actual_fencing_token)) => {
     ///         // compare `fencing_token` and `actual_fencing_token`, etc
     ///     }
     ///     None => {
@@ -214,17 +216,17 @@ where
     /// let new_since: Antichain<u64> = unimplemented!();
     /// let res = since
     ///     .maybe_compare_and_downgrade_since(
-    ///         (&since.opaque().clone(), &since.since().clone()),
+    ///         &since.opaque().clone(),
     ///         (&since.opaque().clone(), &new_since),
     ///     )
     ///     .await;
     ///
     /// match res {
     ///     Some(Ok(_)) => {
-    ///         // we downgraded since!
+    ///         // woohoo!
     ///     }
-    ///     Some(Err((_actual_opaque, actual_since))) => {
-    ///         // we contended with another handle on `since`. this might be OK!
+    ///     Some(Err(_actual_opaque)) => {
+    ///         panic!("the opaque value should never change from the default");
     ///     }
     ///     None => {
     ///         // no problem, we'll try again later
@@ -232,13 +234,12 @@ where
     /// }
     /// # }
     /// ```
-    ///
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn maybe_compare_and_downgrade_since(
         &mut self,
-        expected: (&O, &Antichain<T>),
+        expected: &O,
         new: (&O, &Antichain<T>),
-    ) -> Option<Result<(O, Since<T>), (O, Since<T>)>> {
+    ) -> Option<Result<Since<T>, O>> {
         let elapsed_since_last_downgrade = Duration::from_millis(
             (self.machine.cfg.now)().saturating_sub(self.last_downgrade_since),
         );
@@ -251,24 +252,22 @@ where
 
     async fn compare_and_downgrade_since(
         &mut self,
-        expected: (&O, &Antichain<T>),
+        expected: &O,
         new: (&O, &Antichain<T>),
-    ) -> Result<(O, Since<T>), (O, Since<T>)> {
+    ) -> Result<Since<T>, O> {
         let (res, maintenance) = self
             .machine
             .compare_and_downgrade_since(&self.reader_id, expected, new)
             .await;
         maintenance.start_performing(&self.machine, &self.gc);
         match res {
-            Ok((new_opaque, new_since)) => {
-                self.opaque = new_opaque.clone();
-                self.since = new_since.clone().0;
-                Ok((new_opaque, new_since))
+            Ok(since) => {
+                self.since = since.0.clone();
+                Ok(since)
             }
-            Err((actual_opaque, actual_since)) => {
+            Err(actual_opaque) => {
                 self.opaque = actual_opaque.clone();
-                self.since = actual_since.clone().0;
-                Err((actual_opaque, actual_since))
+                Err(actual_opaque)
             }
         }
     }

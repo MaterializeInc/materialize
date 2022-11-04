@@ -489,9 +489,9 @@ impl PersistClient {
     ///
     /// **IMPORTANT**: The above means that if a SinceHandle is registered and
     /// then lost, the shard's since will be permanently "stuck", forever
-    /// preventing logical compaction. Users are advised to durably record the
-    /// intended [CriticalReaderId] _before_ registering a SinceHandle (in case
-    /// the process crashes at the wrong time).
+    /// preventing logical compaction. Users are advised to durably record
+    /// (preferably in code) the intended [CriticalReaderId] _before_ registering
+    /// a SinceHandle (in case the process crashes at the wrong time).
     ///
     /// If `shard_id` has never been used before, initializes a new shard and
     /// return a handle with its `since` frontier set to the initial value of

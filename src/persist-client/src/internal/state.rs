@@ -372,24 +372,27 @@ where
     pub fn compare_and_downgrade_since(
         &mut self,
         reader_id: &CriticalReaderId,
-        (expected_opaque, expected_since): (Opaque, &Antichain<T>),
+        expected_opaque: Opaque,
         (new_opaque, new_since): (Opaque, &Antichain<T>),
-    ) -> ControlFlow<Infallible, Result<(Opaque, Since<T>), (Opaque, Since<T>)>> {
+    ) -> ControlFlow<Infallible, Result<Since<T>, Opaque>> {
         let reader_state = self.critical_reader(reader_id);
 
-        if &reader_state.since == expected_since && reader_state.opaque == expected_opaque {
-            assert!(PartialOrder::less_than(expected_since, new_since));
-            reader_state.since = new_since.clone();
-            reader_state.opaque = new_opaque.clone();
-            self.update_since();
-            Continue(Ok((new_opaque, Since(new_since.clone()))))
+        if reader_state.opaque == expected_opaque {
+            if PartialOrder::less_than(&reader_state.since, new_since) {
+                reader_state.since = new_since.clone();
+                reader_state.opaque = new_opaque;
+                self.update_since();
+                Continue(Ok(Since(new_since.clone())))
+            } else {
+                // no work to be done -- the reader state's `since` is already sufficiently
+                // advanced. we may someday need to revisit this branch when it's possible
+                // for two `since` frontiers to be incomparable.
+                Continue(Ok(Since(reader_state.since.clone())))
+            }
         } else {
             // No-op, but still commit the state change so that this gets
             // linearized.
-            Continue(Err((
-                reader_state.opaque.clone(),
-                Since(reader_state.since.clone()),
-            )))
+            Continue(Err(reader_state.opaque.clone()))
         }
     }
 

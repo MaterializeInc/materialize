@@ -367,9 +367,9 @@ where
     pub async fn compare_and_downgrade_since<O: Codec64>(
         &mut self,
         reader_id: &CriticalReaderId,
-        (expected_opaque, expected_since): (&O, &Antichain<T>),
+        expected_opaque: &O,
         (new_opaque, new_since): (&O, &Antichain<T>),
-    ) -> (Result<(O, Since<T>), (O, Since<T>)>, RoutineMaintenance) {
+    ) -> (Result<Since<T>, O>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.metrics);
         let (_seqno, res, maintenance) = self
             .apply_unbatched_idempotent_cmd(
@@ -377,7 +377,7 @@ where
                 |_seqno, state| {
                     state.compare_and_downgrade_since(
                         reader_id,
-                        (Opaque(Codec64::encode(expected_opaque)), expected_since),
+                        Opaque(Codec64::encode(expected_opaque)),
                         (Opaque(Codec64::encode(new_opaque)), new_since),
                     )
                 },
@@ -385,8 +385,8 @@ where
             .await;
 
         match res {
-            Ok((token, since)) => (Ok((Codec64::decode(token.0), since)), maintenance),
-            Err((token, since)) => (Err((Codec64::decode(token.0), since)), maintenance),
+            Ok(since) => (Ok(since), maintenance),
+            Err(token) => (Err(Codec64::decode(token.0)), maintenance),
         }
     }
 
@@ -1047,26 +1047,20 @@ pub mod datadriven {
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
-        let expected_token: u64 = args.expect("expect_token");
-        let expected_since = args.expect_antichain("expect_since");
-        let new_token: u64 = args.expect("token");
+        let expected_opaque: u64 = args.expect("expect_opaque");
+        let new_opaque: u64 = args.expect("opaque");
         let new_since = args.expect_antichain("since");
         let reader_id = args.expect("reader_id");
         let (res, routine) = datadriven
             .machine
-            .compare_and_downgrade_since(
-                &reader_id,
-                (&expected_token, &expected_since),
-                (&new_token, &new_since),
-            )
+            .compare_and_downgrade_since(&reader_id, &expected_opaque, (&new_opaque, &new_since))
             .await;
         datadriven.routine.push(routine);
-        let (token, since) =
-            res.map_err(|(token, since)| anyhow!("mismatch: token={}, since={:?}", token, since))?;
+        let since = res.map_err(|opaque| anyhow!("mismatch: opaque={}", opaque))?;
         Ok(format!(
             "{} {} {:?}\n",
             datadriven.machine.seqno(),
-            token,
+            new_opaque,
             since.0.elements()
         ))
     }

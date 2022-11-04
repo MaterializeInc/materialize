@@ -131,7 +131,7 @@ impl SinkHandle {
                 .expect("opening persist client");
 
             let mut read_handle: ReadHandle<SourceData, (), Timestamp, Diff> = client
-                .open_reader(shard_id)
+                .open_leased_reader(shard_id)
                 .await
                 .expect("opening reader for shard");
 

@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use differential_dataflow::consolidation::consolidate_updates;
@@ -452,43 +452,22 @@ impl Transactor {
         const SINCE_LAG: u64 = 10;
         let new_since = Antichain::from_elem(self.read_ts.saturating_sub(SINCE_LAG));
 
-        while PartialOrder::less_than(self.since.since(), &new_since) {
-            debug!(
-                "downgrading since {:?} to {:?}",
-                self.since.since().elements(),
-                new_since.elements()
-            );
-            let expected_opaque = self.since.opaque().clone();
-            let expected_since = self.since.since().clone();
-            let res = self
-                .since
-                .maybe_compare_and_downgrade_since(
-                    (&expected_opaque, &expected_since),
-                    (&expected_opaque, &new_since),
-                )
-                .await;
-            match res {
-                Some(Ok((_token, _since))) => {
-                    // Success! Fall through and let the while loop condition
-                    // exit for us.
-                }
-                Some(Err((actual_opaque, actual_since))) => {
-                    // We raced with another maelstrom node. The since handle
-                    // has updated it's internal since with the real one. Fall
-                    // through and let the while loop condition handle whether
-                    // we should try again.
-                    assert_eq!(self.since.since(), &actual_since.0);
-                    debug!(
-                        "raced with another maelstrom node expected=({}, {:?}) actual=({}, {:?})",
-                        0,
-                        expected_since.elements(),
-                        actual_opaque,
-                        &actual_since.0.elements()
-                    );
-                }
-                None => {
-                    // No-op call
-                }
+        let expected_opaque = self.since.opaque().clone();
+        let res = self
+            .since
+            .maybe_compare_and_downgrade_since(&expected_opaque, (&expected_opaque, &new_since))
+            .await;
+        match res {
+            Some(Ok(_latest_since)) => {
+                // Success!
+            }
+            Some(Err(actual_opaque)) => {
+                // For now, we don't perform any fencing of SinceHandles, and each handle
+                // should share the same opaque value.
+                assert_eq!(actual_opaque, expected_opaque);
+            }
+            None => {
+                panic!("should not no-op `maybe_compare_and_downgrade_since` during testing");
             }
         }
     }
@@ -550,7 +529,9 @@ impl Service for TransactorService {
         let blob = CachingBlob::new(blob);
 
         // Construct requested Consensus.
-        let config = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+        let mut config = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+        // so that we don't hold up writes: always advance a critical handle's since
+        config.critical_downgrade_interval = Duration::from_secs(0);
         let metrics = Arc::new(Metrics::new(&config, &MetricsRegistry::new()));
         let consensus = match &args.consensus_uri {
             Some(consensus_uri) => {
