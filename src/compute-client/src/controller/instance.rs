@@ -439,11 +439,6 @@ where
                         compute_dependencies.clone(),
                     ),
                 );
-                println!(
-                    "Inserted collection id {} -- count(collections) = {}",
-                    export_id,
-                    self.compute.collections.len()
-                );
                 updates.push((export_id, as_of.clone()));
             }
             // Initialize tracking of replica frontiers.
@@ -582,11 +577,6 @@ where
             otel_ctx,
         }));
 
-        println!(
-            "Peeked collection id {} --- count(collections) = {}",
-            id,
-            self.compute.collections.len()
-        );
         Ok(())
     }
 
@@ -928,11 +918,6 @@ where
                     .all(|frontier| frontier.is_empty())
             {
                 self.compute.collections.remove(&id);
-                println!(
-                    "Removed collection id {} --- count(collections): {}",
-                    id,
-                    self.compute.collections.len()
-                );
             }
         }
         Ok(())
