@@ -31,10 +31,11 @@ DEFAULT_MZ_VOLUMES = [
     "tmp:/share/tmp",
 ]
 
-DEFAULT_SIZE = 4
-
 
 class Materialized(Service):
+    class Size:
+        DEFAULT_SIZE = 4
+
     def __init__(
         self,
         name: str = "materialized",
@@ -45,8 +46,8 @@ class Materialized(Service):
         memory: Optional[str] = None,
         persist_blob_url: Optional[str] = None,
         data_directory: str = "/mzdata",
-        workers: Optional[int] = DEFAULT_SIZE,
-        size: Optional[str] = str(DEFAULT_SIZE),
+        workers: Optional[int] = Size.DEFAULT_SIZE,
+        default_size: int = Size.DEFAULT_SIZE,
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         environment_extra: Optional[List[str]] = None,
@@ -86,12 +87,18 @@ class Materialized(Service):
                 "AWS_SESSION_TOKEN",
             ]
 
-        if size:
-            environment += [
-                f"MZ_BOOTSTRAP_BUILTIN_CLUSTER_REPLICA_SIZE={size}",
-                f"MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE={size}",
-                f"MZ_DEFAULT_STORAGE_HOST_SIZE={size}",
-            ]
+        self.default_storage_size = default_size
+        self.default_replica_size = (
+            "1" if default_size == 1 else f"{default_size}-{default_size}"
+        )
+
+        environment += [
+            # Issue #15858 prevents the habitual use of large introspection clusters,
+            # so we are leaving MZ_BOOTSTRAP_BUILTIN_CLUSTER_REPLICA_SIZE as is.
+            # f"MZ_BOOTSTRAP_BUILTIN_CLUSTER_REPLICA_SIZE={self.default_replica_size}",
+            f"MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE={self.default_replica_size}",
+            f"MZ_DEFAULT_STORAGE_HOST_SIZE={self.default_storage_size}",
+        ]
 
         if workers:
             environment += [
@@ -162,7 +169,6 @@ class Computed(Service):
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
-        workers: Optional[int] = DEFAULT_SIZE,
         secrets_reader: str = "process",
         secrets_reader_process_dir: str = "mzdata/secrets",
     ) -> None:
@@ -222,7 +228,7 @@ class Storaged(Service):
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
-        workers: Optional[int] = DEFAULT_SIZE,
+        workers: Optional[int] = Materialized.Size.DEFAULT_SIZE,
         secrets_reader: str = "process",
         secrets_reader_process_dir: str = "mzdata/secrets",
     ) -> None:

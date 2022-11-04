@@ -11,7 +11,7 @@
 
 # The contents of the introspection tables depend on the replica size
 $ skip-if
-SELECT ${arg.size} > 1
+SELECT '${arg.default-replica-size}' != '4-4'
 
 # In case the environment has other replicas
 > SET cluster_replica = r1
@@ -23,7 +23,7 @@ SELECT ${arg.size} > 1
 # Note: We rely on testdrive's retry behavior here, as it takes some time for
 # the logging to catch up.
 
-> SELECT time > 0
+> SELECT COUNT(*)
   FROM
     mz_materialized_views AS views,
     mz_internal.mz_compute_exports AS compute_exports,
@@ -31,5 +31,6 @@ SELECT ${arg.size} > 1
   WHERE
     views.name = 'mv' AND
     views.id = compute_exports.export_id AND
-    compute_exports.export_id = frontiers.export_id
-true
+    compute_exports.export_id = frontiers.export_id AND
+    time > 0
+16
