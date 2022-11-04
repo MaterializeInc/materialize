@@ -209,10 +209,17 @@ where
                 match ComputeGrpcClient::connect_partitioned(addrs, version).await {
                     Ok(client) => Ok(client),
                     Err(e) => {
-                        tracing::warn!(
-                            "error connecting to replica {replica_id}, retrying in {:?}: {e}",
-                            state.next_backoff.unwrap()
-                        );
+                        if state.i >= mz_service::retry::INFO_MIN_RETRIES {
+                            tracing::info!(
+                                "error connecting to replica {replica_id}, retrying in {:?}: {e}",
+                                state.next_backoff.unwrap()
+                            );
+                        } else {
+                            tracing::debug!(
+                                "error connecting to replica {replica_id}, retrying in {:?}: {e}",
+                                state.next_backoff.unwrap()
+                            );
+                        }
                         Err(e)
                     }
                 }

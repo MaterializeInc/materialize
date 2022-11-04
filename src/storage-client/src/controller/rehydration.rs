@@ -155,14 +155,24 @@ where
         // Reconnect to the storage host.
         let client = Retry::default()
             .clamp_backoff(Duration::from_secs(1))
-            .retry_async(|_| {
+            .retry_async(|state| {
                 let addr = self.addr.clone();
                 let version = self.build_info.semver_version();
                 async move {
-                    match StorageGrpcClient::connect(addr, version).await {
+                    match StorageGrpcClient::connect(addr.clone(), version).await {
                         Ok(client) => Ok(client),
                         Err(e) => {
-                            warn!("error connecting to storage host, retrying: {e}");
+                            if state.i >= mz_service::retry::INFO_MIN_RETRIES {
+                                tracing::info!(
+                                    "error connecting to storage host {addr}, retrying in {:?}: {e}",
+                                    state.next_backoff.unwrap()
+                                );
+                            } else {
+                                tracing::debug!(
+                                    "error connecting to storage host {addr}, retrying in {:?}: {e}",
+                                    state.next_backoff.unwrap()
+                                );
+                            }
                             Err(e)
                         }
                     }
