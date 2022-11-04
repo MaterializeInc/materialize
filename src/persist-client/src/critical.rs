@@ -199,7 +199,7 @@ where
     ///     None => {
     ///         // no problem, we'll try again later
     ///     }
-    /// }
+    /// };
     /// # }
     /// ```
     ///
@@ -231,7 +231,7 @@ where
     ///     None => {
     ///         // no problem, we'll try again later
     ///     }
-    /// }
+    /// };
     /// # }
     /// ```
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
