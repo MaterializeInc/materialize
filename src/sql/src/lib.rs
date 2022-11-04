@@ -98,6 +98,7 @@ pub const DEFAULT_SCHEMA: &str = "public";
 
 pub mod ast;
 pub mod catalog;
+mod error_formatting;
 pub mod func;
 pub mod kafka_util;
 pub mod names;

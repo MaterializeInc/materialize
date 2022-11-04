@@ -78,7 +78,21 @@ pub enum PurificationError {
     CsrGetBySubjectError(#[from] GetBySubjectError),
     /// An error compiling protobuf's.
     #[error(transparent)]
-    ProtobufError(#[from] protobuf_native::OperationFailedError),
+    Protobuf(#[from] protobuf_native::OperationFailedError),
+    /// lalala
+    #[error("{}", crate::error_formatting::format_postgres_error(.0))]
+    Postgres(tokio_postgres::Error),
+}
+
+impl From<mz_postgres_util::PostgresError> for PurificationError {
+    fn from(e: mz_postgres_util::PostgresError) -> Self {
+        use mz_postgres_util::PostgresError::*;
+        match e {
+            Postgres(e) => PurificationError::Postgres(e),
+            // TODO(guswynn): better categorize these
+            other => PurificationError::Generic(other.into()),
+        }
+    }
 }
 
 macro_rules! bail_generic {

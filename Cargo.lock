@@ -3969,6 +3969,7 @@ dependencies = [
  "prost",
  "protobuf-src",
  "serde",
+ "thiserror",
  "tokio",
  "tokio-postgres",
  "tonic-build",
