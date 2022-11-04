@@ -245,7 +245,7 @@ where
             BTreeSet::new()
         };
 
-        // Initialize frontier tracking the new replica
+        // Initialize frontier tracking for the new replica
         // and clean up any dropped collections that we can
         let mut updates = Vec::new();
         let mut dropped_collection_ids = Vec::new();
