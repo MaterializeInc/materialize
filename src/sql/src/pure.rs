@@ -17,7 +17,7 @@ use std::iter;
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, Context};
 use itertools::Itertools;
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
@@ -56,10 +56,44 @@ use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
 use crate::plan::StatementContext;
 
+/// An error that happened during purification.
+/// This should be comprehensible (and actionable)
+/// by a user.
+#[derive(Debug, thiserror::Error)]
+pub enum PurificationError {
+    /// A generic error we bailed on.
+    #[error(transparent)]
+    Generic(#[from] anyhow::Error),
+    /// A error in planning.
+    #[error(transparent)]
+    PlanError(#[from] PlanError),
+    /// An error using the catalog.
+    #[error(transparent)]
+    CatalogError(#[from] crate::catalog::CatalogError),
+    /// An error using the CSR.
+    #[error(transparent)]
+    CsrGetSchemaError(#[from] GetSchemaError),
+    /// An error using the CSR.
+    #[error(transparent)]
+    CsrGetBySubjectError(#[from] GetBySubjectError),
+    /// An error compiling protobuf's.
+    #[error(transparent)]
+    ProtobufError(#[from] protobuf_native::OperationFailedError),
+}
+
+macro_rules! bail_generic {
+    ($fmt:expr, $($arg:tt)*) => {
+        return Err(PurificationError::Generic(anyhow::anyhow!($fmt, $($arg)*)))
+    };
+    ($err:expr $(,)?) => {
+        return Err(PurificationError::Generic(anyhow::anyhow!($err)))
+    };
+}
+
 fn subsource_gen<'a, T>(
     selected_subsources: &mut Vec<CreateSourceSubsource<Aug>>,
     tables_by_name: HashMap<String, HashMap<String, HashMap<String, &'a T>>>,
-) -> Result<Vec<(UnresolvedObjectName, UnresolvedObjectName, &'a T)>, anyhow::Error> {
+) -> Result<Vec<(UnresolvedObjectName, UnresolvedObjectName, &'a T)>, PurificationError> {
     let mut validated_requested_subsources = vec![];
 
     for subsource in selected_subsources {
@@ -68,7 +102,9 @@ fn subsource_gen<'a, T>(
         let subsource_name = match &subsource.subsource {
             Some(name) => match name {
                 DeferredObjectName::Deferred(name) => name.clone(),
-                DeferredObjectName::Named(..) => bail!("Cannot manually ID qualify subsources"),
+                DeferredObjectName::Named(..) => {
+                    bail_generic!("Cannot manually ID qualify subsources")
+                }
             },
             None => {
                 // Use the entered name as the upstream reference, and then use
@@ -80,7 +116,7 @@ fn subsource_gen<'a, T>(
 
         let schemas = match tables_by_name.get(&upstream_name.item) {
             Some(schemas) => schemas,
-            None => bail!("table {upstream_name} not found in source"),
+            None => bail_generic!("table {upstream_name} not found in source"),
         };
 
         let schema = match &upstream_name.schema {
@@ -88,14 +124,16 @@ fn subsource_gen<'a, T>(
             None => match schemas.keys().exactly_one() {
                 Ok(schema) => schema,
                 Err(_) => {
-                    bail!("table {upstream_name} is ambiguous, consider specifying the schema")
+                    bail_generic!(
+                        "table {upstream_name} is ambiguous, consider specifying the schema"
+                    )
                 }
             },
         };
 
         let databases = match schemas.get(schema) {
             Some(databases) => databases,
-            None => bail!("schema {schema} not found in source"),
+            None => bail_generic!("schema {schema} not found in source"),
         };
 
         let database = match &upstream_name.database {
@@ -103,14 +141,16 @@ fn subsource_gen<'a, T>(
             None => match databases.keys().exactly_one() {
                 Ok(database) => database,
                 Err(_) => {
-                    bail!("table {upstream_name} is ambiguous, consider specifying the database")
+                    bail_generic!(
+                        "table {upstream_name} is ambiguous, consider specifying the database"
+                    )
                 }
             },
         };
 
         let desc = match databases.get(database) {
             Some(desc) => *desc,
-            None => bail!("database {database} not found source"),
+            None => bail_generic!("database {database} not found source"),
         };
 
         let qualified_upstream_name =
@@ -135,7 +175,7 @@ pub async fn purify_create_source(
         Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
         CreateSourceStatement<Aug>,
     ),
-    anyhow::Error,
+    PurificationError,
 > {
     let CreateSourceStatement {
         connection,
@@ -154,7 +194,7 @@ pub async fn purify_create_source(
         } in subsources
         {
             if let Some(DeferredObjectName::Named(_)) = subsource {
-                bail!("Cannot manually ID qualify subsources");
+                bail_generic!("Cannot manually ID qualify subsources");
             }
         }
     }
@@ -176,7 +216,7 @@ pub async fn purify_create_source(
                 // Get Kafka connection
                 match item.connection()? {
                     Connection::Kafka(connection) => connection.clone(),
-                    _ => bail!("{} is not a kafka connection", item.name()),
+                    _ => bail_generic!("{} is not a kafka connection", item.name()),
                 }
             };
 
@@ -243,7 +283,7 @@ pub async fn purify_create_source(
                 let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
                     Connection::Aws(aws) => aws.clone(),
-                    _ => bail!("{} is not an AWS connection", item.name()),
+                    _ => bail_generic!("{} is not an AWS connection", item.name()),
                 }
             };
             validate_aws_credentials(
@@ -259,7 +299,7 @@ pub async fn purify_create_source(
                 let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
                     Connection::Aws(aws) => aws.clone(),
-                    _ => bail!("{} is not an AWS connection", item.name()),
+                    _ => bail_generic!("{} is not an AWS connection", item.name()),
                 }
             };
             validate_aws_credentials(
@@ -278,7 +318,7 @@ pub async fn purify_create_source(
                 let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
                     Connection::Postgres(connection) => connection.clone(),
-                    _ => bail!("{} is not a postgres connection", item.name()),
+                    _ => bail_generic!("{} is not a postgres connection", item.name()),
                 }
             };
             let crate::plan::statement::PgConfigOptionExtracted { publication, .. } =
@@ -419,7 +459,9 @@ pub async fn purify_create_source(
                 Some(CreateReferencedSubsources::All) => {
                     let available_subsources = match &available_subsources {
                         Some(available_subsources) => available_subsources,
-                        None => bail!("FOR ALL TABLES is only valid for multi-output sources"),
+                        None => {
+                            bail_generic!("FOR ALL TABLES is only valid for multi-output sources")
+                        }
                     };
                     for (name, (_, desc)) in available_subsources {
                         let upstream_name = UnresolvedObjectName::from(name.clone());
@@ -430,7 +472,9 @@ pub async fn purify_create_source(
                 Some(CreateReferencedSubsources::Subset(selected_subsources)) => {
                     let available_subsources = match &available_subsources {
                         Some(available_subsources) => available_subsources,
-                        None => bail!("FOR TABLES (..) is only valid for multi-output sources"),
+                        None => {
+                            bail_generic!("FOR TABLES (..) is only valid for multi-output sources")
+                        }
                     };
                     // The user manually selected a subset of upstream tables so we need to
                     // validate that the names actually exist and are not ambiguous
@@ -456,7 +500,7 @@ pub async fn purify_create_source(
                 }
                 None => {
                     if available_subsources.is_some() {
-                        bail!("multi-output sources require a FOR TABLES (..) or FOR ALL TABLES statement");
+                        bail_generic!("multi-output sources require a FOR TABLES (..) or FOR ALL TABLES statement");
                     }
                 }
             };
@@ -551,7 +595,7 @@ async fn purify_source_format(
     connection: &mut CreateSourceConnection<Aug>,
     envelope: &Option<Envelope>,
     connection_context: &ConnectionContext,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), PurificationError> {
     if matches!(format, CreateSourceFormat::KeyValue { .. })
         && !matches!(
             connection,
@@ -559,7 +603,7 @@ async fn purify_source_format(
         )
     {
         // We don't mention `TestScript` to users here
-        bail!("Kafka sources are the only source type that can provide KEY/VALUE formats")
+        bail_generic!("Kafka sources are the only source type that can provide KEY/VALUE formats")
     }
 
     match format {
@@ -585,7 +629,7 @@ async fn purify_source_format_single(
     connection: &mut CreateSourceConnection<Aug>,
     envelope: &Option<Envelope>,
     connection_context: &ConnectionContext,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), PurificationError> {
     match format {
         Format::Avro(schema) => match schema {
             AvroSchema::Csr { csr_connection } => {
@@ -621,10 +665,10 @@ async fn purify_source_format_single(
                 match connection {
                     CreateSourceConnection::S3 { .. } => {
                         if names.is_empty() {
-                            bail!("CSV WITH HEADER for S3 sources requires specifying the header columns");
+                            bail_generic!("CSV WITH HEADER for S3 sources requires specifying the header columns");
                         }
                     }
-                    _ => bail!("CSV WITH HEADER is only supported for S3 sources"),
+                    _ => bail_generic!("CSV WITH HEADER is only supported for S3 sources"),
                 }
             }
         }
@@ -639,7 +683,7 @@ async fn purify_csr_connection_proto(
     csr_connection: &mut CsrConnectionProtobuf<Aug>,
     envelope: &Option<Envelope>,
     connection_context: &ConnectionContext,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), PurificationError> {
     let topic = if let CreateSourceConnection::Kafka(KafkaSourceConnection {
         connection: KafkaConnection { options, .. },
         ..
@@ -651,7 +695,7 @@ async fn purify_csr_connection_proto(
             .expect("already verified options valid provided");
         topic.expect("already validated topic provided")
     } else {
-        bail!("Confluent Schema Registry is only supported with Kafka sources")
+        bail_generic!("Confluent Schema Registry is only supported with Kafka sources")
     };
 
     let CsrConnectionProtobuf {
@@ -667,7 +711,7 @@ async fn purify_csr_connection_proto(
 
             let ccsr_connection = match scx.get_item_by_resolved_name(connection)?.connection()? {
                 Connection::Csr(connection) => connection.clone(),
-                _ => bail!("{} is not a schema registry connection", connection),
+                _ => bail_generic!("{} is not a schema registry connection", connection),
             };
 
             let ccsr_client = ccsr_connection
@@ -680,7 +724,7 @@ async fn purify_csr_connection_proto(
                 .ok();
 
             if matches!(envelope, Some(Envelope::Debezium(DbzMode::Plain))) && key.is_none() {
-                bail!("Key schema is required for ENVELOPE DEBEZIUM");
+                bail_generic!("Key schema is required for ENVELOPE DEBEZIUM");
             }
 
             *seed = Some(CsrSeedProtobuf { value, key });
@@ -697,7 +741,7 @@ async fn purify_csr_connection_avro(
     csr_connection: &mut CsrConnectionAvro<Aug>,
     envelope: &Option<Envelope>,
     connection_context: &ConnectionContext,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), PurificationError> {
     let topic = if let CreateSourceConnection::Kafka(KafkaSourceConnection {
         connection: KafkaConnection { options, .. },
         ..
@@ -709,7 +753,7 @@ async fn purify_csr_connection_avro(
             .expect("already verified options valid provided");
         topic.expect("already validated topic provided")
     } else {
-        bail!("Confluent Schema Registry is only supported with Kafka sources")
+        bail_generic!("Confluent Schema Registry is only supported with Kafka sources")
     };
 
     let CsrConnectionAvro {
@@ -722,7 +766,7 @@ async fn purify_csr_connection_avro(
         let scx = StatementContext::new(None, &*catalog);
         let csr_connection = match scx.get_item_by_resolved_name(connection)?.connection()? {
             Connection::Csr(connection) => connection.clone(),
-            _ => bail!("{} is not a schema registry connection", connection),
+            _ => bail_generic!("{} is not a schema registry connection", connection),
         };
         let ccsr_client = csr_connection
             .connect(&*connection_context.secrets_reader)
@@ -739,7 +783,7 @@ async fn purify_csr_connection_avro(
         )
         .await?;
         if matches!(envelope, Some(Envelope::Debezium(DbzMode::Plain))) && key_schema.is_none() {
-            bail!("Key schema is required for ENVELOPE DEBEZIUM");
+            bail_generic!("Key schema is required for ENVELOPE DEBEZIUM");
         }
 
         *seed = Some(CsrSeedAvro {
@@ -820,7 +864,7 @@ async fn get_remote_csr_schema(
     key_strategy: ReaderSchemaSelectionStrategy,
     value_strategy: ReaderSchemaSelectionStrategy,
     topic: String,
-) -> Result<Schema, anyhow::Error> {
+) -> Result<Schema, PurificationError> {
     let value_schema_name = format!("{}-value", topic);
     let value_schema = get_schema_with_strategy(ccsr_client, value_strategy, &value_schema_name)
         .await
@@ -843,7 +887,7 @@ async fn get_remote_csr_schema(
 async fn compile_proto(
     subject_name: &String,
     ccsr_client: &Client,
-) -> Result<CsrSeedProtobufSchema, anyhow::Error> {
+) -> Result<CsrSeedProtobufSchema, PurificationError> {
     let (primary_subject, dependency_subjects) =
         ccsr_client.get_subject_and_references(subject_name).await?;
 
@@ -884,7 +928,7 @@ async fn validate_aws_credentials(
     config: &AwsConfig,
     external_id_prefix: Option<&AwsExternalIdPrefix>,
     secrets_reader: &dyn SecretsReader,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), PurificationError> {
     let config = config.load(external_id_prefix, None, secrets_reader).await;
     let sts_client = aws_sdk_sts::Client::new(&config);
     let _ = sts_client

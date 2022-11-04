@@ -392,6 +392,8 @@ impl ErrorResponse {
             AdapterError::UnstableDependency { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Unsupported(..) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Unstructured(_) => SqlState::INTERNAL_ERROR,
+            // TODO(guswynn): support `FEATURE_NOT_SUPPORTED` from purification
+            AdapterError::PurificationError(_) => SqlState::INTERNAL_ERROR,
             AdapterError::UntargetedLogRead { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::TargetedSubscribe { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             // It's not immediately clear which error code to use here because a
