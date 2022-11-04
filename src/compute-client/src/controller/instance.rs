@@ -670,6 +670,7 @@ where
         let mut advanced_collections = Vec::new();
         let mut compute_read_capability_changes = BTreeMap::default();
         let mut storage_read_capability_changes = BTreeMap::default();
+        let mut dropped_collection_ids = Vec::new();
         for (id, new_upper) in updates.iter() {
             let collection = self
                 .compute
@@ -684,6 +685,10 @@ where
             let old_upper = collection
                 .replica_write_frontiers
                 .insert(replica_id, new_upper.clone());
+
+            if new_upper.is_empty() {
+                dropped_collection_ids.push(id.clone());
+            }
 
             let mut new_read_capability = collection
                 .read_policy
@@ -715,6 +720,9 @@ where
         if !compute_read_capability_changes.is_empty() {
             self.update_read_capabilities(&mut compute_read_capability_changes)
                 .await?;
+        }
+        if !dropped_collection_ids.is_empty() {
+            self.update_dropped_collections(dropped_collection_ids)?;
         }
         if !storage_read_capability_changes.is_empty() {
             self.storage_controller
@@ -932,14 +940,7 @@ where
             .filter(|(id, _)| self.compute.collections.contains_key(id))
             .collect();
 
-        self.update_write_frontiers(replica_id, &updates).await?;
-
-        let dropped_collections: Vec<_> = updates
-            .iter()
-            .filter(|(_, frontier)| frontier.is_empty())
-            .map(|(id, _)| id.clone())
-            .collect();
-        self.update_dropped_collections(dropped_collections)
+        self.update_write_frontiers(replica_id, &updates).await
     }
 
     async fn handle_peek_response(
