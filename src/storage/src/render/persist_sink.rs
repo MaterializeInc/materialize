@@ -23,13 +23,13 @@ use timely::PartialOrder;
 use tracing::trace;
 
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::types::errors::DataflowError;
+use mz_storage_client::types::sources::SourceData;
 use mz_timely_util::activator::LimitingActivator;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
-use crate::controller::CollectionMetadata;
 use crate::storage_state::StorageState;
-use crate::types::errors::DataflowError;
-use crate::types::sources::SourceData;
 
 pub fn render<G>(
     scope: &mut G,

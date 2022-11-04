@@ -23,7 +23,7 @@ use mz_ore::task;
 use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{AstInfo, KafkaConfigOption, KafkaConfigOptionName};
-use mz_storage::types::connections::{KafkaConnection, StringOrSecret};
+use mz_storage_client::types::connections::{KafkaConnection, StringOrSecret};
 
 use crate::names::Aug;
 use crate::normalize::generate_extracted_config;
@@ -225,7 +225,7 @@ pub async fn create_consumer(
     secrets_reader: &dyn SecretsReader,
 ) -> Result<Arc<BaseConsumer<KafkaErrCheckContext>>, PlanError> {
     let mut config = create_new_client_config(librdkafka_log_level);
-    mz_storage::types::connections::populate_client_config(
+    mz_storage_client::types::connections::populate_client_config(
         kafka_connection.clone(),
         options,
         std::collections::HashSet::new(),

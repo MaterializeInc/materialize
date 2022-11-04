@@ -19,7 +19,7 @@ use mz_repr::explain_new::ExprHumanizer;
 use mz_repr::{RowArena, ScalarType, Timestamp};
 use mz_sql::plan::QueryWhen;
 use mz_stash::Append;
-use mz_storage::types::sources::Timeline;
+use mz_storage_client::types::sources::Timeline;
 
 use crate::coord::dataflows::{prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;

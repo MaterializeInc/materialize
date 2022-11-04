@@ -51,7 +51,7 @@ members = [
     "src/stash",
     "src/stash-debug",
     "src/storage",
-    "src/storaged",
+    "src/storage-client",
     "src/testdrive",
     "src/timely-util",
     "src/transform",

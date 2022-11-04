@@ -53,11 +53,16 @@ use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{GlobalId, Timestamp};
+use mz_storage_client::controller::{CollectionMetadata, ResumptionFrontierCalculator};
+use mz_storage_client::source::util::async_source;
+use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_client::types::errors::SourceError;
+use mz_storage_client::types::sources::encoding::SourceDataEncoding;
+use mz_storage_client::types::sources::{AsyncSourceToken, MzOffset, SourceToken};
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::operator::StreamExt as _;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
-use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use crate::source::antichain::MutableOffsetAntichain;
 use crate::source::antichain::OffsetAntichain;
 use crate::source::healthcheck::Healthchecker;
@@ -65,15 +70,8 @@ use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockFollower, ReclockOperator};
 use crate::source::types::SourceOutput;
 use crate::source::types::SourceReaderError;
-use crate::source::types::{
-    AsyncSourceToken, SourceMessage, SourceMetrics, SourceReader, SourceReaderMetrics, SourceToken,
-};
 use crate::source::types::{MaybeLength, SourceMessageType};
-use crate::source::util::async_source;
-use crate::types::connections::ConnectionContext;
-use crate::types::errors::SourceError;
-use crate::types::sources::encoding::SourceDataEncoding;
-use crate::types::sources::MzOffset;
+use crate::source::types::{SourceMessage, SourceMetrics, SourceReader, SourceReaderMetrics};
 
 // Interval after which the source operator will yield control.
 const YIELD_INTERVAL: Duration = Duration::from_millis(10);

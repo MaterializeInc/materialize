@@ -20,8 +20,8 @@ import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
 import "repr/src/relation_and_scalar.proto";
 import "repr/src/row.proto";
-import "storage/src/controller.proto";
-import "storage/src/protocol/client.proto";
+import "storage-client/src/controller.proto";
+import "storage-client/src/client.proto";
 
 import "google/protobuf/empty.proto";
 
@@ -40,7 +40,7 @@ message ProtoComputeCommand {
         ProtoInstanceConfig create_instance = 1;
         google.protobuf.Empty drop_instance = 2;
         ProtoCreateDataflows create_dataflows = 3;
-        mz_storage.protocol.client.ProtoAllowCompaction allow_compaction = 4;
+        mz_storage_client.client.ProtoAllowCompaction allow_compaction = 4;
         ProtoPeek peek = 5;
         ProtoCancelPeeks cancel_peeks = 6;
         google.protobuf.Empty initialization_complete = 7;
@@ -108,7 +108,7 @@ message ProtoBuildDesc {
 
 message ProtoSourceInstanceDesc {
     ProtoSourceInstanceArguments arguments = 1;
-    mz_storage.controller.ProtoCollectionMetadata storage_metadata = 2;
+    mz_storage_client.controller.ProtoCollectionMetadata storage_metadata = 2;
     mz_repr.relation_and_scalar.ProtoRelationType typ = 3;
 }
 

@@ -13,31 +13,29 @@ use std::sync::Arc;
 
 use crossbeam_channel::TryRecvError;
 use differential_dataflow::lattice::Lattice;
-use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::{PersistLocation, ShardId};
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp as _;
 use timely::worker::Worker as TimelyWorker;
-
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
 
 use mz_ore::halt;
 use mz_ore::now::NowFn;
+use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ReadHandle;
+use mz_persist_client::{PersistLocation, ShardId};
 use mz_repr::{Diff, GlobalId, Timestamp};
-
-use crate::controller::CollectionMetadata;
-use crate::protocol::client::{StorageCommand, StorageResponse};
-use crate::sink::SinkBaseMetrics;
-use crate::types::connections::ConnectionContext;
-use crate::types::sinks::StorageSinkDesc;
-use crate::types::sources::{IngestionDescription, SourceData};
+use mz_storage_client::client::{StorageCommand, StorageResponse};
+use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_client::types::sinks::StorageSinkDesc;
+use mz_storage_client::types::sources::{IngestionDescription, SourceData};
 
 use crate::decode::metrics::DecodeMetrics;
+use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 
 type CommandReceiver = crossbeam_channel::Receiver<StorageCommand>;

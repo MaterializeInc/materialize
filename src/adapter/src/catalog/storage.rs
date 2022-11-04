@@ -30,7 +30,7 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_stash::{Append, AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
-use mz_storage::types::sources::Timeline;
+use mz_storage_client::types::sources::Timeline;
 
 use crate::catalog;
 use crate::catalog::builtin::{

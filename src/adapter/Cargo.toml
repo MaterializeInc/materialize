@@ -40,7 +40,7 @@ mz-segment = { path = "../segment" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-stash = { path = "../stash" }
-mz-storage = { path = "../storage" }
+mz-storage-client = { path = "../storage-client" }
 mz-transform = { path = "../transform" }
 mz-cloud-resources = { path = "../cloud-resources" }
 prometheus = { version = "0.13.2", default-features = false }

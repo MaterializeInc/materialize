@@ -57,7 +57,7 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
 use mz_secrets::SecretsController;
-use mz_storage::types::connections::ConnectionContext;
+use mz_storage_client::types::connections::ConnectionContext;
 
 mod sys;
 

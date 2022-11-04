@@ -105,10 +105,12 @@ use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statemen
 use mz_sql::names::Aug;
 use mz_sql::plan::{MutationKind, Params};
 use mz_stash::Append;
-use mz_storage::controller::{CollectionDescription, CreateExportToken, DataSource, StorageError};
-use mz_storage::types::connections::ConnectionContext;
-use mz_storage::types::sinks::StorageSinkConnection;
-use mz_storage::types::sources::{IngestionDescription, SourceExport, Timeline};
+use mz_storage_client::controller::{
+    CollectionDescription, CreateExportToken, DataSource, StorageError,
+};
+use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_client::types::sinks::StorageSinkConnection;
+use mz_storage_client::types::sources::{IngestionDescription, SourceExport, Timeline};
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
@@ -700,7 +702,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 .retry_async(|_| async {
                                     let builder = builder.clone();
                                     let connection_context = connection_context.clone();
-                                    mz_storage::sink::build_sink_connection(
+                                    mz_storage_client::sink::build_sink_connection(
                                         builder,
                                         connection_context,
                                     )
@@ -726,7 +728,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     );
                 }
                 CatalogItem::Connection(catalog_connection) => {
-                    if let mz_storage::types::connections::Connection::AwsPrivateLink(conn) =
+                    if let mz_storage_client::types::connections::Connection::AwsPrivateLink(conn) =
                         &catalog_connection.connection
                     {
                         privatelink_connections.insert(

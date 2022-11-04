@@ -30,6 +30,11 @@ use mz_expr::{MirScalarExpr, PartitionId};
 use mz_ore::{halt, task};
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
+use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_client::types::errors::SourceErrorDetails;
+use mz_storage_client::types::sources::{
+    encoding::SourceDataEncoding, MzOffset, PostgresSourceConnection,
+};
 
 use self::metrics::PgSourceMetrics;
 use super::metrics::SourceBaseMetrics;
@@ -38,9 +43,6 @@ use crate::source::{
     types::OffsetCommitter, NextMessage, SourceMessage, SourceMessageType, SourceReader,
     SourceReaderError,
 };
-use crate::types::connections::ConnectionContext;
-use crate::types::errors::SourceErrorDetails;
-use crate::types::sources::{encoding::SourceDataEncoding, MzOffset, PostgresSourceConnection};
 
 mod metrics;
 

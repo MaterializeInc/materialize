@@ -1,7 +1,7 @@
 [package]
 name = "mz-storage"
 description = "Materialize's storage layer."
-version = "0.0.0"
+version = "0.31.0-dev"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -11,56 +11,48 @@ anyhow = "1.0.65"
 async-compression = { version = "0.3.15", features = ["tokio", "gzip"] }
 async-stream = "0.3.3"
 async-trait = "0.1.57"
-aws-config = { version = "0.49.0", default-features = false, features = ["native-tls"] }
 aws-sdk-kinesis = { version = "0.19.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 aws-sdk-s3 = { version = "0.19.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 aws-sdk-sqs = { version = "0.19.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-smithy-http = "0.49.0"
-aws-types = { version = "0.49.0", features = ["hardcoded-credentials"] }
-bytes = "1.2.1"
-bytesize = "1.1.0"
+axum = "0.5.16"
 chrono = { version = "0.4.22", default-features = false, features = ["std"] }
+clap = { version = "3.2.20", features = ["derive", "env"] }
 crossbeam-channel = { version = "0.5.6" }
 csv-core = { version = "0.1.10" }
 dec = "0.4.8"
-derivative = "2.2.0"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.24"
 globset = { version = "0.4.9", features = ["serde1"] }
 http = "0.2.8"
-http-serde = "1.1.2"
 itertools = { version = "0.10.5" }
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
 mz-expr = { path = "../expr" }
+mz-http-util = { path = "../http-util" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-kinesis-util = { path = "../kinesis-util" }
+mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-ore = { path = "../ore", features = ["ssh", "task", "tracing_"] }
-mz-orchestrator = { path = "../orchestrator" }
-mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
-mz-persist-types = { path = "../persist-types" }
 mz-pgcopy = { path = "../pgcopy" }
+mz-pid-file = { path = "../pid-file" }
 mz-postgres-util = { path = "../postgres-util" }
-mz-proto = { path = "../proto", features = ["tokio-postgres"] }
+mz-prof = { path = "../prof" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
 mz-service = { path = "../service" }
-mz-stash = { path = "../stash" }
+mz-storage-client = { path = "../storage-client" }
 mz-timely-util = { path = "../timely-util" }
 once_cell = { version = "1.15.0" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 prometheus = { version = "0.13.2", default-features = false }
-proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
-proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git"}
 prost = { version = "0.11.0", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = { version = "1.6.0" }
-sentry = { version = "0.27.0", optional = true }
 serde = { version = "1.0.147", features = ["derive"] }
 serde_json = { version = "1.0.86" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
@@ -68,7 +60,6 @@ tokio = { version = "1.20.2", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde"] }
 tokio-stream = "0.1.11"
 tokio-util = { version = "0.7.3", features = ["io"] }
-tonic = "0.8.2"
 tracing = "0.1.37"
 tracing-subscriber = "0.3.16"
 thiserror = { version = "1.0.37" }
@@ -83,6 +74,19 @@ tonic-build = "0.8.2"
 datadriven = { version = "0.6.0", features = ["async"] }
 itertools = "0.10.5"
 tokio = { version = "1.20.2", features = ["test-util"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+# According to jemalloc developers, `background_threads` should always be
+# enabled, except in "esoteric" situations that don't apply to Materialize
+# (Namely: if the application relies on new threads not being created for whatever reason)
+#
+# See: https://github.com/jemalloc/jemalloc/issues/956#issuecomment-316224733
+tikv-jemallocator = { version = "0.4.3", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"], optional = true }
+
+[features]
+default = ["jemalloc"]
+jemalloc = ["tikv-jemallocator", "mz-prof/jemalloc"]
+tokio-console = ["mz-ore/tokio-console"]
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux

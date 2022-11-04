@@ -53,9 +53,9 @@ use mz_sql::plan::{
     SubscribeFrom, SubscribePlan, View,
 };
 use mz_stash::Append;
-use mz_storage::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
-use mz_storage::types::sinks::StorageSinkConnectionBuilder;
-use mz_storage::types::sources::{IngestionDescription, SourceExport};
+use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
+use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
+use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
 
 use crate::catalog::builtin::{
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_INTROSPECTION_COMPUTE_INSTANCE,
@@ -601,7 +601,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut connection = plan.connection.connection.clone();
 
         match connection {
-            mz_storage::types::connections::Connection::Ssh(ref mut ssh) => {
+            mz_storage_client::types::connections::Connection::Ssh(ref mut ssh) => {
                 let keyset = SshKeyset::new()?;
                 self.secrets_controller
                     .ensure(connection_gid, &keyset.to_bytes())
@@ -609,7 +609,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 ssh.public_keys = Some(keyset.public_keys());
             }
-            mz_storage::types::connections::Connection::AwsPrivateLink(ref privatelink) => {
+            mz_storage_client::types::connections::Connection::AwsPrivateLink(ref privatelink) => {
                 self.cloud_resource_controller
                     .as_ref()
                     .ok_or(AdapterError::Unsupported(
@@ -1348,7 +1348,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         id,
                         oid,
                         create_export_token,
-                        result: mz_storage::sink::build_sink_connection(
+                        result: mz_storage_client::sink::build_sink_connection(
                             connection_builder,
                             connection_context,
                         )

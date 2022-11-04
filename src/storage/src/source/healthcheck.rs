@@ -8,22 +8,23 @@
 // by the Apache License, Version 2.0.
 
 //! Healthchecks for sources
-use anyhow::Context;
-use chrono::{DateTime, NaiveDateTime, Utc};
 use std::fmt::Display;
 use std::sync::Arc;
+
+use anyhow::Context;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
 use tokio::sync::Mutex;
 use tracing::trace;
 
+use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
-
-use crate::source::{CollectionMetadata, NowFn};
-use crate::types::sources::SourceData;
+use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::types::sources::SourceData;
 
 /// The Healthchecker is responsible for tracking the current state
 /// of a Timely worker for a source, as well as updating the relevant
