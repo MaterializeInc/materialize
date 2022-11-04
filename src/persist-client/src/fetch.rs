@@ -72,6 +72,11 @@ where
         b
     }
 
+    /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
+    pub fn leased_part_from_exchangeable(&self, x: SerdeLeasedBatchPart) -> LeasedBatchPart<T> {
+        LeasedBatchPart::from(x, Arc::clone(&self.metrics))
+    }
+
     /// Trade in an exchange-able [LeasedBatchPart] for the data it represents.
     ///
     /// Note to check the `LeasedBatchPart` documentation for how to handle the
@@ -324,6 +329,7 @@ pub struct LeasedBatchPart<T>
 where
     T: Timestamp + Codec64,
 {
+    pub(crate) metrics: Arc<Metrics>,
     pub(crate) shard_id: ShardId,
     pub(crate) reader_id: ReaderId,
     pub(crate) metadata: SerdeLeasedBatchPartMetadata,
@@ -389,11 +395,7 @@ where
 {
     /// For details, see [`LeasedBatchPart`].
     fn drop(&mut self) {
-        assert!(
-            self.leased_seqno.is_none(),
-            "LeasedBatchPart cannot be dropped with lease intact: {:?}",
-            self
-        );
+        self.metrics.lease.dropped_part.inc()
     }
 }
 
@@ -568,7 +570,7 @@ pub struct SerdeLeasedBatchPart {
     reader_id: ReaderId,
 }
 
-impl<T: Timestamp + Codec64> From<SerdeLeasedBatchPart> for LeasedBatchPart<T> {
+impl<T: Timestamp + Codec64> LeasedBatchPart<T> {
     /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
     ///
     /// Note that this process in non-commutative with
@@ -578,8 +580,9 @@ impl<T: Timestamp + Codec64> From<SerdeLeasedBatchPart> for LeasedBatchPart<T> {
     /// `LeasedBatchPart`'s droppability.
     ///
     /// For more details, see [`LeasedBatchPart`]'s documentation.
-    fn from(x: SerdeLeasedBatchPart) -> Self {
+    pub(crate) fn from(x: SerdeLeasedBatchPart, metrics: Arc<Metrics>) -> Self {
         LeasedBatchPart {
+            metrics,
             shard_id: x.shard_id,
             metadata: x.metadata,
             desc: Description::new(

@@ -772,6 +772,7 @@ impl GcMetrics {
 #[derive(Debug)]
 pub struct LeaseMetrics {
     pub(crate) timeout_read: IntCounter,
+    pub(crate) dropped_part: IntCounter,
 }
 
 impl LeaseMetrics {
@@ -780,6 +781,10 @@ impl LeaseMetrics {
             timeout_read: registry.register(metric!(
                 name: "mz_persist_lease_timeout_read",
                 help: "count of readers whose lease timed out",
+            )),
+            dropped_part: registry.register(metric!(
+                name: "mz_persist_lease_dropped_part",
+                help: "count of LeasedBatchParts that were dropped without being politely returned",
             )),
         }
     }
