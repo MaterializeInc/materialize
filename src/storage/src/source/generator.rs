@@ -13,16 +13,16 @@ use timely::scheduling::SyncActivator;
 
 use mz_expr::PartitionId;
 use mz_repr::{Diff, GlobalId, Row};
+use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_client::types::sources::GeneratorMessageType;
+use mz_storage_client::types::sources::{
+    encoding::SourceDataEncoding, Generator, LoadGenerator, LoadGeneratorSourceConnection, MzOffset,
+};
 
 use super::metrics::SourceBaseMetrics;
 use super::{SourceMessage, SourceMessageType};
 use crate::source::commit::LogCommitter;
 use crate::source::{NextMessage, SourceReader, SourceReaderError};
-use crate::types::connections::ConnectionContext;
-use crate::types::sources::GeneratorMessageType;
-use crate::types::sources::{
-    encoding::SourceDataEncoding, Generator, LoadGenerator, LoadGeneratorSourceConnection, MzOffset,
-};
 
 mod auction;
 mod counter;

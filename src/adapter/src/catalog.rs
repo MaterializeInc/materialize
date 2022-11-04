@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use itertools::Itertools;
-use mz_storage::controller::IntrospectionType;
+use mz_storage_client::controller::IntrospectionType;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -66,9 +66,11 @@ use mz_sql::plan::{
 use mz_sql::{plan, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{CreateSinkOption, CreateSourceOption, Statement, WithOptionValue};
 use mz_stash::{Append, Postgres, Sqlite};
-use mz_storage::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
-use mz_storage::types::sinks::{SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder};
-use mz_storage::types::sources::{SourceDesc, Timeline};
+use mz_storage_client::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
+use mz_storage_client::types::sinks::{
+    SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder,
+};
+use mz_storage_client::types::sources::{SourceDesc, Timeline};
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{
@@ -1507,7 +1509,7 @@ pub struct Secret {
 #[derive(Debug, Clone, Serialize)]
 pub struct Connection {
     pub create_sql: String,
-    pub connection: mz_storage::types::connections::Connection,
+    pub connection: mz_storage_client::types::connections::Connection,
     pub depends_on: Vec<GlobalId>,
 }
 
@@ -1780,7 +1782,7 @@ impl CatalogEntry {
         }
     }
 
-    /// Returns the [`mz_storage::types::sources::SourceDesc`] associated with
+    /// Returns the [`mz_storage_client::types::sources::SourceDesc`] associated with
     /// this `CatalogEntry`, if any.
     pub fn source_desc(&self) -> Result<Option<&SourceDesc>, SqlCatalogError> {
         self.item.source_desc(self.name())
@@ -2391,7 +2393,7 @@ impl<S: Append> Catalog<S> {
         // Load public keys for SSH connections from the secrets store to the catalog
         for (id, entry) in catalog.state.entry_by_id.iter_mut() {
             if let CatalogItem::Connection(ref mut connection) = entry.item {
-                if let mz_storage::types::connections::Connection::Ssh(ref mut ssh) =
+                if let mz_storage_client::types::connections::Connection::Ssh(ref mut ssh) =
                     connection.connection
                 {
                     let secret = config.secrets_reader.read(*id).await?;
@@ -4571,7 +4573,7 @@ impl<S: Append> Catalog<S> {
                     ));
 
                     let mut connection = entry.connection()?.clone();
-                    if let mz_storage::types::connections::Connection::Ssh(ref mut ssh) =
+                    if let mz_storage_client::types::connections::Connection::Ssh(ref mut ssh) =
                         connection.connection
                     {
                         ssh.public_keys = Some(new_public_keypair)
@@ -5763,7 +5765,9 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.source_desc()
     }
 
-    fn connection(&self) -> Result<&mz_storage::types::connections::Connection, SqlCatalogError> {
+    fn connection(
+        &self,
+    ) -> Result<&mz_storage_client::types::connections::Connection, SqlCatalogError> {
         Ok(&self.connection()?.connection)
     }
 

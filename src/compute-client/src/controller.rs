@@ -52,7 +52,7 @@ use mz_expr::RowSetFinishing;
 use mz_orchestrator::{CpuLimit, MemoryLimit, NamespacedOrchestrator};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
-use mz_storage::controller::{ReadPolicy, StorageController, StorageError};
+use mz_storage_client::controller::{ReadPolicy, StorageController, StorageError};
 
 use crate::command::{DataflowDescription, ProcessId, ReplicaId};
 use crate::logging::{LogVariant, LogView, LoggingConfig};

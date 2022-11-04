@@ -41,25 +41,27 @@ use mz_sql_parser::ast::{
     CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
     DeferredObjectName, SetVariableValue, SshConnectionOption,
 };
-use mz_storage::source::generator::as_generator;
-use mz_storage::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
-use mz_storage::types::connections::{
+use mz_storage_client::types::connections::aws::{
+    AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri,
+};
+use mz_storage_client::types::connections::{
     AwsPrivateLinkConnection, Connection, CsrConnectionHttpAuth, KafkaConnection, KafkaSecurity,
     KafkaTlsConfig, SaslConfig, StringOrSecret, TlsIdentity,
 };
-use mz_storage::types::sinks::{
+use mz_storage_client::types::sinks::{
     KafkaConsistencyConfig, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
     KafkaSinkFormat, SinkEnvelope, StorageSinkConnectionBuilder,
 };
-use mz_storage::types::sources::encoding::{
+use mz_storage_client::types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
     ProtobufEncoding, RegexEncoding, SourceDataEncoding, SourceDataEncodingInner,
 };
-use mz_storage::types::sources::{
-    IncludedColumnPos, KafkaSourceConnection, KeyEnvelope, KinesisSourceConnection,
-    LoadGeneratorSourceConnection, PostgresSourceConnection, PostgresSourceDetails,
-    ProtoPostgresSourceDetails, S3SourceConnection, SourceConnection, SourceDesc, SourceEnvelope,
-    TestScriptSourceConnection, Timeline, UnplannedSourceEnvelope, UpsertStyle,
+use mz_storage_client::types::sources::{
+    GenericSourceConnection, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope,
+    KinesisSourceConnection, LoadGenerator, LoadGeneratorSourceConnection,
+    PostgresSourceConnection, PostgresSourceDetails, ProtoPostgresSourceDetails,
+    S3SourceConnection, SourceDesc, SourceEnvelope, TestScriptSourceConnection, Timeline,
+    UnplannedSourceEnvelope, UpsertStyle,
 };
 
 use crate::ast::display::AstDisplay;
@@ -490,7 +492,7 @@ pub fn plan_create_source(
                 }
             }
 
-            let connection = SourceConnection::Kafka(connection);
+            let connection = GenericSourceConnection::Kafka(connection);
 
             (connection, encoding, None)
         }
@@ -517,7 +519,7 @@ pub fn plan_create_source(
             };
 
             let encoding = get_encoding(scx, format, &envelope, Some(connection))?;
-            let connection = SourceConnection::Kinesis(KinesisSourceConnection {
+            let connection = GenericSourceConnection::Kinesis(KinesisSourceConnection {
                 connection_id: connection_item.id(),
                 stream_name,
                 aws,
@@ -542,12 +544,12 @@ pub fn plan_create_source(
             for ks in key_sources {
                 let dtks = match ks {
                     mz_sql_parser::ast::S3KeySource::Scan { bucket } => {
-                        mz_storage::types::sources::S3KeySource::Scan {
+                        mz_storage_client::types::sources::S3KeySource::Scan {
                             bucket: bucket.clone(),
                         }
                     }
                     mz_sql_parser::ast::S3KeySource::SqsNotifications { queue } => {
-                        mz_storage::types::sources::S3KeySource::SqsNotifications {
+                        mz_storage_client::types::sources::S3KeySource::SqsNotifications {
                             queue: queue.clone(),
                         }
                     }
@@ -558,7 +560,7 @@ pub fn plan_create_source(
             if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
                 sql_bail!("S3 sources do not support key decoding");
             }
-            let connection = SourceConnection::S3(S3SourceConnection {
+            let connection = GenericSourceConnection::S3(S3SourceConnection {
                 connection_id: connection_item.id(),
                 key_sources: converted_sources,
                 pattern: pattern
@@ -573,8 +575,8 @@ pub fn plan_create_source(
                     .map_err(|e| sql_err!("parsing glob: {e}"))?,
                 aws,
                 compression: match compression {
-                    Compression::Gzip => mz_storage::types::sources::Compression::Gzip,
-                    Compression::None => mz_storage::types::sources::Compression::None,
+                    Compression::Gzip => mz_storage_client::types::sources::Compression::Gzip,
+                    Compression::None => mz_storage_client::types::sources::Compression::None,
                 },
             });
             (connection, encoding, None)
@@ -679,7 +681,7 @@ pub fn plan_create_source(
                 table_casts.push(column_casts);
             }
 
-            let connection = SourceConnection::Postgres(PostgresSourceConnection {
+            let connection = GenericSourceConnection::Postgres(PostgresSourceConnection {
                 connection,
                 connection_id: connection_item.id(),
                 table_casts,
@@ -700,7 +702,6 @@ pub fn plan_create_source(
                 load_generator_ast_to_generator(generator, options)?;
             let available_subsources = available_subsources
                 .map(|a| BTreeMap::from_iter(a.into_iter().map(|(k, v)| (k, v.0))));
-            let generator = as_generator(&load_generator);
 
             let LoadGeneratorOptionExtracted { tick_interval, .. } = options.clone().try_into()?;
             let tick_micros = match tick_interval {
@@ -710,15 +711,20 @@ pub fn plan_create_source(
                 }
                 None => None,
             };
-            let connection = SourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
-                load_generator,
-                tick_micros,
-            });
-            (connection, generator.data_encoding(), available_subsources)
+
+            let encoding = load_generator.data_encoding();
+
+            let connection =
+                GenericSourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
+                    load_generator,
+                    tick_micros,
+                });
+
+            (connection, encoding, available_subsources)
         }
         CreateSourceConnection::TestScript { desc_json } => {
             scx.require_unsafe_mode("CREATE SOURCE ... FROM TEST SCRIPT")?;
-            let connection = SourceConnection::TestScript(TestScriptSourceConnection {
+            let connection = GenericSourceConnection::TestScript(TestScriptSourceConnection {
                 desc_json: desc_json.clone(),
             });
             // we just use the encoding from the format and envelope
@@ -1080,21 +1086,15 @@ pub(crate) fn load_generator_ast_to_generator(
     options: &[LoadGeneratorOption<Aug>],
 ) -> Result<
     (
-        mz_storage::types::sources::LoadGenerator,
+        LoadGenerator,
         Option<BTreeMap<FullObjectName, (usize, RelationDesc)>>,
     ),
     PlanError,
 > {
     let load_generator = match loadgen {
-        mz_sql_parser::ast::LoadGenerator::Auction => {
-            mz_storage::types::sources::LoadGenerator::Auction
-        }
-        mz_sql_parser::ast::LoadGenerator::Counter => {
-            mz_storage::types::sources::LoadGenerator::Counter
-        }
-        mz_sql_parser::ast::LoadGenerator::Datums => {
-            mz_storage::types::sources::LoadGenerator::Datums
-        }
+        mz_sql_parser::ast::LoadGenerator::Auction => LoadGenerator::Auction,
+        mz_sql_parser::ast::LoadGenerator::Counter => LoadGenerator::Counter,
+        mz_sql_parser::ast::LoadGenerator::Datums => LoadGenerator::Datums,
         mz_sql_parser::ast::LoadGenerator::Tpch => {
             let LoadGeneratorOptionExtracted { scale_factor, .. } = options.to_vec().try_into()?;
 
@@ -1122,7 +1122,7 @@ pub(crate) fn load_generator_ast_to_generator(
             let count_orders = f_to_i(150_000f64 * 10f64)?;
             let count_clerk = f_to_i(1_000f64)?;
 
-            mz_storage::types::sources::LoadGenerator::Tpch {
+            LoadGenerator::Tpch {
                 count_supplier,
                 count_part,
                 count_customer,
@@ -1133,15 +1133,14 @@ pub(crate) fn load_generator_ast_to_generator(
     };
 
     let mut available_subsources = BTreeMap::new();
-    let generator = as_generator(&load_generator);
-    for (i, (name, desc)) in generator.views().iter().enumerate() {
+    for (i, (name, desc)) in load_generator.views().iter().enumerate() {
         let name = FullObjectName {
             database: RawDatabaseSpecifier::Name("mz_load_generators".to_owned()),
-            schema: match loadgen {
-                mz_sql_parser::ast::LoadGenerator::Counter => "counter".into(),
-                mz_sql_parser::ast::LoadGenerator::Auction => "auction".into(),
-                mz_sql_parser::ast::LoadGenerator::Datums => "datums".into(),
-                mz_sql_parser::ast::LoadGenerator::Tpch => "tpch".into(),
+            schema: match load_generator {
+                LoadGenerator::Counter => "counter".into(),
+                LoadGenerator::Auction => "auction".into(),
+                LoadGenerator::Datums => "datums".into(),
+                LoadGenerator::Tpch { .. } => "tpch".into(),
                 // Please use `snake_case` for any multi-word load generators
                 // that you add.
             },
@@ -1233,7 +1232,7 @@ generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default
 pub struct Schema {
     pub key_schema: Option<String>,
     pub value_schema: String,
-    pub csr_connection: Option<mz_storage::types::connections::CsrConnection>,
+    pub csr_connection: Option<mz_storage_client::types::connections::CsrConnection>,
     pub confluent_wire_format: bool,
 }
 
@@ -2644,7 +2643,9 @@ generate_extracted_config!(
     (Password, with_options::Secret)
 );
 
-impl TryFrom<CsrConnectionOptionExtracted> for mz_storage::types::connections::CsrConnection {
+impl TryFrom<CsrConnectionOptionExtracted>
+    for mz_storage_client::types::connections::CsrConnection
+{
     type Error = PlanError;
     fn try_from(ccsr_options: CsrConnectionOptionExtracted) -> Result<Self, Self::Error> {
         let url = match ccsr_options.url {
@@ -2666,7 +2667,7 @@ impl TryFrom<CsrConnectionOptionExtracted> for mz_storage::types::connections::C
             username,
             password: ccsr_options.password.map(|secret| secret.into()),
         });
-        Ok(mz_storage::types::connections::CsrConnection {
+        Ok(mz_storage_client::types::connections::CsrConnection {
             url,
             tls_root_cert: ccsr_options.ssl_certificate_authority,
             tls_identity,
@@ -2693,7 +2694,7 @@ impl PostgresConnectionOptionExtracted {
     fn to_connection(
         self,
         scx: &StatementContext,
-    ) -> Result<mz_storage::types::connections::PostgresConnection, PlanError> {
+    ) -> Result<mz_storage_client::types::connections::PostgresConnection, PlanError> {
         let cert = self.ssl_certificate;
         let key = self.ssl_key.map(|secret| secret.into());
         let tls_identity = match (cert, key) {
@@ -2725,7 +2726,7 @@ impl PostgresConnectionOptionExtracted {
             None
         };
 
-        Ok(mz_storage::types::connections::PostgresConnection {
+        Ok(mz_storage_client::types::connections::PostgresConnection {
             database: self
                 .database
                 .ok_or_else(|| sql_err!("DATABASE option is required"))?,
@@ -2753,11 +2754,13 @@ generate_extracted_config!(
     (User, String)
 );
 
-impl TryFrom<SshConnectionOptionExtracted> for mz_storage::types::connections::SshConnection {
+impl TryFrom<SshConnectionOptionExtracted>
+    for mz_storage_client::types::connections::SshConnection
+{
     type Error = PlanError;
 
     fn try_from(options: SshConnectionOptionExtracted) -> Result<Self, Self::Error> {
-        Ok(mz_storage::types::connections::SshConnection {
+        Ok(mz_storage_client::types::connections::SshConnection {
             host: options
                 .host
                 .ok_or_else(|| sql_err!("HOST option is required"))?,
@@ -2851,7 +2854,7 @@ pub fn plan_create_connection(
         }
         CreateConnection::Csr { with_options } => {
             let c = CsrConnectionOptionExtracted::try_from(with_options)?;
-            let connection = mz_storage::types::connections::CsrConnection::try_from(c)?;
+            let connection = mz_storage_client::types::connections::CsrConnection::try_from(c)?;
             Connection::Csr(connection)
         }
         CreateConnection::Postgres { with_options } => {
@@ -2871,7 +2874,7 @@ pub fn plan_create_connection(
         }
         CreateConnection::Ssh { with_options } => {
             let c = SshConnectionOptionExtracted::try_from(with_options)?;
-            let connection = mz_storage::types::connections::SshConnection::try_from(c)?;
+            let connection = mz_storage_client::types::connections::SshConnection::try_from(c)?;
             Connection::Ssh(connection)
         }
     };

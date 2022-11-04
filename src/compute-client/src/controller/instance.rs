@@ -22,7 +22,7 @@ use mz_build_info::BuildInfo;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
-use mz_storage::controller::{ReadPolicy, StorageController};
+use mz_storage_client::controller::{ReadPolicy, StorageController};
 
 use crate::command::{
     ComputeCommand, ComputeCommandHistory, DataflowDescription, InstanceConfig, Peek, ReplicaId,

@@ -31,7 +31,7 @@ mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr", features = ["tracing_"] }
 mz-secrets = { path = "../secrets" }
 mz-sql-parser = { path = "../sql-parser" }
-mz-storage = { path = "../storage" }
+mz-storage-client = { path = "../storage-client" }
 paste = "1.0"
 protobuf-native = "0.2.1"
 prost = { version = "0.11.0", features = ["no-recursion-limit"] }

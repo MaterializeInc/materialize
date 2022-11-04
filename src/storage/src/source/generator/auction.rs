@@ -14,10 +14,8 @@ use rand::seq::SliceRandom;
 use rand::SeedableRng;
 
 use mz_ore::now::{to_datetime, NowFn};
-use mz_repr::{Datum, RelationDesc, Row, ScalarType};
-
-use crate::types::sources::encoding::DataEncodingInner;
-use crate::types::sources::{Generator, GeneratorMessageType};
+use mz_repr::{Datum, Row};
+use mz_storage_client::types::sources::{Generator, GeneratorMessageType};
 
 /// CREATE TABLE organizations
 ///   (
@@ -69,57 +67,6 @@ const AUCTIONS_OUTPUT: usize = 4;
 const BIDS_OUTPUT: usize = 5;
 
 impl Generator for Auction {
-    fn data_encoding_inner(&self) -> DataEncodingInner {
-        DataEncodingInner::RowCodec(RelationDesc::empty())
-    }
-
-    fn views(&self) -> Vec<(&str, RelationDesc)> {
-        vec![
-            (
-                "organizations",
-                RelationDesc::empty()
-                    .with_column("id", ScalarType::Int64.nullable(false))
-                    .with_column("name", ScalarType::String.nullable(false))
-                    .with_key(vec![0]),
-            ),
-            (
-                "users",
-                RelationDesc::empty()
-                    .with_column("id", ScalarType::Int64.nullable(false))
-                    .with_column("org_id", ScalarType::Int64.nullable(false))
-                    .with_column("name", ScalarType::String.nullable(false))
-                    .with_key(vec![0]),
-            ),
-            (
-                "accounts",
-                RelationDesc::empty()
-                    .with_column("id", ScalarType::Int64.nullable(false))
-                    .with_column("org_id", ScalarType::Int64.nullable(false))
-                    .with_column("balance", ScalarType::Int64.nullable(false))
-                    .with_key(vec![0]),
-            ),
-            (
-                "auctions",
-                RelationDesc::empty()
-                    .with_column("id", ScalarType::Int64.nullable(false))
-                    .with_column("seller", ScalarType::Int64.nullable(false))
-                    .with_column("item", ScalarType::String.nullable(false))
-                    .with_column("end_time", ScalarType::TimestampTz.nullable(false))
-                    .with_key(vec![0]),
-            ),
-            (
-                "bids",
-                RelationDesc::empty()
-                    .with_column("id", ScalarType::Int64.nullable(false))
-                    .with_column("buyer", ScalarType::Int64.nullable(false))
-                    .with_column("auction_id", ScalarType::Int64.nullable(false))
-                    .with_column("amount", ScalarType::Int32.nullable(false))
-                    .with_column("bid_time", ScalarType::TimestampTz.nullable(false))
-                    .with_key(vec![0]),
-            ),
-        ]
-    }
-
     fn by_seed(
         &self,
         now: NowFn,

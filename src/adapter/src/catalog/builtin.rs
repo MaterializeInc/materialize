@@ -32,7 +32,7 @@ use mz_repr::{RelationDesc, RelationType, ScalarType};
 use mz_sql::catalog::{
     CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, TypeReference,
 };
-use mz_storage::controller::IntrospectionType;
+use mz_storage_client::controller::IntrospectionType;
 
 use crate::catalog::{DEFAULT_CLUSTER_REPLICA_NAME, INTROSPECTION_USER, SYSTEM_USER};
 

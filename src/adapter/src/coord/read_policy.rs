@@ -25,7 +25,7 @@ use mz_compute_client::controller::ComputeInstanceId;
 
 use mz_repr::{GlobalId, Timestamp};
 use mz_stash::Append;
-use mz_storage::controller::ReadPolicy;
+use mz_storage_client::controller::ReadPolicy;
 
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::TimelineState;

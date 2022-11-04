@@ -26,9 +26,11 @@ use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::ResolvedDatabaseSpecifier;
 use mz_stash::Append;
-use mz_storage::controller::{CreateExportToken, ExportDescription};
-use mz_storage::types::sinks::{SinkAsOf, StorageSinkConnection};
-use mz_storage::types::sources::{PostgresSourceConnection, SourceConnection, Timeline};
+use mz_storage_client::controller::{CreateExportToken, ExportDescription};
+use mz_storage_client::types::sinks::{SinkAsOf, StorageSinkConnection};
+use mz_storage_client::types::sources::{
+    GenericSourceConnection, PostgresSourceConnection, Timeline,
+};
 
 use crate::catalog::{
     CatalogItem, CatalogState, DataSourceDesc, Op, Sink, StorageSinkConnectionState,
@@ -92,7 +94,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         sources_to_drop.push(*id);
                         if let DataSourceDesc::Ingestion(ingestion) = &source.data_source {
                             match &ingestion.desc.connection {
-                                SourceConnection::Postgres(PostgresSourceConnection {
+                                GenericSourceConnection::Postgres(PostgresSourceConnection {
                                     connection,
                                     details,
                                     ..
@@ -132,12 +134,14 @@ impl<S: Append + 'static> Coordinator<S> {
                     CatalogItem::Connection(catalog::Connection { connection, .. }) => {
                         match connection {
                             // SSH connections have an associated secret that should be dropped
-                            mz_storage::types::connections::Connection::Ssh(_) => {
+                            mz_storage_client::types::connections::Connection::Ssh(_) => {
                                 secrets_to_drop.push(*id);
                             }
                             // PrivateLink connections have an associated VpcEndpoint K8S resource
                             // that should be dropped
-                            mz_storage::types::connections::Connection::AwsPrivateLink(_) => {
+                            mz_storage_client::types::connections::Connection::AwsPrivateLink(
+                                _,
+                            ) => {
                                 vpc_endpoints_to_drop.push(*id);
                             }
                             _ => (),
@@ -470,7 +474,7 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         let storage_sink_from_entry = self.catalog.get_entry(&sink.from);
-        let storage_sink_desc = mz_storage::types::sinks::StorageSinkDesc {
+        let storage_sink_desc = mz_storage_client::types::sinks::StorageSinkDesc {
             from: sink.from,
             from_desc: storage_sink_from_entry
                 .desc(&self.catalog.resolve_full_name(

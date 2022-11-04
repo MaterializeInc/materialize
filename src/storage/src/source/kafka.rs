@@ -27,15 +27,15 @@ use mz_expr::PartitionId;
 use mz_kafka_util::{client::create_new_client_config, client::MzClientContext};
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::{adt::jsonb::Jsonb, GlobalId};
+use mz_storage_client::types::connections::{ConnectionContext, KafkaConnection, StringOrSecret};
+use mz_storage_client::types::sources::encoding::SourceDataEncoding;
+use mz_storage_client::types::sources::{KafkaSourceConnection, MzOffset};
 
 use crate::source::commit::LogCommitter;
 use crate::source::types::OffsetCommitter;
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };
-use crate::types::connections::{ConnectionContext, KafkaConnection, StringOrSecret};
-use crate::types::sources::encoding::SourceDataEncoding;
-use crate::types::sources::{KafkaSourceConnection, MzOffset};
 
 use self::metrics::KafkaPartitionMetrics;
 
@@ -625,7 +625,7 @@ async fn create_kafka_config(
 
     kafka_config.set("fetch.message.max.bytes", "134217728");
 
-    crate::types::connections::populate_client_config(
+    mz_storage_client::types::connections::populate_client_config(
         kafka_connection.clone(),
         options,
         std::collections::HashSet::new(),

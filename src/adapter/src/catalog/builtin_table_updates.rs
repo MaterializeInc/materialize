@@ -26,9 +26,9 @@ use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_storage::types::connections::KafkaConnection;
-use mz_storage::types::hosts::StorageHostConfig;
-use mz_storage::types::sinks::{KafkaSinkConnection, StorageSinkConnection};
+use mz_storage_client::types::connections::KafkaConnection;
+use mz_storage_client::types::hosts::StorageHostConfig;
+use mz_storage_client::types::sinks::{KafkaSinkConnection, StorageSinkConnection};
 
 use crate::catalog::builtin::{
     MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS,
@@ -338,22 +338,24 @@ impl CatalogState {
                 Datum::UInt64(schema_id.into()),
                 Datum::String(name),
                 Datum::String(match connection.connection {
-                    mz_storage::types::connections::Connection::Kafka { .. } => "kafka",
-                    mz_storage::types::connections::Connection::Csr { .. } => {
+                    mz_storage_client::types::connections::Connection::Kafka { .. } => "kafka",
+                    mz_storage_client::types::connections::Connection::Csr { .. } => {
                         "confluent-schema-registry"
                     }
-                    mz_storage::types::connections::Connection::Postgres { .. } => "postgres",
-                    mz_storage::types::connections::Connection::Aws(..) => "aws",
-                    mz_storage::types::connections::Connection::AwsPrivateLink(..) => {
+                    mz_storage_client::types::connections::Connection::Postgres { .. } => {
+                        "postgres"
+                    }
+                    mz_storage_client::types::connections::Connection::Aws(..) => "aws",
+                    mz_storage_client::types::connections::Connection::AwsPrivateLink(..) => {
                         "aws-privatelink"
                     }
-                    mz_storage::types::connections::Connection::Ssh { .. } => "ssh-tunnel",
+                    mz_storage_client::types::connections::Connection::Ssh { .. } => "ssh-tunnel",
                 }),
             ]),
             diff,
         }];
         match connection.connection {
-            mz_storage::types::connections::Connection::Ssh(ref ssh) => {
+            mz_storage_client::types::connections::Connection::Ssh(ref ssh) => {
                 if let Some(public_keypair) = ssh.public_keys.as_ref() {
                     updates.extend(self.pack_ssh_tunnel_connection_update(
                         id,
@@ -364,13 +366,13 @@ impl CatalogState {
                     tracing::error!("does this even happen?");
                 }
             }
-            mz_storage::types::connections::Connection::Kafka(ref kafka) => {
+            mz_storage_client::types::connections::Connection::Kafka(ref kafka) => {
                 updates.extend(self.pack_kafka_connection_update(id, kafka, diff));
             }
-            mz_storage::types::connections::Connection::Csr(_)
-            | mz_storage::types::connections::Connection::Postgres(_)
-            | mz_storage::types::connections::Connection::Aws(_)
-            | mz_storage::types::connections::Connection::AwsPrivateLink(_) => {}
+            mz_storage_client::types::connections::Connection::Csr(_)
+            | mz_storage_client::types::connections::Connection::Postgres(_)
+            | mz_storage_client::types::connections::Connection::Aws(_)
+            | mz_storage_client::types::connections::Connection::AwsPrivateLink(_) => {}
         };
         updates
     }

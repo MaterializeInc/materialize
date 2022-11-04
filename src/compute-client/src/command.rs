@@ -29,8 +29,8 @@ use mz_expr::{
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_proto::{any_uuid, IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationType, Row};
-use mz_storage::controller::CollectionMetadata;
-use mz_storage::protocol::client::ProtoAllowCompaction;
+use mz_storage_client::client::ProtoAllowCompaction;
+use mz_storage_client::controller::CollectionMetadata;
 
 use crate::command::proto_dataflow_description::{
     ProtoIndexExport, ProtoIndexImport, ProtoSinkExport, ProtoSourceImport,

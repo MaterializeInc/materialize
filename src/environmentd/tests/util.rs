@@ -38,7 +38,7 @@ use mz_ore::task;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
 use mz_secrets::SecretsController;
-use mz_storage::types::connections::ConnectionContext;
+use mz_storage_client::types::connections::ConnectionContext;
 
 pub static KAFKA_ADDRS: Lazy<mz_kafka_util::KafkaAddrs> =
     Lazy::new(|| match env::var("KAFKA_ADDRS") {

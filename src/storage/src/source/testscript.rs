@@ -14,12 +14,12 @@ use tokio::time::sleep;
 
 use mz_expr::PartitionId;
 use mz_repr::GlobalId;
+use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_client::types::sources::encoding::SourceDataEncoding;
+use mz_storage_client::types::sources::{MzOffset, TestScriptSourceConnection};
 
 use crate::source::commit::LogCommitter;
 use crate::source::{SourceMessage, SourceMessageType, SourceReader, SourceReaderError};
-use crate::types::connections::ConnectionContext;
-use crate::types::sources::encoding::SourceDataEncoding;
-use crate::types::sources::{MzOffset, TestScriptSourceConnection};
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 #[serde(tag = "command")]
