@@ -16,8 +16,6 @@
     clippy::cast_precision_loss,
     clippy::cast_sign_loss
 )]
-// TODO: remove this
-#![allow(clippy::result_large_err)]
 
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -756,40 +754,40 @@ mod tests {
                     .open::<Vec<u8>, String, u64, i64>(shard_id0)
                     .await
                     .unwrap_err(),
-                InvalidUsage::CodecMismatch(CodecMismatch {
+                InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
                     requested: codecs("Vec<u8>", "String", "u64", "i64"),
                     actual: codecs("String", "String", "u64", "i64"),
-                })
+                }))
             );
             assert_eq!(
                 client
                     .open::<String, Vec<u8>, u64, i64>(shard_id0)
                     .await
                     .unwrap_err(),
-                InvalidUsage::CodecMismatch(CodecMismatch {
+                InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
                     requested: codecs("String", "Vec<u8>", "u64", "i64"),
                     actual: codecs("String", "String", "u64", "i64"),
-                })
+                }))
             );
             assert_eq!(
                 client
                     .open::<String, String, i64, i64>(shard_id0)
                     .await
                     .unwrap_err(),
-                InvalidUsage::CodecMismatch(CodecMismatch {
+                InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
                     requested: codecs("String", "String", "i64", "i64"),
                     actual: codecs("String", "String", "u64", "i64"),
-                })
+                }))
             );
             assert_eq!(
                 client
                     .open::<String, String, u64, u64>(shard_id0)
                     .await
                     .unwrap_err(),
-                InvalidUsage::CodecMismatch(CodecMismatch {
+                InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
                     requested: codecs("String", "String", "u64", "u64"),
                     actual: codecs("String", "String", "u64", "i64"),
-                })
+                }))
             );
 
             // open_reader and open_writer end up using the same checks, so just
@@ -800,20 +798,20 @@ mod tests {
                     .open_reader::<Vec<u8>, String, u64, i64>(shard_id0)
                     .await
                     .unwrap_err(),
-                InvalidUsage::CodecMismatch(CodecMismatch {
+                InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
                     requested: codecs("Vec<u8>", "String", "u64", "i64"),
                     actual: codecs("String", "String", "u64", "i64"),
-                })
+                }))
             );
             assert_eq!(
                 client
                     .open_writer::<Vec<u8>, String, u64, i64>(shard_id0)
                     .await
                     .unwrap_err(),
-                InvalidUsage::CodecMismatch(CodecMismatch {
+                InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
                     requested: codecs("Vec<u8>", "String", "u64", "i64"),
                     actual: codecs("String", "String", "u64", "i64"),
-                })
+                }))
             );
         }
 
