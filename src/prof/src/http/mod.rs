@@ -87,7 +87,9 @@ struct FlamegraphTemplate<'a> {
 async fn time_prof<'a>(
     merge_threads: bool,
     build_info: &BuildInfo,
+    // the time in seconds to run the profiler for
     time_secs: u64,
+    // the sampling frequency in Hz
     sample_freq: u32,
 ) -> impl IntoResponse {
     let ctl_lock;
