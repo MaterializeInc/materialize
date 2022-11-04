@@ -333,8 +333,15 @@ CREATE CLUSTER foo2 REPLICAS (a (SIZE '32'))
 statement ok
 CREATE CLUSTER foo3 REPLICAS (a (SIZE '2-2'))
 
+# Ensure that identifiers are correctly handled in value position, even when
+# they can't be printed bare. We previously had a bug where `"1"` was
+# incorrectly parsed as size `"1"` (quotes included), but `"small"` was parsed
+# as size `small` (quotes excluded).
 statement ok
-DROP CLUSTER foo, foo2, foo3 CASCADE
+CREATE CLUSTER foo4 REPLICAS (a (SIZE "1"))
+
+statement ok
+DROP CLUSTER foo, foo2, foo3, foo4 CASCADE
 
 # Test that introspection source indexes are created and dropped correctly
 
