@@ -224,7 +224,7 @@ Debezium may produce duplicate records if the connector is interrupted. Material
 
 Some sources are low traffic and require relatively few resources to handle data ingestion, while others are high traffic and require hefty resource allocations. You choose the amount of CPU and memory available to a source using the `SIZE` option, and adjust the provisioned size after source creation using the [`ALTER SOURCE`](/sql/alter-source) command.
 
-It's a good idea to use a larger source size source when:
+It's a good idea to use a larger size source when:
 
   * You want to **increase throughput**. Larger sources will typically ingest data
     faster, as there is more CPU available to read and decode data from the
