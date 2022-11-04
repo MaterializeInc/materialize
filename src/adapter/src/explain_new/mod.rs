@@ -202,7 +202,7 @@ where
     T: serde::Serialize,
 {
     fn to_serde_value(&self) -> serde_json::Result<serde_json::Value> {
-        serde_json::to_value(&self.plan.plan)
+        serde_json::to_value(self.plan.plan)
     }
 }
 

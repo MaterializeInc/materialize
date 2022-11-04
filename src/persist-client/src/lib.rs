@@ -16,6 +16,8 @@
     clippy::cast_precision_loss,
     clippy::cast_sign_loss
 )]
+// TODO: remove this
+#![allow(clippy::result_large_err)]
 
 use std::fmt::Debug;
 use std::sync::Arc;
