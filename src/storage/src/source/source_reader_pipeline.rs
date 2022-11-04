@@ -21,6 +21,7 @@
 
 // https://github.com/tokio-rs/prost/issues/237
 #![allow(missing_docs)]
+#![allow(clippy::needless_borrow)]
 
 use std::any::Any;
 use std::collections::hash_map::Entry;

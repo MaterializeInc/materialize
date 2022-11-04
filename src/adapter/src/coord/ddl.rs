@@ -347,12 +347,12 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     pub(crate) async fn drop_indexes(&mut self, indexes: Vec<(ComputeInstanceId, GlobalId)>) {
-        let mut by_compute_instance = HashMap::new();
+        let mut by_compute_instance: HashMap<_, Vec<_>> = HashMap::new();
         for (compute_instance, id) in indexes {
             if self.drop_read_policy(&id) {
                 by_compute_instance
                     .entry(compute_instance)
-                    .or_insert(vec![])
+                    .or_default()
                     .push(id);
             } else {
                 tracing::error!("Instructed to drop a non-index index");
@@ -368,13 +368,13 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     async fn drop_materialized_views(&mut self, mviews: Vec<(ComputeInstanceId, GlobalId)>) {
-        let mut by_compute_instance = HashMap::new();
+        let mut by_compute_instance: HashMap<_, Vec<_>> = HashMap::new();
         let mut source_ids = Vec::new();
         for (compute_instance, id) in mviews {
             if self.drop_read_policy(&id) {
                 by_compute_instance
                     .entry(compute_instance)
-                    .or_insert(vec![])
+                    .or_default()
                     .push(id);
                 source_ids.push(id);
             } else {

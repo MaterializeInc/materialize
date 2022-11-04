@@ -169,6 +169,7 @@ impl Drop for DropSafeLeaseStream {
 /// All times emitted will have been [advanced by] the given `as_of` frontier.
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
+#[allow(clippy::needless_borrow)]
 pub fn persist_source_core<G, YFn>(
     scope: &G,
     source_id: GlobalId,

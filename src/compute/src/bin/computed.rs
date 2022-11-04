@@ -106,7 +106,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     let mut _pid_file = None;
     if let Some(pid_file_location) = &args.pid_file_location {
-        _pid_file = Some(PidFile::open(&pid_file_location).unwrap());
+        _pid_file = Some(PidFile::open(pid_file_location).unwrap());
     }
 
     info!("about to bind to {:?}", args.controller_listen_addr);

@@ -478,7 +478,7 @@ impl FoldConstants {
                 .map(|agg| {
                     row_buf
                         .packer()
-                        .extend(&[agg.expr.eval(&datums, &temp_storage)?]);
+                        .extend([agg.expr.eval(&datums, &temp_storage)?]);
                     Ok::<_, EvalError>(row_buf.clone())
                 })
                 .collect::<Result<Vec<_>, _>>()
