@@ -687,7 +687,7 @@ where
                 .insert(replica_id, new_upper.clone());
 
             if new_upper.is_empty() {
-                dropped_collection_ids.push(id.clone());
+                dropped_collection_ids.push(*id);
             }
 
             let mut new_read_capability = collection
@@ -722,7 +722,7 @@ where
                 .await?;
         }
         if !dropped_collection_ids.is_empty() {
-            self.update_dropped_collections(dropped_collection_ids)?;
+            self.update_dropped_collections(dropped_collection_ids);
         }
         if !storage_read_capability_changes.is_empty() {
             self.storage_controller
@@ -759,7 +759,7 @@ where
             let last_upper = collection.replica_write_frontiers.remove(&replica_id);
 
             if let Some(frontier) = last_upper {
-                dropped_collection_ids.push(id.clone());
+                dropped_collection_ids.push(*id);
 
                 // Update read holds on storage dependencies.
                 for storage_id in &collection.storage_dependencies {
@@ -776,7 +776,7 @@ where
                 .await?;
         }
         if !dropped_collection_ids.is_empty() {
-            self.update_dropped_collections(dropped_collection_ids)?;
+            self.update_dropped_collections(dropped_collection_ids);
         }
         Ok(())
     }
@@ -827,7 +827,7 @@ where
         for (id, change) in compute_net.iter_mut() {
             let frontier = self.compute.collection(*id)?.read_frontier();
             if frontier.is_empty() {
-                dropped_collection_ids.push(id.clone());
+                dropped_collection_ids.push(*id);
             }
             if !change.is_empty() {
                 let frontier = frontier.to_owned();
@@ -839,7 +839,7 @@ where
                 .send(ComputeCommand::AllowCompaction(compaction_commands));
         }
         if !dropped_collection_ids.is_empty() {
-            self.update_dropped_collections(dropped_collection_ids)?;
+            self.update_dropped_collections(dropped_collection_ids);
         }
 
         // We may have storage consequences to process.
@@ -906,24 +906,21 @@ where
 
     /// Cleans up collection state, if necessary, in response to drop operations targeted
     /// at a replica and given collections (via reporting of an empty frontier).
-    fn update_dropped_collections(
-        &mut self,
-        dropped_collection_ids: Vec<GlobalId>,
-    ) -> Result<(), ComputeError> {
+    fn update_dropped_collections(&mut self, dropped_collection_ids: Vec<GlobalId>) {
         for id in dropped_collection_ids {
             // clean up the given collection if read frontier is empty
             // and all replica frontiers are empty
-            let collection = self.compute.collection(id)?;
-            if collection.read_frontier().is_empty()
-                && collection
-                    .replica_write_frontiers
-                    .values()
-                    .all(|frontier| frontier.is_empty())
-            {
-                self.compute.collections.remove(&id);
+            if let Ok(collection) = self.compute.collection(id) {
+                if collection.read_frontier().is_empty()
+                    && collection
+                        .replica_write_frontiers
+                        .values()
+                        .all(|frontier| frontier.is_empty())
+                {
+                    self.compute.collections.remove(&id);
+                }
             }
         }
-        Ok(())
     }
 
     async fn handle_frontier_uppers(
