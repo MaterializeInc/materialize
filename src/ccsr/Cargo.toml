@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.65"
-native-tls = "0.2.10"
+native-tls = "0.2.11"
 openssl = { version = "0.10.42", features = ["vendored"] }
 reqwest = { version = "0.11.12", features = ["blocking", "json", "native-tls-vendored"] }
 serde = { version = "1.0.147", features = ["derive"] }
