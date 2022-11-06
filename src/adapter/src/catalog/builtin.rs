@@ -3016,7 +3016,7 @@ mod tests {
             })
             .collect();
 
-        let catalog = Catalog::open_debug_sqlite(NOW_ZERO.clone()).await?;
+        let catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
         let conn_catalog = catalog.for_system_session();
         let resolve_type_oid = |item: &str| {
             conn_catalog
@@ -3215,7 +3215,7 @@ mod tests {
     // Make sure pg views don't use types that only exist in Materialize.
     #[tokio::test]
     async fn test_pg_views_forbidden_types() -> Result<(), anyhow::Error> {
-        let catalog = Catalog::open_debug_sqlite(SYSTEM_TIME.clone()).await?;
+        let catalog = Catalog::open_debug_memory(SYSTEM_TIME.clone()).await?;
         let conn_catalog = catalog.for_system_session();
 
         for view in BUILTINS::views()
