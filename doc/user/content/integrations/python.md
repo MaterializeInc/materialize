@@ -64,21 +64,17 @@ A `mz_diff` value of `-1` indicates Materialize is deleting one row with the inc
 
 ### Streaming with `psycopg3`
 
-{{< warning >}}
-`psycopg3` is **not yet stable**. The following example may break if its API changes.
-{{< /warning >}}
-
 Although `psycopg3` can function identically as the `psycopg2` example above,
-it provides has a `stream` feature where rows are not buffered, which allows you to use `SUBSCRIBE` directly:
+it provides a `stream` feature where rows are not buffered, which allows you to use `SUBSCRIBE` directly:
 
 ```python
 #!/usr/bin/env python3
 
-import psycopg3
+import psycopg
 import sys
 
 dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
-conn = psycopg3.connect(dsn)
+conn = psycopg.connect(dsn)
 
 with conn.cursor() as cur:
     for row in cur.stream("SUBSCRIBE t"):
