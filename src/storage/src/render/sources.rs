@@ -31,10 +31,7 @@ use mz_timely_util::operator::{CollectionExt, StreamExt};
 
 use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
 use crate::source::types::{DecodeResult, SourceOutput};
-use crate::source::{
-    self, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader, LoadGeneratorSourceReader,
-    PostgresSourceReader, RawSourceCreationConfig, S3SourceReader, TestScriptSourceReader,
-};
+use crate::source::{self, DelimitedValueSourceConnection, RawSourceCreationConfig};
 
 /// A type-level enum that holds one of two types of sources depending on their message type
 ///
@@ -112,7 +109,7 @@ where
     // correct `SourceReader` implementations
     let ((ok_sources, err_source), capability) = match connection {
         GenericSourceConnection::Kafka(connection) => {
-            let ((oks, err), cap) = source::create_raw_source::<_, KafkaSourceReader, _>(
+            let ((oks, err), cap) = source::create_raw_source(
                 scope,
                 base_source_config,
                 connection,
@@ -123,19 +120,18 @@ where
             ((oks, err), cap)
         }
         GenericSourceConnection::Kinesis(connection) => {
-            let ((oks, err), cap) =
-                source::create_raw_source::<_, DelimitedValueSource<KinesisSourceReader>, _>(
-                    scope,
-                    base_source_config,
-                    connection,
-                    storage_state.connection_context.clone(),
-                    resumption_calculator,
-                );
+            let ((oks, err), cap) = source::create_raw_source(
+                scope,
+                base_source_config,
+                DelimitedValueSourceConnection(connection),
+                storage_state.connection_context.clone(),
+                resumption_calculator,
+            );
             let oks = oks.into_iter().map(SourceType::Delimited).collect();
             ((oks, err), cap)
         }
         GenericSourceConnection::S3(connection) => {
-            let ((oks, err), cap) = source::create_raw_source::<_, S3SourceReader, _>(
+            let ((oks, err), cap) = source::create_raw_source(
                 scope,
                 base_source_config,
                 connection,
@@ -146,7 +142,7 @@ where
             ((oks, err), cap)
         }
         GenericSourceConnection::Postgres(connection) => {
-            let ((oks, err), cap) = source::create_raw_source::<_, PostgresSourceReader, _>(
+            let ((oks, err), cap) = source::create_raw_source(
                 scope,
                 base_source_config,
                 connection,
@@ -157,7 +153,7 @@ where
             ((oks, err), cap)
         }
         GenericSourceConnection::LoadGenerator(connection) => {
-            let ((oks, err), cap) = source::create_raw_source::<_, LoadGeneratorSourceReader, _>(
+            let ((oks, err), cap) = source::create_raw_source(
                 scope,
                 base_source_config,
                 connection,
@@ -168,7 +164,7 @@ where
             ((oks, err), cap)
         }
         GenericSourceConnection::TestScript(connection) => {
-            let ((oks, err), cap) = source::create_raw_source::<_, TestScriptSourceReader, _>(
+            let ((oks, err), cap) = source::create_raw_source(
                 scope,
                 base_source_config,
                 connection,

@@ -32,7 +32,7 @@ use mz_storage_client::types::sources::encoding::SourceDataEncoding;
 use mz_storage_client::types::sources::{KafkaSourceConnection, MzOffset};
 
 use crate::source::commit::LogCommitter;
-use crate::source::types::OffsetCommitter;
+use crate::source::types::{OffsetCommitter, SourceConnectionBuilder};
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };
@@ -84,26 +84,22 @@ pub struct KafkaOffsetCommiter {
     consumer: Arc<BaseConsumer<GlueConsumerContext>>,
 }
 
-impl SourceReader for KafkaSourceReader {
-    type Key = Option<Vec<u8>>;
-    type Value = Option<Vec<u8>>;
-    type Diff = ();
+impl SourceConnectionBuilder for KafkaSourceConnection {
+    type Reader = KafkaSourceReader;
     type OffsetCommitter = KafkaOffsetCommiter;
-    type Connection = KafkaSourceConnection;
 
-    /// Create a new instance of a Kafka reader.
-    fn new(
+    fn into_reader(
+        self,
         source_name: String,
         source_id: GlobalId,
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        kc: Self::Connection,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
         connection_context: ConnectionContext,
-    ) -> Result<(Self, Self::OffsetCommitter), anyhow::Error> {
+    ) -> Result<(Self::Reader, Self::OffsetCommitter), anyhow::Error> {
         let KafkaSourceConnection {
             connection,
             connection_id,
@@ -112,7 +108,7 @@ impl SourceReader for KafkaSourceReader {
             group_id_prefix,
             environment_id,
             ..
-        } = kc;
+        } = self;
         let kafka_config = TokioHandle::current().block_on(create_kafka_config(
             connection_id,
             source_id,
@@ -133,7 +129,7 @@ impl SourceReader for KafkaSourceReader {
 
         // Start offsets is a map from partition to the next offset to read
         // from.
-        let mut start_offsets: HashMap<_, i64> = kc
+        let mut start_offsets: HashMap<_, i64> = self
             .start_offsets
             .into_iter()
             .filter(|(pid, _offset)| {
@@ -204,7 +200,7 @@ impl SourceReader for KafkaSourceReader {
                 start_offsets,
                 stats_rx,
                 partition_info,
-                include_headers: kc.include_headers.is_some(),
+                include_headers: self.include_headers.is_some(),
                 _metadata_thread_handle: metadata_thread_handle,
                 partition_metrics: KafkaPartitionMetrics::new(
                     metrics,
@@ -225,6 +221,12 @@ impl SourceReader for KafkaSourceReader {
             },
         ))
     }
+}
+
+impl SourceReader for KafkaSourceReader {
+    type Key = Option<Vec<u8>>;
+    type Value = Option<Vec<u8>>;
+    type Diff = ();
 
     /// This function polls from the next consumer for which a message is available. This function
     /// polls the set round-robin: when a consumer is polled, it is placed at the back of the
