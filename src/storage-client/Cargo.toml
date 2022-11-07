@@ -23,6 +23,7 @@ http-serde = "1.1.2"
 itertools = { version = "0.10.5" }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
+mz-cloud-resources = { path = "../cloud-resources" }
 mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
@@ -42,7 +43,7 @@ mz-timely-util = { path = "../timely-util" }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git"}
 prost = { version = "0.11.2", features = ["no-recursion-limit"] }
-rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
+rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = { version = "1.6.0" }
 serde = { version = "1.0.147", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }

@@ -22,6 +22,7 @@ use tokio_postgres::tls::MakeTlsConnect;
 use tokio_postgres::Client;
 
 use mz_ore::task;
+use mz_repr::GlobalId;
 use mz_ssh_util::tunnel::SshTunnelConfig;
 
 use crate::desc::{PostgresColumnDesc, PostgresTableDesc};
@@ -218,6 +219,12 @@ pub enum TunnelConfig {
     /// This is commonly referred by vendors as a "direct SSH tunnel", in
     /// opposition to "reverse SSH tunnel", which is currently unsupported.
     Ssh(SshTunnelConfig),
+    /// Establish a TCP connection to the database via an AWS PrivateLink
+    /// service.
+    AwsPrivatelink {
+        /// The ID of the AWS PrivateLink service.
+        connection_id: GlobalId,
+    },
 }
 
 /// Configuration for PostgreSQL connections.
@@ -298,6 +305,15 @@ impl Config {
                         .err()
                         .map(|e| tracing::error!("failed to close ssh tunnel: {e}"));
                 });
+                Ok(client)
+            }
+            TunnelConfig::AwsPrivatelink { connection_id } => {
+                let (host, port) = self.address()?;
+                let privatelink_host = mz_cloud_resources::vpc_endpoint_name(*connection_id);
+                let tls = MakeTlsConnect::<TokioTcpStream>::make_tls_connect(&mut tls, host)?;
+                let tcp_stream = TokioTcpStream::connect((privatelink_host, port)).await?;
+                let (client, connection) = postgres_config.connect_raw(tcp_stream, tls).await?;
+                task::spawn(|| task_name, connection);
                 Ok(client)
             }
         }

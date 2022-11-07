@@ -21,11 +21,11 @@ use timely::scheduling::SyncActivator;
 use tokio::runtime::Handle as TokioHandle;
 use tracing::error;
 
+use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_expr::PartitionId;
 use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
-use mz_storage_client::types::connections::aws::AwsExternalIdPrefix;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::SourceErrorDetails;
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;

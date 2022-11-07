@@ -86,8 +86,7 @@ use tracing::{info, span, warn, Level};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
-use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpointSpec;
-use mz_cloud_resources::CloudResourceController;
+use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
 use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId};
 use mz_ore::cast::CastFrom;
@@ -738,12 +737,12 @@ impl<S: Append + 'static> Coordinator<S> {
                     );
                 }
                 CatalogItem::Connection(catalog_connection) => {
-                    if let mz_storage_client::types::connections::Connection::AwsPrivateLink(conn) =
+                    if let mz_storage_client::types::connections::Connection::AwsPrivatelink(conn) =
                         &catalog_connection.connection
                     {
                         privatelink_connections.insert(
                             entry.id(),
-                            VpcEndpointSpec {
+                            VpcEndpointConfig {
                                 aws_service_name: conn.service_name.clone(),
                                 availability_zone_ids: conn.availability_zones.clone(),
                             },

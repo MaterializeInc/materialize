@@ -18,23 +18,19 @@ use kube::ResourceExt;
 
 use maplit::btreemap;
 use mz_cloud_resources::crd::vpc_endpoint::v1::{VpcEndpoint, VpcEndpointSpec};
-use mz_cloud_resources::CloudResourceController;
+use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
 use mz_repr::GlobalId;
 
 use crate::{KubernetesOrchestrator, FIELD_MANAGER};
-
-fn vpc_endpoint_name(id: GlobalId) -> String {
-    format!("connection-{id}")
-}
 
 #[async_trait]
 impl CloudResourceController for KubernetesOrchestrator {
     async fn ensure_vpc_endpoint(
         &self,
         id: GlobalId,
-        spec: VpcEndpointSpec,
+        config: VpcEndpointConfig,
     ) -> Result<(), anyhow::Error> {
-        let name = vpc_endpoint_name(id);
+        let name = mz_cloud_resources::vpc_endpoint_name(id);
         let mut labels = btreemap! {
             "environmentd.materialize.cloud/connection-id".to_owned() => id.to_string(),
         };
@@ -50,7 +46,14 @@ impl CloudResourceController for KubernetesOrchestrator {
                 //owner_references: todo!(),
                 ..Default::default()
             },
-            spec,
+            spec: VpcEndpointSpec {
+                aws_service_name: config.aws_service_name,
+                availability_zone_ids: config.availability_zone_ids,
+                role_suffix: match &self.config.aws_external_id_prefix {
+                    None => id.to_string(),
+                    Some(external_id) => format!("{external_id}/{id}"),
+                },
+            },
             status: None,
         };
         self.vpc_endpoint_api
@@ -66,7 +69,10 @@ impl CloudResourceController for KubernetesOrchestrator {
     async fn delete_vpc_endpoint(&self, id: GlobalId) -> Result<(), anyhow::Error> {
         match self
             .vpc_endpoint_api
-            .delete(&vpc_endpoint_name(id), &DeleteParams::default())
+            .delete(
+                &mz_cloud_resources::vpc_endpoint_name(id),
+                &DeleteParams::default(),
+            )
             .await
         {
             Ok(_) => Ok(()),

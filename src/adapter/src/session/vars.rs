@@ -176,6 +176,12 @@ const TRANSACTION_ISOLATION: ServerVar<IsolationLevel> = ServerVar {
     description: "Sets the current transaction's isolation level (PostgreSQL).",
 };
 
+const MAX_AWS_PRIVATELINK_CONNECTIONS: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("max_aws_privatelink_connections"),
+    value: &0,
+    description: "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize).",
+};
+
 const MAX_TABLES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_tables"),
     value: &25,
@@ -779,6 +785,7 @@ impl SessionVars {
 /// See [`SessionVars`] for more details on the Materialize configuration model.
 #[derive(Debug, Clone)]
 pub struct SystemVars {
+    max_aws_privatelink_connections: SystemVar<u32>,
     max_tables: SystemVar<u32>,
     max_sources: SystemVar<u32>,
     max_sinks: SystemVar<u32>,
@@ -797,6 +804,7 @@ pub struct SystemVars {
 impl Default for SystemVars {
     fn default() -> Self {
         SystemVars {
+            max_aws_privatelink_connections: SystemVar::new(&MAX_AWS_PRIVATELINK_CONNECTIONS),
             max_tables: SystemVar::new(&MAX_TABLES),
             max_sources: SystemVar::new(&MAX_SOURCES),
             max_sinks: SystemVar::new(&MAX_SINKS),
@@ -819,7 +827,8 @@ impl SystemVars {
     /// values on disk.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
         vec![
-            &self.max_tables as &dyn Var,
+            &self.max_aws_privatelink_connections as &dyn Var,
+            &self.max_tables,
             &self.max_sources,
             &self.max_sinks,
             &self.max_materialized_views,
@@ -847,7 +856,9 @@ impl SystemVars {
     /// example, `self.get("max_tables").value()` returns the string
     /// `"25"` or the current value, while `self.max_tables()` returns an i32.
     pub fn get(&self, name: &str) -> Result<&dyn Var, AdapterError> {
-        if name == MAX_TABLES.name {
+        if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
+            Ok(&self.max_aws_privatelink_connections)
+        } else if name == MAX_TABLES.name {
             Ok(&self.max_tables)
         } else if name == MAX_SOURCES.name {
             Ok(&self.max_sources)
@@ -886,7 +897,9 @@ impl SystemVars {
     /// configuration parameter, or if the named configuration parameter does
     /// not exist, an error is returned.
     pub fn set(&mut self, name: &str, value: &str) -> Result<(), AdapterError> {
-        if name == MAX_TABLES.name {
+        if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
+            self.max_aws_privatelink_connections.set(value)
+        } else if name == MAX_TABLES.name {
             self.max_tables.set(value)
         } else if name == MAX_SOURCES.name {
             self.max_sources.set(value)
@@ -923,7 +936,9 @@ impl SystemVars {
     /// insensitively. If the named configuration parameter does not exist, an
     /// error is returned.
     pub fn reset(&mut self, name: &str) -> Result<(), AdapterError> {
-        if name == MAX_TABLES.name {
+        if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
+            self.max_aws_privatelink_connections.reset()
+        } else if name == MAX_TABLES.name {
             self.max_tables.reset()
         } else if name == MAX_SOURCES.name {
             self.max_sources.reset()
@@ -953,6 +968,11 @@ impl SystemVars {
             return Err(AdapterError::UnknownParameter(name.into()));
         }
         Ok(())
+    }
+
+    /// Returns the value of the `max_aws_privatelink_connections` configuration parameter.
+    pub fn max_aws_privatelink_connections(&self) -> u32 {
+        *self.max_aws_privatelink_connections.value()
     }
 
     /// Returns the value of the `max_tables` configuration parameter.

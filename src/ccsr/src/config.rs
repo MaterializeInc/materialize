@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -22,12 +24,13 @@ pub struct Auth {
 }
 
 /// Configuration for a `Client`.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ClientConfig {
     url: Url,
     root_certs: Vec<Certificate>,
     identity: Option<Identity>,
     auth: Option<Auth>,
+    dns_overrides: HashMap<String, Vec<SocketAddr>>,
 }
 
 impl ClientConfig {
@@ -39,6 +42,7 @@ impl ClientConfig {
             root_certs: Vec::new(),
             identity: None,
             auth: None,
+            dns_overrides: HashMap::new(),
         }
     }
 
@@ -63,6 +67,15 @@ impl ClientConfig {
         self
     }
 
+    /// Overrides DNS resolution for specific domains to the provided IP
+    /// addresses.
+    ///
+    /// See [`reqwest::ClientBuilder::resolve_to_addrs`].
+    pub fn resolve_to_addrs(mut self, domain: &str, addrs: &[SocketAddr]) -> ClientConfig {
+        self.dns_overrides.insert(domain.into(), addrs.into());
+        self
+    }
+
     /// Builds the [`Client`].
     pub fn build(self) -> Result<Client, anyhow::Error> {
         let mut builder = reqwest::ClientBuilder::new();
@@ -73,6 +86,10 @@ impl ClientConfig {
 
         if let Some(ident) = self.identity {
             builder = builder.identity(ident.into());
+        }
+
+        for (domain, addrs) in self.dns_overrides {
+            builder = builder.resolve_to_addrs(&domain, &addrs);
         }
 
         let inner = builder

@@ -3375,7 +3375,6 @@ dependencies = [
  "mz-controller",
  "mz-frontegg-auth",
  "mz-http-util",
- "mz-kafka-util",
  "mz-npm",
  "mz-orchestrator",
  "mz-orchestrator-kubernetes",
@@ -3957,8 +3956,10 @@ name = "mz-postgres-util"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "mz-cloud-resources",
  "mz-ore",
  "mz-proto",
+ "mz-repr",
  "mz-ssh-util",
  "openssh",
  "openssl",
@@ -4155,6 +4156,7 @@ dependencies = [
  "itertools",
  "mz-build-info",
  "mz-ccsr",
+ "mz-cloud-resources",
  "mz-compute-client",
  "mz-expr",
  "mz-expr-test-util",
@@ -4327,9 +4329,11 @@ dependencies = [
  "globset",
  "http",
  "itertools",
+ "maplit",
  "mz-avro",
  "mz-build-info",
  "mz-ccsr",
+ "mz-cloud-resources",
  "mz-expr",
  "mz-http-util",
  "mz-interchange",
@@ -4392,6 +4396,7 @@ dependencies = [
  "itertools",
  "mz-build-info",
  "mz-ccsr",
+ "mz-cloud-resources",
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
@@ -5662,8 +5667,8 @@ dependencies = [
 
 [[package]]
 name = "rdkafka"
-version = "0.28.0"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#fe99e1fb18433debc5ba6ca811de983c535e1804"
+version = "0.29.0"
+source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#8ea07c4d2b96636ff093e670bc921892aee0d56a"
 dependencies = [
  "futures-channel",
  "futures-util",
@@ -5679,8 +5684,8 @@ dependencies = [
 
 [[package]]
 name = "rdkafka-sys"
-version = "4.2.0+1.8.2"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#fe99e1fb18433debc5ba6ca811de983c535e1804"
+version = "4.3.0+1.9.2"
+source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#8ea07c4d2b96636ff093e670bc921892aee0d56a"
 dependencies = [
  "cmake",
  "libc",

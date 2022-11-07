@@ -48,12 +48,13 @@ use tokio::time::{self, Duration};
 use tokio_util::io::{ReaderStream, StreamReader};
 use tracing::{debug, error, trace, warn};
 
+use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_expr::PartitionId;
 use mz_ore::retry::{Retry, RetryReader};
 use mz_ore::task;
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
-use mz_storage_client::types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
+use mz_storage_client::types::connections::aws::AwsConfig;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
 use mz_storage_client::types::sources::{Compression, MzOffset, S3KeySource, S3SourceConnection};

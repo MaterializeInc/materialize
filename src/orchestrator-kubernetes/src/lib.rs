@@ -33,6 +33,7 @@ use maplit::btreemap;
 use sha2::{Digest, Sha256};
 
 use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
+use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_orchestrator::LabelSelector as MzLabelSelector;
 use mz_orchestrator::{
     LabelSelectionLogic, NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments,
@@ -59,6 +60,9 @@ pub struct KubernetesOrchestratorConfig {
     pub service_account: Option<String>,
     /// The image pull policy to set for services created by the orchestrator.
     pub image_pull_policy: KubernetesImagePullPolicy,
+    /// An AWS external ID prefix to use when making AWS operations on behalf
+    /// of the environment.
+    pub aws_external_id_prefix: Option<AwsExternalIdPrefix>,
 }
 
 /// Specifies whether Kubernetes should pull Docker images when creating pods.

@@ -9,18 +9,24 @@
 
 //! Connection types.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
+use anyhow::{anyhow, Context};
+use itertools::Itertools;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
+use rdkafka::config::FromClientConfigAndContext;
+use rdkafka::ClientContext;
 use serde::{Deserialize, Serialize};
+use tokio::net;
 use tokio_postgres::config::SslMode;
 use url::Url;
 
 use mz_ccsr::tls::{Certificate, Identity};
+use mz_cloud_resources::AwsExternalIdPrefix;
+use mz_kafka_util::client::BrokerRewritingClientContext;
 use mz_proto::tokio_postgres::any_ssl_mode;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
@@ -29,7 +35,7 @@ use mz_secrets::SecretsReader;
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_ssh_util::tunnel::SshTunnelConfig;
 
-use crate::types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
+use crate::types::connections::aws::AwsConfig;
 
 pub mod aws;
 
@@ -124,12 +130,12 @@ impl ConnectionContext {
     /// [`AwsExternalIdPrefix`] for details.
     pub fn from_cli_args(
         filter: &tracing_subscriber::filter::Targets,
-        aws_external_id_prefix: Option<String>,
+        aws_external_id_prefix: Option<AwsExternalIdPrefix>,
         secrets_reader: Arc<dyn SecretsReader>,
     ) -> ConnectionContext {
         ConnectionContext {
             librdkafka_log_level: mz_ore::tracing::target_level(filter, "librdkafka"),
-            aws_external_id_prefix: aws_external_id_prefix.map(AwsExternalIdPrefix),
+            aws_external_id_prefix,
             secrets_reader,
         }
     }
@@ -151,11 +157,11 @@ pub enum Connection {
     Postgres(PostgresConnection),
     Ssh(SshConnection),
     Aws(AwsConfig),
-    AwsPrivateLink(AwsPrivateLinkConnection),
+    AwsPrivatelink(AwsPrivatelinkConnection),
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct AwsPrivateLinkConnection {
+pub struct AwsPrivatelinkConnection {
     pub service_name: String,
     pub availability_zones: Vec<String>,
 }
@@ -215,41 +221,99 @@ impl From<SaslConfig> for KafkaSecurity {
     }
 }
 
+/// Specifies a Kafka broker in a [`KafkaConnection`].
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct KafkaBroker {
+    /// The address of the Kafka broker.
+    pub address: String,
+    /// An optional AWS PrivateLink service through
+    pub aws_privatelink: Option<KafkaAwsPrivateLink>,
+}
+
+impl RustType<ProtoKafkaBroker> for KafkaBroker {
+    fn into_proto(&self) -> ProtoKafkaBroker {
+        ProtoKafkaBroker {
+            address: self.address.into_proto(),
+            aws_privatelink: self
+                .aws_privatelink
+                .as_ref()
+                .map(|aws_privatelink| aws_privatelink.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoKafkaBroker) -> Result<Self, TryFromProtoError> {
+        Ok(KafkaBroker {
+            address: proto.address.into_rust()?,
+            aws_privatelink: proto.aws_privatelink.into_rust()?,
+        })
+    }
+}
+
+/// Specifies an AWS PrivateLink service for a [`KafkaBroker`].
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct KafkaAwsPrivateLink {
+    /// The ID of the connection to the AWS PrivateLink service.
+    pub connection_id: GlobalId,
+    /// The port to use when connecting to the AWS PrivateLink service, if
+    /// different from the port in [`KafkaBroker::address`].
+    pub port: Option<u16>,
+}
+
+impl RustType<ProtoKafkaAwsPrivateLink> for KafkaAwsPrivateLink {
+    fn into_proto(&self) -> ProtoKafkaAwsPrivateLink {
+        ProtoKafkaAwsPrivateLink {
+            connection_id: Some(self.connection_id.into_proto()),
+            port: self.port.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoKafkaAwsPrivateLink) -> Result<Self, TryFromProtoError> {
+        Ok(KafkaAwsPrivateLink {
+            connection_id: proto
+                .connection_id
+                .into_rust_if_some("ProtoKafkaAwsPrivateLink::connection_id")?,
+            port: proto.port.into_rust()?,
+        })
+    }
+}
+
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaConnection {
-    pub brokers: Vec<String>,
+    pub brokers: Vec<KafkaBroker>,
     pub progress_topic: Option<String>,
     pub security: Option<KafkaSecurity>,
+    pub options: BTreeMap<String, StringOrSecret>,
 }
 
-mod kafka_config_keys {
-    pub const BOOTSTRAP_SERVERS: &str = "bootstrap.servers";
-    pub const SASL_MECHANISMS: &str = "sasl.mechanisms";
-    pub const SASL_PASSWORD: &str = "sasl.password";
-    pub const SASL_USERNAME: &str = "sasl.username";
-    pub const SECURITY_PROTOCOL: &str = "security.protocol";
-    pub const SSL_CERTIFICATE: &str = "ssl.certificate.pem";
-    pub const SSL_CERTIFICATE_AUTHORITY: &str = "ssl.ca.pem";
-    pub const SSL_KEY: &str = "ssl.key.pem";
-}
-
-impl From<KafkaConnection> for BTreeMap<String, StringOrSecret> {
-    fn from(v: KafkaConnection) -> Self {
-        use kafka_config_keys::*;
-        let mut r: BTreeMap<String, StringOrSecret> = BTreeMap::new();
-        r.insert(BOOTSTRAP_SERVERS.to_owned(), v.brokers.join(",").into());
-        match v.security {
+impl KafkaConnection {
+    /// Creates a Kafka client for the connection.
+    pub async fn create_with_context<C, T>(
+        &self,
+        connection_context: &ConnectionContext,
+        context: C,
+        extra_options: &BTreeMap<&str, String>,
+    ) -> Result<T, anyhow::Error>
+    where
+        C: ClientContext,
+        T: FromClientConfigAndContext<BrokerRewritingClientContext<C>>,
+    {
+        let mut options = self.options.clone();
+        options.insert(
+            "bootstrap.servers".into(),
+            self.brokers.iter().map(|b| &b.address).join(",").into(),
+        );
+        match self.security.clone() {
             Some(KafkaSecurity::Tls(KafkaTlsConfig {
                 root_cert,
                 identity,
             })) => {
-                r.insert(SECURITY_PROTOCOL.to_owned(), "SSL".into());
+                options.insert("security.protocol".into(), "SSL".into());
                 if let Some(root_cert) = root_cert {
-                    r.insert(SSL_CERTIFICATE_AUTHORITY.to_owned(), root_cert);
+                    options.insert("ssl.ca.pem".into(), root_cert);
                 }
                 if let Some(identity) = identity {
-                    r.insert(SSL_KEY.to_owned(), StringOrSecret::Secret(identity.key));
-                    r.insert(SSL_CERTIFICATE.to_owned(), identity.cert);
+                    options.insert("ssl.key.pem".into(), StringOrSecret::Secret(identity.key));
+                    options.insert("ssl.certificate.pem".into(), identity.cert);
                 }
             }
             Some(KafkaSecurity::Sasl(SaslConfig {
@@ -258,21 +322,44 @@ impl From<KafkaConnection> for BTreeMap<String, StringOrSecret> {
                 password,
                 tls_root_cert: certificate_authority,
             })) => {
-                r.insert(SECURITY_PROTOCOL.to_owned(), "SASL_SSL".into());
-                r.insert(
-                    SASL_MECHANISMS.to_owned(),
-                    StringOrSecret::String(mechanisms),
-                );
-                r.insert(SASL_USERNAME.to_owned(), username);
-                r.insert(SASL_PASSWORD.to_owned(), StringOrSecret::Secret(password));
+                options.insert("security.protocol".into(), "SASL_SSL".into());
+                options.insert("sasl.mechanisms".into(), StringOrSecret::String(mechanisms));
+                options.insert("sasl.username".into(), username);
+                options.insert("sasl.password".into(), StringOrSecret::Secret(password));
                 if let Some(certificate_authority) = certificate_authority {
-                    r.insert(SSL_CERTIFICATE_AUTHORITY.to_owned(), certificate_authority);
+                    options.insert("ssl.ca.pem".into(), certificate_authority);
                 }
             }
-            None => {}
+            None => (),
         }
 
-        r
+        let mut config = mz_kafka_util::client::create_new_client_config(
+            connection_context.librdkafka_log_level,
+        );
+        for (k, v) in options {
+            config.set(
+                k,
+                v.get_string(&*connection_context.secrets_reader)
+                    .await
+                    .expect("reading kafka secret unexpectedly failed"),
+            );
+        }
+        for (k, v) in extra_options {
+            config.set(*k, v);
+        }
+
+        let mut context = BrokerRewritingClientContext::new(context);
+        for broker in &self.brokers {
+            if let Some(aws_privatelink) = &broker.aws_privatelink {
+                context.add_broker_rewrite(
+                    &broker.address,
+                    &mz_cloud_resources::vpc_endpoint_name(aws_privatelink.connection_id),
+                    aws_privatelink.port,
+                );
+            }
+        }
+
+        Ok(config.create_with_context(context)?)
     }
 }
 
@@ -345,14 +432,24 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
             brokers: self.brokers.into_proto(),
             progress_topic: self.progress_topic.into_proto(),
             security: self.security.into_proto(),
+            options: self
+                .options
+                .iter()
+                .map(|(k, v)| (k.clone(), v.into_proto()))
+                .collect(),
         }
     }
 
     fn from_proto(proto: ProtoKafkaConnection) -> Result<Self, TryFromProtoError> {
         Ok(KafkaConnection {
-            brokers: proto.brokers,
+            brokers: proto.brokers.into_rust()?,
             progress_topic: proto.progress_topic,
             security: proto.security.into_rust()?,
+            options: proto
+                .options
+                .into_iter()
+                .map(|(k, v)| StringOrSecret::from_proto(v).map(|v| (k, v)))
+                .collect::<Result<_, _>>()?,
         })
     }
 }
@@ -369,6 +466,8 @@ pub struct CsrConnection {
     pub tls_identity: Option<TlsIdentity>,
     /// Optional HTTP authentication credentials for the schema registry.
     pub http_auth: Option<CsrConnectionHttpAuth>,
+    /// The ID of an AWS PrivateLink connection through which to tunnel.
+    pub aws_privatelink_id: Option<GlobalId>,
 }
 
 impl CsrConnection {
@@ -406,6 +505,20 @@ impl CsrConnection {
             client_config = client_config.auth(username, password);
         }
 
+        if let Some(aws_privatelink_id) = self.aws_privatelink_id {
+            // TODO: use types to enforce that the URL has a string hostname.
+            let host = self
+                .url
+                .host_str()
+                .ok_or_else(|| anyhow!("url missing host"))?;
+            let privatelink_host = mz_cloud_resources::vpc_endpoint_name(aws_privatelink_id);
+            let addrs: Vec<_> = net::lookup_host(privatelink_host)
+                .await
+                .context("resolving PrivateLink host")?
+                .collect();
+            client_config = client_config.resolve_to_addrs(host, &addrs)
+        }
+
         client_config.build()
     }
 }
@@ -417,6 +530,7 @@ impl RustType<ProtoCsrConnection> for CsrConnection {
             tls_root_cert: self.tls_root_cert.into_proto(),
             tls_identity: self.tls_identity.into_proto(),
             http_auth: self.http_auth.into_proto(),
+            aws_privatelink_id: self.aws_privatelink_id.into_proto(),
         }
     }
 
@@ -426,6 +540,7 @@ impl RustType<ProtoCsrConnection> for CsrConnection {
             tls_root_cert: proto.tls_root_cert.into_rust()?,
             tls_identity: proto.tls_identity.into_rust()?,
             http_auth: proto.http_auth.into_rust()?,
+            aws_privatelink_id: proto.aws_privatelink_id.into_rust()?,
         })
     }
 }
@@ -440,13 +555,15 @@ impl Arbitrary for CsrConnection {
             any::<Option<StringOrSecret>>(),
             any::<Option<TlsIdentity>>(),
             any::<Option<CsrConnectionHttpAuth>>(),
+            any::<Option<GlobalId>>(),
         )
             .prop_map(
-                |(url, tls_root_cert, tls_identity, http_auth)| CsrConnection {
+                |(url, tls_root_cert, tls_identity, http_auth, aws_privatelink_id)| CsrConnection {
                     url,
                     tls_root_cert,
                     tls_identity,
                     http_auth,
+                    aws_privatelink_id,
                 },
             )
             .boxed()
@@ -506,59 +623,6 @@ impl RustType<ProtoCsrConnectionHttpAuth> for CsrConnectionHttpAuth {
     }
 }
 
-/// Propagates appropriate configuration options from `kafka_connection` and
-/// `options` into `config`, ignoring any options identified in
-/// `drop_option_keys`.
-///
-/// Note that this:
-/// - Performs blocking reads when extracting SECRETS.
-/// - Does not ensure that the keys from the Kafka connection and
-///   additional options are disjoint.
-pub async fn populate_client_config<'a>(
-    kafka_connection: KafkaConnection,
-    options: &'a BTreeMap<String, StringOrSecret>,
-    drop_option_keys: HashSet<&'static str>,
-    config: &'a mut rdkafka::ClientConfig,
-    secrets_reader: &'a dyn SecretsReader,
-) {
-    let config_options: BTreeMap<String, StringOrSecret> = kafka_connection.into();
-    for (k, v) in options.iter().chain(config_options.iter()) {
-        if !drop_option_keys.contains(k.as_str()) {
-            config.set(
-                k,
-                v.get_string(secrets_reader)
-                    .await
-                    .expect("reading kafka secret unexpectedly failed"),
-            );
-        }
-    }
-}
-
-/// Provides cleaner access to the `populate_client_config` implementation for
-/// structs.
-#[async_trait]
-pub trait PopulateClientConfig {
-    fn kafka_connection(&self) -> &KafkaConnection;
-    fn options(&self) -> &BTreeMap<String, StringOrSecret>;
-    fn drop_option_keys() -> HashSet<&'static str> {
-        HashSet::new()
-    }
-    async fn populate_client_config(
-        &self,
-        config: &mut rdkafka::ClientConfig,
-        secrets_reader: &dyn SecretsReader,
-    ) {
-        populate_client_config(
-            self.kafka_connection().clone(),
-            self.options(),
-            Self::drop_option_keys(),
-            config,
-            secrets_reader,
-        )
-        .await
-    }
-}
-
 /// A connection to a PostgreSQL server.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct PostgresConnection {
@@ -572,10 +636,8 @@ pub struct PostgresConnection {
     pub user: StringOrSecret,
     /// An optional password for authentication.
     pub password: Option<GlobalId>,
-    /// An optional named SSH tunnel connection ID. Used to manage the public key secret.
-    pub ssh_tunnel_id: Option<GlobalId>,
-    /// An optional SSH tunnel connection details.
-    pub ssh_tunnel: Option<SshConnection>,
+    /// A tunnel through which to route traffic.
+    pub tunnel: PostgresTunnel,
     /// Whether to use TLS for encryption, authentication, or both.
     pub tls_mode: SslMode,
     /// An optional root TLS certificate in PEM format, to verify the server's
@@ -611,43 +673,63 @@ impl PostgresConnection {
             config.ssl_cert(cert.as_bytes()).ssl_key(key.as_bytes());
         }
 
-        let ssh_tunnel = if let (Some(ssh_secret_id), Some(ssh_tunnel)) =
-            (self.ssh_tunnel_id, self.ssh_tunnel.as_ref())
-        {
-            let secret = secrets_reader.read(ssh_secret_id).await?;
-            let key_set = SshKeyPairSet::from_bytes(&secret)?;
-            let key_pair = key_set.primary().clone();
-            mz_postgres_util::TunnelConfig::Ssh(SshTunnelConfig {
-                host: ssh_tunnel.host.clone(),
-                port: ssh_tunnel.port,
-                user: ssh_tunnel.user.clone(),
-                key_pair,
-            })
-        } else {
-            mz_postgres_util::TunnelConfig::Direct
+        let tunnel = match &self.tunnel {
+            PostgresTunnel::Direct => mz_postgres_util::TunnelConfig::Direct,
+            PostgresTunnel::Ssh {
+                connection_id,
+                connection,
+            } => {
+                let secret = secrets_reader.read(*connection_id).await?;
+                let key_set = SshKeyPairSet::from_bytes(&secret)?;
+                let key_pair = key_set.primary().clone();
+                mz_postgres_util::TunnelConfig::Ssh(SshTunnelConfig {
+                    host: connection.host.clone(),
+                    port: connection.port,
+                    user: connection.user.clone(),
+                    key_pair,
+                })
+            }
+            PostgresTunnel::AwsPrivateLink { connection_id } => {
+                mz_postgres_util::TunnelConfig::AwsPrivatelink {
+                    connection_id: *connection_id,
+                }
+            }
         };
 
-        mz_postgres_util::Config::new(config, ssh_tunnel)
+        mz_postgres_util::Config::new(config, tunnel)
     }
 }
 
 impl RustType<ProtoPostgresConnection> for PostgresConnection {
     fn into_proto(&self) -> ProtoPostgresConnection {
+        use proto_postgres_connection::Tunnel;
         ProtoPostgresConnection {
             host: self.host.into_proto(),
             port: self.port.into_proto(),
             database: self.database.into_proto(),
             user: Some(self.user.into_proto()),
             password: self.password.into_proto(),
-            ssh_tunnel_id: self.ssh_tunnel_id.into_proto(),
-            ssh_tunnel: self.ssh_tunnel.into_proto(),
             tls_mode: Some(self.tls_mode.into_proto()),
             tls_root_cert: self.tls_root_cert.into_proto(),
             tls_identity: self.tls_identity.into_proto(),
+            tunnel: Some(match &self.tunnel {
+                PostgresTunnel::Direct => Tunnel::Direct(()),
+                PostgresTunnel::Ssh {
+                    connection_id,
+                    connection,
+                } => Tunnel::Ssh(ProtoPostgresSshTunnel {
+                    connection_id: Some(connection_id.into_proto()),
+                    connection: Some(connection.into_proto()),
+                }),
+                PostgresTunnel::AwsPrivateLink { connection_id } => {
+                    Tunnel::AwsPrivatelink(connection_id.into_proto())
+                }
+            }),
         }
     }
 
     fn from_proto(proto: ProtoPostgresConnection) -> Result<Self, TryFromProtoError> {
+        use proto_postgres_connection::Tunnel;
         Ok(PostgresConnection {
             host: proto.host,
             port: proto.port.into_rust()?,
@@ -656,8 +738,25 @@ impl RustType<ProtoPostgresConnection> for PostgresConnection {
                 .user
                 .into_rust_if_some("ProtoPostgresConnection::user")?,
             password: proto.password.into_rust()?,
-            ssh_tunnel_id: proto.ssh_tunnel_id.into_rust()?,
-            ssh_tunnel: proto.ssh_tunnel.into_rust()?,
+            tunnel: match proto.tunnel {
+                None => {
+                    return Err(TryFromProtoError::missing_field(
+                        "ProtoPostgresConnection::tunnel",
+                    ))
+                }
+                Some(Tunnel::Direct(())) => PostgresTunnel::Direct,
+                Some(Tunnel::Ssh(ssh)) => PostgresTunnel::Ssh {
+                    connection_id: ssh
+                        .connection_id
+                        .into_rust_if_some("ProtoPostgresConnection::ssh::connection_id")?,
+                    connection: ssh
+                        .connection
+                        .into_rust_if_some("ProtoPostgresConnection::ssh::connection")?,
+                },
+                Some(Tunnel::AwsPrivatelink(connection_id)) => PostgresTunnel::AwsPrivateLink {
+                    connection_id: connection_id.into_rust()?,
+                },
+            },
             tls_mode: proto
                 .tls_mode
                 .into_rust_if_some("ProtoPostgresConnection::tls_mode")?,
@@ -678,8 +777,7 @@ impl Arbitrary for PostgresConnection {
             any::<String>(),
             any::<StringOrSecret>(),
             any::<Option<GlobalId>>(),
-            any::<Option<GlobalId>>(),
-            any::<Option<SshConnection>>(),
+            any::<PostgresTunnel>(),
             any_ssl_mode(),
             any::<Option<StringOrSecret>>(),
             any::<Option<TlsIdentity>>(),
@@ -691,8 +789,7 @@ impl Arbitrary for PostgresConnection {
                     database,
                     user,
                     password,
-                    ssh_tunnel_id,
-                    ssh_tunnel,
+                    tunnel,
                     tls_mode,
                     tls_root_cert,
                     tls_identity,
@@ -703,8 +800,7 @@ impl Arbitrary for PostgresConnection {
                         database,
                         user,
                         password,
-                        ssh_tunnel_id,
-                        ssh_tunnel,
+                        tunnel,
                         tls_mode,
                         tls_root_cert,
                         tls_identity,
@@ -713,6 +809,20 @@ impl Arbitrary for PostgresConnection {
             )
             .boxed()
     }
+}
+
+/// Specifies how to tunnel a [`PostgresConnection`].
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum PostgresTunnel {
+    /// No tunneling.
+    Direct,
+    /// Via the specified SSH tunnel connection.
+    Ssh {
+        connection_id: GlobalId,
+        connection: SshConnection,
+    },
+    /// Via the specified AWS PrivateLink connection.
+    AwsPrivateLink { connection_id: GlobalId },
 }
 
 /// A connection to a SSH tunnel.
