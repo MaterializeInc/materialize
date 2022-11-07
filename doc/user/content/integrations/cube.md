@@ -3,13 +3,11 @@ title: "Cube"
 description: "How to connect a Cube deployment to Materialize"
 aliases:
   /third-party/cube/
-menu:
-  main:
-    parent: "integration-guides"
-    name: "Cube"
 ---
 
-[Cube](https://www.cubejs.com/) is an open-source **Headless BI platform**. This integration guide will teach you how to connect Cube with Materialize in a few steps using the browser.
+[Cube](https://www.cubejs.com/) is a headless BI platform that makes data accessible and consistent across every application. It provides data modeling, access control, caching, and a variety of APIs (SQL, GraphQL, and REST) on top of any data warehouse, database, or query engine, including Materialize.
+
+In this guide, we’ll cover how to connect a [Cube Cloud](https://cube.dev/docs/cloud) deployment to Materialize.
 
 ## Pre-requisite
 
