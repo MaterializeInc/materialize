@@ -243,7 +243,8 @@ where
         logging_config.index_logs = self.compute.arranged_logs.clone();
         let maintained_logs: BTreeSet<_> = logging_config.log_identifiers().collect();
 
-        // Initialize frontier tracking the new replica.
+        // Initialize frontier tracking for the new replica
+        // and clean up any dropped collections that we can
         let mut updates = Vec::new();
         for (compute_id, collection) in &mut self.compute.collections {
             // Skip log collections not maintained by this replica.
@@ -667,6 +668,7 @@ where
         let mut advanced_collections = Vec::new();
         let mut compute_read_capability_changes = BTreeMap::default();
         let mut storage_read_capability_changes = BTreeMap::default();
+        let mut dropped_collection_ids = Vec::new();
         for (id, new_upper) in updates.iter() {
             let collection = self
                 .compute
@@ -681,6 +683,10 @@ where
             let old_upper = collection
                 .replica_write_frontiers
                 .insert(replica_id, new_upper.clone());
+
+            if new_upper.is_empty() {
+                dropped_collection_ids.push(*id);
+            }
 
             let mut new_read_capability = collection
                 .read_policy
@@ -736,6 +742,9 @@ where
             .update_write_frontiers(&storage_updates)
             .await?;
 
+        if !dropped_collection_ids.is_empty() {
+            self.update_dropped_collections(dropped_collection_ids);
+        }
         Ok(())
     }
 
@@ -743,10 +752,13 @@ where
     #[tracing::instrument(level = "debug", skip(self))]
     async fn remove_write_frontiers(&mut self, replica_id: ReplicaId) -> Result<(), ComputeError> {
         let mut storage_read_capability_changes = BTreeMap::default();
-        for collection in self.compute.collections.values_mut() {
+        let mut dropped_collection_ids = Vec::new();
+        for (id, collection) in self.compute.collections.iter_mut() {
             let last_upper = collection.replica_write_frontiers.remove(&replica_id);
 
             if let Some(frontier) = last_upper {
+                dropped_collection_ids.push(*id);
+
                 // Update read holds on storage dependencies.
                 for storage_id in &collection.storage_dependencies {
                     let update = storage_read_capability_changes
@@ -761,7 +773,9 @@ where
                 .update_read_capabilities(&mut storage_read_capability_changes)
                 .await?;
         }
-
+        if !dropped_collection_ids.is_empty() {
+            self.update_dropped_collections(dropped_collection_ids);
+        }
         Ok(())
     }
 
@@ -795,30 +809,40 @@ where
                 compute_net.push((key, update));
             } else {
                 // Storage presumably, but verify.
-                storage_todo
-                    .entry(key)
-                    .or_insert_with(ChangeBatch::new)
-                    .extend(update.drain())
+                if self.storage_controller.collection(key).is_ok() {
+                    storage_todo
+                        .entry(key)
+                        .or_insert_with(ChangeBatch::new)
+                        .extend(update.drain())
+                } else {
+                    tracing::error!(
+                        "found neither compute nor storage collection with id {}",
+                        key
+                    );
+                }
             }
         }
 
-        // Translate our net compute actions into `AllowCompaction` commands.
+        // Translate our net compute actions into `AllowCompaction` commands
+        // and a list of collections that are potentially ready to be dropped
         let mut compaction_commands = Vec::new();
+        let mut dropped_collection_ids = Vec::new();
         for (id, change) in compute_net.iter_mut() {
+            let frontier = self.compute.collection(*id)?.read_frontier();
+            if frontier.is_empty() {
+                dropped_collection_ids.push(*id);
+            }
             if !change.is_empty() {
-                let frontier = self
-                    .compute
-                    .collection(*id)
-                    .unwrap()
-                    .read_capabilities
-                    .frontier()
-                    .to_owned();
+                let frontier = frontier.to_owned();
                 compaction_commands.push((*id, frontier));
             }
         }
         if !compaction_commands.is_empty() {
             self.compute
                 .send(ComputeCommand::AllowCompaction(compaction_commands));
+        }
+        if !dropped_collection_ids.is_empty() {
+            self.update_dropped_collections(dropped_collection_ids);
         }
 
         // We may have storage consequences to process.
@@ -879,6 +903,25 @@ where
             ComputeResponse::SubscribeResponse(id, response) => {
                 self.handle_subscribe_response(id, response, replica_id)
                     .await
+            }
+        }
+    }
+
+    /// Cleans up collection state, if necessary, in response to drop operations targeted
+    /// at a replica and given collections (via reporting of an empty frontier).
+    fn update_dropped_collections(&mut self, dropped_collection_ids: Vec<GlobalId>) {
+        for id in dropped_collection_ids {
+            // clean up the given collection if read frontier is empty
+            // and all replica frontiers are empty
+            if let Ok(collection) = self.compute.collection(id) {
+                if collection.read_frontier().is_empty()
+                    && collection
+                        .replica_write_frontiers
+                        .values()
+                        .all(|frontier| frontier.is_empty())
+                {
+                    self.compute.collections.remove(&id);
+                }
             }
         }
     }
