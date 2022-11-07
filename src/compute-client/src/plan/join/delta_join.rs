@@ -22,11 +22,11 @@ use std::collections::HashMap;
 use crate::plan::join::JoinBuildState;
 use crate::plan::join::JoinClosure;
 use crate::plan::AvailableCollections;
-use mz_expr::join_permutations;
 use mz_expr::permutation_for_arrangement;
 use mz_expr::JoinInputMapper;
 use mz_expr::MapFilterProject;
 use mz_expr::MirScalarExpr;
+use mz_expr::{join_permutations, JoinInputCharacteristics};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -217,7 +217,7 @@ impl DeltaJoinPlan {
     /// Create a new join plan from the required arguments.
     pub fn create_from(
         equivalences: &[Vec<MirScalarExpr>],
-        join_orders: &[Vec<(usize, Vec<MirScalarExpr>)>],
+        join_orders: &[Vec<(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)>],
         input_mapper: JoinInputMapper,
         map_filter_project: &mut MapFilterProject,
         available: &[AvailableCollections],
@@ -231,7 +231,7 @@ impl DeltaJoinPlan {
         // (This matches the probably arbitrary historical practice from `mod render`.)
         let mut source_keys = vec![None; number_of_inputs];
         for source_relation in 0..number_of_inputs {
-            for (lookup_relation, lookup_key) in &join_orders[source_relation] {
+            for (lookup_relation, lookup_key, _characteristics) in &join_orders[source_relation] {
                 let key = &mut source_keys[*lookup_relation];
                 if key.is_none() || key.as_ref().unwrap() > lookup_key {
                     *key = Some(lookup_key.clone())
@@ -281,7 +281,7 @@ impl DeltaJoinPlan {
             let mut unthinned_stream_arity = initial_closure.before.projection.len();
 
             // TODO[btv] - Can we deduplicate this with the very similar code in `linear_join.rs` ?
-            for (lookup_relation, lookup_key) in order.iter() {
+            for (lookup_relation, lookup_key, _characteristics) in order.iter() {
                 let available = &available[*lookup_relation];
                 let (lookup_permutation, lookup_thinning) = available
                     .arranged

@@ -19,7 +19,7 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
 ----
 Explained Query (fast path):
-  Constant
+  Constant <empty>
 
 EOF
 
@@ -27,7 +27,7 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
 ----
 Explained Query (fast path):
-  Constant
+  Constant <empty>
 
 EOF
 
@@ -35,7 +35,7 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
 ----
 Explained Query (fast path):
-  Constant
+  Constant <empty>
 
 EOF
 
@@ -43,7 +43,7 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
 ----
 Explained Query (fast path):
-  Constant
+  Constant <empty>
 
 EOF
 
@@ -51,7 +51,7 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
 ----
 Explained Query (fast path):
-  Constant
+  Constant <empty>
 
 EOF
 
@@ -69,7 +69,7 @@ Explained Query:
     Project (#0, #2, #3, #1) // { arity: 4 }
       CrossJoin type=differential // { arity: 4 }
         implementation
-          %1 » %0[]
+          %1 » %0:table_f1[×]A
         ArrangeBy keys=[[]] // { arity: 1 }
           Get materialize.public.table_f1 // { arity: 1 }
         Union // { arity: 3 }
@@ -77,7 +77,7 @@ Explained Query:
           Project (#0..=#2) // { arity: 3 }
             Join on=(#0 = #3) type=differential // { arity: 4 }
               implementation
-                %1 » %0[#0]
+                %1:l0 » %0[#0]KAf
               ArrangeBy keys=[[#0]] // { arity: 3 }
                 Union // { arity: 3 }
                   Negate // { arity: 3 }
@@ -92,7 +92,7 @@ Explained Query:
       Project (#0..=#2) // { arity: 3 }
         Join on=(#0 = #3) type=differential // { arity: 4 }
           implementation
-            %1 » %0[#0]
+            %1:table_f5_f6 » %0:l0[#0]KAf
           ArrangeBy keys=[[#0]] // { arity: 3 }
             Get l0 // { arity: 3 }
           Project (#0) // { arity: 1 }

@@ -193,6 +193,10 @@ impl ExprHumanizer for TestCatalog {
         self.names.get(&id).map(|s| s.to_string())
     }
 
+    fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String> {
+        self.names.get(&id).map(|s| s.to_string())
+    }
+
     fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
         DummyHumanizer.humanize_scalar_type(ty)
     }

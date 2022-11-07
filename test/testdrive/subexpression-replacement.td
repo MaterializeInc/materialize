@@ -79,7 +79,7 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 # Use of a deterministic function
 
 > EXPLAIN SELECT * FROM t1 WHERE col_not_null % 2 = 5 AND (col_not_null % 2 = 5 IS NULL);
-"Explained Query (fast path):  Constant"
+"Explained Query (fast path):  Constant <empty>"
 
 # This is not optimized
 > EXPLAIN SELECT * FROM t1 WHERE (col_not_null % 2) = 1 AND (((col_not_null % 2) = 1) = TRUE);
@@ -107,7 +107,7 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 "Explained Query (fast path):  Filter (#1 = 3)    ReadExistingIndex t1_primary_idxUsed Indexes:  - t1_primary_idx"
 
 > EXPLAIN SELECT * FROM t1 WHERE col_not_null IN (2, 3) AND col_not_null IN (4, 5);
-"Explained Query (fast path):  Constant"
+"Explained Query (fast path):  Constant <empty>"
 
 # Expression inside an IN list
 

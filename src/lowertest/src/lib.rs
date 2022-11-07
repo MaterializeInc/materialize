@@ -834,7 +834,9 @@ fn find_next_type_in_tuple(type_name: &str, prev_elem_end: usize) -> Option<(usi
     let mut it = type_name.chars().skip(current_elem_begin).peekable();
     let mut paren_level = 0;
     let mut bracket_level = 0;
-    while i < type_name.len() && !(paren_level == 0 && bracket_level == 0 && *it.peek().unwrap() == ',') {
+    while i < type_name.len()
+        && !(paren_level == 0 && bracket_level == 0 && *it.peek().unwrap() == ',')
+    {
         if *it.peek().unwrap() == '(' {
             paren_level += 1;
         } else if *it.peek().unwrap() == ')' {

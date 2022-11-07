@@ -19,6 +19,6 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT FROM t1 LEFT JOIN t2 ON TRUE WHERE t1.f1 = t1.f2 + 4 AND t1.f1 IS NULL AND NOT t1.f2 = t1.f1
 ----
 Explained Query (fast path):
-  Constant
+  Constant <empty>
 
 EOF
