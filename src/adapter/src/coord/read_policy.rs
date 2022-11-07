@@ -265,11 +265,11 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                             .holds
                             .update_iter(time.iter().map(|t| (*t, 1)));
                     }
-                    self.compute_read_capability.insert(id, read_capability);
+                    self.compute_read_capabilities.insert(id, read_capability);
                     compute_policy_updates
                         .entry(compute_instance)
                         .or_default()
-                        .push((id, self.compute_read_capability[&id].policy()));
+                        .push((id, self.compute_read_capabilities[&id].policy()));
                 }
             }
 
@@ -280,8 +280,8 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                         .holds
                         .update_iter(time.iter().map(|t| (*t, 1)));
                 }
-                self.storage_read_capability.insert(id, read_capability);
-                storage_policy_updates.push((id, self.storage_read_capability[&id].policy()));
+                self.storage_read_capabilities.insert(id, read_capability);
+                storage_policy_updates.push((id, self.storage_read_capabilities[&id].policy()));
             }
         }
 
@@ -317,7 +317,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         base_policy: ReadPolicy<mz_repr::Timestamp>,
     ) {
         let capability = self
-            .compute_read_capability
+            .compute_read_capabilities
             .get_mut(&id)
             .expect("coord out of sync");
         capability.base_policy = base_policy;
@@ -332,14 +332,14 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
     ///
     /// Returns true if `id` had a read policy and false otherwise.
     pub(crate) fn drop_storage_read_policy(&mut self, id: &GlobalId) -> bool {
-        self.storage_read_capability.remove(id).is_some()
+        self.storage_read_capabilities.remove(id).is_some()
     }
 
     /// Drop read policy in COMPUTE for `id`.
     ///
     /// Returns true if `id` had a read policy and false otherwise.
     pub(crate) fn drop_compute_read_policy(&mut self, id: &GlobalId) -> bool {
-        self.compute_read_capability.remove(id).is_some()
+        self.compute_read_capabilities.remove(id).is_some()
     }
 
     /// Creates a `ReadHolds` struct that creates a read hold for each id in
@@ -400,7 +400,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         // Update STORAGE read policies.
         let mut policy_changes = Vec::new();
         for (time, id) in read_holds.storage_ids() {
-            let read_needs = self.storage_read_capability.get_mut(id).unwrap();
+            let read_needs = self.storage_read_capabilities.get_mut(id).unwrap();
             read_needs.holds.update_iter(time.iter().map(|t| (*t, 1)));
             policy_changes.push((*id, read_needs.policy()));
         }
@@ -414,7 +414,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             let mut policy_changes = Vec::new();
             let mut compute = self.controller.active_compute();
             for (time, id) in compute_ids {
-                let read_needs = self.compute_read_capability.get_mut(id).unwrap();
+                let read_needs = self.compute_read_capabilities.get_mut(id).unwrap();
                 read_needs.holds.update_iter(time.iter().map(|t| (*t, 1)));
                 policy_changes.push((*id, read_needs.policy()));
             }
@@ -463,7 +463,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                             new_time,
                             old_time,
                     );
-                    let read_needs = self.storage_read_capability.get_mut(&id).unwrap();
+                    let read_needs = self.storage_read_capabilities.get_mut(&id).unwrap();
                     read_needs
                         .holds
                         .update_iter(new_time.iter().map(|t| (*t, 1)));
@@ -485,7 +485,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                                 new_time,
                                 old_time,
                         );
-                        let read_needs = self.compute_read_capability.get_mut(&id).unwrap();
+                        let read_needs = self.compute_read_capabilities.get_mut(&id).unwrap();
                         read_needs
                             .holds
                             .update_iter(new_time.iter().map(|t| (*t, 1)));
@@ -536,7 +536,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         let mut policy_changes = Vec::new();
         for (time, id) in read_holds.storage_ids() {
             // It's possible that a concurrent DDL statement has already dropped this GlobalId
-            if let Some(read_needs) = self.storage_read_capability.get_mut(id) {
+            if let Some(read_needs) = self.storage_read_capabilities.get_mut(id) {
                 read_needs.holds.update_iter(time.iter().map(|t| (*t, -1)));
                 policy_changes.push((*id, read_needs.policy()));
             }
@@ -552,7 +552,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             let mut policy_changes = Vec::new();
             for (time, id) in compute_ids {
                 // It's possible that a concurrent DDL statement has already dropped this GlobalId
-                if let Some(read_needs) = self.compute_read_capability.get_mut(id) {
+                if let Some(read_needs) = self.compute_read_capabilities.get_mut(id) {
                     read_needs.holds.update_iter(time.iter().map(|t| (*t, -1)));
                     policy_changes.push((*id, read_needs.policy()));
                 }

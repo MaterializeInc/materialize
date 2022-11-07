@@ -389,7 +389,7 @@ pub struct Coordinator<S> {
     /// to the controller for it to have an effect.
     ///
     /// Access to this field should be restricted to methods in the [`read_policy`] API.
-    storage_read_capability: HashMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
+    storage_read_capabilities: HashMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
     /// For each identifier in COMPUTE, its read policy and any read holds on time.
     ///
     /// Transactions should introduce and remove constraints through the methods
@@ -398,7 +398,7 @@ pub struct Coordinator<S> {
     /// to the controller for it to have an effect.
     ///
     /// Access to this field should be restricted to methods in the [`read_policy`] API.
-    compute_read_capability: HashMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
+    compute_read_capabilities: HashMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
 
     /// For each transaction, the pinned storage and compute identifiers and time at
     /// which they are pinned.
@@ -1096,8 +1096,8 @@ pub async fn serve<S: Append + 'static>(
                 global_timelines: timestamp_oracles,
                 transient_id_counter: 1,
                 active_conns: HashMap::new(),
-                storage_read_capability: Default::default(),
-                compute_read_capability: Default::default(),
+                storage_read_capabilities: Default::default(),
+                compute_read_capabilities: Default::default(),
                 txn_reads: Default::default(),
                 pending_peeks: HashMap::new(),
                 client_pending_peeks: HashMap::new(),
