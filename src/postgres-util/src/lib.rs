@@ -21,9 +21,9 @@ use openssl::x509::X509;
 use postgres_openssl::MakeTlsConnector;
 use rand::Rng;
 use tokio::net::TcpStream as TokioTcpStream;
-use tokio_postgres::config::{ReplicationMode, SslMode};
+use tokio_postgres::config::{Host, ReplicationMode, SslMode};
 use tokio_postgres::tls::MakeTlsConnect;
-use tokio_postgres::{Client, Config as PostgresConfig};
+use tokio_postgres::Client;
 
 use mz_ore::ssh_key::SshKeypair;
 use mz_ore::task;
@@ -33,7 +33,7 @@ use crate::desc::{PostgresColumnDesc, PostgresTableDesc};
 pub mod desc;
 
 /// Creates a TLS connector for the given [`Config`].
-pub fn make_tls(config: &PostgresConfig) -> Result<MakeTlsConnector, anyhow::Error> {
+pub fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, anyhow::Error> {
     let mut builder = SslConnector::builder(SslMethod::tls_client())?;
     // The mode dictates whether we verify peer certs and hostnames. By default, Postgres is
     // pretty relaxed and recommends SslMode::VerifyCa or SslMode::VerifyFull for security.
@@ -210,9 +210,10 @@ pub async fn drop_replication_slots(config: Config, slots: &[&str]) -> Result<()
     Ok(())
 }
 
-/// Configuration on how to connect a given Postgres database.
+/// Configures an optional tunnel for use when connecting to a PostgreSQL
+/// database.
 #[derive(PartialEq, Clone)]
-pub enum SshTunnelConfig {
+pub enum TunnelConfig {
     /// Establish a direct TCP connection to the database host.
     Direct,
     /// Establish a TCP connection to the database via an SSH tunnel.
@@ -220,10 +221,10 @@ pub enum SshTunnelConfig {
     /// and then opening a separate connection from that host to the database.
     /// This is commonly referred by vendors as a "direct SSH tunnel", in
     /// opposition to "reverse SSH tunnel", which is currently unsupported.
-    Tunnel {
-        /// Hostname of the SSH bastion host
+    Ssh {
+        /// Hostname of the SSH bastion server.
         host: String,
-        /// Port where `sshd` is running in the bastion host
+        /// Port where `sshd` is running in the bastion server.
         port: u16,
         /// Username to be used in the SSH connection
         user: String,
@@ -232,13 +233,16 @@ pub enum SshTunnelConfig {
     },
 }
 
-// Omit keys from debug output
-impl std::fmt::Debug for SshTunnelConfig {
+impl std::fmt::Debug for TunnelConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Direct => write!(f, "Direct"),
-            Self::Tunnel {
-                host, port, user, ..
+            Self::Ssh {
+                host,
+                port,
+                user,
+                // Omit keys from debug output
+                keypair: _,
             } => f
                 .debug_struct("Tunnel")
                 .field("host", host)
@@ -249,53 +253,74 @@ impl std::fmt::Debug for SshTunnelConfig {
     }
 }
 
-/// Configuration for Postgres connections.
+/// Configuration for PostgreSQL connections.
 ///
-/// This is a wrapper around [`tokio_postgres`] configuration struct
-/// which also includes:
-///  - Information about whether to use SSH tunnels or not, with associated
-///    configuration.
-///  - Exposed relevant parameters in the format we specify them, as we only
-///    allow a subset of valid values (e.g. no Unix-domain sockets).
+/// This wraps [`tokio_postgres::Config`] to allow the configuration of a
+/// tunnel via a [`TunnelConfig`].
 #[derive(Debug, PartialEq, Clone)]
 pub struct Config {
-    postgres_config: PostgresConfig,
-    host: String,
-    port: u16,
-    ssh_tunnel: SshTunnelConfig,
+    inner: tokio_postgres::Config,
+    tunnel: TunnelConfig,
 }
 
 impl Config {
-    pub fn new(
-        postgres_config: PostgresConfig,
-        host: &str,
-        port: u16,
-        ssh_tunnel: SshTunnelConfig,
-    ) -> Self {
-        Self {
-            postgres_config,
-            host: host.to_string(),
-            port,
-            ssh_tunnel,
+    pub fn new(inner: tokio_postgres::Config, tunnel: TunnelConfig) -> Result<Self, anyhow::Error> {
+        let config = Self { inner, tunnel };
+
+        // Early validate that the configuration contains only a single TCP
+        // server.
+        config.address()?;
+
+        Ok(config)
+    }
+
+    /// Connects to the configured PostgreSQL database.
+    pub async fn connect(&self, task_name: &str) -> Result<Client, anyhow::Error> {
+        self.connect_internal(task_name, |_| ()).await
+    }
+
+    /// Starts a replication connection to the configured PostgreSQL database.
+    pub async fn connect_replication(&self) -> Result<Client, anyhow::Error> {
+        self.connect_internal("postgres_connect_replication", |config| {
+            config
+                .replication_mode(ReplicationMode::Logical)
+                .connect_timeout(Duration::from_secs(30))
+                .keepalives_idle(Duration::from_secs(10 * 60));
+        })
+        .await
+    }
+
+    fn address(&self) -> Result<(&str, u16), anyhow::Error> {
+        match (self.inner.get_hosts(), self.inner.get_ports()) {
+            ([Host::Tcp(host)], [port]) => Ok((host, *port)),
+            _ => bail!("only TCP connections to a single PostgreSQL server are supported"),
         }
     }
 
-    /// Connect to a Postgres database, automatically managing SSL and SSH details as needed.
-    pub async fn connect(&self, connection_task_name: &str) -> Result<Client, anyhow::Error> {
-        let mut tls = make_tls(&self.postgres_config)?;
-        match self.ssh_tunnel {
-            SshTunnelConfig::Direct => {
-                let (client, connection) = self.postgres_config.connect(tls).await?;
-                task::spawn(|| connection_task_name, connection);
+    async fn connect_internal<F>(
+        &self,
+        task_name: &str,
+        configure: F,
+    ) -> Result<Client, anyhow::Error>
+    where
+        F: FnOnce(&mut tokio_postgres::Config),
+    {
+        let mut postgres_config = self.inner.clone();
+        configure(&mut postgres_config);
+        let mut tls = make_tls(&postgres_config)?;
+        match self.tunnel {
+            TunnelConfig::Direct => {
+                let (client, connection) = postgres_config.connect(tls).await?;
+                task::spawn(|| task_name, connection);
                 Ok(client)
             }
-            SshTunnelConfig::Tunnel { .. } => {
+            TunnelConfig::Ssh { .. } => {
                 let (session, local_port) = self.establish_openssh_connection().await?;
-                let tls = MakeTlsConnect::<TokioTcpStream>::make_tls_connect(&mut tls, &self.host)?;
+                let (host, _) = self.address()?;
+                let tls = MakeTlsConnect::<TokioTcpStream>::make_tls_connect(&mut tls, host)?;
                 let tcp_stream = TokioTcpStream::connect(("localhost", local_port)).await?;
-                let (client, connection) =
-                    self.postgres_config.connect_raw(tcp_stream, tls).await?;
-                task::spawn(|| connection_task_name, async {
+                let (client, connection) = postgres_config.connect_raw(tcp_stream, tls).await?;
+                task::spawn(|| task_name, async {
                     _ = connection
                         .await
                         .err()
@@ -311,56 +336,13 @@ impl Config {
         }
     }
 
-    /// Starts a replication connection to the upstream database
-    // TODO(guswynn): explore how to merge this function with `connect`
-    pub async fn connect_replication(mut self) -> Result<Client, anyhow::Error> {
-        let mut tls = make_tls(&self.postgres_config)?;
-        match self.ssh_tunnel {
-            SshTunnelConfig::Direct => {
-                let (client, connection) = self
-                    .postgres_config
-                    .replication_mode(ReplicationMode::Logical)
-                    .connect_timeout(Duration::from_secs(30))
-                    .keepalives_idle(Duration::from_secs(10 * 60))
-                    .connect(tls)
-                    .await?;
-                task::spawn(|| "postgres_connect_replication", connection);
-                Ok(client)
-            }
-            SshTunnelConfig::Tunnel { .. } => {
-                let (session, local_port) = self.establish_openssh_connection().await?;
-                let tls = MakeTlsConnect::<TokioTcpStream>::make_tls_connect(&mut tls, &self.host)?;
-                let tcp_stream = TokioTcpStream::connect(("localhost", local_port)).await?;
-                let (client, connection) = self
-                    .postgres_config
-                    .replication_mode(ReplicationMode::Logical)
-                    .connect_timeout(Duration::from_secs(30))
-                    .keepalives_idle(Duration::from_secs(10 * 60))
-                    .connect_raw(tcp_stream, tls)
-                    .await?;
-                task::spawn(|| "postgres_connect_replication", async {
-                    _ = connection
-                        .await
-                        .err()
-                        .map(|e| tracing::error!("Postgres connection failed: {e}"));
-                    _ = session
-                        .close()
-                        .await
-                        .err()
-                        .map(|e| tracing::error!("failed to close ssh tunnel: {e}"));
-                });
-                Ok(client)
-            }
-        }
-    }
-
-    /// Sets up an ssh tunnel
+    /// Sets up an SSH tunnel.
     ///
     /// Returns the `Session` value you must keep alive to keep the tunnel
     /// open and the local port the tunnel is listening on.
     async fn establish_openssh_connection(&self) -> Result<(openssh::Session, u16), anyhow::Error> {
-        match &self.ssh_tunnel {
-            SshTunnelConfig::Tunnel {
+        match &self.tunnel {
+            TunnelConfig::Ssh {
                 host,
                 port,
                 user,
@@ -417,7 +399,7 @@ impl Config {
                     let local_port: u16 = rng.gen_range(49152..65535);
 
                     let local = openssh::Socket::new(&("localhost", local_port))?;
-                    let remote = (self.host.as_str(), self.port);
+                    let remote = self.address()?;
                     let remote = openssh::Socket::new(&remote)?;
 
                     match session
@@ -443,7 +425,7 @@ impl Config {
 
                 Ok((session, local_port))
             }
-            SshTunnelConfig::Direct => bail!("connection not setup to use SSH"),
+            TunnelConfig::Direct => bail!("connection not setup to use SSH"),
         }
     }
 }
