@@ -29,13 +29,14 @@ use timely::progress::Timestamp;
 use timely::scheduling::{Scheduler, SyncActivator};
 use timely::worker::Worker as TimelyWorker;
 use timely::WorkerConfig;
+use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
 use mz_build_info::BuildInfo;
-use mz_compute_client::command::CommunicationConfig;
 use mz_compute_client::command::{
     BuildDesc, ComputeCommand, ComputeCommandHistory, DataflowDescription,
 };
+use mz_compute_client::command::{CommunicationConfig, ComputeStartupEpoch};
 use mz_compute_client::response::ComputeResponse;
 use mz_compute_client::service::ComputeClient;
 use mz_ore::halt;
@@ -45,7 +46,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistConfig;
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::local::LocalClient;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::communication::initialize_networking;
 use crate::compute_state::ActiveComputeState;
@@ -94,7 +95,7 @@ pub struct TimelyContainer {
 }
 
 /// Threadsafe reference to an optional TimelyContainer
-pub type TimelyContainerRef = Arc<Mutex<Option<TimelyContainer>>>;
+pub type TimelyContainerRef = Arc<tokio::sync::Mutex<Option<TimelyContainer>>>;
 
 /// Initiates a timely dataflow computation, processing compute commands.
 pub fn serve(
@@ -109,7 +110,8 @@ pub fn serve(
     );
     let persist_clients = Arc::new(tokio::sync::Mutex::new(persist_clients));
     let tokio_executor = tokio::runtime::Handle::current();
-    let timely_container = Arc::new(Mutex::new(None));
+    let timely_container = Arc::new(tokio::sync::Mutex::new(None));
+
     let client_builder = {
         let timely_container = Arc::clone(&timely_container);
         move || {
@@ -143,8 +145,11 @@ impl ClusterClient<PartitionedClient> {
     }
 
     async fn build_timely(
-        &mut self,
         comm_config: CommunicationConfig,
+        epoch: ComputeStartupEpoch,
+        trace_metrics: TraceMetrics,
+        persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
+        tokio_executor: Handle,
     ) -> Result<TimelyContainer, Error> {
         info!("Building timely container with config {comm_config:?}");
         let (client_txs, client_rxs): (Vec<_>, Vec<_>) = (0..comm_config.workers)
@@ -152,14 +157,9 @@ impl ClusterClient<PartitionedClient> {
             .unzip();
         let client_rxs: Mutex<Vec<_>> = Mutex::new(client_rxs.into_iter().map(Some).collect());
 
-        let (builders, other) = initialize_networking(&comm_config)
-            .await
-            .map_err(|e| anyhow!("{e}"))?;
+        let (builders, other) = initialize_networking(&comm_config, epoch).await?;
 
         let workers = comm_config.workers;
-        let trace_metrics = self.trace_metrics.clone();
-        let persist_clients = Arc::clone(&self.persist_clients);
-        let tokio_executor = self.tokio_handle.clone();
         let worker_guards = execute_from(
             builders,
             other,
@@ -191,7 +191,11 @@ impl ClusterClient<PartitionedClient> {
         })
     }
 
-    async fn build(&mut self, comm_config: CommunicationConfig) -> Result<(), Error> {
+    async fn build(
+        &mut self,
+        comm_config: CommunicationConfig,
+        epoch: ComputeStartupEpoch,
+    ) -> Result<(), Error> {
         let workers = comm_config.workers;
 
         // Check if we can reuse the existing timely instance.
@@ -201,8 +205,12 @@ impl ClusterClient<PartitionedClient> {
         // As we don't terminate timely workers, the thread join would hang forever, possibly
         // creating a fair share of confusion in the orchestrator.
 
-        let timely = self.timely_container.lock().unwrap().take();
-        let timely = match timely {
+        let trace_metrics = self.trace_metrics.clone();
+        let persist_clients = Arc::clone(&self.persist_clients);
+        let handle = self.tokio_handle.clone();
+
+        let mut timely_lock = self.timely_container.lock().await;
+        let timely = match timely_lock.take() {
             Some(existing) => {
                 if comm_config != existing.comm_config {
                     halt!(
@@ -211,10 +219,21 @@ impl ClusterClient<PartitionedClient> {
                         existing.comm_config,
                     );
                 }
-                info!("Timely already initialized; re-using.");
+                info!("Timely already initialized; re-using.",);
                 existing
             }
-            None => self.build_timely(comm_config).await?,
+            None => {
+                let build_timely_result =
+                    Self::build_timely(comm_config, epoch, trace_metrics, persist_clients, handle)
+                        .await;
+                match build_timely_result {
+                    Err(e) => {
+                        warn!("timely initialization failed: {e}");
+                        return Err(e);
+                    }
+                    Ok(ok) => ok,
+                }
+            }
         };
 
         let (command_txs, command_rxs): (Vec<_>, Vec<_>) =
@@ -235,14 +254,13 @@ impl ClusterClient<PartitionedClient> {
                 activator_rx.recv().unwrap()
             })
             .collect();
+        *timely_lock = Some(timely);
 
         self.inner = Some(LocalClient::new_partitioned(
             response_rxs,
             command_txs,
             activators,
         ));
-
-        *self.timely_container.lock().unwrap() = Some(timely);
         Ok(())
     }
 }
@@ -263,14 +281,16 @@ impl GenericClient<ComputeCommand, ComputeResponse> for ClusterClient<Partitione
         // Changing this debug statement requires changing the replica-isolation test
         tracing::debug!("ClusterClient send={:?}", &cmd);
         match cmd {
-            ComputeCommand::CreateTimely(comm_config) => self.build(comm_config).await,
+            ComputeCommand::CreateTimely { comm_config, epoch } => {
+                self.build(comm_config, epoch).await
+            }
             ComputeCommand::DropInstance => {
                 self.inner.as_mut().expect("intialized").send(cmd).await?;
                 self.inner = None;
                 let _ = self
                     .timely_container
                     .lock()
-                    .unwrap()
+                    .await
                     .take()
                     .expect("Running instance") // Maybe better to send an error back in this case?
                     .worker_guards

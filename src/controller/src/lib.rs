@@ -211,7 +211,7 @@ where
     mz_storage_client::controller::Controller<T>: StorageController<Timestamp = T>,
 {
     /// Creates a new controller.
-    pub async fn new(config: ControllerConfig) -> Self {
+    pub async fn new(config: ControllerConfig, envd_epoch: i64) -> Self {
         let storage_controller = mz_storage_client::controller::Controller::new(
             config.build_info,
             config.storage_stash_url,
@@ -227,6 +227,7 @@ where
             config.build_info,
             config.orchestrator.namespace("compute"),
             config.computed_image,
+            envd_epoch,
         );
 
         Self {

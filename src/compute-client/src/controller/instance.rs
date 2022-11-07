@@ -25,8 +25,8 @@ use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 
 use crate::command::{
-    ComputeCommand, ComputeCommandHistory, DataflowDescription, InstanceConfig, Peek, ReplicaId,
-    SourceInstanceDesc,
+    ComputeCommand, ComputeCommandHistory, ComputeStartupEpoch, DataflowDescription,
+    InstanceConfig, Peek, ReplicaId, SourceInstanceDesc,
 };
 use crate::logging::{LogVariant, LoggingConfig};
 use crate::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
@@ -65,6 +65,10 @@ pub(super) struct Instance<T> {
     pub ready_responses: VecDeque<ComputeControllerResponse<T>>,
     /// Orchestrator for managing replicas
     orchestrator: ComputeOrchestrator,
+    /// A number that increases with each restart of `environmentd`.
+    envd_epoch: i64,
+    /// Numbers that increase with each restart of a replica.
+    replica_epochs: HashMap<ReplicaId, u64>,
 }
 
 impl<T> Instance<T> {
@@ -113,6 +117,7 @@ where
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
         max_result_size: u32,
         orchestrator: ComputeOrchestrator,
+        envd_epoch: i64,
     ) -> Self {
         let collections = arranged_logs
             .iter()
@@ -134,9 +139,14 @@ where
             failed_replicas: Default::default(),
             ready_responses: Default::default(),
             orchestrator,
+            envd_epoch,
+            replica_epochs: Default::default(),
         };
 
-        instance.send(ComputeCommand::CreateTimely(Default::default()));
+        instance.send(ComputeCommand::CreateTimely {
+            comm_config: Default::default(),
+            epoch: ComputeStartupEpoch::new(envd_epoch, 0),
+        });
         instance.send(ComputeCommand::CreateInstance(InstanceConfig {
             logging: Default::default(),
             max_result_size,
@@ -257,6 +267,8 @@ where
         }
         self.update_write_frontiers(id, &updates).await?;
 
+        let replica_epoch = self.compute.replica_epochs.entry(id).or_default();
+        *replica_epoch += 1;
         let replica = Replica::spawn(
             id,
             self.compute.instance_id,
@@ -264,6 +276,7 @@ where
             location,
             logging_config,
             self.compute.orchestrator.clone(),
+            ComputeStartupEpoch::new(self.compute.envd_epoch, *replica_epoch),
         );
 
         // Take this opportunity to clean up the history we should present.

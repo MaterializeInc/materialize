@@ -116,7 +116,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             .command_history
             .push(cmd.clone(), &self.compute_state.pending_peeks);
         match cmd {
-            CreateTimely(_) => panic!("CreateTimely must be captured before"),
+            CreateTimely { .. } => panic!("CreateTimely must be captured before"),
             CreateInstance(config) => self.handle_create_instance(config),
             DropInstance => (),
             InitializationComplete => (),

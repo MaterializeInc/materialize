@@ -27,6 +27,11 @@ import "google/protobuf/empty.proto";
 
 package mz_compute_client.command;
 
+message ProtoComputeStartupEpoch {
+  int64 envd = 1;
+  uint64 replica = 2;
+}
+
 message ProtoComputeCommand {
     message ProtoCreateDataflows {
         repeated ProtoDataflowDescription dataflows = 1;
@@ -34,6 +39,11 @@ message ProtoComputeCommand {
 
     message ProtoCancelPeeks {
         repeated mz_proto.ProtoU128 uuids = 1;
+    }
+
+    message ProtoCreateTimely {
+        ProtoCommunicationConfig comm_config = 1;
+        ProtoComputeStartupEpoch epoch = 2;
     }
 
     oneof kind {
@@ -45,7 +55,7 @@ message ProtoComputeCommand {
         ProtoCancelPeeks cancel_peeks = 6;
         google.protobuf.Empty initialization_complete = 7;
         ProtoUpdateMaxResultSize update_max_result_size = 8;
-        ProtoCommunicationConfig create_timely = 9;
+        ProtoCreateTimely create_timely = 9;
     }
 }
 
