@@ -782,7 +782,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         // Having installed all entries, creating all constraints, we can now relax read policies.
-        self.initialize_read_policies(policies_to_set, DEFAULT_LOGICAL_COMPACTION_WINDOW_MS)
+        self.initialize_read_policies(&policies_to_set, DEFAULT_LOGICAL_COMPACTION_WINDOW_MS)
             .await;
 
         info!("coordinator init: announcing completion of initialization to controller");
