@@ -9,8 +9,6 @@
 
 use std::{collections::BTreeMap, ffi::c_void, sync::atomic::AtomicBool, time::Instant};
 
-use once_cell::sync::Lazy;
-
 pub mod http;
 #[cfg(all(not(target_os = "macos"), feature = "jemalloc"))]
 pub mod jemalloc;
@@ -126,7 +124,7 @@ impl StackProfile {
     }
 }
 
-static EVER_SYMBOLICATED: Lazy<AtomicBool> = Lazy::new(|| false.into());
+static EVER_SYMBOLICATED: AtomicBool = AtomicBool::new(false);
 
 /// Check whether symbolication has ever been run in this process.
 /// This controls whether we display a warning about increasing RAM usage
