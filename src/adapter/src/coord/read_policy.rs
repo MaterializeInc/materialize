@@ -188,7 +188,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         compaction_window_ms: Option<Timestamp>,
     ) {
         self.initialize_read_policies(
-            CollectionIdBundle {
+            &CollectionIdBundle {
                 storage_ids: ids.into_iter().collect(),
                 compute_ids: BTreeMap::new(),
             },
@@ -211,7 +211,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         let mut compute_ids: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
         compute_ids.insert(instance, ids.into_iter().collect());
         self.initialize_read_policies(
-            CollectionIdBundle {
+            &CollectionIdBundle {
                 storage_ids: BTreeSet::new(),
                 compute_ids,
             },
@@ -228,7 +228,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn initialize_read_policies(
         &mut self,
-        id_bundle: CollectionIdBundle,
+        id_bundle: &CollectionIdBundle,
         compaction_window_ms: Option<Timestamp>,
     ) {
         let mut compute_policy_updates: BTreeMap<ComputeInstanceId, Vec<_>> = BTreeMap::new();
@@ -241,7 +241,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 Some(timeline) => {
                     let TimelineState { oracle, .. } = self.ensure_timeline_state(&timeline).await;
                     let read_ts = oracle.read_ts();
-                    let new_read_holds = self.initialize_read_holds(read_ts, id_bundle);
+                    let new_read_holds = self.initialize_read_holds(read_ts, &id_bundle);
                     let TimelineState { read_holds, .. } =
                         self.ensure_timeline_state(&timeline).await;
                     for (time, id_bundle) in &new_read_holds.holds {
@@ -347,7 +347,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
     fn initialize_read_holds(
         &mut self,
         time: mz_repr::Timestamp,
-        id_bundle: CollectionIdBundle,
+        id_bundle: &CollectionIdBundle,
     ) -> ReadHolds<mz_repr::Timestamp> {
         let mut read_holds = ReadHolds::new();
         let time = Antichain::from_elem(time);
@@ -390,7 +390,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
     pub(crate) fn acquire_read_holds(
         &mut self,
         time: mz_repr::Timestamp,
-        id_bundle: CollectionIdBundle,
+        id_bundle: &CollectionIdBundle,
     ) -> ReadHolds<mz_repr::Timestamp> {
         let read_holds = self.initialize_read_holds(time, id_bundle);
         // Update STORAGE read policies.

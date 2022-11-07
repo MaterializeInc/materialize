@@ -312,7 +312,7 @@ mod tests {
         }
         let mut out = String::new();
         if test_type == TestType::Opt {
-            let mut optimizer = Optimizer::logical_optimizer();
+            let optimizer = Optimizer::logical_optimizer();
             dataflow = dataflow
                 .into_iter()
                 .map(|(id, rel)| (id, optimizer.optimize(rel).unwrap().into_inner()))
@@ -332,8 +332,8 @@ mod tests {
             _ => {}
         };
         if test_type == TestType::Opt {
-            let mut log_optimizer = Optimizer::logical_cleanup_pass();
-            let mut phys_optimizer = Optimizer::physical_optimizer();
+            let log_optimizer = Optimizer::logical_cleanup_pass();
+            let phys_optimizer = Optimizer::physical_optimizer();
             dataflow = dataflow
                 .into_iter()
                 .map(|(id, rel)| {

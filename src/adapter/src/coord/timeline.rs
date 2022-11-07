@@ -116,7 +116,7 @@ impl<T: TimestampManipulation> TimestampOracle<T> {
     ///
     /// This timestamp will be greater or equal to all prior values of `self.apply_write(write_ts)`,
     /// and strictly less than all subsequent values of `self.write_ts()`.
-    fn read_ts(&mut self) -> T {
+    fn read_ts(&self) -> T {
         self.state.read_ts.clone()
     }
 
@@ -222,7 +222,7 @@ impl<T: TimestampManipulation> DurableTimestampOracle<T> {
     /// persisted to disk.
     ///
     /// See [`TimestampOracle::read_ts`] for more details.
-    pub fn read_ts(&mut self) -> T {
+    pub fn read_ts(&self) -> T {
         let ts = self.timestamp_oracle.read_ts();
         assert!(
             ts.less_than(&self.durable_timestamp),
@@ -288,14 +288,21 @@ impl<S: Append + 'static> Coordinator<S> {
             .oracle
     }
 
+    pub(crate) fn get_timestamp_oracle(
+        &self,
+        timeline: &Timeline,
+    ) -> &DurableTimestampOracle<Timestamp> {
+        &self
+            .global_timelines
+            .get(timeline)
+            .expect("all timelines have a timestamp oracle")
+            .oracle
+    }
+
     /// Returns a reference to the timestamp oracle used for reads and writes
     /// from/to a local input.
     fn get_local_timestamp_oracle(&self) -> &DurableTimestampOracle<Timestamp> {
-        &self
-            .global_timelines
-            .get(&Timeline::EpochMilliseconds)
-            .expect("no realtime timeline")
-            .oracle
+        self.get_timestamp_oracle(&Timeline::EpochMilliseconds)
     }
 
     /// Returns a mutable reference to the timestamp oracle used for reads and writes
@@ -603,24 +610,24 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Returns an iterator that partitions an id bundle by the timeline that each id belongs to.
     pub fn partition_ids_by_timeline(
         &self,
-        id_bundle: CollectionIdBundle,
+        id_bundle: &CollectionIdBundle,
     ) -> impl Iterator<Item = (Option<Timeline>, CollectionIdBundle)> {
         let mut res: HashMap<Option<Timeline>, CollectionIdBundle> = HashMap::new();
 
-        for id in id_bundle.storage_ids {
-            let timeline = self.get_timeline(id);
-            res.entry(timeline).or_default().storage_ids.insert(id);
+        for id in &id_bundle.storage_ids {
+            let timeline = self.get_timeline(*id);
+            res.entry(timeline).or_default().storage_ids.insert(*id);
         }
 
-        for (compute_instance, ids) in id_bundle.compute_ids {
+        for (compute_instance, ids) in &id_bundle.compute_ids {
             for id in ids {
-                let timeline = self.get_timeline(id);
+                let timeline = self.get_timeline(*id);
                 res.entry(timeline)
                     .or_default()
                     .compute_ids
-                    .entry(compute_instance)
+                    .entry(*compute_instance)
                     .or_default()
-                    .insert(id);
+                    .insert(*id);
             }
         }
 
