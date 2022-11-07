@@ -129,7 +129,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             ),
         );
         match cmd {
-            CreateTimely(_) => panic!("CreateTimely must be captured before"),
+            CreateTimely { .. } => panic!("CreateTimely must be captured before"),
             CreateInstance(config) => self.handle_create_instance(config),
             DropInstance => (),
             InitializationComplete => (),

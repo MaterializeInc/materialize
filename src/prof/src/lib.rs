@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::{collections::BTreeMap, ffi::c_void, time::Instant};
+use std::{collections::BTreeMap, ffi::c_void, sync::atomic::AtomicBool, time::Instant};
 
 pub mod http;
 #[cfg(all(not(target_os = "macos"), feature = "jemalloc"))]
@@ -124,12 +124,23 @@ impl StackProfile {
     }
 }
 
+static EVER_SYMBOLICATED: AtomicBool = AtomicBool::new(false);
+
+/// Check whether symbolication has ever been run in this process.
+/// This controls whether we display a warning about increasing RAM usage
+/// due to the backtrace cache on the
+/// profiler page. (Because the RAM hit is one-time, we don't need to warn if it's already happened).
+pub fn ever_symbolicated() -> bool {
+    EVER_SYMBOLICATED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// Given some stack traces, generate a map of addresses to their
 /// corresponding symbols.
 ///
 /// Each address could correspond to more than one symbol, because
 /// of inlining. (E.g. if 0x1234 comes from "g", which is inlined in "f", the corresponding vec of symbols will be ["f", "g"].)
 pub fn symbolicate(profile: &StackProfile) -> BTreeMap<usize, Vec<String>> {
+    EVER_SYMBOLICATED.store(true, std::sync::atomic::Ordering::SeqCst);
     let mut all_addrs = vec![];
     for (stack, _annotation) in profile.stacks.iter() {
         all_addrs.extend(stack.addrs.iter().cloned());

@@ -73,6 +73,7 @@ class MaterializeApplication(Application):
         release_mode: bool = True,
         tag: Optional[str] = None,
         aws_region: Optional[str] = None,
+        log_filter: Optional[str] = None,
     ) -> None:
         self.environmentd = EnvironmentdService()
         self.testdrive = Testdrive(release_mode=release_mode, aws_region=aws_region)
@@ -98,7 +99,9 @@ class MaterializeApplication(Application):
             Minio(),
             VpcEndpointsClusterRole(),
             AdminRoleBinding(),
-            EnvironmentdStatefulSet(release_mode=release_mode, tag=tag),
+            EnvironmentdStatefulSet(
+                release_mode=release_mode, tag=tag, log_filter=log_filter
+            ),
             self.environmentd,
             self.testdrive,
         ]

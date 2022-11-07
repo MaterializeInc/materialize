@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
+use mz_stash::Stash;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::sync::{mpsc, oneshot};
 use tower_http::cors::AllowOrigin;
@@ -244,6 +245,9 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     {
         bail!("bootstrap default cluster replica size is unknown");
     }
+    let envd_epoch = stash
+        .epoch()
+        .expect("a real environmentd should always have an epoch number");
     let adapter_storage = mz_adapter::catalog::storage::Connection::open(
         stash,
         &BootstrapArgs {
@@ -272,7 +276,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     .context("opening storage usage client")?;
 
     // Initialize controller.
-    let controller = mz_controller::Controller::new(config.controller).await;
+    let controller = mz_controller::Controller::new(config.controller, envd_epoch).await;
 
     // Initialize adapter.
     let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {

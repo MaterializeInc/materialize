@@ -8,31 +8,53 @@
 // by the Apache License, Version 2.0.
 
 //! Code to spin up communication mesh for a compute replica.
-//! Most of this logic was taken from Timely's communication::networking
-//! module, with the crucial difference that we
-//! actually verify that we can receive data on a connection before considering it
-//! established, and retry otherwise. This allows us to cope with the phenomenon
-//! of spuriously accepted connections that has been observed in Kubernetes with linkerd.
+//!
+//! The startup protocol is as follows:
+//! The compute controller in `environmentd`, after having connected to all the
+//! `computed` processes in a replica, sends each of them a `CreateTimely` command
+//! containing an epoch value (which is the same across all copies of the command).
+//! The meaning of this value is irrelevant,
+//! as long as it is totally ordered and
+//! increases monotonically (including across `environmentd` restarts)
+//!
+//! In the past, we've seen issues caused by `environmentd`'s replica connections
+//! flapping repeatedly and causing several instances of the startup code to spin up
+//! in short succession (or even simultaneously) in response to different `CreateTimely`
+//! commands, causing mass confusion among the processes
+//! and possible crash loops. To avoid this, we do not allow processes to connect to each
+//! other unless they are responding to a `CreateTimely` command with the same epoch value.
+//! If a process discovers the existence of a peer with a lower epoch value, it ignores it,
+//! and if it discovers one with a higher epoch value, it aborts the connection.
+//! Such a process is guaranteed to eventually hear about the higher epoch value
+//! (and, thus, successfully connect to its peers), since
+//! `environmentd` sends `CreateTimely` commands to all processes in a replica.
+//!
+//! Concretely, each process awaits connections from its peers with higher indices,
+//! and initiates connections to those with lower indices. Having established
+//! a TCP connection, they exchange epochs, to enable the logic described above.
 
 use std::any::Any;
-use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
-use std::thread;
-use std::thread::sleep;
+use std::cmp::Ordering;
+use std::fmt::Display;
 use std::time::Duration;
 
-use mz_ore::task::spawn_blocking;
+use anyhow::Context;
+use futures::stream::FuturesUnordered;
+use futures::FutureExt;
+use futures::StreamExt;
+use mz_compute_client::command::ComputeStartupEpoch;
+use mz_ore::cast::CastFrom;
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::allocator::GenericBuilder;
-use tracing::{info, trace, warn};
+use tracing::{debug, info, warn};
 
 use mz_compute_client::command::CommunicationConfig;
 
 /// Creates communication mesh from cluster config
 pub async fn initialize_networking(
     config: &CommunicationConfig,
-) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), String> {
+    epoch: ComputeStartupEpoch,
+) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), anyhow::Error> {
     let CommunicationConfig {
         workers,
         process,
@@ -40,24 +62,33 @@ pub async fn initialize_networking(
     } = config;
     info!(
         process = process,
-        "initializing network for multi-process timely instance, with {} processes",
+        "initializing network for multi-process timely instance, with {} processes for epoch number {epoch}",
         addresses.len()
     );
-    let sockets_result = spawn_blocking(|| "computed networking setup", {
-        let addresses = addresses.clone();
-        let process = *process;
-        move || create_sockets(addresses, process)
-    })
-    .await
-    .map_err(|e| format!("JoinError: {e}"))?;
-    match sockets_result.and_then(|sockets| {
-        initialize_networking_from_sockets(sockets, *process, *workers, Box::new(|_| None))
-    }) {
+    let sockets = create_sockets(addresses.clone(), u64::cast_from(*process), epoch)
+        .await
+        .context("failed to set up timely sockets")?;
+    let sockets = sockets
+        .into_iter()
+        .map(|s| s.map(|s| s.into_std()).transpose())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(anyhow::Error::from)
+        .context("failed to get standard sockets from tokio sockets")?;
+    for s in &sockets {
+        if let Some(s) = s {
+            s.set_nonblocking(false)
+                .context("failed to set socket to non-blocking")?;
+        }
+    }
+
+    match initialize_networking_from_sockets(sockets, *process, *workers, Box::new(|_| None)) {
         Ok((stuff, guard)) => Ok((
             stuff.into_iter().map(GenericBuilder::ZeroCopy).collect(),
             Box::new(guard),
         )),
-        Err(err) => Err(format!("failed to initialize networking: {err}")),
+        Err(err) => {
+            Err(anyhow::Error::from(err).context("failed to initialize networking from sockets"))
+        }
     }
 }
 
@@ -65,153 +96,209 @@ pub async fn initialize_networking(
 ///
 /// The item at index i in the resulting vec, is a Some(TcpSocket) to process i, except
 /// for item `my_index` which is None (no socket to self).
-fn create_sockets(
+async fn create_sockets(
     addresses: Vec<String>,
-    my_index: usize,
-) -> Result<Vec<Option<TcpStream>>, io::Error> {
-    let hosts1 = Arc::new(addresses);
-    let hosts2 = Arc::clone(&hosts1);
+    my_index: u64,
+    my_epoch: ComputeStartupEpoch,
+) -> Result<Vec<Option<tokio::net::TcpStream>>, anyhow::Error> {
+    let my_index_uz = usize::cast_from(my_index);
+    assert!(my_index_uz < addresses.len());
+    let n_peers = addresses.len() - 1;
+    let mut results: Vec<_> = (0..addresses.len()).map(|_| None).collect();
 
-    let start_task = thread::spawn(move || start_connections(hosts1, my_index));
-    let await_task = thread::spawn(move || await_connections(hosts2, my_index));
-
-    let mut results = start_task.join().unwrap()?;
-    results.push(None);
-    let to_extend = await_task.join().unwrap()?;
-    results.extend(to_extend.into_iter());
-
-    for r in &mut results {
-        if let Some(sock) = r.as_mut() {
-            sock.set_nonblocking(false)
-                .expect("set_nonblocking(false) call failed");
+    let my_address = &addresses[my_index_uz];
+    let listener = loop {
+        let mut tries = 0;
+        match tokio::net::TcpListener::bind(&my_address[..]).await {
+            Ok(ok) => break ok,
+            Err(e) => {
+                warn!("failed to listen on address {my_address}: {e}");
+                tries += 1;
+                if tries == 10 {
+                    return Err(e.into());
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
         }
+    };
+
+    struct ConnectionEstablished {
+        peer_index: u64,
+        stream: tokio::net::TcpStream,
     }
 
-    info!(process = my_index, "initialization complete");
+    let mut futs = FuturesUnordered::new();
+    for i in 0..my_index {
+        let address = addresses[usize::cast_from(i)].clone();
+        futs.push(
+            async move {
+                start_connection(address, my_index, my_epoch)
+                    .await
+                    .map(move |stream| ConnectionEstablished {
+                        peer_index: i,
+                        stream,
+                    })
+            }
+            .boxed(),
+        );
+    }
+
+    futs.push({
+        let f = async {
+            await_connection(&listener, my_index, my_epoch)
+                .await
+                .map(|(stream, peer_index)| ConnectionEstablished { peer_index, stream })
+        }
+        .boxed();
+        f
+    });
+
+    while results.iter().filter(|maybe| maybe.is_some()).count() != n_peers {
+        let ConnectionEstablished { peer_index, stream } = futs
+            .next()
+            .await
+            .expect("we should always at least have a listener task")?;
+
+        let from_listener = match my_index.cmp(&peer_index) {
+            Ordering::Less => true,
+            Ordering::Equal => panic!("someone claimed to be us"),
+            Ordering::Greater => false,
+        };
+
+        if from_listener {
+            futs.push({
+                let f = async {
+                    await_connection(&listener, my_index, my_epoch)
+                        .await
+                        .map(|(stream, peer_index)| ConnectionEstablished { peer_index, stream })
+                }
+                .boxed();
+                f
+            });
+        }
+
+        let old = std::mem::replace(&mut results[usize::cast_from(peer_index)], Some(stream));
+        if old.is_some() {
+            panic!("connected to peer {peer_index} multiple times");
+        }
+    }
 
     Ok(results)
 }
 
-/// Garbage-collect broken connections.
-///
-/// Detect if any connection has gone away, by doing a short peek.
-/// Assuming the sockets are nonblocking, this should immediately either return data,
-/// or fail with EAGAIN or EWOULDBLOCK.
-///
-/// If an EOF or an error other than those two is signaled, the connection is broken
-/// and should be set to `None`.
-///
-/// `first_idx` is used only for error messages; it does not impact behavior otherwise.
-fn gc_broken_connections<'a, I>(conns: I, first_idx: usize)
-where
-    I: IntoIterator<Item = &'a mut Option<TcpStream>>,
-{
-    let mut buf = [0];
-    for (i, maybe_conn) in conns.into_iter().enumerate() {
-        trace!("peeking {} to detect whether it's broken", first_idx + i);
-        if let Some(conn) = maybe_conn {
-            let closed = match conn.peek(&mut buf) {
-                Ok(0) => true, // EOF
-                Ok(_) => false,
-                Err(err) => err.kind() != std::io::ErrorKind::WouldBlock,
-            };
-            if closed {
-                warn!(
-                    "Connection {} has gone down; we will try to establish it again.",
-                    i + first_idx
-                );
-                *maybe_conn = None;
-            } else {
-                trace!("Peek OK")
-            }
-        }
+#[derive(Debug)]
+/// This task can never successfully boot, since
+/// a peer has seen a higher epoch from `environmentd`.
+pub struct EpochMismatch {
+    /// The epoch we know about
+    mine: ComputeStartupEpoch,
+    /// The higher epoch from our peer
+    peer: ComputeStartupEpoch,
+}
+
+impl Display for EpochMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let EpochMismatch { mine, peer } = self;
+        write!(f, "epoch mismatch: ours was {mine}; the peer's was {peer}")
     }
 }
 
-/// Result contains connections [0, my_index - 1].
-fn start_connections(
-    addresses: Arc<Vec<String>>,
-    my_index: usize,
-) -> Result<Vec<Option<TcpStream>>, io::Error> {
-    let addresses: Vec<_> = addresses.iter().take(my_index).cloned().collect();
-    let mut results: Vec<_> = (0..my_index).map(|_| None).collect();
+impl std::error::Error for EpochMismatch {}
 
-    // We do not want to provide opportunities for the startup
-    // sequence to hang waiting for one of its peers, not noticing that another has gone down;
-    // empirically, we have found it difficult to reason
-    // about whether this results in crash loops and global deadlocks.
-    // Thus, in between connection attempts, check whether a previously-established connection has
-    // gone away; if so, we clear it and retry it again later.
-    while let Some(i) = results.iter().position(|r| r.is_none()) {
-        info!(process = my_index, "Attempting to connect to process {i}");
-        match TcpStream::connect(&addresses[i]) {
+async fn start_connection(
+    address: String,
+    my_index: u64,
+    my_epoch: ComputeStartupEpoch,
+) -> Result<tokio::net::TcpStream, anyhow::Error> {
+    loop {
+        info!(
+            process = my_index,
+            "Attempting to connect to process at {address}"
+        );
+
+        match tokio::net::TcpStream::connect(&address).await {
             Ok(mut s) => {
-                s.set_nodelay(true).expect("set_nodelay call failed");
+                s.set_nodelay(true)?;
+                use tokio::io::AsyncWriteExt;
 
-                s.write_all(&my_index.to_ne_bytes())
-                    .expect("failed to send process index");
+                s.write_all(&my_index.to_be_bytes()).await?;
 
-                // This is necessary for `gc_broken_connections`; it will be unset
-                // before actually trying to use the sockets.
-                s.set_nonblocking(true)
-                    .expect("set_nonblocking(true) call failed");
+                s.write_all(&my_epoch.to_bytes()).await?;
 
-                info!(process = my_index, "Connected to process {i}");
-                results[i] = Some(s);
+                let mut buffer = [0u8; 16];
+                use tokio::io::AsyncReadExt;
+                s.read_exact(&mut buffer).await?;
+                let peer_epoch = ComputeStartupEpoch::from_bytes(buffer);
+                debug!("start: received peer epoch {peer_epoch}");
+
+                match my_epoch.cmp(&peer_epoch) {
+                    Ordering::Less => {
+                        return Err(EpochMismatch {
+                            mine: my_epoch,
+                            peer: peer_epoch,
+                        }
+                        .into());
+                    }
+                    Ordering::Greater => {
+                        warn!(
+                            process = my_index,
+                            "peer at address {address} gave older epoch ({peer_epoch}) than ours ({my_epoch})"
+                        );
+                    }
+                    Ordering::Equal => return Ok(s),
+                }
             }
             Err(err) => {
                 info!(
                     process = my_index,
-                    "error connecting to process {i}: {err}; will retry"
+                    "error connecting to process at {address}: {err}; will retry"
                 );
-                sleep(Duration::from_secs(1));
             }
         }
-        // If a peer failed, it's better that we detect it now than spin up Timely
-        // and immediately crash.
-        gc_broken_connections(&mut results, 0);
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
-
-    Ok(results)
 }
 
-/// Result contains connections [my_index + 1, addresses.len() - 1].
-fn await_connections(
-    addresses: Arc<Vec<String>>,
-    my_index: usize,
-) -> Result<Vec<Option<TcpStream>>, io::Error> {
-    let mut results: Vec<_> = (0..(addresses.len() - my_index - 1))
-        .map(|_| None)
-        .collect();
-    let listener = TcpListener::bind(&addresses[my_index][..])?;
+async fn await_connection(
+    listener: &tokio::net::TcpListener,
+    my_index: u64, // only for logging
+    my_epoch: ComputeStartupEpoch,
+) -> Result<(tokio::net::TcpStream, u64), anyhow::Error> {
+    loop {
+        info!(process = my_index, "awaiting connection from peer");
+        let mut s = listener.accept().await?.0;
+        info!(process = my_index, "accepted connection from peer");
+        s.set_nodelay(true)?;
 
-    while results.iter().any(|r| r.is_none()) {
-        info!(process = my_index, "Awaiting connection from peers");
-        let mut stream = listener.accept()?.0;
-        info!(process = my_index, "Accepted connection from peer");
-        stream.set_nodelay(true).expect("set_nodelay call failed");
-        let mut buffer = [0u8; 8];
-        stream.read_exact(&mut buffer)?;
-        let identifier: usize = u64::from_ne_bytes((&buffer[..]).try_into().unwrap())
-            .try_into()
-            .expect("Materialize must run on a 64-bit system");
-        // This is necessary for `gc_broken_connections`; it will be unset
-        // before actually trying to use the sockets.
-        stream
-            .set_nonblocking(true)
-            .expect("set_nonblocking(true) call failed");
-        assert!(identifier >= (my_index + 1));
-        assert!(identifier < addresses.len());
-        if results[identifier - my_index - 1].is_some() {
-            warn!(process = my_index, "New incarnation of peer {identifier}");
+        let mut buffer = [0u8; 16];
+        use tokio::io::AsyncReadExt;
+
+        s.read_exact(&mut buffer[0..8]).await?;
+        let peer_index = u64::from_be_bytes((&buffer[0..8]).try_into().unwrap());
+        debug!("await: received peer index {peer_index}");
+
+        s.read_exact(&mut buffer).await?;
+        let peer_epoch = ComputeStartupEpoch::from_bytes(buffer);
+        debug!("await: received peer epoch {peer_epoch}");
+
+        use tokio::io::AsyncWriteExt;
+        s.write_all(&my_epoch.to_bytes()[..]).await?;
+
+        match my_epoch.cmp(&peer_epoch) {
+            Ordering::Less => {
+                return Err(EpochMismatch {
+                    mine: my_epoch,
+                    peer: peer_epoch,
+                }
+                .into());
+            }
+            Ordering::Greater => {
+                warn!(
+                    process = my_index,
+                    "peer {peer_index} gave older epoch ({peer_epoch}) than ours ({my_epoch})"
+                );
+            }
+            Ordering::Equal => return Ok((s, peer_index)),
         }
-        results[identifier - my_index - 1] = Some(stream);
-        info!(process = my_index, "connection from process {}", identifier);
-
-        // If a peer failed, it's better that we detect it now than spin up Timely
-        // and immediately crash.
-        gc_broken_connections(&mut results, my_index + 1);
     }
-
-    Ok(results)
 }
