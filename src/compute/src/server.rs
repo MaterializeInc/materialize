@@ -173,6 +173,7 @@ impl ClusterClient<PartitionedClient> {
                     .take()
                     .unwrap();
                 let _trace_metrics = trace_metrics.clone();
+                let _compute_metrics = compute_metrics.clone();
                 let persist_clients = Arc::clone(&persist_clients);
                 Worker {
                     timely_worker,
@@ -248,6 +249,7 @@ impl<C: Debug> Debug for ClusterClient<C> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ClusterClient")
             .field("trace_metrics", &self.trace_metrics)
+            .field("compute_metrics", &self.compute_metrics)
             .field("persist_clients", &self.persist_clients)
             .field("inner", &self.inner)
             .finish_non_exhaustive()
