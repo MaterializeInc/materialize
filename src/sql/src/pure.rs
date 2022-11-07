@@ -27,6 +27,7 @@ use uuid::Uuid;
 
 use mz_ccsr::Schema as CcsrSchema;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError};
+use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_ore::cast::CastFrom;
 use mz_proto::RustType;
 use mz_repr::{strconv, GlobalId};
@@ -37,7 +38,7 @@ use mz_sql_parser::ast::{
     KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection, PgConfigOption,
     PgConfigOptionName, ReaderSchemaSelectionStrategy, TableConstraint, UnresolvedObjectName,
 };
-use mz_storage_client::types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
+use mz_storage_client::types::connections::aws::AwsConfig;
 use mz_storage_client::types::connections::{Connection, ConnectionContext};
 use mz_storage_client::types::sources::PostgresSourceDetails;
 
@@ -170,7 +171,7 @@ pub async fn purify_create_source(
             ..
         }) => {
             let scx = StatementContext::new(None, &*catalog);
-            let connection = {
+            let mut connection = {
                 let item = scx.get_item_by_resolved_name(connection)?;
                 // Get Kafka connection
                 match item.connection()? {
@@ -184,21 +185,18 @@ pub async fn purify_create_source(
 
             let offset_type =
                 Option::<kafka_util::KafkaStartOffsetType>::try_from(&extracted_options)?;
-            let config_options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
+
+            for (k, v) in kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0 {
+                connection.options.insert(k, v);
+            }
 
             let topic = extracted_options
                 .topic
                 .ok_or_else(|| sql_err!("KAFKA CONNECTION without TOPIC"))?;
 
-            let consumer = kafka_util::create_consumer(
-                &topic,
-                &connection,
-                &config_options,
-                connection_context.librdkafka_log_level,
-                &*connection_context.secrets_reader,
-            )
-            .await
-            .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
+            let consumer = kafka_util::create_consumer(&connection_context, &connection, &topic)
+                .await
+                .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
 
             if let Some(offset_type) = offset_type {
                 // Translate `START TIMESTAMP` to a start offset

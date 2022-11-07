@@ -346,7 +346,7 @@ impl CatalogState {
                         "postgres"
                     }
                     mz_storage_client::types::connections::Connection::Aws(..) => "aws",
-                    mz_storage_client::types::connections::Connection::AwsPrivateLink(..) => {
+                    mz_storage_client::types::connections::Connection::AwsPrivatelink(..) => {
                         "aws-privatelink"
                     }
                     mz_storage_client::types::connections::Connection::Ssh { .. } => "ssh-tunnel",
@@ -372,7 +372,7 @@ impl CatalogState {
             mz_storage_client::types::connections::Connection::Csr(_)
             | mz_storage_client::types::connections::Connection::Postgres(_)
             | mz_storage_client::types::connections::Connection::Aws(_)
-            | mz_storage_client::types::connections::Connection::AwsPrivateLink(_) => {}
+            | mz_storage_client::types::connections::Connection::AwsPrivatelink(_) => {}
         };
         updates
     }
@@ -415,7 +415,10 @@ impl CatalogState {
                     lower_bound: 1,
                     length: kafka.brokers.len(),
                 }],
-                kafka.brokers.iter().map(|id| Datum::String(id)),
+                kafka
+                    .brokers
+                    .iter()
+                    .map(|broker| Datum::String(&broker.address)),
             )
             .unwrap();
         let brokers = row.unpack_first();

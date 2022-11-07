@@ -197,37 +197,61 @@ $ kafka-ingest format=bytes topic=t2 key-format=bytes key-terminator=: timestamp
 grape:grape
 
 > CREATE SOURCE upsert_time_offset_0
-  FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=0, TOPIC 'testdrive-t2-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_conn (
+      START TIMESTAMP=0,
+      TOPIC 'testdrive-t2-${testdrive.seed}',
+      TOPIC METADATA REFRESH INTERVAL MS 10
+  )
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
 > CREATE SOURCE upsert_time_offset_1
-  FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=1, TOPIC 'testdrive-t2-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_conn (
+      START TIMESTAMP 1,
+      TOPIC 'testdrive-t2-${testdrive.seed}',
+      TOPIC METADATA REFRESH INTERVAL MS 10
+  )
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
 > CREATE SOURCE upsert_time_offset_2
-  FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=2, TOPIC 'testdrive-t2-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_conn (
+      START TIMESTAMP 2,
+      TOPIC 'testdrive-t2-${testdrive.seed}',
+      TOPIC METADATA REFRESH INTERVAL MS 10
+  )
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
 > CREATE SOURCE upsert_time_offset_3
-  FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=3, TOPIC 'testdrive-t2-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_conn (
+      START TIMESTAMP 3,
+      TOPIC 'testdrive-t2-${testdrive.seed}',
+      TOPIC METADATA REFRESH INTERVAL MS 10
+  )
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
 > CREATE SOURCE upsert_time_offset_4
-  FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=4, TOPIC 'testdrive-t2-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_conn (
+      START TIMESTAMP 4,
+      TOPIC 'testdrive-t2-${testdrive.seed}',
+      TOPIC METADATA REFRESH INTERVAL MS 10
+  )
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
 > CREATE SOURCE upsert_time_offset_5
-  FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=5, TOPIC 'testdrive-t2-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_conn (
+      START TIMESTAMP 5,
+      TOPIC 'testdrive-t2-${testdrive.seed}',
+      TOPIC METADATA REFRESH INTERVAL MS 10
+  )
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT

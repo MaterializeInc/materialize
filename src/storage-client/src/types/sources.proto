@@ -157,7 +157,6 @@ message ProtoKafkaSourceConnection {
     ProtoIncludedColumnPos include_topic = 8;
     ProtoIncludedColumnPos include_offset = 9;
     ProtoIncludedColumnPos include_headers = 10;
-    map<string, mz_storage_client.types.connections.ProtoStringOrSecret> options = 11;
 }
 
 message ProtoSourceDesc {

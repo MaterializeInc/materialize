@@ -379,14 +379,14 @@ CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME 'com.amazonaw
 ----
 CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME = 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES = ('use1-az1', 'use1-az4'))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("privatelinkconn")]), connection: AwsPrivateLink { with_options: [AwsPrivateLinkConnectionOption { name: ServiceName, value: Some(Value(String("com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc"))) }, AwsPrivateLinkConnectionOption { name: AvailabilityZones, value: Some(Sequence([Value(String("use1-az1")), Value(String("use1-az4"))])) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("privatelinkconn")]), connection: AwsPrivatelink { with_options: [AwsPrivatelinkConnectionOption { name: ServiceName, value: Some(Value(String("com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc"))) }, AwsPrivatelinkConnectionOption { name: AvailabilityZones, value: Some(Sequence([Value(String("use1-az1")), Value(String("use1-az4"))])) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CONNECTION privatelinkconn FOR AWS PRIVATELINK SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES ('use1-az1', 'use1-az4')
 ----
 CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME = 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES = ('use1-az1', 'use1-az4'))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("privatelinkconn")]), connection: AwsPrivateLink { with_options: [AwsPrivateLinkConnectionOption { name: ServiceName, value: Some(Value(String("com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc"))) }, AwsPrivateLinkConnectionOption { name: AvailabilityZones, value: Some(Sequence([Value(String("use1-az1")), Value(String("use1-az4"))])) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("privatelinkconn")]), connection: AwsPrivatelink { with_options: [AwsPrivatelinkConnectionOption { name: ServiceName, value: Some(Value(String("com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc"))) }, AwsPrivatelinkConnectionOption { name: AvailabilityZones, value: Some(Sequence([Value(String("use1-az1")), Value(String("use1-az4"))])) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CONNECTION pgconn FOR postgres HOST foo, PORT 1234, SSL CERTIFICATE AUTHORITY 'foo', SSH TUNNEL tun
@@ -394,6 +394,21 @@ CREATE CONNECTION pgconn FOR postgres HOST foo, PORT 1234, SSL CERTIFICATE AUTHO
 CREATE CONNECTION pgconn TO POSTGRES (HOST = foo, PORT = 1234, SSL CERTIFICATE AUTHORITY = 'foo', SSH TUNNEL = tun)
 =>
 CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("pgconn")]), connection: Postgres { with_options: [PostgresConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, PostgresConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("foo"))) }, PostgresConnectionOption { name: SshTunnel, value: Some(Object(Name(UnresolvedObjectName([Ident("tun")])))) }] }, if_not_exists: false })
+
+parse-statement
+CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK db.schema.item, PORT 1234)
+----
+CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK = db.schema.item, PORT = 1234)
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("pgconn")]), connection: Postgres { with_options: [PostgresConnectionOption { name: AwsPrivatelink, value: Some(Object(Name(UnresolvedObjectName([Ident("db"), Ident("schema"), Ident("item")])))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }] }, if_not_exists: false })
+
+parse-statement
+CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK db.schema.item, PORT 1234, HOST foo)
+----
+CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK = db.schema.item, PORT = 1234, HOST = foo)
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("pgconn")]), connection: Postgres { with_options: [PostgresConnectionOption { name: AwsPrivatelink, value: Some(Object(Name(UnresolvedObjectName([Ident("db"), Ident("schema"), Ident("item")])))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, PostgresConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }] }, if_not_exists: false })
+
 
 parse-statement
 CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red');
@@ -1194,7 +1209,7 @@ CREATE CONNECTION conn1 FOR KAFKA BROKER 'kafka:1234', SSL KEY = 'foo', SSL CERT
 ----
 CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234', SSL KEY = 'foo', SSL CERTIFICATE = 'qux')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(Value(String("kafka:1234"))) }, KafkaConnectionOption { name: SslKey, value: Some(Value(String("foo"))) }, KafkaConnectionOption { name: SslCertificate, value: Some(Value(String("qux"))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", aws_privatelink: None })) }, KafkaConnectionOption { name: SslKey, value: Some(Value(String("foo"))) }, KafkaConnectionOption { name: SslCertificate, value: Some(Value(String("qux"))) }] }, if_not_exists: false })
 
 parse-statement roundtrip
 CREATE CONNECTION conn1 TO KAFKA (BROKER 'kafka:1234', SSL KEY = 'foo', SSL CERTIFICATE = 'qux');
@@ -1206,7 +1221,58 @@ CREATE CONNECTION conn1 FOR KAFKA BROKER 'kafka:1234', PROGRESS TOPIC 'my-materi
 ----
 CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234', PROGRESS TOPIC = 'my-materialize-progress-topic')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(Value(String("kafka:1234"))) }, KafkaConnectionOption { name: ProgressTopic, value: Some(Value(String("my-materialize-progress-topic"))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", aws_privatelink: None })) }, KafkaConnectionOption { name: ProgressTopic, value: Some(Value(String("my-materialize-progress-topic"))) }] }, if_not_exists: false })
+
+parse-statement
+CREATE CONNECTION conn1 TO KAFKA (BROKER 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1);
+----
+CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1)
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", aws_privatelink: Some(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })) }] }, if_not_exists: false })
+
+parse-statement
+CREATE CONNECTION conn1 TO KAFKA (BROKER 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093));
+----
+CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093))
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", aws_privatelink: Some(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) })) }] }, if_not_exists: false })
+
+parse-statement
+CREATE CONNECTION conn1 TO KAFKA (
+    BROKERS (
+        'kafka:9092' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9092),
+        'kafka:9093' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093),
+        'kafka:9094' USING AWS PRIVATELINK aws.privatelink.c1
+    )
+);
+----
+CREATE CONNECTION conn1 TO KAFKA (BROKERS = ('kafka:9092' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9092), 'kafka:9093' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093), 'kafka:9094' USING AWS PRIVATELINK aws.privatelink.c1))
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", aws_privatelink: Some(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9092"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", aws_privatelink: Some(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9094", aws_privatelink: Some(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })])) }] }, if_not_exists: false })
+
+parse-statement
+CREATE CONNECTION conn1 TO KAFKA (
+    BROKERS [
+        'kafka:9092' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9092),
+        'kafka:9093' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093),
+        'kafka:9094' USING AWS PRIVATELINK aws.privatelink.c1
+    ]
+);
+----
+CREATE CONNECTION conn1 TO KAFKA (BROKERS = ('kafka:9092' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9092), 'kafka:9093' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093), 'kafka:9094' USING AWS PRIVATELINK aws.privatelink.c1))
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", aws_privatelink: Some(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9092"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", aws_privatelink: Some(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9094", aws_privatelink: Some(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })])) }] }, if_not_exists: false })
+
+parse-statement
+CREATE CONNECTION conn1 TO KAFKA (
+    BROKERS (
+        'kafka:9092' USING AWS PRIVATELINK aws.privatelink.c1 [PORT 9092],
+    )
+);
+----
+error: Expected right parenthesis, found left square bracket
+        'kafka:9092' USING AWS PRIVATELINK aws.privatelink.c1 [PORT 9092],
+                                                              ^
 
 parse-statement
 DROP CONNECTION conn1
@@ -1233,6 +1299,21 @@ parse-statement roundtrip
 CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (URL = 'http://localhost:8081', USERNAME = 'user', PASSWORD = 'word')
 ----
 CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (URL = 'http://localhost:8081', USERNAME = 'user', PASSWORD = 'word')
+
+
+parse-statement
+CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK db.schema.item, PORT 8080)
+----
+CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK = db.schema.item, PORT = 8080)
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Csr { with_options: [CsrConnectionOption { name: AwsPrivatelink, value: Some(Object(Name(UnresolvedObjectName([Ident("db"), Ident("schema"), Ident("item")])))) }, CsrConnectionOption { name: Port, value: Some(Value(Number("8080"))) }] }, if_not_exists: false })
+
+parse-statement
+CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK db.schema.item, PORT 8080, URL 'http://localhost:8081')
+----
+CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK = db.schema.item, PORT = 8080, URL = 'http://localhost:8081')
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Csr { with_options: [CsrConnectionOption { name: AwsPrivatelink, value: Some(Object(Name(UnresolvedObjectName([Ident("db"), Ident("schema"), Ident("item")])))) }, CsrConnectionOption { name: Port, value: Some(Value(Number("8080"))) }, CsrConnectionOption { name: Url, value: Some(Value(String("http://localhost:8081"))) }] }, if_not_exists: false })
 
 
 parse-statement

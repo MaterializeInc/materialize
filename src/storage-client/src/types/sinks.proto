@@ -74,7 +74,6 @@ message ProtoKafkaSinkConnection {
     optional ProtoPublishedSchemaInfo published_schema_info = 7;
     ProtoKafkaSinkProgressConnection progress = 8;
     uint64 fuel = 11;
-    map<string, mz_storage_client.types.connections.ProtoStringOrSecret> options = 12;
 }
 
 message ProtoPublishedSchemaInfo {

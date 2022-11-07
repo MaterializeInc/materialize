@@ -333,7 +333,7 @@ contains:cannot specify multiple Kafka broker addresses in one string
 ! CREATE CONNECTION missing_url TO CONFLUENT SCHEMA REGISTRY (
     USERNAME 'foo'
   );
-contains: must specify URL
+contains:must specify URL
 
 > CREATE SECRET s AS '...';
 
@@ -354,3 +354,20 @@ contains: requires both SSL KEY and SSL CERTIFICATE
     USER 'foo'
   );
 contains: HOST option is required
+
+## AWS PrivateLink
+
+! CREATE CONNECTION conn1 TO KAFKA (BROKER '${testdrive.kafka-addr}' USING AWS PRIVATELINK foo (PORT 9093));
+contains: unknown catalog item 'foo'
+
+! CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK foo, PORT 8080)
+contains: unknown catalog item 'foo'
+
+! CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK foo, PORT 1234)
+contains: unknown catalog item 'foo'
+
+! CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (
+    SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
+    AVAILABILITY ZONES ('use1-az1', 'use1-az4')
+  )
+contains: AWS PrivateLink connections are not supported

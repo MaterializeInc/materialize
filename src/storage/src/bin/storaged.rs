@@ -14,6 +14,7 @@ use std::process;
 
 use anyhow::{bail, Context};
 use axum::routing;
+use mz_cloud_resources::AwsExternalIdPrefix;
 use once_cell::sync::Lazy;
 use tracing::info;
 
@@ -78,8 +79,8 @@ struct Args {
     /// An external ID to be supplied to all AWS AssumeRole operations.
     ///
     /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
-    #[clap(long, env = "AWS_EXTERNAL_ID", value_name = "ID")]
-    aws_external_id: Option<String>,
+    #[clap(long, env = "AWS_EXTERNAL_ID", value_name = "ID", parse(from_str = AwsExternalIdPrefix::new_from_cli_argument_or_environment_variable))]
+    aws_external_id: Option<AwsExternalIdPrefix>,
 
     // === Process orchestrator options. ===
     /// Where to write a PID lock file.

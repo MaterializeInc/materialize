@@ -15,11 +15,11 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use maplit::btreeset;
-use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpointSpec;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, OwnedMutexGuard};
 use tracing::{event, warn, Level};
 
+use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::command::{BuildDesc, DataflowDesc, IndexDesc, ReplicaId};
 use mz_compute_client::controller::{
     ComputeInstanceId, ComputeReplicaConfig, ComputeReplicaLogging,
@@ -608,15 +608,13 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await?;
                 ssh.public_keys = Some(key_set.public_keys());
             }
-            mz_storage_client::types::connections::Connection::AwsPrivateLink(ref privatelink) => {
+            mz_storage_client::types::connections::Connection::AwsPrivatelink(ref privatelink) => {
                 self.cloud_resource_controller
                     .as_ref()
-                    .ok_or(AdapterError::Unsupported(
-                        "PrivateLink connections are only allowed in cloud.",
-                    ))?
+                    .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))?
                     .ensure_vpc_endpoint(
                         connection_gid,
-                        VpcEndpointSpec {
+                        VpcEndpointConfig {
                             aws_service_name: privatelink.service_name.to_owned(),
                             availability_zone_ids: privatelink.availability_zones.to_owned(),
                         },

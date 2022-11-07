@@ -7,27 +7,28 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use maplit::btreemap;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
 use rdkafka::message::{BorrowedMessage, Headers};
 use rdkafka::statistics::Statistics;
 use rdkafka::topic_partition_list::Offset;
-use rdkafka::{ClientConfig, ClientContext, Message, TopicPartitionList};
+use rdkafka::{ClientContext, Message, TopicPartitionList};
 use timely::scheduling::activate::SyncActivator;
 use tokio::runtime::Handle as TokioHandle;
 use tracing::{error, info, warn};
 
 use mz_expr::PartitionId;
-use mz_kafka_util::{client::create_new_client_config, client::MzClientContext};
+use mz_kafka_util::client::{BrokerRewritingClientContext, MzClientContext};
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::{adt::jsonb::Jsonb, GlobalId};
-use mz_storage_client::types::connections::{ConnectionContext, KafkaConnection, StringOrSecret};
+use mz_storage_client::types::connections::{ConnectionContext, StringOrSecret};
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
 use mz_storage_client::types::sources::{KafkaSourceConnection, MzOffset};
 
@@ -50,7 +51,7 @@ pub struct KafkaSourceReader {
     /// Source global ID
     id: GlobalId,
     /// Kafka consumer for this source
-    consumer: Arc<BaseConsumer<GlueConsumerContext>>,
+    consumer: Arc<BaseConsumer<BrokerRewritingClientContext<GlueConsumerContext>>>,
     /// List of consumers. A consumer should be assigned per partition to guarantee fairness
     partition_consumers: VecDeque<PartitionConsumer>,
     /// Worker ID
@@ -81,7 +82,7 @@ pub struct KafkaOffsetCommiter {
     source_id: GlobalId,
     topic_name: String,
     logger: LogCommitter,
-    consumer: Arc<BaseConsumer<GlueConsumerContext>>,
+    consumer: Arc<BaseConsumer<BrokerRewritingClientContext<GlueConsumerContext>>>,
 }
 
 impl SourceConnectionBuilder for KafkaSourceConnection {
@@ -103,28 +104,63 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
         let KafkaSourceConnection {
             connection,
             connection_id,
-            options,
             topic,
             group_id_prefix,
             environment_id,
             ..
         } = self;
-        let kafka_config = TokioHandle::current().block_on(create_kafka_config(
-            connection_id,
-            source_id,
-            group_id_prefix,
-            environment_id,
-            &connection,
-            &options,
-            &connection_context,
-        ));
         let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
-        let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
-            .create_with_context(GlueConsumerContext {
-                activator: consumer_activator,
-                stats_tx,
-            })
-            .expect("Failed to create Kafka Consumer");
+        let consumer: BaseConsumer<_> =
+            TokioHandle::current().block_on(connection.create_with_context(
+                &connection_context,
+                GlueConsumerContext {
+                    activator: consumer_activator,
+                    stats_tx,
+                },
+                &btreemap! {
+                    // Default to disabling Kafka auto commit. This can be
+                    // explicitly enabled by the user if they want to use it for
+                    // progress tracking.
+                    "enable.auto.commit" => "false".into(),
+                    // Always begin ingest at 0 when restarted, even if Kafka
+                    // contains committed consumer read offsets
+                    "auto.offset.reset" => "earliest".into(),
+                    // How often to refresh metadata from the Kafka broker. This
+                    // can have a minor impact on startup latency and latency
+                    // after adding a new partition, as the metadata for a
+                    // partition must be fetched before we can retrieve data
+                    // from it. We try to manually trigger metadata fetches when
+                    // it makes sense, but if those manual fetches fail, this is
+                    // the interval at which we retry.
+                    //
+                    // 30s may seem low, but the default is 5m. More frequent
+                    // metadata refresh rates are surprising to Kafka users, as
+                    // topic partition counts hardly ever change in production.
+                    "topic.metadata.refresh.interval.ms" => "30000".into(), // 30s
+                    // TODO: document the rationale for this.
+                    "fetch.message.max.bytes" => "134217728".into(),
+                    // Consumer group ID. librdkafka requires this, and we use
+                    // offset committing to provide a way for users to monitor
+                    // ingest progress, though we do not rely on the committed
+                    // offsets for any functionality.
+                    //
+                    // The group ID is partially dictated by the user and
+                    // partially dictated by us. Users can set a prefix so they
+                    // can see which consumers belong to which Materialize
+                    // deployment, but we set a suffix to ensure uniqueness. A
+                    // unique consumer group ID is the most surefire way to
+                    // ensure that librdkafka does not try to perform its own
+                    // consumer group balancing, which would wreak havoc with
+                    // our careful partition assignment strategy.
+                    "group.id" => format!(
+                        "{}materialize-{}-{}-{}",
+                        group_id_prefix.unwrap_or_else(String::new),
+                        environment_id,
+                        connection_id,
+                        source_id,
+                    ),
+                },
+            ))?;
         let consumer = Arc::new(consumer);
 
         // Start offsets is a map from partition to the next offset to read
@@ -162,11 +198,15 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
             let partition_info = Arc::downgrade(&partition_info);
             let topic = topic.clone();
             let consumer = Arc::clone(&consumer);
-            let metadata_refresh_frequency = kafka_config
+            let metadata_refresh_frequency = connection
+                .options
                 .get("topic.metadata.refresh.interval.ms")
                 // Safe conversion: statement::extract_config enforces that option is a value
                 // between 0 and 3600000
-                .map(|s| Duration::from_millis(s.parse().unwrap()))
+                .map(|s| match s {
+                    StringOrSecret::String(s) => Duration::from_millis(s.parse().unwrap()),
+                    StringOrSecret::Secret(_) => unreachable!(),
+                })
                 // Default value obtained from https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
                 .unwrap_or_else(|| Duration::from_secs(300));
 
@@ -409,7 +449,7 @@ impl KafkaSourceReader {
                 .expect("partition known to be valid");
             pc.partition_queue.set_nonempty_callback({
                 let context = Arc::clone(&context);
-                move || context.activate()
+                move || context.inner().activate()
             });
         }
 
@@ -417,7 +457,7 @@ impl KafkaSourceReader {
             .consumer
             .split_partition_queue(&self.topic_name, partition_id)
             .expect("partition known to be valid");
-        partition_queue.set_nonempty_callback(move || context.activate());
+        partition_queue.set_nonempty_callback(move || context.inner().activate());
         self.partition_consumers.push_front(PartitionConsumer::new(
             partition_id,
             partition_queue,
@@ -589,79 +629,6 @@ impl KafkaSourceReader {
     }
 }
 
-/// Creates a Kafka config.
-///
-/// `options` set additional configuration operations from the user. While these
-/// look arbitrary, other layers of the system tightly control which
-/// configuration options are allowable.
-async fn create_kafka_config(
-    connection_id: GlobalId,
-    source_id: GlobalId,
-    group_id_prefix: Option<String>,
-    environment_id: String,
-    kafka_connection: &KafkaConnection,
-    options: &BTreeMap<String, StringOrSecret>,
-    connection_context: &ConnectionContext,
-) -> ClientConfig {
-    let mut kafka_config = create_new_client_config(connection_context.librdkafka_log_level);
-
-    // Default to disabling Kafka auto commit. This can be explicitly enabled
-    // by the user if they want to use it for progress tracking.
-    kafka_config.set("enable.auto.commit", "false");
-
-    // Always begin ingest at 0 when restarted, even if Kafka contains committed
-    // consumer read offsets
-    kafka_config.set("auto.offset.reset", "earliest");
-
-    // How often to refresh metadata from the Kafka broker. This can have a
-    // minor impact on startup latency and latency after adding a new partition,
-    // as the metadata for a partition must be fetched before we can retrieve
-    // data from it. We try to manually trigger metadata fetches when it makes
-    // sense, but if those manual fetches fail, this is the interval at which we
-    // retry.
-    //
-    // 30s may seem low, but the default is 5m. More frequent metadata refresh
-    // rates are surprising to Kafka users, as topic partition counts hardly
-    // ever change in production.
-    kafka_config.set("topic.metadata.refresh.interval.ms", "30000"); // 30 seconds
-
-    kafka_config.set("fetch.message.max.bytes", "134217728");
-
-    mz_storage_client::types::connections::populate_client_config(
-        kafka_connection.clone(),
-        options,
-        std::collections::HashSet::new(),
-        &mut kafka_config,
-        &*connection_context.secrets_reader,
-    )
-    .await;
-
-    // Consumer group ID. librdkafka requires this, and we use offset committing
-    // to provide a way for users to monitor ingest progress (though we do not
-    // rely on the committed offsets for any functionality)
-    //
-    // This is partially dictated by the user and partially dictated by us.
-    // Users can set a prefix so they can see which consumers belong to which
-    // Materialize deployment, but we set a suffix to ensure uniqueness. A
-    // unique consumer group ID is the most surefire way to ensure that
-    // librdkafka does not try to perform its own consumer group balancing,
-    // which would wreak havoc with our careful partition assignment strategy.
-    //
-    // TODO(guswynn): make this include the connection id as well
-    kafka_config.set(
-        "group.id",
-        &format!(
-            "{}materialize-{}-{}-{}",
-            group_id_prefix.unwrap_or_else(String::new),
-            environment_id,
-            connection_id,
-            source_id,
-        ),
-    );
-
-    kafka_config
-}
-
 fn construct_source_message(
     msg: &BorrowedMessage<'_>,
     include_headers: bool,
@@ -699,7 +666,7 @@ struct PartitionConsumer {
     /// the partition id with which this consumer is associated
     pid: i32,
     /// The underlying Kafka partition queue
-    partition_queue: PartitionQueue<GlueConsumerContext>,
+    partition_queue: PartitionQueue<BrokerRewritingClientContext<GlueConsumerContext>>,
     /// Whether or not to unpack and allocate headers and pass them through in the `SourceMessage`
     include_headers: bool,
 }
@@ -708,7 +675,7 @@ impl PartitionConsumer {
     /// Creates a new partition consumer from underlying Kafka consumer
     fn new(
         pid: i32,
-        partition_queue: PartitionQueue<GlueConsumerContext>,
+        partition_queue: PartitionQueue<BrokerRewritingClientContext<GlueConsumerContext>>,
         include_headers: bool,
     ) -> Self {
         PartitionConsumer {
@@ -788,11 +755,14 @@ impl GlueConsumerContext {
 impl ConsumerContext for GlueConsumerContext {}
 
 /// Return the list of partition ids associated with a specific topic
-fn get_kafka_partitions(
-    consumer: &BaseConsumer<GlueConsumerContext>,
+fn get_kafka_partitions<C>(
+    consumer: &BaseConsumer<C>,
     topic: &str,
     timeout: Duration,
-) -> Result<Vec<i32>, anyhow::Error> {
+) -> Result<Vec<i32>, anyhow::Error>
+where
+    C: ConsumerContext,
+{
     let metadata = consumer.fetch_metadata(Some(topic), timeout)?;
     Ok(metadata.topics()[0]
         .partitions()
