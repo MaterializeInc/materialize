@@ -16,6 +16,71 @@ To use credentials that contain sensitive information (like passwords and SSL ke
 
 {{< diagram "create-connection.svg" >}}
 
+## AWS PrivateLink
+
+{{< alpha />}}
+
+An [AWS PrivateLink connection](#aws-privatelink) establishes a link to an [AWS
+PrivateLink] service.
+
+You can use AWS PrivateLink connections in [Confluent Schema Registry
+connections](#confluent-schema-registry), [Kafka connections](#kafka), and
+[Postgres connections](#postgres).
+
+Field                       | Value            | Required | Description
+----------------------------|------------------|:--------:| ------------
+`SERVICE NAME`              | `text`           | ✓        | The name of the AWS PrivateLink service.
+`AVAILABILITY ZONES`        | `text[]`         | ✓        | The IDs of the AWS availability zones in which the service is accessible.
+
+### Permissions
+
+After you create the connection, you must configure your AWS PrivateLink service
+to accept connections from the following AWS principal:
+
+```
+arn:aws:iam::664411391173:role/mz_<EXTERNAL-ID>_<CONNECTION-ID>
+```
+
+Fill in the values as follows:
+
+  * **`EXTERNAL-ID`**: A unique ID associated with your Materialize region.
+    You must [contact support](/support/) to determine this ID.
+  * **`CONNECTION-ID`**: The ID of the AWS PrivateLink connection in your
+    Materialize region. You can determine this ID by querying
+    [`mz_connections`].
+
+For example:
+
+```
+arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u23
+```
+
+See [Manage permissions](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#add-remove-permissions) in the AWS PrivateLink
+documentation for details.
+
+{{< warning >}}
+Do **not** grant access to the root principal for the Materialize AWS account.
+Doing so will allow any Materialize customer to create a connection to your
+AWS PrivateLink service.
+{{< /warning >}}
+
+### Accepting connection requests
+
+If your AWS PrivateLink service is configured to require acceptance of
+connection requests, you must manually approve the connection request from
+Materialize after executing `CREATE CONNECTION`. See [Accept or reject
+connection requests](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests) in the
+AWS PrivateLink documentation for more details.
+
+### Example
+
+```sql
+CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+    SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
+    AVAILABILITY ZONES ('use1-az1', 'use1-az4')
+);
+```
+
 ## Confluent Schema Registry
 
 A Confluent Schema Registry connection establishes a link to a [Confluent Schema
@@ -32,8 +97,11 @@ Field                       | Value            | Required | Description
 `SSL KEY`                   | secret           | ✓        | Your SSL certificate's key in PEM format. Required for SSL client authentication.
 `PASSWORD`                  | secret           |          | The password used to connect to the schema registry with basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
 `USERNAME`                  | secret or `text` |          | The username used to connect to the schema registry with basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
+`AWS PRIVATELINK`           | object name      |          | The name of an [AWS PrivateLink connection](#aws-privatelink) through which network traffic should be routed.
 
-### Example
+### Examples
+
+Connect directly to a Confluent Schema Registry server:
 
 ```sql
 CREATE SECRET csr_ssl_crt AS '<CSR_SSL_CRT>';
@@ -49,12 +117,34 @@ CREATE CONNECTION csr_ssl TO CONFLUENT SCHEMA REGISTRY (
 );
 ```
 
+Connect to a Confluent Schema Registry server via an AWS PrivateLink service:
+
+```sql
+CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+    SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
+    AVAILABILITY ZONES ('use1-az1', 'use1-az4')
+);
+
+CREATE CONNECTION csr_privatelink TO CONFLUENT SCHEMA REGISTRY (
+    URL 'http://my-confluent-schema-registry:8081',
+    AWS PRIVATELINK privatelink_svc
+);
+```
+
 ## Kafka
 
 A Kafka connection establishes a link to a [Kafka] cluster.
 
 You can use Kafka connections to create [Kafka
 sources](/sql/create-source/kafka) and [Kafka sinks](/sql/create-sink).
+
+### General options
+
+Field                                   | Value            | Required | Description
+----------------------------------------|------------------|:--------:|-------------------------------
+`BROKER`                    | `text`           | ✓        | The Kafka bootstrap server. Exclusive with `BROKERS`.
+`BROKERS`                   | `text[]`         |          | A comma-separated list of Kafka bootstrap servers. Exclusive with `BROKER`.
+`PROGRESS TOPIC`                        | `text`           |          | The name of a topic that Kafka sinks can use to track internal consistency metadata. If this is not specified, a default topic name will be selected.
 
 ### SSL {#kafka-ssl}
 
@@ -64,8 +154,6 @@ To connect to a Kafka broker that requires [SSL authentication](https://docs.con
 
 Field                       | Value            | Required | Description
 ----------------------------|------------------|:--------:|------------------
-`BROKER`                    | `text`           | ✓        | The Kafka bootstrap server. Exclusive with `BROKERS`.
-`BROKERS`                   | `text[]`         |          | A comma-separated list of Kafka bootstrap servers. Exclusive with `BROKER`.
 `SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The absolute path to the certificate authority (CA) certificate in PEM format. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
 `SSL CERTIFICATE`           | secret or `text` | ✓        | Your SSL certificate in PEM format. Required for SSL client authentication.
 `SSL KEY`                   | secret           | ✓        | Your SSL certificate's key in PEM format. Required for SSL client authentication.
@@ -85,7 +173,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 );
 ```
 
-Create a connection to multiple Kafka brokers:
+Create a connection to a Kafka cluster with multiple bootstrap servers:
 
 ```sql
 CREATE CONNECTION kafka_connection TO KAFKA (
@@ -108,7 +196,7 @@ Field                                   | Value            | Required | Descript
 `SASL PASSWORD`                         | secret           | ✓        | Your SASL password, if any. Required if `SASL MECHANISMS` is `PLAIN`.
 `SSL CERTIFICATE AUTHORITY`             | secret or `text` |          | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
 
-#### Example
+#### Examples
 
 ```sql
 CREATE SECRET kafka_password AS '<BROKER_PASSWORD>';
@@ -121,11 +209,58 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 );
 ```
 
-### Other {#kafka-other}
+### AWS PrivateLink {#kafka-aws-privatelink}
+
+#### Syntax
+
+The full syntax for the `BROKERS` option is:
+
+{{< diagram "create-connection-kafka-brokers.svg" >}}
+
+##### `kafka_broker`
+
+{{< diagram "create-connection-kafka-broker.svg" >}}
+
+#### Description
 
 Field                                   | Value            | Required | Description
 ----------------------------------------|------------------|:--------:|-------------------------------
-`PROGRESS TOPIC`                        | `text`           |          | The name of a topic that Kafka sinks can use to track internal consistency metadata. If this is not specified, a default topic name will be selected.
+`connection`                            | object name      | ✓        | The name of an [AWS PrivateLink connection](#aws-privatelink) through which network traffic for this broker should be routed.
+`PORT`                                  | `integer`        |          | The port of the AWS PrivateLink service to connect to. Defaults to the broker's port.
+
+The `USING PRIVATELINK` clause specifies that Materialize should connect to the
+designated broker in a Kafka cluster via an AWS PrivateLink service.
+
+You must attach the clause individually to each broker that you want to connect
+to via AWS PrivateLink.
+
+#### Examples
+
+Suppose you have the following infrastructure:
+
+  * A Kafka cluster consisting of two brokers named `broker1` and `broker2`,
+    both listening on port 9092.
+
+  * A Network Load Balancer that forwards port 9092 to `broker1:9092` and port
+    9093 to `broker2:9092`.
+
+  * A PrivateLink endpoint service attached to the load balancer.
+
+You can create a connection to this Kafka broker in Materialize like so:
+
+```sql
+CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+    SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
+    AVAILABILITY ZONES ('use1-az1', 'use1-az4')
+);
+
+CREATE CONNECTION kafka_connection TO KAFKA (
+    BROKERS (
+        'broker1:9092' USING AWS PRIVATELINK privatelink_svc,
+        'broker2:9092' USING AWS PRIVATELINK privatelink_svc (PORT 9093)
+    )
+);
+```
 
 ## Postgres
 
@@ -147,6 +282,7 @@ Field                       | Value            | Required | Description
 `SSL CERTIFICATE`           | secret or `text` |          | Client SSL certificate in PEM format.
 `SSL KEY`                   | secret           |          | Client SSL key in PEM format.
 `USER`                      | `text`           | ✓        | Database username.
+`AWS PRIVATELINK`           | object name      |          | The name of an [AWS PrivateLink connection](#aws-privatelink) through which network traffic should be routed.
 
 ### Examples
 
@@ -246,6 +382,7 @@ SELECT * FROM mz_ssh_tunnel_connections;
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE SOURCE`](/sql/create-source)
 
+[AWS PrivateLink]: https://aws.amazon.com/privatelink/
 [Confluent Schema Registry]: https://docs.confluent.io/platform/current/schema-registry/index.html#sr-overview
 [Kafka]: https://kafka.apache.org
 [PostgreSQL]: https://www.postgresql.org
@@ -253,6 +390,7 @@ SELECT * FROM mz_ssh_tunnel_connections;
 [`CREATE SOURCE`]: /sql/create-source
 [`CREATE SINK`]: /sql/create-sink
 [`FORMAT`]: /sql/create-source/#formats
+[`mz_connections`]: /sql/system-catalog/mz_catalog/#mz_connections
 [`mz_ssh_tunnel_connections`]: /sql/system-catalog/mz_catalog/#mz_ssh_tunnel_connections
 [Ed25519 algorithm]: https://ed25519.cr.yp.to
 [latacora-crypto]: https://latacora.micro.blog/2018/04/03/cryptographic-right-answers.html

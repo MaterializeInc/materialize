@@ -27,7 +27,7 @@ Before moving on, double check that you have:
 
 ### Steps
 
-1. In Materialize, create an [SSH tunnel connection](/sql/create-connection/#postgres-ssh-example) to the bastion server:
+1. In Materialize, create an [SSH tunnel connection](/sql/create-connection/#ssh-tunnel) to the bastion server:
 
     ```sql
     CREATE CONNECTION ssh_connection TO SSH TUNNEL (
@@ -56,7 +56,7 @@ Before moving on, double check that you have:
     echo "ssh-ed25519 AAAA...76RH materialize" >> ~/.ssh/authorized_keys
     ```
 
-1. In Materialize, create a [PostgreSQL connection](/sql/create-connection/#postgres-example) that uses `ssh_connection`:
+1. In Materialize, create a [PostgreSQL connection](/sql/create-connection/#postgres) that uses `ssh_connection`:
 
     ```sql
     CREATE SECRET pgpass AS '<POSTGRES_PASSWORD>';
