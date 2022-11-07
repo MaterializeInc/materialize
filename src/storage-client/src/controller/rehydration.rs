@@ -318,14 +318,7 @@ where
                         .insert(export.id, Antichain::from_elem(T::minimum()));
                 }
             }
-            StorageCommand::AllowCompaction(frontiers) => {
-                for (id, frontier) in frontiers {
-                    if frontier.is_empty() {
-                        self.sources.remove(id);
-                        self.uppers.remove(id);
-                    }
-                }
-            }
+            StorageCommand::AllowCompaction(_frontiers) => {}
         }
     }
 
@@ -335,21 +328,13 @@ where
                 let mut new_uppers = Vec::new();
 
                 for (id, new_upper) in list {
-                    if let Some(reported) = self.uppers.get_mut(&id) {
-                        if PartialOrder::less_than(reported, &new_upper) {
-                            reported.clone_from(&new_upper);
-                            new_uppers.push((id, new_upper));
-                        }
-                    } else {
-                        // It can happen during source shutdown that we remove
-                        // the tracked upper from our state but a
-                        // `FrontierUppers` response is still on the wire.
-                        //
-                        // This is very fine to ignore, especially now that
-                        // these upper updates are plain `Antichains`, and not
-                        // `ChangeBatches` where we need to be extra careful
-                        // about not messing up our state.
-                        tracing::info!("RehydratingStorageClient received FrontierUppers response {new_upper:?} for absent identifier {id}");
+                    let reported = match self.uppers.get_mut(&id) {
+                        Some(reported) => reported,
+                        None => panic!("Reference to absent collection: {id}"),
+                    };
+                    if PartialOrder::less_than(reported, &new_upper) {
+                        reported.clone_from(&new_upper);
+                        new_uppers.push((id, new_upper));
                     }
                 }
                 if !new_uppers.is_empty() {
@@ -357,6 +342,13 @@ where
                 } else {
                     None
                 }
+            }
+            StorageResponse::DroppedIds(dropped_ids) => {
+                for id in dropped_ids.iter() {
+                    self.sources.remove(id);
+                    self.uppers.remove(id);
+                }
+                Some(StorageResponse::DroppedIds(dropped_ids))
             }
         }
     }
