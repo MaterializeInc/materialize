@@ -175,11 +175,11 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                 Ok(ComputeCommand::UpdateMaxResultSize(max_result_size))
             }
             Some(CreateTimely(ProtoCreateTimely { comm_config, epoch })) => {
-                let comm_config = comm_config.ok_or(TryFromProtoError::missing_field(
-                    "ProtoCreateTimely::comm_config",
-                ))?;
-                let epoch =
-                    epoch.ok_or(TryFromProtoError::missing_field("ProtoCreateTimely::epoch"))?;
+                let comm_config = comm_config.ok_or_else(|| {
+                    TryFromProtoError::missing_field("ProtoCreateTimely::comm_config")
+                })?;
+                let epoch = epoch
+                    .ok_or_else(|| TryFromProtoError::missing_field("ProtoCreateTimely::epoch"))?;
                 Ok(ComputeCommand::CreateTimely {
                     comm_config: comm_config.into_rust()?,
                     epoch: epoch.into_rust()?,
