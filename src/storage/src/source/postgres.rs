@@ -39,9 +39,9 @@ use mz_storage_client::types::sources::{
 use self::metrics::PgSourceMetrics;
 use super::metrics::SourceBaseMetrics;
 use crate::source::commit::LogCommitter;
+use crate::source::types::{OffsetCommitter, SourceConnectionBuilder};
 use crate::source::{
-    types::OffsetCommitter, NextMessage, SourceMessage, SourceMessageType, SourceReader,
-    SourceReaderError,
+    NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };
 
 mod metrics;
@@ -201,26 +201,22 @@ struct PostgresTaskInfo {
     offset_rx: Receiver<HashMap<PartitionId, MzOffset>>,
 }
 
-impl SourceReader for PostgresSourceReader {
-    type Key = ();
-    type Value = Row;
-    // Postgres can produce deletes that cause retractions
-    type Diff = Diff;
+impl SourceConnectionBuilder for PostgresSourceConnection {
+    type Reader = PostgresSourceReader;
     type OffsetCommitter = PgOffsetCommitter;
-    type Connection = PostgresSourceConnection;
 
-    fn new(
+    fn into_reader(
+        self,
         _source_name: String,
         source_id: GlobalId,
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        connection: Self::Connection,
         start_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         metrics: SourceBaseMetrics,
         connection_context: ConnectionContext,
-    ) -> Result<(Self, Self::OffsetCommitter), anyhow::Error> {
+    ) -> Result<(Self::Reader, Self::OffsetCommitter), anyhow::Error> {
         let active_read_worker =
             crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
 
@@ -245,17 +241,13 @@ impl SourceReader for PostgresSourceReader {
             .unwrap_or_default();
 
         let connection_config = TokioHandle::current()
-            .block_on(
-                connection
-                    .connection
-                    .config(&*connection_context.secrets_reader),
-            )
+            .block_on(self.connection.config(&*connection_context.secrets_reader))
             .expect("Postgres connection unexpectedly missing secrets");
 
         if active_read_worker {
             let mut source_tables = HashMap::new();
-            let tables_iter = connection.details.tables.iter();
-            for (i, (desc, casts)) in tables_iter.zip(connection.table_casts).enumerate() {
+            let tables_iter = self.details.tables.iter();
+            for (i, (desc, casts)) in tables_iter.zip(self.table_casts).enumerate() {
                 let source_table = SourceTable {
                     output_index: i + 1,
                     desc: desc.clone(),
@@ -267,8 +259,8 @@ impl SourceReader for PostgresSourceReader {
             let task_info = PostgresTaskInfo {
                 source_id,
                 connection_config,
-                publication: connection.publication,
-                slot: connection.details.slot,
+                publication: self.publication,
+                slot: self.details.slot,
                 /// Our cursor into the WAL
                 lsn: start_offset.offset.into(),
                 metrics: PgSourceMetrics::new(&metrics, source_id),
@@ -285,7 +277,7 @@ impl SourceReader for PostgresSourceReader {
         }
 
         Ok((
-            Self {
+            PostgresSourceReader {
                 receiver_stream: dataflow_rx,
                 active_read_worker,
                 reported_unconsumed_partitions: false,
@@ -300,6 +292,13 @@ impl SourceReader for PostgresSourceReader {
             },
         ))
     }
+}
+
+impl SourceReader for PostgresSourceReader {
+    type Key = ();
+    type Value = Row;
+    // Postgres can produce deletes that cause retractions
+    type Diff = Diff;
 
     // TODO(guswynn): use `next` instead of using a channel
     fn get_next_message(

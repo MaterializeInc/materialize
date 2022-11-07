@@ -33,6 +33,7 @@ use mz_storage_client::types::sources::{KinesisSourceConnection, MzOffset};
 
 use crate::source::commit::LogCommitter;
 use crate::source::metrics::KinesisMetrics;
+use crate::source::types::SourceConnectionBuilder;
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };
@@ -130,25 +131,22 @@ impl KinesisSourceReader {
     }
 }
 
-impl SourceReader for KinesisSourceReader {
-    type Key = ();
-    type Value = Option<Vec<u8>>;
-    type Diff = ();
+impl SourceConnectionBuilder for KinesisSourceConnection {
+    type Reader = KinesisSourceReader;
     type OffsetCommitter = LogCommitter;
-    type Connection = KinesisSourceConnection;
 
-    fn new(
+    fn into_reader(
+        self,
         _source_name: String,
         source_id: GlobalId,
         worker_id: usize,
         worker_count: usize,
         _consumer_activator: SyncActivator,
-        kc: Self::Connection,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
         connection_context: ConnectionContext,
-    ) -> Result<(Self, Self::OffsetCommitter), anyhow::Error> {
+    ) -> Result<(Self::Reader, Self::OffsetCommitter), anyhow::Error> {
         let active_read_worker =
             crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
 
@@ -156,7 +154,7 @@ impl SourceReader for KinesisSourceReader {
         // We could change that to only spin up Kinesis when needed.
         let state = TokioHandle::current().block_on(create_state(
             &metrics.kinesis,
-            kc,
+            self,
             connection_context.aws_external_id_prefix.as_ref(),
             source_id,
             &*connection_context.secrets_reader,
@@ -185,6 +183,12 @@ impl SourceReader for KinesisSourceReader {
             Err(e) => Err(anyhow!("{}", e)),
         }
     }
+}
+
+impl SourceReader for KinesisSourceReader {
+    type Key = ();
+    type Value = Option<Vec<u8>>;
+    type Diff = ();
 
     fn get_next_message(
         &mut self,

@@ -61,6 +61,7 @@ use mz_storage_client::types::sources::{Compression, MzOffset, S3KeySource, S3So
 use self::metrics::{BucketMetrics, ScanBucketMetrics};
 use self::notifications::{Event, EventType, TestEvent};
 use crate::source::commit::LogCommitter;
+use crate::source::types::SourceConnectionBuilder;
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };
@@ -808,25 +809,22 @@ where
     })
 }
 
-impl SourceReader for S3SourceReader {
-    type Key = ();
-    type Value = Option<Vec<u8>>;
-    type Diff = ();
+impl SourceConnectionBuilder for S3SourceConnection {
+    type Reader = S3SourceReader;
     type OffsetCommitter = LogCommitter;
-    type Connection = S3SourceConnection;
 
-    fn new(
+    fn into_reader(
+        self,
         source_name: String,
         source_id: GlobalId,
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        s3_conn: Self::Connection,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
         connection_context: ConnectionContext,
-    ) -> Result<(Self, Self::OffsetCommitter), anyhow::Error> {
+    ) -> Result<(Self::Reader, Self::OffsetCommitter), anyhow::Error> {
         let active_read_worker =
             crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
 
@@ -835,7 +833,7 @@ impl SourceReader for S3SourceReader {
             let (dataflow_tx, dataflow_rx) = tokio::sync::mpsc::channel(10_000);
             let (keys_tx, keys_rx) = tokio::sync::mpsc::channel(10_000);
             let (shutdowner, shutdown_rx) = tokio::sync::watch::channel(DataflowStatus::Running);
-            let glob = s3_conn.pattern.map(|g| g.compile_matcher());
+            let glob = self.pattern.map(|g| g.compile_matcher());
 
             task::spawn(|| format!("s3_download:{}", source_id), {
                 let secrets_reader = Arc::clone(&connection_context.secrets_reader);
@@ -844,15 +842,15 @@ impl SourceReader for S3SourceReader {
                     keys_rx,
                     dataflow_tx,
                     shutdown_rx.clone(),
-                    s3_conn.aws.clone(),
+                    self.aws.clone(),
                     connection_context.aws_external_id_prefix.clone(),
                     consumer_activator,
-                    s3_conn.compression,
+                    self.compression,
                     metrics.clone(),
                     secrets_reader,
                 )
             });
-            for key_source in s3_conn.key_sources {
+            for key_source in self.key_sources {
                 match key_source {
                     S3KeySource::Scan { bucket } => {
                         debug!(
@@ -867,7 +865,7 @@ impl SourceReader for S3SourceReader {
                                 bucket,
                                 source_id,
                                 glob.clone(),
-                                s3_conn.aws.clone(),
+                                self.aws.clone(),
                                 connection_context.aws_external_id_prefix.clone(),
                                 keys_tx.clone(),
                                 metrics.clone(),
@@ -886,7 +884,7 @@ impl SourceReader for S3SourceReader {
                                 source_id,
                                 glob.clone(),
                                 queue,
-                                s3_conn.aws.clone(),
+                                self.aws.clone(),
                                 connection_context.aws_external_id_prefix.clone(),
                                 keys_tx.clone(),
                                 shutdown_rx.clone(),
@@ -922,6 +920,12 @@ impl SourceReader for S3SourceReader {
             },
         ))
     }
+}
+
+impl SourceReader for S3SourceReader {
+    type Key = ();
+    type Value = Option<Vec<u8>>;
+    type Diff = ();
 
     fn get_next_message(
         &mut self,
