@@ -119,8 +119,13 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             .command_history
             .push(cmd.clone(), &self.compute_state.pending_peeks);
         self.compute_state.metrics.command_history_size.set(
-            i64::try_from(self.compute_state.command_history.len()).expect(
+            u64::try_from(self.compute_state.command_history.len()).expect(
                 "The compute command history size must be non-negative and fit a 64-bit number",
+            ),
+        );
+        self.compute_state.metrics.dataflow_count_in_history.set(
+            u64::try_from(self.compute_state.command_history.dataflow_count()).expect(
+                "The number of dataflows in the compute history must be non-negative and fit a 64-bit number",
             ),
         );
         match cmd {

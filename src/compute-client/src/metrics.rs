@@ -7,14 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use prometheus::IntGauge;
+use mz_ore::metrics::UIntGauge;
 
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 
 #[derive(Clone, Debug)]
 pub struct ComputeMetrics {
-    pub command_history_size: IntGauge,
+    pub command_history_size: UIntGauge,
+    pub dataflow_count_in_history: UIntGauge,
 }
 
 impl ComputeMetrics {
@@ -23,6 +24,10 @@ impl ComputeMetrics {
             command_history_size: registry.register(metric!(
                 name: "mz_compute_comamnd_history_size",
                 help: "The size of the compute command history.",
+            )),
+            dataflow_count_in_history: registry.register(metric!(
+                name: "mz_compute_dataflow_count_in_history",
+                help: "The number of dataflow descriptions in the compute command history.",
             )),
         }
     }
