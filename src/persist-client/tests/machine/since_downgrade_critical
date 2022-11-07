@@ -63,10 +63,15 @@ shard-desc
 ----
 since=[3] upper=[0]
 
+# Downgrading to the same since is a no-op (but still gets linearized)
+compare-and-downgrade-since expect_opaque=0 opaque=0 since=(5) reader_id=c00000000-0000-0000-0000-000000000000
+----
+v9 0 [5]
+
 # Since does not regress
 compare-and-downgrade-since expect_opaque=0 opaque=0 since=(0) reader_id=c00000000-0000-0000-0000-000000000000
 ----
-v9 0 [5]
+v10 0 [5]
 
 shard-desc
 ----
@@ -75,7 +80,7 @@ since=[3] upper=[0]
 # Shard since unaffected by handle with since > shard since expiring.
 expire-critical-reader reader_id=c00000000-0000-0000-0000-000000000000
 ----
-v10 ok
+v11 ok
 
 shard-desc
 ----
@@ -84,12 +89,12 @@ since=[3] upper=[0]
 # Create a third handle. It gets the current since of 3.
 register-critical-reader reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v11 [3]
+v12 [3]
 
 # Shard since doesn't change until the meet (min) of all handle sinces changes.
 compare-and-downgrade-since expect_opaque=0 opaque=22 since=(10) reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v12 22 [10]
+v13 22 [10]
 
 shard-desc
 ----
@@ -101,7 +106,7 @@ since=[3] upper=[0]
 # Switch this assertion back when we re-enable this.
 expire-critical-reader reader_id=c11111111-1111-1111-1111-111111111111
 ----
-v13 ok
+v14 ok
 
 shard-desc
 ----
@@ -113,8 +118,12 @@ since=[3] upper=[0]
 # Switch this assertion back when we re-enable this.
 expire-critical-reader reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v14 ok
+v15 ok
 
 shard-desc
 ----
 since=[3] upper=[0]
+
+register-critical-reader reader_id=c33333333-3333-3333-3333-333333333333
+----
+v16 [3]
