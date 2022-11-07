@@ -16,7 +16,6 @@
 extern crate core;
 
 mod configuration;
-mod errors;
 mod login;
 mod password;
 mod region;
@@ -83,7 +82,7 @@ enum Commands {
     /// Connect to a region using a SQL shell
     Shell {
         #[clap(possible_values = CloudProviderRegion::variants())]
-        cloud_provider_region: String,
+        cloud_provider_region: Option<String>,
     },
 }
 
@@ -246,7 +245,7 @@ async fn main() -> Result<()> {
                 } => {
                     let cloud_provider_region =
                         CloudProviderRegion::from_str(&cloud_provider_region)?;
-                    let profile = config.get_profile()?;
+                    let mut profile = config.get_profile()?;
 
                     let valid_profile = profile.validate(&client).await?;
 
@@ -274,7 +273,8 @@ async fn main() -> Result<()> {
                         }
                     }
 
-                    loading_spinner.finish_with_message("Region enabled.");
+                    loading_spinner.finish_with_message(format!("{cloud_provider_region} enabled"));
+                    profile.set_default_region(cloud_provider_region);
                 }
 
                 RegionCommand::List => {
@@ -323,8 +323,16 @@ async fn main() -> Result<()> {
         Commands::Shell {
             cloud_provider_region,
         } => {
-            let cloud_provider_region = CloudProviderRegion::from_str(&cloud_provider_region)?;
             let profile = config.get_profile()?;
+
+            let cloud_provider_region = match cloud_provider_region {
+                Some(ref cloud_provider_region) => {
+                    CloudProviderRegion::from_str(cloud_provider_region)?
+                }
+                None => profile
+                    .get_default_region()
+                    .context("no region specified and no default region set")?,
+            };
 
             let client = Client::new();
             let valid_profile = profile.validate(&client).await?;
