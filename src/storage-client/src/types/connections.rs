@@ -585,17 +585,16 @@ pub struct PostgresConnection {
 }
 
 impl PostgresConnection {
-    pub async fn postgres_config(
+    pub async fn config(
         &self,
         secrets_reader: &dyn mz_secrets::SecretsReader,
-    ) -> Result<tokio_postgres::Config, anyhow::Error> {
-        let user = self.user.get_string(secrets_reader).await?;
+    ) -> Result<mz_postgres_util::Config, anyhow::Error> {
         let mut config = tokio_postgres::Config::new();
         config
             .host(&self.host)
             .port(self.port)
             .dbname(&self.database)
-            .user(&user)
+            .user(&self.user.get_string(secrets_reader).await?)
             .ssl_mode(self.tls_mode);
         if let Some(password) = self.password {
             let password = secrets_reader.read_string(password).await?;
@@ -610,35 +609,24 @@ impl PostgresConnection {
             let key = secrets_reader.read_string(tls_identity.key).await?;
             config.ssl_cert(cert.as_bytes()).ssl_key(key.as_bytes());
         }
-        Ok(config)
-    }
 
-    pub async fn config(
-        &self,
-        secrets_reader: &dyn mz_secrets::SecretsReader,
-    ) -> Result<mz_postgres_util::Config, anyhow::Error> {
         let ssh_tunnel = if let (Some(ssh_secret_id), Some(ssh_tunnel)) =
             (self.ssh_tunnel_id, self.ssh_tunnel.as_ref())
         {
             let secret = secrets_reader.read(ssh_secret_id).await?;
             let keyset = mz_ore::ssh_key::SshKeyset::from_bytes(&secret)?;
             let keypair = keyset.primary().clone();
-            mz_postgres_util::SshTunnelConfig::Tunnel {
+            mz_postgres_util::TunnelConfig::Ssh {
                 host: ssh_tunnel.host.clone(),
                 port: ssh_tunnel.port,
                 user: ssh_tunnel.user.clone(),
                 keypair,
             }
         } else {
-            mz_postgres_util::SshTunnelConfig::Direct
+            mz_postgres_util::TunnelConfig::Direct
         };
 
-        Ok(mz_postgres_util::Config::new(
-            self.postgres_config(secrets_reader).await?,
-            &self.host,
-            self.port,
-            ssh_tunnel,
-        ))
+        mz_postgres_util::Config::new(config, ssh_tunnel)
     }
 }
 
