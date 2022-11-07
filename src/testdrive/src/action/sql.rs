@@ -76,6 +76,8 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         _ => true,
     };
 
+    let expect_deprecated = state.deprecate_next_stmt().await?;
+
     let state = &state;
     let expected_output = &cmd.expected_output;
     let res = match should_retry {
@@ -89,6 +91,10 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
     .retry_async_canceling(|retry_state| async move {
         match try_run_sql(state, query, expected_output).await {
             Ok(()) => {
+                if expect_deprecated {
+                    bail!("prematurely deprecated statement");
+                }
+
                 if retry_state.i != 0 {
                     println!();
                 }
@@ -102,6 +108,10 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
                 Ok(())
             }
             Err(e) => {
+                if expect_deprecated {
+                    return Ok(());
+                }
+
                 if retry_state.i == 0 && should_retry {
                     print!("rows didn't match; sleeping to see if dataflow catches up");
                 }

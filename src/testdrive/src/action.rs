@@ -25,12 +25,6 @@ use aws_types::credentials::ProvideCredentials;
 use aws_types::SdkConfig;
 use futures::future::FutureExt;
 use itertools::Itertools;
-use mz_adapter::catalog::{Catalog, ConnCatalog};
-use mz_adapter::session::Session;
-use mz_kafka_util::client::{create_new_client_config_simple, MzClientContext};
-use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::SYSTEM_TIME;
-use mz_stash::StashFactory;
 use once_cell::sync::Lazy;
 use rand::Rng;
 use rdkafka::producer::Producer;
@@ -38,16 +32,23 @@ use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
 use url::Url;
 
+use mz_adapter::catalog::{Catalog, ConnCatalog};
+use mz_adapter::session::Session;
+use mz_kafka_util::client::{create_new_client_config_simple, MzClientContext};
 use mz_ore::display::DisplayExt;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_postgres_util::make_tls;
+use mz_stash::StashFactory;
 
 use crate::error::PosError;
 use crate::parser::{validate_ident, Command, PosCommand, SqlExpectedError, SqlOutput};
 use crate::util;
 use crate::util::postgres::postgres_client;
 
+mod deprecate;
 mod file;
 mod http;
 mod kafka;
@@ -160,6 +161,7 @@ pub struct State {
     regex: Option<Regex>,
     regex_replacement: String,
     postgres_factory: StashFactory,
+    deprecate: Option<String>,
 
     // === Materialize state. ===
     materialize_catalog_postgres_stash: Option<String>,
@@ -637,6 +639,28 @@ impl State {
             })
             .await
     }
+
+    pub async fn deprecate_next_stmt(&mut self) -> Result<bool, anyhow::Error> {
+        if let Some(deprecated_version) = self.deprecate.take() {
+            // Ignore subversions
+            let version_extract =
+                "SELECT regexp_extract('v(\\d+\\.\\d+\\.\\d+)', mz_version()) AS version";
+            let version = self
+                .pgclient
+                .query_one(version_extract, &[])
+                .await
+                .context("getting version")?;
+
+            let version = semver::Version::parse(version.get("version")).expect("known to be good");
+
+            // If the currently running version is >= the deprecated version, return true
+            let req = semver::VersionReq::parse(&format!(">={deprecated_version}"))?;
+
+            Ok(req.matches(&version))
+        } else {
+            Ok(false)
+        }
+    }
 }
 
 pub enum ControlFlow {
@@ -675,6 +699,7 @@ impl Run for PosCommand {
                     *line = subst(line, &state.cmd_vars)?;
                 }
                 match builtin.name.as_ref() {
+                    "deprecate-next-stmt" => deprecate::deprecate(builtin, state),
                     "file-append" => file::run_append(builtin, state).await,
                     "file-delete" => file::run_delete(builtin, state).await,
                     "http-request" => http::run_request(builtin, state).await,
@@ -972,6 +997,7 @@ pub async fn create_state(
         regex: None,
         regex_replacement: set::DEFAULT_REGEX_REPLACEMENT.into(),
         postgres_factory: StashFactory::new(&MetricsRegistry::new()),
+        deprecate: None,
 
         // === Materialize state. ===
         materialize_catalog_postgres_stash,
