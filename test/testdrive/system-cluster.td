@@ -67,7 +67,7 @@ INSERT INTO temp SELECT * FROM temp
 2
 
 > SHOW CLUSTER REPLICAS WHERE cluster = 'mz_system'
-mz_system r1 1
+mz_system r1 1 false
 
 $ postgres-execute connection=mz_system
 DROP CLUSTER REPLICA mz_system.r1
@@ -78,4 +78,4 @@ $ postgres-execute connection=mz_system
 CREATE CLUSTER REPLICA mz_system.r1 SIZE '${arg.default-replica-size}';
 
 > SHOW CLUSTER REPLICAS WHERE cluster = 'mz_system'
-mz_system r1 ${arg.default-replica-size}
+mz_system r1 ${arg.default-replica-size} false
