@@ -312,7 +312,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn drop_sources(&mut self, sources: Vec<GlobalId>) {
         for id in &sources {
-            self.drop_read_policy(id);
+            self.drop_storage_read_policy(id);
         }
         self.controller.storage.drop_sources(sources).await.unwrap();
     }
@@ -341,7 +341,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     pub(crate) async fn drop_storage_sinks(&mut self, sinks: Vec<GlobalId>) {
         for id in &sinks {
-            self.drop_read_policy(id);
+            self.drop_storage_read_policy(id);
         }
         self.controller.storage.drop_sinks(sinks).await.unwrap();
     }
@@ -349,7 +349,7 @@ impl<S: Append + 'static> Coordinator<S> {
     pub(crate) async fn drop_indexes(&mut self, indexes: Vec<(ComputeInstanceId, GlobalId)>) {
         let mut by_compute_instance: HashMap<_, Vec<_>> = HashMap::new();
         for (compute_instance, id) in indexes {
-            if self.drop_read_policy(&id) {
+            if self.drop_compute_read_policy(&id) {
                 by_compute_instance
                     .entry(compute_instance)
                     .or_default()
@@ -371,7 +371,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut by_compute_instance: HashMap<_, Vec<_>> = HashMap::new();
         let mut source_ids = Vec::new();
         for (compute_instance, id) in mviews {
-            if self.drop_read_policy(&id) {
+            if self.drop_compute_read_policy(&id) {
                 by_compute_instance
                     .entry(compute_instance)
                     .or_default()
@@ -396,6 +396,9 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         // Drop storage sources.
+        for id in &source_ids {
+            self.drop_storage_read_policy(id);
+        }
         self.controller
             .storage
             .drop_sources(source_ids)
