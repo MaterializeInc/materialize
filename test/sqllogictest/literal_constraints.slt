@@ -978,3 +978,24 @@ Used Indexes:
   - materialize.public.idx_t2_a_b_c
 
 EOF
+
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/15696
+
+statement ok
+CREATE TABLE bar(a BOOL, b BOOL);
+
+statement ok
+CREATE INDEX ON bar(b AND a);
+
+query T multiline
+EXPLAIN SELECT * FROM bar WHERE (b AND a) = TRUE;
+----
+Explained Query (fast path):
+  Project (#1, #2)
+    ReadExistingIndex materialize.public.bar_expr_idx lookup value (true)
+
+Used Indexes:
+  - materialize.public.bar_expr_idx
+
+EOF
