@@ -362,7 +362,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(")");
             }
             Expr::NullIf { l_expr, r_expr } => {
-                f.write_str("COALESCE(");
+                f.write_str("NULLIF(");
                 f.write_node(&display::comma_separated(&[l_expr, r_expr]));
                 f.write_str(")");
             }
