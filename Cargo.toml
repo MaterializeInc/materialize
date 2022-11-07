@@ -45,6 +45,7 @@ members = [
     "src/secrets",
     "src/segment",
     "src/service",
+    "src/ssh-util",
     "src/sql",
     "src/sql-parser",
     "src/sqllogictest",

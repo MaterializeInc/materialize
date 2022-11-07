@@ -21,12 +21,13 @@ use tokio_postgres::config::SslMode;
 use url::Url;
 
 use mz_ccsr::tls::{Certificate, Identity};
-
 use mz_proto::tokio_postgres::any_ssl_mode;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
+use mz_ssh_util::keys::SshKeyPairSet;
+use mz_ssh_util::tunnel::SshTunnelConfig;
 
 use crate::types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
 
@@ -614,14 +615,14 @@ impl PostgresConnection {
             (self.ssh_tunnel_id, self.ssh_tunnel.as_ref())
         {
             let secret = secrets_reader.read(ssh_secret_id).await?;
-            let keyset = mz_ore::ssh_key::SshKeyset::from_bytes(&secret)?;
-            let keypair = keyset.primary().clone();
-            mz_postgres_util::TunnelConfig::Ssh {
+            let key_set = SshKeyPairSet::from_bytes(&secret)?;
+            let key_pair = key_set.primary().clone();
+            mz_postgres_util::TunnelConfig::Ssh(SshTunnelConfig {
                 host: ssh_tunnel.host.clone(),
                 port: ssh_tunnel.port,
                 user: ssh_tunnel.user.clone(),
-                keypair,
-            }
+                key_pair,
+            })
         } else {
             mz_postgres_util::TunnelConfig::Direct
         };

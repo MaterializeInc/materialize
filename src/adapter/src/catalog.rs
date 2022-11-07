@@ -65,6 +65,7 @@ use mz_sql::plan::{
 };
 use mz_sql::{plan, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{CreateSinkOption, CreateSourceOption, Statement, WithOptionValue};
+use mz_ssh_util::keys::SshKeyPairSet;
 use mz_stash::{Append, Postgres, Sqlite};
 use mz_storage_client::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 use mz_storage_client::types::sinks::{
@@ -2397,9 +2398,9 @@ impl<S: Append> Catalog<S> {
                     connection.connection
                 {
                     let secret = config.secrets_reader.read(*id).await?;
-                    let keyset = mz_ore::ssh_key::SshKeyset::from_bytes(&secret)?;
-                    let public_keypair = keyset.public_keys();
-                    ssh.public_keys = Some(public_keypair);
+                    let keyset = SshKeyPairSet::from_bytes(&secret)?;
+                    let public_key_pair = keyset.public_keys();
+                    ssh.public_keys = Some(public_key_pair);
                 }
             }
         }
@@ -4555,20 +4556,20 @@ impl<S: Append> Catalog<S> {
                 }
                 Op::UpdateRotatedKeys {
                     id,
-                    previous_public_keypair,
-                    new_public_keypair,
+                    previous_public_key_pair,
+                    new_public_key_pair,
                 } => {
                     let entry = state.get_entry(&id);
                     // Retract old keys
                     builtin_table_updates.extend(state.pack_ssh_tunnel_connection_update(
                         id,
-                        &previous_public_keypair,
+                        &previous_public_key_pair,
                         -1,
                     ));
                     // Insert the new rotated keys
                     builtin_table_updates.extend(state.pack_ssh_tunnel_connection_update(
                         id,
-                        &new_public_keypair,
+                        &new_public_key_pair,
                         1,
                     ));
 
@@ -4576,7 +4577,7 @@ impl<S: Append> Catalog<S> {
                     if let mz_storage_client::types::connections::Connection::Ssh(ref mut ssh) =
                         connection.connection
                     {
-                        ssh.public_keys = Some(new_public_keypair)
+                        ssh.public_keys = Some(new_public_key_pair)
                     }
                     let new_item = CatalogItem::Connection(connection);
 
@@ -5292,8 +5293,8 @@ pub enum Op {
     ResetAllSystemConfiguration {},
     UpdateRotatedKeys {
         id: GlobalId,
-        previous_public_keypair: (String, String),
-        new_public_keypair: (String, String),
+        previous_public_key_pair: (String, String),
+        new_public_key_pair: (String, String),
     },
 }
 

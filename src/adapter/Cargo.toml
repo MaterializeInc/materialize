@@ -27,7 +27,7 @@ mz-compute-client = { path = "../compute-client" }
 mz-controller = { path = "../controller" }
 mz-expr = { path = "../expr" }
 mz-kafka-util = { path = "../kafka-util" }
-mz-ore = { path = "../ore", features = ["ssh", "task", "tracing_"] }
+mz-ore = { path = "../ore", features = ["task", "tracing_"] }
 mz-persist-types = { path = "../persist-types" }
 mz-persist-client = { path = "../persist-client" }
 mz-pgcopy = { path = "../pgcopy" }
@@ -39,6 +39,7 @@ mz-secrets = { path = "../secrets" }
 mz-segment = { path = "../segment" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
+mz-ssh-util = { path = "../ssh-util" }
 mz-stash = { path = "../stash" }
 mz-storage-client = { path = "../storage-client" }
 mz-transform = { path = "../transform" }
