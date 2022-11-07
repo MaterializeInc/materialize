@@ -12,7 +12,7 @@ use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use chrono::Utc;
 use clap::ArgEnum;
@@ -348,6 +348,15 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             // cluster-autoscaler. Notably, eviction of pods for resource overuse is still enabled.
             "cluster-autoscaler.kubernetes.io/safe-to-evict".to_owned() => "false".to_string(),
         };
+
+        let container_name = image
+            .splitn(2, '/')
+            .skip(1)
+            .next()
+            .and_then(|name_version| name_version.splitn(2, ':').next())
+            .context("`image` is not ORG/NAME:VERSION")?
+            .to_string();
+
         let mut pod_template_spec = PodTemplateSpec {
             metadata: Some(ObjectMeta {
                 labels: Some(labels.clone()),
@@ -356,7 +365,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             }),
             spec: Some(PodSpec {
                 containers: vec![Container {
-                    name: "default".into(),
+                    name: container_name,
                     image: Some(image),
                     args: Some(args),
                     image_pull_policy: Some(self.config.image_pull_policy.to_string()),
