@@ -202,13 +202,13 @@ mod disabled {
             "time_fg" => {
                 let time_secs = time_secs.ok_or_else(|| {
                     (
-                        StatusCode::INTERNAL_SERVER_ERROR,
+                        StatusCode::BAD_REQUEST,
                         "Expected value for `time_secs`".to_owned(),
                     )
                 })?;
                 let hz = hz.ok_or_else(|| {
                     (
-                        StatusCode::INTERNAL_SERVER_ERROR,
+                        StatusCode::BAD_REQUEST,
                         "Expected value for `hz`".to_owned(),
                     )
                 })?;
@@ -387,13 +387,13 @@ mod enabled {
             "time_fg" => {
                 let time_secs = time_secs.ok_or_else(|| {
                     (
-                        StatusCode::INTERNAL_SERVER_ERROR,
+                        StatusCode::BAD_REQUEST,
                         "Expected value for `time_secs`".to_owned(),
                     )
                 })?;
                 let hz = hz.ok_or_else(|| {
                     (
-                        StatusCode::INTERNAL_SERVER_ERROR,
+                        StatusCode::BAD_REQUEST,
                         "Expected value for `hz`".to_owned(),
                     )
                 })?;
