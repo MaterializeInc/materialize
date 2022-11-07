@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import subprocess
+import time
 from textwrap import dedent
 
 from materialize.cloudtest.application import MaterializeApplication
@@ -86,15 +87,21 @@ def validate(mz: MaterializeApplication, seed: int) -> None:
     )
 
 
-def kill_computed(mz: MaterializeApplication, compute_id: int) -> None:
+def kill_computed(
+    mz: MaterializeApplication, compute_id: int, signal: str = "SIGKILL"
+) -> None:
     cluster_id, replica_id = mz.environmentd.sql_query(
         f"SELECT cluster_id, id FROM mz_cluster_replicas WHERE name = 'shared_fate_replica'"
     )[0]
 
     pod_name = f"pod/compute-cluster-{cluster_id}-replica-{replica_id}-{compute_id}"
 
+    print(f"sending signal {signal} to pod {pod_name}...")
+
     try:
-        mz.kubectl("exec", pod_name, "--", "bash", "-c", "kill -9 `pidof computed`")
+        mz.kubectl(
+            "exec", pod_name, "--", "bash", "-c", f"kill -{signal} `pidof computed`"
+        )
     except subprocess.CalledProcessError:
         # The computed process or container most likely has stopped already or is on its way
         pass
@@ -131,3 +138,42 @@ def test_kill_all_but_one_computed(mz: MaterializeApplication) -> None:
         kill_computed(mz, compute_id)
 
     validate(mz, 4)
+
+
+def test_kill_while_suspended(mz: MaterializeApplication) -> None:
+    """Suspend a computed and resume it after the rest of the cluster went down."""
+    populate(mz, 5)
+    kill_computed(mz, 2, signal="SIGSTOP")
+    time.sleep(1)
+    kill_computed(mz, 4)
+    time.sleep(10)
+    kill_computed(mz, 2, signal="SIGCONT")
+    validate(mz, 5)
+
+
+def test_suspend_while_killing(mz: MaterializeApplication) -> None:
+    """Suspend a computed while the cluster is going down and resume it after."""
+    populate(mz, 6)
+    kill_computed(mz, 4)
+    kill_computed(mz, 2, signal="SIGSTOP")
+    time.sleep(10)
+    kill_computed(mz, 2, signal="SIGCONT")
+    validate(mz, 6)
+
+
+def test_suspend_all_but_one(mz: MaterializeApplication) -> None:
+    """Suspend all computeds while killing one."""
+    populate(mz, 7)
+
+    for compute_id in range(0, CLUSTER_SIZE):
+        if compute_id != 4:
+            kill_computed(mz, compute_id, signal="SIGSTOP")
+
+    kill_computed(mz, 4)
+    time.sleep(10)
+
+    for compute_id in range(0, CLUSTER_SIZE):
+        if compute_id != 4:
+            kill_computed(mz, compute_id, signal="SIGCONT")
+
+    validate(mz, 7)
