@@ -35,7 +35,7 @@ use mz_expr::{
 use mz_ore::ssh_key::SshKeyset;
 use mz_ore::task;
 use mz_repr::explain_new::Explainee;
-use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, ScalarType, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
 use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails};
 use mz_sql::names::QualifiedObjectName;
@@ -53,10 +53,14 @@ use mz_sql::plan::{
     SubscribeFrom, SubscribePlan, View,
 };
 use mz_stash::Append;
-use mz_storage::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
-use mz_storage::types::sinks::StorageSinkConnectionBuilder;
-use mz_storage::types::sources::{IngestionDescription, SourceExport};
+use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
+use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
+use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
 
+use crate::catalog::builtin::{
+    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_INTROSPECTION_COMPUTE_INSTANCE,
+    MZ_INTROSPECTION_ROLE, MZ_SYSTEM_COMPUTE_INSTANCE, PG_CATALOG_SCHEMA,
+};
 use crate::catalog::{
     self, Catalog, CatalogItem, ComputeInstance, Connection, DataSourceDesc, Ingestion,
     SerializedComputeReplicaLocation, StorageSinkConnectionState, SYSTEM_USER,
@@ -65,8 +69,8 @@ use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::dataflows::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
 use crate::coord::{
-    peek, read_policy, Coordinator, Message, PendingTxn, SendDiffs, SinkConnectionReady, TxnReads,
-    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+    peek, Coordinator, Message, PendingReadTxn, PendingTxn, SendDiffs, SinkConnectionReady,
+    TxnReads, DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
 };
 use crate::error::AdapterError;
 use crate::explain_new::optimizer_trace::OptimizerTrace;
@@ -92,6 +96,13 @@ impl<S: Append + 'static> Coordinator<S> {
         event!(Level::TRACE, plan = format!("{:?}", plan));
         let responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
         tx.set_allowed(responses);
+
+        if session.user().name == MZ_INTROSPECTION_ROLE.name {
+            if let Err(e) = self.mz_introspection_user_privilege_hack(&session, &plan, &depends_on)
+            {
+                return tx.send(Err(e), session);
+            }
+        }
 
         match plan {
             Plan::CreateSource(plan) => {
@@ -590,7 +601,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut connection = plan.connection.connection.clone();
 
         match connection {
-            mz_storage::types::connections::Connection::Ssh(ref mut ssh) => {
+            mz_storage_client::types::connections::Connection::Ssh(ref mut ssh) => {
                 let keyset = SshKeyset::new()?;
                 self.secrets_controller
                     .ensure(connection_gid, &keyset.to_bytes())
@@ -598,7 +609,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 ssh.public_keys = Some(keyset.public_keys());
             }
-            mz_storage::types::connections::Connection::AwsPrivateLink(ref privatelink) => {
+            mz_storage_client::types::connections::Connection::AwsPrivateLink(ref privatelink) => {
                 self.cloud_resource_controller
                     .as_ref()
                     .ok_or(AdapterError::Unsupported(
@@ -1122,18 +1133,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
-                // We must advance the timeline to `since_ts` so that the table is not invalid.
-                let timeline = self
-                    .get_timeline(table_id)
-                    .expect("Table not present in a timeline");
-                let old_read_holds = self
-                    .ensure_timeline_state(timeline.clone())
-                    .await
-                    .read_holds
-                    .clone();
-                let new_read_holds = self.update_read_hold(old_read_holds, since_ts).await;
-                self.ensure_timeline_state(timeline).await.read_holds = new_read_holds;
-
                 self.initialize_storage_read_policies(
                     vec![table_id],
                     DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
@@ -1349,7 +1348,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         id,
                         oid,
                         create_export_token,
-                        result: mz_storage::sink::build_sink_connection(
+                        result: mz_storage_client::sink::build_sink_connection(
                             connection_builder,
                             connection_context,
                         )
@@ -1956,16 +1955,19 @@ impl<S: Append + 'static> Coordinator<S> {
                 });
                 return;
             }
-            Ok((Some(TransactionOps::Peeks(_)), _))
+            Ok((Some(TransactionOps::Peeks(timestamp)), _))
                 if session.vars().transaction_isolation()
                     == &IsolationLevel::StrictSerializable =>
             {
                 self.strict_serializable_reads_tx
-                    .send(PendingTxn {
-                        client_transmitter: tx,
-                        response,
-                        session,
-                        action,
+                    .send(PendingReadTxn::Read {
+                        txn: PendingTxn {
+                            client_transmitter: tx,
+                            response,
+                            session,
+                            action,
+                        },
+                        timestamp,
                     })
                     .expect("sending to strict_serializable_reads_tx cannot fail");
                 return;
@@ -2100,12 +2102,9 @@ impl<S: Append + 'static> Coordinator<S> {
                         &id_bundle,
                         &QueryWhen::Immediately,
                         compute_instance,
+                        &timeline,
                     )?;
-                    let read_holds = read_policy::ReadHolds {
-                        time: timestamp,
-                        id_bundle,
-                    };
-                    self.acquire_read_holds(&read_holds).await;
+                    let read_holds = self.acquire_read_holds(timestamp, id_bundle).await;
                     let txn_reads = TxnReads {
                         timestamp_independent,
                         read_holds,
@@ -2120,7 +2119,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let id_bundle = self
                 .index_oracle(compute_instance)
                 .sufficient_collections(&source_ids);
-            let allowed_id_bundle = &self.txn_reads.get(&conn_id).unwrap().read_holds.id_bundle;
+            let allowed_id_bundle = &self.txn_reads.get(&conn_id).unwrap().read_holds.id_bundle();
             // Find the first reference or index (if any) that is not in the transaction. A
             // reference could be caused by a user specifying an object in a different
             // schema than the first query. An index could be caused by a CREATE INDEX
@@ -2163,7 +2162,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let id_bundle = self
                 .index_oracle(compute_instance)
                 .sufficient_collections(&source_ids);
-            self.determine_timestamp(session, &id_bundle, &when, compute_instance)?
+            self.determine_timestamp(session, &id_bundle, &when, compute_instance, &timeline)?
         };
 
         // before we have the corrected timestamp ^
@@ -2241,7 +2240,7 @@ impl<S: Append + 'static> Coordinator<S> {
             {
                 None
             } else {
-                Some(timestamp)
+                Some((timestamp, timeline))
             };
 
             session.add_transaction_ops(TransactionOps::Peeks(peek_ts))?;
@@ -2300,9 +2299,15 @@ impl<S: Append + 'static> Coordinator<S> {
             let id_bundle = coord
                 .index_oracle(compute_instance_id)
                 .sufficient_collections(uses);
+            let timeline = coord.validate_timeline(id_bundle.iter())?;
             // If a timestamp was explicitly requested, use that.
-            let timestamp =
-                coord.determine_timestamp(session, &id_bundle, &when, compute_instance_id)?;
+            let timestamp = coord.determine_timestamp(
+                session,
+                &id_bundle,
+                &when,
+                compute_instance_id,
+                &timeline,
+            )?;
 
             Ok::<_, AdapterError>(ComputeSinkDesc {
                 from,
@@ -2580,11 +2585,13 @@ impl<S: Append + 'static> Coordinator<S> {
         // TODO: determine_timestamp takes a mut self to track linearizability,
         // so explaining a plan involving tables has side effects. Removing those side
         // effects would be good.
+        // TODO(jkosh44): Would be a nice addition to include the timeline in output.
         let timestamp = self.determine_timestamp(
             session,
             &id_bundle,
             &QueryWhen::Immediately,
             compute_instance,
+            &timeline,
         )?;
         let since = self.least_valid_read(&id_bundle).elements().to_vec();
         let upper = self.least_valid_write(&id_bundle);
@@ -2946,14 +2953,12 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
-        let ts = self.get_local_read_ts();
-        let ts = MirScalarExpr::literal_ok(Datum::from(ts), ScalarType::MzTimestamp);
         let peek_response = match self
             .sequence_peek(
                 &mut session,
                 PeekPlan {
                     source: selection,
-                    when: QueryWhen::AtTimestamp(ts),
+                    when: QueryWhen::Immediately,
                     finishing,
                     copy_to: None,
                 },
@@ -2970,6 +2975,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let timeout_dur = *session.vars().statement_timeout();
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();
+        let strict_serializable_reads_tx = self.strict_serializable_reads_tx.clone();
         task::spawn(|| format!("sequence_read_then_write:{id}"), async move {
             let arena = RowArena::new();
             let diffs = match peek_response {
@@ -3092,6 +3098,43 @@ impl<S: Append + 'static> Coordinator<S> {
             } else {
                 diffs
             };
+
+            // We need to clear out the read ops so the write doesn't fail due to a
+            // read only transaction.
+            let read_ops = session.take_transaction_read_ops();
+            // No matter what isolation level the client is using, we must linearize this
+            // read. The write will be performed right after this, as part of a single
+            // transaction, so the write must have a timestamp greater than or equal to the
+            // read.
+            //
+            // Note: It's only OK for the write to have a greater timestamp than the read
+            // because the write lock prevents any other writes from happening in between
+            // the read and write.
+            if let Some((read_ts, Some(timeline))) = read_ops {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let result = strict_serializable_reads_tx.send(PendingReadTxn::ReadThenWrite {
+                    tx,
+                    timestamp: (read_ts, timeline),
+                });
+                // It is not an error for these results to be ready after `strict_serializable_reads_rx` has been dropped.
+                if let Err(e) = result {
+                    warn!(
+                        "strict_serializable_reads_tx dropped before we could send: {:?}",
+                        e
+                    );
+                    return;
+                }
+                let result = rx.await;
+                // It is not an error for these results to be ready after `tx` has been dropped.
+                if let Err(e) = result {
+                    warn!(
+                        "tx used to linearize read in read then write transaction dropped before we could send: {:?}",
+                        e
+                    );
+                    return;
+                }
+            }
+
             // It is not an error for these results to be ready after `internal_cmd_rx` has been dropped.
             let result = internal_cmd_tx.send(Message::SendDiffs(SendDiffs {
                 session,
@@ -3398,6 +3441,116 @@ impl<S: Append + 'static> Coordinator<S> {
         }
         self.transient_id_counter += 1;
         Ok(GlobalId::Transient(id))
+    }
+
+    /// TODO(jkosh44) This function will verify the privileges for the mz_introspection user.
+    ///  All of the privileges are hard coded into this function. In the future if we ever add
+    ///  a more robust privileges framework, then this function should be replaced with that
+    ///  framework.
+    fn mz_introspection_user_privilege_hack(
+        &self,
+        session: &Session,
+        plan: &Plan,
+        depends_on: &Vec<GlobalId>,
+    ) -> Result<(), AdapterError> {
+        if session.user().name != MZ_INTROSPECTION_ROLE.name {
+            return Ok(());
+        }
+
+        match plan {
+            Plan::Subscribe(_)
+            | Plan::Peek(_)
+            | Plan::CopyFrom(_)
+            | Plan::SendRows(_)
+            | Plan::Explain(_)
+            | Plan::ShowAllVariables
+            | Plan::ShowVariable(_)
+            | Plan::SetVariable(_)
+            | Plan::ResetVariable(_)
+            | Plan::StartTransaction(_)
+            | Plan::CommitTransaction
+            | Plan::AbortTransaction
+            | Plan::EmptyQuery
+            | Plan::Declare(_)
+            | Plan::Fetch(_)
+            | Plan::Close(_)
+            | Plan::Prepare(_)
+            | Plan::Execute(_)
+            | Plan::Deallocate(_) => {}
+
+            Plan::CreateConnection(_)
+            | Plan::CreateDatabase(_)
+            | Plan::CreateSchema(_)
+            | Plan::CreateRole(_)
+            | Plan::CreateComputeInstance(_)
+            | Plan::CreateComputeReplica(_)
+            | Plan::CreateSource(_)
+            | Plan::CreateSecret(_)
+            | Plan::CreateSink(_)
+            | Plan::CreateTable(_)
+            | Plan::CreateView(_)
+            | Plan::CreateMaterializedView(_)
+            | Plan::CreateIndex(_)
+            | Plan::CreateType(_)
+            | Plan::DiscardTemp
+            | Plan::DiscardAll
+            | Plan::DropDatabase(_)
+            | Plan::DropSchema(_)
+            | Plan::DropRoles(_)
+            | Plan::DropComputeInstances(_)
+            | Plan::DropComputeReplicas(_)
+            | Plan::DropItems(_)
+            | Plan::SendDiffs(_)
+            | Plan::Insert(_)
+            | Plan::AlterNoop(_)
+            | Plan::AlterIndexSetOptions(_)
+            | Plan::AlterIndexResetOptions(_)
+            | Plan::AlterSink(_)
+            | Plan::AlterSource(_)
+            | Plan::AlterItemRename(_)
+            | Plan::AlterSecret(_)
+            | Plan::AlterSystemSet(_)
+            | Plan::AlterSystemReset(_)
+            | Plan::AlterSystemResetAll(_)
+            | Plan::ReadThenWrite(_)
+            | Plan::Raise(_)
+            | Plan::RotateKeys(_) => {
+                return Err(AdapterError::Unauthorized(
+                    "user 'mz_introspection' is unauthorized to perform this action".into(),
+                ))
+            }
+        }
+
+        if let Ok(active_compute_instance) = self.catalog.active_compute_instance(session) {
+            let active_compute_instance = active_compute_instance.name();
+            if (matches!(plan, Plan::Peek(_)) || matches!(plan, Plan::Subscribe(_)))
+                && active_compute_instance != MZ_INTROSPECTION_COMPUTE_INSTANCE.name
+                && active_compute_instance != MZ_SYSTEM_COMPUTE_INSTANCE.name
+            {
+                return Err(AdapterError::Unauthorized(format!(
+                    "user 'mz_introspection' is unauthorized to use cluster {active_compute_instance}",
+                )));
+            }
+        }
+
+        for id in depends_on {
+            let entry = self.catalog.get_entry(id);
+            let full_name = self
+                .catalog
+                .resolve_full_name(entry.name(), Some(session.conn_id()));
+            let schema = &full_name.schema;
+            if schema != MZ_CATALOG_SCHEMA
+                && schema != PG_CATALOG_SCHEMA
+                && schema != MZ_INTERNAL_SCHEMA
+                && schema != INFORMATION_SCHEMA
+            {
+                return Err(AdapterError::Unauthorized(format!(
+                    "user 'mz_introspection' is unauthorized to interact with object {full_name}",
+                )));
+            }
+        }
+
+        Ok(())
     }
 }
 

@@ -2222,7 +2222,7 @@ impl HirScalarExpr {
                     Some(datum) => datum,
                 };
                 let scalar_type = &params.types[*n - 1];
-                let row = Row::pack(&[datum]);
+                let row = Row::pack([datum]);
                 let column_type = scalar_type.clone().nullable(datum.is_null());
                 *e = HirScalarExpr::Literal(row, column_type);
             }
@@ -2268,7 +2268,7 @@ impl HirScalarExpr {
     }
 
     pub fn literal(datum: Datum, scalar_type: ScalarType) -> HirScalarExpr {
-        let row = Row::pack(&[datum]);
+        let row = Row::pack([datum]);
         HirScalarExpr::Literal(row, scalar_type.nullable(datum.is_null()))
     }
 

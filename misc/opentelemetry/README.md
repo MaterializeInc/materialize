@@ -6,7 +6,7 @@ Primarily adapted from [the opentelemetry-rust repo].
 
 ```
 $ ./mzcompose up -d
-$ MZ_OPENTELEMETRY_ENDPOINT="http://localhost:4317" bin/materialized
+$ bin/environmentd <--reset> -- --opentelemetry-endpoint="http://localhost:4317"
 ```
 
 

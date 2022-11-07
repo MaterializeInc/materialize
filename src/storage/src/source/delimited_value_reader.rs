@@ -14,13 +14,13 @@ use timely::scheduling::activate::SyncActivator;
 
 use mz_expr::PartitionId;
 use mz_repr::GlobalId;
+use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_client::types::sources::encoding::SourceDataEncoding;
+use mz_storage_client::types::sources::MzOffset;
 
 use crate::source::types::SourceMessageType;
 use crate::source::types::SourceReaderError;
 use crate::source::types::{NextMessage, SourceMessage, SourceReader};
-use crate::types::connections::ConnectionContext;
-use crate::types::sources::encoding::SourceDataEncoding;
-use crate::types::sources::MzOffset;
 
 /// A wrapper that converts a delimited source reader that only provides
 /// values into a key/value reader whose key is always None

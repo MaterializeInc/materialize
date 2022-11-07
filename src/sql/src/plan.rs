@@ -44,8 +44,8 @@ use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::explain_new::{ExplainConfig, ExplainFormat};
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
-use mz_storage::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
-use mz_storage::types::sources::{SourceDesc, Timeline};
+use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
+use mz_storage_client::types::sources::{SourceDesc, Timeline};
 
 use crate::ast::{
     ExplainStage, Expr, FetchDirection, IndexOptionName, NoticeSeverity, ObjectType, Raw,
@@ -655,7 +655,7 @@ pub struct Ingestion {
 #[derive(Clone, Debug)]
 pub struct Connection {
     pub create_sql: String,
-    pub connection: mz_storage::types::connections::Connection,
+    pub connection: mz_storage_client::types::connections::Connection,
 }
 
 #[derive(Clone, Debug)]

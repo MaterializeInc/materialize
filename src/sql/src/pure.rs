@@ -37,9 +37,9 @@ use mz_sql_parser::ast::{
     KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection, PgConfigOption,
     PgConfigOptionName, ReaderSchemaSelectionStrategy, TableConstraint, UnresolvedObjectName,
 };
-use mz_storage::types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
-use mz_storage::types::connections::{Connection, ConnectionContext};
-use mz_storage::types::sources::PostgresSourceDetails;
+use mz_storage_client::types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
+use mz_storage_client::types::connections::{Connection, ConnectionContext};
+use mz_storage_client::types::sources::PostgresSourceDetails;
 
 use crate::ast::{
     AvroSchema, CreateReferencedSubsources, CreateSourceConnection, CreateSourceFormat,

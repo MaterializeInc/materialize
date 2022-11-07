@@ -31,7 +31,8 @@ use tracing::{debug, debug_span, instrument, trace_span, warn, Instrument};
 use uuid::Uuid;
 
 use crate::fetch::{
-    fetch_leased_part, BatchFetcher, LeasedBatchPart, SerdeLeasedBatchPartMetadata,
+    fetch_leased_part, BatchFetcher, LeasedBatchPart, SerdeLeasedBatchPart,
+    SerdeLeasedBatchPartMetadata,
 };
 use crate::internal::machine::Machine;
 use crate::internal::metrics::{Metrics, MetricsRetryStream};
@@ -135,6 +136,11 @@ where
             Some(x) => x,
             None => self.listen.next_parts().await,
         }
+    }
+
+    /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
+    pub fn leased_part_from_exchangeable(&self, x: SerdeLeasedBatchPart) -> LeasedBatchPart<T> {
+        LeasedBatchPart::from(x, Arc::clone(&self.listen.handle.metrics))
     }
 
     /// Returns the given [`LeasedBatchPart`], releasing its lease.
@@ -598,6 +604,7 @@ where
         metadata: SerdeLeasedBatchPartMetadata,
     ) -> impl Iterator<Item = LeasedBatchPart<T>> + '_ {
         batch.parts.into_iter().map(move |part| LeasedBatchPart {
+            metrics: Arc::clone(&self.metrics),
             shard_id: self.machine.shard_id(),
             reader_id: self.reader_id.clone(),
             metadata: metadata.clone(),
@@ -700,6 +707,15 @@ where
         let elapsed_since_last_heartbeat =
             Duration::from_millis(heartbeat_ts.saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
+            if elapsed_since_last_heartbeat > self.machine.cfg.reader_lease_duration {
+                warn!(
+                    "reader ({}) of shard ({}) went {}s between heartbeats",
+                    self.reader_id,
+                    self.machine.shard_id(),
+                    elapsed_since_last_heartbeat.as_secs_f64()
+                );
+            }
+
             let (_, existed, maintenance) = self
                 .machine
                 .heartbeat_reader(&self.reader_id, heartbeat_ts)
@@ -1024,7 +1040,7 @@ mod tests {
 
         // Return any outstanding parts, to prevent a panic!
         for part in subsequent_parts {
-            subscribe.return_leased_part(part.into());
+            subscribe.return_leased_part(subscribe.leased_part_from_exchangeable(part));
         }
 
         drop(subscribe);

@@ -7,77 +7,78 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use anyhow::{bail, Context, Ok, Result};
 use axum::http::StatusCode;
 use axum::{extract::Query, response::IntoResponse, routing::get, Router};
 use std::net::SocketAddr;
-use std::process::exit;
-use std::time::Duration;
-use std::{collections::HashMap, io::Write};
 
-use crate::profiles::save_profile;
-use crate::utils::{exit_with_fail_message, trim_newline, AppPassword, FromTos};
-use crate::{
-    BrowserAPIToken, ExitMessage, FronteggAPIToken, FronteggAuth, Profile, API_TOKEN_AUTH_URL,
-    DEFAULT_PROFILE_NAME, USER_AUTH_URL, WEB_LOGIN_URL,
-};
-use mz_ore::task;
+use std::{collections::HashMap, io::Write};
+use tokio::sync::broadcast::{channel, Sender};
+
+use crate::configuration::{Configuration, FronteggAPIToken, FronteggAuth};
+use crate::utils::trim_newline;
+use crate::{BrowserAPIToken, API_TOKEN_AUTH_URL, USER_AUTH_URL, WEB_LOGIN_URL};
+
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use reqwest::Client;
-use tokio::time::sleep;
 
 /// Request handler for the server waiting the browser API token creation
+// Axum requires the handler be async even though we don't await
+#[allow(clippy::unused_async)]
 async fn request(
     Query(BrowserAPIToken {
         email,
         secret,
         client_id,
-        mut name,
     }): Query<BrowserAPIToken>,
+    tx: Sender<Option<(String, FronteggAPIToken)>>,
 ) -> impl IntoResponse {
     if !secret.is_empty() {
-        let app_password = AppPassword::from_api_token(FronteggAPIToken { client_id, secret });
-
-        let profile = Profile {
-            name: name
-                .get_or_insert(DEFAULT_PROFILE_NAME.to_string())
-                .to_string(),
-            email,
-            app_password,
-            region: None,
-        };
-        save_profile(profile).unwrap();
+        tx.send(Some((email, FronteggAPIToken { client_id, secret })))
+            .unwrap();
+    } else {
+        tx.send(None).unwrap();
     }
-
-    let _ = task::spawn(|| "sleep", async {
-        println!("Profile created.");
-        sleep(Duration::from_millis(200)).await;
-        exit(0);
-    });
 
     (StatusCode::OK, "You can now close the tab.")
 }
 
 /// Log the user using the browser, generates an API token and saves the new profile data.
-pub(crate) async fn login_with_browser(profile_name: &str) -> Result<(), std::io::Error> {
+pub(crate) async fn login_with_browser(
+    profile_name: &str,
+    config: &mut Configuration,
+) -> Result<()> {
     // Open the browser to login user
     let path = format!("{:}?profile_name={:}", WEB_LOGIN_URL, profile_name);
     if let Err(err) = open::that(path.clone()) {
-        exit_with_fail_message(ExitMessage::String(format!(
-            "An error occurred when opening '{}': {}",
-            path, err
-        )))
+        bail!("An error occurred when opening '{}': {}", path, err)
     }
 
     // Start the server to handle the request response
-    let app = Router::new().route("/", get(request));
+    let (tx, mut result) = channel(1);
+    let mut close = tx.subscribe();
+    let app = Router::new().route("/", get(|body| request(body, tx)));
+    mz_ore::task::spawn(|| "server_task", async {
+        let addr = SocketAddr::from(([127, 0, 0, 1], 8808));
+        axum::Server::bind(&addr)
+            .serve(app.into_make_service())
+            .with_graceful_shutdown(async move {
+                close.recv().await.ok();
+            })
+            .await
+    });
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8808));
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
+    match result
+        .recv()
         .await
-        .unwrap();
-
-    Ok(())
+        .context("failed to retrive new profile")?
+    {
+        Some((email, api_token)) => {
+            config.create_or_update_profile(profile_name.to_string(), email, api_token);
+            Ok(())
+        }
+        None => bail!("failed to login via browser"),
+    }
 }
 
 /// Generates an API token using an access token
@@ -109,11 +110,7 @@ pub(crate) async fn generate_api_token(
 }
 
 /// Generates an access token using an API token
-async fn authenticate_user(
-    client: &Client,
-    email: &str,
-    password: &str,
-) -> Result<FronteggAuth, reqwest::Error> {
+async fn authenticate_user(client: &Client, email: &str, password: &str) -> Result<FronteggAuth> {
     let mut access_token_request_body = HashMap::new();
     access_token_request_body.insert("email", email);
     access_token_request_body.insert("password", password);
@@ -131,14 +128,20 @@ async fn authenticate_user(
 
     match response.status() {
         StatusCode::UNAUTHORIZED => {
-            exit_with_fail_message(ExitMessage::Str("Invalid user or password."))
+            bail!("Invalid user or password")
         }
-        _ => response.json::<FronteggAuth>().await,
+        _ => response
+            .json::<FronteggAuth>()
+            .await
+            .context("failed to parse response from server"),
     }
 }
 
 /// Log the user using the console, generates an API token and saves the new profile data.
-pub(crate) async fn login_with_console(profile_name: &String) -> Result<(), reqwest::Error> {
+pub(crate) async fn login_with_console(
+    profile_name: &String,
+    config: &mut Configuration,
+) -> Result<()> {
     // Handle interactive user input
     let mut email = String::new();
 
@@ -163,12 +166,7 @@ pub(crate) async fn login_with_console(profile_name: &String) -> Result<(), reqw
     )
     .await?;
 
-    let profile = Profile {
-        name: profile_name.to_string(),
-        email,
-        app_password: AppPassword::from_api_token(api_token),
-        region: None,
-    };
-    save_profile(profile).unwrap();
+    config.create_or_update_profile(profile_name.to_string(), email, api_token);
+
     Ok(())
 }

@@ -443,7 +443,7 @@ impl State {
             .topics()
             .iter()
             .filter_map(|t| {
-                if t.name().starts_with(&"testdrive-") {
+                if t.name().starts_with("testdrive-") {
                     Some(t.name())
                 } else {
                     None
@@ -492,7 +492,7 @@ impl State {
             Ok(subjects) => {
                 let testdrive_subjects: Vec<_> = subjects
                     .iter()
-                    .filter(|s| s.starts_with(&"testdrive-"))
+                    .filter(|s| s.starts_with("testdrive-"))
                     .collect();
 
                 for subject in testdrive_subjects {

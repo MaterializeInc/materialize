@@ -17,20 +17,20 @@ use std::sync::Arc;
 
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::{AsCollection, Collection, Hashable};
+use timely::dataflow::Scope;
+use tokio::sync::Mutex;
+
+use mz_interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistLocation, ShardId};
-use timely::dataflow::Scope;
-
-use mz_interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
-use tokio::sync::Mutex;
+use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::source::persist_source;
+use mz_storage_client::types::errors::DataflowError;
+use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnection, StorageSinkDesc};
 
-use crate::controller::CollectionMetadata;
-use crate::source::persist_source;
 use crate::storage_state::{SinkToken, StorageState};
-use crate::types::errors::DataflowError;
-use crate::types::sinks::{SinkEnvelope, StorageSinkConnection, StorageSinkDesc};
 
 /// _Renders_ complete _differential_ [`Collection`]s
 /// that represent the sink and its errors as requested

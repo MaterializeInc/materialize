@@ -32,7 +32,7 @@ use mz_repr::{RelationDesc, RelationType, ScalarType};
 use mz_sql::catalog::{
     CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, TypeReference,
 };
-use mz_storage::controller::IntrospectionType;
+use mz_storage_client::controller::IntrospectionType;
 
 use crate::catalog::{DEFAULT_CLUSTER_REPLICA_NAME, INTROSPECTION_USER, SYSTEM_USER};
 
@@ -1860,6 +1860,7 @@ pub const PG_PROC: BuiltinView = BuiltinView {
     mz_functions.oid,
     mz_functions.name AS proname,
     mz_schemas.oid AS pronamespace,
+    NULL::pg_catalog.oid AS proowner,
     NULL::pg_catalog.text AS proargdefaults
 FROM mz_catalog.mz_functions
 JOIN mz_catalog.mz_schemas ON mz_functions.schema_id = mz_schemas.id

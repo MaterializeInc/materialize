@@ -13,7 +13,7 @@ use timely::progress::{Antichain, Timestamp as _};
 
 use mz_repr::GlobalId;
 use mz_repr::{Diff, Row, Timestamp};
-use mz_storage::controller::CollectionMetadata;
+use mz_storage_client::controller::CollectionMetadata;
 
 use crate::compute_state::ComputeState;
 

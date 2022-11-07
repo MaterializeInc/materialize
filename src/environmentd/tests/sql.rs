@@ -1829,3 +1829,65 @@ fn test_load_generator() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
+
+#[test]
+fn test_introspection_user_permissions() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let config = util::Config::default();
+    let server = util::start_server(config)?;
+
+    let mut external_client = server.connect(postgres::NoTls)?;
+    let mut introspection_client = server
+        .pg_config_internal()
+        .user(&INTROSPECTION_USER.name)
+        .connect(postgres::NoTls)?;
+
+    external_client.batch_execute("CREATE TABLE materialize.public.t1 (a INT)")?;
+
+    introspection_client.batch_execute("SET CLUSTER TO 'mz_introspection'")?;
+
+    assert!(introspection_client
+        .query("SELECT * FROM materialize.public.t1", &[])
+        .is_err());
+    assert!(introspection_client
+        .batch_execute("INSERT INTO materialize.public.t1 VALUES (1)")
+        .is_err());
+    assert!(introspection_client
+        .batch_execute("CREATE TABLE t2 (a INT)")
+        .is_err());
+
+    assert!(introspection_client
+        .query("SELECT * FROM mz_internal.mz_view_keys", &[])
+        .is_ok());
+    assert!(introspection_client
+        .query("SELECT * FROM mz_catalog.mz_tables", &[])
+        .is_ok());
+    assert!(introspection_client
+        .query("SELECT * FROM pg_catalog.pg_namespace", &[])
+        .is_ok());
+
+    introspection_client.batch_execute("SET CLUSTER TO 'mz_system'")?;
+    assert!(introspection_client
+        .query("SELECT * FROM mz_internal.mz_view_keys", &[])
+        .is_ok());
+    assert!(introspection_client
+        .query("SELECT * FROM mz_catalog.mz_tables", &[])
+        .is_ok());
+    assert!(introspection_client
+        .query("SELECT * FROM pg_catalog.pg_namespace", &[])
+        .is_ok());
+
+    introspection_client.batch_execute("SET CLUSTER TO 'default'")?;
+    assert!(introspection_client
+        .query("SELECT * FROM mz_internal.mz_view_keys", &[])
+        .is_err());
+    assert!(introspection_client
+        .query("SELECT * FROM mz_catalog.mz_tables", &[])
+        .is_err());
+    assert!(introspection_client
+        .query("SELECT * FROM pg_catalog.pg_namespace", &[])
+        .is_err());
+
+    Ok(())
+}

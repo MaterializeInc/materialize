@@ -13,8 +13,6 @@ use std::ops::RangeInclusive;
 
 use chrono::NaiveDate;
 use dec::OrderedDecimal;
-use mz_repr::adt::date::Date;
-use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
 use once_cell::sync::Lazy;
 use rand::distributions::{Alphanumeric, DistString};
 use rand::rngs::StdRng;
@@ -22,10 +20,10 @@ use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 
 use mz_ore::now::NowFn;
-use mz_repr::{Datum, RelationDesc, Row, ScalarType};
-
-use crate::types::sources::encoding::DataEncodingInner;
-use crate::types::sources::{Generator, GeneratorMessageType};
+use mz_repr::adt::date::Date;
+use mz_repr::adt::numeric::{self, DecimalLike, Numeric};
+use mz_repr::{Datum, Row};
+use mz_storage_client::types::sources::{Generator, GeneratorMessageType};
 
 #[derive(Clone, Debug)]
 pub struct Tpch {
@@ -46,121 +44,6 @@ const NATION_OUTPUT: usize = 7;
 const REGION_OUTPUT: usize = 8;
 
 impl Generator for Tpch {
-    fn data_encoding_inner(&self) -> DataEncodingInner {
-        DataEncodingInner::RowCodec(RelationDesc::empty())
-    }
-
-    fn views(&self) -> Vec<(&str, RelationDesc)> {
-        let identifier = ScalarType::Int64.nullable(false);
-        let decimal = ScalarType::Numeric {
-            max_scale: Some(NumericMaxScale::try_from(2i64).unwrap()),
-        }
-        .nullable(false);
-        vec![
-            (
-                "supplier",
-                RelationDesc::empty()
-                    .with_column("s_suppkey", identifier.clone())
-                    .with_column("s_name", ScalarType::String.nullable(false))
-                    .with_column("s_address", ScalarType::String.nullable(false))
-                    .with_column("s_nationkey", identifier.clone())
-                    .with_column("s_phone", ScalarType::String.nullable(false))
-                    .with_column("s_acctbal", decimal.clone())
-                    .with_column("s_comment", ScalarType::String.nullable(false))
-                    .with_key(vec![0]),
-            ),
-            (
-                "part",
-                RelationDesc::empty()
-                    .with_column("p_partkey", identifier.clone())
-                    .with_column("p_name", ScalarType::String.nullable(false))
-                    .with_column("p_mfgr", ScalarType::String.nullable(false))
-                    .with_column("p_brand", ScalarType::String.nullable(false))
-                    .with_column("p_type", ScalarType::String.nullable(false))
-                    .with_column("p_size", ScalarType::Int32.nullable(false))
-                    .with_column("p_container", ScalarType::String.nullable(false))
-                    .with_column("p_retailprice", decimal.clone())
-                    .with_column("p_comment", ScalarType::String.nullable(false))
-                    .with_key(vec![0]),
-            ),
-            (
-                "partsupp",
-                RelationDesc::empty()
-                    .with_column("ps_partkey", identifier.clone())
-                    .with_column("ps_suppkey", identifier.clone())
-                    .with_column("ps_availqty", ScalarType::Int32.nullable(false))
-                    .with_column("ps_supplycost", decimal.clone())
-                    .with_column("ps_comment", ScalarType::String.nullable(false))
-                    .with_key(vec![0, 1]),
-            ),
-            (
-                "customer",
-                RelationDesc::empty()
-                    .with_column("c_custkey", identifier.clone())
-                    .with_column("c_name", ScalarType::String.nullable(false))
-                    .with_column("c_address", ScalarType::String.nullable(false))
-                    .with_column("c_nationkey", identifier.clone())
-                    .with_column("c_phone", ScalarType::String.nullable(false))
-                    .with_column("c_acctbal", decimal.clone())
-                    .with_column("c_mktsegment", ScalarType::String.nullable(false))
-                    .with_column("c_comment", ScalarType::String.nullable(false))
-                    .with_key(vec![0]),
-            ),
-            (
-                "orders",
-                RelationDesc::empty()
-                    .with_column("o_orderkey", identifier.clone())
-                    .with_column("o_custkey", identifier.clone())
-                    .with_column("o_orderstatus", ScalarType::String.nullable(false))
-                    .with_column("o_totalprice", decimal.clone())
-                    .with_column("o_orderdate", ScalarType::Date.nullable(false))
-                    .with_column("o_orderpriority", ScalarType::String.nullable(false))
-                    .with_column("o_clerk", ScalarType::String.nullable(false))
-                    .with_column("o_shippriority", ScalarType::Int32.nullable(false))
-                    .with_column("o_comment", ScalarType::String.nullable(false))
-                    .with_key(vec![0]),
-            ),
-            (
-                "lineitem",
-                RelationDesc::empty()
-                    .with_column("l_orderkey", identifier.clone())
-                    .with_column("l_partkey", identifier.clone())
-                    .with_column("l_suppkey", identifier.clone())
-                    .with_column("l_linenumber", ScalarType::Int32.nullable(false))
-                    .with_column("l_quantity", decimal.clone())
-                    .with_column("l_extendedprice", decimal.clone())
-                    .with_column("l_discount", decimal.clone())
-                    .with_column("l_tax", decimal)
-                    .with_column("l_returnflag", ScalarType::String.nullable(false))
-                    .with_column("l_linestatus", ScalarType::String.nullable(false))
-                    .with_column("l_shipdate", ScalarType::Date.nullable(false))
-                    .with_column("l_commitdate", ScalarType::Date.nullable(false))
-                    .with_column("l_receiptdate", ScalarType::Date.nullable(false))
-                    .with_column("l_shipinstruct", ScalarType::String.nullable(false))
-                    .with_column("l_shipmode", ScalarType::String.nullable(false))
-                    .with_column("l_comment", ScalarType::String.nullable(false))
-                    .with_key(vec![0, 3]),
-            ),
-            (
-                "nation",
-                RelationDesc::empty()
-                    .with_column("n_nationkey", identifier.clone())
-                    .with_column("n_name", ScalarType::String.nullable(false))
-                    .with_column("n_regionkey", identifier.clone())
-                    .with_column("n_comment", ScalarType::String.nullable(false))
-                    .with_key(vec![0]),
-            ),
-            (
-                "region",
-                RelationDesc::empty()
-                    .with_column("r_regionkey", identifier)
-                    .with_column("r_name", ScalarType::String.nullable(false))
-                    .with_column("r_comment", ScalarType::String.nullable(false))
-                    .with_key(vec![0]),
-            ),
-        ]
-    }
-
     fn by_seed(
         &self,
         _: NowFn,

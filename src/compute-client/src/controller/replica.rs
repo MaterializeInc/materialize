@@ -46,7 +46,7 @@ pub(super) struct Replica<T> {
     /// Location of the replica
     pub location: ComputeReplicaLocation,
     /// The logging config specific to this replica.
-    pub logging_config: Option<LoggingConfig>,
+    pub logging_config: LoggingConfig,
 }
 
 impl<T> Replica<T>
@@ -59,7 +59,7 @@ where
         instance_id: ComputeInstanceId,
         build_info: &'static BuildInfo,
         location: ComputeReplicaLocation,
-        logging_config: Option<LoggingConfig>,
+        logging_config: LoggingConfig,
         orchestrator: ComputeOrchestrator,
     ) -> Self {
         // Launch a task to handle communication with the replica
@@ -115,7 +115,7 @@ struct ReplicaTask<T> {
     /// Location
     location: ComputeReplicaLocation,
     /// Logging
-    logging_config: Option<LoggingConfig>,
+    logging_config: LoggingConfig,
     /// The build information for this process.
     build_info: &'static BuildInfo,
     /// A channel upon which commands intended for the replica are delivered.
@@ -162,7 +162,6 @@ where
             .await?;
 
         let cmd_spec = CommandSpecialization {
-            replica_id,
             logging_config,
             comm_config,
         };
@@ -210,10 +209,17 @@ where
                 match ComputeGrpcClient::connect_partitioned(addrs, version).await {
                     Ok(client) => Ok(client),
                     Err(e) => {
-                        tracing::warn!(
-                            "error connecting to replica {replica_id}, retrying in {:?}: {e}",
-                            state.next_backoff.unwrap()
-                        );
+                        if state.i >= mz_service::retry::INFO_MIN_RETRIES {
+                            tracing::info!(
+                                "error connecting to replica {replica_id}, retrying in {:?}: {e}",
+                                state.next_backoff.unwrap()
+                            );
+                        } else {
+                            tracing::debug!(
+                                "error connecting to replica {replica_id}, retrying in {:?}: {e}",
+                                state.next_backoff.unwrap()
+                            );
+                        }
                         Err(e)
                     }
                 }
@@ -256,8 +262,7 @@ where
 }
 
 struct CommandSpecialization {
-    replica_id: ReplicaId,
-    logging_config: Option<LoggingConfig>,
+    logging_config: LoggingConfig,
     comm_config: CommunicationConfig,
 }
 
@@ -269,7 +274,6 @@ impl CommandSpecialization {
     fn specialize_command<T>(&self, command: &mut ComputeCommand<T>) {
         // Set new replica ID and obtain set the sinked logs specific to this replica
         if let ComputeCommand::CreateInstance(config) = command {
-            config.replica_id = self.replica_id;
             config.logging = self.logging_config.clone();
         }
 

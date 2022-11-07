@@ -507,6 +507,10 @@ impl Stash for Sqlite {
         // SQLite doesn't have a concept of leadership
         Ok(())
     }
+
+    fn epoch(&self) -> Option<i64> {
+        None
+    }
 }
 
 impl From<rusqlite::Error> for StashError {

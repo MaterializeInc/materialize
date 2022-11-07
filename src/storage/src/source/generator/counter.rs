@@ -10,24 +10,12 @@
 use std::iter;
 
 use mz_ore::now::NowFn;
-use mz_repr::{Datum, RelationDesc, Row, ScalarType};
-
-use crate::types::sources::encoding::DataEncodingInner;
-use crate::types::sources::{Generator, GeneratorMessageType};
+use mz_repr::{Datum, Row};
+use mz_storage_client::types::sources::{Generator, GeneratorMessageType};
 
 pub struct Counter {}
 
 impl Generator for Counter {
-    fn data_encoding_inner(&self) -> DataEncodingInner {
-        DataEncodingInner::RowCodec(
-            RelationDesc::empty().with_column("counter", ScalarType::Int64.nullable(false)),
-        )
-    }
-
-    fn views(&self) -> Vec<(&str, RelationDesc)> {
-        Vec::new()
-    }
-
     fn by_seed(
         &self,
         _now: NowFn,

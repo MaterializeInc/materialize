@@ -9,28 +9,29 @@
 
 //! A mechanism to ensure that a sequence of writes and reads proceed correctly through timestamps.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use timely::progress::Timestamp as TimelyTimestamp;
-use timely::PartialOrder;
+use tracing::error;
 
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::CollectionPlan;
-use mz_ore::now::{to_datetime, EpochMillis};
+use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_repr::{GlobalId, Timestamp, TimestampManipulation};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_stash::Append;
-use mz_storage::types::sources::Timeline;
+use mz_storage_client::types::sources::Timeline;
 
 use crate::catalog::CatalogItem;
 use crate::client::ConnectionId;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
 use crate::coord::Coordinator;
+use crate::util::ResultExt;
 use crate::AdapterError;
 
 /// Timestamps used by writes in an Append command.
@@ -249,7 +250,7 @@ impl<T: TimestampManipulation> DurableTimestampOracle<T> {
             self.durable_timestamp = ts.step_forward_by(&self.persist_interval);
             persist_fn(self.durable_timestamp.clone())
                 .await
-                .expect("can't persist timestamp");
+                .unwrap_or_terminate("can't persist timestamp");
         }
     }
 }
@@ -323,6 +324,10 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Peek the current timestamp used for operations on local inputs. Used to determine how much
     /// to block group commits by.
     pub(crate) async fn apply_local_write(&mut self, timestamp: Timestamp) {
+        let now = self.now().into();
+        if timestamp > now {
+            error!("Setting local read timestamp to {timestamp} which is ahead of now, {now}");
+        }
         self.global_timelines
             .get_mut(&Timeline::EpochMilliseconds)
             .expect("no realtime timeline")
@@ -335,28 +340,59 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     /// Ensures that a global timeline state exists for `timeline`.
-    pub(crate) async fn ensure_timeline_state(
-        &mut self,
-        timeline: Timeline,
+    pub(crate) async fn ensure_timeline_state<'a>(
+        &'a mut self,
+        timeline: &'a Timeline,
     ) -> &mut TimelineState<Timestamp> {
-        if !self.global_timelines.contains_key(&timeline) {
-            self.global_timelines.insert(
+        Self::ensure_timeline_state_with_initial_time(
+            timeline,
+            Timestamp::minimum(),
+            self.catalog.config().now.clone(),
+            |ts| self.catalog.persist_timestamp(timeline, ts),
+            &mut self.global_timelines,
+        )
+        .await
+    }
+
+    /// Ensures that a global timeline state exists for `timeline`, with an initial time
+    /// of `initially`.
+    pub(crate) async fn ensure_timeline_state_with_initial_time<'a, Fut>(
+        timeline: &'a Timeline,
+        initially: Timestamp,
+        now: NowFn,
+        persist_fn: impl FnOnce(Timestamp) -> Fut,
+        global_timelines: &'a mut BTreeMap<Timeline, TimelineState<Timestamp>>,
+    ) -> &'a mut TimelineState<Timestamp>
+    where
+        Fut: Future<Output = Result<(), crate::catalog::Error>>,
+    {
+        if !global_timelines.contains_key(timeline) {
+            let oracle = if timeline == &Timeline::EpochMilliseconds {
+                DurableTimestampOracle::new(
+                    initially,
+                    move || (now)().into(),
+                    *TIMESTAMP_PERSIST_INTERVAL,
+                    persist_fn,
+                )
+                .await
+            } else {
+                DurableTimestampOracle::new(
+                    initially,
+                    Timestamp::minimum,
+                    *TIMESTAMP_PERSIST_INTERVAL,
+                    persist_fn,
+                )
+                .await
+            };
+            global_timelines.insert(
                 timeline.clone(),
                 TimelineState {
-                    oracle: DurableTimestampOracle::new(
-                        Timestamp::minimum(),
-                        Timestamp::minimum,
-                        *TIMESTAMP_PERSIST_INTERVAL,
-                        |ts| self.catalog.persist_timestamp(&timeline, ts),
-                    )
-                    .await,
-                    read_holds: ReadHolds::new(Timestamp::minimum()),
+                    oracle,
+                    read_holds: ReadHolds::new(),
                 },
             );
         }
-        self.global_timelines
-            .get_mut(&timeline)
-            .expect("inserted above")
+        global_timelines.get_mut(timeline).expect("inserted above")
     }
 
     pub(crate) fn remove_storage_ids_from_timeline<I>(&mut self, ids: I) -> Vec<Timeline>
@@ -370,8 +406,8 @@ impl<S: Append + 'static> Coordinator<S> {
                     .global_timelines
                     .get_mut(&timeline)
                     .expect("all timelines have a timestamp oracle");
-                read_holds.id_bundle.storage_ids.remove(&id);
-                if read_holds.id_bundle.is_empty() {
+                read_holds.remove_storage_id(&id);
+                if read_holds.is_empty() {
                     self.global_timelines.remove(&timeline);
                     empty_timelines.push(timeline);
                 }
@@ -391,15 +427,10 @@ impl<S: Append + 'static> Coordinator<S> {
                     .global_timelines
                     .get_mut(&timeline)
                     .expect("all timelines have a timestamp oracle");
-                if let Some(ids) = read_holds.id_bundle.compute_ids.get_mut(&compute_instance) {
-                    ids.remove(&id);
-                    if ids.is_empty() {
-                        read_holds.id_bundle.compute_ids.remove(&compute_instance);
-                    }
-                    if read_holds.id_bundle.is_empty() {
-                        self.global_timelines.remove(&timeline);
-                        empty_timelines.push(timeline);
-                    }
+                read_holds.remove_compute_id(&compute_instance, &id);
+                if read_holds.is_empty() {
+                    self.global_timelines.remove(&timeline);
+                    empty_timelines.push(timeline);
                 }
             }
         }
@@ -412,8 +443,8 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Vec<Timeline> {
         let mut empty_timelines = Vec::new();
         for (timeline, TimelineState { read_holds, .. }) in &mut self.global_timelines {
-            read_holds.id_bundle.compute_ids.remove(&compute_instance);
-            if read_holds.id_bundle.is_empty() {
+            read_holds.remove_compute_instance(&compute_instance);
+            if read_holds.is_empty() {
                 empty_timelines.push(timeline.clone());
             }
         }
@@ -552,6 +583,33 @@ impl<S: Append + 'static> Coordinator<S> {
             .collect()
     }
 
+    /// Returns an iterator that partitions an id bundle by the timeline that each id belongs to.
+    pub fn partition_ids_by_timeline(
+        &self,
+        id_bundle: CollectionIdBundle,
+    ) -> impl Iterator<Item = (Option<Timeline>, CollectionIdBundle)> {
+        let mut res: HashMap<Option<Timeline>, CollectionIdBundle> = HashMap::new();
+
+        for id in id_bundle.storage_ids {
+            let timeline = self.get_timeline(id);
+            res.entry(timeline).or_default().storage_ids.insert(id);
+        }
+
+        for (compute_instance, ids) in id_bundle.compute_ids {
+            for id in ids {
+                let timeline = self.get_timeline(id);
+                res.entry(timeline)
+                    .or_default()
+                    .compute_ids
+                    .entry(compute_instance)
+                    .or_default()
+                    .insert(id);
+            }
+        }
+
+        res.into_iter()
+    }
+
     /// Return the set of ids in a timedomain and verify timeline correctness.
     ///
     /// When a user starts a transaction, we need to prevent compaction of anything
@@ -659,7 +717,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .apply_write(now, |ts| self.catalog.persist_timestamp(&timeline, ts))
                 .await;
             let read_ts = oracle.read_ts();
-            if read_holds.time.less_than(&read_ts) {
+            if read_holds.times().any(|time| time.less_than(&read_ts)) {
                 read_holds = self.update_read_hold(read_holds, read_ts).await;
             }
             self.global_timelines

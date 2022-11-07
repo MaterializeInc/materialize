@@ -65,7 +65,7 @@ Field                | Value  | Description
 Field                | Value  | Description
 ---------------------|--------|------------
 `SNAPSHOT`           | `bool` | Default: `true`. Whether to emit the consolidated results of the query before the sink was created at the start of the sink. To see only results after the sink is created, specify `WITH (SNAPSHOT = false)`.
-`SIZE`               | `text`    | **Required.** The [size](#sizing-a-sink) for the sink. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`.
+`SIZE`               | `text`    | **Required.** The [size](#sizing-a-sink) for the sink. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`, `xlarge`.
 
 ## Detail
 

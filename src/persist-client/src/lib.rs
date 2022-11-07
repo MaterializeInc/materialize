@@ -302,7 +302,7 @@ impl PersistConfig {
             compaction_queue_size: 20,
             compaction_minimum_timeout: Duration::from_secs(90),
             consensus_connection_pool_max_size: 50,
-            writer_lease_duration: Duration::from_secs(60 * 15),
+            writer_lease_duration: 60 * Duration::from_secs(60),
             reader_lease_duration: Self::DEFAULT_READ_LEASE_DURATION,
         }
     }
@@ -754,40 +754,40 @@ mod tests {
                     .open::<Vec<u8>, String, u64, i64>(shard_id0)
                     .await
                     .unwrap_err(),
-                InvalidUsage::CodecMismatch(CodecMismatch {
+                InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
                     requested: codecs("Vec<u8>", "String", "u64", "i64"),
                     actual: codecs("String", "String", "u64", "i64"),
-                })
+                }))
             );
             assert_eq!(
                 client
                     .open::<String, Vec<u8>, u64, i64>(shard_id0)
                     .await
                     .unwrap_err(),
-                InvalidUsage::CodecMismatch(CodecMismatch {
+                InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
                     requested: codecs("String", "Vec<u8>", "u64", "i64"),
                     actual: codecs("String", "String", "u64", "i64"),
-                })
+                }))
             );
             assert_eq!(
                 client
                     .open::<String, String, i64, i64>(shard_id0)
                     .await
                     .unwrap_err(),
-                InvalidUsage::CodecMismatch(CodecMismatch {
+                InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
                     requested: codecs("String", "String", "i64", "i64"),
                     actual: codecs("String", "String", "u64", "i64"),
-                })
+                }))
             );
             assert_eq!(
                 client
                     .open::<String, String, u64, u64>(shard_id0)
                     .await
                     .unwrap_err(),
-                InvalidUsage::CodecMismatch(CodecMismatch {
+                InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
                     requested: codecs("String", "String", "u64", "u64"),
                     actual: codecs("String", "String", "u64", "i64"),
-                })
+                }))
             );
 
             // open_reader and open_writer end up using the same checks, so just
@@ -798,20 +798,20 @@ mod tests {
                     .open_reader::<Vec<u8>, String, u64, i64>(shard_id0)
                     .await
                     .unwrap_err(),
-                InvalidUsage::CodecMismatch(CodecMismatch {
+                InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
                     requested: codecs("Vec<u8>", "String", "u64", "i64"),
                     actual: codecs("String", "String", "u64", "i64"),
-                })
+                }))
             );
             assert_eq!(
                 client
                     .open_writer::<Vec<u8>, String, u64, i64>(shard_id0)
                     .await
                     .unwrap_err(),
-                InvalidUsage::CodecMismatch(CodecMismatch {
+                InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
                     requested: codecs("Vec<u8>", "String", "u64", "i64"),
                     actual: codecs("String", "String", "u64", "i64"),
-                })
+                }))
             );
         }
 

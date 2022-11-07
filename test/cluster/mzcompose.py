@@ -57,14 +57,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-cluster",
         "test-github-12251",
         "test-github-15535",
+        "test-github-15799",
         "test-remote-storaged",
         "test-drop-default-cluster",
         "test-upsert",
         "test-resource-limits",
         "test-invalid-computed-reuse",
-        # Disabled to permit a breaking change.
-        # See: https://materializeinc.slack.com/archives/C02FWJ94HME/p1661288774456699?thread_ts=1661288684.301649&cid=C02FWJ94HME
-        # "test-builtin-migration",
+        "test-builtin-migration",
         "pg-snapshot-resumption",
     ]:
         with c.test_case(name):
@@ -263,6 +262,48 @@ def workflow_test_github_15535(c: Composition) -> None:
     assert t_upper, "t has empty upper frontier"
 
 
+def workflow_test_github_15799(c: Composition) -> None:
+    """
+    Test that querying arranged introspection sources on a replica does not
+    crash other replicas in the same cluster that have introspection disabled.
+
+    Regression test for https://github.com/MaterializeInc/materialize/issues/15799.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("computed_1")
+    c.up("computed_2")
+    c.wait_for_materialized()
+
+    c.sql(
+        """
+        CREATE CLUSTER cluster1 REPLICAS (
+            logging_on (
+                REMOTE ['computed_1:2100'],
+                COMPUTE ['computed_1:2102'],
+                WORKERS 2
+            ),
+            logging_off (
+                REMOTE ['computed_2:2100'],
+                COMPUTE ['computed_2:2102'],
+                WORKERS 2,
+                INTROSPECTION INTERVAL 0
+            )
+        );
+        SET cluster = cluster1;
+
+        -- query the arranged introspection sources on the replica with logging enabled
+        SET cluster_replica = logging_on;
+        SELECT * FROM mz_internal.mz_active_peeks, mz_internal.mz_compute_exports;
+
+        -- verify that the other replica has not crashed and still responds
+        SET cluster_replica = logging_off;
+        SELECT * FROM mz_tables, mz_sources;
+        """
+    )
+
+
 def workflow_test_upsert(c: Composition) -> None:
     """Test creating upsert sources and continuing to ingest them after a restart."""
     with c.override(
@@ -365,7 +406,7 @@ def workflow_test_resource_limits(c: Composition) -> None:
 
 
 # TODO: Would be nice to update this test to use a builtin table that can be materialized.
-#  pg_roles, and most postgres catalog views, cannot be materialized because they use
+#  pg_proc, and most postgres catalog views, cannot be materialized because they use
 #  pg_catalog.current_database(). So we can't test making indexes and materialized views.
 def workflow_test_builtin_migration(c: Composition) -> None:
     """Exercise the builtin object migration code by upgrading between two versions
@@ -375,9 +416,10 @@ def workflow_test_builtin_migration(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     with c.override(
-        # Random commit before pg_roles was updated.
+        # Random commit before pg_proc was updated.
         Materialized(
-            image="materialize/materialized:devel-9efd269199b1510b3e8f90196cb4fa3072a548a1",
+            image="materialize/materialized:devel-aa4128c9c485322f90ab0af2b9cb4d16e1c470c0",
+            default_size=1,
         ),
         Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
     ):
@@ -388,11 +430,12 @@ def workflow_test_builtin_migration(c: Composition) -> None:
         c.testdrive(
             input=dedent(
                 """
-        > CREATE VIEW v1 AS SELECT COUNT(*) FROM pg_roles;
+        # The limit is added to avoid having to update the number every time we add a function.
+        > CREATE VIEW v1 AS SELECT COUNT(*) FROM (SELECT * FROM pg_proc ORDER BY oid LIMIT 5);
         > SELECT * FROM v1;
-        2
-        ! SELECT DISTINCT rolconnlimit FROM pg_roles;
-        contains:column "rolconnlimit" does not exist
+        5
+        ! SELECT DISTINCT proowner FROM pg_proc;
+        contains:column "proowner" does not exist
     """
             )
         )
@@ -412,10 +455,10 @@ def workflow_test_builtin_migration(c: Composition) -> None:
             input=dedent(
                 """
        > SELECT * FROM v1;
-       2
+       5
        # This column is new after the migration
-       > SELECT DISTINCT rolconnlimit FROM pg_roles;
-       -1
+       > SELECT DISTINCT proowner FROM pg_proc;
+       <null>
     """
             )
         )

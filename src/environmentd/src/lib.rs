@@ -37,7 +37,7 @@ use mz_ore::task;
 use mz_ore::tracing::TracingTargetCallbacks;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
-use mz_storage::types::connections::ConnectionContext;
+use mz_storage_client::types::connections::ConnectionContext;
 
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
 use crate::server::ListenerHandle;

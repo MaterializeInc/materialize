@@ -9,14 +9,98 @@
 
 use std::collections::HashMap;
 
-use crate::utils::CloudProviderRegion;
-use crate::{
-    CloudProvider, CloudProviderAndRegion, Environment, Region, ValidProfile, CLOUD_PROVIDERS_URL,
-};
-use anyhow::{ensure, Context, Result};
-
+use crate::configuration::ValidProfile;
+use crate::{CloudProvider, CloudProviderAndRegion, Environment, Region, CLOUD_PROVIDERS_URL};
+use anyhow::{bail, ensure, Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use reqwest::{Client, Error};
+use serde::de::{Unexpected, Visitor};
+use serde::{Deserialize, Serialize};
+use std::fmt::Display;
+use std::str::FromStr;
+
+/// Cloud providers and regions available.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum CloudProviderRegion {
+    AwsUsEast1,
+    AwsEuWest1,
+}
+
+/// Implementation to name the possible values and parse every option.
+impl CloudProviderRegion {
+    pub fn variants() -> [&'static str; 2] {
+        ["aws/us-east-1", "aws/eu-west-1"]
+    }
+
+    /// Return the region name inside a cloud provider.
+    pub fn region_name(self) -> &'static str {
+        match self {
+            CloudProviderRegion::AwsUsEast1 => "us-east-1",
+            CloudProviderRegion::AwsEuWest1 => "eu-west-1",
+        }
+    }
+}
+
+impl Display for CloudProviderRegion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CloudProviderRegion::AwsUsEast1 => write!(f, "aws/us-east-1"),
+            CloudProviderRegion::AwsEuWest1 => write!(f, "aws/eu-west-1"),
+        }
+    }
+}
+
+impl FromStr for CloudProviderRegion {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "aws/us-east-1" => Ok(CloudProviderRegion::AwsUsEast1),
+            "aws/eu-west-1" => Ok(CloudProviderRegion::AwsEuWest1),
+            _ => bail!("Unknown region {}", s),
+        }
+    }
+}
+
+struct CloudProviderRegionVisitor;
+
+impl<'de> Visitor<'de> for CloudProviderRegionVisitor {
+    type Value = CloudProviderRegion;
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        CloudProviderRegion::from_str(v).map_err(|_| {
+            E::invalid_value(
+                Unexpected::Str(v),
+                &format!("{:?}", CloudProviderRegion::variants()).as_str(),
+            )
+        })
+    }
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(formatter, "{:?}", CloudProviderRegion::variants())
+    }
+}
+
+impl<'de> Deserialize<'de> for CloudProviderRegion {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_str(CloudProviderRegionVisitor)
+    }
+}
+
+impl Serialize for CloudProviderRegion {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
 
 /// Build the headers for reqwest request with the frontegg authorization.
 fn build_region_request_headers(authorization: &str) -> HeaderMap {
@@ -32,7 +116,7 @@ fn build_region_request_headers(authorization: &str) -> HeaderMap {
 pub(crate) async fn enable_region_environment(
     client: &Client,
     cloud_provider: &CloudProvider,
-    valid_profile: &ValidProfile,
+    valid_profile: &ValidProfile<'_>,
 ) -> Result<Region, reqwest::Error> {
     let authorization: String = format!("Bearer {}", valid_profile.frontegg_auth.access_token);
 
@@ -59,7 +143,7 @@ pub(crate) async fn enable_region_environment(
 pub(crate) async fn get_cloud_provider_region_details(
     client: &Client,
     cloud_provider_region: &CloudProvider,
-    valid_profile: &ValidProfile,
+    valid_profile: &ValidProfile<'_>,
 ) -> Result<Vec<Region>, anyhow::Error> {
     let authorization: String = format!("Bearer {}", valid_profile.frontegg_auth.access_token);
     let headers = build_region_request_headers(&authorization);
@@ -75,7 +159,7 @@ pub(crate) async fn get_cloud_provider_region_details(
 pub(crate) async fn region_environment_details(
     client: &Client,
     region: &Region,
-    valid_profile: &ValidProfile,
+    valid_profile: &ValidProfile<'_>,
 ) -> Result<Option<Vec<Environment>>, Error> {
     let authorization: String = format!("Bearer {}", valid_profile.frontegg_auth.access_token);
     let headers = build_region_request_headers(authorization.as_str());
@@ -101,7 +185,7 @@ pub(crate) async fn region_environment_details(
 pub(crate) async fn list_regions(
     cloud_providers: &Vec<CloudProvider>,
     client: &Client,
-    valid_profile: &ValidProfile,
+    valid_profile: &ValidProfile<'_>,
 ) -> Result<Vec<CloudProviderAndRegion>> {
     // TODO: Run requests in parallel
     let mut cloud_providers_and_regions: Vec<CloudProviderAndRegion> = Vec::new();
@@ -131,7 +215,7 @@ pub(crate) async fn list_regions(
 /// E.g.: [us-east-1, eu-west-1]
 pub(crate) async fn list_cloud_providers(
     client: &Client,
-    valid_profile: &ValidProfile,
+    valid_profile: &ValidProfile<'_>,
 ) -> Result<Vec<CloudProvider>, Error> {
     let authorization: String = format!("Bearer {}", valid_profile.frontegg_auth.access_token);
 
@@ -192,7 +276,7 @@ pub(crate) fn print_environment_status(environment: Environment, health: bool) {
 
 pub(crate) async fn get_provider_by_region_name(
     client: &Client,
-    valid_profile: &ValidProfile,
+    valid_profile: &ValidProfile<'_>,
     cloud_provider_region: &CloudProviderRegion,
 ) -> Result<CloudProvider> {
     let cloud_providers = list_cloud_providers(client, valid_profile)
@@ -210,7 +294,7 @@ pub(crate) async fn get_provider_by_region_name(
 
 pub(crate) async fn get_provider_region(
     client: &Client,
-    valid_profile: &ValidProfile,
+    valid_profile: &ValidProfile<'_>,
     cloud_provider_region: &CloudProviderRegion,
 ) -> Result<Region> {
     let cloud_provider = get_provider_by_region_name(client, valid_profile, cloud_provider_region)
@@ -231,7 +315,7 @@ pub(crate) async fn get_provider_region(
 
 pub(crate) async fn get_region_environment(
     client: &Client,
-    valid_profile: &ValidProfile,
+    valid_profile: &ValidProfile<'_>,
     region: &Region,
 ) -> Result<Environment> {
     let environment_details = region_environment_details(client, region, valid_profile)
@@ -247,7 +331,7 @@ pub(crate) async fn get_region_environment(
 
 pub(crate) async fn get_provider_region_environment(
     client: &Client,
-    valid_profile: &ValidProfile,
+    valid_profile: &ValidProfile<'_>,
     cloud_provider_region: &CloudProviderRegion,
 ) -> Result<Environment> {
     let region = get_provider_region(client, valid_profile, cloud_provider_region)

@@ -23,18 +23,18 @@ use timely::progress::Antichain;
 use tokio::runtime::Handle as TokioHandle;
 
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
+use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::source::persist_source;
+use mz_storage_client::types::errors::{DataflowError, DecodeError, EnvelopeError};
+use mz_storage_client::types::sources::{encoding::*, *};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 
-use crate::controller::CollectionMetadata;
 use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
 use crate::source::types::{DecodeResult, SourceOutput};
 use crate::source::{
-    self, persist_source, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader,
-    LoadGeneratorSourceReader, PostgresSourceReader, RawSourceCreationConfig, S3SourceReader,
-    TestScriptSourceReader,
+    self, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader, LoadGeneratorSourceReader,
+    PostgresSourceReader, RawSourceCreationConfig, S3SourceReader, TestScriptSourceReader,
 };
-use crate::types::errors::{DataflowError, DecodeError, EnvelopeError};
-use crate::types::sources::{encoding::*, *};
 
 /// A type-level enum that holds one of two types of sources depending on their message type
 ///
@@ -111,7 +111,7 @@ where
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
     let ((ok_sources, err_source), capability) = match connection {
-        SourceConnection::Kafka(connection) => {
+        GenericSourceConnection::Kafka(connection) => {
             let ((oks, err), cap) = source::create_raw_source::<_, KafkaSourceReader, _>(
                 scope,
                 base_source_config,
@@ -122,7 +122,7 @@ where
             let oks: Vec<_> = oks.into_iter().map(SourceType::Delimited).collect();
             ((oks, err), cap)
         }
-        SourceConnection::Kinesis(connection) => {
+        GenericSourceConnection::Kinesis(connection) => {
             let ((oks, err), cap) =
                 source::create_raw_source::<_, DelimitedValueSource<KinesisSourceReader>, _>(
                     scope,
@@ -134,7 +134,7 @@ where
             let oks = oks.into_iter().map(SourceType::Delimited).collect();
             ((oks, err), cap)
         }
-        SourceConnection::S3(connection) => {
+        GenericSourceConnection::S3(connection) => {
             let ((oks, err), cap) = source::create_raw_source::<_, S3SourceReader, _>(
                 scope,
                 base_source_config,
@@ -145,7 +145,7 @@ where
             let oks = oks.into_iter().map(SourceType::ByteStream).collect();
             ((oks, err), cap)
         }
-        SourceConnection::Postgres(connection) => {
+        GenericSourceConnection::Postgres(connection) => {
             let ((oks, err), cap) = source::create_raw_source::<_, PostgresSourceReader, _>(
                 scope,
                 base_source_config,
@@ -156,7 +156,7 @@ where
             let oks = oks.into_iter().map(SourceType::Row).collect();
             ((oks, err), cap)
         }
-        SourceConnection::LoadGenerator(connection) => {
+        GenericSourceConnection::LoadGenerator(connection) => {
             let ((oks, err), cap) = source::create_raw_source::<_, LoadGeneratorSourceReader, _>(
                 scope,
                 base_source_config,
@@ -167,7 +167,7 @@ where
             let oks = oks.into_iter().map(SourceType::Row).collect();
             ((oks, err), cap)
         }
-        SourceConnection::TestScript(connection) => {
+        GenericSourceConnection::TestScript(connection) => {
             let ((oks, err), cap) = source::create_raw_source::<_, TestScriptSourceReader, _>(
                 scope,
                 base_source_config,

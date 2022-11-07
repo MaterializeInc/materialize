@@ -47,10 +47,10 @@ use mz_persist_client::PersistLocation;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::{GlobalId, TimestampManipulation};
-use mz_storage::controller::StorageController;
-use mz_storage::protocol::client::{
+use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
+use mz_storage_client::controller::StorageController;
 
 /// Configures a controller.
 #[derive(Debug, Clone)]
@@ -208,11 +208,11 @@ where
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
-    mz_storage::controller::Controller<T>: StorageController<Timestamp = T>,
+    mz_storage_client::controller::Controller<T>: StorageController<Timestamp = T>,
 {
     /// Creates a new controller.
     pub async fn new(config: ControllerConfig) -> Self {
-        let storage_controller = mz_storage::controller::Controller::new(
+        let storage_controller = mz_storage_client::controller::Controller::new(
             config.build_info,
             config.storage_stash_url,
             config.persist_location,

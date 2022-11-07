@@ -21,7 +21,7 @@ use mz_ore::task;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_sql::plan::Plan;
 use mz_stash::Append;
-use mz_storage::protocol::client::Update;
+use mz_storage_client::client::Update;
 
 use crate::catalog::BuiltinTableUpdate;
 use crate::coord::timeline::WriteTimestamp;

@@ -106,16 +106,12 @@ name               type   size
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-$ set-regex match=\d+ replacement=<D>
-
 > SHOW SINKS
 name               type   size
 ------------------------------
-snk<D>             kafka  <D>
-snk<D>             kafka  <D>
-snk<D>             kafka  <D>
-
-$ unset-regex
+snk1             kafka  ${arg.default-storage-size}
+snk2             kafka  ${arg.default-storage-size}
+snk3             kafka  ${arg.default-storage-size}
 
 $ kafka-verify-data format=avro sink=materialize.public.snk1 sort-messages=true
 {"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": [0, 0, 0, 0, 0, 0, 0, 1]}}}
@@ -204,22 +200,18 @@ $ kafka-verify-data format=avro sink=materialize.public.snk8 sort-messages=true
 {"before": null, "after": {"row":{"column1": 2}}}
 {"before": null, "after": {"row":{"column1": 3}}}
 
-$ set-regex match=\d+ replacement=<D>
-
 > SHOW SINKS
 name               type   size
 ------------------------------
-snk<D>             kafka  <D>
-snk<D>             kafka  <D>
-snk<D>             kafka  <D>
-snk<D>             kafka  <D>
-snk<D>             kafka  <D>
-snk<D>             kafka  <D>
-snk<D>             kafka  <D>
-snk<D>             kafka  <D>
-snk_unsigned       kafka  <D>
-
-$ unset-regex
+snk1             kafka  ${arg.default-storage-size}
+snk2             kafka  ${arg.default-storage-size}
+snk3             kafka  ${arg.default-storage-size}
+snk4             kafka  ${arg.default-storage-size}
+snk5             kafka  ${arg.default-storage-size}
+snk6             kafka  ${arg.default-storage-size}
+snk7             kafka  ${arg.default-storage-size}
+snk8             kafka  ${arg.default-storage-size}
+snk_unsigned       kafka  ${arg.default-storage-size}
 
 # test explicit partition count
 > CREATE SINK snk9 FROM foo
@@ -287,30 +279,27 @@ $ kafka-create-topic topic=snk15 partitions=4
 
 # Including for sinks with default size
 > SELECT size FROM mz_sinks WHERE name = 'snk13'
-"${arg.size}"
-
-$ skip-if
-SELECT ${arg.size} != 1
+"${arg.default-storage-size}"
 
 # Check that SHOW SINKS shows the size correctly
 > SHOW SINKS
 name               type   size
 ------------------------------
-snk1               kafka  1
-snk2               kafka  1
-snk3               kafka  1
-snk4               kafka  1
-snk5               kafka  1
-snk6               kafka  1
-snk7               kafka  1
-snk8               kafka  1
-snk9               kafka  1
-snk10              kafka  1
-snk11              kafka  1
-snk12              kafka  1
-snk13              kafka  1
-snk14              kafka  1
-snk15              kafka  1
+snk1               kafka  ${arg.default-storage-size}
+snk2               kafka  ${arg.default-storage-size}
+snk3               kafka  ${arg.default-storage-size}
+snk4               kafka  ${arg.default-storage-size}
+snk5               kafka  ${arg.default-storage-size}
+snk6               kafka  ${arg.default-storage-size}
+snk7               kafka  ${arg.default-storage-size}
+snk8               kafka  ${arg.default-storage-size}
+snk9               kafka  ${arg.default-storage-size}
+snk10              kafka  ${arg.default-storage-size}
+snk11              kafka  ${arg.default-storage-size}
+snk12              kafka  ${arg.default-storage-size}
+snk13              kafka  ${arg.default-storage-size}
+snk14              kafka  ${arg.default-storage-size}
+snk15              kafka  ${arg.default-storage-size}
 sink_with_size     kafka  2
 sink_with_options  kafka  2
-snk_unsigned       kafka  1
+snk_unsigned       kafka  ${arg.default-storage-size}

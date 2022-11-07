@@ -15,7 +15,6 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::{Send, Sync};
-use std::rc::Rc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -25,20 +24,20 @@ use prometheus::core::{AtomicI64, AtomicU64};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract};
 use timely::scheduling::activate::SyncActivator;
-use timely::scheduling::ActivateOnDrop;
 use timely::Data;
 
 use mz_avro::types::Value;
 use mz_expr::PartitionId;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_client::types::errors::{DecodeError, SourceErrorDetails};
+use mz_storage_client::types::sources::encoding::SourceDataEncoding;
+use mz_storage_client::types::sources::MzOffset;
+use mz_storage_client::types::sources::SourceConnection;
 
 use crate::source::healthcheck::SourceStatusUpdate;
 use crate::source::metrics::SourceBaseMetrics;
-use crate::types::connections::ConnectionContext;
-use crate::types::errors::{DecodeError, SourceErrorDetails};
-use crate::types::sources::encoding::SourceDataEncoding;
-use crate::types::sources::MzOffset;
 
 /// This trait defines the interface between Materialize and external sources,
 /// and must be implemented for every new kind of source.
@@ -156,10 +155,6 @@ pub trait SourceReader {
     }
 }
 
-pub trait SourceConnection: Clone {
-    fn name(&self) -> &'static str;
-}
-
 /// A sibling trait to `SourceReader` that represents a source's
 /// ability to _commit offsets_ that have been guaranteed
 /// to be written into persist
@@ -173,23 +168,6 @@ pub trait OffsetCommitter {
         &self,
         offsets: HashMap<PartitionId, MzOffset>,
     ) -> Result<(), anyhow::Error>;
-}
-
-/// A `SourceToken` manages interest in a source.
-///
-/// When the `SourceToken` is dropped the associated source will be stopped.
-pub struct SourceToken {
-    pub(crate) _activator: Rc<ActivateOnDrop<()>>,
-}
-
-/// A `AsyncSourceToken` manages interest in a source.
-///
-/// When the `AsyncSourceToken` is dropped the associated source will be stopped.
-///
-/// This type does the same thing as `SourceToken`, but operates in a way
-/// optimized for async timely operators.
-pub struct AsyncSourceToken {
-    pub(crate) _drop_closes_the_oneshot: tokio::sync::oneshot::Sender<()>,
 }
 
 pub enum NextMessage<Key, Value, Diff> {

@@ -22,7 +22,7 @@ use mz_build_info::BuildInfo;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
-use mz_storage::controller::{ReadPolicy, StorageController};
+use mz_storage_client::controller::{ReadPolicy, StorageController};
 
 use crate::command::{
     ComputeCommand, ComputeCommandHistory, DataflowDescription, InstanceConfig, Peek, ReplicaId,
@@ -138,8 +138,7 @@ where
 
         instance.send(ComputeCommand::CreateTimely(Default::default()));
         instance.send(ComputeCommand::CreateInstance(InstanceConfig {
-            replica_id: Default::default(),
-            logging: None,
+            logging: Default::default(),
             max_result_size,
         }));
 
@@ -181,33 +180,35 @@ where
 
     /// Receives the next response from any replica of this instance.
     ///
+    /// Returns `Err` if receiving from a replica has failed, to signal that it is in need of
+    /// rehydration.
+    ///
     /// This method is cancellation safe.
-    pub async fn recv(&mut self) -> (ReplicaId, ComputeResponse<T>) {
+    pub async fn recv(&mut self) -> Result<(ReplicaId, ComputeResponse<T>), ReplicaId> {
         // Receive responses from any of the replicas, and take appropriate
         // action.
-        loop {
-            let response = self
-                .replicas
-                .iter_mut()
-                .map(|(id, replica)| async { (*id, replica.recv().await) })
-                .collect::<FuturesUnordered<_>>()
-                .next()
-                .await;
+        let response = self
+            .replicas
+            .iter_mut()
+            .map(|(id, replica)| async { (*id, replica.recv().await) })
+            .collect::<FuturesUnordered<_>>()
+            .next()
+            .await;
 
-            match response {
-                None => {
-                    // There were no replicas in the set. Block forever to
-                    // communicate that no response is ready.
-                    future::pending().await
-                }
-                Some((replica_id, None)) => {
-                    // A replica has failed and requires rehydration.
-                    self.failed_replicas.insert(replica_id);
-                }
-                Some((replica_id, Some(response))) => {
-                    // A replica has produced a response. Return it.
-                    return (replica_id, response);
-                }
+        match response {
+            None => {
+                // There were no replicas in the set. Block forever to
+                // communicate that no response is ready.
+                future::pending().await
+            }
+            Some((replica_id, None)) => {
+                // A replica has failed and requires rehydration.
+                self.failed_replicas.insert(replica_id);
+                Err(replica_id)
+            }
+            Some((replica_id, Some(response))) => {
+                // A replica has produced a response. Return it.
+                Ok((replica_id, response))
             }
         }
     }
@@ -230,23 +231,20 @@ where
         &mut self,
         id: ReplicaId,
         location: ComputeReplicaLocation,
-        mut logging_config: Option<LoggingConfig>,
+        mut logging_config: LoggingConfig,
     ) -> Result<(), ComputeError> {
-        let maintained_logs = if let Some(logging) = &mut logging_config {
-            // Initialize state for per-replica log collections.
-            for (log_id, _) in logging.sink_logs.values() {
-                self.compute
-                    .collections
-                    .insert(*log_id, CollectionState::new_log_collection());
-            }
+        // Initialize state for per-replica log collections.
+        for (log_id, _) in logging_config.sink_logs.values() {
+            self.compute
+                .collections
+                .insert(*log_id, CollectionState::new_log_collection());
+        }
 
-            logging.active_logs = self.compute.arranged_logs.clone();
-            logging.log_identifiers().collect()
-        } else {
-            BTreeSet::new()
-        };
+        logging_config.index_logs = self.compute.arranged_logs.clone();
+        let maintained_logs: BTreeSet<_> = logging_config.log_identifiers().collect();
 
-        // Initialize frontier tracking the new replica.
+        // Initialize frontier tracking for the new replica
+        // and clean up any dropped collections that we can
         let mut updates = Vec::new();
         for (compute_id, collection) in &mut self.compute.collections {
             // Skip log collections not maintained by this replica.
@@ -546,10 +544,7 @@ where
         updates.insert(id, ChangeBatch::new_from(timestamp.clone(), 1));
         self.update_read_capabilities(&mut updates).await?;
 
-        let unfinished = match &target_replica {
-            Some(target) => [*target].into(),
-            None => self.compute.replicas.keys().copied().collect(),
-        };
+        let unfinished = self.compute.replicas.keys().copied().collect();
         let otel_ctx = OpenTelemetryContext::obtain();
         self.compute.peeks.insert(
             uuid,
@@ -557,6 +552,7 @@ where
                 target: id,
                 time: timestamp.clone(),
                 unfinished,
+                target_replica,
                 // TODO(guswynn): can we just hold the `tracing::Span` here instead?
                 otel_ctx: Some(otel_ctx.clone()),
             },
@@ -569,7 +565,6 @@ where
             timestamp,
             finishing,
             map_filter_project,
-            target_replica,
             // Obtain an `OpenTelemetryContext` from the thread-local tracing
             // tree to forward it on to the compute worker.
             otel_ctx,
@@ -673,6 +668,7 @@ where
         let mut advanced_collections = Vec::new();
         let mut compute_read_capability_changes = BTreeMap::default();
         let mut storage_read_capability_changes = BTreeMap::default();
+        let mut dropped_collection_ids = Vec::new();
         for (id, new_upper) in updates.iter() {
             let collection = self
                 .compute
@@ -687,6 +683,10 @@ where
             let old_upper = collection
                 .replica_write_frontiers
                 .insert(replica_id, new_upper.clone());
+
+            if new_upper.is_empty() {
+                dropped_collection_ids.push(*id);
+            }
 
             let mut new_read_capability = collection
                 .read_policy
@@ -742,6 +742,9 @@ where
             .update_write_frontiers(&storage_updates)
             .await?;
 
+        if !dropped_collection_ids.is_empty() {
+            self.update_dropped_collections(dropped_collection_ids);
+        }
         Ok(())
     }
 
@@ -749,10 +752,13 @@ where
     #[tracing::instrument(level = "debug", skip(self))]
     async fn remove_write_frontiers(&mut self, replica_id: ReplicaId) -> Result<(), ComputeError> {
         let mut storage_read_capability_changes = BTreeMap::default();
-        for collection in self.compute.collections.values_mut() {
+        let mut dropped_collection_ids = Vec::new();
+        for (id, collection) in self.compute.collections.iter_mut() {
             let last_upper = collection.replica_write_frontiers.remove(&replica_id);
 
             if let Some(frontier) = last_upper {
+                dropped_collection_ids.push(*id);
+
                 // Update read holds on storage dependencies.
                 for storage_id in &collection.storage_dependencies {
                     let update = storage_read_capability_changes
@@ -767,7 +773,9 @@ where
                 .update_read_capabilities(&mut storage_read_capability_changes)
                 .await?;
         }
-
+        if !dropped_collection_ids.is_empty() {
+            self.update_dropped_collections(dropped_collection_ids);
+        }
         Ok(())
     }
 
@@ -801,30 +809,40 @@ where
                 compute_net.push((key, update));
             } else {
                 // Storage presumably, but verify.
-                storage_todo
-                    .entry(key)
-                    .or_insert_with(ChangeBatch::new)
-                    .extend(update.drain())
+                if self.storage_controller.collection(key).is_ok() {
+                    storage_todo
+                        .entry(key)
+                        .or_insert_with(ChangeBatch::new)
+                        .extend(update.drain())
+                } else {
+                    tracing::error!(
+                        "found neither compute nor storage collection with id {}",
+                        key
+                    );
+                }
             }
         }
 
-        // Translate our net compute actions into `AllowCompaction` commands.
+        // Translate our net compute actions into `AllowCompaction` commands
+        // and a list of collections that are potentially ready to be dropped
         let mut compaction_commands = Vec::new();
+        let mut dropped_collection_ids = Vec::new();
         for (id, change) in compute_net.iter_mut() {
+            let frontier = self.compute.collection(*id)?.read_frontier();
+            if frontier.is_empty() {
+                dropped_collection_ids.push(*id);
+            }
             if !change.is_empty() {
-                let frontier = self
-                    .compute
-                    .collection(*id)
-                    .unwrap()
-                    .read_capabilities
-                    .frontier()
-                    .to_owned();
+                let frontier = frontier.to_owned();
                 compaction_commands.push((*id, frontier));
             }
         }
         if !compaction_commands.is_empty() {
             self.compute
                 .send(ComputeCommand::AllowCompaction(compaction_commands));
+        }
+        if !dropped_collection_ids.is_empty() {
+            self.update_dropped_collections(dropped_collection_ids);
         }
 
         // We may have storage consequences to process.
@@ -889,6 +907,25 @@ where
         }
     }
 
+    /// Cleans up collection state, if necessary, in response to drop operations targeted
+    /// at a replica and given collections (via reporting of an empty frontier).
+    fn update_dropped_collections(&mut self, dropped_collection_ids: Vec<GlobalId>) {
+        for id in dropped_collection_ids {
+            // clean up the given collection if read frontier is empty
+            // and all replica frontiers are empty
+            if let Ok(collection) = self.compute.collection(id) {
+                if collection.read_frontier().is_empty()
+                    && collection
+                        .replica_write_frontiers
+                        .values()
+                        .all(|frontier| frontier.is_empty())
+                {
+                    self.compute.collections.remove(&id);
+                }
+            }
+        }
+    }
+
     async fn handle_frontier_uppers(
         &mut self,
         list: Vec<(GlobalId, Antichain<T>)>,
@@ -921,7 +958,9 @@ where
             }
         };
 
-        // If this is the first response, forward it; otherwise do not.
+        // Forward the peek response, if we didn't already forward a response
+        // to this peek previously. If the peek is targeting a replica, only
+        // forward the response from that replica.
         // TODO: we could collect the other responses to assert equivalence?
         // Trades resources (memory) for reassurances; idk which is best.
         //
@@ -933,10 +972,14 @@ where
         //
         // Additionally, we just use the `otel_ctx` from the first worker to
         // respond.
-        let controller_response = peek
-            .otel_ctx
-            .take()
-            .map(|_| ComputeControllerResponse::PeekResponse(uuid, response, otel_ctx));
+        let replica_targeted = peek.target_replica.unwrap_or(replica_id) == replica_id;
+        let controller_response = if replica_targeted {
+            peek.otel_ctx
+                .take()
+                .map(|_| ComputeControllerResponse::PeekResponse(uuid, response, otel_ctx))
+        } else {
+            None
+        };
 
         // Update the per-replica tracking and draw appropriate consequences.
         peek.unfinished.remove(&replica_id);
@@ -965,30 +1008,34 @@ where
                 // If this batch advances the subscribe's frontier, we emit all updates at times
                 // greater or equal to the last frontier (to avoid emitting duplicate updates).
                 // let old_upper_bound = entry.bounds.upper.clone();
-                let lower = self
+                let prev_frontier = self
                     .compute
                     .subscribes
                     .remove(&subscribe_id)
                     .unwrap_or_else(Antichain::new);
 
-                if PartialOrder::less_than(&lower, &upper) {
+                if PartialOrder::less_than(&prev_frontier, &upper) {
                     if !upper.is_empty() {
                         // This subscribe can produce more data. Keep tracking it.
                         self.compute.subscribes.insert(subscribe_id, upper.clone());
                     }
 
                     if let Ok(updates) = updates.as_mut() {
-                        updates.retain(|(time, _data, _diff)| lower.less_equal(time));
+                        updates.retain(|(time, _data, _diff)| prev_frontier.less_equal(time));
                     }
                     Some(ComputeControllerResponse::SubscribeResponse(
                         subscribe_id,
                         SubscribeResponse::Batch(SubscribeBatch {
-                            lower,
+                            lower: prev_frontier,
                             upper,
                             updates,
                         }),
                     ))
                 } else {
+                    if !prev_frontier.is_empty() {
+                        // This subscribe can produce more data. Keep tracking it.
+                        self.compute.subscribes.insert(subscribe_id, prev_frontier);
+                    }
                     None
                 }
             }
@@ -1022,6 +1069,10 @@ struct PendingPeek<T> {
     time: T,
     /// Replicas that have yet to respond to this peek.
     unfinished: BTreeSet<ReplicaId>,
+    /// For replica-targeted peeks, this specifies the replica whose response we should pass on.
+    ///
+    /// If this value is `None`, we pass on the first response.
+    target_replica: Option<ReplicaId>,
     /// The OpenTelemetry context for this peek.
     ///
     /// This value is `Some` as long as we have not yet passed a response up the chain, and `None`

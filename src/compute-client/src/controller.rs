@@ -52,7 +52,7 @@ use mz_expr::RowSetFinishing;
 use mz_orchestrator::{CpuLimit, MemoryLimit, NamespacedOrchestrator};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
-use mz_storage::controller::{ReadPolicy, StorageController, StorageError};
+use mz_storage_client::controller::{ReadPolicy, StorageController, StorageError};
 
 use crate::command::{DataflowDescription, ProcessId, ReplicaId};
 use crate::logging::{LogVariant, LogView, LoggingConfig};
@@ -483,18 +483,20 @@ where
         }
 
         // `Instance::recv` is cancellation safe, so it is safe to construct this `select_all`.
-        let receives = self.instances.iter_mut().map(|(id, instance)| {
-            Box::pin(
-                instance
-                    .recv()
-                    .map(|(replica_id, resp)| (*id, replica_id, resp)),
-            )
-        });
-        let ((instance_id, replica_id, resp), _index, _remaining) =
-            future::select_all(receives).await;
+        let receives = self
+            .instances
+            .iter_mut()
+            .map(|(id, instance)| Box::pin(instance.recv().map(|result| (*id, result))));
+        let ((instance_id, result), _index, _remaining) = future::select_all(receives).await;
 
-        self.replica_heartbeats.insert(replica_id, Utc::now());
-        self.stashed_response = Some((instance_id, replica_id, resp));
+        if let Ok((replica_id, resp)) = result {
+            self.replica_heartbeats.insert(replica_id, Utc::now());
+            self.stashed_response = Some((instance_id, replica_id, resp));
+        } else {
+            // There is nothing to do here. `recv` has already added the failed replica to
+            // `instance.failed_replicas`, so it will be rehydrated in the next call to
+            // `ActiveComputeController::process`.
+        }
     }
 
     /// Listen for changes to compute services reported by the orchestrator.
@@ -543,21 +545,23 @@ where
         replica_id: ReplicaId,
         config: ComputeReplicaConfig,
     ) -> Result<(), ComputeError> {
-        let logging_config = if let Some(interval) = config.logging.interval {
-            let mut sink_logs = BTreeMap::new();
-            for (variant, id) in config.logging.sources {
-                let storage_meta = self.storage.collection(id)?.collection_metadata.clone();
-                sink_logs.insert(variant, (id, storage_meta));
-            }
+        let (enable_logging, interval_ns) = match config.logging.interval {
+            Some(interval) => (true, interval.as_nanos()),
+            None => (false, 1_000_000_000),
+        };
 
-            Some(LoggingConfig {
-                interval_ns: interval.as_nanos(),
-                active_logs: Default::default(),
-                log_logging: config.logging.log_logging,
-                sink_logs,
-            })
-        } else {
-            None
+        let mut sink_logs = BTreeMap::new();
+        for (variant, id) in config.logging.sources {
+            let storage_meta = self.storage.collection(id)?.collection_metadata.clone();
+            sink_logs.insert(variant, (id, storage_meta));
+        }
+
+        let logging_config = LoggingConfig {
+            interval_ns,
+            enable_logging,
+            log_logging: config.logging.log_logging,
+            index_logs: Default::default(),
+            sink_logs,
         };
 
         self.instance(instance_id)?

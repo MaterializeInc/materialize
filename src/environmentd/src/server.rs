@@ -19,7 +19,7 @@ use futures::stream::{Stream, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
-use tracing::error;
+use tracing::{debug, error};
 
 use mz_ore::task;
 
@@ -104,7 +104,7 @@ where
         let fut = server.handle_connection(conn);
         task::spawn(|| &task_name, async {
             if let Err(e) = fut.await {
-                error!("error handling connection in {}: {:#}", S::NAME, e);
+                debug!("error handling connection in {}: {:#}", S::NAME, e);
             }
         });
     }

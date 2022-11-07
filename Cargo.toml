@@ -51,7 +51,7 @@ members = [
     "src/stash",
     "src/stash-debug",
     "src/storage",
-    "src/storaged",
+    "src/storage-client",
     "src/testdrive",
     "src/timely-util",
     "src/transform",
@@ -69,7 +69,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.64.0"
+rust-version = "1.65.0"
 
 [profile.dev]
 # TODO(gusywnn|benesch): remove this when incremental ice's are improved

@@ -18,13 +18,13 @@ use timely::progress::Antichain;
 use tokio::sync::Mutex;
 use tracing::trace;
 
+use mz_ore::halt;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{PersistLocation, ShardId, Upper};
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
-
-use crate::types::sources::SourceData;
+use mz_storage_client::types::sources::SourceData;
 
 /// The Healthchecker is responsible for tracking the current state
 /// of a Timely worker for a source, as well as updating the relevant
@@ -81,8 +81,8 @@ impl Healthchecker {
         })
     }
 
-    /// Report a SinkStatus::Stalled and then panic with the same message
-    pub async fn report_stall_and_panic<S>(hc: Option<&mut Self>, msg: S) -> !
+    /// Report a SinkStatus::Stalled and then halt with the same message.
+    pub async fn report_stall_and_halt<S>(hc: Option<&mut Self>, msg: S) -> !
     where
         S: ToString + std::fmt::Debug,
     {
@@ -92,7 +92,7 @@ impl Healthchecker {
                 .await;
         }
 
-        panic!("{msg:?}")
+        halt!("{msg:?}")
     }
 
     /// Process a [`SinkStatus`] emitted by a sink

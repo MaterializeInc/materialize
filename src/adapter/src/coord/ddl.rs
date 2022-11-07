@@ -26,9 +26,11 @@ use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::ResolvedDatabaseSpecifier;
 use mz_stash::Append;
-use mz_storage::controller::{CreateExportToken, ExportDescription};
-use mz_storage::types::sinks::{SinkAsOf, StorageSinkConnection};
-use mz_storage::types::sources::{PostgresSourceConnection, SourceConnection, Timeline};
+use mz_storage_client::controller::{CreateExportToken, ExportDescription};
+use mz_storage_client::types::sinks::{SinkAsOf, StorageSinkConnection};
+use mz_storage_client::types::sources::{
+    GenericSourceConnection, PostgresSourceConnection, Timeline,
+};
 
 use crate::catalog::{
     CatalogItem, CatalogState, DataSourceDesc, Op, Sink, StorageSinkConnectionState,
@@ -92,7 +94,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         sources_to_drop.push(*id);
                         if let DataSourceDesc::Ingestion(ingestion) = &source.data_source {
                             match &ingestion.desc.connection {
-                                SourceConnection::Postgres(PostgresSourceConnection {
+                                GenericSourceConnection::Postgres(PostgresSourceConnection {
                                     connection,
                                     details,
                                     ..
@@ -132,12 +134,14 @@ impl<S: Append + 'static> Coordinator<S> {
                     CatalogItem::Connection(catalog::Connection { connection, .. }) => {
                         match connection {
                             // SSH connections have an associated secret that should be dropped
-                            mz_storage::types::connections::Connection::Ssh(_) => {
+                            mz_storage_client::types::connections::Connection::Ssh(_) => {
                                 secrets_to_drop.push(*id);
                             }
                             // PrivateLink connections have an associated VpcEndpoint K8S resource
                             // that should be dropped
-                            mz_storage::types::connections::Connection::AwsPrivateLink(_) => {
+                            mz_storage_client::types::connections::Connection::AwsPrivateLink(
+                                _,
+                            ) => {
                                 vpc_endpoints_to_drop.push(*id);
                             }
                             _ => (),
@@ -343,12 +347,12 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     pub(crate) async fn drop_indexes(&mut self, indexes: Vec<(ComputeInstanceId, GlobalId)>) {
-        let mut by_compute_instance = HashMap::new();
+        let mut by_compute_instance: HashMap<_, Vec<_>> = HashMap::new();
         for (compute_instance, id) in indexes {
             if self.drop_read_policy(&id) {
                 by_compute_instance
                     .entry(compute_instance)
-                    .or_insert(vec![])
+                    .or_default()
                     .push(id);
             } else {
                 tracing::error!("Instructed to drop a non-index index");
@@ -364,13 +368,13 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     async fn drop_materialized_views(&mut self, mviews: Vec<(ComputeInstanceId, GlobalId)>) {
-        let mut by_compute_instance = HashMap::new();
+        let mut by_compute_instance: HashMap<_, Vec<_>> = HashMap::new();
         let mut source_ids = Vec::new();
         for (compute_instance, id) in mviews {
             if self.drop_read_policy(&id) {
                 by_compute_instance
                     .entry(compute_instance)
-                    .or_insert(vec![])
+                    .or_default()
                     .push(id);
                 source_ids.push(id);
             } else {
@@ -462,7 +466,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let timeline = self
             .get_timeline(sink.from)
             .unwrap_or(Timeline::EpochMilliseconds);
-        let now = self.ensure_timeline_state(timeline).await.oracle.read_ts();
+        let now = self.ensure_timeline_state(&timeline).await.oracle.read_ts();
         let frontier = Antichain::from_elem(now);
         let as_of = SinkAsOf {
             frontier,
@@ -470,7 +474,7 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         let storage_sink_from_entry = self.catalog.get_entry(&sink.from);
-        let storage_sink_desc = mz_storage::types::sinks::StorageSinkDesc {
+        let storage_sink_desc = mz_storage_client::types::sinks::StorageSinkDesc {
             from: sink.from,
             from_desc: storage_sink_from_entry
                 .desc(&self.catalog.resolve_full_name(

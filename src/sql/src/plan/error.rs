@@ -78,6 +78,10 @@ pub enum PlanError {
     Parser(ParserError),
     Qgm(QGMError),
     DropViewOnMaterializedView(String),
+    DropSubsource {
+        subsource: String,
+        source: String,
+    },
     AlterViewOnMaterializedView(String),
     ShowCreateViewOnMaterializedView(String),
     ExplainViewOnMaterializedView(String),
@@ -115,6 +119,9 @@ impl PlanError {
             Self::DropViewOnMaterializedView(_) => {
                 Some("Use DROP MATERIALIZED VIEW to remove a materialized view.".into())
             }
+            Self::DropSubsource { source, .. } => Some(format!(
+                "Use DROP SOURCE {source} to drop this subsource's primary source and all of its other subsources"
+            )),
             Self::AlterViewOnMaterializedView(_) => {
                 Some("Use ALTER MATERIALIZED VIEW to rename a materialized view.".into())
             }
@@ -239,6 +246,7 @@ impl fmt::Display for PlanError {
                 "column {} uses unrecognized type",
                 format!("{}.{}", table, column).quoted()
             ),
+            Self::DropSubsource{subsource, source: _} => write!(f, "SOURCE {subsource} is a subsource and cannot be dropped independently of its primary source"),
         }
     }
 }

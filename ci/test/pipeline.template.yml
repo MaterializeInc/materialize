@@ -422,6 +422,7 @@ steps:
   - id: zippy-kafka-sources-short
     label: "Short Zippy"
     depends_on: build-x86_64
+    inputs: [misc/python/materialize/zippy]
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -457,6 +458,7 @@ steps:
   - id: checks-drop-create-default-replica
     label: "Checks + DROP/CREATE replica"
     depends_on: build-x86_64
+    inputs: [misc/python/materialize/checks]
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -468,6 +470,7 @@ steps:
   - id: checks-restart-computed
     label: "Checks + restart computed"
     depends_on: build-x86_64
+    inputs: [misc/python/materialize/checks]
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -479,6 +482,7 @@ steps:
   - id: checks-restart-entire-mz
     label: "Checks + restart of the entire Mz"
     depends_on: build-x86_64
+    inputs: [misc/python/materialize/checks]
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -490,6 +494,7 @@ steps:
   - id: checks-restart-environmentd-storaged
     label: "Checks + restart of environmentd & storaged"
     depends_on: build-x86_64
+    inputs: [misc/python/materialize/checks]
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -501,6 +506,7 @@ steps:
   - id: checks-kill-storaged
     label: "Checks + kill storaged"
     depends_on: build-x86_64
+    inputs: [misc/python/materialize/checks]
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -512,6 +518,7 @@ steps:
   - id: checks-restart-postgres-backend
     label: "Checks + restart Postgres backend"
     depends_on: build-x86_64
+    inputs: [misc/python/materialize/checks]
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -523,6 +530,7 @@ steps:
   - id: checks-restart-source-postgres
     label: "Checks + restart source Postgres"
     depends_on: build-x86_64
+    inputs: [misc/python/materialize/checks]
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -536,7 +544,7 @@ steps:
     depends_on: build-x86_64
     timeout_in_minutes: 30
     artifact_paths: junit_cloudtest_*.xml
-    inputs: [test/cloudtest]
+    inputs: [test/cloudtest, misc/python/materialize/cloudtest]
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
@@ -545,6 +553,7 @@ steps:
   - id: checks-restart-redpanda
     label: "Checks + restart Redpanda"
     depends_on: build-x86_64
+    inputs: [misc/python/materialize/checks]
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64

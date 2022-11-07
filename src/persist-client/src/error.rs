@@ -102,7 +102,7 @@ pub enum InvalidUsage<T> {
         handle_shard: ShardId,
     },
     /// The requested codecs don't match the actual ones in durable storage.
-    CodecMismatch(CodecMismatch),
+    CodecMismatch(Box<CodecMismatch>),
     /// An unregistered or expired [crate::write::WriterId] was used by [crate::write::WriteHandle]
     UnknownWriter(WriterId),
 }
@@ -189,6 +189,12 @@ impl std::fmt::Display for CodecMismatch {
 
 impl<T> From<CodecMismatch> for InvalidUsage<T> {
     fn from(x: CodecMismatch) -> Self {
+        InvalidUsage::CodecMismatch(Box::new(x))
+    }
+}
+
+impl<T> From<Box<CodecMismatch>> for InvalidUsage<T> {
+    fn from(x: Box<CodecMismatch>) -> Self {
         InvalidUsage::CodecMismatch(x)
     }
 }

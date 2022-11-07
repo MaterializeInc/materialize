@@ -67,7 +67,8 @@ class Testdrive(K8sPod):
                 "--schema-registry-url=http://redpanda:8081",
                 "--default-timeout=300s",
                 "--var=replicas=1",
-                "--var=size=1",
+                "--var=default-storage-size=1",
+                "--var=default-replica-size=1",
                 *([f"--aws-region={self.aws_region}"] if self.aws_region else []),
                 # S3 sources are not compatible with Minio unfortunately
                 # "--aws-endpoint=http://minio-service.default:9000",
