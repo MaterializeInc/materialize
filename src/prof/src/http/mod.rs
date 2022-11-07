@@ -162,6 +162,7 @@ mod disabled {
     use mz_build_info::BuildInfo;
 
     use super::{time_prof, MemProfilingStatus, ProfTemplate};
+    use crate::ever_symbolicated;
 
     #[derive(Deserialize)]
     pub struct ProfQuery {
@@ -178,6 +179,7 @@ mod disabled {
             version: build_info.version,
             executable: &super::EXECUTABLE,
             mem_prof: MemProfilingStatus::Disabled,
+            ever_symbolicated: ever_symbolicated(),
         })
     }
 
