@@ -2351,7 +2351,7 @@ pub const MZ_SHOW_CLUSTER_REPLICAS: BuiltinView = BuiltinView {
             mz_catalog.mz_clusters.name AS cluster,
             mz_catalog.mz_cluster_replicas.name AS replica,
             mz_catalog.mz_cluster_replicas.size AS size,
-            statuses.is_ready
+            statuses.ready
         FROM
             mz_catalog.mz_cluster_replicas
                 JOIN
@@ -2365,7 +2365,7 @@ pub const MZ_SHOW_CLUSTER_REPLICAS: BuiltinView = BuiltinView {
                                         mz_internal.mz_cluster_replica_statuses.status
                                         = 'ready'
                                     )
-                                    AS is_ready
+                                    AS ready
                             FROM mz_internal.mz_cluster_replica_statuses
                             GROUP BY replica_id
                         )
@@ -2483,7 +2483,7 @@ pub const MZ_SHOW_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_show_cluster_replicas_ind
 IN CLUSTER mz_introspection
-ON mz_internal.mz_show_cluster_replicas (cluster, replica, size)",
+ON mz_internal.mz_show_cluster_replicas (cluster, replica, size, ready)",
 };
 
 pub const MZ_SHOW_SECRETS_IND: BuiltinIndex = BuiltinIndex {
