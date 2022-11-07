@@ -73,6 +73,7 @@ struct ProfTemplate<'a> {
     version: &'a str,
     executable: &'a str,
     mem_prof: MemProfilingStatus,
+    ever_symbolicated: bool,
 }
 
 #[derive(Template)]
@@ -161,6 +162,7 @@ mod disabled {
     use mz_build_info::BuildInfo;
 
     use super::{time_prof, MemProfilingStatus, ProfTemplate};
+    use crate::ever_symbolicated;
 
     #[derive(Deserialize)]
     pub struct ProfQuery {
@@ -177,6 +179,7 @@ mod disabled {
             version: build_info.version,
             executable: &super::EXECUTABLE,
             mem_prof: MemProfilingStatus::Disabled,
+            ever_symbolicated: ever_symbolicated(),
         })
     }
 
@@ -222,6 +225,7 @@ mod enabled {
     use serde::Deserialize;
     use tokio::sync::Mutex;
 
+    use crate::ever_symbolicated;
     use crate::jemalloc::{parse_jeheap, JemallocProfCtl, JemallocStats, PROF_CTL};
 
     use super::{flamegraph, time_prof, MemProfilingStatus, ProfTemplate};
@@ -422,6 +426,7 @@ mod enabled {
             version: build_info.version,
             executable: &super::EXECUTABLE,
             mem_prof: MemProfilingStatus::Enabled(prof_md.start_time),
+            ever_symbolicated: ever_symbolicated(),
         })
     }
 }
