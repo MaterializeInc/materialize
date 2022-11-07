@@ -46,8 +46,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistConfig;
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::local::LocalClient;
-use tracing::info;
-use tracing::log::warn;
+use tracing::{info, warn};
 
 use crate::communication::initialize_networking;
 use crate::compute_state::ActiveComputeState;

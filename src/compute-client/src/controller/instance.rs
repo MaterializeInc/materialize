@@ -267,17 +267,8 @@ where
         }
         self.update_write_frontiers(id, &updates).await?;
 
-        let replica_epoch = match self.compute.replica_epochs.entry(id) {
-            std::collections::hash_map::Entry::Occupied(mut oe) => {
-                let new = *(oe.get()) + 1;
-                oe.insert(new);
-                new
-            }
-            std::collections::hash_map::Entry::Vacant(ve) => {
-                ve.insert(0);
-                0
-            }
-        };
+        let replica_epoch = self.compute.replica_epochs.entry(id).or_default();
+        *replica_epoch += 1;
         let replica = Replica::spawn(
             id,
             self.compute.instance_id,
@@ -285,7 +276,7 @@ where
             location,
             logging_config,
             self.compute.orchestrator.clone(),
-            ComputeStartupEpoch::new(self.compute.envd_epoch, replica_epoch),
+            ComputeStartupEpoch::new(self.compute.envd_epoch, *replica_epoch),
         );
 
         // Take this opportunity to clean up the history we should present.

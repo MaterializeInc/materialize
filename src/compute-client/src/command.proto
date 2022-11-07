@@ -27,6 +27,11 @@ import "google/protobuf/empty.proto";
 
 package mz_compute_client.command;
 
+message ProtoComputeStartupEpoch {
+  int64 envd = 1;
+  uint64 replica = 2;
+}
+
 message ProtoComputeCommand {
     message ProtoCreateDataflows {
         repeated ProtoDataflowDescription dataflows = 1;
@@ -34,11 +39,6 @@ message ProtoComputeCommand {
 
     message ProtoCancelPeeks {
         repeated mz_proto.ProtoU128 uuids = 1;
-    }
-
-    message ProtoComputeStartupEpoch {
-        int64 envd = 1;
-        uint64 replica = 2;
     }
 
     message ProtoCreateTimely {

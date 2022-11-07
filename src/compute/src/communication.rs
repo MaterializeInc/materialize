@@ -12,19 +12,20 @@
 //! The startup protocol is as follows:
 //! The compute controller in `environmentd`, after having connected to all the
 //! `computed` processes in a replica, sends each of them a `CreateTimely` command
-//! containing an epoch number (which is the same across all copies of the command).
-//! The meaning of this number is irrelevant to us,
-//! as long as it increases monotonically.
+//! containing an epoch value (which is the same across all copies of the command).
+//! The meaning of this value is irrelevant,
+//! as long as it is totally ordered and
+//! increases monotonically (including across `environmentd` restarts)
 //!
 //! In the past, we've seen issues caused by `environmentd`'s replica connections
 //! flapping repeatedly and causing several instances of the startup code to spin up
 //! in short succession (or even simultaneously) in response to different `CreateTimely`
 //! commands, causing mass confusion among the processes
 //! and possible crash loops. To avoid this, we do not allow processes to connect to each
-//! other unless they are responding to a `CreateTimely` command with the same epoch number.
-//! If a process discovers the existence of a peer with a lower epoch number, it ignores it,
-//! and if it discovers one with a higher epoch number, it aborts the connection.
-//! Such a process is guaranteed to eventually hear about the higher epoch number
+//! other unless they are responding to a `CreateTimely` command with the same epoch value.
+//! If a process discovers the existence of a peer with a lower epoch value, it ignores it,
+//! and if it discovers one with a higher epoch value, it aborts the connection.
+//! Such a process is guaranteed to eventually hear about the higher epoch value
 //! (and, thus, successfully connect to its peers), since
 //! `environmentd` sends `CreateTimely` commands to all processes in a replica.
 //!
@@ -220,17 +221,13 @@ async fn start_connection(
                 s.set_nodelay(true)?;
                 use tokio::io::AsyncWriteExt;
 
-                s.write_all(&my_index.to_ne_bytes()).await?;
+                s.write_all(&my_index.to_be_bytes()).await?;
 
                 s.write_all(&my_epoch.to_bytes()).await?;
 
                 let mut buffer = [0u8; 16];
                 use tokio::io::AsyncReadExt;
                 s.read_exact(&mut buffer).await?;
-                // let peer_epoch = (
-                //     (i64::from_ne_bytes((&buffer[0..8]).try_into().unwrap())),
-                //     (u64::from_ne_bytes((&buffer[8..16]).try_into().unwrap())),
-                // );
                 let peer_epoch = ComputeStartupEpoch::from_bytes(buffer);
                 debug!("start: received peer epoch {peer_epoch}");
 
@@ -277,7 +274,7 @@ async fn await_connection(
         use tokio::io::AsyncReadExt;
 
         s.read_exact(&mut buffer[0..8]).await?;
-        let peer_index = u64::from_ne_bytes((&buffer[0..8]).try_into().unwrap());
+        let peer_index = u64::from_be_bytes((&buffer[0..8]).try_into().unwrap());
         debug!("await: received peer index {peer_index}");
 
         s.read_exact(&mut buffer).await?;

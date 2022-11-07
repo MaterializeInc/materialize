@@ -175,10 +175,14 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                 Ok(ComputeCommand::UpdateMaxResultSize(max_result_size))
             }
             Some(CreateTimely(ProtoCreateTimely { comm_config, epoch })) => {
-                let ProtoComputeStartupEpoch { envd, replica } = epoch.unwrap();
+                let comm_config = comm_config.ok_or(TryFromProtoError::missing_field(
+                    "ProtoCreateTimely::comm_config",
+                ))?;
+                let epoch =
+                    epoch.ok_or(TryFromProtoError::missing_field("ProtoCreateTimely::epoch"))?;
                 Ok(ComputeCommand::CreateTimely {
-                    comm_config: comm_config.unwrap().into_rust()?,
-                    epoch: ComputeStartupEpoch::new(envd.into_rust()?, replica.into_rust()?),
+                    comm_config: comm_config.into_rust()?,
+                    epoch: epoch.into_rust()?,
                 })
             }
             None => Err(TryFromProtoError::missing_field(
@@ -238,6 +242,21 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
 pub struct ComputeStartupEpoch {
     envd: i64,
     replica: u64,
+}
+
+impl RustType<ProtoComputeStartupEpoch> for ComputeStartupEpoch {
+    fn into_proto(&self) -> ProtoComputeStartupEpoch {
+        let Self { envd, replica } = self;
+        ProtoComputeStartupEpoch {
+            envd: *envd,
+            replica: *replica,
+        }
+    }
+
+    fn from_proto(proto: ProtoComputeStartupEpoch) -> Result<Self, TryFromProtoError> {
+        let ProtoComputeStartupEpoch { envd, replica } = proto;
+        Ok(Self { envd, replica })
+    }
 }
 
 impl ComputeStartupEpoch {
