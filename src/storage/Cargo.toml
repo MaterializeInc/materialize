@@ -16,7 +16,7 @@ aws-sdk-s3 = { version = "0.19.0", default-features = false, features = ["native
 aws-sdk-sqs = { version = "0.19.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 axum = "0.5.16"
 chrono = { version = "0.4.22", default-features = false, features = ["std"] }
-clap = { version = "3.2.20", features = ["derive", "env"] }
+clap = { version = "4.0.19", features = ["derive", "env"] }
 crossbeam-channel = { version = "0.5.6" }
 csv-core = { version = "0.1.10" }
 dec = "0.4.8"
