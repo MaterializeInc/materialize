@@ -79,7 +79,7 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
 ----
 Explained Query (fast path):
-  Constant
+  Constant <empty>
 
 EOF
 
@@ -202,7 +202,7 @@ Explained Query:
         Project (#0, #1) // { arity: 2 }
           Join on=(#0 = #2) type=differential // { arity: 3 }
             implementation
-              materialize.public.t3 » %1[#0]
+              %0:t3 » %1[#0]UKA
             Get materialize.public.t3 // { arity: 2 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Distinct group_by=[#0] // { arity: 1 }

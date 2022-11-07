@@ -572,7 +572,7 @@ Explained Query:
     Filter (#0) IS NOT NULL
       Join on=(#0 = #2 AND #1 = #5 AND #3 = #4) type=differential
         implementation
-          %1 » %0[#0] » %2[#0, #1]
+          %1:u » %0:t[#0]KA » %2:v[#0, #1]KKA
         ArrangeBy keys=[[#0]]
           Get materialize.public.t
         ArrangeBy keys=[[#0]]
@@ -593,7 +593,7 @@ EOF
 statement ok
 CREATE INDEX t_b_idx ON T(b);
 
-# Test a delta join WITH(join_impls).
+# Test a delta join without WITH(join_impls).
 query T multiline
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT a, b, c, d, e, f
@@ -631,9 +631,9 @@ Explained Query:
     Filter (#1) IS NOT NULL AND (#3) IS NOT NULL
       Join on=(#1 = #2 AND #3 = #4) type=delta
         implementation
-          %0 » %1[#0] » %2[#0]
-          %1 » %0[#1] » %2[#0]
-          %2 » %1[#1] » %0[#1]
+          %0:t » %1:u[#0]KA » %2:v[#0]KA
+          %1:u » %0:t[#1]KA » %2:v[#0]KA
+          %2:v » %1:u[#1]KA » %0:t[#1]KA
         ArrangeBy keys=[[#1]]
           Get materialize.public.t
         ArrangeBy keys=[[#0], [#1]]

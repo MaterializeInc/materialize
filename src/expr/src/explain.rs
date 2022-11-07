@@ -381,7 +381,7 @@ impl<'a> ViewExplanation<'a> {
                 },
                 separated(
                     " ",
-                    inputs.iter().map(|(pos, input)| {
+                    inputs.iter().map(|(pos, input, _characteristics)| {
                         format!(
                             "%{}.({})",
                             self.expr_chain(&join_inputs[*pos]),
@@ -399,7 +399,7 @@ impl<'a> ViewExplanation<'a> {
                         self.expr_chain(&join_inputs[pos]),
                         separated(
                             " ",
-                            inputs.iter().map(|(pos, input)| {
+                            inputs.iter().map(|(pos, input, _characteristics)| {
                                 format!(
                                     "%{}.({})",
                                     self.expr_chain(&join_inputs[*pos]),

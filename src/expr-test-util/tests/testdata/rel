@@ -87,8 +87,8 @@ build
 (join
     [(get y) (get y)]
     [[#0 #3]]
-    (delta_query [[[0 [#0]] [1 [#0]]]
-                  [[1 [#0]] [0 [#0]]]]))
+    (delta_query [[[0 [#0] (false 1 true (false false false 0 false) 0)] [1 [#0] (false 1 true (false false false 0 false) 0)]]
+                  [[1 [#0] (false 1 true (false false false 0 false) 0)] [0 [#0] (false 1 true (false false false 0 false) 0)]]]))
 ----
 ----
 %0 =

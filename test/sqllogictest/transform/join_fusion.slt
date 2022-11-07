@@ -35,7 +35,7 @@ Explained Query:
     Filter (#0 <= #2) // { arity: 6 }
       Join on=(#0 = #4 AND #1 = #3) type=differential // { arity: 6 }
         implementation
-          %2 » %0[#0] » %1[#1]
+          %2:t3 » %0:t1[#0]KAiif » %1:t2[#1]KAiif
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Filter (#0 > 0) AND (#1) IS NOT NULL // { arity: 2 }
             Get materialize.public.t1 // { arity: 2 }
@@ -115,7 +115,7 @@ Explained Query:
     Filter (#5 != #11) AND (#14 >= #10) // { arity: 15 }
       Join on=(#0 = #8 AND date_to_timestamp(#11) = (#5 - 9 months)) type=differential // { arity: 15 }
         implementation
-          materialize.public.customer » %0[] » %1[#0, date_to_timestamp(#3)]
+          %2:customer » %0:lineitem[×]A » %1:orders[#0, date_to_timestamp(#3)]KKA
         ArrangeBy keys=[[]] // { arity: 8 }
           Get materialize.public.lineitem // { arity: 8 }
         ArrangeBy keys=[[#0, date_to_timestamp(#3)]] // { arity: 4 }
@@ -156,7 +156,7 @@ Explained Query:
           Filter (#1 <= 195) AND (#1 >= 38) AND (1997-08-25 00:00:00 = date_to_timestamp(#4)) // { arity: 6 }
             Join on=(#0 = #3 AND #1 = #5) type=differential // { arity: 6 }
               implementation
-                %2 » %1[#0] » %0[#0]
+                %2 » %1:orders[#0]KAeiiiif » %0:lineitem[#0]KAeiiiif
               ArrangeBy keys=[[#0]] // { arity: 1 }
                 Project (#4) // { arity: 1 }
                   Filter (#6 = 1997-01-25) // { arity: 8 }
@@ -197,7 +197,7 @@ Explained Query:
   Project (#1, #0, #1) // { arity: 3 }
     Join on=(#2 = #4 AND #3 = #5) type=differential // { arity: 6 }
       implementation
-        %2 » %1[] » %0[#2, #3]
+        %2:customer » %1:orders[×]Aef » %0:lineitem[#2, #3]KKAef
       ArrangeBy keys=[[#2, #3]] // { arity: 4 }
         Project (#0, #1, #4, #6) // { arity: 4 }
           Filter (#4 = (#4 % 5)) // { arity: 8 }
@@ -236,7 +236,7 @@ Explained Query:
   Project (#0..=#9, #4, #5, #12..=#14) // { arity: 15 }
     Join on=(#4 = #10 AND #5 = #11) type=differential // { arity: 15 }
       implementation
-        %1 » %0[#4, #5] » %2[]
+        %1:orders » %0:lineitem[#4, #5]KKAef » %2:customer[×]Aef
       ArrangeBy keys=[[#4, #5]] // { arity: 8 }
         Filter (date_to_timestamp(#7) = (#5 + 6 days)) // { arity: 8 }
           Get materialize.public.lineitem // { arity: 8 }
@@ -271,6 +271,6 @@ WHERE a2.f1 + a1.f2 = (SELECT 1)
 AND a2.f1 IS NULL;
 ----
 Explained Query (fast path):
-  Constant
+  Constant <empty>
 
 EOF

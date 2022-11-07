@@ -248,7 +248,7 @@ Explained Query:
     Project (#0) // { arity: 1 }
       Join on=(#0 = #1) type=differential // { arity: 2 }
         implementation
-          l0 » %1[#0]
+          %0:l0 » %1[#0]UKA
         Get l0 // { arity: 1 }
         ArrangeBy keys=[[#0]] // { arity: 1 }
           Distinct group_by=[record_get[0](record_get[1](#0))] // { arity: 1 }
@@ -259,7 +259,7 @@ Explained Query:
                     Reduce group_by=[#0] aggregates=[row_number(row(list[row(#0, #1, #2)]))] // { arity: 2 }
                       CrossJoin type=differential // { arity: 3 }
                         implementation
-                          materialize.public.t2 » %0[]
+                          %1:t2 » %0[×]A
                         ArrangeBy keys=[[]] // { arity: 1 }
                           Distinct group_by=[#0] // { arity: 1 }
                             Get l0 // { arity: 1 }

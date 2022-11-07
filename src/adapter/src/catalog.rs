@@ -5454,6 +5454,14 @@ impl ExprHumanizer for ConnCatalog<'_> {
             .map(|name| self.resolve_full_name(name).to_string())
     }
 
+    fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String> {
+        self.state
+            .entry_by_id
+            .get(&id)
+            .map(|entry| entry.name())
+            .map(|name| name.item.clone())
+    }
+
     fn humanize_scalar_type(&self, typ: &ScalarType) -> String {
         use ScalarType::*;
 

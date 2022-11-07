@@ -81,14 +81,18 @@ where
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
         match self {
             FastPathPlan::Constant(Ok(rows), _) => {
-                writeln!(f, "{}Constant", ctx.as_mut())?;
-                *ctx.as_mut() += 1;
-                fmt_text_constant_rows(
-                    f,
-                    rows.iter().map(|(row, _, diff)| (row, diff)),
-                    ctx.as_mut(),
-                )?;
-                *ctx.as_mut() -= 1;
+                if !rows.is_empty() {
+                    writeln!(f, "{}Constant", ctx.as_mut())?;
+                    *ctx.as_mut() += 1;
+                    fmt_text_constant_rows(
+                        f,
+                        rows.iter().map(|(row, _, diff)| (row, diff)),
+                        ctx.as_mut(),
+                    )?;
+                    *ctx.as_mut() -= 1;
+                } else {
+                    writeln!(f, "{}Constant <empty>", ctx.as_mut())?;
+                }
                 Ok(())
             }
             FastPathPlan::Constant(Err(err), _) => {
@@ -616,7 +620,8 @@ mod tests {
         );
         constant_rows
             .extend((0..20).map(|i| (Row::pack(Some(Datum::String(&i.to_string()))), 0, 1)));
-        let constant_exp2 = "Constant\n  total_rows: 523\n  first_rows:\n    - (\"hello\")\
+        let constant_exp2 =
+            "Constant\n  total_rows (diffs absed): 523\n  first_rows:\n    - (\"hello\")\
         \n    - ((\"world\") x 2)\n    - ((\"star\") x 500)\n    - (\"0\")\n    - (\"1\")\
         \n    - (\"2\")\n    - (\"3\")\n    - (\"4\")\n    - (\"5\")\n    - (\"6\")\
         \n    - (\"7\")\n    - (\"8\")\n    - (\"9\")\n    - (\"10\")\n    - (\"11\")\
