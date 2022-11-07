@@ -564,7 +564,14 @@ pub enum CatalogError {
     /// Unknown connection.
     UnknownConnection(String),
     /// Expected the catalog item to have the given type, but it did not.
-    UnexpectedType(String, CatalogItemType),
+    UnexpectedType {
+        /// The item's name.
+        name: String,
+        /// The actual type of the item.
+        actual_type: CatalogItemType,
+        /// The expected type of the item.
+        expected_type: CatalogItemType,
+    },
     /// Invalid attempt to depend on a non-dependable item.
     InvalidDependency {
         /// The invalid item's name.
@@ -587,8 +594,12 @@ impl fmt::Display for CatalogError {
                 write!(f, "unknown cluster replica '{}'", name)
             }
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
-            Self::UnexpectedType(name, item_type) => {
-                write!(f, "\"{name}\" is not of type {item_type}")
+            Self::UnexpectedType {
+                name,
+                actual_type,
+                expected_type,
+            } => {
+                write!(f, "\"{name}\" is a {actual_type} not a {expected_type}")
             }
             Self::InvalidDependency { name, typ } => write!(
                 f,

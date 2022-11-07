@@ -37,7 +37,10 @@ use mz_ore::task;
 use mz_repr::explain_new::Explainee;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
-use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails};
+use mz_sql::catalog::{
+    CatalogComputeInstance, CatalogError, CatalogItem as SqlCatalogItem, CatalogItemType,
+    CatalogTypeDetails,
+};
 use mz_sql::names::QualifiedObjectName;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
@@ -3247,8 +3250,10 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Re-fetch the updated item from the catalog
         let entry = self.catalog.get_entry(&id);
-        let updated_sink = entry.sink().ok_or_else(|| {
-            CatalogError::UnexpectedType(entry.name().to_string(), CatalogItemType::Sink)
+        let updated_sink = entry.sink().ok_or_else(|| CatalogError::UnexpectedType {
+            name: entry.name().to_string(),
+            actual_type: entry.item_type(),
+            expected_type: CatalogItemType::Sink,
         })?;
 
         self.controller
@@ -3270,8 +3275,10 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Re-fetch the updated item from the catalog
         let entry = self.catalog.get_entry(&id);
-        let updated_source = entry.source().ok_or_else(|| {
-            CatalogError::UnexpectedType(entry.name().to_string(), CatalogItemType::Source)
+        let updated_source = entry.source().ok_or_else(|| CatalogError::UnexpectedType {
+            name: entry.name().to_string(),
+            actual_type: entry.item_type(),
+            expected_type: CatalogItemType::Source,
         })?;
         if let DataSourceDesc::Ingestion(Ingestion { host_config, .. }) =
             &updated_source.data_source

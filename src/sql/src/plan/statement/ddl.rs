@@ -3183,9 +3183,10 @@ pub fn plan_drop_item(
         return Err(PlanError::DropViewOnMaterializedView(name));
     } else if object_type != item_type {
         sql_bail!(
-            "{} is not of type {}",
+            "{} is a {} not a {}",
             scx.catalog.resolve_full_name(catalog_entry.name()),
-            object_type,
+            catalog_entry.item_type(),
+            format!("{object_type}").to_lowercase(),
         );
     }
 
@@ -3375,7 +3376,7 @@ pub fn plan_alter_object_rename(
                     "{} is a {} not a {}",
                     full_name,
                     entry.item_type(),
-                    object_type
+                    format!("{object_type}").to_lowercase()
                 )
             }
             let proposed_name = QualifiedObjectName {
@@ -3431,7 +3432,7 @@ pub fn plan_alter_secret(
     };
     if entry.item_type() != CatalogItemType::Secret {
         sql_bail!(
-            "{} is a {} not a SECRET",
+            "{} is a {} not a secret",
             scx.catalog.resolve_full_name(entry.name()),
             entry.item_type()
         )
