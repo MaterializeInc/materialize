@@ -16,6 +16,7 @@
 extern crate core;
 
 mod configuration;
+mod errors;
 mod login;
 mod password;
 mod region;
@@ -52,9 +53,6 @@ use crate::shell::shell;
 struct Cli {
     #[clap(subcommand)]
     command: Commands,
-    /// Identify using a particular profile
-    #[clap(short, long, env = "MZ_PROFILE", default_value = "default")]
-    profile: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -63,11 +61,19 @@ enum Commands {
     AppPassword(AppPasswordCommand),
     /// Open the docs
     Docs,
-    /// Open the web login
+    /// Login to a profile and make it the active profile
     Login {
         /// Login by typing your email and password
         #[clap(short, long)]
         interactive: bool,
+
+        /// Force reauthentication for the profile
+        #[clap(short, long)]
+        force: bool,
+
+        /// The profile to login to
+        #[clap(default_value = "default")]
+        profile: String,
     },
     /// Show commands to interact with regions
     Region {
@@ -172,17 +178,14 @@ const WEB_DOCS_URL: &str = "https://www.materialize.com/docs";
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Cli::parse();
-    let profile_name = args.profile;
     let mut config = Configuration::load()?;
+
     match args.command {
         Commands::AppPassword(password_cmd) => {
-            let profile = config.get_profile(Some(profile_name))?;
+            let profile = config.get_profile()?;
 
             let client = Client::new();
-            let valid_profile = profile
-                .validate(&client)
-                .await
-                .context("failed to validate profile. reauthorize using mz login")?;
+            let valid_profile = profile.validate(&client).await?;
 
             match password_cmd.command {
                 AppPasswordSubommand::Create { name } => {
@@ -219,11 +222,18 @@ async fn main() -> Result<()> {
             open::that(WEB_DOCS_URL).with_context(|| "Opening the browser.")?
         }
 
-        Commands::Login { interactive } => {
-            if interactive {
-                login_with_console(&profile_name, &mut config).await?
-            } else {
-                login_with_browser(&profile_name, &mut config).await?
+        Commands::Login {
+            interactive,
+            force,
+            profile,
+        } => {
+            config.update_current_profile(profile.clone());
+            if config.get_profile().is_err() || force {
+                if interactive {
+                    login_with_console(&profile, &mut config).await?
+                } else {
+                    login_with_browser(&profile, &mut config).await?
+                }
             }
         }
 
@@ -236,12 +246,9 @@ async fn main() -> Result<()> {
                 } => {
                     let cloud_provider_region =
                         CloudProviderRegion::from_str(&cloud_provider_region)?;
-                    let profile = config.get_profile(Some(profile_name))?;
+                    let profile = config.get_profile()?;
 
-                    let valid_profile = profile
-                        .validate(&client)
-                        .await
-                        .context("failed to validate profile. reauthorize using mz login")?;
+                    let valid_profile = profile.validate(&client).await?;
 
                     let loading_spinner = run_loading_spinner("Enabling region...".to_string());
                     let cloud_provider = get_provider_by_region_name(
@@ -271,12 +278,9 @@ async fn main() -> Result<()> {
                 }
 
                 RegionCommand::List => {
-                    let profile = config.get_profile(Some(profile_name))?;
+                    let profile = config.get_profile()?;
 
-                    let valid_profile = profile
-                        .validate(&client)
-                        .await
-                        .context("failed to validate profile. reauthorize using mz login")?;
+                    let valid_profile = profile.validate(&client).await?;
 
                     let cloud_providers = list_cloud_providers(&client, &valid_profile)
                         .await
@@ -298,12 +302,9 @@ async fn main() -> Result<()> {
                     let cloud_provider_region =
                         CloudProviderRegion::from_str(&cloud_provider_region)?;
 
-                    let profile = config.get_profile(Some(profile_name))?;
+                    let profile = config.get_profile()?;
 
-                    let valid_profile = profile
-                        .validate(&client)
-                        .await
-                        .context("failed to validate profile. reauthorize using mz login")?;
+                    let valid_profile = profile.validate(&client).await?;
 
                     let environment = get_provider_region_environment(
                         &client,
@@ -323,13 +324,10 @@ async fn main() -> Result<()> {
             cloud_provider_region,
         } => {
             let cloud_provider_region = CloudProviderRegion::from_str(&cloud_provider_region)?;
-            let profile = config.get_profile(Some(profile_name))?;
+            let profile = config.get_profile()?;
 
             let client = Client::new();
-            let valid_profile = profile
-                .validate(&client)
-                .await
-                .context("failed to validate profile. reauthorize using mz login")?;
+            let valid_profile = profile.validate(&client).await?;
 
             shell(client, valid_profile, cloud_provider_region)
                 .await

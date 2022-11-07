@@ -7,12 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::{
-    collections::{BTreeMap, HashMap},
-    fmt::Display,
-    fs,
-    path::PathBuf,
-};
+use std::{collections::BTreeMap, fmt::Display, fs, path::PathBuf};
 
 use anyhow::{bail, Context, Ok, Result};
 use dirs::home_dir;
@@ -50,7 +45,7 @@ pub(crate) struct FronteggAuth {
     pub access_token: String,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct FronteggAPIToken {
     pub(crate) client_id: String,
@@ -99,14 +94,14 @@ impl Configuration {
             .unwrap_or_else(|| Ok(Configuration::default()))
     }
 
-    pub(crate) fn current_profile(&self, profile: Option<String>) -> String {
-        profile.unwrap_or_else(|| self.current_profile.clone())
+    pub(crate) fn current_profile(&self) -> String {
+        self.current_profile.to_string()
     }
 
-    pub(crate) fn get_profile(&mut self, profile: Option<String>) -> Result<Profile> {
-        let profile = self.current_profile(profile);
+    pub(crate) fn get_profile(&mut self) -> Result<Profile> {
+        let profile = &self.current_profile;
         self.profiles
-            .get_mut(&profile)
+            .get_mut(profile)
             .map(|p| Profile {
                 _modified: &mut self.modified,
                 profile: p,
@@ -128,7 +123,7 @@ impl Configuration {
         keys
     }
 
-    pub(crate) fn update_default_profile(&mut self, profile: String) {
+    pub(crate) fn update_current_profile(&mut self, profile: String) {
         self.modified = true;
         self.current_profile = profile;
     }
@@ -215,9 +210,6 @@ impl Profile<'_> {
 
     pub(crate) async fn validate(&self, client: &Client) -> Result<ValidProfile<'_>> {
         let api_token: FronteggAPIToken = self.profile.app_password.as_str().try_into()?;
-        let mut access_token_request_body = HashMap::new();
-        access_token_request_body.insert("clientId", api_token.client_id.as_str());
-        access_token_request_body.insert("secret", api_token.secret.as_str());
 
         let mut headers = HeaderMap::new();
         headers.insert(USER_AGENT, HeaderValue::from_static("reqwest"));
@@ -226,13 +218,13 @@ impl Profile<'_> {
         let authentication_result = client
             .post(crate::MACHINE_AUTH_URL)
             .headers(headers)
-            .json(&access_token_request_body)
+            .json(&api_token)
             .send()
             .await
             .context("failed to connect to server")?;
 
         if authentication_result.status() == 401 {
-            bail!("Unauthorized. Please, check the credentials.");
+            bail!("failed to validate profile. reauthorize using mz login --force [profile]");
         }
 
         let auth = authentication_result
