@@ -38,8 +38,8 @@ use crate::internal::metrics::{
 };
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
-    CriticalReaderState, HollowBatch, LeasedReaderState, Opaque, Since, State, StateCollections,
-    Upper, WriterState,
+    CriticalReaderState, HollowBatch, LeasedReaderState, Since, State, StateCollections, Upper,
+    WriterState,
 };
 use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::StateVersions;
@@ -189,12 +189,11 @@ where
     pub async fn register_critical_reader<O: Codec64 + Default>(
         &mut self,
         reader_id: &CriticalReaderId,
-        opaque: &O,
     ) -> CriticalReaderState<T> {
         let metrics = Arc::clone(&self.metrics);
         let (_seqno, state, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, state| {
-                state.register_critical_reader(reader_id, Opaque(Codec64::encode(opaque)))
+                state.register_critical_reader::<O>(reader_id)
             })
             .await;
         state
@@ -375,10 +374,10 @@ where
             .apply_unbatched_idempotent_cmd(
                 &metrics.cmds.compare_and_downgrade_since,
                 |_seqno, state| {
-                    state.compare_and_downgrade_since(
+                    state.compare_and_downgrade_since::<O>(
                         reader_id,
-                        Opaque(Codec64::encode(expected_opaque)),
-                        (Opaque(Codec64::encode(new_opaque)), new_since),
+                        expected_opaque,
+                        (new_opaque, new_since),
                     )
                 },
             )
@@ -386,7 +385,7 @@ where
 
         match res {
             Ok(since) => (Ok(since), maintenance),
-            Err((opaque, since)) => (Err((Codec64::decode(opaque.0), since)), maintenance),
+            Err((opaque, since)) => (Err((opaque, since)), maintenance),
         }
     }
 
@@ -1366,7 +1365,7 @@ pub mod datadriven {
         let reader_id = args.expect("reader_id");
         let state = datadriven
             .machine
-            .register_critical_reader(&reader_id, &u64::default())
+            .register_critical_reader::<u64>(&reader_id)
             .await;
         Ok(format!(
             "{} {:?}\n",

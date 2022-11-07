@@ -524,9 +524,7 @@ impl PersistClient {
         .await?;
         let gc = GarbageCollector::new(machine.clone());
 
-        let state = machine
-            .register_critical_reader(&reader_id, &O::default())
-            .await;
+        let state = machine.register_critical_reader::<O>(&reader_id).await;
         let handle = SinceHandle::new(
             machine,
             gc,

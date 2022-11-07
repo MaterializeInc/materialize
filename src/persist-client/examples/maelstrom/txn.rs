@@ -530,7 +530,8 @@ impl Service for TransactorService {
 
         // Construct requested Consensus.
         let mut config = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
-        // so that we don't hold up writes: always advance a critical handle's since
+        // to simplify some downstream logic (+ a bit more stress testing),
+        // always downgrade the since of critical handles when asked
         config.critical_downgrade_interval = Duration::from_secs(0);
         let metrics = Arc::new(Metrics::new(&config, &MetricsRegistry::new()));
         let consensus = match &args.consensus_uri {

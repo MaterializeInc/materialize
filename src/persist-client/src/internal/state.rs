@@ -211,17 +211,16 @@ where
         Continue((Upper(self.trace.upper().clone()), read_cap))
     }
 
-    pub fn register_critical_reader(
+    pub fn register_critical_reader<O: Codec64 + Default>(
         &mut self,
         reader_id: &CriticalReaderId,
-        opaque: Opaque,
     ) -> ControlFlow<Infallible, CriticalReaderState<T>> {
         let state = match self.critical_readers.get(reader_id) {
             Some(state) => state.clone(),
             None => {
                 let state = CriticalReaderState {
                     since: self.trace.since().clone(),
-                    opaque,
+                    opaque: Opaque(Codec64::encode(&O::default())),
                 };
                 self.critical_readers
                     .insert(reader_id.clone(), state.clone());
@@ -369,26 +368,26 @@ where
         Continue(Since(reader_current_since))
     }
 
-    pub fn compare_and_downgrade_since(
+    pub fn compare_and_downgrade_since<O: Codec64>(
         &mut self,
         reader_id: &CriticalReaderId,
-        expected_opaque: Opaque,
-        (new_opaque, new_since): (Opaque, &Antichain<T>),
-    ) -> ControlFlow<Infallible, Result<Since<T>, (Opaque, Since<T>)>> {
+        expected_opaque: &O,
+        (new_opaque, new_since): (&O, &Antichain<T>),
+    ) -> ControlFlow<Infallible, Result<Since<T>, (O, Since<T>)>> {
         let reader_state = self.critical_reader(reader_id);
 
-        if reader_state.opaque != expected_opaque {
+        if reader_state.opaque.0 != Codec64::encode(expected_opaque) {
             // No-op, but still commit the state change so that this gets
             // linearized.
             return Continue(Err((
-                reader_state.opaque.clone(),
+                Codec64::decode(reader_state.opaque.0),
                 Since(reader_state.since.clone()),
             )));
         }
 
         if PartialOrder::less_than(&reader_state.since, new_since) {
             reader_state.since = new_since.clone();
-            reader_state.opaque = new_opaque;
+            reader_state.opaque = Opaque(Codec64::encode(new_opaque));
             self.update_since();
             Continue(Ok(Since(new_since.clone())))
         } else {

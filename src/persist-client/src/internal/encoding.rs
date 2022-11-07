@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
 
@@ -679,7 +678,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoCriticalReaderState> for CriticalRead
     fn into_proto(&self) -> ProtoCriticalReaderState {
         ProtoCriticalReaderState {
             since: Some(self.since.into_proto()),
-            opaque: Vec::from(self.opaque.0),
+            opaque: i64::from_le_bytes(self.opaque.0),
         }
     }
 
@@ -688,10 +687,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoCriticalReaderState> for CriticalRead
             since: proto
                 .since
                 .into_rust_if_some("ProtoCriticalReaderState::since")?,
-            opaque: Opaque(
-                <[u8; 8]>::try_from(proto.opaque.borrow())
-                    .expect("internal error: could not decode CriticalReaderState token"),
-            ),
+            opaque: Opaque(i64::to_le_bytes(proto.opaque)),
         })
     }
 }
