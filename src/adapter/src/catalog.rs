@@ -3198,12 +3198,15 @@ impl Catalog {
             // the only goal is to produce a nicer error message; we'll bail out
             // safely even if the error message we're sniffing out changes.
             static LOGGING_ERROR: Lazy<Regex> =
-                Lazy::new(|| Regex::new("unknown catalog item 'mz_catalog.[^']*'").unwrap());
+                Lazy::new(|| Regex::new("mz_catalog.[^']*").unwrap());
+
             let item = match c.deserialize_item(id, def) {
                 Ok(item) => item,
-                Err(e) if LOGGING_ERROR.is_match(&e.to_string()) => {
+                Err(AdapterError::SqlCatalog(SqlCatalogError::UnknownItem(name)))
+                    if LOGGING_ERROR.is_match(&name.to_string()) =>
+                {
                     return Err(Error::new(ErrorKind::UnsatisfiableLoggingDependency {
-                        depender_name: name.to_string(),
+                        depender_name: name,
                     }));
                 }
                 Err(e) => {
@@ -5438,7 +5441,7 @@ impl Catalog {
         &self,
         id: GlobalId,
         SerializedCatalogItem::V1 { create_sql }: SerializedCatalogItem,
-    ) -> Result<CatalogItem, anyhow::Error> {
+    ) -> Result<CatalogItem, AdapterError> {
         self.parse_item(id, create_sql, Some(&PlanContext::zero()))
     }
 
@@ -5448,7 +5451,7 @@ impl Catalog {
         id: GlobalId,
         create_sql: String,
         pcx: Option<&PlanContext>,
-    ) -> Result<CatalogItem, anyhow::Error> {
+    ) -> Result<CatalogItem, AdapterError> {
         let session_catalog = self.for_system_session();
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
         let (stmt, depends_on) = mz_sql::names::resolve(&session_catalog, stmt)?;
@@ -5564,7 +5567,12 @@ impl Catalog {
                     depends_on,
                 })
             }
-            _ => bail!("catalog entry generated inappropriate plan"),
+            _ => {
+                return Err(Error::new(ErrorKind::Corruption {
+                    detail: "catalog entry generated inappropriate plan".to_string(),
+                })
+                .into())
+            }
         })
     }
 

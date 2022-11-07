@@ -109,6 +109,8 @@ pub enum AdapterError {
     PlanError(PlanError),
     /// The named prepared statement already exists.
     PreparedStatementExists(String),
+    /// Wrapper around parsing error
+    ParseError(mz_sql_parser::parser::ParserError),
     /// The transaction is in read-only mode.
     ReadOnlyTransaction,
     /// The specified session parameter is read-only.
@@ -396,6 +398,7 @@ impl fmt::Display for AdapterError {
             AdapterError::OperationRequiresTransaction(op) => {
                 write!(f, "{} can only be used in transaction blocks", op)
             }
+            AdapterError::ParseError(e) => e.fmt(f),
             AdapterError::PlanError(e) => e.fmt(f),
             AdapterError::PreparedStatementExists(name) => {
                 write!(f, "prepared statement {} already exists", name.quoted())
@@ -587,6 +590,12 @@ impl From<TimestampError> for AdapterError {
     fn from(e: TimestampError) -> Self {
         let e: EvalError = e.into();
         e.into()
+    }
+}
+
+impl From<mz_sql_parser::parser::ParserError> for AdapterError {
+    fn from(e: mz_sql_parser::parser::ParserError) -> Self {
+        AdapterError::ParseError(e)
     }
 }
 
