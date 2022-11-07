@@ -57,6 +57,7 @@ pub struct Opaque(pub [u8; 8]);
 pub struct CriticalReaderState<T> {
     pub since: Antichain<T>,
     pub opaque: Opaque,
+    pub opaque_codec: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -221,6 +222,7 @@ where
                 let state = CriticalReaderState {
                     since: self.trace.since().clone(),
                     opaque: Opaque(Codec64::encode(&O::default())),
+                    opaque_codec: O::codec_name(),
                 };
                 self.critical_readers
                     .insert(reader_id.clone(), state.clone());
@@ -375,6 +377,7 @@ where
         (new_opaque, new_since): (&O, &Antichain<T>),
     ) -> ControlFlow<Infallible, Result<Since<T>, (O, Since<T>)>> {
         let reader_state = self.critical_reader(reader_id);
+        assert_eq!(reader_state.opaque_codec, O::codec_name());
 
         if reader_state.opaque.0 != Codec64::encode(expected_opaque) {
             // No-op, but still commit the state change so that this gets

@@ -50,6 +50,7 @@ message ProtoLeasedReaderState {
 message ProtoCriticalReaderState {
     ProtoU64Antichain since = 1;
     int64 opaque = 2;
+    string opaque_codec = 3;
 }
 
 message ProtoWriterState {

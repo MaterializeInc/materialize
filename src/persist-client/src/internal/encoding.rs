@@ -679,6 +679,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoCriticalReaderState> for CriticalRead
         ProtoCriticalReaderState {
             since: Some(self.since.into_proto()),
             opaque: i64::from_le_bytes(self.opaque.0),
+            opaque_codec: self.opaque_codec.clone(),
         }
     }
 
@@ -688,6 +689,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoCriticalReaderState> for CriticalRead
                 .since
                 .into_rust_if_some("ProtoCriticalReaderState::since")?,
             opaque: Opaque(i64::to_le_bytes(proto.opaque)),
+            opaque_codec: proto.opaque_codec,
         })
     }
 }
