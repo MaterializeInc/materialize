@@ -133,7 +133,7 @@ class TestLength(BaseLength):
 ## The base listagg method in dbt takes a delimiter, and returns text.
 ## This behavior differs in Materialize. https://materialize.com/docs/sql/functions/list_agg
 @pytest.mark.skip(
-    reason="Use Materialize's built in list_agg() function. https://materialize.com/docs/sql/functions/list_agg"
+    reason="Materialize supports list_agg() as a built-in function: https://materialize.com/docs/sql/functions/list_agg"
 )
 class TestListagg(BaseListagg):
     pass
