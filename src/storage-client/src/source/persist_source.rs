@@ -232,6 +232,11 @@ where
     let handle_creation_token = Arc::new(());
     let weak_handle_token = Arc::downgrade(&handle_creation_token);
 
+    // This channel functions as a token that can be awaited. We never send a message on this
+    // channel, but we rely on the drop behavior. If the transmitter is dropped the receiver will
+    // return an error. Before the drop occurs the receiver will never return from await.
+    let (drop_tx, drop_rx) = tokio::sync::oneshot::channel::<()>();
+
     let until_clone = until.clone();
     // This is a generator that sets up an async `Stream` that can be continuously polled to get the
     // values that are `yield`-ed from it's body.
@@ -286,13 +291,24 @@ where
         // `as_of`.
         yield (Vec::new(), as_of_stream.clone());
 
-        let subscription = read.subscribe(as_of_stream.clone()).await;
+        // Always poll drop_rx first. drop_rx returns only if drop_tx has been dropped.
+        // In this case, we deliberately do not continue on the subscribe. but terminate this task
+        let subscription = tokio::select! {
+            biased;
+            _ = drop_rx => None,
+            x = read.subscribe(as_of_stream.clone()) => Some(x),
+        };
 
         // This is a moment where we may have let persist compact if our token
         // has been dropped, but if we still hold it we should be good to go.
         if weak_handle_token.upgrade().is_none() {
             return;
         }
+
+        // We get here only when the token is still present, hence the subscription select
+        // must have returned from the subscribe and hence we can be sure that subscripbtion
+        // is Some.
+        let subscription = subscription.unwrap();
 
         let mut subscription = subscription.unwrap_or_else(|e| {
             panic!(
@@ -550,7 +566,7 @@ where
         }
     });
 
-    let token = Rc::new((token, handle_creation_token));
+    let token = Rc::new((token, handle_creation_token, drop_tx));
 
     (update_output_stream, token)
 }
