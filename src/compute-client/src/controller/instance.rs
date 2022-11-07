@@ -816,6 +816,11 @@ where
                         .entry(key)
                         .or_insert_with(ChangeBatch::new)
                         .extend(update.drain())
+                } else {
+                    tracing::error!(
+                        "found neither compute nor storage collection with id {}",
+                        key
+                    );
                 }
             }
         }
