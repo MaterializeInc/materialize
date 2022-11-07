@@ -721,9 +721,6 @@ where
             self.update_read_capabilities(&mut compute_read_capability_changes)
                 .await?;
         }
-        if !dropped_collection_ids.is_empty() {
-            self.update_dropped_collections(dropped_collection_ids);
-        }
         if !storage_read_capability_changes.is_empty() {
             self.storage_controller
                 .update_read_capabilities(&mut storage_read_capability_changes)
@@ -747,6 +744,9 @@ where
             .update_write_frontiers(&storage_updates)
             .await?;
 
+        if !dropped_collection_ids.is_empty() {
+            self.update_dropped_collections(dropped_collection_ids);
+        }
         Ok(())
     }
 
