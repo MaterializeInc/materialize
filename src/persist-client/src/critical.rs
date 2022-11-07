@@ -177,6 +177,8 @@ where
     /// use mz_persist_client::critical::SinceHandle;
     /// use mz_persist_types::Codec64;
     ///
+    /// # #[tokio::main]
+    /// # async fn main() {
     /// # async {
     /// let fencing_token: u64 = unimplemented!();
     /// let mut since: SinceHandle<String, String, u64, i64, u64> = unimplemented!();
@@ -200,8 +202,8 @@ where
     ///         // no problem, we'll try again later
     ///     }
     /// };
-    /// # ()
     /// # }.await
+    /// # }
     /// ```
     ///
     /// If fencing is not required and it's acceptable to have concurrent [SinceHandle] for
@@ -212,6 +214,8 @@ where
     /// use mz_persist_client::critical::SinceHandle;
     /// use mz_persist_types::Codec64;
     ///
+    /// # #[tokio::main]
+    /// # async fn main() {
     /// # async {
     /// let mut since: SinceHandle<String, String, u64, i64, u64> = unimplemented!();
     /// let new_since: Antichain<u64> = unimplemented!();
@@ -233,8 +237,8 @@ where
     ///         // no problem, we'll try again later
     ///     }
     /// };
-    /// # ()
     /// # }.await
+    /// # }
     /// ```
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn maybe_compare_and_downgrade_since(
