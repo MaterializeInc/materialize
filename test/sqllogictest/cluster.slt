@@ -378,7 +378,7 @@ CREATE CLUSTER REPLICA default.size_1 SIZE;
 statement ok
 CREATE CLUSTER REPLICA default.size_1 SIZE '1';
 
-query TTT
+query TTTT
 SHOW CLUSTER REPLICAS
 ----
 default r1 1 false
@@ -389,7 +389,7 @@ mz_system r1 1 false
 statement ok
 CREATE CLUSTER foo REPLICAS (size_1 (SIZE '1'), size_2 (SIZE '2'))
 
-query TTT
+query TTTT
 SHOW CLUSTER REPLICAS
 ----
 default r1 1 false
@@ -417,7 +417,7 @@ DROP CLUSTER REPLICA default.size_1
 statement ok
 DROP CLUSTER REPLICA foo.size_1, foo.size_2
 
-query TTT
+query TTTT
 SHOW CLUSTER REPLICAS
 ----
 default r1 1 false
