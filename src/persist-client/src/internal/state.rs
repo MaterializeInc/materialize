@@ -377,25 +377,25 @@ where
     ) -> ControlFlow<Infallible, Result<Since<T>, (Opaque, Since<T>)>> {
         let reader_state = self.critical_reader(reader_id);
 
-        if reader_state.opaque == expected_opaque {
-            if PartialOrder::less_than(&reader_state.since, new_since) {
-                reader_state.since = new_since.clone();
-                reader_state.opaque = new_opaque;
-                self.update_since();
-                Continue(Ok(Since(new_since.clone())))
-            } else {
-                // no work to be done -- the reader state's `since` is already sufficiently
-                // advanced. we may someday need to revisit this branch when it's possible
-                // for two `since` frontiers to be incomparable.
-                Continue(Ok(Since(reader_state.since.clone())))
-            }
-        } else {
+        if reader_state.opaque != expected_opaque {
             // No-op, but still commit the state change so that this gets
             // linearized.
-            Continue(Err((
+            return Continue(Err((
                 reader_state.opaque.clone(),
                 Since(reader_state.since.clone()),
-            )))
+            )));
+        }
+
+        if PartialOrder::less_than(&reader_state.since, new_since) {
+            reader_state.since = new_since.clone();
+            reader_state.opaque = new_opaque;
+            self.update_since();
+            Continue(Ok(Since(new_since.clone())))
+        } else {
+            // no work to be done -- the reader state's `since` is already sufficiently
+            // advanced. we may someday need to revisit this branch when it's possible
+            // for two `since` frontiers to be incomparable.
+            Continue(Ok(Since(reader_state.since.clone())))
         }
     }
 
