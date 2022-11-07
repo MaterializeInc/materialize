@@ -201,7 +201,7 @@ where
     ///     }
     /// };
     /// # ()
-    /// # }
+    /// # }.await
     /// ```
     ///
     /// If fencing is not required and it's acceptable to have concurrent [SinceHandle] for
@@ -234,7 +234,7 @@ where
     ///     }
     /// };
     /// # ()
-    /// # }
+    /// # }.await
     /// ```
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn maybe_compare_and_downgrade_since(
