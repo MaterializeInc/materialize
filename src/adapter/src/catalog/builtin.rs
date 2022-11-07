@@ -2351,13 +2351,15 @@ pub const MZ_SHOW_CLUSTER_REPLICAS: BuiltinView = BuiltinView {
             mz_catalog.mz_clusters.name AS cluster,
             mz_catalog.mz_cluster_replicas.name AS replica,
             mz_catalog.mz_cluster_replicas.size AS size,
-            statuses.ready
+            coalesce(statuses.ready, false) AS ready
         FROM
             mz_catalog.mz_cluster_replicas
                 JOIN
                     mz_catalog.mz_clusters
                     ON mz_catalog.mz_cluster_replicas.cluster_id = mz_catalog.mz_clusters.id
-                JOIN
+                -- TODO[btv] This has to be a left join, because `mz_cluster_replica_statuses`
+                -- is not filled in immediately on replica creation.
+                LEFT JOIN
                     (
                             SELECT
                                 replica_id,
