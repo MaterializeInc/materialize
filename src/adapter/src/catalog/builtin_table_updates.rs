@@ -356,10 +356,10 @@ impl CatalogState {
         }];
         match connection.connection {
             mz_storage_client::types::connections::Connection::Ssh(ref ssh) => {
-                if let Some(public_keypair) = ssh.public_keys.as_ref() {
+                if let Some(public_key_set) = ssh.public_keys.as_ref() {
                     updates.extend(self.pack_ssh_tunnel_connection_update(
                         id,
-                        public_keypair,
+                        public_key_set,
                         diff,
                     ));
                 } else {

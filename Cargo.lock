@@ -3110,6 +3110,7 @@ dependencies = [
  "mz-segment",
  "mz-sql",
  "mz-sql-parser",
+ "mz-ssh-util",
  "mz-stash",
  "mz-storage-client",
  "mz-transform",
@@ -3753,9 +3754,7 @@ dependencies = [
  "sentry",
  "sentry-tracing",
  "serde",
- "serde_json",
  "smallvec",
- "ssh-key",
  "stacker",
  "tokio",
  "tokio-native-tls",
@@ -3764,7 +3763,6 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
- "zeroize",
 ]
 
 [[package]]
@@ -3961,15 +3959,14 @@ dependencies = [
  "anyhow",
  "mz-ore",
  "mz-proto",
+ "mz-ssh-util",
  "openssh",
  "openssl",
  "postgres-openssl",
  "proptest",
  "prost",
  "protobuf-src",
- "rand",
  "serde",
- "tempfile",
  "tokio",
  "tokio-postgres",
  "tonic-build",
@@ -4248,6 +4245,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-ssh-util"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "mz-ore",
+ "openssh",
+ "openssl",
+ "rand",
+ "serde",
+ "serde_json",
+ "ssh-key",
+ "tempfile",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
 name = "mz-stash"
 version = "0.0.0"
 dependencies = [
@@ -4391,6 +4405,7 @@ dependencies = [
  "mz-repr",
  "mz-secrets",
  "mz-service",
+ "mz-ssh-util",
  "mz-stash",
  "mz-timely-util",
  "proptest",

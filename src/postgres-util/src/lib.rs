@@ -9,9 +9,6 @@
 
 //! PostgreSQL utility library.
 
-use std::fs::File;
-use std::io::Write;
-use std::os::unix::prelude::PermissionsExt;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
@@ -19,14 +16,13 @@ use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
 use postgres_openssl::MakeTlsConnector;
-use rand::Rng;
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio_postgres::config::{Host, ReplicationMode, SslMode};
 use tokio_postgres::tls::MakeTlsConnect;
 use tokio_postgres::Client;
 
-use mz_ore::ssh_key::SshKeypair;
 use mz_ore::task;
+use mz_ssh_util::tunnel::SshTunnelConfig;
 
 use crate::desc::{PostgresColumnDesc, PostgresTableDesc};
 
@@ -212,7 +208,7 @@ pub async fn drop_replication_slots(config: Config, slots: &[&str]) -> Result<()
 
 /// Configures an optional tunnel for use when connecting to a PostgreSQL
 /// database.
-#[derive(PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum TunnelConfig {
     /// Establish a direct TCP connection to the database host.
     Direct,
@@ -221,36 +217,7 @@ pub enum TunnelConfig {
     /// and then opening a separate connection from that host to the database.
     /// This is commonly referred by vendors as a "direct SSH tunnel", in
     /// opposition to "reverse SSH tunnel", which is currently unsupported.
-    Ssh {
-        /// Hostname of the SSH bastion server.
-        host: String,
-        /// Port where `sshd` is running in the bastion server.
-        port: u16,
-        /// Username to be used in the SSH connection
-        user: String,
-        /// SSH keypair used for authentication.
-        keypair: SshKeypair,
-    },
-}
-
-impl std::fmt::Debug for TunnelConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Direct => write!(f, "Direct"),
-            Self::Ssh {
-                host,
-                port,
-                user,
-                // Omit keys from debug output
-                keypair: _,
-            } => f
-                .debug_struct("Tunnel")
-                .field("host", host)
-                .field("port", port)
-                .field("user", user)
-                .finish(),
-        }
-    }
+    Ssh(SshTunnelConfig),
 }
 
 /// Configuration for PostgreSQL connections.
@@ -308,15 +275,15 @@ impl Config {
         let mut postgres_config = self.inner.clone();
         configure(&mut postgres_config);
         let mut tls = make_tls(&postgres_config)?;
-        match self.tunnel {
+        match &self.tunnel {
             TunnelConfig::Direct => {
                 let (client, connection) = postgres_config.connect(tls).await?;
                 task::spawn(|| task_name, connection);
                 Ok(client)
             }
-            TunnelConfig::Ssh { .. } => {
-                let (session, local_port) = self.establish_openssh_connection().await?;
-                let (host, _) = self.address()?;
+            TunnelConfig::Ssh(tunnel) => {
+                let (host, port) = self.address()?;
+                let (session, local_port) = tunnel.connect(host, port).await?;
                 let tls = MakeTlsConnect::<TokioTcpStream>::make_tls_connect(&mut tls, host)?;
                 let tcp_stream = TokioTcpStream::connect(("localhost", local_port)).await?;
                 let (client, connection) = postgres_config.connect_raw(tcp_stream, tls).await?;
@@ -333,99 +300,6 @@ impl Config {
                 });
                 Ok(client)
             }
-        }
-    }
-
-    /// Sets up an SSH tunnel.
-    ///
-    /// Returns the `Session` value you must keep alive to keep the tunnel
-    /// open and the local port the tunnel is listening on.
-    async fn establish_openssh_connection(&self) -> Result<(openssh::Session, u16), anyhow::Error> {
-        match &self.tunnel {
-            TunnelConfig::Ssh {
-                host,
-                port,
-                user,
-                keypair,
-            } => {
-                let tempdir = tempfile::Builder::new()
-                    .prefix("ssh-tunnel-key")
-                    .tempdir()?;
-                let path = tempdir.path().join("key");
-                let mut tempfile = File::create(&path)?;
-                // Give read+write permissions on the file
-                tempfile.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-                // let private_key = keypair.ssh_private_key();
-                tempfile.write_all(keypair.ssh_private_key().as_bytes())?;
-                // Remove write permissions as soon as the key is written
-                // Mostly helpful to ensure the file is not accidentally overwritten.
-                tempfile.set_permissions(std::fs::Permissions::from_mode(0o400))?;
-
-                let mut builder = openssh::SessionBuilder::default();
-
-                // Bastion hosts (and therefore keys) tend to change,
-                // so we don't want to lock ourselves into trusting
-                // only the first we see. In any case, recording
-                // a known host would only last as long as the life
-                // of a storage pod, so it doesn't offer any
-                // protection.
-                builder.known_hosts_check(openssh::KnownHosts::Accept);
-                builder.user_known_hosts_file("/dev/null");
-
-                builder.user(user.clone()).port(*port).keyfile(&path);
-                let session = builder.connect(host).await?;
-
-                // Delete the private key for safety: since `ssh` still has an open handle to it,
-                // it still has access to the key.
-                drop(tempfile);
-                std::fs::remove_file(&path)?;
-                drop(tempdir);
-
-                // Ensure session is healthy
-                session.check().await?;
-
-                // Loop trying to find an open port
-                let mut attempts = 0;
-                let local_port = loop {
-                    if attempts > 50 {
-                        // If we failed to find an open port after 50 attempts, something is seriously wrong
-                        bail!("failed to find an open port to open the SSH tunnel")
-                    } else {
-                        attempts += 1;
-                    }
-
-                    let mut rng: rand::rngs::StdRng = rand::SeedableRng::from_entropy();
-                    // Choosing a dynamic port according to RFC 6335
-                    let local_port: u16 = rng.gen_range(49152..65535);
-
-                    let local = openssh::Socket::new(&("localhost", local_port))?;
-                    let remote = self.address()?;
-                    let remote = openssh::Socket::new(&remote)?;
-
-                    match session
-                        .request_port_forward(openssh::ForwardType::Local, local, remote)
-                        .await
-                    {
-                        Err(err) => match err {
-                            openssh::Error::Ssh(err)
-                                if err.to_string().contains("forwarding request failed") =>
-                            {
-                                tracing::warn!(
-                                    "Port {local_port} already in use, testing another port"
-                                );
-                            }
-                            _ => {
-                                tracing::error!("SSH connection failed: {err}");
-                                bail!("failed to open SSH tunnel")
-                            }
-                        },
-                        Ok(_) => break local_port,
-                    };
-                };
-
-                Ok((session, local_port))
-            }
-            TunnelConfig::Direct => bail!("connection not setup to use SSH"),
         }
     }
 }

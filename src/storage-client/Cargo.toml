@@ -26,7 +26,7 @@ mz-ccsr = { path = "../ccsr" }
 mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
-mz-ore = { path = "../ore", features = ["ssh", "task", "tracing_"] }
+mz-ore = { path = "../ore", features = ["task", "tracing_"] }
 mz-orchestrator = { path = "../orchestrator" }
 mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
@@ -36,6 +36,7 @@ mz-proto = { path = "../proto", features = ["tokio-postgres"] }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
 mz-service = { path = "../service" }
+mz-ssh-util = { path = "../ssh-util" }
 mz-stash = { path = "../stash" }
 mz-timely-util = { path = "../timely-util" }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
