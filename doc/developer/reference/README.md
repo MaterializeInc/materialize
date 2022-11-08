@@ -12,7 +12,7 @@ Whenever you work on something that might break this assumption (most often code
 
 ## High-Level Design & Technical Areas
 
-![Platform Architecture](assets/platform-architecture.png)
+![Environment high-level architecture](assets/environment-high-level-architecture.png)
 
 For details, look at the sub-space for the specific area:
 
