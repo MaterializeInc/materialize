@@ -34,6 +34,9 @@ use crate::{
     InternalStashError, Stash, StashCollection, StashError, Timestamp,
 };
 
+// TODO: Change the indexes on data to be more applicable to the current
+// consolidation technique. This will involve a migration (which we don't yet
+// have code to handle).
 const SCHEMA: &str = "
 CREATE TABLE fence (
     epoch bigint PRIMARY KEY,
@@ -258,6 +261,27 @@ impl Postgres {
             )
             .await?;
         Ok(())
+    }
+
+    /// Verifies stash invariants. Should only be called by tests.
+    pub async fn verify(&self) -> Result<(), StashError> {
+        let client = self.client.as_ref().unwrap();
+
+        // Because consolidation is in a separate task, allow this to retry.
+        Retry::default()
+            .max_duration(Duration::from_secs(10))
+            .retry_async(|_| async {
+                let count: i64 = client
+                    .query_one("SELECT count(*) FROM data WHERE diff < 0", &[])
+                    .await?
+                    .get(0);
+                if count > 0 {
+                    Err(format!("found {count} data rows with negative diff").into())
+                } else {
+                    Ok(())
+                }
+            })
+            .await
     }
 
     /// Opens the stash stored at the specified path.
@@ -1152,8 +1176,7 @@ struct Consolidator {
 
     client: Option<Client>,
     stmt_candidates: Option<Statement>,
-    stmt_consolidate: Option<Statement>,
-    stmt_cleanup: Option<Statement>,
+    stmt_insert: Option<Statement>,
     stmt_delete: Option<Statement>,
 }
 
@@ -1169,8 +1192,7 @@ impl Consolidator {
             sinces_rx,
             client: None,
             stmt_candidates: None,
-            stmt_consolidate: None,
-            stmt_cleanup: None,
+            stmt_insert: None,
             stmt_delete: None,
             consolidations: HashMap::new(),
         };
@@ -1244,23 +1266,45 @@ impl Consolidator {
         let tx = client.transaction().await?;
         let deleted = match since.borrow().as_option() {
             Some(since) => {
-                // Only attempt to consolidate things that have been deleted
-                // (negative diff). Start by finding candidate keys.
-                let keys = tx
+                // In a single query we can detect all candidate entries (things
+                // with a negative diff) and delete and return all associated
+                // keys.
+                let rows = tx
                     .query(self.stmt_candidates.as_ref().unwrap(), &[&id, since])
                     .await?
                     .into_iter()
-                    .map(|row| row.get::<_, serde_json::Value>(0))
+                    .map(|row| {
+                        (
+                            (
+                                row.get::<_, serde_json::Value>("key"),
+                                row.get::<_, serde_json::Value>("value"),
+                            ),
+                            row.get::<_, Diff>("diff"),
+                        )
+                    })
                     .collect::<Vec<_>>();
-                // Generate the consolidated entries for things with non-zero diff.
-                tx.execute(
-                    self.stmt_consolidate.as_ref().unwrap(),
-                    &[&id, since, &keys],
-                )
-                .await?;
-                // Delete old entries.
-                tx.execute(self.stmt_cleanup.as_ref().unwrap(), &[&id, since, &keys])
-                    .await?
+                let deleted = rows.len();
+                // Perform the consolidation in Rust.
+                let rows = crate::consolidate(rows);
+                // Then for any items that have a positive diff, INSERT them
+                // back into the database. Our current production stash usage
+                // will never have any results here (all consolidations sum to
+                // 0), only tests will. Thus, it's probably faster to perform
+                // consolidations in Rust instead of SQL because (unverified
+                // assumption) it's faster to return all the rows and use
+                // differential's consolidation method. So far we have not
+                // produced a benchmark that can accurately verify these claims.
+                // The benchmarks we have thus far are either not this workload
+                // or else vary wildly when the exact same benchmark is run
+                // repeatedly.
+                for ((key, value), diff) in rows {
+                    tx.execute(
+                        self.stmt_insert.as_ref().unwrap(),
+                        &[&id, &key, &value, since, &diff],
+                    )
+                    .await?;
+                }
+                mz_ore::cast::usize_to_u64(deleted)
             }
             None => {
                 // The since is empty, so we can delete all the associated data.
@@ -1283,63 +1327,26 @@ impl Consolidator {
                 }
             },
         );
-        // Prepare a list of keys that could potentially benefit from
-        // consolidation (diffs < 0). This doesn't handle the case where we have
-        // a diff = 2, but our current use of the stash doesn't do that, so it's
-        // not a problem.
-        //
-        // TODO: This could be taught about a LIMIT so that the amount of work
-        // done per transaction is capped, then run in a loop until all
-        // candidates are processed. We currently don't think this will be
-        // helpful because there are not many workloads where an entire large
-        // collection is being deleted and recreated. (Note: the previous
-        // consolidation method did indeed delete and recreate the entire
-        // collection each run which is a pathalogically bad workload for
-        // cockroach (see #15842), but this consolidation method would require a
-        // user to do that, which we don't expect to be the general case.)
         self.stmt_candidates = Some(
             client
                 .prepare(
                     "
-                    SELECT DISTINCT key
-                    FROM data
-                    WHERE collection_id = $1 AND time < $2 AND diff < 0
+                    DELETE FROM data
+                    WHERE collection_id = $1 AND time <= $2 AND key IN (
+                        SELECT key
+                        FROM data
+                        WHERE collection_id = $1 AND time <= $2 AND diff < 0
+                    )
+                    RETURNING key, value, diff
                     ",
                 )
                 .await?,
         );
-        // For all entries before the current since, consolidate diffs into the
-        // current since, ignoring kv pairs whose diffs consolidated to
-        // 0. Note that this does create situations where the current since can
-        // have a +1 and -1 diff for some kv pair if, say, an entry was deleted
-        // (which happens at the current since and results in a diff=-1) and
-        // then consolidation causes the diff=+1 entry that created the item to
-        // get its timestamp bumped to the current since. These will be cleaned
-        // up during the next consolidation after the since has advanced, and
-        // are not a correctness problem. This could possibly be improved if
-        // there were a primary/unique key constraint on (collection, time, key,
-        // value), which would allow the use of INSERT ON CONFLICT. However 1)
-        // Cockroach doesn't currently support jsonb types in unique key
-        // constraints and 2) even if you create a computed (STORED) column on
-        // key and value and make a PK on those, some benchmarks got worse than
-        // this current solution.
-        self.stmt_consolidate = Some(
+        self.stmt_insert = Some(
             client
                 .prepare(
-                    "
-                    INSERT INTO data (collection_id, key, value, time, diff)
-                    SELECT $1, key, value, $2, sum(diff) FROM data
-                    WHERE collection_id = $1 AND time < $2 AND key = ANY($3)
-                    GROUP BY key, value
-                    HAVING sum(diff) != 0
-                    ",
-                )
-                .await?,
-        );
-        self.stmt_cleanup = Some(
-            client
-                .prepare(
-                    "DELETE FROM data WHERE collection_id = $1 AND time < $2 AND key = ANY($3)",
+                    "INSERT INTO data (collection_id, key, value, time, diff)
+                    VALUES ($1, $2, $3, $4, $5)",
                 )
                 .await?,
         );
