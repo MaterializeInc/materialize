@@ -22,7 +22,6 @@ use mz_ore::str::StrExt;
 use mz_repr::explain_new::ExplainError;
 use mz_repr::NotNullViolation;
 use mz_sql::plan::PlanError;
-use mz_sql::pure::PurificationError;
 use mz_sql::query_model::QGMError;
 use mz_storage_client::controller::StorageError;
 use mz_transform::TransformError;
@@ -165,8 +164,6 @@ pub enum AdapterError {
     //
     // TODO(benesch): convert all those errors to structured errors.
     Unstructured(anyhow::Error),
-    /// An error that occurred in purification.
-    PurificationError(PurificationError),
     /// The named feature is not supported and will (probably) not be.
     Unsupported(&'static str),
     /// The specified function cannot be materialized.
@@ -448,11 +445,6 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::Unsupported(features) => write!(f, "{} are not supported", features),
             AdapterError::Unstructured(e) => write!(f, "{:#}", e),
-            AdapterError::PurificationError(e) => {
-                // `PurificationError` is already transparent, so we just write it
-                // transparently.
-                write!(f, "{:#}", e)
-            }
             AdapterError::WriteOnlyTransaction => f.write_str("transaction in write-only mode"),
             AdapterError::UnknownPreparedStatement(name) => {
                 write!(f, "prepared statement {} does not exist", name.quoted())
@@ -488,12 +480,6 @@ impl From<anyhow::Error> for AdapterError {
             Some(plan_error) => AdapterError::PlanError(plan_error.clone()),
             None => AdapterError::Unstructured(e),
         }
-    }
-}
-
-impl From<PurificationError> for AdapterError {
-    fn from(e: PurificationError) -> AdapterError {
-        AdapterError::PurificationError(e)
     }
 }
 

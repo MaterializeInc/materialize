@@ -119,7 +119,8 @@ $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=mat
   )
 ! CREATE SOURCE "no_such_host"
   FROM POSTGRES CONNECTION no_such_host (PUBLICATION 'mz_source');
-contains:failed to lookup address information
+# TODO: assert on `detail` here.
+exact:failed to fetch publication information from PostgreSQL database
 
 > CREATE CONNECTION no_such_port TO POSTGRES (
     HOST postgres,
@@ -130,7 +131,8 @@ contains:failed to lookup address information
   )
 ! CREATE SOURCE "no_such_port"
   FROM POSTGRES CONNECTION no_such_port (PUBLICATION 'mz_source');
-contains:error connecting to server: Connection refused (os error 111)
+# TODO: assert on `detail` here.
+exact:failed to fetch publication information from PostgreSQL database
 
 > CREATE CONNECTION no_such_user TO POSTGRES (
     HOST postgres,
@@ -140,7 +142,8 @@ contains:error connecting to server: Connection refused (os error 111)
   )
 ! CREATE SOURCE "no_such_user"
   FROM POSTGRES CONNECTION no_such_user (PUBLICATION 'mz_source');
-contains:db error: FATAL: role "no_such_user" does not exist
+# TODO: assert on `detail` here.
+exact:failed to fetch publication information from PostgreSQL database
 
 > CREATE SECRET badpass AS 'badpass'
 > CREATE CONNECTION no_such_password TO POSTGRES (
@@ -151,7 +154,8 @@ contains:db error: FATAL: role "no_such_user" does not exist
   )
 ! CREATE SOURCE "no_such_password"
   FROM POSTGRES CONNECTION no_such_password (PUBLICATION 'mz_source');
-contains:db error: FATAL: password authentication failed for user "postgres"
+# TODO: assert on `detail` here.
+exact:failed to fetch publication information from PostgreSQL database
 
 > CREATE CONNECTION no_such_dbname TO POSTGRES (
     HOST postgres,
@@ -161,11 +165,13 @@ contains:db error: FATAL: password authentication failed for user "postgres"
   )
 ! CREATE SOURCE "no_such_dbname"
   FROM POSTGRES CONNECTION no_such_dbname (PUBLICATION 'mz_source');
-contains:db error: FATAL: database "no_such_dbname" does not exist
+# TODO: assert on `detail` here.
+exact:failed to fetch publication information from PostgreSQL database
 
 ! CREATE SOURCE "no_such_publication"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'no_such_publication');
-contains:publication "no_such_publication" does not exist
+# TODO: assert on `detail` here.
+exact:failed to fetch publication information from PostgreSQL database
 
 
 #

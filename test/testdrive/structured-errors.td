@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Test error messages
+# Testing user-focused error messages
 
 > CREATE SECRET pgpass AS 'postgres'
 > CREATE CONNECTION pg TO POSTGRES (
@@ -18,7 +18,8 @@
     PASSWORD SECRET pgpass
   )
 
+# TODO(guswynn): make testdrive support `startswith`, and hints and details
 ! CREATE SOURCE "test_error"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR ALL TABLES
-exact:error communicating with postgres instance: error connecting to server: Connection refused (os error 61)
+exact:failed to fetch publication information from PostgreSQL database

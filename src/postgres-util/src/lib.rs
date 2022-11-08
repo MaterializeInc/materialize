@@ -28,9 +28,7 @@ use crate::desc::{PostgresColumnDesc, PostgresTableDesc};
 
 pub mod desc;
 
-/// An error that happened during purification.
-/// This should be comprehensible (and actionable)
-/// by a user.
+/// An error representing pg, ssh, ssl, and other failures.
 #[derive(Debug, thiserror::Error)]
 pub enum PostgresError {
     /// Any other error we bail on.
