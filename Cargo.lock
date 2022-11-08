@@ -4386,7 +4386,6 @@ dependencies = [
  "aws-smithy-http",
  "aws-types",
  "bytes",
- "datadriven",
  "derivative",
  "differential-dataflow",
  "futures",
