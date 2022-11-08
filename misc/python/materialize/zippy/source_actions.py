@@ -8,61 +8,67 @@
 # by the Apache License, Version 2.0.
 
 import random
+from textwrap import dedent
 from typing import List, Set, Type
 
 from materialize.mzcompose import Composition
-from materialize.zippy.framework import Action, Capabilities, Capability
+from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
 from materialize.zippy.kafka_capabilities import KafkaRunning, TopicExists
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.source_capabilities import SourceExists
 
 
-class CreateSource(Action):
+class CreateSourceParameterized(ActionFactory):
     """Creates a source in Materialized."""
 
     @classmethod
     def requires(self) -> Set[Type[Capability]]:
         return {MzIsRunning, KafkaRunning, TopicExists}
 
-    def __init__(self, capabilities: Capabilities) -> None:
-        source_name = "source" + str(random.randint(1, 10))
-        this_source = SourceExists(name=source_name)
+    def __init__(self, max_sources: int = 10) -> None:
+        self.max_sources = max_sources
 
-        existing_sources = [
-            s for s in capabilities.get(SourceExists) if s.name == this_source.name
-        ]
+    def new(self, capabilities: Capabilities) -> List[Action]:
+        new_source_name = capabilities.get_free_capability_name(
+            SourceExists, self.max_sources
+        )
 
-        if len(existing_sources) == 0:
-            self.new_source = True
-
-            self.source = this_source
-            self.topic = random.choice(capabilities.get(TopicExists))
-            self.source.topic = self.topic
-        elif len(existing_sources) == 1:
-            self.new_source = False
-
-            self.source = existing_sources[0]
-            assert self.source.topic is not None
-            self.topic = self.source.topic
+        if new_source_name:
+            return [
+                CreateSource(
+                    source=SourceExists(
+                        name=new_source_name,
+                        topic=random.choice(capabilities.get(TopicExists)),
+                    )
+                )
+            ]
         else:
-            assert False
+            return []
+
+
+class CreateSource(Action):
+    def __init__(self, source: SourceExists) -> None:
+        self.source = source
 
     def run(self, c: Composition) -> None:
-        if self.new_source:
-            envelope = str(self.topic.envelope).split(".")[1]
-            c.testdrive(
+        envelope = str(self.source.topic.envelope).split(".")[1]
+        c.testdrive(
+            dedent(
                 f"""
-> CREATE CONNECTION IF NOT EXISTS {self.source.name}_csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
+                > CREATE CONNECTION IF NOT EXISTS {self.source.name}_csr_conn
+                  TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
 
-> CREATE CONNECTION IF NOT EXISTS {self.source.name}_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+                > CREATE CONNECTION IF NOT EXISTS {self.source.name}_kafka_conn
+                  TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
 
-> CREATE SOURCE {self.source.name}
-  FROM KAFKA CONNECTION {self.source.name}_kafka_conn
-  (TOPIC 'testdrive-{self.topic.name}-${{testdrive.seed}}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.source.name}_csr_conn
-  ENVELOPE {envelope}
-"""
+                > CREATE SOURCE {self.source.name}
+                  FROM KAFKA CONNECTION {self.source.name}_kafka_conn
+                  (TOPIC 'testdrive-{self.source.topic.name}-${{testdrive.seed}}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.source.name}_csr_conn
+                  ENVELOPE {envelope}
+                """
             )
+        )
 
     def provides(self) -> List[Capability]:
-        return [self.source] if self.new_source else []
+        return [self.source]

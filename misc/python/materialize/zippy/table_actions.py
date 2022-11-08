@@ -8,55 +8,75 @@
 # by the Apache License, Version 2.0.
 
 import random
+from textwrap import dedent
 from typing import List, Set, Type
 
 from materialize.mzcompose import Composition
-from materialize.zippy.framework import Action, Capabilities, Capability
+from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.table_capabilities import TableExists
 
 MAX_ROWS_PER_ACTION = 10000
 
 
-class CreateTable(Action):
-    """Creates a table on the Mz instance. 50% of the tables have a default index."""
+class CreateTableParameterized(ActionFactory):
+    def __init__(
+        self, max_tables: int = 10, max_rows_per_action: int = MAX_ROWS_PER_ACTION
+    ) -> None:
+        self.max_tables = max_tables
+        self.max_rows_per_action = max_rows_per_action
 
     @classmethod
     def requires(self) -> Set[Type[Capability]]:
         return {MzIsRunning}
 
-    def __init__(self, capabilities: Capabilities) -> None:
-        this_table = TableExists(name="table" + str(random.randint(1, 10)))
+    def new(self, capabilities: Capabilities) -> List[Action]:
+        new_table_name = capabilities.get_free_capability_name(
+            TableExists, self.max_tables
+        )
 
-        existing_tables = [
-            t for t in capabilities.get(TableExists) if t.name == this_table.name
-        ]
-
-        if len(existing_tables) == 0:
-            self.new_table = True
-            self.has_index = random.choice([True, False])
-            self.table = this_table
-        elif len(existing_tables) == 1:
-            self.new_table = False
-            self.table = existing_tables[0]
+        if new_table_name:
+            return [
+                CreateTable(
+                    capabilities=capabilities,
+                    table=TableExists(
+                        name=new_table_name,
+                        has_index=random.choice([True, False]),
+                        max_rows_per_action=self.max_rows_per_action,
+                    ),
+                )
+            ]
         else:
-            assert False
+            return []
+
+
+class CreateTable(Action):
+    """Creates a table on the Mz instance. 50% of the tables have a default index."""
+
+    def __init__(self, table: TableExists, capabilities: Capabilities) -> None:
+        assert (
+            table is not None
+        ), "CreateTable Action can not be referenced directly, it is produced by CreateTableParameterized factory"
+        self.table = table
 
     def run(self, c: Composition) -> None:
-        if self.new_table:
-            index = (
-                f"> CREATE DEFAULT INDEX ON {self.table.name}" if self.has_index else ""
-            )
-            c.testdrive(
+        index = (
+            f"> CREATE DEFAULT INDEX ON {self.table.name}"
+            if self.table.has_index
+            else ""
+        )
+        c.testdrive(
+            dedent(
                 f"""
-> CREATE TABLE {self.table.name} (f1 INTEGER);
-{index}
-> INSERT INTO {self.table.name} VALUES ({self.table.watermarks.max});
-"""
+                > CREATE TABLE {self.table.name} (f1 INTEGER);
+                {index}
+                > INSERT INTO {self.table.name} VALUES ({self.table.watermarks.max});
+                """
             )
+        )
 
     def provides(self) -> List[Capability]:
-        return [self.table] if self.new_table else []
+        return [self.table]
 
 
 class ValidateTable(Action):
@@ -71,10 +91,12 @@ class ValidateTable(Action):
 
     def run(self, c: Composition) -> None:
         c.testdrive(
-            f"""
-> SELECT MIN(f1), MAX(f1), COUNT(f1), COUNT(DISTINCT f1) FROM {self.table.name};
-{self.table.watermarks.min} {self.table.watermarks.max} {(self.table.watermarks.max-self.table.watermarks.min)+1} {(self.table.watermarks.max-self.table.watermarks.min)+1}
-"""
+            dedent(
+                f"""
+                > SELECT MIN(f1), MAX(f1), COUNT(f1), COUNT(DISTINCT f1) FROM {self.table.name};
+                {self.table.watermarks.min} {self.table.watermarks.max} {(self.table.watermarks.max-self.table.watermarks.min)+1} {(self.table.watermarks.max-self.table.watermarks.min)+1}
+                """
+            )
         )
 
 
@@ -87,7 +109,7 @@ class DML(Action):
 
     def __init__(self, capabilities: Capabilities) -> None:
         self.table = random.choice(capabilities.get(TableExists))
-        self.delta = random.randint(1, MAX_ROWS_PER_ACTION)
+        self.delta = random.randint(1, self.table.max_rows_per_action)
 
 
 class Insert(DML):

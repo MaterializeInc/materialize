@@ -18,5 +18,13 @@ class SinkExists(Capability):
     source_view: ViewExists
     dest_view: ViewExists
 
-    def __init__(self, name: str) -> None:
+    @classmethod
+    def format_str(cls) -> str:
+        return "sink_{}"
+
+    def __init__(
+        self, name: str, source_view: ViewExists, dest_view: ViewExists
+    ) -> None:
         self.name = name
+        self.source_view = source_view
+        self.dest_view = dest_view

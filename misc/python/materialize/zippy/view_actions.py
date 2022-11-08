@@ -9,24 +9,20 @@
 
 import random
 from textwrap import dedent
-from typing import List, Set, Type, Union
+from typing import List, Set, Type
 
 from materialize.mzcompose import Composition
 from materialize.zippy.debezium_capabilities import DebeziumSourceExists
-from materialize.zippy.framework import Action, Capabilities, Capability
+from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.pg_cdc_capabilities import PostgresCdcTableExists
 from materialize.zippy.source_capabilities import SourceExists
 from materialize.zippy.table_capabilities import TableExists
-from materialize.zippy.view_capabilities import ViewExists
-
-WatermarkedObjects = List[
-    Union[TableExists, SourceExists, DebeziumSourceExists, PostgresCdcTableExists]
-]
+from materialize.zippy.view_capabilities import ViewExists, WatermarkedObjects
 
 
-class CreateView(Action):
-    """Creates a view that is a join over one or more sources or tables"""
+class CreateViewParameterized(ActionFactory):
+    """Emits CreateView Actions within the constraints specified in the constructor."""
 
     @classmethod
     def requires(self) -> List[Set[Type[Capability]]]:
@@ -37,63 +33,72 @@ class CreateView(Action):
             {MzIsRunning, PostgresCdcTableExists},
         ]
 
-    def __init__(self, capabilities: Capabilities) -> None:
-        view_name = "view" + str(random.randint(1, 10))
+    def __init__(
+        self,
+        max_views: int = 10,
+        max_inputs: int = 5,
+        expensive_aggregates: bool = True,
+    ) -> None:
+        self.max_views = max_views
+        self.max_inputs = max_inputs
+        self.expensive_aggregates = expensive_aggregates
 
-        this_view = ViewExists(name=view_name)
-        existing_views = [
-            v for v in capabilities.get(ViewExists) if v.name == this_view.name
-        ]
-        self.view = this_view
+    def new(self, capabilities: Capabilities) -> List[Action]:
+        new_view_name = capabilities.get_free_capability_name(
+            ViewExists, self.max_views
+        )
+        if new_view_name:
+            potential_inputs: WatermarkedObjects = []
+            for source_capability in [
+                SourceExists,
+                TableExists,
+                DebeziumSourceExists,
+                PostgresCdcTableExists,
+            ]:
+                potential_inputs.extend(capabilities.get(source_capability))
 
-        if len(existing_views) == 0:
-            self.new_view = True
-            sources: WatermarkedObjects = capabilities.get(SourceExists)
-            tables: WatermarkedObjects = capabilities.get(TableExists)
-            debezium_sources: WatermarkedObjects = capabilities.get(
-                DebeziumSourceExists
+            inputs = random.sample(
+                potential_inputs,
+                min(len(potential_inputs), random.randint(1, self.max_inputs)),
             )
-            pg_cdc_tables: WatermarkedObjects = capabilities.get(PostgresCdcTableExists)
 
-            potential_froms = sources + tables + debezium_sources + pg_cdc_tables
-            this_view.froms = random.sample(
-                potential_froms,
-                min(len(potential_froms), random.randint(1, self.max_sources())),
-            )
-            this_view.expensive_aggregates = self.expensive_aggregates()
-
-            self.has_index = random.choice([True, False])
-            self.view = this_view
-            assert len(self.view.froms) > 0
-        elif len(existing_views) == 1:
-            self.new_view = False
-            self.view = existing_views[0]
+            return [
+                CreateView(
+                    capabilities=capabilities,
+                    view=ViewExists(
+                        name=new_view_name,
+                        has_index=random.choice([True, False]),
+                        expensive_aggregates=self.expensive_aggregates,
+                        inputs=inputs,
+                    ),
+                )
+            ]
         else:
-            assert False
+            return []
 
-    def max_sources(self) -> int:
-        return 5
 
-    def expensive_aggregates(self) -> bool:
-        return True
+class CreateView(Action):
+    """Creates a view that is a join over one or more sources or tables"""
+
+    def __init__(self, capabilities: Capabilities, view: ViewExists) -> None:
+        self.view = view
 
     def run(self, c: Composition) -> None:
-        if not self.new_view:
-            return
+        first_input = self.view.inputs[0]
+        outer_join = " ".join(f"JOIN {f.name} USING (f1)" for f in self.view.inputs[1:])
 
-        some_from = random.sample(self.view.froms, 1)[0]
-        outer_join = " ".join(f"JOIN {f.name} USING (f1)" for f in self.view.froms[1:])
+        index = (
+            f"> CREATE DEFAULT INDEX ON {self.view.name}" if self.view.has_index else ""
+        )
 
-        index = f"> CREATE DEFAULT INDEX ON {self.view.name}" if self.has_index else ""
-
-        aggregates = [f"COUNT({some_from.name}.f1) AS c1"]
+        aggregates = [f"COUNT({first_input.name}.f1) AS c1"]
 
         if self.view.expensive_aggregates:
             aggregates.extend(
                 [
-                    f"COUNT(DISTINCT {some_from.name}.f1) AS c2",
-                    f"MIN({some_from.name}.f1)",
-                    f"MAX({some_from.name}.f1)",
+                    f"COUNT(DISTINCT {first_input.name}.f1) AS c2",
+                    f"MIN({first_input.name}.f1)",
+                    f"MAX({first_input.name}.f1)",
                 ]
             )
 
@@ -104,7 +109,7 @@ class CreateView(Action):
                 f"""
                 > CREATE MATERIALIZED VIEW {self.view.name} AS
                   SELECT {aggregates}
-                  FROM {self.view.froms[0].name}
+                  FROM {first_input.name}
                   {outer_join}
                 """
             )
@@ -112,21 +117,7 @@ class CreateView(Action):
         )
 
     def provides(self) -> List[Capability]:
-        return [self.view] if self.new_view else []
-
-
-class CreateViewSimple(CreateView):
-    """Creates a single-source view without memory-consuming aggregates"""
-
-    @classmethod
-    def require_explicit_mention(self) -> bool:
-        return True
-
-    def max_sources(self) -> int:
-        return 1
-
-    def expensive_aggregates(self) -> bool:
-        return False
+        return [self.view]
 
 
 class ValidateView(Action):
