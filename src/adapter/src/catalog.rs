@@ -1408,6 +1408,14 @@ impl Source {
             DataSourceDesc::Introspection(_) | DataSourceDesc::Source => None,
         }
     }
+
+    /// Returns whether this source ingests data from an external source.
+    pub fn is_external(&self) -> bool {
+        match self.data_source {
+            DataSourceDesc::Ingestion(_) => true,
+            DataSourceDesc::Source | DataSourceDesc::Introspection(_) => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
