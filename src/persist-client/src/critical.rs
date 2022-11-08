@@ -174,6 +174,7 @@ where
     ///
     /// ```rust,no_run
     /// use timely::progress::Antichain;
+    /// use tokio_test;
     /// use mz_persist_client::critical::SinceHandle;
     /// use mz_persist_types::Codec64;
     ///
@@ -208,6 +209,7 @@ where
     ///
     /// ```rust,no_run
     /// use timely::progress::Antichain;
+    /// use tokio_test;
     /// use mz_persist_client::critical::SinceHandle;
     /// use mz_persist_types::Codec64;
     ///
