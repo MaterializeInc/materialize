@@ -610,15 +610,28 @@ impl Coordinator {
             .drop_sinks_unvalidated(builtin_migration_metadata.previous_sink_ids);
 
         let mut entries: Vec<_> = self.catalog.entries().cloned().collect();
-        // Topologically sort entries based on the used_by relationship
-        entries.sort_unstable_by(|a, b| {
+        // Topologically sort entries:
+        // - If one item uses the other, preserve that causal dependency
+        // - Else, treat each item as if its ID were max(greatest dependency,
+        //   self); this lets the item "bubble up" to the position of its
+        //   greatest dependency, where it can be properly checked using the
+        //   prior condition
+        entries.sort_by(|a, b| {
             use std::cmp::Ordering;
             if a.used_by().contains(&b.id()) {
                 Ordering::Less
             } else if b.used_by().contains(&a.id()) {
                 Ordering::Greater
             } else {
-                Ordering::Equal
+                let a_cmp = match a.uses().iter().max() {
+                    Some(id) => std::cmp::max(*id, a.id()),
+                    None => a.id(),
+                };
+                let b_cmp = match b.uses().iter().max() {
+                    Some(id) => std::cmp::max(*id, b.id()),
+                    None => b.id(),
+                };
+                a_cmp.cmp(&b_cmp)
             }
         });
 
