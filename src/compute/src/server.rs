@@ -745,7 +745,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         for dataflow in dataflows.iter() {
                             let export_ids = dataflow.export_ids().collect::<BTreeSet<_>>();
                             if let Some(old_dataflow) = old_dataflows.get(&export_ids) {
-                                let compatible = dataflow.compatible_with(old_dataflow);
+                                let compatible = old_dataflow.compatible_with(dataflow);
                                 let uncompacted = !export_ids
                                     .iter()
                                     .flat_map(|id| old_frontiers.get(id))
