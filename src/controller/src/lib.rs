@@ -228,6 +228,7 @@ where
             config.init_container_image.clone(),
             config.now,
             &config.postgres_factory,
+            envd_epoch,
         )
         .await;
 

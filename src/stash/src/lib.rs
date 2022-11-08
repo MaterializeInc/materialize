@@ -394,7 +394,7 @@ pub trait Stash: std::fmt::Debug + Send {
     /// method. Otherwise, returns `Err`.
     async fn confirm_leadership(&mut self) -> Result<(), StashError>;
 
-    /// Returns the stash's epoch number. If `Some`, it is a number that
+    /// Returns the stash's epoch number. If `Some`, it is a positive number that
     /// increases with each start of a stash.
     fn epoch(&self) -> Option<NonZeroI64>;
 }

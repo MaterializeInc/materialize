@@ -250,7 +250,25 @@ where
         }
     }
 
-    async fn compare_and_downgrade_since(
+    /// Forwards the since capability of this handle to `new_since` iff the opaque value of this
+    /// handle's [CriticalReaderId] is `expected`, and [Self::maybe_compare_and_downgrade_since]
+    /// chooses to perform the downgrade.
+    ///
+    /// Users are expected to call this function only when a guaranteed downgrade is necessary. All
+    /// other downgrades should preferably go through [Self::maybe_compare_and_downgrade_since]
+    /// which will automatically rate limit the operations.
+    ///
+    /// When returning `Ok(since)`, `since` will be set to the most recent value known for this
+    /// critical reader ID, and is guaranteed to be `!less_than(new_since)`.
+    ///
+    /// Because SinceHandles are expected to live beyond process lifetimes, it's possible for the
+    /// same [CriticalReaderId] to be used concurrently from multiple processes (either
+    /// intentionally or something like a zombie process). To discover this,
+    /// [Self::compare_and_downgrade_since] has "compare and set" semantics over an opaque value.
+    /// If the `expected` opaque value does not match state, an `Err` is returned and the caller
+    /// must decide how to handle it (likely a retry or a `halt!`).
+    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
+    pub async fn compare_and_downgrade_since(
         &mut self,
         expected: &O,
         new: (&O, &Antichain<T>),
@@ -264,6 +282,7 @@ where
         match res {
             Ok(since) => {
                 self.since = since.0.clone();
+                self.opaque = new.0.clone();
                 Ok(since)
             }
             Err((actual_opaque, since)) => {
@@ -288,6 +307,8 @@ mod tests {
     use std::str::FromStr;
 
     use super::*;
+    use crate::tests::new_test_client;
+    use crate::{PersistClient, ShardId};
 
     #[test]
     fn reader_id_human_readable_serde() {
@@ -346,5 +367,42 @@ mod tests {
             .await;
 
         assert_eq!(noop, None);
+    }
+
+    // Verifies that the handle updates its view of the opaque token correctly
+    #[tokio::test]
+    async fn handle_opaque_token() {
+        let client = new_test_client().await;
+        let shard_id = ShardId::new();
+
+        let mut since = client
+            .open_critical_since::<(), (), u64, i64, i64>(
+                shard_id,
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
+            )
+            .await
+            .expect("codec mismatch");
+
+        // The token must be initialized to the default value
+        assert_eq!(since.opaque(), &i64::MIN);
+
+        since
+            .compare_and_downgrade_since(&i64::MIN, (&5, &Antichain::from_elem(0)))
+            .await
+            .unwrap();
+
+        // Our view of the token must be updated now
+        assert_eq!(since.opaque(), &5);
+
+        let since2 = client
+            .open_critical_since::<(), (), u64, i64, i64>(
+                shard_id,
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
+            )
+            .await
+            .expect("codec mismatch");
+
+        // The token should still be 5
+        assert_eq!(since2.opaque(), &5);
     }
 }
