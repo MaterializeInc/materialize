@@ -838,13 +838,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     if let Some(time) = frontier.get(0) {
                         use crate::logging::compute::ComputeEvent;
                         logger.log(ComputeEvent::Frontier(*id, *time, -1));
-                        logger.log(ComputeEvent::Frontier(
-                            *id,
-                            *(minimum
-                                .get(0)
-                                .expect("minimum antichain should not be empty")),
-                            1,
-                        ));
+                        logger.log(ComputeEvent::Frontier(*id, Timestamp::minimum(), 1));
                     }
                 }
                 *frontier = minimum;

@@ -161,11 +161,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                     Antichain::from_elem(timely::progress::Timestamp::minimum()),
                 ) {
                     error!(
-                        "existing frontier {} for newly created dataflow id {}",
-                        frontier
-                            .get(0)
-                            .expect("empty frontier found for newly created dataflow"),
-                        object_id
+                        "existing frontier {frontier:?} for newly created dataflow id {object_id}"
                     );
                 }
 
@@ -542,11 +538,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 Antichain::from_elem(timely::progress::Timestamp::minimum()),
             ) {
                 error!(
-                    "existing frontier {} for newly initialized logging export id {}",
-                    frontier
-                        .get(0)
-                        .expect("empty frontier found for newly initialized logging export"),
-                    id
+                    "existing frontier {frontier:?} for newly initialized logging export id {id}"
                 );
             }
             logger.log(ComputeEvent::Frontier(
