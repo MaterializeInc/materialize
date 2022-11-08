@@ -144,6 +144,8 @@ pub enum ComputeError {
     InstanceMissing(ComputeInstanceId),
     /// Command referenced an identifier that was not present.
     IdentifierMissing(GlobalId),
+    /// Command referenced a replica that was not present.
+    ReplicaMissing(ReplicaId),
     /// The identified instance exists already.
     InstanceExists(ComputeInstanceId),
     /// Dataflow was malformed (e.g. missing `as_of`).
@@ -163,6 +165,7 @@ impl Error for ComputeError {
         match self {
             Self::InstanceMissing(_)
             | Self::IdentifierMissing(_)
+            | Self::ReplicaMissing(_)
             | Self::InstanceExists(_)
             | Self::DataflowMalformed
             | Self::DataflowSinceViolation(_)
@@ -181,6 +184,9 @@ impl fmt::Display for ComputeError {
                 f,
                 "command referenced an instance that was not present: {id}"
             ),
+            Self::ReplicaMissing(id) => {
+                write!(f, "command referenced a replica that was not present: {id}")
+            }
             Self::IdentifierMissing(id) => write!(
                 f,
                 "command referenced an identifier that was not present: {id}"

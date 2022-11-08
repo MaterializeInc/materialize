@@ -306,8 +306,40 @@ where
     /// This method removes the replica from the orchestrator and should only be called if the
     /// replica should be permanently removed.
     pub async fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ComputeError> {
-        if let Err(e) = self.compute.replicas[&id].send(ComputeCommand::DropInstance) {
+        let replica = self
+            .compute
+            .replicas
+            .get_mut(&id)
+            .ok_or(ComputeError::ReplicaMissing(id))?;
+
+        if let Err(e) = replica.send(ComputeCommand::DropInstance) {
             tracing::warn!("Could not send DropInstance to replica {:?}: {}", &id, &e)
+        }
+
+        // If the replica is managed we have to remove it from the orchestrator. We spawn
+        // a background task that waits until the termination of the message handler task and
+        // then removes it from the orchestrator.
+        if matches!(replica.location, ComputeReplicaLocation::Managed { .. }) {
+            let replica_task = replica.replica_task.take().unwrap();
+            let instance_id = self.compute.instance_id;
+            let orchestrator = self.compute.orchestrator.clone();
+            mz_ore::task::spawn(|| format!("drop-replica-{id}"), async move {
+                // Ensure the active-replication-replica task is terminated before removing the service
+                // from the orchestrator. This await guarantees the ensure call has happened before
+                // we remove the replica from the orchestrator.
+                replica_task.abort();
+                let join_result = replica_task.await;
+                tracing::debug!("Replica task joined: {:?}", join_result);
+
+                match orchestrator.drop_replica(instance_id, id).await {
+                    Ok(_) => {
+                        tracing::debug!("Removed replica from orchestrator")
+                    }
+                    Err(e) => {
+                        tracing::warn!("Could not drop replica {:?}: {}", &id, &e)
+                    }
+                }
+            });
         }
 
         self.remove_replica_state(id).await
