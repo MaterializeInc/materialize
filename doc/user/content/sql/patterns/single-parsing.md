@@ -9,7 +9,7 @@ menu:
 ---
 
 <!-- Use a single materialized view to parse a Kafka/Redpanda source **only once** and save resources. -->
-Avoid parsing a Kafka/Redpanda source **more than once** . Using a single materialized view for parsing has multiple benefits:
+Avoid parsing a Kafka/Redpanda source **more than once**. Using a single materialized view for parsing has multiple benefits:
 * Faster and reusable access to data
 * Less resources processing data
 * Cleaner code
