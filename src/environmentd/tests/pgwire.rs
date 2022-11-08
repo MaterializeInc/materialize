@@ -241,8 +241,8 @@ fn test_conn_startup() -> Result<(), Box<dyn Error>> {
         // Send a startup packet for protocol version two, which Materialize
         // does not support.
         let mut buf = vec![];
-        buf.extend(&0_i32.to_be_bytes()); // frame length, corrected below
-        buf.extend(&0x20000_i32.to_be_bytes()); // protocol version two
+        buf.extend(0_i32.to_be_bytes()); // frame length, corrected below
+        buf.extend(0x20000_i32.to_be_bytes()); // protocol version two
         buf.extend(b"user\0ignored\0\0"); // dummy user parameter
         let len: i32 = buf.len().try_into()?;
         buf[0..4].copy_from_slice(&len.to_be_bytes());

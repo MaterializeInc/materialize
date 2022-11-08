@@ -102,18 +102,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use mz_persist_client::ShardId;
 use timely::communication::Allocate;
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
+use mz_persist_client::ShardId;
 use mz_repr::GlobalId;
+use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::types::sinks::StorageSinkDesc;
+use mz_storage_client::types::sources::IngestionDescription;
 
-use crate::controller::CollectionMetadata;
 use crate::storage_state::StorageState;
-use crate::types::sinks::StorageSinkDesc;
-use crate::types::sources::IngestionDescription;
 
 mod debezium;
 mod persist_sink;

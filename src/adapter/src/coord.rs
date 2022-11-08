@@ -105,10 +105,12 @@ use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statemen
 use mz_sql::names::Aug;
 use mz_sql::plan::{MutationKind, Params};
 use mz_stash::Append;
-use mz_storage::controller::{CollectionDescription, CreateExportToken, DataSource, StorageError};
-use mz_storage::types::connections::ConnectionContext;
-use mz_storage::types::sinks::StorageSinkConnection;
-use mz_storage::types::sources::{IngestionDescription, SourceExport, Timeline};
+use mz_storage_client::controller::{
+    CollectionDescription, CreateExportToken, DataSource, StorageError,
+};
+use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_client::types::sinks::StorageSinkConnection;
+use mz_storage_client::types::sources::{IngestionDescription, SourceExport, Timeline};
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
@@ -379,7 +381,7 @@ pub struct Coordinator<S> {
     /// active connections.
     active_conns: HashMap<ConnectionId, ConnMeta>,
 
-    /// For each identifier, its read policy and any transaction holds on time.
+    /// For each identifier in STORAGE, its read policy and any read holds on time.
     ///
     /// Transactions should introduce and remove constraints through the methods
     /// `acquire_read_holds` and `release_read_holds`, respectively. The base
@@ -387,7 +389,17 @@ pub struct Coordinator<S> {
     /// to the controller for it to have an effect.
     ///
     /// Access to this field should be restricted to methods in the [`read_policy`] API.
-    read_capability: HashMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
+    storage_read_capabilities: HashMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
+    /// For each identifier in COMPUTE, its read policy and any read holds on time.
+    ///
+    /// Transactions should introduce and remove constraints through the methods
+    /// `acquire_read_holds` and `release_read_holds`, respectively. The base
+    /// policy can also be updated, though one should be sure to communicate this
+    /// to the controller for it to have an effect.
+    ///
+    /// Access to this field should be restricted to methods in the [`read_policy`] API.
+    compute_read_capabilities: HashMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
+
     /// For each transaction, the pinned storage and compute identifiers and time at
     /// which they are pinned.
     ///
@@ -700,7 +712,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 .retry_async(|_| async {
                                     let builder = builder.clone();
                                     let connection_context = connection_context.clone();
-                                    mz_storage::sink::build_sink_connection(
+                                    mz_storage_client::sink::build_sink_connection(
                                         builder,
                                         connection_context,
                                     )
@@ -726,7 +738,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     );
                 }
                 CatalogItem::Connection(catalog_connection) => {
-                    if let mz_storage::types::connections::Connection::AwsPrivateLink(conn) =
+                    if let mz_storage_client::types::connections::Connection::AwsPrivateLink(conn) =
                         &catalog_connection.connection
                     {
                         privatelink_connections.insert(
@@ -1021,7 +1033,7 @@ pub async fn serve<S: Append + 'static>(
     availability_zones.shuffle(&mut rand::thread_rng());
 
     info!("coordinator init: opening catalog");
-    let (mut catalog, builtin_migration_metadata, builtin_table_updates) =
+    let (mut catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
         Catalog::open(catalog::Config {
             storage,
             unsafe_mode,
@@ -1084,7 +1096,8 @@ pub async fn serve<S: Append + 'static>(
                 global_timelines: timestamp_oracles,
                 transient_id_counter: 1,
                 active_conns: HashMap::new(),
-                read_capability: Default::default(),
+                storage_read_capabilities: Default::default(),
+                compute_read_capabilities: Default::default(),
                 txn_reads: Default::default(),
                 pending_peeks: HashMap::new(),
                 client_pending_peeks: HashMap::new(),

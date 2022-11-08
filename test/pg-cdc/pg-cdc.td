@@ -213,9 +213,12 @@ utf<NUMBER>_table     subsource <null>
 
 $ unset-regex
 
-# Dependency graph is that mz_source depends on all subsources
+# Cannot drop subsources independent of primary source
 ! DROP SOURCE conflict_table
-contains: cannot drop materialize.public.conflict_table: still depended upon by catalog item 'materialize.public.mz_source'
+contains: SOURCE materialize.public.conflict_table is a subsource and cannot be dropped independently of its primary source
+
+! DROP SOURCE conflict_table CASCADE
+contains: SOURCE materialize.public.conflict_table is a subsource and cannot be dropped independently of its primary source
 
 > SELECT * FROM no_replica_identity;
 1

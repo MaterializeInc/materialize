@@ -34,7 +34,7 @@ fn main() {
         .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
         .extern_path(".mz_repr.row", "::mz_repr")
         .extern_path(".mz_repr.url", "::mz_repr::url")
-        .extern_path(".mz_storage", "::mz_storage")
+        .extern_path(".mz_storage_client", "::mz_storage_client")
         .compile(
             &[
                 "compute-client/src/command.proto",

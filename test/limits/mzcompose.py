@@ -1220,7 +1220,9 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    Materialized(memory="8G"),
+    # We create all sources, sinks and dataflows by default with SIZE '1'
+    # The workflow_instance_size workflow is testing multi-process clusters
+    Materialized(memory="8G", default_size=1),
     Testdrive(default_timeout="120s"),
 ]
 

@@ -23,10 +23,13 @@
 use std::fmt;
 
 use mz_expr::{
-    explain::Indices, AggregateExpr, Id, JoinImplementation, MirRelationExpr, MirScalarExpr,
+    explain::Indices, AggregateExpr, Id, JoinImplementation, JoinInputCharacteristics,
+    MapFilterProject, MirRelationExpr, MirScalarExpr,
 };
+use mz_ore::soft_assert;
 use mz_ore::str::{bracketed, separated, IndentLike, StrExt};
-use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText};
+use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText, ExprHumanizer};
+use mz_repr::{GlobalId, Row};
 
 use crate::explain_new::{Displayable, PlanRenderingContext};
 
@@ -67,11 +70,19 @@ impl<'a> Displayable<'a, MirRelationExpr> {
         match &self.0 {
             Constant { rows, typ: _ } => match rows {
                 Ok(rows) => {
-                    write!(f, "{}Constant", ctx.indent)?;
-                    self.fmt_attributes(f, ctx)?;
-                    ctx.indented(|ctx| {
-                        fmt_text_constant_rows(f, rows.iter().map(|(x, y)| (x, y)), &mut ctx.indent)
-                    })?;
+                    if !rows.is_empty() {
+                        write!(f, "{}Constant", ctx.indent)?;
+                        self.fmt_attributes(f, ctx)?;
+                        ctx.indented(|ctx| {
+                            fmt_text_constant_rows(
+                                f,
+                                rows.iter().map(|(x, y)| (x, y)),
+                                &mut ctx.indent,
+                            )
+                        })?;
+                    } else {
+                        write!(f, "{}Constant <empty>", ctx.indent)?;
+                    }
                 }
                 Err(err) => {
                     writeln!(f, "{}Error {}", ctx.indent, err.to_string().quoted())?;
@@ -186,7 +197,10 @@ impl<'a> Displayable<'a, MirRelationExpr> {
             Join {
                 inputs,
                 equivalences,
-                implementation,
+                implementation:
+                    implementation @ (JoinImplementation::Differential(..)
+                    | JoinImplementation::DeltaQuery(..)
+                    | JoinImplementation::Unimplemented),
             } => {
                 let has_equivalences = !equivalences.is_empty();
                 let equivalences = separated(
@@ -211,76 +225,90 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                 self.fmt_attributes(f, ctx)?;
 
                 if ctx.config.join_impls {
-                    let input_name = |pos: &usize| -> String {
-                        match &inputs[*pos] {
-                            MirRelationExpr::Get { id, .. } => match id {
-                                Id::Local(id) => id.to_string(),
-                                Id::Global(id) => ctx
-                                    .humanizer
-                                    .humanize_id(*id)
-                                    .unwrap_or_else(|| format!("?{}", id)),
-                            },
-                            _ => format!("%{}", pos),
+                    let input_name = &|pos: usize| -> String {
+                        // Dig out a Get (or IndexedFilter), and return the name of its Id.
+                        fn dig_name_from_expr(
+                            h: &dyn ExprHumanizer,
+                            e: &MirRelationExpr,
+                        ) -> Option<String> {
+                            let global_id_name = |gid: &GlobalId| -> String {
+                                h.humanize_id_unqualified(*gid)
+                                    .unwrap_or_else(|| format!("?{}", gid))
+                            };
+                            let (_mfp, e) = MapFilterProject::extract_from_expression(e);
+                            match e {
+                                Get { id, .. } => match id {
+                                    Id::Local(lid) => Some(lid.to_string()),
+                                    Id::Global(gid) => Some(global_id_name(gid)),
+                                },
+                                ArrangeBy { input, .. } => dig_name_from_expr(h, input),
+                                Join {
+                                    implementation: JoinImplementation::IndexedFilter(gid, ..),
+                                    ..
+                                } => Some(global_id_name(gid)),
+                                _ => None,
+                            }
                         }
+                        match dig_name_from_expr(ctx.humanizer, &inputs[pos]) {
+                            Some(str) => format!("%{}:{}", pos, str),
+                            None => format!("%{}", pos),
+                        }
+                    };
+                    let join_order = |head_idx: usize,
+                                      tail: &Vec<(
+                        usize,
+                        Vec<MirScalarExpr>,
+                        Option<JoinInputCharacteristics>,
+                    )>|
+                     -> String {
+                        format!(
+                            "{} » {}",
+                            input_name(head_idx),
+                            separated(
+                                " » ",
+                                tail.iter().map(|(pos, key, characteristics)| {
+                                    format!(
+                                        "{}[{}]{}",
+                                        input_name(*pos),
+                                        if key.is_empty() {
+                                            "×".to_owned()
+                                        } else {
+                                            separated_text(", ", key.iter().map(Displayable::from))
+                                                .to_string()
+                                        },
+                                        characteristics
+                                            .as_ref()
+                                            .map(|c| c.explain())
+                                            .unwrap_or_else(|| "".to_string())
+                                    )
+                                })
+                            ),
+                        )
                     };
                     ctx.indented(|ctx| {
                         match implementation {
                             JoinImplementation::Differential((head_idx, _head_key), tail) => {
-                                debug_assert_eq!(inputs.len(), tail.len() + 1);
+                                soft_assert!(inputs.len() == tail.len() + 1);
 
                                 writeln!(f, "{}implementation", ctx.indent)?;
                                 ctx.indented(|ctx| {
-                                    writeln!(
-                                        f,
-                                        "{}{} » {}",
-                                        ctx.indent,
-                                        input_name(head_idx),
-                                        separated(
-                                            " » ",
-                                            tail.iter().map(|(pos, key)| {
-                                                format!(
-                                                    "{}[{}]",
-                                                    input_name(pos),
-                                                    separated_text(
-                                                        ", ",
-                                                        key.iter().map(Displayable::from)
-                                                    )
-                                                )
-                                            })
-                                        ),
-                                    )
+                                    writeln!(f, "{}{}", ctx.indent, join_order(*head_idx, tail))
                                 })?;
                             }
                             JoinImplementation::DeltaQuery(half_join_chains) => {
-                                debug_assert_eq!(inputs.len(), half_join_chains.len());
+                                soft_assert!(inputs.len() == half_join_chains.len());
 
                                 writeln!(f, "{}implementation", ctx.indent)?;
                                 ctx.indented(|ctx| {
                                     for (pos, chain) in half_join_chains.iter().enumerate() {
-                                        writeln!(
-                                            f,
-                                            "{}{} » {}",
-                                            ctx.indent,
-                                            input_name(&pos),
-                                            separated(
-                                                " » ",
-                                                chain.iter().map(|(pos, input)| {
-                                                    format!(
-                                                        "{}[{}]",
-                                                        input_name(pos),
-                                                        separated_text(
-                                                            ", ",
-                                                            input.iter().map(Displayable::from)
-                                                        )
-                                                    )
-                                                })
-                                            )
-                                        )?;
+                                        writeln!(f, "{}{}", ctx.indent, join_order(pos, chain))?;
                                     }
                                     Ok(())
                                 })?;
                             }
-                            JoinImplementation::IndexedFilter(_, _, _) => {}
+                            JoinImplementation::IndexedFilter(_, _, _) => {
+                                unreachable!() // because above we matched the other implementations
+                            }
                             JoinImplementation::Unimplemented => {}
                         }
                         Ok(())
@@ -293,6 +321,12 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                     }
                     Ok(())
                 })?;
+            }
+            Join {
+                implementation: JoinImplementation::IndexedFilter(id, _key, literal_constraints),
+                ..
+            } => {
+                Self::fmt_indexed_filter(f, ctx, id, Some(literal_constraints.clone()))?;
             }
             Reduce {
                 group_key,
@@ -436,6 +470,37 @@ impl<'a> Displayable<'a, MirRelationExpr> {
         } else {
             writeln!(f)
         }
+    }
+
+    pub fn fmt_indexed_filter<'b, C>(
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut C,
+        id: &GlobalId,               // The id of the index
+        constants: Option<Vec<Row>>, // The values that we are looking up
+    ) -> fmt::Result
+    where
+        C: AsMut<mz_ore::str::Indent> + AsRef<&'b dyn mz_repr::explain_new::ExprHumanizer>,
+    {
+        let humanized_index = ctx
+            .as_ref()
+            .humanize_id(*id)
+            .unwrap_or_else(|| id.to_string());
+        if let Some(constants) = constants {
+            write!(
+                f,
+                "{}ReadExistingIndex {} lookup_",
+                ctx.as_mut(),
+                humanized_index
+            )?;
+            if constants.len() == 1 {
+                writeln!(f, "value={}", constants.get(0).unwrap())?;
+            } else {
+                writeln!(f, "values=[{}]", separated("; ", constants))?;
+            }
+        } else {
+            writeln!(f, "{}ReadExistingIndex {}", ctx.as_mut(), humanized_index)?;
+        }
+        Ok(())
     }
 }
 

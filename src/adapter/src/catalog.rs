@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use itertools::Itertools;
-use mz_storage::controller::IntrospectionType;
+use mz_storage_client::controller::IntrospectionType;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -66,9 +66,11 @@ use mz_sql::plan::{
 use mz_sql::{plan, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{CreateSinkOption, CreateSourceOption, Statement, WithOptionValue};
 use mz_stash::{Append, Postgres, Sqlite};
-use mz_storage::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
-use mz_storage::types::sinks::{SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder};
-use mz_storage::types::sources::{SourceDesc, Timeline};
+use mz_storage_client::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
+use mz_storage_client::types::sinks::{
+    SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder,
+};
+use mz_storage_client::types::sources::{SourceDesc, Timeline};
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{
@@ -1507,7 +1509,7 @@ pub struct Secret {
 #[derive(Debug, Clone, Serialize)]
 pub struct Connection {
     pub create_sql: String,
-    pub connection: mz_storage::types::connections::Connection,
+    pub connection: mz_storage_client::types::connections::Connection,
     pub depends_on: Vec<GlobalId>,
 }
 
@@ -1780,7 +1782,7 @@ impl CatalogEntry {
         }
     }
 
-    /// Returns the [`mz_storage::types::sources::SourceDesc`] associated with
+    /// Returns the [`mz_storage_client::types::sources::SourceDesc`] associated with
     /// this `CatalogEntry`, if any.
     pub fn source_desc(&self) -> Result<Option<&SourceDesc>, SqlCatalogError> {
         self.item.source_desc(self.name())
@@ -1961,9 +1963,10 @@ impl Catalog<Postgres> {
 impl<S: Append> Catalog<S> {
     /// Opens or creates a catalog that stores data at `path`.
     ///
-    /// Returns the catalog, metadata about builtin objects that have
-    /// changed schemas since last restart, and a list of updates to builtin
-    /// tables that describe the initial state of the catalog.
+    /// Returns the catalog, metadata about builtin objects that have changed
+    /// schemas since last restart, a list of updates to builtin tables that
+    /// describe the initial state of the catalog, and the version of the
+    /// catalog before any migrations were performed.
     #[tracing::instrument(level = "info", skip_all)]
     pub async fn open(
         config: Config<'_, S>,
@@ -1972,6 +1975,7 @@ impl<S: Append> Catalog<S> {
             Catalog<S>,
             BuiltinMigrationMetadata,
             Vec<BuiltinTableUpdate>,
+            String,
         ),
         AdapterError,
     > {
@@ -2347,18 +2351,18 @@ impl<S: Append> Catalog<S> {
             catalog.state.insert_system_configuration(&name, &value)?;
         }
 
-        if !config.skip_migrations {
-            let last_seen_version = catalog
-                .storage()
-                .await
-                .get_catalog_content_version()
-                .await?
-                // `new` means that it hasn't been initialized
-                .unwrap_or_else(|| "new".to_string());
+        let last_seen_version = catalog
+            .storage()
+            .await
+            .get_catalog_content_version()
+            .await?
+            // `new` means that it hasn't been initialized
+            .unwrap_or_else(|| "new".to_string());
 
+        if !config.skip_migrations {
             migrate::migrate(&mut catalog).await.map_err(|e| {
                 Error::new(ErrorKind::FailedMigration {
-                    last_seen_version,
+                    last_seen_version: last_seen_version.clone(),
                     this_version: catalog.config().build_info.version,
                     cause: e.to_string(),
                 })
@@ -2389,7 +2393,7 @@ impl<S: Append> Catalog<S> {
         // Load public keys for SSH connections from the secrets store to the catalog
         for (id, entry) in catalog.state.entry_by_id.iter_mut() {
             if let CatalogItem::Connection(ref mut connection) = entry.item {
-                if let mz_storage::types::connections::Connection::Ssh(ref mut ssh) =
+                if let mz_storage_client::types::connections::Connection::Ssh(ref mut ssh) =
                     connection.connection
                 {
                     let secret = config.secrets_reader.read(*id).await?;
@@ -2460,7 +2464,12 @@ impl<S: Append> Catalog<S> {
             builtin_table_updates.push(catalog.state.pack_egress_ip_update(ip)?);
         }
 
-        Ok((catalog, builtin_migration_metadata, builtin_table_updates))
+        Ok((
+            catalog,
+            builtin_migration_metadata,
+            builtin_table_updates,
+            last_seen_version,
+        ))
     }
 
     /// Loads built-in system types into the catalog.
@@ -2889,7 +2898,7 @@ impl<S: Append> Catalog<S> {
         )
         .await?;
         let secrets_reader = Arc::new(InMemorySecretsController::new());
-        let (catalog, _, _) = Catalog::open(Config {
+        let (catalog, _, _, _) = Catalog::open(Config {
             storage,
             unsafe_mode: true,
             persisted_introspection: true,
@@ -4564,7 +4573,7 @@ impl<S: Append> Catalog<S> {
                     ));
 
                     let mut connection = entry.connection()?.clone();
-                    if let mz_storage::types::connections::Connection::Ssh(ref mut ssh) =
+                    if let mz_storage_client::types::connections::Connection::Ssh(ref mut ssh) =
                         connection.connection
                     {
                         ssh.public_keys = Some(new_public_keypair)
@@ -5445,6 +5454,14 @@ impl ExprHumanizer for ConnCatalog<'_> {
             .map(|name| self.resolve_full_name(name).to_string())
     }
 
+    fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String> {
+        self.state
+            .entry_by_id
+            .get(&id)
+            .map(|entry| entry.name())
+            .map(|name| name.item.clone())
+    }
+
     fn humanize_scalar_type(&self, typ: &ScalarType) -> String {
         use ScalarType::*;
 
@@ -5756,7 +5773,9 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.source_desc()
     }
 
-    fn connection(&self) -> Result<&mz_storage::types::connections::Connection, SqlCatalogError> {
+    fn connection(
+        &self,
+    ) -> Result<&mz_storage_client::types::connections::Connection, SqlCatalogError> {
         Ok(&self.connection()?.connection)
     }
 

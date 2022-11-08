@@ -1114,7 +1114,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                         // Start with the constant input. This is important at least until #14059
                         // is fixed.
                         let start: usize = 1;
-                        let order = vec![(0usize, key.clone())];
+                        let order = vec![(0usize, key.clone(), None)];
                         let source_arrangement = input_keys[start].arbitrary_arrangement();
                         let (ljp, missing) = LinearJoinPlan::create_from(
                             start,
@@ -1143,7 +1143,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     DeltaQuery(orders) => {
                         let (djp, missing) = DeltaJoinPlan::create_from(
                             equivalences,
-                            &orders[..],
+                            orders,
                             input_mapper,
                             &mut mfp,
                             &input_keys,

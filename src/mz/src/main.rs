@@ -157,7 +157,7 @@ struct CloudProviderAndRegion {
 }
 
 /// Constants
-const CLOUD_PROVIDERS_URL: &str = "https://cloud.materialize.com/api/cloud-providers";
+const CLOUD_PROVIDERS_URL: &str = "https://cloud.materialize.com/_metadata/cloud-regions.json";
 const API_TOKEN_AUTH_URL: &str =
     "https://admin.cloud.materialize.com/identity/resources/users/api-tokens/v1";
 const API_FRONTEGG_TOKEN_AUTH_URL: &str =

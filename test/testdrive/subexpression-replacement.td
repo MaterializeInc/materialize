@@ -28,11 +28,11 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 "Explained Query (fast path):  Filter (#0) IS NULL AND (#1 = 5)    ReadExistingIndex t1_primary_idxUsed Indexes:  - t1_primary_idx"
 
 > EXPLAIN SELECT * FROM t1 WHERE col_not_null = 1 AND (col_not_null = 1 AND col_null = 5);
-"Explained Query (fast path):  Project (#0, #1)    ReadExistingIndex t1_primary_idx lookup value (5, 1)Used Indexes:  - t1_primary_idx"
+"Explained Query (fast path):  Project (#0, #1)    ReadExistingIndex t1_primary_idx lookup_value=(5, 1)Used Indexes:  - t1_primary_idx"
 
 # NULL-able expressions are dedupped
 > EXPLAIN SELECT * FROM t1 WHERE col_null = 1 AND (col_null = 1 AND col_not_null = 5);
-"Explained Query (fast path):  Project (#0, #1)    ReadExistingIndex t1_primary_idx lookup value (1, 5)Used Indexes:  - t1_primary_idx"
+"Explained Query (fast path):  Project (#0, #1)    ReadExistingIndex t1_primary_idx lookup_value=(1, 5)Used Indexes:  - t1_primary_idx"
 
 # OR/disjunction at the top level
 
@@ -79,7 +79,7 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 # Use of a deterministic function
 
 > EXPLAIN SELECT * FROM t1 WHERE col_not_null % 2 = 5 AND (col_not_null % 2 = 5 IS NULL);
-"Explained Query (fast path):  Constant"
+"Explained Query (fast path):  Constant <empty>"
 
 # This is not optimized
 > EXPLAIN SELECT * FROM t1 WHERE (col_not_null % 2) = 1 AND (((col_not_null % 2) = 1) = TRUE);
@@ -107,7 +107,7 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 "Explained Query (fast path):  Filter (#1 = 3)    ReadExistingIndex t1_primary_idxUsed Indexes:  - t1_primary_idx"
 
 > EXPLAIN SELECT * FROM t1 WHERE col_not_null IN (2, 3) AND col_not_null IN (4, 5);
-"Explained Query (fast path):  Constant"
+"Explained Query (fast path):  Constant <empty>"
 
 # Expression inside an IN list
 

@@ -14,7 +14,7 @@ use timely::progress::Antichain;
 
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc};
-use mz_storage::controller::CollectionMetadata;
+use mz_storage_client::controller::CollectionMetadata;
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_client.sinks.rs"));
 

@@ -596,6 +596,9 @@ pub trait ExprHumanizer: fmt::Debug {
     /// identified by `id`.
     fn humanize_id(&self, id: GlobalId) -> Option<String>;
 
+    /// Same as above, but without qualifications, e.g., only `foo` for `materialize.public.foo`.
+    fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String>;
+
     /// Returns a human-readable name for the specified scalar type.
     fn humanize_scalar_type(&self, ty: &ScalarType) -> String;
 
@@ -621,6 +624,10 @@ impl ExprHumanizer for DummyHumanizer {
     fn humanize_id(&self, _: GlobalId) -> Option<String> {
         // Returning `None` allows the caller to fall back to displaying the
         // ID, if they so desire.
+        None
+    }
+
+    fn humanize_id_unqualified(&self, _id: GlobalId) -> Option<String> {
         None
     }
 
@@ -657,19 +664,26 @@ where
     let mut first_rows = Vec::with_capacity(20);
     for _ in 0..20 {
         if let Some((row, diff)) = rows.next() {
-            row_count += diff;
+            row_count += diff.abs();
             first_rows.push((row, diff));
         }
     }
-    let rest_of_row_count = rows.into_iter().map(|(_, diff)| diff).sum::<crate::Diff>();
+    let rest_of_row_count = rows
+        .into_iter()
+        .map(|(_, diff)| diff.abs())
+        .sum::<crate::Diff>();
     if rest_of_row_count != 0 {
-        writeln!(f, "{}total_rows: {}", ctx, row_count + rest_of_row_count)?;
+        writeln!(
+            f,
+            "{}total_rows (diffs absed): {}",
+            ctx,
+            row_count + rest_of_row_count
+        )?;
         writeln!(f, "{}first_rows:", ctx)?;
         ctx.indented(move |ctx| write_first_rows(f, &first_rows, ctx))?;
     } else {
         write_first_rows(f, &first_rows, ctx)?;
     }
-
     Ok(())
 }
 

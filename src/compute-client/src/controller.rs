@@ -52,7 +52,7 @@ use mz_expr::RowSetFinishing;
 use mz_orchestrator::{CpuLimit, MemoryLimit, NamespacedOrchestrator};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
-use mz_storage::controller::{ReadPolicy, StorageController, StorageError};
+use mz_storage_client::controller::{ReadPolicy, StorageController, StorageError};
 
 use crate::command::{DataflowDescription, ProcessId, ReplicaId};
 use crate::logging::{LogVariant, LogView, LoggingConfig};
@@ -67,7 +67,6 @@ mod orchestrator;
 mod replica;
 
 pub use mz_orchestrator::ServiceStatus as ComputeInstanceStatus;
-
 /// An abstraction allowing us to name different compute instances.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum ComputeInstanceId {
@@ -326,6 +325,8 @@ pub struct ComputeController<T> {
     stashed_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
     /// Times we have last received responses from replicas.
     replica_heartbeats: BTreeMap<ReplicaId, DateTime<Utc>>,
+    /// A number that increases on every `environmentd` restart.
+    envd_epoch: i64,
 }
 
 impl<T> ComputeController<T> {
@@ -334,6 +335,7 @@ impl<T> ComputeController<T> {
         build_info: &'static BuildInfo,
         orchestrator: Arc<dyn NamespacedOrchestrator>,
         computed_image: String,
+        envd_epoch: i64,
     ) -> Self {
         Self {
             instances: BTreeMap::new(),
@@ -342,6 +344,7 @@ impl<T> ComputeController<T> {
             initialized: false,
             stashed_response: None,
             replica_heartbeats: BTreeMap::new(),
+            envd_epoch,
         }
     }
 
@@ -419,6 +422,7 @@ where
                 arranged_logs,
                 max_result_size,
                 self.orchestrator.clone(),
+                self.envd_epoch,
             ),
         );
 
@@ -545,21 +549,23 @@ where
         replica_id: ReplicaId,
         config: ComputeReplicaConfig,
     ) -> Result<(), ComputeError> {
-        let logging_config = if let Some(interval) = config.logging.interval {
-            let mut sink_logs = BTreeMap::new();
-            for (variant, id) in config.logging.sources {
-                let storage_meta = self.storage.collection(id)?.collection_metadata.clone();
-                sink_logs.insert(variant, (id, storage_meta));
-            }
+        let (enable_logging, interval_ns) = match config.logging.interval {
+            Some(interval) => (true, interval.as_nanos()),
+            None => (false, 1_000_000_000),
+        };
 
-            Some(LoggingConfig {
-                interval_ns: interval.as_nanos(),
-                active_logs: Default::default(),
-                log_logging: config.logging.log_logging,
-                sink_logs,
-            })
-        } else {
-            None
+        let mut sink_logs = BTreeMap::new();
+        for (variant, id) in config.logging.sources {
+            let storage_meta = self.storage.collection(id)?.collection_metadata.clone();
+            sink_logs.insert(variant, (id, storage_meta));
+        }
+
+        let logging_config = LoggingConfig {
+            interval_ns,
+            enable_logging,
+            log_logging: config.logging.log_logging,
+            index_logs: Default::default(),
+            sink_logs,
         };
 
         self.instance(instance_id)?

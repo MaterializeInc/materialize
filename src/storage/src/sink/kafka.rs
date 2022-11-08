@@ -20,7 +20,6 @@ use anyhow::{anyhow, bail, Context};
 use differential_dataflow::{Collection, Hashable};
 use futures::{StreamExt, TryFutureExt};
 use itertools::Itertools;
-use mz_persist_client::ShardId;
 use prometheus::core::AtomicU64;
 use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
@@ -52,18 +51,19 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_ore::retry::Retry;
 use mz_ore::task;
+use mz_persist_client::ShardId;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::types::connections::{ConnectionContext, PopulateClientConfig};
+use mz_storage_client::types::errors::DataflowError;
+use mz_storage_client::types::sinks::{
+    KafkaSinkConnection, PublishedSchemaInfo, SinkAsOf, SinkEnvelope, StorageSinkDesc,
+};
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 
-use crate::controller::CollectionMetadata;
 use crate::render::sinks::{HealthcheckerArgs, SinkRender};
 use crate::sink::{Healthchecker, KafkaBaseMetrics, SinkStatus};
 use crate::storage_state::StorageState;
-use crate::types::connections::{ConnectionContext, PopulateClientConfig};
-use crate::types::errors::DataflowError;
-use crate::types::sinks::{
-    KafkaSinkConnection, PublishedSchemaInfo, SinkAsOf, SinkEnvelope, StorageSinkDesc,
-};
 
 // 30s is a good maximum backoff for network operations. Long enough to reduce
 // load on an upstream system, but short enough that we can respond quickly when
@@ -320,12 +320,15 @@ impl KafkaTxProducer {
     fn send<'a, K, P>(
         &self,
         record: BaseRecord<'a, K, P>,
-    ) -> Result<(), (KafkaError, BaseRecord<'a, K, P>)>
+    ) -> Result<(), (KafkaError, Box<BaseRecord<'a, K, P>>)>
     where
         K: ToBytes + ?Sized,
         P: ToBytes + ?Sized,
     {
-        self.inner.send(record)
+        self.inner
+            .send(record)
+            // box the entire record the rdkakfa crate gives us back
+            .map_err(|(e, record)| (e, Box::new(record)))
     }
 
     async fn retry_on_txn_error<'a, F, Fut, T>(&self, f: F) -> Result<T, String>
@@ -546,7 +549,7 @@ impl KafkaSinkState {
                     return;
                 }
                 Err((e, rec)) => {
-                    record = rec;
+                    record = *rec;
                     self.metrics.message_send_errors_counter.inc();
 
                     if let KafkaError::MessageProduction(RDKafkaErrorCode::QueueFull) = e {

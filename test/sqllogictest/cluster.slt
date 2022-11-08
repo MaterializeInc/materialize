@@ -333,8 +333,15 @@ CREATE CLUSTER foo2 REPLICAS (a (SIZE '32'))
 statement ok
 CREATE CLUSTER foo3 REPLICAS (a (SIZE '2-2'))
 
+# Ensure that identifiers are correctly handled in value position, even when
+# they can't be printed bare. We previously had a bug where `"1"` was
+# incorrectly parsed as size `"1"` (quotes included), but `"small"` was parsed
+# as size `small` (quotes excluded).
 statement ok
-DROP CLUSTER foo, foo2, foo3 CASCADE
+CREATE CLUSTER foo4 REPLICAS (a (SIZE "1"))
+
+statement ok
+DROP CLUSTER foo, foo2, foo3, foo4 CASCADE
 
 # Test that introspection source indexes are created and dropped correctly
 
@@ -371,26 +378,26 @@ CREATE CLUSTER REPLICA default.size_1 SIZE;
 statement ok
 CREATE CLUSTER REPLICA default.size_1 SIZE '1';
 
-query TTT
+query TTTT
 SHOW CLUSTER REPLICAS
 ----
-default r1 1
-default size_1 1
-mz_introspection r1 1
-mz_system r1 1
+default r1 1 false
+default size_1 1 false
+mz_introspection r1 1 false
+mz_system r1 1 false
 
 statement ok
 CREATE CLUSTER foo REPLICAS (size_1 (SIZE '1'), size_2 (SIZE '2'))
 
-query TTT
+query TTTT
 SHOW CLUSTER REPLICAS
 ----
-default r1 1
-default size_1 1
-foo size_1 1
-foo size_2 2
-mz_introspection r1 1
-mz_system r1 1
+default r1 1 false
+default size_1 1 false
+foo size_1 1 false
+foo size_2 2 false
+mz_introspection r1 1 false
+mz_system r1 1 false
 
 statement ok
 DROP CLUSTER REPLICA IF EXISTS default.bar
@@ -410,12 +417,12 @@ DROP CLUSTER REPLICA default.size_1
 statement ok
 DROP CLUSTER REPLICA foo.size_1, foo.size_2
 
-query TTT
+query TTTT
 SHOW CLUSTER REPLICAS
 ----
-default r1 1
-mz_introspection r1 1
-mz_system r1 1
+default r1 1 false
+mz_introspection r1 1 false
+mz_system r1 1 false
 
 statement ok
 CREATE CLUSTER REPLICA default.foo_bar SIZE '1'

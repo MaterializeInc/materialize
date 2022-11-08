@@ -11,7 +11,7 @@ import csv
 import re
 import tempfile
 from pathlib import Path
-from typing import cast
+from typing import Optional, cast
 
 import click
 import numpy as np
@@ -83,11 +83,19 @@ class Opt:
 
     no_indexes = dict(default=False, help="Skip CREATE [DEFAULT]/DROP INDEX DDL.")
 
-    db_port = dict(default=6875, help="DB connection port.")
+    db_port = dict(default=6875, help="DB connection port.", envvar="PGPORT")
 
-    db_host = dict(default="localhost", help="DB connection host.")
+    db_host = dict(default="localhost", help="DB connection host.", envvar="PGHOST")
 
-    db_user = dict(default="materialize", help="DB connection user.")
+    db_user = dict(default="materialize", help="DB connection user.", envvar="PGUSER")
+
+    db_pass = dict(default=None, help="DB connection password.", envvar="PGPASSWORD")
+
+    db_require_ssl = dict(
+        is_flag=True,
+        help="DB connection requires SSL.",
+        envvar="PGREQUIRESSL",
+    )
 
 
 @app.command()
@@ -96,19 +104,29 @@ class Opt:
 @click.option("--db-port", **Opt.db_port)
 @click.option("--db-host", **Opt.db_host)
 @click.option("--db-user", **Opt.db_user)
+@click.option("--db-pass", **Opt.db_pass)
+@click.option("--db-require-ssl", **Opt.db_require_ssl)
 def init(
     scenario: Scenario,
     no_indexes: bool,
     db_port: int,
     db_host: str,
     db_user: str,
+    db_pass: Optional[str],
+    db_require_ssl: bool,
 ) -> None:
     """Initialize the DB under test for the given scenario."""
 
     info(f'Initializing "{scenario}" as the DB under test')
 
     try:
-        db = sql.Database(port=db_port, host=db_host, user=db_user)
+        db = sql.Database(
+            port=db_port,
+            host=db_host,
+            user=db_user,
+            password=db_pass,
+            require_ssl=db_require_ssl,
+        )
 
         db.drop_database(scenario)
         db.create_database(scenario)
@@ -136,6 +154,7 @@ def init(
 @click.option("--db-port", **Opt.db_port)
 @click.option("--db-host", **Opt.db_host)
 @click.option("--db-user", **Opt.db_user)
+@click.option("--db-pass", **Opt.db_pass)
 def run(
     scenario: Scenario,
     samples: int,
@@ -144,13 +163,21 @@ def run(
     db_port: int,
     db_host: str,
     db_user: str,
+    db_pass: Optional[str],
+    db_require_ssl: bool,
 ) -> None:
     """Run benchmark in the DB under test for a given scenario."""
 
     info(f'Running "{scenario}" scenario')
 
     try:
-        db = sql.Database(port=db_port, host=db_host, user=db_user)
+        db = sql.Database(
+            port=db_port,
+            host=db_host,
+            user=db_user,
+            password=db_pass,
+            require_ssl=db_require_ssl,
+        )
         db.set_database(scenario)
 
         df = pd.DataFrame.from_records(

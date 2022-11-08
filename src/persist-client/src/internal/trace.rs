@@ -276,6 +276,8 @@ enum SpineBatch<T> {
     Fueled {
         desc: Description<T>,
         parts: Vec<HollowBatch<T>>,
+        // A cached version of parts.iter().map(|x| x.len).sum()
+        len: usize,
     },
 }
 
@@ -326,15 +328,17 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
             SpineBatch::Merged(HollowBatch { len, .. }) => *len,
             // NB: This is an upper bound on len, we won't know for sure until
             // we compact it.
-            SpineBatch::Fueled { parts, .. } => parts.iter().map(|b| b.len).sum(),
+            SpineBatch::Fueled { len, parts, .. } => {
+                // Sanity check the cached len value in debug mode, to hopefully
+                // find any bugs with its maintenance.
+                debug_assert_eq!(*len, parts.iter().map(|x| x.len).sum::<usize>());
+                *len
+            }
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        match self {
-            SpineBatch::Merged(HollowBatch { len, .. }) => *len == 0,
-            SpineBatch::Fueled { parts, .. } => parts.iter().all(|b| b.len == 0),
-        }
+        self.len() == 0
     }
 
     pub fn empty(lower: Antichain<T>, upper: Antichain<T>, since: Antichain<T>) -> Self {
@@ -401,8 +405,9 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
         // are `[0,1),[1,2),[2,3),[3,4)`, we can swap out the middle two parts for res.
         match self {
             SpineBatch::Fueled {
-                ref parts,
-                ref desc,
+                parts,
+                desc,
+                len: _,
             } => {
                 // first, determine if a subset of parts can be cleanly replaced by the merge res
                 let mut lower = None;
@@ -426,8 +431,9 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
                         new_parts.push(res.output.clone());
                         new_parts.extend_from_slice(&parts[upper + 1..]);
                         let new_spine_batch = SpineBatch::Fueled {
-                            parts: new_parts,
                             desc: desc.to_owned(),
+                            len: new_parts.iter().map(|x| x.len).sum(),
+                            parts: new_parts,
                         };
                         if new_spine_batch.len() > self.len() {
                             return ApplyMergeResult::NotAppliedTooManyUpdates;
@@ -494,6 +500,7 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
 
         SpineBatch::Fueled {
             desc,
+            len: merged_parts.iter().map(|x| x.len).sum(),
             parts: merged_parts,
         }
     }
@@ -1214,20 +1221,23 @@ pub mod datadriven {
                         .collect::<Vec<_>>()
                         .join(""),
                 ),
-                SpineBatch::Fueled { desc, parts } => format!(
-                    "{:?}{:?}{:?} {}/{}{}\n",
-                    desc.lower().elements(),
-                    desc.upper().elements(),
-                    desc.since().elements(),
-                    parts.len(),
-                    parts.iter().map(|x| x.len).sum::<usize>(),
-                    parts
-                        .iter()
-                        .flat_map(|x| x.parts.iter())
-                        .map(|x| format!(" {}", x.key))
-                        .collect::<Vec<_>>()
-                        .join("")
-                ),
+                SpineBatch::Fueled { desc, parts, len } => {
+                    assert_eq!(*len, parts.iter().map(|x| x.len).sum::<usize>());
+                    format!(
+                        "{:?}{:?}{:?} {}/{}{}\n",
+                        desc.lower().elements(),
+                        desc.upper().elements(),
+                        desc.since().elements(),
+                        parts.len(),
+                        len,
+                        parts
+                            .iter()
+                            .flat_map(|x| x.parts.iter())
+                            .map(|x| format!(" {}", x.key))
+                            .collect::<Vec<_>>()
+                            .join("")
+                    )
+                }
             };
             s.push_str(&b);
         });

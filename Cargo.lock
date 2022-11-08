@@ -3111,7 +3111,7 @@ dependencies = [
  "mz-sql",
  "mz-sql-parser",
  "mz-stash",
- "mz-storage",
+ "mz-storage-client",
  "mz-transform",
  "once_cell",
  "prometheus",
@@ -3267,7 +3267,7 @@ dependencies = [
  "mz-prof",
  "mz-repr",
  "mz-service",
- "mz-storage",
+ "mz-storage-client",
  "mz-timely-util",
  "once_cell",
  "prometheus",
@@ -3299,7 +3299,7 @@ dependencies = [
  "mz-proto",
  "mz-repr",
  "mz-service",
- "mz-storage",
+ "mz-storage-client",
  "mz-timely-util",
  "once_cell",
  "proptest",
@@ -3333,7 +3333,7 @@ dependencies = [
  "mz-persist-types",
  "mz-proto",
  "mz-repr",
- "mz-storage",
+ "mz-storage-client",
  "serde",
  "timely",
  "tokio",
@@ -3392,7 +3392,7 @@ dependencies = [
  "mz-service",
  "mz-sql",
  "mz-stash",
- "mz-storage",
+ "mz-storage-client",
  "nix",
  "num_cpus",
  "once_cell",
@@ -4172,7 +4172,7 @@ dependencies = [
  "mz-repr",
  "mz-secrets",
  "mz-sql-parser",
- "mz-storage",
+ "mz-storage-client",
  "once_cell",
  "paste",
  "prost",
@@ -4233,7 +4233,7 @@ dependencies = [
  "mz-secrets",
  "mz-sql",
  "mz-sql-parser",
- "mz-storage",
+ "mz-storage-client",
  "once_cell",
  "postgres-protocol",
  "regex",
@@ -4280,8 +4280,9 @@ dependencies = [
  "mz-build-info",
  "mz-ore",
  "mz-postgres-util",
+ "mz-secrets",
  "mz-stash",
- "mz-storage",
+ "mz-storage-client",
  "once_cell",
  "serde_json",
  "tokio",
@@ -4290,73 +4291,65 @@ dependencies = [
 
 [[package]]
 name = "mz-storage"
-version = "0.0.0"
+version = "0.31.0-dev"
 dependencies = [
  "anyhow",
  "async-compression",
  "async-stream",
  "async-trait",
- "aws-config",
  "aws-sdk-kinesis",
  "aws-sdk-s3",
  "aws-sdk-sqs",
- "aws-smithy-http",
- "aws-types",
- "bytes",
- "bytesize",
+ "axum",
  "chrono",
+ "clap",
  "crossbeam-channel",
  "csv-core",
  "datadriven",
  "dec",
- "derivative",
  "differential-dataflow",
  "fail",
  "futures",
  "globset",
  "http",
- "http-serde",
  "itertools",
  "mz-avro",
  "mz-build-info",
  "mz-ccsr",
  "mz-expr",
+ "mz-http-util",
  "mz-interchange",
  "mz-kafka-util",
  "mz-kinesis-util",
- "mz-orchestrator",
+ "mz-orchestrator-tracing",
  "mz-ore",
- "mz-persist",
  "mz-persist-client",
- "mz-persist-types",
  "mz-pgcopy",
+ "mz-pid-file",
  "mz-postgres-util",
- "mz-proto",
+ "mz-prof",
  "mz-repr",
  "mz-secrets",
  "mz-service",
- "mz-stash",
+ "mz-storage-client",
  "mz-timely-util",
  "once_cell",
  "postgres-protocol",
  "prometheus",
- "proptest",
- "proptest-derive",
  "prost",
  "protobuf-src",
  "rand",
  "rdkafka",
  "regex",
- "sentry",
  "serde",
  "serde_json",
  "thiserror",
+ "tikv-jemallocator",
  "timely",
  "tokio",
  "tokio-postgres",
  "tokio-stream",
  "tokio-util",
- "tonic",
  "tonic-build",
  "tracing",
  "tracing-subscriber",
@@ -4365,27 +4358,58 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-storaged"
-version = "0.31.0-dev"
+name = "mz-storage-client"
+version = "0.0.0"
 dependencies = [
  "anyhow",
- "axum",
- "clap",
- "fail",
+ "async-stream",
+ "async-trait",
+ "aws-config",
+ "aws-smithy-http",
+ "aws-types",
+ "bytes",
+ "datadriven",
+ "derivative",
+ "differential-dataflow",
+ "futures",
+ "globset",
+ "http",
+ "http-serde",
+ "itertools",
  "mz-build-info",
- "mz-http-util",
- "mz-orchestrator-tracing",
+ "mz-ccsr",
+ "mz-expr",
+ "mz-interchange",
+ "mz-kafka-util",
+ "mz-orchestrator",
  "mz-ore",
- "mz-pid-file",
- "mz-prof",
+ "mz-persist",
+ "mz-persist-client",
+ "mz-persist-types",
+ "mz-postgres-util",
+ "mz-proto",
+ "mz-repr",
+ "mz-secrets",
  "mz-service",
- "mz-storage",
- "once_cell",
- "tikv-jemallocator",
+ "mz-stash",
+ "mz-timely-util",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "protobuf-src",
+ "rdkafka",
+ "regex",
+ "serde",
  "timely",
  "tokio",
+ "tokio-postgres",
+ "tokio-stream",
+ "tonic",
+ "tonic-build",
  "tracing",
  "tracing-subscriber",
+ "url",
+ "uuid",
 ]
 
 [[package]]
@@ -4480,9 +4504,11 @@ version = "0.0.0"
 dependencies = [
  "differential-dataflow",
  "futures-util",
+ "mz-ore",
  "proptest",
  "serde",
  "timely",
+ "timely_communication",
  "tokio",
 ]
 
@@ -4500,7 +4526,6 @@ dependencies = [
  "mz-lowertest",
  "mz-ore",
  "mz-repr",
- "mz-storage",
  "num-derive",
  "num-traits",
  "proc-macro2",
@@ -4524,9 +4549,9 @@ dependencies = [
 
 [[package]]
 name = "native-tls"
-version = "0.2.10"
+version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd7e2f3618557f980e0b17e8856252eee3c97fa12c54dff0ca290fb6266ca4a9"
+checksum = "07226173c32f2926027b63cce4bcd8076c3552846cbe7925f3aaffeac0a3b92e"
 dependencies = [
  "lazy_static",
  "libc",
@@ -5420,9 +5445,9 @@ dependencies = [
 
 [[package]]
 name = "prost"
-version = "0.11.0"
+version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "399c3c31cdec40583bb68f0b18403400d01ec4289c383aa047560439952c4dd7"
+checksum = "a0841812012b2d4a6145fae9a6af1534873c32aa67fff26bd09f8fa42c83f95a"
 dependencies = [
  "bytes",
  "prost-derive",
@@ -6628,7 +6653,7 @@ checksum = "42657b1a6f4d817cda8e7a0ace261fe0cc946cf3a80314390b22cc61ae080792"
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#9548bf9c53418284a811ffc0d397d3d9c26c78ff"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#157b80dead4f943a2ee6548eb2245787fbe9c5bd"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -6646,12 +6671,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#9548bf9c53418284a811ffc0d397d3d9c26c78ff"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#157b80dead4f943a2ee6548eb2245787fbe9c5bd"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#9548bf9c53418284a811ffc0d397d3d9c26c78ff"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#157b80dead4f943a2ee6548eb2245787fbe9c5bd"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -6667,7 +6692,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#9548bf9c53418284a811ffc0d397d3d9c26c78ff"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#157b80dead4f943a2ee6548eb2245787fbe9c5bd"
 dependencies = [
  "columnation",
  "serde",
@@ -6676,7 +6701,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#9548bf9c53418284a811ffc0d397d3d9c26c78ff"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#157b80dead4f943a2ee6548eb2245787fbe9c5bd"
 
 [[package]]
 name = "tinytemplate"

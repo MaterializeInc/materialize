@@ -165,10 +165,31 @@ function parseMzfg(input) {
         if (!parsedLine) {
             throw "Invalid symbol line: " + line;
         }
+        // unescape the semicolons and backslashes in the line
+        let escaping = false;
+        let path = [];
+        let name_buf = "";
+        for (const ch of parsedLine.groups['names']) {
+            if (escaping) {
+                name_buf += ch;
+                escaping = false;
+            } else if (ch == '\\') {
+                escaping = true;
+            } else if (ch == ';') {
+                // we split on un-escaped `;`, so we add the piece here
+                // and reset the buffer
+                path.push(name_buf);
+                name_buf = "";
+            } else {
+                name_buf += ch;
+            }
+        }
 
-        let path = parsedLine.groups['names'].split(';');
-        // ignore the trailing comma
-        path.pop();
+        // There should be a trailing semicolon, but let's
+        // be robust in case there isn't
+        if (name_buf) {
+            path.push(name_buf);
+        }
         const addr = parsedLine.groups['address'];
         names[addr] = path;
     }

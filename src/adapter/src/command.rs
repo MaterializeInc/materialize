@@ -347,7 +347,7 @@ impl ExecuteResponse {
             DroppedSource => Some("DROP SOURCE".into()),
             DroppedTable => Some("DROP TABLE".into()),
             DroppedView => Some("DROP VIEW".into()),
-            DroppedMaterializedView => Some("DROP MATERIALIZED view".into()),
+            DroppedMaterializedView => Some("DROP MATERIALIZED VIEW".into()),
             DroppedIndex => Some("DROP INDEX".into()),
             DroppedSink => Some("DROP SINK".into()),
             DroppedType => Some("DROP TYPE".into()),

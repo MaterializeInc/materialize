@@ -337,7 +337,7 @@ pub fn decode_trace_inline_meta(
     inline_base64: Option<&String>,
 ) -> Result<(ProtoBatchFormat, ProtoBatchPartInline), Error> {
     let inline_base64 = inline_base64.ok_or("missing batch metadata")?;
-    let inline_encoded = base64::decode(&inline_base64).map_err(|err| err.to_string())?;
+    let inline_encoded = base64::decode(inline_base64).map_err(|err| err.to_string())?;
     let inline = ProtoBatchPartInline::decode(&*inline_encoded).map_err(|err| err.to_string())?;
     let format = ProtoBatchFormat::from_i32(inline.format)
         .ok_or_else(|| Error::from(format!("unknown format: {}", inline.format)))?;

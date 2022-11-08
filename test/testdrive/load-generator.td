@@ -9,17 +9,13 @@
 
 > CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
-$ set-regex match=\d+ replacement=<SIZE>
-
 > SHOW SOURCES
 accounts      subsource      <null>
-auction_house load-generator <SIZE>
+auction_house load-generator ${arg.default-storage-size}
 auctions      subsource      <null>
 bids          subsource      <null>
 organizations subsource      <null>
 users         subsource      <null>
-
-$ unset-regex
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
 

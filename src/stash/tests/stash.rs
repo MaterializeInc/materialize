@@ -7,7 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::{collections::BTreeMap, convert::Infallible};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    convert::Infallible,
+};
 
 use futures::Future;
 use postgres_openssl::MakeTlsConnector;
@@ -97,10 +100,10 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
     }
     // Test readonly.
     {
+        Postgres::clear(&connstr, tls.clone()).await.unwrap();
         let mut stash_rw = Postgres::new(connstr.to_string(), None, tls.clone())
             .await
             .unwrap();
-        stash_rw.collection::<i64, i64>("c1").await.unwrap();
         let col_rw = stash_rw.collection::<i64, i64>("c1").await.unwrap();
         let mut batch = col_rw.make_batch(&mut stash_rw).await.unwrap();
         col_rw.append_to_batch(&mut batch, &1, &2, 1);
@@ -108,7 +111,7 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
 
         // Now make a readonly stash. We should fail to create new collections,
         // but be able to read existing collections.
-        let mut stash_ro = Postgres::new_readonly(connstr.to_string(), None, tls)
+        let mut stash_ro = Postgres::new_readonly(connstr.to_string(), None, tls.clone())
             .await
             .unwrap();
         let res = stash_ro.collection::<i64, i64>("c2").await;
@@ -121,6 +124,52 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
 
         // The previous stash should still be the leader.
         assert!(stash_rw.confirm_leadership().await.is_ok());
+    }
+    // Test savepoint.
+    {
+        let mut stash_rw = Postgres::new(connstr.to_string(), None, tls.clone())
+            .await
+            .unwrap();
+        // Data still present from previous test.
+        let c1_rw = stash_rw.collection::<i64, i64>("c1").await.unwrap();
+
+        // Now make a savepoint stash. We should be allowed to create anything
+        // we want, but it shouldn't be viewable to other stashes.
+        let mut stash_sp = Postgres::new_savepoint(connstr.to_string(), tls)
+            .await
+            .unwrap();
+        let c1_sp = stash_rw.collection::<i64, i64>("c1").await.unwrap();
+        let mut batch = c1_sp.make_batch(&mut stash_sp).await.unwrap();
+        c1_sp.append_to_batch(&mut batch, &5, &6, 1);
+        stash_sp.append(&[batch]).await.unwrap();
+        assert_eq!(
+            stash_sp.peek(c1_sp).await.unwrap(),
+            vec![(1, 2, 1), (5, 6, 1)]
+        );
+        // RW collection can't see the new row.
+        assert_eq!(stash_rw.peek(c1_rw).await.unwrap(), vec![(1, 2, 1)]);
+
+        // SP stash can create a new collection, append to it, peek it.
+        let c_savepoint = stash_sp
+            .collection::<i64, i64>("c_savepoint")
+            .await
+            .unwrap();
+        let mut batch = c_savepoint.make_batch(&mut stash_sp).await.unwrap();
+        c_savepoint.append_to_batch(&mut batch, &3, &4, 1);
+        stash_sp.append(&[batch]).await.unwrap();
+        assert_eq!(stash_sp.peek(c_savepoint).await.unwrap(), vec![(3, 4, 1)]);
+        // But the RW collection can't see it.
+        assert_eq!(
+            stash_rw.collections().await.unwrap(),
+            BTreeSet::from(["c1".to_string()])
+        );
+
+        drop(stash_sp);
+
+        // The previous stash should still be the leader.
+        assert!(stash_rw.confirm_leadership().await.is_ok());
+        // Verify c1 didn't change.
+        assert_eq!(stash_rw.peek(c1_rw).await.unwrap(), vec![(1, 2, 1)]);
     }
 
     Ok(())

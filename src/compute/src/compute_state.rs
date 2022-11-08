@@ -37,8 +37,8 @@ use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_storage::controller::CollectionMetadata;
-use mz_storage::types::errors::DataflowError;
+use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::operator::CollectionExt;
 use tracing::{span, Level};
@@ -116,7 +116,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             .command_history
             .push(cmd.clone(), &self.compute_state.pending_peeks);
         match cmd {
-            CreateTimely(_) => panic!("CreateTimely must be captured before"),
+            CreateTimely { .. } => panic!("CreateTimely must be captured before"),
             CreateInstance(config) => self.handle_create_instance(config),
             DropInstance => (),
             InitializationComplete => (),
@@ -134,9 +134,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     }
 
     fn handle_create_instance(&mut self, config: InstanceConfig) {
-        if let Some(logging) = config.logging {
-            self.initialize_logging(&logging);
-        }
+        self.initialize_logging(&config.logging);
     }
 
     fn handle_create_dataflows(
@@ -503,32 +501,32 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
         // Install traces as maintained indexes
         for (log, (trace, token)) in t_traces {
-            let id = logging.active_logs[&log];
+            let id = logging.index_logs[&log];
             self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
         }
         for (log, (trace, token)) in r_traces {
-            let id = logging.active_logs[&log];
+            let id = logging.index_logs[&log];
             self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
         }
         for (log, (trace, token)) in d_traces {
-            let id = logging.active_logs[&log];
+            let id = logging.index_logs[&log];
             self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
         }
         for (log, (trace, token)) in c_traces {
-            let id = logging.active_logs[&log];
+            let id = logging.index_logs[&log];
             self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
         }
 
         // Initialize frontier reporting for all logging indexes and sinks.
-        let index_ids = logging.active_logs.values().copied();
+        let index_ids = logging.index_logs.values().copied();
         let sink_ids = logging.sink_logs.values().map(|(id, _)| *id);
         for id in index_ids.chain(sink_ids) {
             self.compute_state.reported_frontiers.insert(

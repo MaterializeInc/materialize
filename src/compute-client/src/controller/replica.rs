@@ -22,7 +22,7 @@ use mz_build_info::BuildInfo;
 use mz_ore::retry::Retry;
 use mz_service::client::GenericClient;
 
-use crate::command::{CommunicationConfig, ComputeCommand, ReplicaId};
+use crate::command::{CommunicationConfig, ComputeCommand, ComputeStartupEpoch, ReplicaId};
 use crate::logging::LoggingConfig;
 use crate::response::ComputeResponse;
 use crate::service::{ComputeClient, ComputeGrpcClient};
@@ -46,7 +46,7 @@ pub(super) struct Replica<T> {
     /// Location of the replica
     pub location: ComputeReplicaLocation,
     /// The logging config specific to this replica.
-    pub logging_config: Option<LoggingConfig>,
+    pub logging_config: LoggingConfig,
 }
 
 impl<T> Replica<T>
@@ -59,8 +59,9 @@ where
         instance_id: ComputeInstanceId,
         build_info: &'static BuildInfo,
         location: ComputeReplicaLocation,
-        logging_config: Option<LoggingConfig>,
+        logging_config: LoggingConfig,
         orchestrator: ComputeOrchestrator,
+        epoch: ComputeStartupEpoch,
     ) -> Self {
         // Launch a task to handle communication with the replica
         // asynchronously. This isolates the main controller thread from
@@ -78,6 +79,7 @@ where
                 orchestrator,
                 command_rx,
                 response_tx,
+                epoch,
             }
             .run(),
         );
@@ -115,7 +117,7 @@ struct ReplicaTask<T> {
     /// Location
     location: ComputeReplicaLocation,
     /// Logging
-    logging_config: Option<LoggingConfig>,
+    logging_config: LoggingConfig,
     /// The build information for this process.
     build_info: &'static BuildInfo,
     /// A channel upon which commands intended for the replica are delivered.
@@ -124,6 +126,9 @@ struct ReplicaTask<T> {
     response_tx: UnboundedSender<ComputeResponse<T>>,
     /// Orchestrator responsible for setting up computeds
     orchestrator: ComputeOrchestrator,
+    /// A number (technically, pair of numbers) identifying this incarnation of the replica.
+    /// The semantics of this don't matter, except that it must strictly increase.
+    epoch: ComputeStartupEpoch,
 }
 
 impl<T> ReplicaTask<T>
@@ -154,6 +159,7 @@ where
             command_rx,
             response_tx,
             orchestrator,
+            epoch,
         } = self;
 
         let is_managed = matches!(location, ComputeReplicaLocation::Managed { .. });
@@ -164,6 +170,7 @@ where
         let cmd_spec = CommandSpecialization {
             logging_config,
             comm_config,
+            epoch,
         };
 
         let res = run_message_loop(
@@ -209,10 +216,17 @@ where
                 match ComputeGrpcClient::connect_partitioned(addrs, version).await {
                     Ok(client) => Ok(client),
                     Err(e) => {
-                        tracing::warn!(
-                            "error connecting to replica {replica_id}, retrying in {:?}: {e}",
-                            state.next_backoff.unwrap()
-                        );
+                        if state.i >= mz_service::retry::INFO_MIN_RETRIES {
+                            tracing::info!(
+                                "error connecting to replica {replica_id}, retrying in {:?}: {e}",
+                                state.next_backoff.unwrap()
+                            );
+                        } else {
+                            tracing::debug!(
+                                "error connecting to replica {replica_id}, retrying in {:?}: {e}",
+                                state.next_backoff.unwrap()
+                            );
+                        }
                         Err(e)
                     }
                 }
@@ -255,8 +269,9 @@ where
 }
 
 struct CommandSpecialization {
-    logging_config: Option<LoggingConfig>,
+    logging_config: LoggingConfig,
     comm_config: CommunicationConfig,
+    epoch: ComputeStartupEpoch,
 }
 
 impl CommandSpecialization {
@@ -270,8 +285,9 @@ impl CommandSpecialization {
             config.logging = self.logging_config.clone();
         }
 
-        if let ComputeCommand::CreateTimely(comm_config) = command {
+        if let ComputeCommand::CreateTimely { comm_config, epoch } = command {
             *comm_config = self.comm_config.clone();
+            *epoch = self.epoch;
         }
     }
 }

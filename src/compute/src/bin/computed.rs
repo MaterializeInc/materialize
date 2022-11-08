@@ -96,6 +96,7 @@ async fn main() {
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::set_abort_on_panic();
+    mz_timely_util::panic::halt_on_timely_communication_panic();
     let (tracing_target_callbacks, _sentry_guard) = mz_ore::tracing::configure(
         "computed",
         &args.tracing,
@@ -106,7 +107,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     let mut _pid_file = None;
     if let Some(pid_file_location) = &args.pid_file_location {
-        _pid_file = Some(PidFile::open(&pid_file_location).unwrap());
+        _pid_file = Some(PidFile::open(pid_file_location).unwrap());
     }
 
     info!("about to bind to {:?}", args.controller_listen_addr);

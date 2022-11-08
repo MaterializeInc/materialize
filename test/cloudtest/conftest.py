@@ -29,6 +29,7 @@ def mz(pytestconfig: pytest.Config) -> MaterializeApplication:
     return MaterializeApplication(
         release_mode=(not pytestconfig.getoption("dev")),
         aws_region=pytestconfig.getoption("aws_region"),
+        log_filter=pytestconfig.getoption("log_filter"),
     )
 
 
@@ -44,4 +45,10 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store",
         default=None,
         help="AWS region to pass to testdrive",
+    )
+    parser.addoption(
+        "--log-filter",
+        action="store",
+        default=None,
+        help="Log filter for Materialize binaries",
     )

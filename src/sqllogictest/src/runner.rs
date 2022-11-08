@@ -78,7 +78,7 @@ use mz_sql_parser::{
     ast::{display::AstDisplay, CreateIndexStatement, RawObjectName, Statement as AstStatement},
     parser,
 };
-use mz_storage::types::connections::ConnectionContext;
+use mz_storage_client::types::connections::ConnectionContext;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
 use crate::util;

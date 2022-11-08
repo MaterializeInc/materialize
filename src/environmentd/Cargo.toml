@@ -51,7 +51,7 @@ mz-secrets = { path = "../secrets" }
 mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
 mz-stash = { path = "../stash" }
-mz-storage = { path = "../storage" }
+mz-storage-client = { path = "../storage-client" }
 nix = "0.25.0"
 num_cpus = "1.13.1"
 openssl = { version = "0.10.42", features = ["vendored"] }

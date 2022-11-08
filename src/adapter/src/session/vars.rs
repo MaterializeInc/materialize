@@ -389,6 +389,8 @@ impl SessionVars {
             &self.integer_datetimes,
             &self.server_version,
             &self.standard_conforming_strings,
+            &self.timezone,
+            &self.interval_style,
         ]
         .into_iter()
     }

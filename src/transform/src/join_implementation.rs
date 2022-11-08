@@ -21,8 +21,8 @@ use std::collections::HashMap;
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::JoinImplementation::IndexedFilter;
 use mz_expr::{
-    FilterCharacteristics, Id, JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr,
-    RECURSION_LIMIT,
+    FilterCharacteristics, Id, JoinInputCharacteristics, JoinInputMapper, MapFilterProject,
+    MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
@@ -423,7 +423,7 @@ mod delta_queries {
                 .map(|o| {
                     o.into_iter()
                         .skip(1)
-                        .map(|(_c, k, r)| (r, k))
+                        .map(|(c, k, r)| (r, k, Some(c)))
                         .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>();
@@ -447,9 +447,10 @@ mod delta_queries {
 }
 
 mod differential {
-    use crate::join_implementation::{Characteristics, FilterCharacteristics};
+    use crate::join_implementation::{FilterCharacteristics, JoinInputCharacteristics};
     use itertools::Itertools;
     use mz_expr::{JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+    use mz_ore::soft_assert;
 
     use crate::TransformError;
 
@@ -487,7 +488,7 @@ mod differential {
             //    the `skip(1)` when thinking this through.)
             orders.iter_mut().for_each(|order| {
                 let mut sum = FilterCharacteristics::none();
-                for (Characteristics { filters, .. }, _, _) in order {
+                for (JoinInputCharacteristics { filters, .. }, _, _) in order {
                     *filters |= sum;
                     sum = filters.clone();
                 }
@@ -525,19 +526,20 @@ mod differential {
                         ))
                     })?
                     .into_iter()
-                    .map(|(_c, k, r)| (r, k))
+                    .map(|(c, k, r)| (r, k, Some(c)))
                     .collect::<Vec<_>>()
             } else {
                 // if max_min_characteristics is None, then there must only be
                 // one input and thus only one order in orders
+                soft_assert!(orders.len() == 1);
                 orders
                     .remove(0)
                     .into_iter()
-                    .map(|(_c, k, r)| (r, k))
+                    .map(|(c, k, r)| (r, k, Some(c)))
                     .collect::<Vec<_>>()
             };
 
-            let (start, start_keys) = &order[0];
+            let (start, start_keys, _characteristics) = &order[0];
             let start = *start;
             let start_keys = if available[start].contains(start_keys) {
                 Some(start_keys.clone())
@@ -579,11 +581,13 @@ mod differential {
 fn implement_arrangements<'a>(
     inputs: &mut [MirRelationExpr],
     available_arrangements: &[Vec<Vec<MirScalarExpr>>],
-    needed_arrangements: impl Iterator<Item = &'a (usize, Vec<MirScalarExpr>)>,
+    needed_arrangements: impl Iterator<
+        Item = &'a (usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>),
+    >,
 ) -> MapFilterProject {
     // Collect needed arrangements by source index.
     let mut needed = vec![Vec::new(); inputs.len()];
-    for (index, key) in needed_arrangements {
+    for (index, key, _characteristics) in needed_arrangements {
         needed[*index].push(key.clone());
     }
 
@@ -696,50 +700,11 @@ fn optimize_orders(
     unique_keys: &[Vec<Vec<usize>>],
     filters: &[FilterCharacteristics],
     input_mapper: &JoinInputMapper,
-) -> Vec<Vec<(Characteristics, Vec<MirScalarExpr>, usize)>> {
+) -> Vec<Vec<(JoinInputCharacteristics, Vec<MirScalarExpr>, usize)>> {
     let mut orderer = Orderer::new(equivalences, available, unique_keys, filters, input_mapper);
     (0..available.len())
         .map(move |i| orderer.optimize_order_for(i))
         .collect::<Vec<_>>()
-}
-
-/// Characteristics of a join order candidate collection.
-///
-/// A candidate is described by a collection and a key, and may have various liabilities.
-/// Primarily, the candidate may risk substantial inflation of records, which is something
-/// that concerns us greatly. Additionally the candidate may be unarranged, and we would
-/// prefer candidates that do not require additional memory. Finally, we prefer lower id
-/// collections in the interest of consistent tie-breaking.
-#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone)]
-pub struct Characteristics {
-    // An excellent indication that record count will not increase.
-    unique_key: bool,
-    // A weaker signal that record count will not increase.
-    key_length: usize,
-    // Indicates that there will be no additional in-memory footprint.
-    arranged: bool,
-    // Characteristics of the filter that is applied at this input.
-    filters: FilterCharacteristics,
-    // We want to prefer input earlier in the input list, for stability of ordering.
-    input: std::cmp::Reverse<usize>,
-}
-
-impl Characteristics {
-    fn new(
-        unique_key: bool,
-        key_length: usize,
-        arranged: bool,
-        filters: FilterCharacteristics,
-        input: usize,
-    ) -> Self {
-        Self {
-            unique_key,
-            key_length,
-            arranged,
-            filters,
-            input: std::cmp::Reverse(input),
-        }
-    }
 }
 
 struct Orderer<'a> {
@@ -752,12 +717,13 @@ struct Orderer<'a> {
     reverse_equivalences: Vec<Vec<(usize, usize)>>,
     unique_arrangement: Vec<Vec<bool>>,
 
-    order: Vec<(Characteristics, Vec<MirScalarExpr>, usize)>,
+    order: Vec<(JoinInputCharacteristics, Vec<MirScalarExpr>, usize)>,
     placed: Vec<bool>,
     bound: Vec<Vec<MirScalarExpr>>,
     equivalences_active: Vec<bool>,
     arrangement_active: Vec<Vec<usize>>,
-    priority_queue: std::collections::BinaryHeap<(Characteristics, Vec<MirScalarExpr>, usize)>,
+    priority_queue:
+        std::collections::BinaryHeap<(JoinInputCharacteristics, Vec<MirScalarExpr>, usize)>,
 }
 
 impl<'a> Orderer<'a> {
@@ -816,7 +782,7 @@ impl<'a> Orderer<'a> {
     fn optimize_order_for(
         &mut self,
         start: usize,
-    ) -> Vec<(Characteristics, Vec<MirScalarExpr>, usize)> {
+    ) -> Vec<(JoinInputCharacteristics, Vec<MirScalarExpr>, usize)> {
         self.order.clear();
         self.priority_queue.clear();
         for input in 0..self.inputs {
@@ -837,13 +803,25 @@ impl<'a> Orderer<'a> {
             {
                 self.arrangement_active[input].push(pos);
                 self.priority_queue.push((
-                    Characteristics::new(is_unique, 0, true, self.filters[input].clone(), input),
+                    JoinInputCharacteristics::new(
+                        is_unique,
+                        0,
+                        true,
+                        self.filters[input].clone(),
+                        input,
+                    ),
                     vec![],
                     input,
                 ));
             } else {
                 self.priority_queue.push((
-                    Characteristics::new(is_unique, 0, false, self.filters[input].clone(), input),
+                    JoinInputCharacteristics::new(
+                        is_unique,
+                        0,
+                        false,
+                        self.filters[input].clone(),
+                        input,
+                    ),
                     vec![],
                     input,
                 ));
@@ -869,7 +847,7 @@ impl<'a> Orderer<'a> {
         // calculate characteristics of an arrangement, if any on the starting input
         // by default, there is no arrangement on the starting input
         let mut start_tuple = (
-            Characteristics::new(false, 0, false, self.filters[start].clone(), start),
+            JoinInputCharacteristics::new(false, 0, false, self.filters[start].clone(), start),
             vec![],
             start,
         );
@@ -894,7 +872,7 @@ impl<'a> Orderer<'a> {
                 {
                     let is_unique = self.unique_arrangement[start][pos];
                     start_tuple = (
-                        Characteristics::new(
+                        JoinInputCharacteristics::new(
                             is_unique,
                             candidate_start_key.len(),
                             true,
@@ -968,7 +946,7 @@ impl<'a> Orderer<'a> {
                                             // TODO: This could be pre-computed, as it is independent of the order.
                                             let is_unique = self.unique_arrangement[rel][pos];
                                             self.priority_queue.push((
-                                                Characteristics::new(
+                                                JoinInputCharacteristics::new(
                                                     is_unique,
                                                     keys.len(),
                                                     true,
@@ -987,7 +965,7 @@ impl<'a> Orderer<'a> {
                                     })
                                 });
                                 self.priority_queue.push((
-                                    Characteristics::new(
+                                    JoinInputCharacteristics::new(
                                         is_unique,
                                         self.bound[rel].len(),
                                         false,

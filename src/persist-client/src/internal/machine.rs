@@ -81,7 +81,7 @@ where
         shard_id: ShardId,
         metrics: Arc<Metrics>,
         state_versions: Arc<StateVersions>,
-    ) -> Result<Self, CodecMismatch> {
+    ) -> Result<Self, Box<CodecMismatch>> {
         let shard_metrics = metrics.shards.shard(&shard_id);
         let state = metrics
             .cmds

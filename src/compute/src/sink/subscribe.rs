@@ -23,8 +23,8 @@ use timely::progress::Antichain;
 use mz_compute_client::response::{SubscribeBatch, SubscribeResponse};
 use mz_compute_client::sinks::{ComputeSinkDesc, SinkAsOf, SubscribeSinkConnection};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_storage::controller::CollectionMetadata;
-use mz_storage::types::errors::DataflowError;
+use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::types::errors::DataflowError;
 
 use crate::render::sinks::SinkRender;
 

@@ -172,7 +172,7 @@ Explained Query:
   Project (#0, #1, #0, #1) // { arity: 4 }
     Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
       implementation
-        %1 » %0[#0, #1]
+        %1:t2 » %0:t1[#0, #1]KKA
       ArrangeBy keys=[[#0, #1]] // { arity: 2 }
         Filter (#0) IS NOT NULL AND (#1) IS NOT NULL // { arity: 2 }
           Get materialize.public.t1 // { arity: 2 }
@@ -194,7 +194,7 @@ select * from t1, t2 where t1.f1 = t2.f1 + 1 or (t1.f1 is null and t2.f1 is null
 Explained Query:
   Join on=(#0 = (#2 + 1)) type=differential // { arity: 4 }
     implementation
-      materialize.public.t2 » %0[#0]
+      %1:t2 » %0:t1[#0]KA
     ArrangeBy keys=[[#0]] // { arity: 2 }
       Get materialize.public.t1 // { arity: 2 }
     Get materialize.public.t2 // { arity: 2 }
@@ -208,7 +208,7 @@ select * from t1, t2 where t1.f1 = t2.f1 + 1 or (t1.f1 is null and (t2.f1 + 1) i
 Explained Query:
   Join on=(#0 = (#2 + 1)) type=differential // { arity: 4 }
     implementation
-      materialize.public.t2 » %0[#0]
+      %1:t2 » %0:t1[#0]KA
     ArrangeBy keys=[[#0]] // { arity: 2 }
       Get materialize.public.t1 // { arity: 2 }
     Get materialize.public.t2 // { arity: 2 }
@@ -222,7 +222,7 @@ select * from t1, t2 where t2.f1 = t1.f1 + 1 or (t1.f1 is null and (t2.f1 + 1) i
 Explained Query:
   Join on=(#2 = (#0 + 1)) type=differential // { arity: 4 }
     implementation
-      materialize.public.t2 » %0[(#0 + 1)]
+      %1:t2 » %0:t1[(#0 + 1)]KA
     ArrangeBy keys=[[(#0 + 1)]] // { arity: 2 }
       Get materialize.public.t1 // { arity: 2 }
     Get materialize.public.t2 // { arity: 2 }
@@ -236,7 +236,7 @@ select * from t1, t2 where t2.f1 = t1.f1 + 1 or (t1.f1 is null and ((t2.f1 + 1) 
 Explained Query:
   Join on=(#2 = (#0 + 1)) type=differential // { arity: 4 }
     implementation
-      materialize.public.t2 » %0[(#0 + 1)]
+      %1:t2 » %0:t1[(#0 + 1)]KA
     ArrangeBy keys=[[(#0 + 1)]] // { arity: 2 }
       Get materialize.public.t1 // { arity: 2 }
     Get materialize.public.t2 // { arity: 2 }
@@ -254,7 +254,7 @@ Explained Query:
     Filter (((#1 = 3) AND (#3 = 4)) OR ((#1 = 5) AND (#3 = 6))) // { arity: 4 }
       Join on=(#0 = #2) type=differential // { arity: 4 }
         implementation
-          %1 » %0[#0]
+          %1:t2 » %0:t1[#0]KAef
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Filter (#0) IS NOT NULL AND ((#1 = 3) OR (#1 = 5)) // { arity: 2 }
             Get materialize.public.t1 // { arity: 2 }
@@ -277,7 +277,7 @@ Explained Query:
     Filter ((#1 = 5) OR ((#1 = 3) AND (#3 = 4))) // { arity: 4 }
       Join on=(#0 = #2) type=differential // { arity: 4 }
         implementation
-          %1 » %0[#0]
+          %1:t2 » %0:t1[#0]KAef
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Filter (#0) IS NOT NULL AND ((#1 = 3) OR (#1 = 5)) // { arity: 2 }
             Get materialize.public.t1 // { arity: 2 }
@@ -300,7 +300,7 @@ Explained Query:
   Filter ((#1 = 27) OR ((#0 = #2) AND (#1 <= 1995))) // { arity: 4 }
     CrossJoin type=differential // { arity: 4 }
       implementation
-        materialize.public.t2 » %0[]
+        %1:t2 » %0:t1[×]Aeiif
       ArrangeBy keys=[[]] // { arity: 2 }
         Filter ((#1 = 27) OR (#1 <= 1995)) // { arity: 2 }
           Get materialize.public.t1 // { arity: 2 }

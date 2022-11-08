@@ -7,8 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_ore::soft_assert_or_log;
-use std::{collections::BTreeMap, ffi::c_void, time::Instant};
+use std::{collections::BTreeMap, ffi::c_void, sync::atomic::AtomicBool, time::Instant};
 
 pub mod http;
 #[cfg(all(not(target_os = "macos"), feature = "jemalloc"))]
@@ -68,10 +67,11 @@ impl StackProfile {
             for (addr, names) in symbols {
                 if !names.is_empty() {
                     write!(&mut builder, "{addr:#x} ").unwrap();
-                    for name in names {
-                        // The client splits on semicolons, which shouldn't
-                        // be present in symbol names.
-                        soft_assert_or_log!(!name.contains(';'), "Invalid symbol name: {name}");
+                    for mut name in names {
+                        // The client splits on semicolons, so
+                        // we have to escape them.
+                        name = name.replace('\\', "\\\\");
+                        name = name.replace(';', "\\;");
                         write!(&mut builder, "{name};").unwrap();
                     }
                     writeln!(&mut builder, "").unwrap();
@@ -124,12 +124,23 @@ impl StackProfile {
     }
 }
 
+static EVER_SYMBOLICATED: AtomicBool = AtomicBool::new(false);
+
+/// Check whether symbolication has ever been run in this process.
+/// This controls whether we display a warning about increasing RAM usage
+/// due to the backtrace cache on the
+/// profiler page. (Because the RAM hit is one-time, we don't need to warn if it's already happened).
+pub fn ever_symbolicated() -> bool {
+    EVER_SYMBOLICATED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// Given some stack traces, generate a map of addresses to their
 /// corresponding symbols.
 ///
 /// Each address could correspond to more than one symbol, because
 /// of inlining. (E.g. if 0x1234 comes from "g", which is inlined in "f", the corresponding vec of symbols will be ["f", "g"].)
 pub fn symbolicate(profile: &StackProfile) -> BTreeMap<usize, Vec<String>> {
+    EVER_SYMBOLICATED.store(true, std::sync::atomic::Ordering::SeqCst);
     let mut all_addrs = vec![];
     for (stack, _annotation) in profile.stacks.iter() {
         all_addrs.extend(stack.addrs.iter().cloned());

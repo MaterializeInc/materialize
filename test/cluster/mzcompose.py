@@ -57,6 +57,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-cluster",
         "test-github-12251",
         "test-github-15535",
+        "test-github-15799",
         "test-remote-storaged",
         "test-drop-default-cluster",
         "test-upsert",
@@ -261,6 +262,48 @@ def workflow_test_github_15535(c: Composition) -> None:
     assert t_upper, "t has empty upper frontier"
 
 
+def workflow_test_github_15799(c: Composition) -> None:
+    """
+    Test that querying arranged introspection sources on a replica does not
+    crash other replicas in the same cluster that have introspection disabled.
+
+    Regression test for https://github.com/MaterializeInc/materialize/issues/15799.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("computed_1")
+    c.up("computed_2")
+    c.wait_for_materialized()
+
+    c.sql(
+        """
+        CREATE CLUSTER cluster1 REPLICAS (
+            logging_on (
+                REMOTE ['computed_1:2100'],
+                COMPUTE ['computed_1:2102'],
+                WORKERS 2
+            ),
+            logging_off (
+                REMOTE ['computed_2:2100'],
+                COMPUTE ['computed_2:2102'],
+                WORKERS 2,
+                INTROSPECTION INTERVAL 0
+            )
+        );
+        SET cluster = cluster1;
+
+        -- query the arranged introspection sources on the replica with logging enabled
+        SET cluster_replica = logging_on;
+        SELECT * FROM mz_internal.mz_active_peeks, mz_internal.mz_compute_exports;
+
+        -- verify that the other replica has not crashed and still responds
+        SET cluster_replica = logging_off;
+        SELECT * FROM mz_tables, mz_sources;
+        """
+    )
+
+
 def workflow_test_upsert(c: Composition) -> None:
     """Test creating upsert sources and continuing to ingest them after a restart."""
     with c.override(
@@ -376,6 +419,7 @@ def workflow_test_builtin_migration(c: Composition) -> None:
         # Random commit before pg_proc was updated.
         Materialized(
             image="materialize/materialized:devel-aa4128c9c485322f90ab0af2b9cb4d16e1c470c0",
+            default_size=1,
         ),
         Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
     ):

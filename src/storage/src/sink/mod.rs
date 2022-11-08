@@ -12,9 +12,7 @@
 mod healthcheck;
 mod kafka;
 mod metrics;
-mod sink_connection;
 
 pub use healthcheck::{Healthchecker, SinkStatus};
 pub(crate) use metrics::KafkaBaseMetrics;
 pub use metrics::SinkBaseMetrics;
-pub use sink_connection::build_sink_connection;

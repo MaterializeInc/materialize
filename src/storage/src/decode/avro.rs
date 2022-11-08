@@ -11,8 +11,7 @@ use tokio::runtime::Handle as TokioHandle;
 
 use mz_interchange::avro::Decoder;
 use mz_repr::Row;
-
-use crate::types::errors::DecodeErrorKind;
+use mz_storage_client::types::errors::DecodeErrorKind;
 
 #[derive(Debug)]
 pub struct AvroDecoderState {
