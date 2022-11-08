@@ -440,6 +440,9 @@ where
     async fn advance_timed_out(&mut self, err: ErrorResponse) -> Result<State, io::Error> {
         // dropping the adapter client will terminate the session.
         self.adapter_client = None;
+        // We must wait for the client to send a request before we can send the error response.
+        // Due to the PG wire protocol, we can't send an ErrorResponse unless it is in response
+        // to a client message.
         let _ = self.conn.recv().await?;
         self.error(err).await?;
         Ok(State::Done)
