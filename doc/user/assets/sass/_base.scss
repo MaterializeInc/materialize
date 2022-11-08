@@ -1,0 +1,186 @@
+/* ------------------------------------------------- */
+/* ----- Basic Setup ----- */
+/* ------------------------------------------------- */
+
+:root {
+    --nav-height: 6.5rem;
+
+    --h1: 4.8rem;
+    --h2: 2.8rem;
+    --h3: 2.4rem;
+    --h4: 1.8rem;
+    --h5: 1.6rem;
+    --base: 1.6rem;
+    --sm: 1.4rem;
+    --xsm: 1.2rem;
+
+    --pico: 0.5rem;
+    --nano: 1rem;
+    --micro: 1.5rem;
+    --milli: 2rem;
+    --xx-small: 2.5rem;
+    --x-small: 3rem;
+    --small: 4rem;
+    --medium: 5rem;
+    --large: 6rem;
+
+    --graidient-primary: linear-gradient(
+        270deg,
+        hsl(270deg 68% 58%) 0%,
+        hsl(287deg 59% 55%) 11%,
+        hsl(303deg 54% 53%) 22%,
+        hsl(315deg 65% 57%) 33%,
+        hsl(325deg 74% 60%) 44%,
+        hsl(333deg 81% 64%) 56%,
+        hsl(340deg 86% 67%) 67%,
+        hsl(348deg 88% 70%) 78%,
+        hsl(355deg 88% 73%) 89%,
+        hsl(3deg 86% 74%) 100%
+    );
+
+    --orchid: #e537c0;
+    --orange: #ee8660;
+    --lavender: #ad37e5;
+    --purple: #7f4eff;
+    --purple-dark: #472f85;
+
+    --link: var(--purple);
+    --white: #fff;
+    --white-light: #fafafa;
+    --code-block-light: #f9f7fd;
+
+    --nav-light: #fff;
+    --nav-dark: #111111d9;
+
+    --black: #111111;
+    --black-mid: #141414;
+    --black-light: #181818;
+    --black-lighter: #222222;
+    --black-lightest: #343434;
+
+    --gray-dark: #555555;
+    --gray: #888888;
+    --gray-light: #bbbbbb;
+    --gray-lighter: #dddd;
+    --gray-lightest: #eeeeee;
+}
+
+body.dark {
+    --bg: var(--black);
+    --bg-nav: var(--nav-dark);
+    --bg-sub: var(--black-light);
+    --card: var(--black-mid);
+    --card-light: var(--black-light);
+    --divider: var(--black-lighter);
+    --divider-light: var(--black-lightest);
+
+    --code-block: var(--card-light);
+    --code-red: #fc6e6c;
+    --code-pink: #f97fe6;
+    --code-blue: #4b73f8;
+    --code-green: #2e731c;
+
+    --important: var(--gray-lightest);
+    --sub: var(--gray-light);
+    --body: var(--gray);
+    --highlight: var(--lavender);
+}
+
+body.light {
+    --bg: var(--white-light);
+    --bg-nav: var(--nav-light);
+    --bg-sub: var(--gray-lighter);
+    --card: var(--gray-lightest);
+    --card-light: var(--white);
+    --divider: var(--gray);
+    --divider-light: var(--gray-lighter);
+
+    --code-block: var(--code-block-light);
+    --code-red: #c41a16;
+    --code-pink: #a90d91;
+    --code-blue: #1c01ce;
+    --code-green: #177500;
+
+    --important: var(--black);
+    --sub: var(--black-lighter);
+    --body: var(--black-light);
+    --highlight: var(--purple-dark);
+}
+
+*,
+*::before,
+*::after {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html {
+    font-size: 62.5%;
+}
+
+body {
+    font-family: "Inter", sans-serif;
+    color: var(--body);
+    background: var(--bg);
+    font-size: var(--base);
+    line-height: 1.7;
+    font-weight: 300;
+}
+
+a,
+button {
+    cursor: pointer;
+}
+
+a {
+    color: var(--sub);
+    transition: all 0.2s;
+    transition-delay: 50ms;
+    text-decoration: none;
+
+    &:hover,
+    &:focus {
+        text-decoration: underline;
+        color: var(--important);
+    }
+}
+
+[class*="btn"] {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 12px;
+    text-transform: uppercase;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    background: var(--graidient-primary);
+    color: var(--white);
+    padding: 0.6rem 1.2rem;
+    border-radius: 8px;
+
+    &:hover,
+    &:focus {
+        color: var(--white);
+        text-decoration: none;
+        box-shadow: rgba(246, 136, 132, 0.3) 0px 0px 0px 5px;
+    }
+}
+
+.btn-ghost {
+    position: relative;
+    background: var(--bg);
+    color: var(--important);
+    border: 1px solid var(--sub);
+
+    &:hover,
+    &:focus {
+        color: var(--important);
+    }
+}
+
+.graident-text {
+    background: var(--graidient-primary);
+    color: transparent;
+    background-clip: text;
+}
