@@ -2,7 +2,7 @@
 
 The areas of the database architecture that belong to STORAGE team are depicted in the diagram below.
 
-![Platform architecture - STORAGE components](../assets/platform-architecture-storage.png)
+![Environment high-level architecture - STORAGE components](../assets/environment-high-level-architecture-storage.png)
 
 The STORAGE layer is responsible for:
 
