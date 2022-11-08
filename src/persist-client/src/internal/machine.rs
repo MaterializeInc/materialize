@@ -29,6 +29,7 @@ use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 
+use crate::critical::CriticalReaderId;
 use crate::error::{CodecMismatch, InvalidUsage};
 use crate::internal::compact::CompactReq;
 use crate::internal::maintenance::{LeaseExpiration, RoutineMaintenance, WriterMaintenance};
@@ -37,12 +38,13 @@ use crate::internal::metrics::{
 };
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
-    HollowBatch, ReaderState, Since, State, StateCollections, Upper, WriterState,
+    CriticalReaderState, HollowBatch, LeasedReaderState, Since, State, StateCollections, Upper,
+    WriterState,
 };
 use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
-use crate::read::ReaderId;
+use crate::read::LeasedReaderId;
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
 
@@ -163,20 +165,38 @@ where
         applied_ever_true
     }
 
-    pub async fn register_reader(
+    pub async fn register_leased_reader(
         &mut self,
-        reader_id: &ReaderId,
+        reader_id: &LeasedReaderId,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
-    ) -> (Upper<T>, ReaderState<T>) {
+    ) -> (Upper<T>, LeasedReaderState<T>) {
         let metrics = Arc::clone(&self.metrics);
         let (seqno, (shard_upper, read_cap), _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |seqno, state| {
-                state.register_reader(reader_id, seqno, lease_duration, heartbeat_timestamp_ms)
+                state.register_leased_reader(
+                    reader_id,
+                    seqno,
+                    lease_duration,
+                    heartbeat_timestamp_ms,
+                )
             })
             .await;
         debug_assert_eq!(seqno, read_cap.seqno);
         (shard_upper, read_cap)
+    }
+
+    pub async fn register_critical_reader<O: Codec64 + Default>(
+        &mut self,
+        reader_id: &CriticalReaderId,
+    ) -> CriticalReaderState<T> {
+        let metrics = Arc::clone(&self.metrics);
+        let (_seqno, state, _maintenance) = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, state| {
+                state.register_critical_reader::<O>(reader_id)
+            })
+            .await;
+        state
     }
 
     pub async fn register_writer(
@@ -196,10 +216,10 @@ where
 
     pub async fn clone_reader(
         &mut self,
-        new_reader_id: &ReaderId,
+        new_reader_id: &LeasedReaderId,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
-    ) -> ReaderState<T> {
+    ) -> LeasedReaderState<T> {
         let metrics = Arc::clone(&self.metrics);
         let (seqno, read_cap, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.clone_reader, |seqno, state| {
@@ -325,7 +345,7 @@ where
 
     pub async fn downgrade_since(
         &mut self,
-        reader_id: &ReaderId,
+        reader_id: &LeasedReaderId,
         outstanding_seqno: Option<SeqNo>,
         new_since: &Antichain<T>,
         heartbeat_timestamp_ms: u64,
@@ -343,21 +363,47 @@ where
         .await
     }
 
-    pub async fn heartbeat_reader(
+    pub async fn compare_and_downgrade_since<O: Codec64>(
         &mut self,
-        reader_id: &ReaderId,
+        reader_id: &CriticalReaderId,
+        expected_opaque: &O,
+        (new_opaque, new_since): (&O, &Antichain<T>),
+    ) -> (Result<Since<T>, (O, Since<T>)>, RoutineMaintenance) {
+        let metrics = Arc::clone(&self.metrics);
+        let (_seqno, res, maintenance) = self
+            .apply_unbatched_idempotent_cmd(
+                &metrics.cmds.compare_and_downgrade_since,
+                |_seqno, state| {
+                    state.compare_and_downgrade_since::<O>(
+                        reader_id,
+                        expected_opaque,
+                        (new_opaque, new_since),
+                    )
+                },
+            )
+            .await;
+
+        match res {
+            Ok(since) => (Ok(since), maintenance),
+            Err((opaque, since)) => (Err((opaque, since)), maintenance),
+        }
+    }
+
+    pub async fn heartbeat_leased_reader(
+        &mut self,
+        reader_id: &LeasedReaderId,
         heartbeat_timestamp_ms: u64,
     ) -> (SeqNo, bool, RoutineMaintenance) {
         let metrics = Arc::clone(&self.metrics);
         let (seqno, existed, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.heartbeat_reader, |_, state| {
-                state.heartbeat_reader(reader_id, heartbeat_timestamp_ms)
+                state.heartbeat_leased_reader(reader_id, heartbeat_timestamp_ms)
             })
             .await;
         (seqno, existed, maintenance)
     }
 
-    pub async fn start_reader_heartbeat_task(self, reader_id: ReaderId) -> JoinHandle<()> {
+    pub async fn start_reader_heartbeat_task(self, reader_id: LeasedReaderId) -> JoinHandle<()> {
         let mut machine = self;
         spawn(|| "persist::heartbeat_read", async move {
             let sleep_duration = machine.cfg.reader_lease_duration / 2;
@@ -377,7 +423,7 @@ where
 
                 let before_heartbeat = Instant::now();
                 let (_seqno, existed, _maintenance) = machine
-                    .heartbeat_reader(&reader_id, (machine.cfg.now)())
+                    .heartbeat_leased_reader(&reader_id, (machine.cfg.now)())
                     .await;
 
                 let elapsed_since_heartbeat = before_heartbeat.elapsed();
@@ -451,11 +497,21 @@ where
         })
     }
 
-    pub async fn expire_reader(&mut self, reader_id: &ReaderId) -> SeqNo {
+    pub async fn expire_leased_reader(&mut self, reader_id: &LeasedReaderId) -> SeqNo {
         let metrics = Arc::clone(&self.metrics);
         let (seqno, _existed, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_reader, |_, state| {
-                state.expire_reader(reader_id)
+                state.expire_leased_reader(reader_id)
+            })
+            .await;
+        seqno
+    }
+
+    pub async fn expire_critical_reader(&mut self, reader_id: &CriticalReaderId) -> SeqNo {
+        let metrics = Arc::clone(&self.metrics);
+        let (seqno, _existed, _maintenance) = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_reader, |_, state| {
+                state.expire_critical_reader(reader_id)
             })
             .await;
         seqno
@@ -956,6 +1012,18 @@ pub mod datadriven {
         Ok(s)
     }
 
+    #[allow(clippy::unused_async)]
+    pub async fn shard_desc(
+        datadriven: &mut MachineState,
+        _args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        Ok(format!(
+            "since={:?} upper={:?}\n",
+            datadriven.machine.state.since().elements(),
+            datadriven.machine.state.upper().elements()
+        ))
+    }
+
     pub async fn downgrade_since(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
@@ -970,6 +1038,30 @@ pub mod datadriven {
         Ok(format!(
             "{} {:?}\n",
             datadriven.machine.seqno(),
+            since.0.elements()
+        ))
+    }
+
+    pub async fn compare_and_downgrade_since(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let expected_opaque: u64 = args.expect("expect_opaque");
+        let new_opaque: u64 = args.expect("opaque");
+        let new_since = args.expect_antichain("since");
+        let reader_id = args.expect("reader_id");
+        let (res, routine) = datadriven
+            .machine
+            .compare_and_downgrade_since(&reader_id, &expected_opaque, (&new_opaque, &new_since))
+            .await;
+        datadriven.routine.push(routine);
+        let since = res.map_err(|(opaque, since)| {
+            anyhow!("mismatch: opaque={} since={:?}", opaque, since.0.elements())
+        })?;
+        Ok(format!(
+            "{} {} {:?}\n",
+            datadriven.machine.seqno(),
+            new_opaque,
             since.0.elements()
         ))
     }
@@ -1227,7 +1319,7 @@ pub mod datadriven {
         let as_of = args.expect_antichain("as_of");
         let read = datadriven
             .client
-            .open_reader::<String, (), u64, i64>(datadriven.shard_id)
+            .open_leased_reader::<String, (), u64, i64>(datadriven.shard_id)
             .await
             .expect("invalid shard types");
         let listen = read
@@ -1266,14 +1358,30 @@ pub mod datadriven {
         }
     }
 
-    pub async fn register_reader(
+    pub async fn register_critical_reader(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let reader_id = args.expect("reader_id");
-        let _state = datadriven
+        let state = datadriven
             .machine
-            .register_reader(
+            .register_critical_reader::<u64>(&reader_id)
+            .await;
+        Ok(format!(
+            "{} {:?}\n",
+            datadriven.machine.seqno(),
+            state.since.elements(),
+        ))
+    }
+
+    pub async fn register_leased_reader(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let reader_id = args.expect("reader_id");
+        let (_, state) = datadriven
+            .machine
+            .register_leased_reader(
                 &reader_id,
                 datadriven.client.cfg.reader_lease_duration,
                 (datadriven.client.cfg.now)(),
@@ -1282,7 +1390,7 @@ pub mod datadriven {
         Ok(format!(
             "{} {:?}\n",
             datadriven.machine.seqno(),
-            datadriven.machine.state.since().elements(),
+            state.since.elements(),
         ))
     }
 
@@ -1306,14 +1414,14 @@ pub mod datadriven {
         ))
     }
 
-    pub async fn heartbeat_reader(
+    pub async fn heartbeat_leased_reader(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let reader_id = args.expect("reader_id");
         let _ = datadriven
             .machine
-            .heartbeat_reader(&reader_id, (datadriven.client.cfg.now)())
+            .heartbeat_leased_reader(&reader_id, (datadriven.client.cfg.now)())
             .await;
         Ok(format!("{} ok\n", datadriven.machine.seqno()))
     }
@@ -1330,12 +1438,21 @@ pub mod datadriven {
         Ok(format!("{} ok\n", datadriven.machine.seqno()))
     }
 
-    pub async fn expire_reader(
+    pub async fn expire_critical_reader(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let reader_id = args.expect("reader_id");
-        let _ = datadriven.machine.expire_reader(&reader_id).await;
+        let _ = datadriven.machine.expire_critical_reader(&reader_id).await;
+        Ok(format!("{} ok\n", datadriven.machine.seqno()))
+    }
+
+    pub async fn expire_leased_reader(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let reader_id = args.expect("reader_id");
+        let _ = datadriven.machine.expire_leased_reader(&reader_id).await;
         Ok(format!("{} ok\n", datadriven.machine.seqno()))
     }
 

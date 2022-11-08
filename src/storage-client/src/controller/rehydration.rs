@@ -207,7 +207,7 @@ where
                 .await
                 .expect("error creating persist client");
             let from_read_handle = persist_client
-                .open_reader::<SourceData, (), T, Diff>(
+                .open_leased_reader::<SourceData, (), T, Diff>(
                     export.description.from_storage_metadata.data_shard,
                 )
                 .await

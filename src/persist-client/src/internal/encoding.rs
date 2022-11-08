@@ -23,19 +23,21 @@ use uuid::Uuid;
 
 use mz_ore::halt;
 
+use crate::critical::CriticalReaderId;
 use crate::error::CodecMismatch;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::state::{
-    HollowBatch, HollowBatchPart, ProtoHollowBatch, ProtoHollowBatchPart, ProtoReaderState,
+    CriticalReaderState, HollowBatch, HollowBatchPart, LeasedReaderState, Opaque,
+    ProtoCriticalReaderState, ProtoHollowBatch, ProtoHollowBatchPart, ProtoLeasedReaderState,
     ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs,
-    ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoWriterState,
-    ReaderState, State, StateCollections, WriterState,
+    ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoWriterState, State,
+    StateCollections, WriterState,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, StateDiff, StateFieldDiff, StateFieldValDiff,
 };
 use crate::internal::trace::Trace;
-use crate::read::ReaderId;
+use crate::read::LeasedReaderId;
 use crate::write::WriterEnrichedHollowBatch;
 use crate::{PersistConfig, ShardId, WriterId};
 
@@ -98,14 +100,27 @@ impl RustType<String> for ShardId {
     }
 }
 
-impl RustType<String> for ReaderId {
+impl RustType<String> for LeasedReaderId {
     fn into_proto(&self) -> String {
         self.to_string()
     }
 
     fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
-        match parse_id('r', "ReaderId", &proto) {
-            Ok(x) => Ok(ReaderId(x)),
+        match parse_id('r', "LeasedReaderId", &proto) {
+            Ok(x) => Ok(LeasedReaderId(x)),
+            Err(_) => Err(TryFromProtoError::InvalidShardId(proto)),
+        }
+    }
+}
+
+impl RustType<String> for CriticalReaderId {
+    fn into_proto(&self) -> String {
+        self.to_string()
+    }
+
+    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
+        match parse_id('c', "CriticalReaderId", &proto) {
+            Ok(x) => Ok(CriticalReaderId(x)),
             Err(_) => Err(TryFromProtoError::InvalidShardId(proto)),
         }
     }
@@ -183,55 +198,77 @@ where
 
 impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
     fn into_proto(&self) -> ProtoStateDiff {
+        // Deconstruct self so we get a compile failure if new fields are added.
+        let StateDiff {
+            applier_version,
+            seqno_from,
+            seqno_to,
+            latest_rollup_key,
+            rollups,
+            last_gc_req,
+            leased_readers,
+            critical_readers,
+            writers,
+            since,
+            spine,
+        } = self;
+
         let mut field_diffs = ProtoStateFieldDiffs::default();
         field_diffs_into_proto(
             ProtoStateField::LastGcReq,
-            &self.last_gc_req,
+            last_gc_req,
             &mut field_diffs,
             |()| Vec::new(),
             |v| v.into_proto().encode_to_vec(),
         );
         field_diffs_into_proto(
             ProtoStateField::Rollups,
-            &self.rollups,
+            rollups,
             &mut field_diffs,
             |k| k.into_proto().encode_to_vec(),
             |v| v.into_proto().encode_to_vec(),
         );
         field_diffs_into_proto(
-            ProtoStateField::Readers,
-            &self.readers,
+            ProtoStateField::LeasedReaders,
+            leased_readers,
+            &mut field_diffs,
+            |k| k.into_proto().encode_to_vec(),
+            |v| v.into_proto().encode_to_vec(),
+        );
+        field_diffs_into_proto(
+            ProtoStateField::CriticalReaders,
+            critical_readers,
             &mut field_diffs,
             |k| k.into_proto().encode_to_vec(),
             |v| v.into_proto().encode_to_vec(),
         );
         field_diffs_into_proto(
             ProtoStateField::Writers,
-            &self.writers,
+            writers,
             &mut field_diffs,
             |k| k.into_proto().encode_to_vec(),
             |v| v.into_proto().encode_to_vec(),
         );
         field_diffs_into_proto(
             ProtoStateField::Since,
-            &self.since,
+            since,
             &mut field_diffs,
             |()| Vec::new(),
             |v| v.into_proto().encode_to_vec(),
         );
         field_diffs_into_proto(
             ProtoStateField::Spine,
-            &self.spine,
+            spine,
             &mut field_diffs,
             |k| k.into_proto().encode_to_vec(),
             |()| Vec::new(),
         );
         debug_assert_eq!(field_diffs.validate(), Ok(()));
         ProtoStateDiff {
-            applier_version: self.applier_version.to_string(),
-            seqno_from: self.seqno_from.into_proto(),
-            seqno_to: self.seqno_to.into_proto(),
-            latest_rollup_key: self.latest_rollup_key.into_proto(),
+            applier_version: applier_version.to_string(),
+            seqno_from: seqno_from.into_proto(),
+            seqno_to: seqno_to.into_proto(),
+            latest_rollup_key: latest_rollup_key.into_proto(),
             field_diffs: Some(field_diffs),
         }
     }
@@ -273,10 +310,18 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
                         |k| k.into_rust(),
                         |v| v.into_rust(),
                     )?,
-                    ProtoStateField::Readers => {
-                        field_diff_into_rust::<String, ProtoReaderState, _, _, _, _>(
+                    ProtoStateField::LeasedReaders => {
+                        field_diff_into_rust::<String, ProtoLeasedReaderState, _, _, _, _>(
                             diff,
-                            &mut state_diff.readers,
+                            &mut state_diff.leased_readers,
+                            |k| k.into_rust(),
+                            |v| v.into_rust(),
+                        )?
+                    }
+                    ProtoStateField::CriticalReaders => {
+                        field_diff_into_rust::<String, ProtoCriticalReaderState, _, _, _, _>(
+                            diff,
+                            &mut state_diff.critical_readers,
                             |k| k.into_rust(),
                             |v| v.into_rust(),
                         )?
@@ -455,9 +500,15 @@ where
                 .iter()
                 .map(|(seqno, key)| (seqno.into_proto(), key.into_proto()))
                 .collect(),
-            readers: self
+            leased_readers: self
                 .collections
-                .readers
+                .leased_readers
+                .iter()
+                .map(|(id, state)| (id.into_proto(), state.into_proto()))
+                .collect(),
+            critical_readers: self
+                .collections
+                .critical_readers
                 .iter()
                 .map(|(id, state)| (id.into_proto(), state.into_proto()))
                 .collect(),
@@ -522,9 +573,13 @@ where
         for (seqno, key) in x.rollups {
             rollups.insert(seqno.into_rust()?, key.into_rust()?);
         }
-        let mut readers = BTreeMap::new();
-        for (id, state) in x.readers {
-            readers.insert(id.into_rust()?, state.into_rust()?);
+        let mut leased_readers = BTreeMap::new();
+        for (id, state) in x.leased_readers {
+            leased_readers.insert(id.into_rust()?, state.into_rust()?);
+        }
+        let mut critical_readers = BTreeMap::new();
+        for (id, state) in x.critical_readers {
+            critical_readers.insert(id.into_rust()?, state.into_rust()?);
         }
         let mut writers = BTreeMap::new();
         for (id, state) in x.writers {
@@ -533,7 +588,8 @@ where
         let collections = StateCollections {
             rollups,
             last_gc_req: x.last_gc_req.into_rust()?,
-            readers,
+            leased_readers,
+            critical_readers,
             writers,
             trace: x.trace.into_rust_if_some("trace")?,
         };
@@ -586,9 +642,9 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoTrace> for Trace<T> {
     }
 }
 
-impl<T: Timestamp + Codec64> RustType<ProtoReaderState> for ReaderState<T> {
-    fn into_proto(&self) -> ProtoReaderState {
-        ProtoReaderState {
+impl<T: Timestamp + Codec64> RustType<ProtoLeasedReaderState> for LeasedReaderState<T> {
+    fn into_proto(&self) -> ProtoLeasedReaderState {
+        ProtoLeasedReaderState {
             seqno: self.seqno.into_proto(),
             since: Some(self.since.into_proto()),
             last_heartbeat_timestamp_ms: self.last_heartbeat_timestamp_ms.into_proto(),
@@ -596,7 +652,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoReaderState> for ReaderState<T> {
         }
     }
 
-    fn from_proto(proto: ProtoReaderState) -> Result<Self, TryFromProtoError> {
+    fn from_proto(proto: ProtoLeasedReaderState) -> Result<Self, TryFromProtoError> {
         let mut lease_duration_ms = proto.lease_duration_ms.into_rust()?;
         // MIGRATION: If the lease_duration_ms is empty, then the proto field
         // was missing and we need to fill in a default. This would ideally be
@@ -607,11 +663,33 @@ impl<T: Timestamp + Codec64> RustType<ProtoReaderState> for ReaderState<T> {
                 u64::try_from(PersistConfig::DEFAULT_READ_LEASE_DURATION.as_millis())
                     .expect("lease duration as millis should fit within u64");
         }
-        Ok(ReaderState {
+        Ok(LeasedReaderState {
             seqno: proto.seqno.into_rust()?,
-            since: proto.since.into_rust_if_some("ProtoReaderState::since")?,
+            since: proto
+                .since
+                .into_rust_if_some("ProtoLeasedReaderState::since")?,
             last_heartbeat_timestamp_ms: proto.last_heartbeat_timestamp_ms.into_rust()?,
             lease_duration_ms,
+        })
+    }
+}
+
+impl<T: Timestamp + Codec64> RustType<ProtoCriticalReaderState> for CriticalReaderState<T> {
+    fn into_proto(&self) -> ProtoCriticalReaderState {
+        ProtoCriticalReaderState {
+            since: Some(self.since.into_proto()),
+            opaque: i64::from_le_bytes(self.opaque.0),
+            opaque_codec: self.opaque_codec.clone(),
+        }
+    }
+
+    fn from_proto(proto: ProtoCriticalReaderState) -> Result<Self, TryFromProtoError> {
+        Ok(CriticalReaderState {
+            since: proto
+                .since
+                .into_rust_if_some("ProtoCriticalReaderState::since")?,
+            opaque: Opaque(i64::to_le_bytes(proto.opaque)),
+            opaque_codec: proto.opaque_codec,
         })
     }
 }
@@ -849,7 +927,7 @@ mod tests {
 
     #[test]
     fn reader_state_migration_lease_duration() {
-        let x = ReaderState {
+        let x = LeasedReaderState {
             seqno: SeqNo(1),
             since: Antichain::from_elem(2u64),
             last_heartbeat_timestamp_ms: 3,
@@ -862,6 +940,6 @@ mod tests {
         // migrate from unset.
         expected.lease_duration_ms =
             u64::try_from(PersistConfig::DEFAULT_READ_LEASE_DURATION.as_millis()).unwrap();
-        assert_eq!(<ReaderState<u64>>::from_proto(old).unwrap(), expected);
+        assert_eq!(<LeasedReaderState<u64>>::from_proto(old).unwrap(), expected);
     }
 }

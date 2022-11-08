@@ -40,11 +40,17 @@ message ProtoTrace {
     repeated ProtoHollowBatch spine = 2;
 }
 
-message ProtoReaderState {
+message ProtoLeasedReaderState {
     ProtoU64Antichain since = 1;
     uint64 seqno = 2;
     uint64 last_heartbeat_timestamp_ms = 3;
     uint64 lease_duration_ms = 4;
+}
+
+message ProtoCriticalReaderState {
+    ProtoU64Antichain since = 1;
+    int64 opaque = 2;
+    string opaque_codec = 3;
 }
 
 message ProtoWriterState {
@@ -65,14 +71,16 @@ message ProtoStateRollup {
     map<uint64, string> rollups = 12;
 
     ProtoTrace trace = 7;
-    map<string, ProtoReaderState> readers = 8;
+    map<string, ProtoLeasedReaderState> leased_readers = 8;
+    map<string, ProtoCriticalReaderState> critical_readers = 13;
     map<string, ProtoWriterState> writers = 9;
 }
 
 enum ProtoStateField {
     ROLLUPS = 0;
     LAST_GC_REQ = 1;
-    READERS = 2;
+    LEASED_READERS = 2;
+    CRITICAL_READERS = 6;
     WRITERS = 3;
     SINCE = 4;
     SPINE = 5;

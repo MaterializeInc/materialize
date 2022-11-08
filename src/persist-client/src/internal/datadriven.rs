@@ -198,16 +198,24 @@ mod tests {
                             "compare-and-append" => {
                                 machine_dd::compare_and_append(&mut state, args).await
                             }
+                            "compare-and-downgrade-since" => {
+                                machine_dd::compare_and_downgrade_since(&mut state, args).await
+                            }
                             "consensus-scan" => machine_dd::consensus_scan(&mut state, args).await,
                             "downgrade-since" => {
                                 machine_dd::downgrade_since(&mut state, args).await
                             }
-                            "expire-reader" => machine_dd::expire_reader(&mut state, args).await,
+                            "expire-critical-reader" => {
+                                machine_dd::expire_critical_reader(&mut state, args).await
+                            }
+                            "expire-leased-reader" => {
+                                machine_dd::expire_leased_reader(&mut state, args).await
+                            }
                             "expire-writer" => machine_dd::expire_writer(&mut state, args).await,
                             "fetch-batch" => machine_dd::fetch_batch(&mut state, args).await,
                             "gc" => machine_dd::gc(&mut state, args).await,
-                            "heartbeat-reader" => {
-                                machine_dd::heartbeat_reader(&mut state, args).await
+                            "heartbeat-leased-reader" => {
+                                machine_dd::heartbeat_leased_reader(&mut state, args).await
                             }
                             "heartbeat-writer" => {
                                 machine_dd::heartbeat_writer(&mut state, args).await
@@ -216,11 +224,14 @@ mod tests {
                             "perform-maintenance" => {
                                 machine_dd::perform_maintenance(&mut state, args).await
                             }
+                            "register-critical-reader" => {
+                                machine_dd::register_critical_reader(&mut state, args).await
+                            }
                             "register-listen" => {
                                 machine_dd::register_listen(&mut state, args).await
                             }
-                            "register-reader" => {
-                                machine_dd::register_reader(&mut state, args).await
+                            "register-leased-reader" => {
+                                machine_dd::register_leased_reader(&mut state, args).await
                             }
                             "register-writer" => {
                                 machine_dd::register_writer(&mut state, args).await
@@ -228,6 +239,7 @@ mod tests {
                             "set-batch-parts-size" => {
                                 machine_dd::set_batch_parts_size(&mut state, args).await
                             }
+                            "shard-desc" => machine_dd::shard_desc(&mut state, args).await,
                             "snapshot" => machine_dd::snapshot(&mut state, args).await,
                             "truncate-batch-desc" => {
                                 machine_dd::truncate_batch_desc(&mut state, args).await

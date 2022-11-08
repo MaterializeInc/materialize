@@ -1712,7 +1712,7 @@ mod tests {
         drop(persist_clients);
 
         let read_handle = persist_client
-            .open_reader::<SourceData, (), Timestamp, Diff>(binding_shard)
+            .open_leased_reader::<SourceData, (), Timestamp, Diff>(binding_shard)
             .await
             .expect("error opening persist shard");
 
