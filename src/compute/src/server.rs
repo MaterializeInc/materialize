@@ -833,7 +833,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
             // We compact away removed frontiers, and so only need to reset ids we continue to use.
             // We must remember, though, to compensate what already was sent to logging sources.
             for (id, frontier) in compute_state.reported_frontiers.iter_mut() {
-                let minimum = timely::progress::Antichain::from_elem(<_>::minimum());
                 if let Some(logger) = &compute_state.compute_logger {
                     if let Some(time) = frontier.get(0) {
                         use crate::logging::compute::ComputeEvent;
@@ -841,7 +840,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         logger.log(ComputeEvent::Frontier(*id, Timestamp::minimum(), 1));
                     }
                 }
-                *frontier = minimum;
+                *frontier = timely::progress::Antichain::from_elem(<_>::minimum());
             }
             // Sink tokens should be retained for retained dataflows, and dropped for dropped dataflows.
             compute_state
