@@ -611,7 +611,6 @@ impl<'a> ShowSelect<'a> {
             filter,
             order.unwrap_or("q.*")
         );
-        println!("[btv] query: {query}");
         let stmts = parse::parse(&query).expect("ShowSelect::new called with invalid SQL");
         let stmt = match stmts.into_element() {
             Statement::Select(select) => select,
