@@ -52,14 +52,18 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
         match &self.0 {
             Constant { rows } => match rows {
                 Ok(rows) => {
-                    writeln!(f, "{}Constant", ctx.indent)?;
-                    ctx.indented(|ctx| {
-                        fmt_text_constant_rows(
-                            f,
-                            rows.iter().map(|(data, _, diff)| (data, diff)),
-                            &mut ctx.indent,
-                        )
-                    })?;
+                    if !rows.is_empty() {
+                        writeln!(f, "{}Constant", ctx.indent)?;
+                        ctx.indented(|ctx| {
+                            fmt_text_constant_rows(
+                                f,
+                                rows.iter().map(|(data, _, diff)| (data, diff)),
+                                &mut ctx.indent,
+                            )
+                        })?;
+                    } else {
+                        writeln!(f, "{}Constant <empty>", ctx.indent)?;
+                    }
                 }
                 Err(err) => {
                     writeln!(f, "{}Error {}", ctx.indent, err.to_string().quoted())?;

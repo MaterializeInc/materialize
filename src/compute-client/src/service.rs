@@ -148,7 +148,7 @@ where
 
     /// Observes commands that move past, and prepares state for responses.
     pub fn observe_command(&mut self, command: &ComputeCommand<T>) {
-        if let ComputeCommand::CreateTimely(_) = command {
+        if let ComputeCommand::CreateTimely { .. } = command {
             self.reset();
         } else {
             // Note that we are not guaranteed to observe other compute commands than
@@ -186,13 +186,16 @@ where
     fn split_command(&mut self, command: ComputeCommand<T>) -> Vec<Option<ComputeCommand<T>>> {
         self.observe_command(&command);
         match command {
-            ComputeCommand::CreateTimely(comm_config) => (0..self.parts)
+            ComputeCommand::CreateTimely { comm_config, epoch } => (0..self.parts)
                 .into_iter()
                 .map(|part| {
-                    Some(ComputeCommand::CreateTimely(CommunicationConfig {
-                        process: part,
-                        ..comm_config.clone()
-                    }))
+                    Some(ComputeCommand::CreateTimely {
+                        comm_config: CommunicationConfig {
+                            process: part,
+                            ..comm_config.clone()
+                        },
+                        epoch,
+                    })
                 })
                 .collect(),
             command => {

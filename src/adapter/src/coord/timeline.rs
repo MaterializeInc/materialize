@@ -24,7 +24,7 @@ use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_repr::{GlobalId, Timestamp, TimestampManipulation};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_stash::Append;
-use mz_storage::types::sources::Timeline;
+use mz_storage_client::types::sources::Timeline;
 
 use crate::catalog::CatalogItem;
 use crate::client::ConnectionId;

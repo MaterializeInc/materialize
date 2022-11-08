@@ -2689,7 +2689,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
                 })
             }), 1068;
             params!(Int64, Int64) => Operation::binary(move |_ecx, start, stop| {
-                let row = Row::pack(&[Datum::Int64(1)]);
+                let row = Row::pack([Datum::Int64(1)]);
                 let column_type = ColumnType { scalar_type: ScalarType::Int64, nullable: false };
                 Ok(TableFuncPlan {
                     expr: HirRelationExpr::CallTable {

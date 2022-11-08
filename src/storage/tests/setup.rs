@@ -22,15 +22,15 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task::RuntimeExt;
 use mz_repr::TimestampManipulation;
 use mz_repr::{Diff, GlobalId, Timestamp};
-use mz_storage::protocol::client::StorageCommand;
 use mz_storage::sink::SinkBaseMetrics;
 use mz_storage::source::metrics::SourceBaseMetrics;
 use mz_storage::source::testscript::ScriptCommand;
-use mz_storage::types::sources::{
-    encoding::SourceDataEncoding, SourceConnection, SourceData, SourceDesc, SourceEnvelope,
+use mz_storage::DecodeMetrics;
+use mz_storage_client::client::StorageCommand;
+use mz_storage_client::types::sources::{
+    encoding::SourceDataEncoding, GenericSourceConnection, SourceData, SourceDesc, SourceEnvelope,
     TestScriptSourceConnection,
 };
-use mz_storage::DecodeMetrics;
 
 pub fn run_script_source(
     source: Vec<ScriptCommand>,
@@ -41,7 +41,7 @@ pub fn run_script_source(
     let timestamp_interval = Duration::from_secs(1);
 
     let desc = SourceDesc {
-        connection: SourceConnection::TestScript(TestScriptSourceConnection {
+        connection: GenericSourceConnection::TestScript(TestScriptSourceConnection {
             desc_json: serde_json::to_string(&source).unwrap(),
         }),
         encoding,
@@ -154,7 +154,7 @@ where
                 sink_metrics,
                 timely_worker_index: 0,
                 timely_worker_peers: 0,
-                connection_context: mz_storage::types::connections::ConnectionContext {
+                connection_context: mz_storage_client::types::connections::ConnectionContext {
                     librdkafka_log_level: tracing::Level::INFO,
                     aws_external_id_prefix: None,
                     secrets_reader: Arc::new(mz_secrets::InMemorySecretsController::new()),
@@ -171,7 +171,7 @@ where
                 storage_state,
                 client_rx: fake_rx,
             };
-            let collection_metadata = mz_storage::controller::CollectionMetadata {
+            let collection_metadata = mz_storage_client::controller::CollectionMetadata {
                 persist_location,
                 remap_shard: mz_persist_client::ShardId::new(),
                 data_shard: mz_persist_client::ShardId::new(),
@@ -181,7 +181,7 @@ where
             let id = GlobalId::User(1);
             let source_exports = BTreeMap::from([(
                 id,
-                mz_storage::types::sources::SourceExport {
+                mz_storage_client::types::sources::SourceExport {
                     storage_metadata: collection_metadata.clone(),
                     output_index: 0,
                 },
@@ -190,17 +190,18 @@ where
             {
                 let _tokio_guard = tokio_runtime.enter();
                 worker.handle_storage_command(StorageCommand::CreateSources(vec![
-                    mz_storage::protocol::client::CreateSourceCommand {
+                    mz_storage_client::client::CreateSourceCommand {
                         id,
-                        description: mz_storage::types::sources::IngestionDescription {
+                        description: mz_storage_client::types::sources::IngestionDescription {
                             desc: desc.clone(),
                             ingestion_metadata: collection_metadata,
                             source_exports,
                             // Only used for Debezium
                             source_imports: BTreeMap::new(),
-                            host_config: mz_storage::types::hosts::StorageHostConfig::Remote {
-                                addr: "test".to_string(),
-                            },
+                            host_config:
+                                mz_storage_client::types::hosts::StorageHostConfig::Remote {
+                                    addr: "test".to_string(),
+                                },
                         },
                         // TODO: test resumption as well!
                         resume_upper: Antichain::from_elem(Timestamp::minimum()),

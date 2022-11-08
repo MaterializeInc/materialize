@@ -37,8 +37,8 @@ use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_storage::controller::CollectionMetadata;
-use mz_storage::types::errors::DataflowError;
+use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::operator::CollectionExt;
 use tracing::{span, Level};
@@ -116,7 +116,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             .command_history
             .push(cmd.clone(), &self.compute_state.pending_peeks);
         match cmd {
-            CreateTimely(_) => panic!("CreateTimely must be captured before"),
+            CreateTimely { .. } => panic!("CreateTimely must be captured before"),
             CreateInstance(config) => self.handle_create_instance(config),
             DropInstance => (),
             InitializationComplete => (),

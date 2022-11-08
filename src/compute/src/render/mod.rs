@@ -118,9 +118,9 @@ use mz_compute_client::plan::Plan;
 use mz_expr::Id;
 use mz_ore::collections::CollectionExt as IteratorExt;
 use mz_repr::{Diff, GlobalId, Row};
-use mz_storage::controller::CollectionMetadata;
-use mz_storage::source::persist_source;
-use mz_storage::types::errors::DataflowError;
+use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::source::persist_source;
+use mz_storage_client::types::errors::DataflowError;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;

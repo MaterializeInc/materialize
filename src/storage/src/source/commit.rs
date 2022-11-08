@@ -9,7 +9,6 @@
 
 //! Drivers for upstream commit
 use std::collections::HashMap;
-use std::marker::{Send, Sync};
 
 use async_trait::async_trait;
 use tokio::sync::watch;
@@ -17,9 +16,9 @@ use tokio::sync::watch;
 use mz_expr::PartitionId;
 use mz_ore::task;
 use mz_repr::GlobalId;
+use mz_storage_client::types::sources::MzOffset;
 
 use crate::source::types::OffsetCommitter;
-use crate::types::sources::MzOffset;
 
 /// An OffsetCommitter that simply logs its callbacks.
 pub struct LogCommitter {

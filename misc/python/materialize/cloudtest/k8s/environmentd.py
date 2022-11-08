@@ -51,9 +51,15 @@ class EnvironmentdService(K8sService):
 
 
 class EnvironmentdStatefulSet(K8sStatefulSet):
-    def __init__(self, tag: Optional[str] = None, release_mode: bool = True) -> None:
+    def __init__(
+        self,
+        tag: Optional[str] = None,
+        release_mode: bool = True,
+        log_filter: Optional[str] = None,
+    ) -> None:
         self.tag = tag
         self.release_mode = release_mode
+        self.log_filter = log_filter
         super().__init__()
 
     def generate_stateful_set(self) -> V1StatefulSet:
@@ -104,7 +110,8 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 # cloudtest may be called upon to spin up older versions of Mz too!
                 # If you are adding a command-line option that is only supported on newer
                 # releases, do not add it here, add it as a V1EnvVar above instead.
-            ],
+            ]
+            + ([f"--log-filter={self.log_filter}"] if self.log_filter else []),
             env=env,
             ports=ports,
             volume_mounts=volume_mounts,

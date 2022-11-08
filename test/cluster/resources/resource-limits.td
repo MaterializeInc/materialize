@@ -310,5 +310,14 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 > SELECT * FROM t2
 2
 
+> SHOW max_aws_privatelink_connections
+0
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_aws_privatelink_connections = 42
+
+> SHOW max_aws_privatelink_connections
+42
+
 $ postgres-execute connection=mz_system
 ALTER SYSTEM RESET ALL

@@ -23,6 +23,7 @@ use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::progress::Timestamp as _;
 use timely::PartialOrder;
 use tokio::sync::Mutex;
+use tracing::trace;
 
 use mz_expr::PartitionId;
 use mz_ore::now::NowFn;
@@ -31,11 +32,10 @@ use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::Upper;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
-use tracing::trace;
+use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::types::sources::{MzOffset, SourceData};
 
-use crate::controller::CollectionMetadata;
 use crate::source::antichain::OffsetAntichain;
-use crate::types::sources::{MzOffset, SourceData};
 
 /// A "follower" for the ReclockOperator, that maintains
 /// a trace based on the results of reclocking and data from

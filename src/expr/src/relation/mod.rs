@@ -33,7 +33,10 @@ use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, 
 
 use crate::explain::{Indices, ViewExplanation};
 use crate::visit::{Visit, VisitChildren};
-use crate::{func as scalar_func, EvalError, Id, LocalId, MirScalarExpr, UnaryFunc, VariadicFunc};
+use crate::{
+    func as scalar_func, EvalError, FilterCharacteristics, Id, LocalId, MirScalarExpr, UnaryFunc,
+    VariadicFunc,
+};
 
 use self::func::{AggregateFunc, LagLeadType, TableFunc};
 
@@ -2084,19 +2087,23 @@ pub enum JoinImplementation {
     /// and 2) if it should be arranged, the keys to arrange it by.
     /// The sequence that follows lists other relation indexes, and the key for
     /// the arrangement we should use when joining it in.
+    /// The JoinInputCharacteristics are for EXPLAINing the characteristics that
+    /// were used for join ordering.
     ///
     /// Each collection index should occur exactly once, either in the first
     /// position or somewhere in the list.
     Differential(
         (usize, Option<Vec<MirScalarExpr>>),
-        Vec<(usize, Vec<MirScalarExpr>)>,
+        Vec<(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)>,
     ),
     /// Perform independent delta query dataflows for each input.
     ///
     /// The argument is a sequence of plans, for the input collections in order.
     /// Each plan starts from the corresponding index, and then in sequence joins
     /// against collections identified by index and with the specified arrangement key.
-    DeltaQuery(Vec<Vec<(usize, Vec<MirScalarExpr>)>>),
+    /// The JoinInputCharacteristics are for EXPLAINing the characteristics that were
+    /// used for join ordering.
+    DeltaQuery(Vec<Vec<(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)>>),
     /// Join a user-created index with a constant collection to speed up the evaluation of a
     /// predicate such as `(f1 = 3 AND f2 = 5) OR (f1 = 7 AND f2 = 9)`.
     /// This gets translated to a Differential join during MIR -> LIR lowering, but we still want
@@ -2131,6 +2138,62 @@ impl JoinImplementation {
             Self::IndexedFilter(..) => Some("indexed_filter"),
             Self::Unimplemented => None,
         }
+    }
+}
+
+/// Characteristics of a join order candidate collection.
+///
+/// A candidate is described by a collection and a key, and may have various liabilities.
+/// Primarily, the candidate may risk substantial inflation of records, which is something
+/// that concerns us greatly. Additionally the candidate may be unarranged, and we would
+/// prefer candidates that do not require additional memory. Finally, we prefer lower id
+/// collections in the interest of consistent tie-breaking.
+#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect)]
+pub struct JoinInputCharacteristics {
+    /// An excellent indication that record count will not increase.
+    pub unique_key: bool,
+    /// A weaker signal that record count will not increase.
+    pub key_length: usize,
+    /// Indicates that there will be no additional in-memory footprint.
+    pub arranged: bool,
+    /// Characteristics of the filter that is applied at this input.
+    pub filters: FilterCharacteristics,
+    /// We want to prefer input earlier in the input list, for stability of ordering.
+    pub input: std::cmp::Reverse<usize>,
+}
+
+impl JoinInputCharacteristics {
+    /// Creates a new instance with the given characteristics.
+    pub fn new(
+        unique_key: bool,
+        key_length: usize,
+        arranged: bool,
+        filters: FilterCharacteristics,
+        input: usize,
+    ) -> Self {
+        Self {
+            unique_key,
+            key_length,
+            arranged,
+            filters,
+            input: std::cmp::Reverse(input),
+        }
+    }
+
+    /// Turns the instance into a String to be printed in EXPLAIN.
+    pub fn explain(&self) -> String {
+        let mut e = "".to_owned();
+        if self.unique_key {
+            e.push_str("U");
+        }
+        for _ in 0..self.key_length {
+            e.push_str("K");
+        }
+        if self.arranged {
+            e.push_str("A");
+        }
+        e.push_str(&self.filters.explain());
+        e
     }
 }
 

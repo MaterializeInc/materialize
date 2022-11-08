@@ -31,6 +31,7 @@ statement_timeout                       "10 s"                 "Sets the maximum
 idle_in_transaction_session_timeout     "2 min"                "Sets the maximum allowed duration that a session can sit idle in a transaction before being terminated. A value of zero disables the timeout (PostgreSQL)."
 TimeZone                                UTC                    "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
 transaction_isolation                   "strict serializable"  "Sets the current transaction's isolation level (PostgreSQL)."
+max_aws_privatelink_connections         0                      "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize)."
 max_clusters                            10                     "The maximum number of clusters in the region (Materialize)."
 max_databases                           1000                   "The maximum number of databases in the region (Materialize)."
 max_objects_per_schema                  1000                   "The maximum number of objects in a schema (Materialize)."

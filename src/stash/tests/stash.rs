@@ -81,11 +81,17 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
     }
     {
         connect(&connstr, tls.clone(), true).await;
-        test_stash(|| async { connect(&connstr, tls.clone(), false).await }).await?;
+        let stash = test_stash(|| async { connect(&connstr, tls.clone(), false).await })
+            .await
+            .unwrap();
+        stash.verify().await.unwrap();
     }
     {
         connect(&connstr, tls.clone(), true).await;
-        test_append(|| async { connect(&connstr, tls.clone(), false).await }).await?;
+        let stash = test_append(|| async { connect(&connstr, tls.clone(), false).await })
+            .await
+            .unwrap();
+        stash.verify().await.unwrap();
     }
     // Test the fence.
     {
@@ -124,6 +130,7 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
 
         // The previous stash should still be the leader.
         assert!(stash_rw.confirm_leadership().await.is_ok());
+        stash_rw.verify().await.unwrap();
     }
     // Test savepoint.
     {
@@ -170,12 +177,13 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
         assert!(stash_rw.confirm_leadership().await.is_ok());
         // Verify c1 didn't change.
         assert_eq!(stash_rw.peek(c1_rw).await.unwrap(), vec![(1, 2, 1)]);
+        stash_rw.verify().await.unwrap();
     }
 
     Ok(())
 }
 
-async fn test_append<F, S, O>(f: F) -> Result<(), anyhow::Error>
+async fn test_append<F, S, O>(f: F) -> Result<S, anyhow::Error>
 where
     S: Append,
     O: Future<Output = S>,
@@ -358,10 +366,10 @@ where
 
     test_stash_table(&mut stash).await?;
 
-    Ok(())
+    Ok(stash)
 }
 
-async fn test_stash<F, S, O>(f: F) -> Result<(), anyhow::Error>
+async fn test_stash<F, S, O>(f: F) -> Result<S, anyhow::Error>
 where
     S: Stash,
     O: Future<Output = S>,
@@ -552,7 +560,7 @@ where
         Some("bar".to_string())
     );
 
-    Ok(())
+    Ok(stash)
 }
 
 async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> {

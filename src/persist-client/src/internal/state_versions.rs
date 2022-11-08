@@ -109,7 +109,7 @@ impl StateVersions {
     pub async fn maybe_init_shard<K, V, T, D>(
         &self,
         shard_metrics: &ShardMetrics,
-    ) -> Result<State<K, V, T, D>, CodecMismatch>
+    ) -> Result<State<K, V, T, D>, Box<CodecMismatch>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -158,7 +158,7 @@ impl StateVersions {
                     Ok(state) => !state.collections.rollups.values().any(|x| x == rollup_key),
                     // If the codecs don't match, then we definitely didn't
                     // write the state.
-                    Err(CodecMismatch { .. }) => true,
+                    Err(_codec_mismatch) => true,
                 };
                 if should_delete_rollup {
                     self.delete_rollup(&shard_id, rollup_key).await;
@@ -260,7 +260,7 @@ impl StateVersions {
         &self,
         shard_id: &ShardId,
         mut all_live_diffs: Vec<VersionedData>,
-    ) -> Result<State<K, V, T, D>, CodecMismatch>
+    ) -> Result<State<K, V, T, D>, Box<CodecMismatch>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -328,7 +328,7 @@ impl StateVersions {
     pub async fn fetch_and_update_to_current<K, V, T, D>(
         &self,
         state: &mut State<K, V, T, D>,
-    ) -> Result<(), CodecMismatch>
+    ) -> Result<(), Box<CodecMismatch>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -364,7 +364,7 @@ impl StateVersions {
     pub async fn fetch_live_states<K, V, T, D>(
         &self,
         shard_id: &ShardId,
-    ) -> Result<StateVersionsIter<K, V, T, D>, CodecMismatch>
+    ) -> Result<StateVersionsIter<K, V, T, D>, Box<CodecMismatch>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -526,7 +526,7 @@ impl StateVersions {
         shard_id: &ShardId,
         all_live_diffs: Vec<VersionedData>,
         seqno: SeqNo,
-    ) -> Option<Result<State<K, V, T, D>, CodecMismatch>>
+    ) -> Option<Result<State<K, V, T, D>, Box<CodecMismatch>>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -604,7 +604,7 @@ impl StateVersions {
         &self,
         shard_id: &ShardId,
         rollup_key: &PartialRollupKey,
-    ) -> Option<Result<State<K, V, T, D>, CodecMismatch>>
+    ) -> Option<Result<State<K, V, T, D>, Box<CodecMismatch>>>
     where
         K: Debug + Codec,
         V: Debug + Codec,

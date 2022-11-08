@@ -37,7 +37,7 @@ use mz_ore::result::ResultExt;
 use mz_ore::str::{bracketed, separated};
 use mz_repr::explain_new::ExprHumanizer;
 use mz_repr::GlobalId;
-use mz_storage::types::sources::Timeline;
+use mz_storage_client::types::sources::Timeline;
 
 use crate::command::DataflowDescription;
 

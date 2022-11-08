@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 pub mod v1 {
     use super::*;
 
+    /// Describes an AWS VPC endpoint to create.
     #[derive(CustomResource, Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
     #[serde(rename_all = "camelCase")]
     #[kube(
@@ -35,8 +36,12 @@ pub mod v1 {
     // you must also update src/cloud-resources/gen/vpcendpoints.crd.json
     // so that cloudtest can register the CRD.
     pub struct VpcEndpointSpec {
+        /// The name of the service to connect to.
         pub aws_service_name: String,
+        /// The IDs of the availability zones in which the service is available.
         pub availability_zone_ids: Vec<String>,
+        /// A suffix to use in the name of the IAM role that is created.
+        pub role_suffix: String,
     }
 
     #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]

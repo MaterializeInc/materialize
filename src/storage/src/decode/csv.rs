@@ -8,9 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use mz_repr::{Datum, Row};
-
-use crate::types::errors::DecodeErrorKind;
-use crate::types::sources::encoding::CsvEncoding;
+use mz_storage_client::types::errors::DecodeErrorKind;
+use mz_storage_client::types::sources::encoding::CsvEncoding;
 
 #[derive(Debug)]
 pub struct CsvDecoderState {

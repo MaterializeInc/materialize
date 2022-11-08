@@ -419,7 +419,7 @@ where
             .expect("no required fields means no initialization errors");
     }
 
-    pub fn decode(build_version: &Version, buf: &[u8]) -> Result<Self, CodecMismatch> {
+    pub fn decode(build_version: &Version, buf: &[u8]) -> Result<Self, Box<CodecMismatch>> {
         let proto = ProtoStateRollup::decode(buf)
             // We received a State that we couldn't decode. This could happen if
             // persist messes up backward/forward compatibility, if the durable

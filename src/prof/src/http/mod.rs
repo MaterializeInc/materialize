@@ -73,18 +73,26 @@ struct ProfTemplate<'a> {
     version: &'a str,
     executable: &'a str,
     mem_prof: MemProfilingStatus,
+    ever_symbolicated: bool,
 }
 
 #[derive(Template)]
 #[template(path = "http/templates/flamegraph.html")]
-struct FlamegraphTemplate<'a> {
-    version: &'a str,
-    title: &'a str,
-    mzfg: &'a str,
+pub struct FlamegraphTemplate<'a> {
+    pub version: &'a str,
+    pub title: &'a str,
+    pub mzfg: &'a str,
 }
 
 #[allow(clippy::drop_copy)]
-async fn time_prof<'a>(merge_threads: bool, build_info: &BuildInfo) -> impl IntoResponse {
+async fn time_prof<'a>(
+    merge_threads: bool,
+    build_info: &BuildInfo,
+    // the time in seconds to run the profiler for
+    time_secs: u64,
+    // the sampling frequency in Hz
+    sample_freq: u32,
+) -> impl IntoResponse {
     let ctl_lock;
     cfg_if! {
         if #[cfg(any(target_os = "macos", not(feature = "jemalloc")))] {
@@ -101,16 +109,22 @@ async fn time_prof<'a>(merge_threads: bool, build_info: &BuildInfo) -> impl Into
     }
     // SAFETY: We ensure above that memory profiling is off.
     // Since we hold the mutex, nobody else can be turning it back on in the intervening time.
-    let stacks = unsafe { crate::time::prof_time(Duration::from_secs(10), 99, merge_threads) }
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let stacks = unsafe {
+        crate::time::prof_time(Duration::from_secs(time_secs), sample_freq, merge_threads)
+    }
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     // Fail with a compile error if we weren't holding the jemalloc lock.
     drop(ctl_lock);
+    let (secs_s, freq_s) = (format!("{time_secs}"), format!("{sample_freq}"));
     Ok::<_, (StatusCode, String)>(flamegraph(
         stacks,
         "CPU Time Flamegraph",
         false,
-        &[],
+        &[
+            ("Sampling time (s)", &secs_s),
+            ("Sampling frequency (Hz)", &freq_s),
+        ],
         build_info,
     ))
 }
@@ -148,6 +162,7 @@ mod disabled {
     use mz_build_info::BuildInfo;
 
     use super::{time_prof, MemProfilingStatus, ProfTemplate};
+    use crate::ever_symbolicated;
 
     #[derive(Deserialize)]
     pub struct ProfQuery {
@@ -164,6 +179,7 @@ mod disabled {
             version: build_info.version,
             executable: &super::EXECUTABLE,
             mem_prof: MemProfilingStatus::Disabled,
+            ever_symbolicated: ever_symbolicated(),
         })
     }
 
@@ -171,15 +187,37 @@ mod disabled {
     pub struct ProfForm {
         action: String,
         threads: Option<String>,
+        time_secs: Option<u64>,
+        hz: Option<u32>,
     }
 
     pub async fn handle_post(
-        Form(ProfForm { action, threads }): Form<ProfForm>,
+        Form(ProfForm {
+            action,
+            threads,
+            time_secs,
+            hz,
+        }): Form<ProfForm>,
         build_info: &'static BuildInfo,
     ) -> impl IntoResponse {
         let merge_threads = threads.as_deref() == Some("merge");
         match action.as_ref() {
-            "time_fg" => Ok(time_prof(merge_threads, build_info).await),
+            "time_fg" => {
+                let time_secs = time_secs.ok_or_else(|| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        "Expected value for `time_secs`".to_owned(),
+                    )
+                })?;
+                let hz = hz.ok_or_else(|| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        "Expected value for `hz`".to_owned(),
+                    )
+                })?;
+
+                Ok(time_prof(merge_threads, build_info, time_secs, hz).await)
+            }
             _ => Err((
                 StatusCode::BAD_REQUEST,
                 format!("unrecognized `action` parameter: {}", action),
@@ -202,6 +240,7 @@ mod enabled {
     use serde::Deserialize;
     use tokio::sync::Mutex;
 
+    use crate::ever_symbolicated;
     use crate::jemalloc::{parse_jeheap, JemallocProfCtl, JemallocStats, PROF_CTL};
 
     use super::{flamegraph, time_prof, MemProfilingStatus, ProfTemplate};
@@ -227,10 +266,17 @@ mod enabled {
     pub struct ProfForm {
         action: String,
         threads: Option<String>,
+        time_secs: Option<u64>,
+        hz: Option<u32>,
     }
 
     pub async fn handle_post(
-        Form(ProfForm { action, threads }): Form<ProfForm>,
+        Form(ProfForm {
+            action,
+            threads,
+            time_secs,
+            hz,
+        }): Form<ProfForm>,
         build_info: &'static BuildInfo,
     ) -> impl IntoResponse {
         let prof_ctl = PROF_CTL.as_ref().unwrap();
@@ -342,7 +388,23 @@ mod enabled {
                         .into_response(),
                 )
             }
-            "time_fg" => Ok(time_prof(merge_threads, build_info).await.into_response()),
+            "time_fg" => {
+                let time_secs = time_secs.ok_or_else(|| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        "Expected value for `time_secs`".to_owned(),
+                    )
+                })?;
+                let hz = hz.ok_or_else(|| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        "Expected value for `hz`".to_owned(),
+                    )
+                })?;
+                Ok(time_prof(merge_threads, build_info, time_secs, hz)
+                    .await
+                    .into_response())
+            }
             x => Err((
                 StatusCode::BAD_REQUEST,
                 format!("unrecognized `action` parameter: {}", x),
@@ -393,6 +455,7 @@ mod enabled {
             version: build_info.version,
             executable: &super::EXECUTABLE,
             mem_prof: MemProfilingStatus::Enabled(prof_md.start_time),
+            ever_symbolicated: ever_symbolicated(),
         })
     }
 }

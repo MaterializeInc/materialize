@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 
 use mz_storage::source::testscript::ScriptCommand;
-use mz_storage::types::sources::{encoding::SourceDataEncoding, SourceEnvelope};
+use mz_storage_client::types::sources::{encoding::SourceDataEncoding, SourceEnvelope};
 
 mod setup;
 

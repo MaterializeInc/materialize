@@ -290,7 +290,7 @@ mz_raw_worker_compute_delays_s2_primary_idx                 mz_raw_worker_comput
 mz_scheduling_elapsed_internal_s2_primary_idx               mz_scheduling_elapsed_internal              mz_introspection    {id,worker_id}
 mz_scheduling_parks_internal_s2_primary_idx                 mz_scheduling_parks_internal                mz_introspection    {worker_id,slept_for,requested}
 mz_show_all_objects_ind                                     mz_objects                                  mz_introspection    {schema_id}
-mz_show_cluster_replicas_ind                                mz_show_cluster_replicas                    mz_introspection    {cluster,replica,size}
+mz_show_cluster_replicas_ind                                mz_show_cluster_replicas                    mz_introspection    {cluster,replica,size,ready}
 mz_show_clusters_ind                                        mz_clusters                                 mz_introspection    {name}
 mz_show_columns_ind                                         mz_columns                                  mz_introspection    {id}
 mz_show_connections_ind                                     mz_connections                              mz_introspection    {schema_id}

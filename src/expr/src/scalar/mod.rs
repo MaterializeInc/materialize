@@ -2031,6 +2031,26 @@ impl FilterCharacteristics {
         }
     }
 
+    pub fn explain(&self) -> String {
+        let mut e = "".to_owned();
+        if self.literal_equality {
+            e.push_str("e");
+        }
+        if self.like {
+            e.push_str("l");
+        }
+        if self.is_null {
+            e.push_str("n");
+        }
+        for _ in 0..self.literal_inequality {
+            e.push_str("i");
+        }
+        if self.any_filter {
+            e.push_str("f");
+        }
+        e
+    }
+
     pub fn filter_characteristics(
         filters: &Vec<MirScalarExpr>,
     ) -> Result<FilterCharacteristics, RecursionLimitError> {

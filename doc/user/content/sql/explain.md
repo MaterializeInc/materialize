@@ -148,14 +148,14 @@ columns assigned to `Map` operators, it might be useful to request [the `arity` 
 
 Each operator can also be annotated with additional metadata. Details are shown by default in
 the `EXPLAIN PHYSICAL PLAN` output, but are hidden elsewhere. In `EXPLAIN OPTIMIZED PLAN`, details
-about the implementation in the `Join` operator can be requested with [the `join_impls` output modifier](#output-modifiers).
+about the implementation in the `Join` operator can be requested with [the `join_impls` output modifier](#output-modifiers):
 
 ```text
 Join on=(#1 = #2 AND #3 = #4) type=delta
   implementation
-    %0 » %1[#0] » %2[#0]
-    %1 » %0[#1] » %2[#0]
-    %2 » %1[#1] » %0[#1]
+    %0:t » %1:u[#0]KA » %2:v[#0]KA
+    %1:u » %0:t[#1]KA » %2:v[#0]KA
+    %2:v » %1:u[#1]KA » %0:t[#1]KA
   ArrangeBy keys=[[#1]]
     Get materialize.public.t
   ArrangeBy keys=[[#0], [#1]]
@@ -163,10 +163,25 @@ Join on=(#1 = #2 AND #3 = #4) type=delta
   ArrangeBy keys=[[#0]]
     Get materialize.public.v
 ```
+The `%0`, `%1`, etc. refer to each of the join inputs.
+A *differential* join shows one join path, which is simply a sequence of binary
+joins (each of whose results need to be maintained as state).
+A [*delta* join](https://materialize.com/blog/maintaining-joins-using-few-resources)
+shows a join path for each of the inputs.
+The expressions in
+a bracket show the key for joining with that input. The letters after the brackets
+indicate the input characteristics used for join ordering. `U` means unique, the
+number of `K`s means the key length, `A` means already arranged (e.g., an index
+exists). The small letters refer to filter characteristics:
+**e**quality to a literal,
+**l**ike,
+is **n**ull,
+**i**nequality to a literal,
+any **f**ilter.
 
 A plan can optionally end with a finishing action which can sort, limit and
 project the result data. This operator is special, as it can only occur at the
-top of the plan. Finishing actions are executed outside of the parallel dataflow
+top of the plan. Finishing actions are executed outside the parallel dataflow
 that implements the rest of the plan.
 
 ```

@@ -44,7 +44,7 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 , t2 WHERE t1.f1 = 123 AND t1.f
 Explained Query:
   CrossJoin type=differential // { arity: 4 }
     implementation
-      %1 » %0[]
+      %1:t2 » %0:t1[×]UAef
     ArrangeBy keys=[[]] // { arity: 2 }
       Filter (#0 = 123) // { arity: 2 }
         Get materialize.public.t1 // { arity: 2 }
@@ -79,7 +79,7 @@ Explained Query:
     cte l1 =
       CrossJoin type=differential // { arity: 4 }
         implementation
-          %1 » %0[]
+          %1:t2 » %0:l0[×]UAef
         ArrangeBy keys=[[]] // { arity: 2 }
           Get l0 // { arity: 2 }
         Filter (#0 = 123) // { arity: 2 }
@@ -117,7 +117,7 @@ Explained Query:
     cte l0 =
       CrossJoin type=differential // { arity: 3 }
         implementation
-          %1 » %0[]
+          %1:t2 » %0:t1[×]UAef
         ArrangeBy keys=[[]] // { arity: 2 }
           Filter (#0 = 123) // { arity: 2 }
             Get materialize.public.t1 // { arity: 2 }
@@ -138,7 +138,7 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 LEFT JOIN t2 ON (TRUE) WHERE t1
 Explained Query:
   CrossJoin type=differential // { arity: 4 }
     implementation
-      %1 » %0[]
+      %1:t2 » %0:t1[×]UAef
     ArrangeBy keys=[[]] // { arity: 2 }
       Filter (#0 = 123) // { arity: 2 }
         Get materialize.public.t1 // { arity: 2 }
@@ -160,7 +160,7 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM t1, t2, t3 WHERE t1.f1 = 123 AND t
 Explained Query:
   CrossJoin type=differential // { arity: 6 }
     implementation
-      %2 » %0[] » %1[]
+      %2:t3 » %0:t1[×]UAef » %1:t2[×]UAef
     ArrangeBy keys=[[]] // { arity: 2 }
       Filter (#0 = 123) // { arity: 2 }
         Get materialize.public.t1 // { arity: 2 }
@@ -188,7 +188,7 @@ Explained Query:
   Map (123) // { arity: 1 }
     CrossJoin type=differential // { arity: 0 }
       implementation
-        %1 » %0[]
+        %1:t2 » %0:t1[×]UAef
       ArrangeBy keys=[[]] // { arity: 0 }
         Project () // { arity: 0 }
           Filter (#0 = 123) // { arity: 2 }
@@ -219,7 +219,7 @@ Explained Query:
   Return // { arity: 1 }
     CrossJoin type=differential // { arity: 1 }
       implementation
-        %1 » l1[]
+        %1 » %0:l1[×]UAef
       Get l1 // { arity: 0 }
       Union // { arity: 1 }
         Get l2 // { arity: 1 }
@@ -233,7 +233,7 @@ Explained Query:
     cte l2 =
       CrossJoin type=differential // { arity: 1 }
         implementation
-          %1 » l1[]
+          %1:t1 » %0:l1[×]UAef
         Get l1 // { arity: 0 }
         Project (#0) // { arity: 1 }
           Filter (#0 = 123) // { arity: 2 }
@@ -267,7 +267,7 @@ Explained Query:
       Map ((#0 = 123)) // { arity: 2 }
         CrossJoin type=differential // { arity: 1 }
           implementation
-            %1 » %0[]
+            %1 » %0:t2[×]UAef
           ArrangeBy keys=[[]] // { arity: 0 }
             Project () // { arity: 0 }
               Filter (#0 = 123) // { arity: 2 }
@@ -310,7 +310,7 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE t1.f1 = 123 AND EXISTS (S
 Explained Query:
   CrossJoin type=differential // { arity: 2 }
     implementation
-      %1 » %0[]
+      %1:t2 » %0:t1[×]UAef
     ArrangeBy keys=[[]] // { arity: 2 }
       Filter (#0 = 123) // { arity: 2 }
         Get materialize.public.t1 // { arity: 2 }
@@ -333,7 +333,7 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE t1.f1 = 123 AND EXISTS (S
 Explained Query:
   CrossJoin type=differential // { arity: 2 }
     implementation
-      %2 » %0[] » %1[]
+      %2:t3 » %0:t1[×]UAef » %1:t2[×]UAef
     ArrangeBy keys=[[]] // { arity: 2 }
       Filter (#0 = 123) // { arity: 2 }
         Get materialize.public.t1 // { arity: 2 }
@@ -364,7 +364,7 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM t1, (SELECT t2.f1 FROM t2) AS dt1 
 Explained Query:
   CrossJoin type=differential // { arity: 3 }
     implementation
-      %1 » %0[]
+      %1:t2 » %0:t1[×]UAef
     ArrangeBy keys=[[]] // { arity: 2 }
       Filter (#0 = 123) // { arity: 2 }
         Get materialize.public.t1 // { arity: 2 }
@@ -387,7 +387,7 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE 123 = (SELECT t2.f1 FROM 
 Explained Query:
   CrossJoin type=differential // { arity: 2 }
     implementation
-      %1 » %0[]
+      %1 » %0:t1[×]A
     ArrangeBy keys=[[]] // { arity: 2 }
       Get materialize.public.t1 // { arity: 2 }
     Union // { arity: 0 }
@@ -412,7 +412,7 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE t1.f1 = 123 AND t1.f1 = (
 Explained Query:
   CrossJoin type=differential // { arity: 2 }
     implementation
-      %1 » %0[]
+      %1 » %0:t1[×]UAef
     ArrangeBy keys=[[]] // { arity: 2 }
       Filter (#0 = 123) // { arity: 2 }
         Get materialize.public.t1 // { arity: 2 }
@@ -491,7 +491,7 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123 AND t2.f1 = 234;
 ----
 Explained Query (fast path):
-  Constant
+  Constant <empty>
 
 EOF
 
@@ -503,7 +503,7 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 FULL OUTER JOIN t2 USING (f1) WHERE t1.f1 = 123 AND t2.f1 = 234;
 ----
 Explained Query (fast path):
-  Constant
+  Constant <empty>
 
 EOF
 
@@ -515,7 +515,7 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM t1, t2 WHERE t1.f1 = 123 AND t1.f1
 Explained Query:
   CrossJoin type=differential // { arity: 4 }
     implementation
-      %1 » %0[]
+      %1:t2 » %0:t1[×]UAeif
     ArrangeBy keys=[[]] // { arity: 2 }
       Filter (#0 = 123) // { arity: 2 }
         Get materialize.public.t1 // { arity: 2 }
@@ -543,7 +543,7 @@ explain with(arity, join_impls) select * from int_table, double_table where int_
 Explained Query:
   Join on=(#1 = integer_to_double(#0)) type=differential // { arity: 2 }
     implementation
-      %1 » %0[integer_to_double(#0)]
+      %1:double_table » %0:int_table[integer_to_double(#0)]KA
     ArrangeBy keys=[[integer_to_double(#0)]] // { arity: 1 }
       Get materialize.public.int_table // { arity: 1 }
     Filter (#0) IS NOT NULL // { arity: 1 }

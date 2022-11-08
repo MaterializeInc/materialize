@@ -113,7 +113,7 @@ Explained Query:
     Map (1) // { arity: 4 }
       CrossJoin type=differential // { arity: 3 }
         implementation
-          materialize.public.t » %0[]
+          %1:t » %0:t[×]A
         ArrangeBy keys=[[]] // { arity: 1 }
           Project (#2) // { arity: 1 }
             Map ((#0 + 1)) // { arity: 3 }
@@ -131,7 +131,7 @@ Explained Query:
     Map (2, 1) // { arity: 6 }
       CrossJoin type=differential // { arity: 4 }
         implementation
-          materialize.public.t » %0[]
+          %1:t » %0:t[×]A
         ArrangeBy keys=[[]] // { arity: 2 }
           Project (#2, #3) // { arity: 2 }
             Map ((#1 + 1), (#0 + 1)) // { arity: 4 }
@@ -149,7 +149,7 @@ Explained Query:
     Map (3, 2, 1) // { arity: 8 }
       CrossJoin type=differential // { arity: 5 }
         implementation
-          materialize.public.t » %0[]
+          %1:t » %0:t[×]A
         ArrangeBy keys=[[]] // { arity: 3 }
           Project (#2..=#4) // { arity: 3 }
             Map ((#1 + 1), (#0 + 2), (#0 + 1)) // { arity: 5 }
@@ -198,7 +198,7 @@ Explained Query:
     Map ((1 + #0), 1) // { arity: 3 }
       CrossJoin type=differential // { arity: 1 }
         implementation
-          %1 » %0[]
+          %1:t » %0[×]
         Constant // { arity: 0 }
           - (() x 7)
         Project (#0) // { arity: 1 }
@@ -750,7 +750,7 @@ Explained Query:
         Project (#0) // { arity: 1 }
           Join on=(#0 = #1) type=differential // { arity: 2 }
             implementation
-              %1 » %0[#0]
+              %1 » %0:t_pk[#0]UKAiif
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Project (#0) // { arity: 1 }
                 Filter (#0 <= 195) AND (#0 >= 38) // { arity: 2 }
@@ -799,7 +799,7 @@ Explained Query:
         Project (#0) // { arity: 1 }
           Join on=(#0 = #1) type=differential // { arity: 2 }
             implementation
-              %1 » %0[#0]
+              %1 » %0:t[#0]KAiif
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Project (#0) // { arity: 1 }
                 Filter (#0 <= 195) AND (#0 >= 38) // { arity: 2 }
@@ -866,7 +866,7 @@ explain with(arity, join_impls) select * from t1 as a1 join t1 as a2 on (a2.f2 =
 Explained Query:
   CrossJoin type=differential // { arity: 4 }
     implementation
-      %1 » %2[] » %0[]
+      %1:t1 » %2[×]UAef » %0:t1[×]Aef
     ArrangeBy keys=[[]] // { arity: 2 }
       Get materialize.public.t1 // { arity: 2 }
     Filter (#1 = 9) // { arity: 2 }
