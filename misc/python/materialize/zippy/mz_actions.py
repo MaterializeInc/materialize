@@ -19,15 +19,6 @@ class MzStart(Action):
     """Starts a Mz instance (all components are running in the same container)."""
 
     def run(self, c: Composition) -> None:
-        # Work around https://github.com/MaterializeInc/materialize/issues/15725
-        # by cleaning up Process Orchestrator metadata on restart
-        c.run(
-            "materialized",
-            "-c",
-            "rm -rf /mzdata/*.pid /mzdata/*.ports",
-            entrypoint="bash",
-        )
-
         c.up("materialized")
         # Loaded Mz environments take a while to start up
         c.wait_for_materialized(timeout_secs=300)
