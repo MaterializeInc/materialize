@@ -1901,11 +1901,23 @@ fn test_idle_in_transaction_session_timeout() -> Result<(), Box<dyn Error>> {
     client.batch_execute("SET idle_in_transaction_session_timeout TO '4ms'")?;
     client.batch_execute("BEGIN")?;
     std::thread::sleep(Duration::from_millis(5));
-    let error = client.query("SELECT 1", &[]).unwrap_err();
-    assert!(
-        error.is_closed(),
-        "error should indicate that client is closed: {error:?}"
-    );
+    // Retry because sleep might be woken up early.
+    Retry::default()
+        .max_duration(Duration::from_secs(1))
+        .retry(|_| {
+            let res = client.query("SELECT 1", &[]);
+            if let Err(error) = res {
+                if error.is_closed() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "error should indicates that the connection is closed: {error:?}"
+                    ))
+                }
+            } else {
+                Err(format!("query should return error: {res:?}"))
+            }
+        })?;
 
     // session should be timed out even if transaction has failed.
     let mut client = server.connect(postgres::NoTls)?;
@@ -1917,11 +1929,23 @@ fn test_idle_in_transaction_session_timeout() -> Result<(), Box<dyn Error>> {
         "failing a transaction should not close the connection: {error:?}"
     );
     std::thread::sleep(Duration::from_millis(5));
-    let error = client.query("SELECT 1", &[]).unwrap_err();
-    assert!(
-        error.is_closed(),
-        "error should indicate that client is closed: {error:?}"
-    );
+    // Retry because sleep might be woken up early.
+    Retry::default()
+        .max_duration(Duration::from_secs(1))
+        .retry(|_| {
+            let res = client.query("SELECT 1", &[]);
+            if let Err(error) = res {
+                if error.is_closed() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "error should indicates that the connection is closed: {error:?}"
+                    ))
+                }
+            } else {
+                Err(format!("query should return error: {res:?}"))
+            }
+        })?;
 
     // session should not be timed out if it's not idle.
     let mut client = server.connect(postgres::NoTls)?;
