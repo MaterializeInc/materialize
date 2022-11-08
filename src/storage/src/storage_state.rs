@@ -98,6 +98,8 @@ pub struct StorageState {
     pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
     /// See: [SinkHandle]
     pub sink_handles: HashMap<GlobalId, SinkHandle>,
+    /// Collection ids that have been dropped but not yet reported as dropped
+    pub dropped_ids: Vec<GlobalId>,
 }
 
 /// This maintains an additional read hold on the source data for a sink, alongside
@@ -220,6 +222,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 self.timely_worker.step();
             }
 
+            // Rerport any dropped ids
+            if !self.storage_state.dropped_ids.is_empty() {
+                let ids = std::mem::take(&mut self.storage_state.dropped_ids);
+                self.send_storage_response(&response_tx, StorageResponse::DroppedIds(ids));
+            }
+
             self.report_frontier_progress(&response_tx);
 
             // Handle any received commands.
@@ -325,6 +333,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         self.storage_state.source_tokens.remove(&id);
                         self.storage_state.sink_tokens.remove(&id);
                         self.storage_state.sink_handles.remove(&id);
+                        self.storage_state.dropped_ids.push(id);
                     }
                 }
             }

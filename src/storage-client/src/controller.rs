@@ -1366,6 +1366,11 @@ where
                 self.update_write_frontiers(&updates).await?;
                 Ok(())
             }
+            Some(StorageResponse::DroppedIds(_ids)) => {
+                // TODO(petrosagg): It looks like the storage controller never cleans up GlobalIds
+                // from its state. It should probably be done as a reaction to this response.
+                Ok(())
+            }
         }
     }
 }

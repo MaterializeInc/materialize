@@ -283,21 +283,29 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
     /// TODO(teskje): Consider also reporting the previous upper frontier and using that
     /// information to assert the correct implementation of our protocols at various places.
     FrontierUppers(Vec<(GlobalId, Antichain<T>)>),
+    /// Punctuation indicates that no more responses will be transmitted for the specified ids
+    DroppedIds(Vec<GlobalId>),
 }
 
 impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoStorageResponse {
-        use proto_storage_response::Kind::*;
+        use proto_storage_response::{Kind::*, ProtoDroppedIds};
         ProtoStorageResponse {
             kind: Some(match self {
                 StorageResponse::FrontierUppers(traces) => FrontierUppers(traces.into_proto()),
+                StorageResponse::DroppedIds(ids) => DroppedIds(ProtoDroppedIds {
+                    ids: ids.into_proto(),
+                }),
             }),
         }
     }
 
     fn from_proto(proto: ProtoStorageResponse) -> Result<Self, TryFromProtoError> {
-        use proto_storage_response::Kind::*;
+        use proto_storage_response::{Kind::*, ProtoDroppedIds};
         match proto.kind {
+            Some(DroppedIds(ProtoDroppedIds { ids })) => {
+                Ok(StorageResponse::DroppedIds(ids.into_rust()?))
+            }
             Some(FrontierUppers(traces)) => {
                 Ok(StorageResponse::FrontierUppers(traces.into_rust()?))
             }
@@ -331,7 +339,7 @@ pub struct PartitionedStorageState<T> {
     parts: usize,
     /// Upper frontiers for sources and sinks, both unioned across all partitions and from each
     /// individual partition.
-    uppers: HashMap<GlobalId, (MutableAntichain<T>, Vec<Antichain<T>>)>,
+    uppers: HashMap<GlobalId, (MutableAntichain<T>, Vec<Option<Antichain<T>>>)>,
 }
 
 impl<T> Partitionable<StorageCommand<T>, StorageResponse<T>>
@@ -360,7 +368,8 @@ where
                     for &export_id in ingestion.description.source_exports.keys() {
                         let mut frontier = MutableAntichain::new();
                         frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
-                        let part_frontiers = vec![Antichain::from_elem(T::minimum()); self.parts];
+                        let part_frontiers =
+                            vec![Some(Antichain::from_elem(T::minimum())); self.parts];
                         let previous = self.uppers.insert(export_id, (frontier, part_frontiers));
                         assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", export_id, command);
                     }
@@ -370,7 +379,7 @@ where
                 for export in exports {
                     let mut frontier = MutableAntichain::new();
                     frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
-                    let part_frontiers = vec![Antichain::from_elem(T::minimum()); self.parts];
+                    let part_frontiers = vec![Some(Antichain::from_elem(T::minimum())); self.parts];
                     let previous = self.uppers.insert(export.id, (frontier, part_frontiers));
                     assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", export.id, command);
                 }
@@ -403,17 +412,22 @@ where
                 let mut new_uppers = Vec::new();
 
                 for (id, new_shard_upper) in list {
-                    if let Some((frontier, shard_frontiers)) = self.uppers.get_mut(&id) {
-                        let old_upper = frontier.frontier().to_owned();
-                        let shard_upper = &mut shard_frontiers[shard_id];
-                        frontier.update_iter(shard_upper.iter().map(|t| (t.clone(), -1)));
-                        frontier.update_iter(new_shard_upper.iter().map(|t| (t.clone(), 1)));
-                        shard_upper.join_assign(&new_shard_upper);
+                    let (frontier, shard_frontiers) = match self.uppers.get_mut(&id) {
+                        Some(value) => value,
+                        None => panic!("Reference to absent collection: {id}"),
+                    };
+                    let old_upper = frontier.frontier().to_owned();
+                    let shard_upper = match &mut shard_frontiers[shard_id] {
+                        Some(shard_upper) => shard_upper,
+                        None => panic!("Reference to absent shard {shard_id} for collection {id}"),
+                    };
+                    frontier.update_iter(shard_upper.iter().map(|t| (t.clone(), -1)));
+                    frontier.update_iter(new_shard_upper.iter().map(|t| (t.clone(), 1)));
+                    shard_upper.join_assign(&new_shard_upper);
 
-                        let new_upper = frontier.frontier();
-                        if PartialOrder::less_than(&old_upper.borrow(), &new_upper) {
-                            new_uppers.push((id, new_upper.to_owned()));
-                        }
+                    let new_upper = frontier.frontier();
+                    if PartialOrder::less_than(&old_upper.borrow(), &new_upper) {
+                        new_uppers.push((id, new_upper.to_owned()));
                     }
                 }
 
@@ -421,6 +435,32 @@ where
                     None
                 } else {
                     Some(Ok(StorageResponse::FrontierUppers(new_uppers)))
+                }
+            }
+            StorageResponse::DroppedIds(dropped_ids) => {
+                let mut new_drops = vec![];
+
+                for id in dropped_ids {
+                    let (_, shard_frontiers) = match self.uppers.get_mut(&id) {
+                        Some(value) => value,
+                        None => panic!("Reference to absent collection: {id}"),
+                    };
+                    let prev = shard_frontiers[shard_id].take();
+                    assert!(
+                        prev.is_some(),
+                        "got double drop for {id} from shard {shard_id}"
+                    );
+
+                    if shard_frontiers.iter().all(Option::is_none) {
+                        self.uppers.remove(&id);
+                        new_drops.push(id);
+                    }
+                }
+
+                if new_drops.is_empty() {
+                    None
+                } else {
+                    Some(Ok(StorageResponse::DroppedIds(new_drops)))
                 }
             }
         }
