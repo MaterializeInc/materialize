@@ -1,0 +1,5 @@
+@mixin card {
+    background: var(--card-light);
+    border: 1px solid var(--divider-light);
+    border-radius: 1.2rem;
+}

@@ -1,64 +1,64 @@
 .rr-diagram {
-  margin: 1.5rem 0;
-  overflow: auto;
+    margin: 1.5rem 0;
+    overflow: auto;
 
-  .line {
-    fill: none;
-    stroke: $off-black;
-  }
+    .line {
+        fill: none;
+        stroke: var(--sub);
+    }
 
-  .bold-line {
-    stroke: $black;
-    shape-rendering: crispEdges;
-    stroke-width: 2;
-  }
+    .bold-line {
+        stroke: var(--important);
+        shape-rendering: crispEdges;
+        stroke-width: 2;
+    }
 
-  .thin-line {
-    stroke: $black;
-    shape-rendering: crispEdges;
-  }
+    .thin-line {
+        stroke: var(--important);
+        shape-rendering: crispEdges;
+    }
 
-  .filled {
-    fill: $off-black;
-    stroke: none;
-  }
+    .filled {
+        fill: var(--sub);
+        stroke: none;
+    }
 
-  text.terminal,
-  text.nonterminal,
-  text.regexp {
-    font-family: "Inter", sans-serif;
-    font-size: 14px;
-    fill: $black;
-  }
+    text.terminal,
+    text.nonterminal,
+    text.regexp {
+        font-family: "Inter", sans-serif;
+        font-size: 14px;
+        fill: $black;
+    }
 
-  text.terminal {
-    font-weight: bold;
-  }
+    text.terminal {
+        font-weight: bold;
+    }
 
-  rect,
-  circle,
-  polygon {
-    fill: $off-black;
-    stroke: $off-black;
-  }
+    rect,
+    circle,
+    polygon {
+        fill: var(--sub);
+        stroke: var(--sub);
+    }
 
-  rect.terminal {
-    fill: scale-color($purple-40, $saturation: -50%);
-    stroke: $off-black;
-  }
+    rect.terminal {
+        fill: scale-color($purple-40, $saturation: -50%);
+        stroke: var(--sub);
+    }
 
-  rect.nonterminal {
-    fill: scale-color($purple-20, $saturation: -50%);
-    stroke: $off-black;
-  }
+    rect.nonterminal {
+        fill: scale-color($purple-20, $saturation: -50%);
+        stroke: var(--sub);
+    }
 
-  rect.text {
-    fill: none;
-    stroke: none;
-  }
+    rect.text {
+        fill: none;
+        stroke: none;
+    }
 
-  polygon.regexp {
-    fill: scale-color($purple-10, $saturation: -50%);
-    stroke: $off-black;
-  }
+    polygon.regexp {
+        fill: scale-color($purple-10, $saturation: -50%);
+        stroke: var(--sub);
+    }
 }

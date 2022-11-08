@@ -16,38 +16,242 @@ $lime: #77e04c;
 
 /* New Site Styles */
 /* TODO: Remove V2 once ported over */
-$white-v2: #FFF;
-$grey-v2: #A2A2A2;
-$dark-grey-v2: #CDCDCD;
-$medium-grey-v2: #EDE7FD;
-$light-grey-v2: #F5F5F5;
-$black-v2: #383D49;
+$white-v2: #fff;
+$grey-v2: #a2a2a2;
+$dark-grey-v2: #cdcdcd;
+$medium-grey-v2: #ede7fd;
+$light-grey-v2: #f5f5f5;
+$black-v2: #383d49;
 $dark-black-v2: #111111;
-$faded-purple-v2: #FAF8FD;
-$light-purple-v2: #BAB5EF;
-$purple-v2: #7F4EFF;
-$medium-purple-v2: #472F85;
-$dark-purple-v2: #1B164C;
-$darkest-purple-v2: #140D55;
-$orchid-v2: #E537C0;
-$transparent-gradient-v2: linear-gradient(0deg, #FFFFFF00 0%,#FFFFFF00 100%);
-$primary-gradient-v2: linear-gradient(280.8deg, #5C29F1 15.21%, #E37AC2 56.5%, #FF9067 85.53%);
-$primary-gradient-dark-v2: linear-gradient(280.8deg, #5C29F1 15.21%, #E37AC2 56.5%, #FF9067 85.53%),linear-gradient(0deg, #111111, #111111);
+$faded-purple-v2: #faf8fd;
+$light-purple-v2: #bab5ef;
+$purple-v2: #7f4eff;
+$medium-purple-v2: #472f85;
+$dark-purple-v2: #1b164c;
+$darkest-purple-v2: #140d55;
+$orchid-v2: #e537c0;
+$transparent-gradient-v2: linear-gradient(0deg, #ffffff00 0%, #ffffff00 100%);
+$primary-gradient-v2: linear-gradient(
+    280.8deg,
+    #5c29f1 15.21%,
+    #e37ac2 56.5%,
+    #ff9067 85.53%
+);
+$primary-gradient-dark-v2: linear-gradient(
+        280.8deg,
+        #5c29f1 15.21%,
+        #e37ac2 56.5%,
+        #ff9067 85.53%
+    ),
+    linear-gradient(0deg, #111111, #111111);
 
-$secondary-gradient-v2: linear-gradient(277.43deg, #4512C7 -97.28%, #59C3FF 15.82%, #75FF86 120.75%), linear-gradient(281.49deg, #5C29F1 22.32%, #E37AC2 64.57%, #FF9067 94.28%);
-$purple-gradient-v2: linear-gradient(102.5deg, #5A34CB 17.99%, #9B34CB 59.07%);
-$transparent-v2: #FFFFFF00;
+$secondary-gradient-v2: linear-gradient(
+        277.43deg,
+        #4512c7 -97.28%,
+        #59c3ff 15.82%,
+        #75ff86 120.75%
+    ),
+    linear-gradient(281.49deg, #5c29f1 22.32%, #e37ac2 64.57%, #ff9067 94.28%);
+$purple-gradient-v2: linear-gradient(102.5deg, #5a34cb 17.99%, #9b34cb 59.07%);
+$transparent-v2: #ffffff00;
 
 $border-radius: 4px;
 
-$success: #13D461;
-$progress: #D1FA77;
-$warning: #EE8660;
+$success: #13d461;
+$progress: #d1fa77;
+$warning: #ee8660;
 $danger: #e5375e;
 
-@import "reset";
+@import "mixins";
 @import "content";
 @import "layout";
-@import "fonts";
+@import "nav";
 @import "highlight";
 @import "railroad_diagrams";
+
+/* ------------------------------------------------- */
+/* ----- Basic Setup ----- */
+/* ------------------------------------------------- */
+
+:root {
+    --nav-height: 6.5rem;
+
+    --h1: 4.8rem;
+    --h2: 2.8rem;
+    --h3: 2.4rem;
+    --h4: 1.8rem;
+    --h5: 1.6rem;
+    --base: 1.6rem;
+    --sm: 1.4rem;
+    --xsm: 1.2rem;
+
+    --pico: 0.5rem;
+    --nano: 1rem;
+    --micro: 1.5rem;
+    --milli: 2rem;
+    --xx-small: 2.5rem;
+    --x-small: 3rem;
+    --small: 4rem;
+    --medium: 5rem;
+    --large: 6rem;
+
+    --graidient-primary: linear-gradient(
+        270deg,
+        hsl(270deg 68% 58%) 0%,
+        hsl(287deg 59% 55%) 11%,
+        hsl(303deg 54% 53%) 22%,
+        hsl(315deg 65% 57%) 33%,
+        hsl(325deg 74% 60%) 44%,
+        hsl(333deg 81% 64%) 56%,
+        hsl(340deg 86% 67%) 67%,
+        hsl(348deg 88% 70%) 78%,
+        hsl(355deg 88% 73%) 89%,
+        hsl(3deg 86% 74%) 100%
+    );
+
+    --orchid: #e537c0;
+    --orange: #ee8660;
+    --lavender: #ad37e5;
+    --purple: #7f4eff;
+    --purple-dark: #472f85;
+
+    --link: var(--purple);
+    --white: #fff;
+    --white-light: #fafafa;
+    --code-block-light: #f9f7fd;
+
+    --nav-light: #fff;
+    --nav-dark: #111111d9;
+
+    --black: #111111;
+    --black-mid: #141414;
+    --black-light: #181818;
+    --black-lighter: #222222;
+    --black-lightest: #343434;
+
+    --gray-dark: #555555;
+    --gray: #888888;
+    --gray-light: #bbbbbb;
+    --gray-lighter: #dddd;
+    --gray-lightest: #eeeeee;
+}
+
+body.dark {
+    --bg: var(--black);
+    --bg-nav: var(--nav-dark);
+    --bg-sub: var(--black-light);
+    --card: var(--black-mid);
+    --card-light: var(--black-light);
+    --divider: var(--black-lighter);
+    --divider-light: var(--black-lightest);
+
+    --code-block: var(--card-light);
+    --code-red: #fc6e6c;
+    --code-pink: #f97fe6;
+    --code-blue: #4b73f8;
+    --code-green: #2e731c;
+
+    --important: var(--gray-lightest);
+    --sub: var(--gray-light);
+    --body: var(--gray);
+    --highlight: var(--lavender);
+}
+
+body.light {
+    --bg: var(--white-light);
+    --bg-nav: var(--nav-light);
+    --bg-sub: var(--gray-lighter);
+    --card: var(--gray-lightest);
+    --card-light: var(--white);
+    --divider: var(--gray);
+    --divider-light: var(--gray-lighter);
+
+    --code-block: var(--code-block-light);
+    --code-red: #c41a16;
+    --code-pink: #a90d91;
+    --code-blue: #1c01ce;
+    --code-green: #177500;
+
+    --important: var(--black);
+    --sub: var(--black-lighter);
+    --body: var(--black-light);
+    --highlight: var(--purple-dark);
+}
+
+*,
+*::before,
+*::after {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html {
+    font-size: 62.5%;
+}
+
+body {
+    font-family: "Inter", sans-serif;
+    color: var(--body);
+    background: var(--bg);
+    font-size: var(--base);
+    line-height: 1.7;
+    font-weight: 300;
+}
+
+a,
+button {
+    cursor: pointer;
+}
+
+a {
+    color: var(--sub);
+    transition: all 0.2s;
+    transition-delay: 50ms;
+    text-decoration: none;
+
+    &:hover,
+    &:focus {
+        text-decoration: underline;
+        color: var(--important);
+    }
+}
+
+[class*="btn"] {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 12px;
+    text-transform: uppercase;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    background: var(--graidient-primary);
+    color: var(--white);
+    padding: 0.6rem 1.2rem;
+    border-radius: 8px;
+
+    &:hover,
+    &:focus {
+        color: var(--white);
+        text-decoration: none;
+        box-shadow: rgba(246, 136, 132, 0.3) 0px 0px 0px 5px;
+    }
+}
+
+.btn-ghost {
+    position: relative;
+    background: var(--bg);
+    color: var(--important);
+    border: 1px solid var(--sub);
+
+    &:hover,
+    &:focus {
+        color: var(--important);
+    }
+}
+
+.graident-text {
+    background: var(--graidient-primary);
+    color: transparent;
+    background-clip: text;
+}

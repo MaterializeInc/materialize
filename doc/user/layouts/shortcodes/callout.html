@@ -1,18 +1,20 @@
 <div class="callout">
 
-  {{ .Inner | $.Page.RenderString }}
+  <div>
+    {{ .Inner | $.Page.RenderString }}
 
   <p>
     {{ if (isset $.Params "primary_text") }}
-    <a class="cta" {{ with .Get "primary_url" }} href="{{ . }}"{{ end }}>
+    <a class="btn" {{ with .Get "primary_url" }} href="{{ . }}"{{ end }}>
       {{ .Get "primary_text" }}
     </a>
     {{ end }}
     {{ if (isset $.Params "secondary_text") }}
-    <a class="cta secondary" {{ with .Get "secondary_url" }} href="{{ . }}"{{ end }}>
+    <a class="btn" {{ with .Get "secondary_url" }} href="{{ . }}"{{ end }}>
       {{ .Get "secondary_text" }}
     </a>
     {{ end }}
   </p>
+  </div>
 
 </div>
