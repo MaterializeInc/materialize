@@ -489,6 +489,25 @@ where
             .machine
             .downgrade_since(&self.reader_id, outstanding_seqno, new_since, heartbeat_ts)
             .await;
+
+        // Debugging for #15937.
+        if let Some(outstanding_seqno) = outstanding_seqno {
+            let seqnos_held = outstanding_seqno.0.saturating_sub(_seqno.0);
+            // We get just over 1 seqno-per-second on average for a shard in
+            // prod, so this is about an hour.
+            const SEQNOS_HELD_THRESHOLD: u64 = 60 * 60;
+            if seqnos_held >= SEQNOS_HELD_THRESHOLD {
+                tracing::info!(
+                    "{} reader {} holding an unexpected number of seqnos {} vs {}: {:?}",
+                    self.machine.shard_id(),
+                    self.reader_id,
+                    outstanding_seqno,
+                    _seqno,
+                    self.leased_seqnos,
+                );
+            }
+        }
+
         self.since = current_reader_since.0;
         // A heartbeat is just any downgrade_since traffic, so update the
         // internal rate limiter here to play nicely with `maybe_heartbeat`.
