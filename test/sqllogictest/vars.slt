@@ -194,3 +194,9 @@ SHOW extra_float_digits
 ----
 -3
 COMPLETE 1
+
+# Test the user= syntax for sqllogictest itself.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET max_tables = 100
+----
+COMPLETE 0
