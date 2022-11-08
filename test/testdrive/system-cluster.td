@@ -66,8 +66,11 @@ INSERT INTO temp SELECT * FROM temp
 1
 2
 
+# Ready is false in the process orchestrator, but true in K8s
+$ set-regex match=true|false replacement=<TRUE_OR_FALSE>
+
 > SHOW CLUSTER REPLICAS WHERE cluster = 'mz_system'
-mz_system r1 1 false
+mz_system r1 1 <TRUE_OR_FALSE>
 
 $ postgres-execute connection=mz_system
 DROP CLUSTER REPLICA mz_system.r1
@@ -78,4 +81,6 @@ $ postgres-execute connection=mz_system
 CREATE CLUSTER REPLICA mz_system.r1 SIZE '${arg.default-replica-size}';
 
 > SHOW CLUSTER REPLICAS WHERE cluster = 'mz_system'
-mz_system r1 ${arg.default-replica-size} false
+mz_system r1 ${arg.default-replica-size} <TRUE_OR_FALSE>
+
+$ unset-regex
