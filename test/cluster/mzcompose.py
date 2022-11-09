@@ -314,54 +314,82 @@ def workflow_test_github_15930(c: Composition) -> None:
     """
 
     c.down(destroy_volumes=True)
-    c.up("materialized")
-    c.up("computed_1")
-    c.wait_for_materialized()
+    with c.override(
+        # Start postgres for the pg source
+        Postgres(),
+        Testdrive(no_reset=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.up("computed_1")
+        c.wait_for_materialized()
 
-    c.sql(
-        """
-        CREATE CLUSTER cluster1 REPLICAS (
-            logging_on (
-                REMOTE ['computed_1:2100'],
-                COMPUTE ['computed_1:2102'],
-                WORKERS 2
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (
+                logging_on (
+                    REMOTE ['computed_1:2100'],
+                    COMPUTE ['computed_1:2102'],
+                    WORKERS 2
+                )
+            );
+            """
+        )
+
+        # verify that we can query the introspection source
+        c.testdrive(
+            input=dedent(
+                """
+            > SET cluster = cluster1;
+            > SELECT 1 FROM mz_internal.mz_worker_compute_frontiers LIMIT 1;
+            1
+                """
             )
-        );
-        SET cluster = cluster1;
+        )
 
-        -- verify that we can query the introspection source
-        SELECT * FROM mz_internal.mz_worker_compute_frontiers;
-        """
-    )
+        # Restart environmentd to trigger a reconciliation on computed.
+        c.kill("materialized")
+        c.up("materialized")
+        c.wait_for_materialized()
 
-    # Restart environmentd to trigger a reconciliation on computed.
-    c.kill("materialized")
-    c.up("materialized")
-    c.wait_for_materialized()
+        # verify again that we can query the introspection source
+        c.testdrive(
+            input=dedent(
+                """
+            > SET cluster = cluster1;
+            > SELECT 1 FROM mz_internal.mz_worker_compute_frontiers LIMIT 1;
+            1
+                """
+            )
+        )
 
-    c.sql(
-        """
-        -- verify that we can still query the introspection source
-        SELECT * FROM mz_internal.mz_worker_compute_frontiers;
+        c.sql(
+            """
+            SET cluster = cluster1;
+            -- now let's give it another go with user-defined objects
+            CREATE TABLE t (a int);
+            CREATE DEFAULT INDEX ON t;
+            INSERT INTO t VALUES (42);
+            """
+        )
 
-        -- now let's give it another go with user-defined objects
-        CREATE TABLE t (a int);
-        CREATE DEFAULT INDEX ON t;
-        INSERT INTO t VALUES (9),(8),(7);
-        """
-    )
+        # Restart environmentd to trigger yet another reconciliation on computed.
+        c.kill("materialized")
+        c.up("materialized")
+        c.wait_for_materialized()
 
-    # Restart environmentd to trigger yet another reconciliation on computed.
-    c.kill("materialized")
-    c.up("materialized")
-    c.wait_for_materialized()
-
-    c.sql(
-        """
-        -- verify that we can still query the introspection source
-        SELECT * FROM mz_internal.mz_worker_compute_frontiers;
-        """
-    )
+        # verify yet again that we can query the introspection source and now the table.
+        c.testdrive(
+            input=dedent(
+                """
+            > SET cluster = cluster1;
+            > SELECT 1 FROM mz_internal.mz_worker_compute_frontiers LIMIT 1;
+            1
+            > SELECT * FROM t;
+            42
+                """
+            )
+        )
 
 
 def workflow_test_upsert(c: Composition) -> None:
