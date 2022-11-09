@@ -1961,7 +1961,7 @@ mod persist_write_handles {
     use mz_persist_client::write::WriteHandle;
     use mz_persist_types::Codec64;
     use mz_repr::{Diff, GlobalId, TimestampManipulation};
-    use tracing::Instrument;
+    use tracing::{error, Instrument};
 
     use crate::client::StorageResponse;
     use crate::client::{TimestamplessUpdate, Update};
@@ -2197,11 +2197,12 @@ mod persist_write_handles {
                                                         // results in the meantime.
                                                         result = Ok(Ok(Ok(())))
                                                     } else {
-                                                        panic!(
+                                                        error!(
                                                             "Table write failed: `write.upper` set to value that signals we have lost leadership.  \
                                                             Actual {:?}; Expected new upper: {:?}; Expected persist upper: {:?}; for {:?}; with updates {:?}",
                                                             write.upper(), new_upper, persist_upper, id, updates
                                                         );
+                                                        return Err(*id);
                                                     }
                                                 }
 
