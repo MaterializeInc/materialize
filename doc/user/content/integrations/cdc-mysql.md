@@ -6,7 +6,7 @@ aliases:
 menu:
   main:
     parent: "integration-guides"
-    name: "MySQL"
+    name: "MySQL CDC"
     weight: 30
 ---
 
