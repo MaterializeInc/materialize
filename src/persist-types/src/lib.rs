@@ -78,7 +78,7 @@ pub trait Codec64: Sized + 'static {
 }
 
 /// An opaque fencing token used in compare_and_downgrade_since.
-pub trait Opaque: Clone + Sized + 'static {
+pub trait Opaque: PartialEq + Clone + Sized + 'static {
     /// The value of the opaque token when no compare_and_downgrade_since calls
     /// have yet been successful.
     fn initial() -> Self;

@@ -100,3 +100,11 @@ impl Opaque for u64 {
         u64::MIN
     }
 }
+
+// TODO: Remove this once we wrap coord epochs in an `Epoch` struct and impl
+// Opaque on `Epoch` instead.
+impl Opaque for i64 {
+    fn initial() -> Self {
+        i64::MIN
+    }
+}

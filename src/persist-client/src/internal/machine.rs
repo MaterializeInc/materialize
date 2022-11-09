@@ -363,7 +363,7 @@ where
         .await
     }
 
-    pub async fn compare_and_downgrade_since<O: Codec64>(
+    pub async fn compare_and_downgrade_since<O: Opaque + Codec64>(
         &mut self,
         reader_id: &CriticalReaderId,
         expected_opaque: &O,

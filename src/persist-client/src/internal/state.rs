@@ -370,7 +370,7 @@ where
         Continue(Since(reader_current_since))
     }
 
-    pub fn compare_and_downgrade_since<O: Codec64>(
+    pub fn compare_and_downgrade_since<O: Opaque + Codec64>(
         &mut self,
         reader_id: &CriticalReaderId,
         expected_opaque: &O,
@@ -379,7 +379,7 @@ where
         let reader_state = self.critical_reader(reader_id);
         assert_eq!(reader_state.opaque_codec, O::codec_name());
 
-        if reader_state.opaque.0 != Codec64::encode(expected_opaque) {
+        if &O::decode(reader_state.opaque.0) != expected_opaque {
             // No-op, but still commit the state change so that this gets
             // linearized.
             return Continue(Err((
