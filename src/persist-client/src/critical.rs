@@ -259,6 +259,7 @@ where
             .machine
             .compare_and_downgrade_since(&self.reader_id, expected, new)
             .await;
+        self.last_downgrade_since = (self.machine.cfg.now)();
         maintenance.start_performing(&self.machine, &self.gc);
         match res {
             Ok(since) => {
@@ -319,5 +320,31 @@ mod tests {
         );
         let container: Container = serde_json::from_value(json).expect("deserializable");
         assert_eq!(container.reader_id, id);
+    }
+
+    #[tokio::test]
+    async fn rate_limit() {
+        let client = crate::tests::new_test_client().await;
+
+        let shard_id = crate::ShardId::new();
+
+        let mut since = client
+            .open_critical_since::<(), (), u64, i64, i64>(shard_id, CriticalReaderId::new())
+            .await
+            .expect("codec mismatch");
+
+        assert_eq!(since.opaque(), &0);
+
+        since
+            .compare_and_downgrade_since(&0, (&5, &Antichain::from_elem(0)))
+            .await
+            .unwrap();
+
+        // should not fire, since we just had a successful `compare_and_downgrade_since` call
+        let noop = since
+            .maybe_compare_and_downgrade_since(&5, (&5, &Antichain::from_elem(0)))
+            .await;
+
+        assert_eq!(noop, None);
     }
 }
