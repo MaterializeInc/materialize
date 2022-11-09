@@ -2197,7 +2197,11 @@ mod persist_write_handles {
                                                         // results in the meantime.
                                                         result = Ok(Ok(Ok(())))
                                                     } else {
-                                                        panic!("Table write failed: `write.upper` set to value that signals we have lost leadership");
+                                                        panic!(
+                                                            "Table write failed: `write.upper` set to value that signals we have lost leadership.  \
+                                                            Actual {:?}; Expected new upper: {:?}; Expected persist upper: {:?}; for {:?}; with updates {:?}",
+                                                            write.upper(), new_upper, persist_upper, id, updates
+                                                        );
                                                     }
                                                 }
 
