@@ -315,8 +315,6 @@ def workflow_test_github_15930(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     with c.override(
-        # Start postgres for the pg source
-        Postgres(),
         Testdrive(no_reset=True),
     ):
         c.up("testdrive", persistent=True)
