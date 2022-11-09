@@ -28,7 +28,10 @@ from dbt.tests.adapter.basic.test_docs_generate import (
 from dbt.tests.adapter.basic.test_empty import BaseEmpty
 from dbt.tests.adapter.basic.test_ephemeral import BaseEphemeral
 from dbt.tests.adapter.basic.test_generic_tests import BaseGenericTests
-from dbt.tests.adapter.basic.test_incremental import BaseIncremental
+from dbt.tests.adapter.basic.test_incremental import (
+    BaseIncremental,
+    BaseIncrementalNotSchemaChange,
+)
 from dbt.tests.adapter.basic.test_singular_tests import BaseSingularTests
 from dbt.tests.adapter.basic.test_singular_tests_ephemeral import (
     BaseSingularTestsEphemeral,
@@ -151,6 +154,11 @@ class TestBaseAdapterMethodMaterialize(BaseAdapterMethod):
 {% endif %}
 select * from {{ upstream }}
 """
+    pass
+
+
+@pytest.mark.skip(reason="dbt-materialize does not support incremental models")
+class TestBaseIncrementalNotSchemaChangeMaterialize(BaseIncrementalNotSchemaChange):
     pass
 
 
