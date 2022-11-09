@@ -1346,7 +1346,10 @@ fn jsonb_get_path<'a>(
                         // index backwards from the end
                         (list.iter().count() as i64) + i
                     };
-                    list.iter().nth(i as usize).unwrap_or(Datum::Null)
+                    match list.iter().nth(i as usize) {
+                        Some(e) => e,
+                        None => return Datum::Null,
+                    }
                 }
                 Err(_) => return Datum::Null,
             },
