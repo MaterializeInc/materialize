@@ -188,6 +188,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Returns the configuration of the catalog.
     fn config(&self) -> &CatalogConfig;
 
+    /// Check if window functions are supported by the current system configuration.
+    fn window_functions(&self) -> bool;
+
     /// Returns the number of milliseconds since the system epoch. For normal use
     /// this means the Unix epoch. This can safely be mocked in tests and start
     /// at 0.
@@ -724,6 +727,10 @@ impl SessionCatalog for DummyCatalog {
 
     fn config(&self) -> &CatalogConfig {
         &DUMMY_CONFIG
+    }
+
+    fn window_functions(&self) -> bool {
+        true
     }
 
     fn now(&self) -> EpochMillis {
