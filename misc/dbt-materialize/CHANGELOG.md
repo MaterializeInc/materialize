@@ -4,10 +4,7 @@
 
 * Upgrade to `dbt-postgres` v1.3.0.
 
-* Enable support for `any_value`, `bool_or`, `cast_bool_to_text`, `concat`,
-  `date_add`, `date_diff`, `date_trunc`, `escape_single_quotes`, `except`,
-  `hash`, `intercept`, `last_day`, `length`, `position`, `replace`, `right`,
-  `safe_cast`, `split_part`, `string_literal`, `current_timestamp` macros.
+* Migrate cross-database macros from [`materialize-dbt-utils`](https://github.com/MaterializeInc/materialize-dbt-utils) into the adapter, as a result of [dbt-core #5298](https://github.com/dbt-labs/dbt-core/pull/5298). The `utils` macros will be deprecated in the upcoming release of the package, and removed in a subsequent release.
 
 ## 1.2.1 - 2022-11-01
 
