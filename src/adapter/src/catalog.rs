@@ -2826,7 +2826,7 @@ impl<S: Append> Catalog<S> {
                 .state
                 .compute_instances_by_id
                 .get_mut(compute_instance)
-                .expect(&format!("invalid compute instance {compute_instance}"))
+                .unwrap_or_else(|| panic!("invalid compute instance {compute_instance}"))
                 .log_indexes;
             for (variant, _name, new_id) in updates {
                 log_indexes.remove(variant);
