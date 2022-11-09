@@ -35,6 +35,12 @@ name = "Operating Materialize"
 weight= 25
 
 [[menu.main]]
+identifier = "network-security"
+name = "Network security"
+parent = 'ops'
+weight= 10
+
+[[menu.main]]
 identifier = "cs_redpanda"
 name = "Redpanda"
 parent = "create-source"
@@ -42,34 +48,28 @@ url = "/sql/create-source/kafka"
 weight= 10
 
 [[menu.main]]
-name = "Tables"
-parent = "reference"
-url = "/sql/create-table/"
-weight= 30
-
-[[menu.main]]
 name = "Views"
 parent = "reference"
 url = "/sql/create-view/"
-weight= 40
+weight= 30
 
 [[menu.main]]
 name = "Materialized views"
 parent = "reference"
 url = "/sql/create-materialized-view/"
-weight= 45
+weight= 35
 
 [[menu.main]]
 name = "Sinks"
 parent = "reference"
 url = "/sql/create-sink/"
-weight= 60
+weight= 25
 
 [[menu.main]]
 name = "Clusters"
 parent = "reference"
 url = "/sql/create-cluster/"
-weight= 65
+weight= 1
 
 [[menu.main]]
 name = "Queries (`SELECT`)"
@@ -87,7 +87,7 @@ weight= 80
 name = "Indexes"
 parent = "reference"
 url = "/sql/create-index"
-weight= 50
+weight= 40
 
 [[menu.main]]
 name = "SQL commands"
@@ -98,9 +98,9 @@ weight = 100
 [[menu.main]]
 identifier = "cs_connections"
 name = "Connections"
-parent = "create-source"
+parent = "reference"
 url = "/sql/create-connection/"
-weight= 100
+weight= 5
 
 [[menu.main]]
 name = "SQL patterns"

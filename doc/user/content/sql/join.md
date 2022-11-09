@@ -5,7 +5,7 @@ menu:
   main:
     parent: 'reference'
     name: Joins
-    weight: 46
+    weight: 50
 ---
 
 `JOIN` lets you combine two or more table expressions into a single table

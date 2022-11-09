@@ -3,8 +3,8 @@ title: "Static IP addresses"
 description: "Materialize uses static IP addresses for outbound connections from sources and sinks"
 menu:
   main:
-    parent: ops
-    weight: 80
+    parent: network-security
+    weight: 10
 ---
 
 Your Materialize region initiates connections from a static set of IP addresses.
@@ -43,6 +43,9 @@ Show the static egress IPs associated with a region:
 
 ```sql
 SELECT * FROM mz_egress_ips;
+```
+
+```nofmt
    egress_ip
 ----------------
  1.2.3.4
