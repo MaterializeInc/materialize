@@ -27,7 +27,7 @@ use tracing::{debug, info, warn};
 use mz_ore::fmt::FormatBuffer;
 use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
 use mz_persist::retry::Retry;
-use mz_persist_types::{Codec, Codec64};
+use mz_persist_types::{Codec, Codec64, Opaque};
 
 use crate::critical::CriticalReaderId;
 use crate::error::{CodecMismatch, InvalidUsage};
@@ -186,7 +186,7 @@ where
         (shard_upper, read_cap)
     }
 
-    pub async fn register_critical_reader<O: Codec64 + Default>(
+    pub async fn register_critical_reader<O: Opaque + Codec64>(
         &mut self,
         reader_id: &CriticalReaderId,
     ) -> CriticalReaderState<T> {

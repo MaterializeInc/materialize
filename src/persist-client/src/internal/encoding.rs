@@ -27,7 +27,7 @@ use crate::critical::CriticalReaderId;
 use crate::error::CodecMismatch;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::state::{
-    CriticalReaderState, HollowBatch, HollowBatchPart, LeasedReaderState, Opaque,
+    CriticalReaderState, HollowBatch, HollowBatchPart, LeasedReaderState, OpaqueState,
     ProtoCriticalReaderState, ProtoHollowBatch, ProtoHollowBatchPart, ProtoLeasedReaderState,
     ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs,
     ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoWriterState, State,
@@ -688,7 +688,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoCriticalReaderState> for CriticalRead
             since: proto
                 .since
                 .into_rust_if_some("ProtoCriticalReaderState::since")?,
-            opaque: Opaque(i64::to_le_bytes(proto.opaque)),
+            opaque: OpaqueState(i64::to_le_bytes(proto.opaque)),
             opaque_codec: proto.opaque_codec,
         })
     }

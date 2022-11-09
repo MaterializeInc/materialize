@@ -11,7 +11,7 @@
 
 use bytes::BufMut;
 
-use crate::{Codec, Codec64};
+use crate::{Codec, Codec64, Opaque};
 
 impl Codec for () {
     fn codec_name() -> String {
@@ -92,5 +92,11 @@ impl Codec64 for u64 {
 
     fn decode(buf: [u8; 8]) -> Self {
         u64::from_le_bytes(buf)
+    }
+}
+
+impl Opaque for u64 {
+    fn initial() -> Self {
+        u64::MIN
     }
 }

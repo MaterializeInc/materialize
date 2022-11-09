@@ -76,3 +76,10 @@ pub trait Codec64: Sized + 'static {
     /// handle bytes output by all previous versions of encode.
     fn decode(buf: [u8; 8]) -> Self;
 }
+
+/// An opaque fencing token used in compare_and_downgrade_since.
+pub trait Opaque: Clone + Sized + 'static {
+    /// The value of the opaque token when no compare_and_downgrade_since calls
+    /// have yet been successful.
+    fn initial() -> Self;
+}

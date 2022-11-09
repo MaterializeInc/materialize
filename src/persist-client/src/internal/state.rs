@@ -20,7 +20,7 @@ use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_persist::location::SeqNo;
-use mz_persist_types::{Codec, Codec64};
+use mz_persist_types::{Codec, Codec64, Opaque};
 use semver::Version;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -51,12 +51,12 @@ pub struct LeasedReaderState<T> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Opaque(pub [u8; 8]);
+pub struct OpaqueState(pub [u8; 8]);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CriticalReaderState<T> {
     pub since: Antichain<T>,
-    pub opaque: Opaque,
+    pub opaque: OpaqueState,
     pub opaque_codec: String,
 }
 
@@ -212,7 +212,7 @@ where
         Continue((Upper(self.trace.upper().clone()), read_cap))
     }
 
-    pub fn register_critical_reader<O: Codec64 + Default>(
+    pub fn register_critical_reader<O: Opaque + Codec64>(
         &mut self,
         reader_id: &CriticalReaderId,
     ) -> ControlFlow<Infallible, CriticalReaderState<T>> {
@@ -221,7 +221,7 @@ where
             None => {
                 let state = CriticalReaderState {
                     since: self.trace.since().clone(),
-                    opaque: Opaque(Codec64::encode(&O::default())),
+                    opaque: OpaqueState(Codec64::encode(&O::initial())),
                     opaque_codec: O::codec_name(),
                 };
                 self.critical_readers
@@ -390,7 +390,7 @@ where
 
         if PartialOrder::less_than(&reader_state.since, new_since) {
             reader_state.since = new_since.clone();
-            reader_state.opaque = Opaque(Codec64::encode(new_opaque));
+            reader_state.opaque = OpaqueState(Codec64::encode(new_opaque));
             self.update_since();
             Continue(Ok(Since(new_since.clone())))
         } else {
