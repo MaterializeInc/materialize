@@ -31,6 +31,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
+use mz_repr::adt::system::Oid;
 use mz_repr::strconv;
 use mz_repr::{ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
@@ -601,7 +602,7 @@ pub fn plan_create_source(
             let PgConfigOptionExtracted {
                 details,
                 publication,
-                text_columns: _,
+                text_columns,
                 seen: _,
             } = options.clone().try_into()?;
 
@@ -611,6 +612,51 @@ pub fn plan_create_source(
             let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
             let details = ProtoPostgresSourcePublicationDetails::decode(&*details)
                 .map_err(|e| sql_err!("{}", e))?;
+
+            // Create a "catalog" of the tables in the PG details.
+            let mut tables_by_name = HashMap::new();
+            for table in details.tables.iter() {
+                tables_by_name
+                    .entry(table.name.clone())
+                    .or_insert_with(HashMap::new)
+                    .entry(table.namespace.clone())
+                    .or_insert_with(HashMap::new)
+                    .entry(connection.database.clone())
+                    .or_insert(table);
+            }
+
+            let publication_catalog = crate::catalog::ErsatzCatalog(tables_by_name);
+
+            let mut text_cols: HashMap<Oid, HashSet<String>> = HashMap::new();
+
+            // Look up the referenced text_columns in the publication_catalog.
+            for name in text_columns {
+                let (qual, col) = match name.0.split_last().expect("must have at least one element")
+                {
+                    (col, qual) => (
+                        UnresolvedObjectName(qual.to_vec()),
+                        col.as_str().to_string(),
+                    ),
+                };
+
+                let (_name, table_desc) = publication_catalog
+                    .resolve(qual)
+                    .expect("known to exist from purification");
+
+                assert!(
+                    table_desc
+                        .columns
+                        .iter()
+                        .find(|column| column.name == col)
+                        .is_some(),
+                    "validated column exists in table during purification"
+                );
+
+                text_cols
+                    .entry(Oid(table_desc.oid))
+                    .or_default()
+                    .insert(col);
+            }
 
             // Register the available subsources
             let mut available_subsources = BTreeMap::new();
@@ -653,37 +699,47 @@ pub fn plan_create_source(
                 // column and casts it to the appropriate target type
                 let mut column_casts = vec![];
                 for (i, column) in table.columns.iter().enumerate() {
-                    let ty = match mz_pgrepr::Type::from_oid_and_typmod(
-                        column.type_oid,
-                        column.type_mod,
-                    ) {
-                        Ok(t) => t,
-                        // If this reference survived purification, we
-                        // do not expect it to be from a table that the
-                        // user will consume., i.e. expect this table to
-                        // be filtered out of table casts.
-                        Err(_) => {
-                            column_casts.push(
-                                HirScalarExpr::CallVariadic {
-                                    func: mz_expr::VariadicFunc::ErrorIfNull,
-                                    exprs: vec![
-                                        HirScalarExpr::literal_null(ScalarType::String),
-                                        HirScalarExpr::literal(
-                                            mz_repr::Datum::from(
-                                                format!(
-                                                    "Unsupported type with OID {}",
-                                                    column.type_oid
-                                                )
-                                                .as_str(),
-                                            ),
-                                            ScalarType::String,
-                                        ),
-                                    ],
+                    let ty = match text_cols.get(&Oid(table.oid)) {
+                        // Treat the column as text if it was referenced in
+                        // `TEXT COLUMNS`. This is the only place we need to
+                        // perform this logic; even if the type is unsupported,
+                        // we'll be able to ingest its values as text in
+                        // storage.
+                        Some(names) if names.contains(&column.name) => mz_pgrepr::Type::Text,
+                        _ => {
+                            match mz_pgrepr::Type::from_oid_and_typmod(
+                                column.type_oid,
+                                column.type_mod,
+                            ) {
+                                Ok(t) => t,
+                                // If this reference survived purification, we
+                                // do not expect it to be from a table that the
+                                // user will consume., i.e. expect this table to
+                                // be filtered out of table casts.
+                                Err(_) => {
+                                    column_casts.push(
+                                        HirScalarExpr::CallVariadic {
+                                            func: mz_expr::VariadicFunc::ErrorIfNull,
+                                            exprs: vec![
+                                                HirScalarExpr::literal_null(ScalarType::String),
+                                                HirScalarExpr::literal(
+                                                    mz_repr::Datum::from(
+                                                        format!(
+                                                            "Unsupported type with OID {}",
+                                                            column.type_oid
+                                                        )
+                                                        .as_str(),
+                                                    ),
+                                                    ScalarType::String,
+                                                ),
+                                            ],
+                                        }
+                                        .lower_uncorrelated()
+                                        .expect("no correlation"),
+                                    );
+                                    continue;
                                 }
-                                .lower_uncorrelated()
-                                .expect("no correlation"),
-                            );
-                            continue;
+                            }
                         }
                     };
 
@@ -733,7 +789,6 @@ pub fn plan_create_source(
                 publication: publication.expect("validated exists during purification"),
                 publication_details,
             });
-
             // The postgres source only outputs data to its subsources. The catalog object
             // representing the source itself is just an empty relation with no columns
             let encoding = SourceDataEncoding::Single(DataEncoding::new(

@@ -186,8 +186,7 @@ def test_upgrade_from_version(
 
     with c.override(
         Testdrive(
-            validate_postgres_stash=True,
-            volumes_extra=["secrets:/share/secrets"],
+            validate_postgres_stash=True, volumes_extra=["secrets:/share/secrets"]
         )
     ):
         c.run(
