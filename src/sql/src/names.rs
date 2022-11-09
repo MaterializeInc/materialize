@@ -1110,6 +1110,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     .map(|r| self.fold_replica_definition(r))
                     .collect(),
             ),
+            ConnectionKafkaBroker(broker) => ConnectionKafkaBroker(self.fold_kafka_broker(broker)),
         }
     }
 }

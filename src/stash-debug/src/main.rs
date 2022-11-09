@@ -38,7 +38,7 @@ use mz_ore::{
 };
 use mz_secrets::InMemorySecretsController;
 use mz_stash::{Append, Postgres, Stash};
-use mz_storage::controller as storage;
+use mz_storage_client::controller as storage;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());

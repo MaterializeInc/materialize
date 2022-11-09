@@ -13,47 +13,41 @@
 //! The primary exports are [`render_decode`], [`render_decode_delimited`], and
 //! [`render_decode_cdcv2`]. See their docs for more details about their differences.
 
-use std::{
-    any::Any,
-    cell::RefCell,
-    collections::VecDeque,
-    marker::{Send, Sync},
-    rc::Rc,
-    time::Duration,
-};
+use std::any::Any;
+use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::rc::Rc;
+use std::time::Duration;
 
-use ::regex::Regex;
 use chrono::NaiveDateTime;
 use differential_dataflow::capture::YieldingIter;
 use differential_dataflow::Hashable;
 use differential_dataflow::{AsCollection, Collection};
-use mz_avro::{AvroDeserializer, GeneralDeserializer};
-use mz_expr::PartitionId;
+use regex::Regex;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::SyncActivator;
 use tokio::runtime::Handle as TokioHandle;
+use tracing::error;
 
+use mz_avro::{AvroDeserializer, GeneralDeserializer};
+use mz_expr::PartitionId;
 use mz_interchange::avro::ConfluentAvroResolver;
 use mz_repr::{adt::timestamp::CheckedTimestamp, Datum};
 use mz_repr::{Diff, Row, Timestamp};
-use tracing::error;
+use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_client::types::errors::{DecodeError, DecodeErrorKind};
+use mz_storage_client::types::sources::encoding::{
+    AvroEncoding, DataEncoding, DataEncodingInner, RegexEncoding,
+};
+use mz_storage_client::types::sources::{IncludedColumnSource, MzOffset};
 
 use self::avro::AvroDecoderState;
 use self::csv::CsvDecoderState;
 use self::metrics::DecodeMetrics;
 use self::protobuf::ProtobufDecoderState;
-use crate::types::connections::ConnectionContext;
-use crate::types::errors::DecodeError;
-use crate::types::sources::encoding::{
-    AvroEncoding, DataEncoding, DataEncodingInner, RegexEncoding,
-};
-use crate::types::sources::{IncludedColumnSource, MzOffset};
-use crate::{
-    source::types::{DecodeResult, SourceOutput},
-    types::errors::DecodeErrorKind,
-};
+use crate::source::types::{DecodeResult, SourceOutput};
 
 mod avro;
 mod csv;

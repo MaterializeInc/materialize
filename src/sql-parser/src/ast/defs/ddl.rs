@@ -595,23 +595,27 @@ impl_display_t!(KafkaConnectionOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CsrConnectionOptionName {
-    Url,
-    SslKey,
+    AwsPrivatelink,
+    Password,
+    Port,
     SslCertificate,
     SslCertificateAuthority,
+    SslKey,
+    Url,
     Username,
-    Password,
 }
 
 impl AstDisplay for CsrConnectionOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
-            CsrConnectionOptionName::Url => "URL",
-            CsrConnectionOptionName::SslKey => "SSL KEY",
+            CsrConnectionOptionName::AwsPrivatelink => "AWS PRIVATELINK",
+            CsrConnectionOptionName::Password => "PASSWORD",
+            CsrConnectionOptionName::Port => "PORT",
             CsrConnectionOptionName::SslCertificate => "SSL CERTIFICATE",
             CsrConnectionOptionName::SslCertificateAuthority => "SSL CERTIFICATE AUTHORITY",
+            CsrConnectionOptionName::SslKey => "SSL KEY",
+            CsrConnectionOptionName::Url => "URL",
             CsrConnectionOptionName::Username => "USERNAME",
-            CsrConnectionOptionName::Password => "PASSWORD",
         })
     }
 }
@@ -637,6 +641,7 @@ impl_display_t!(CsrConnectionOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PostgresConnectionOptionName {
+    AwsPrivatelink,
     Database,
     Host,
     Password,
@@ -652,6 +657,7 @@ pub enum PostgresConnectionOptionName {
 impl AstDisplay for PostgresConnectionOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
+            PostgresConnectionOptionName::AwsPrivatelink => "AWS PRIVATELINK",
             PostgresConnectionOptionName::Database => "DATABASE",
             PostgresConnectionOptionName::Host => "HOST",
             PostgresConnectionOptionName::Password => "PASSWORD",
@@ -728,29 +734,29 @@ impl<T: AstInfo> AstDisplay for AwsConnectionOption<T> {
 impl_display_t!(AwsConnectionOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum AwsPrivateLinkConnectionOptionName {
+pub enum AwsPrivatelinkConnectionOptionName {
     ServiceName,
     AvailabilityZones,
 }
 
-impl AstDisplay for AwsPrivateLinkConnectionOptionName {
+impl AstDisplay for AwsPrivatelinkConnectionOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
-            AwsPrivateLinkConnectionOptionName::ServiceName => "SERVICE NAME",
-            AwsPrivateLinkConnectionOptionName::AvailabilityZones => "AVAILABILITY ZONES",
+            AwsPrivatelinkConnectionOptionName::ServiceName => "SERVICE NAME",
+            AwsPrivatelinkConnectionOptionName::AvailabilityZones => "AVAILABILITY ZONES",
         })
     }
 }
-impl_display!(AwsPrivateLinkConnectionOptionName);
+impl_display!(AwsPrivatelinkConnectionOptionName);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// An option in a `CREATE CONNECTION...AWS PRIVATELINK`.
-pub struct AwsPrivateLinkConnectionOption<T: AstInfo> {
-    pub name: AwsPrivateLinkConnectionOptionName,
+pub struct AwsPrivatelinkConnectionOption<T: AstInfo> {
+    pub name: AwsPrivatelinkConnectionOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
 
-impl<T: AstInfo> AstDisplay for AwsPrivateLinkConnectionOption<T> {
+impl<T: AstInfo> AstDisplay for AwsPrivatelinkConnectionOption<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.name);
         if let Some(v) = &self.value {
@@ -759,7 +765,7 @@ impl<T: AstInfo> AstDisplay for AwsPrivateLinkConnectionOption<T> {
         }
     }
 }
-impl_display_t!(AwsPrivateLinkConnectionOption);
+impl_display_t!(AwsPrivatelinkConnectionOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SshConnectionOptionName {
@@ -802,8 +808,8 @@ pub enum CreateConnection<T: AstInfo> {
     Aws {
         with_options: Vec<AwsConnectionOption<T>>,
     },
-    AwsPrivateLink {
-        with_options: Vec<AwsPrivateLinkConnectionOption<T>>,
+    AwsPrivatelink {
+        with_options: Vec<AwsPrivatelinkConnectionOption<T>>,
     },
     Kafka {
         with_options: Vec<KafkaConnectionOption<T>>,
@@ -842,7 +848,7 @@ impl<T: AstInfo> AstDisplay for CreateConnection<T> {
                 f.write_node(&display::comma_separated(with_options));
                 f.write_str(")");
             }
-            Self::AwsPrivateLink { with_options } => {
+            Self::AwsPrivatelink { with_options } => {
                 f.write_str("AWS PRIVATELINK (");
                 f.write_node(&display::comma_separated(with_options));
                 f.write_str(")");

@@ -13,31 +13,29 @@ use std::sync::Arc;
 
 use crossbeam_channel::TryRecvError;
 use differential_dataflow::lattice::Lattice;
-use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::{PersistLocation, ShardId};
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp as _;
 use timely::worker::Worker as TimelyWorker;
-
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
 
 use mz_ore::halt;
 use mz_ore::now::NowFn;
+use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ReadHandle;
+use mz_persist_client::{PersistLocation, ShardId};
 use mz_repr::{Diff, GlobalId, Timestamp};
-
-use crate::controller::CollectionMetadata;
-use crate::protocol::client::{StorageCommand, StorageResponse};
-use crate::sink::SinkBaseMetrics;
-use crate::types::connections::ConnectionContext;
-use crate::types::sinks::StorageSinkDesc;
-use crate::types::sources::{IngestionDescription, SourceData};
+use mz_storage_client::client::{StorageCommand, StorageResponse};
+use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_client::types::sinks::StorageSinkDesc;
+use mz_storage_client::types::sources::{IngestionDescription, SourceData};
 
 use crate::decode::metrics::DecodeMetrics;
+use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 
 type CommandReceiver = crossbeam_channel::Receiver<StorageCommand>;
@@ -100,6 +98,8 @@ pub struct StorageState {
     pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
     /// See: [SinkHandle]
     pub sink_handles: HashMap<GlobalId, SinkHandle>,
+    /// Collection ids that have been dropped but not yet reported as dropped
+    pub dropped_ids: Vec<GlobalId>,
 }
 
 /// This maintains an additional read hold on the source data for a sink, alongside
@@ -133,7 +133,7 @@ impl SinkHandle {
                 .expect("opening persist client");
 
             let mut read_handle: ReadHandle<SourceData, (), Timestamp, Diff> = client
-                .open_reader(shard_id)
+                .open_leased_reader(shard_id)
                 .await
                 .expect("opening reader for shard");
 
@@ -220,6 +220,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 self.timely_worker.step_or_park(None);
             } else {
                 self.timely_worker.step();
+            }
+
+            // Rerport any dropped ids
+            if !self.storage_state.dropped_ids.is_empty() {
+                let ids = std::mem::take(&mut self.storage_state.dropped_ids);
+                self.send_storage_response(&response_tx, StorageResponse::DroppedIds(ids));
             }
 
             self.report_frontier_progress(&response_tx);
@@ -327,6 +333,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         self.storage_state.source_tokens.remove(&id);
                         self.storage_state.sink_tokens.remove(&id);
                         self.storage_state.sink_handles.remove(&id);
+                        self.storage_state.dropped_ids.push(id);
                     }
                 }
             }

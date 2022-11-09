@@ -28,7 +28,7 @@ mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
-mz-storage = { path = "../storage" }
+mz-storage-client = { path = "../storage-client" }
 mz-cloud-resources = { path = "../cloud-resources" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 regex = "1.6.0"

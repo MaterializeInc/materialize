@@ -1,0 +1,20 @@
+[package]
+name = "mz-ssh-util"
+description = "SSH utility library."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+anyhow = { version = "1.0.65" }
+mz-ore = { path = "../ore" }
+openssh = "0.9.7"
+openssl = { version = "0.10.42", features = ["vendored"] }
+rand = "0.8.5"
+serde = { version = "1.0.147", features = ["derive"] }
+serde_json = { version = "1.0.86" }
+ssh-key = { version = "0.4.3" }
+tempfile = "3.3.0"
+tracing = "0.1.37"
+zeroize = { version = "1.5.7", features = ["serde"] }

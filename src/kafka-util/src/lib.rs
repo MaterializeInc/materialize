@@ -11,9 +11,5 @@
 
 //! Utilities for working with Kafka.
 
-mod addr;
-
 pub mod admin;
 pub mod client;
-
-pub use addr::{KafkaAddrs, KafkaAddrsParseError, ProtoKafkaAddrs};

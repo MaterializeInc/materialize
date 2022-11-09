@@ -55,11 +55,7 @@ EXPLAIN WITH(arity, join_impls) VIEW foo3
 ----
 Explained Query:
   Project (#0) // { arity: 1 }
-    Join on=(#0 = #1) type=indexed_filter // { arity: 2 }
-      ArrangeBy keys=[[#0]] // { arity: 1 }
-        Get materialize.public.foo2 // { arity: 1 }
-      Constant // { arity: 1 }
-        - (6)
+    ReadExistingIndex materialize.public.foo2 lookup_value=(6)
 
 Used Indexes:
   - materialize.public.foo2_primary_idx
@@ -71,7 +67,7 @@ EXPLAIN WITH(arity, join_impls) SELECT * from foo3
 ----
 Explained Query (fast path):
   Project (#0)
-    ReadExistingIndex materialize.public.foo2_primary_idx lookup value (6)
+    ReadExistingIndex materialize.public.foo2_primary_idx lookup_value=(6)
 
 Used Indexes:
   - materialize.public.foo2_primary_idx

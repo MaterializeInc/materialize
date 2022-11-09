@@ -392,6 +392,10 @@ pub trait Stash: std::fmt::Debug + Send {
     /// point from the invocation of this method to the return of this
     /// method. Otherwise, returns `Err`.
     async fn confirm_leadership(&mut self) -> Result<(), StashError>;
+
+    /// Returns the stash's epoch number. If `Some`, it is a number that
+    /// increases with each start of a stash.
+    fn epoch(&self) -> Option<i64>;
 }
 
 /// `StashCollection` is like a differential dataflow [`Collection`], but the
@@ -1070,6 +1074,33 @@ where
         soft_assert!(self.verify().is_ok());
         deleted
     }
+}
+
+/// Helper function to consolidate `serde_json::Value`. `Value` doesn't
+/// implement `Ord` which is required by `consolidate`, so we must serialize and
+/// deserialize through bytes.
+fn consolidate<I>(rows: I) -> impl Iterator<Item = ((Value, Value), Diff)>
+where
+    I: IntoIterator<Item = ((Value, Value), Diff)>,
+{
+    // This assumes the to bytes representation is deterministic. The current
+    // backing of Map is a BTreeMap which is sorted, but this isn't a documented
+    // guarantee.
+    // See: https://github.com/serde-rs/json/blob/44d9c53e2507636c0c2afee0c9c132095dddb7df/src/map.rs#L1-L7
+    let mut rows = rows
+        .into_iter()
+        .map(|((key, value), diff)| {
+            let key = serde_json::to_vec(&key).expect("must serialize");
+            let value = serde_json::to_vec(&value).expect("must serialize");
+            ((key, value), diff)
+        })
+        .collect();
+    differential_dataflow::consolidation::consolidate(&mut rows);
+    rows.into_iter().map(|((key, value), diff)| {
+        let key = serde_json::from_slice(&key).expect("must deserialize");
+        let value = serde_json::from_slice(&value).expect("must deserialize");
+        ((key, value), diff)
+    })
 }
 
 /// Helper function to consolidate `serde_json::Value` updates. `Value` doesn't

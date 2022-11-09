@@ -45,15 +45,20 @@ class CreateReplica(Action):
         if len(existing_replicas) == 0:
             self.new_replica = True
 
-            size_types = [ReplicaSizeType.Nodes, ReplicaSizeType.Workers]
-            type_weights = [0.75, 0.25]
-            size_type = random.choices(size_types, weights=type_weights, k=1)[0]
+            size_types = [
+                ReplicaSizeType.Nodes,
+                ReplicaSizeType.Workers,
+                ReplicaSizeType.Both,
+            ]
+            size_type = random.choice(size_types)
 
             size = str(random.choice([2, 4]))
             if size_type is ReplicaSizeType.Nodes:
                 this_replica.size = size + "-1"
             elif size_type is ReplicaSizeType.Workers:
                 this_replica.size = size
+            elif size_type is ReplicaSizeType.Both:
+                this_replica.size = f"{size}-{size}"
             else:
                 assert False
 

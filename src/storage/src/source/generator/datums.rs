@@ -7,45 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashSet;
 use std::iter;
 
 use mz_ore::now::NowFn;
-use mz_repr::{Datum, RelationDesc, Row, ScalarType};
-
-use crate::types::sources::encoding::DataEncodingInner;
-use crate::types::sources::{Generator, GeneratorMessageType};
+use mz_repr::{Datum, Row, ScalarType};
+use mz_storage_client::types::sources::{Generator, GeneratorMessageType};
 
 pub struct Datums {}
 
 impl Generator for Datums {
-    fn data_encoding_inner(&self) -> DataEncodingInner {
-        let mut desc =
-            RelationDesc::empty().with_column("rowid", ScalarType::Int64.nullable(false));
-        let typs = ScalarType::enumerate();
-        let mut names = HashSet::new();
-        for typ in typs {
-            // Cut out variant information from the debug print.
-            let mut name = format!("_{:?}", typ)
-                .split(' ')
-                .next()
-                .unwrap()
-                .to_lowercase();
-            // Incase we ever have multiple variants of the same type, create
-            // unique names for them.
-            while names.contains(&name) {
-                name.push('_');
-            }
-            names.insert(name.clone());
-            desc = desc.with_column(name, typ.clone().nullable(true));
-        }
-        DataEncodingInner::RowCodec(desc)
-    }
-
-    fn views(&self) -> Vec<(&str, RelationDesc)> {
-        Vec::new()
-    }
-
     fn by_seed(
         &self,
         _: NowFn,

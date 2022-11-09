@@ -25,11 +25,12 @@ use semver::Version;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
+use crate::critical::CriticalReaderId;
 use crate::error::{Determinacy, InvalidUsage};
 use crate::internal::gc::GcReq;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeReq, FueledMergeRes, Trace};
-use crate::read::ReaderId;
+use crate::read::LeasedReaderId;
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
 
@@ -39,7 +40,7 @@ include!(concat!(
 ));
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct ReaderState<T> {
+pub struct LeasedReaderState<T> {
     pub seqno: SeqNo,
     pub since: Antichain<T>,
     /// UNIX_EPOCH timestamp (in millis) of this reader's most recent heartbeat
@@ -47,6 +48,16 @@ pub struct ReaderState<T> {
     /// Duration (in millis) allowed after [Self::last_heartbeat_timestamp_ms]
     /// after which this reader may be expired
     pub lease_duration_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Opaque(pub [u8; 8]);
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CriticalReaderState<T> {
+    pub since: Antichain<T>,
+    pub opaque: Opaque,
+    pub opaque_codec: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -140,7 +151,8 @@ pub struct StateCollections<T> {
     // - Invariant: There is a rollup with `seqno <= self.seqno_since`.
     pub(crate) rollups: BTreeMap<SeqNo, PartialRollupKey>,
 
-    pub(crate) readers: BTreeMap<ReaderId, ReaderState<T>>,
+    pub(crate) leased_readers: BTreeMap<LeasedReaderId, LeasedReaderState<T>>,
+    pub(crate) critical_readers: BTreeMap<CriticalReaderId, CriticalReaderState<T>>,
     pub(crate) writers: BTreeMap<WriterId, WriterState>,
 
     // - Invariant: `trace.since == meet(all reader.since)`
@@ -179,24 +191,45 @@ where
         Continue(applied)
     }
 
-    pub fn register_reader(
+    pub fn register_leased_reader(
         &mut self,
-        reader_id: &ReaderId,
+        reader_id: &LeasedReaderId,
         seqno: SeqNo,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
-    ) -> ControlFlow<Infallible, (Upper<T>, ReaderState<T>)> {
+    ) -> ControlFlow<Infallible, (Upper<T>, LeasedReaderState<T>)> {
         // TODO: Handle if the reader or writer already exist (probably with a
         // retry).
-        let read_cap = ReaderState {
+        let read_cap = LeasedReaderState {
             seqno,
             since: self.trace.since().clone(),
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
             lease_duration_ms: u64::try_from(lease_duration.as_millis())
                 .expect("lease duration as millis should fit within u64"),
         };
-        self.readers.insert(reader_id.clone(), read_cap.clone());
+        self.leased_readers
+            .insert(reader_id.clone(), read_cap.clone());
         Continue((Upper(self.trace.upper().clone()), read_cap))
+    }
+
+    pub fn register_critical_reader<O: Codec64 + Default>(
+        &mut self,
+        reader_id: &CriticalReaderId,
+    ) -> ControlFlow<Infallible, CriticalReaderState<T>> {
+        let state = match self.critical_readers.get(reader_id) {
+            Some(state) => state.clone(),
+            None => {
+                let state = CriticalReaderState {
+                    since: self.trace.since().clone(),
+                    opaque: Opaque(Codec64::encode(&O::default())),
+                    opaque_codec: O::codec_name(),
+                };
+                self.critical_readers
+                    .insert(reader_id.clone(), state.clone());
+                state
+            }
+        };
+        Continue(state)
     }
 
     pub fn register_writer(
@@ -216,20 +249,21 @@ where
 
     pub fn clone_reader(
         &mut self,
-        new_reader_id: &ReaderId,
+        new_reader_id: &LeasedReaderId,
         seqno: SeqNo,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
-    ) -> ControlFlow<Infallible, ReaderState<T>> {
+    ) -> ControlFlow<Infallible, LeasedReaderState<T>> {
         // TODO: Handle if the reader already exists (probably with a retry).
-        let read_cap = ReaderState {
+        let read_cap = LeasedReaderState {
             seqno,
             since: self.trace.since().clone(),
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
             lease_duration_ms: u64::try_from(lease_duration.as_millis())
                 .expect("lease duration as millis should fit within u64"),
         };
-        self.readers.insert(new_reader_id.clone(), read_cap.clone());
+        self.leased_readers
+            .insert(new_reader_id.clone(), read_cap.clone());
         Continue(read_cap)
     }
 
@@ -292,13 +326,13 @@ where
 
     pub fn downgrade_since(
         &mut self,
-        reader_id: &ReaderId,
+        reader_id: &LeasedReaderId,
         seqno: SeqNo,
         outstanding_seqno: Option<SeqNo>,
         new_since: &Antichain<T>,
         heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<Infallible, Since<T>> {
-        let reader_state = self.reader(reader_id);
+        let reader_state = self.leased_reader(reader_id);
 
         // Also use this as an opportunity to heartbeat the reader and downgrade
         // the seqno capability.
@@ -336,12 +370,43 @@ where
         Continue(Since(reader_current_since))
     }
 
-    pub fn heartbeat_reader(
+    pub fn compare_and_downgrade_since<O: Codec64>(
         &mut self,
-        reader_id: &ReaderId,
+        reader_id: &CriticalReaderId,
+        expected_opaque: &O,
+        (new_opaque, new_since): (&O, &Antichain<T>),
+    ) -> ControlFlow<Infallible, Result<Since<T>, (O, Since<T>)>> {
+        let reader_state = self.critical_reader(reader_id);
+        assert_eq!(reader_state.opaque_codec, O::codec_name());
+
+        if reader_state.opaque.0 != Codec64::encode(expected_opaque) {
+            // No-op, but still commit the state change so that this gets
+            // linearized.
+            return Continue(Err((
+                Codec64::decode(reader_state.opaque.0),
+                Since(reader_state.since.clone()),
+            )));
+        }
+
+        if PartialOrder::less_than(&reader_state.since, new_since) {
+            reader_state.since = new_since.clone();
+            reader_state.opaque = Opaque(Codec64::encode(new_opaque));
+            self.update_since();
+            Continue(Ok(Since(new_since.clone())))
+        } else {
+            // no work to be done -- the reader state's `since` is already sufficiently
+            // advanced. we may someday need to revisit this branch when it's possible
+            // for two `since` frontiers to be incomparable.
+            Continue(Ok(Since(reader_state.since.clone())))
+        }
+    }
+
+    pub fn heartbeat_leased_reader(
+        &mut self,
+        reader_id: &LeasedReaderId,
         heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<Infallible, bool> {
-        match self.readers.get_mut(reader_id) {
+        match self.leased_readers.get_mut(reader_id) {
             Some(reader_state) => {
                 reader_state.last_heartbeat_timestamp_ms = std::cmp::max(
                     heartbeat_timestamp_ms,
@@ -355,8 +420,36 @@ where
         }
     }
 
-    pub fn expire_reader(&mut self, reader_id: &ReaderId) -> ControlFlow<Infallible, bool> {
-        let existed = self.readers.remove(reader_id).is_some();
+    pub fn expire_leased_reader(
+        &mut self,
+        reader_id: &LeasedReaderId,
+    ) -> ControlFlow<Infallible, bool> {
+        let existed = self.leased_readers.remove(reader_id).is_some();
+        if existed {
+            // TODO: Re-enable this once we have #15511.
+            //
+            // Temporarily disabling this because we think it might be the cause
+            // of the remap since bug. Specifically, a storaged process has a
+            // ReadHandle for maintaining the once and one inside a Listen. If
+            // we crash and stay down for longer than the read lease duration,
+            // it's possible that an expiry of them both in quick succession
+            // jumps the since forward to the Listen one.
+            //
+            // Don't forget to update the downgrade_since when this gets
+            // switched back on.
+            //
+            // self.update_since();
+        }
+        // No-op if existed is false, but still commit the state change so that
+        // this gets linearized.
+        Continue(existed)
+    }
+
+    pub fn expire_critical_reader(
+        &mut self,
+        reader_id: &CriticalReaderId,
+    ) -> ControlFlow<Infallible, bool> {
+        let existed = self.critical_readers.remove(reader_id).is_some();
         if existed {
             // TODO: Re-enable this once we have #15511.
             //
@@ -403,17 +496,28 @@ where
         Continue(existed)
     }
 
-    fn reader(&mut self, id: &ReaderId) -> &mut ReaderState<T> {
-        self.readers
+    fn leased_reader(&mut self, id: &LeasedReaderId) -> &mut LeasedReaderState<T> {
+        self.leased_readers
             .get_mut(id)
-            // The only (tm) ways to hit this are (1) inventing a ReaderId
+            // The only (tm) ways to hit this are (1) inventing a LeasedReaderId
             // instead of getting it from Register or (2) if a lease expired.
-            // (1) is a gross mis-use and (2) may happen if a reader did not
-            // get to heartbeat for a long time. Readers are expected to
+            // (1) is a gross mis-use and (2) may happen if a reader did not get
+            // to heartbeat for a long time. Readers are expected to
             // heartbeat/downgrade their since regularly.
             .unwrap_or_else(|| {
                 panic!(
-                    "ReaderId({}) was expired due to inactivity. Did the machine go to sleep?",
+                    "LeasedReaderId({}) was expired due to inactivity. Did the machine go to sleep?",
+                    id
+                )
+            })
+    }
+
+    fn critical_reader(&mut self, id: &CriticalReaderId) -> &mut CriticalReaderState<T> {
+        self.critical_readers
+            .get_mut(id)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Unknown CriticalReaderId({}). It was either never registered, or has been manually expired.",
                     id
                 )
             })
@@ -437,17 +541,21 @@ where
     }
 
     fn update_since(&mut self) {
-        let mut readers = self.readers.values();
-        let mut since = match readers.next() {
-            Some(reader) => reader.since.clone(),
+        let mut sinces_iter = self
+            .leased_readers
+            .values()
+            .map(|x| &x.since)
+            .chain(self.critical_readers.values().map(|x| &x.since));
+        let mut since = match sinces_iter.next() {
+            Some(since) => since.clone(),
             None => {
                 // If there are no current readers, leave `since` unchanged so
                 // it doesn't regress.
                 return;
             }
         };
-        while let Some(reader) = readers.next() {
-            since.meet_assign(&reader.since);
+        while let Some(s) = sinces_iter.next() {
+            since.meet_assign(s);
         }
         self.trace.downgrade_since(&since);
     }
@@ -576,9 +684,10 @@ where
 
     pub(super) fn seqno_since(&self) -> SeqNo {
         let mut seqno_since = self.seqno;
-        for cap in self.collections.readers.values() {
+        for cap in self.collections.leased_readers.values() {
             seqno_since = std::cmp::min(seqno_since, cap.seqno);
         }
+        // critical_readers don't hold a seqno capability.
         seqno_since
     }
 }
@@ -598,7 +707,8 @@ where
             collections: StateCollections {
                 last_gc_req: SeqNo::minimum(),
                 rollups: BTreeMap::new(),
-                readers: BTreeMap::new(),
+                leased_readers: BTreeMap::new(),
+                critical_readers: BTreeMap::new(),
                 writers: BTreeMap::new(),
                 trace: Trace::default(),
             },
@@ -725,15 +835,17 @@ where
     pub fn handles_needing_expiration(
         &self,
         now_ms: EpochMillis,
-    ) -> (Vec<ReaderId>, Vec<WriterId>) {
+    ) -> (Vec<LeasedReaderId>, Vec<WriterId>) {
         let mut readers = Vec::new();
-        for (reader, state) in self.collections.readers.iter() {
+        for (reader, state) in self.collections.leased_readers.iter() {
             let time_since_last_heartbeat_ms =
                 now_ms.saturating_sub(state.last_heartbeat_timestamp_ms);
             if time_since_last_heartbeat_ms > state.lease_duration_ms {
                 readers.push(reader.clone());
             }
         }
+        // critical_readers don't need forced expiration (in fact, that's the
+        // point)
         let mut writers = Vec::new();
         for (writer, state) in self.collections.writers.iter() {
             let time_since_last_heartbeat_ms =
@@ -757,7 +869,7 @@ where
 }
 
 /// Wrapper for Antichain that represents a Since
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Since<T>(pub Antichain<T>);
 
 // When used as an error, Since is determinate.
@@ -806,12 +918,15 @@ mod tests {
     fn downgrade_since() {
         let mut state =
             State::<(), (), u64, i64>::new(DUMMY_BUILD_INFO.semver_version(), ShardId::new());
-        let reader = ReaderId::new();
+        let reader = LeasedReaderId::new();
         let seqno = SeqNo::minimum();
         let now = SYSTEM_TIME.clone();
-        let _ = state
-            .collections
-            .register_reader(&reader, seqno, Duration::from_secs(10), now());
+        let _ = state.collections.register_leased_reader(
+            &reader,
+            seqno,
+            Duration::from_secs(10),
+            now(),
+        );
 
         // The shard global since == 0 initially.
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(0));
@@ -854,10 +969,13 @@ mod tests {
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
 
         // Create a second reader.
-        let reader2 = ReaderId::new();
-        let _ = state
-            .collections
-            .register_reader(&reader2, seqno, Duration::from_secs(10), now());
+        let reader2 = LeasedReaderId::new();
+        let _ = state.collections.register_leased_reader(
+            &reader2,
+            seqno,
+            Duration::from_secs(10),
+            now(),
+        );
 
         // Shard since doesn't change until the meet (min) of all reader sinces changes.
         assert_eq!(
@@ -885,14 +1003,20 @@ mod tests {
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
 
         // Shard since unaffected readers with since > shard since expiring.
-        assert_eq!(state.collections.expire_reader(&reader), Continue(true));
+        assert_eq!(
+            state.collections.expire_leased_reader(&reader),
+            Continue(true)
+        );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
 
         // Create a third reader.
-        let reader3 = ReaderId::new();
-        let _ = state
-            .collections
-            .register_reader(&reader3, seqno, Duration::from_secs(10), now());
+        let reader3 = LeasedReaderId::new();
+        let _ = state.collections.register_leased_reader(
+            &reader3,
+            seqno,
+            Duration::from_secs(10),
+            now(),
+        );
 
         // Shard since doesn't change until the meet (min) of all reader sinces changes.
         assert_eq!(
@@ -908,7 +1032,10 @@ mod tests {
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
 
         // Shard since advances when reader with the minimal since expires.
-        assert_eq!(state.collections.expire_reader(&reader2), Continue(true));
+        assert_eq!(
+            state.collections.expire_leased_reader(&reader2),
+            Continue(true)
+        );
         // TODO: expiry temporarily doesn't advance since until we have #15511.
         // Switch this assertion back when we re-enable this.
         //
@@ -916,7 +1043,10 @@ mod tests {
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
 
         // Shard since unaffected when all readers are expired.
-        assert_eq!(state.collections.expire_reader(&reader3), Continue(true));
+        assert_eq!(
+            state.collections.expire_leased_reader(&reader3),
+            Continue(true)
+        );
         // TODO: expiry temporarily doesn't advance since until we have #15511.
         // Switch this assertion back when we re-enable this.
         //
@@ -1032,9 +1162,9 @@ mod tests {
             Ok(Err(Upper(Antichain::from_elem(5))))
         );
 
-        let reader = ReaderId::new();
+        let reader = LeasedReaderId::new();
         // Advance the since to 2.
-        let _ = state.collections.register_reader(
+        let _ = state.collections.register_leased_reader(
             &reader,
             SeqNo::minimum(),
             Duration::from_secs(10),

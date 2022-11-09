@@ -324,9 +324,9 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                 ScalarType::Interval => Value::Fixed(16, {
                     let iv = datum.unwrap_interval();
                     let mut buf = Vec::with_capacity(16);
-                    buf.extend(&iv.months.to_le_bytes());
-                    buf.extend(&iv.days.to_le_bytes());
-                    buf.extend(&iv.micros.to_le_bytes());
+                    buf.extend(iv.months.to_le_bytes());
+                    buf.extend(iv.days.to_le_bytes());
+                    buf.extend(iv.micros.to_le_bytes());
                     debug_assert_eq!(buf.len(), 16);
                     buf
                 }),

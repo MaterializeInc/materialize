@@ -158,7 +158,7 @@ pub(crate) mod exp {
         use super::*;
 
         pub(crate) fn int32(value: i32) -> BoxScalarExpr {
-            BoxScalarExpr::Literal(Row::pack(&[Datum::Int32(value)]), typ::int32(true))
+            BoxScalarExpr::Literal(Row::pack([Datum::Int32(value)]), typ::int32(true))
         }
     }
 }

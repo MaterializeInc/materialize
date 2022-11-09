@@ -103,6 +103,13 @@ named connection. It will be created on first use. This can be used to
 test transaction isolation or otherwise do things that require multiple
 connections.
 
+If `conn` is specified, an additional `,user=<name>` can be added to specify the
+connecting user. If the user is `mz_system`, the internal SQL port will be used
+on which system commands like `ALTER SYSTEM` can be used.
+
+> simple conn=mz_system,user=mz_system
+> <SQL>
+
 The output is one line per row, one "COMPLETE X" (where X is the
 number of affected rows) per statement, or an error message.
 

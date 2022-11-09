@@ -32,7 +32,7 @@ use crate::error::InvalidUsage;
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, ReadMetrics};
 use crate::internal::paths::PartialBatchKey;
-use crate::read::{ReadHandle, ReaderId};
+use crate::read::{LeasedReaderId, ReadHandle};
 use crate::ShardId;
 
 /// Capable of fetching [`LeasedBatchPart`] while not holding any capabilities.
@@ -70,6 +70,11 @@ where
         };
         handle.expire().await;
         b
+    }
+
+    /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
+    pub fn leased_part_from_exchangeable(&self, x: SerdeLeasedBatchPart) -> LeasedBatchPart<T> {
+        LeasedBatchPart::from(x, Arc::clone(&self.metrics))
     }
 
     /// Trade in an exchange-able [LeasedBatchPart] for the data it represents.
@@ -159,7 +164,7 @@ pub(crate) async fn fetch_leased_part<K, V, T, D>(
     blob: &(dyn Blob + Send + Sync),
     metrics: Arc<Metrics>,
     read_metrics: &ReadMetrics,
-    reader_id: Option<&ReaderId>,
+    reader_id: Option<&LeasedReaderId>,
 ) -> (LeasedBatchPart<T>, FetchedPart<K, V, T, D>)
 where
     K: Debug + Codec,
@@ -324,8 +329,9 @@ pub struct LeasedBatchPart<T>
 where
     T: Timestamp + Codec64,
 {
+    pub(crate) metrics: Arc<Metrics>,
     pub(crate) shard_id: ShardId,
-    pub(crate) reader_id: ReaderId,
+    pub(crate) reader_id: LeasedReaderId,
     pub(crate) metadata: SerdeLeasedBatchPartMetadata,
     pub(crate) desc: Description<T>,
     pub(crate) key: PartialBatchKey,
@@ -367,14 +373,14 @@ where
     /// Because sources get dropped without notice, we need to permit another
     /// operator to safely expire leases.
     ///
-    /// The part's `reader_id` is intentionally inaccessible, and should be
-    /// obtained from the issuing [`ReadHandle`], or one of its derived
+    /// The part's `reader_id` is intentionally inaccessible, and should
+    /// be obtained from the issuing [`ReadHandle`], or one of its derived
     /// structures, e.g. [`crate::read::Subscribe`].
     ///
     /// # Panics
-    /// - If `reader_id` is different than the [`ReaderId`] from the part
-    ///   issuer.
-    pub(crate) fn return_lease(&mut self, reader_id: &ReaderId) -> Option<SeqNo> {
+    /// - If `reader_id` is different than the [`LeasedReaderId`] from
+    ///   the part issuer.
+    pub(crate) fn return_lease(&mut self, reader_id: &LeasedReaderId) -> Option<SeqNo> {
         assert!(
             &self.reader_id == reader_id,
             "only issuing reader can authorize lease expiration"
@@ -389,11 +395,7 @@ where
 {
     /// For details, see [`LeasedBatchPart`].
     fn drop(&mut self) {
-        assert!(
-            self.leased_seqno.is_none(),
-            "LeasedBatchPart cannot be dropped with lease intact: {:?}",
-            self
-        );
+        self.metrics.lease.dropped_part.inc()
     }
 }
 
@@ -565,10 +567,10 @@ pub struct SerdeLeasedBatchPart {
     since: Vec<[u8; 8]>,
     key: PartialBatchKey,
     leased_seqno: Option<SeqNo>,
-    reader_id: ReaderId,
+    reader_id: LeasedReaderId,
 }
 
-impl<T: Timestamp + Codec64> From<SerdeLeasedBatchPart> for LeasedBatchPart<T> {
+impl<T: Timestamp + Codec64> LeasedBatchPart<T> {
     /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
     ///
     /// Note that this process in non-commutative with
@@ -578,8 +580,9 @@ impl<T: Timestamp + Codec64> From<SerdeLeasedBatchPart> for LeasedBatchPart<T> {
     /// `LeasedBatchPart`'s droppability.
     ///
     /// For more details, see [`LeasedBatchPart`]'s documentation.
-    fn from(x: SerdeLeasedBatchPart) -> Self {
+    pub(crate) fn from(x: SerdeLeasedBatchPart, metrics: Arc<Metrics>) -> Self {
         LeasedBatchPart {
+            metrics,
             shard_id: x.shard_id,
             metadata: x.metadata,
             desc: Description::new(

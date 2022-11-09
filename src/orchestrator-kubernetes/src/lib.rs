@@ -12,7 +12,7 @@ use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use chrono::Utc;
 use clap::ArgEnum;
@@ -33,6 +33,7 @@ use maplit::btreemap;
 use sha2::{Digest, Sha256};
 
 use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
+use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_orchestrator::LabelSelector as MzLabelSelector;
 use mz_orchestrator::{
     LabelSelectionLogic, NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments,
@@ -59,6 +60,9 @@ pub struct KubernetesOrchestratorConfig {
     pub service_account: Option<String>,
     /// The image pull policy to set for services created by the orchestrator.
     pub image_pull_policy: KubernetesImagePullPolicy,
+    /// An AWS external ID prefix to use when making AWS operations on behalf
+    /// of the environment.
+    pub aws_external_id_prefix: Option<AwsExternalIdPrefix>,
 }
 
 /// Specifies whether Kubernetes should pull Docker images when creating pods.
@@ -344,6 +348,15 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             // cluster-autoscaler. Notably, eviction of pods for resource overuse is still enabled.
             "cluster-autoscaler.kubernetes.io/safe-to-evict".to_owned() => "false".to_string(),
         };
+
+        let container_name = image
+            .splitn(2, '/')
+            .skip(1)
+            .next()
+            .and_then(|name_version| name_version.splitn(2, ':').next())
+            .context("`image` is not ORG/NAME:VERSION")?
+            .to_string();
+
         let mut pod_template_spec = PodTemplateSpec {
             metadata: Some(ObjectMeta {
                 labels: Some(labels.clone()),
@@ -352,7 +365,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             }),
             spec: Some(PodSpec {
                 containers: vec![Container {
-                    name: "default".into(),
+                    name: container_name,
                     image: Some(image),
                     args: Some(args),
                     image_pull_policy: Some(self.config.image_pull_policy.to_string()),

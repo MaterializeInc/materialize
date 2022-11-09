@@ -13,7 +13,7 @@
 
 use crate::internal::compact::CompactReq;
 use crate::internal::gc::GcReq;
-use crate::{Compactor, GarbageCollector, Machine, ReaderId, WriterId};
+use crate::{Compactor, GarbageCollector, LeasedReaderId, Machine, WriterId};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures_util::future::BoxFuture;
@@ -26,7 +26,7 @@ use tracing::info;
 
 #[derive(Debug)]
 pub struct LeaseExpiration {
-    pub(crate) readers: Vec<ReaderId>,
+    pub(crate) readers: Vec<LeasedReaderId>,
     pub(crate) writers: Vec<WriterId>,
 }
 
@@ -139,7 +139,7 @@ impl RoutineMaintenance {
                             expired,
                             machine.shard_id()
                         );
-                        let _ = machine.expire_reader(&expired).await;
+                        let _ = machine.expire_leased_reader(&expired).await;
                     })
                     .map(|_| ())
                     .boxed(),

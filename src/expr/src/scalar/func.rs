@@ -1346,7 +1346,10 @@ fn jsonb_get_path<'a>(
                         // index backwards from the end
                         (list.iter().count() as i64) + i
                     };
-                    list.iter().nth(i as usize).unwrap_or(Datum::Null)
+                    match list.iter().nth(i as usize) {
+                        Some(e) => e,
+                        None => return Datum::Null,
+                    }
                 }
                 Err(_) => return Datum::Null,
             },
@@ -4983,7 +4986,7 @@ fn substr<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     let str_len = s.len();
     let start_char_idx = char_indices
         .nth(start_idx as usize)
-        .map_or(str_len, &get_str_index);
+        .map_or(str_len, get_str_index);
 
     if datums.len() == 3 {
         let end_idx = match datums[2].unwrap_int64() {
@@ -5007,7 +5010,7 @@ fn substr<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
             }
         };
 
-        let end_char_idx = char_indices.nth(end_idx).map_or(str_len, &get_str_index);
+        let end_char_idx = char_indices.nth(end_idx).map_or(str_len, get_str_index);
 
         Ok(Datum::String(&s[start_char_idx..end_char_idx]))
     } else {

@@ -19,7 +19,7 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT FROM ( SELECT FROM t2 a1 RIGHT JOIN t2 ON a1.f1 IS NULL WHERE TRUE AND a1.f1 = a1.f2 )
 ----
 Explained Query (fast path):
-  Constant
+  Constant <empty>
 
 EOF
 
@@ -31,7 +31,7 @@ Explained Query:
   Project () // { arity: 0 }
     Join on=(#0 = (#1 + #2)) type=differential // { arity: 3 }
       implementation
-        %1 » %0[]
+        %1:t2 » %0:t1[×]A
       ArrangeBy keys=[[]] // { arity: 2 }
         Filter (#0) IS NOT NULL // { arity: 2 }
           Get materialize.public.t1 // { arity: 2 }
@@ -54,7 +54,7 @@ Explained Query:
     Project () // { arity: 0 }
       Join on=(#0 = #1) type=differential // { arity: 2 }
         implementation
-          l0 » %1[#0]
+          %0:l0 » %1[#0]UKA
         Get l0 // { arity: 1 }
         ArrangeBy keys=[[#0]] // { arity: 1 }
           Distinct group_by=[#0] // { arity: 1 }
@@ -78,7 +78,7 @@ Explained Query:
           Filter (#2 > #0) // { arity: 3 }
             CrossJoin type=differential // { arity: 3 }
               implementation
-                l0 » %0[] » %1[] » %2[]
+                %3:l0 » %0:t2[×]A » %1:l1[×]A » %2:t1[×]A
               ArrangeBy keys=[[]] // { arity: 1 }
                 Project (#1) // { arity: 1 }
                   Get materialize.public.t2 // { arity: 2 }

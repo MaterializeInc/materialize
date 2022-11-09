@@ -22,10 +22,11 @@ use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::timestamp::Timestamp as _;
 
-use crate::controller::ResumptionFrontierCalculator;
-use crate::source::source_reader_pipeline::RawSourceCreationConfig;
 use mz_repr::Timestamp;
+use mz_storage_client::controller::ResumptionFrontierCalculator;
 use mz_timely_util::builder_async::OperatorBuilder;
+
+use crate::source::source_reader_pipeline::RawSourceCreationConfig;
 
 /// Generates a timely `Stream` with no inputs that periodically
 /// downgrades its output `Capability` _to the "resumption frontier"

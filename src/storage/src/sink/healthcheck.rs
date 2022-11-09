@@ -24,8 +24,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{PersistLocation, ShardId, Upper};
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
-
-use crate::types::sources::SourceData;
+use mz_storage_client::types::sources::SourceData;
 
 /// The Healthchecker is responsible for tracking the current state
 /// of a Timely worker for a source, as well as updating the relevant

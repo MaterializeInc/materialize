@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
-use mz_storage::controller::CollectionMetadata;
+use mz_storage_client::controller::CollectionMetadata;
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_client.logging.rs"));
 

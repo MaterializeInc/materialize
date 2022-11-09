@@ -1,0 +1,129 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests to exercise compare_and_downgrade_since on critical SinceHandles.
+
+# The shard global since == 0 initially
+shard-desc
+----
+since=[0] upper=[0]
+
+# A newly registered handle gets that since.
+register-critical-reader reader_id=c00000000-0000-0000-0000-000000000000
+----
+v2 [0]
+
+# Successful downgrade
+compare-and-downgrade-since expect_opaque=0 opaque=0 since=(2) reader_id=c00000000-0000-0000-0000-000000000000
+----
+v3 0 [2]
+
+shard-desc
+----
+since=[2] upper=[0]
+
+# Expected opaque doesn't match
+compare-and-downgrade-since expect_opaque=100 opaque=0 since=(4) reader_id=c00000000-0000-0000-0000-000000000000
+----
+error: mismatch: opaque=0 since=[2]
+
+# Create a second reader. This gets the current since for a capability.
+register-critical-reader reader_id=c11111111-1111-1111-1111-111111111111
+----
+v5 [2]
+
+# Downgrade since and change the reader's opaque value
+compare-and-downgrade-since expect_opaque=0 opaque=11 since=(3) reader_id=c11111111-1111-1111-1111-111111111111
+----
+v6 11 [3]
+
+# Downgrade again with the new opaque value, without asking to advance since
+compare-and-downgrade-since expect_opaque=11 opaque=111 since=(3) reader_id=c11111111-1111-1111-1111-111111111111
+----
+v7 111 [3]
+
+# Shard since doesn't change until the meet (min) of all handle sinces changes.
+shard-desc
+----
+since=[2] upper=[0]
+
+# Shard since == 3 when all handle have since >= 3. NB: expected matches this
+# handle's since capability, not the shard's global since
+compare-and-downgrade-since expect_opaque=0 opaque=0 since=(5) reader_id=c00000000-0000-0000-0000-000000000000
+----
+v8 0 [5]
+
+shard-desc
+----
+since=[3] upper=[0]
+
+# Downgrading to the same since is a no-op (but still gets linearized)
+compare-and-downgrade-since expect_opaque=0 opaque=0 since=(5) reader_id=c00000000-0000-0000-0000-000000000000
+----
+v9 0 [5]
+
+# Since does not regress
+compare-and-downgrade-since expect_opaque=0 opaque=0 since=(0) reader_id=c00000000-0000-0000-0000-000000000000
+----
+v10 0 [5]
+
+shard-desc
+----
+since=[3] upper=[0]
+
+# Shard since unaffected by handle with since > shard since expiring.
+expire-critical-reader reader_id=c00000000-0000-0000-0000-000000000000
+----
+v11 ok
+
+shard-desc
+----
+since=[3] upper=[0]
+
+# Create a third handle. It gets the current since of 3.
+register-critical-reader reader_id=c22222222-2222-2222-2222-222222222222
+----
+v12 [3]
+
+# Shard since doesn't change until the meet (min) of all handle sinces changes.
+compare-and-downgrade-since expect_opaque=0 opaque=22 since=(10) reader_id=c22222222-2222-2222-2222-222222222222
+----
+v13 22 [10]
+
+shard-desc
+----
+since=[3] upper=[0]
+
+# Shard since advances when handle with the minimal since expires.
+#
+# TODO: expiry temporarily doesn't advance since until we have #15511.
+# Switch this assertion back when we re-enable this.
+expire-critical-reader reader_id=c11111111-1111-1111-1111-111111111111
+----
+v14 ok
+
+shard-desc
+----
+since=[3] upper=[0]
+
+# Shard since unaffected when all handle are expired.
+#
+# TODO: expiry temporarily doesn't advance since until we have #15511.
+# Switch this assertion back when we re-enable this.
+expire-critical-reader reader_id=c22222222-2222-2222-2222-222222222222
+----
+v15 ok
+
+shard-desc
+----
+since=[3] upper=[0]
+
+register-critical-reader reader_id=c33333333-3333-3333-3333-333333333333
+----
+v16 [3]
