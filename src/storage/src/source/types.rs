@@ -322,16 +322,17 @@ pub struct DecodeResult {
     pub metadata: Row,
 }
 
-/// A structured error for `SourceReader::get_next_message`
-/// implementors. Also implements `From<anyhow::Error>`
-/// for convenience.
+/// A structured error for `SourceReader::get_next_message` implementors.
 #[derive(Debug)]
 pub struct SourceReaderError {
     pub inner: SourceErrorDetails,
 }
 
-impl From<anyhow::Error> for SourceReaderError {
-    fn from(e: anyhow::Error) -> Self {
+impl SourceReaderError {
+    /// This is an unclassified but definite error. This is typically only appropriate
+    /// when the error is permanently fatal for the source... some critical invariant
+    /// is violated or data is corrupted, for example.
+    pub fn other_definite(e: anyhow::Error) -> SourceReaderError {
         SourceReaderError {
             inner: SourceErrorDetails::Other(format!("{}", e)),
         }

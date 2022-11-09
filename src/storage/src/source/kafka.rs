@@ -314,7 +314,8 @@ impl SourceReader for KafkaSourceReader {
                     self.source_name, self.topic_name, e
                 ),
                 Ok(message) => {
-                    let source_message = construct_source_message(&message, self.include_headers)?;
+                    let source_message = construct_source_message(&message, self.include_headers)
+                        .map_err(SourceReaderError::other_definite)?;
                     next_message = self.handle_message(source_message);
                 }
             }
@@ -332,7 +333,9 @@ impl SourceReader for KafkaSourceReader {
                 break;
             }
 
-            let message = self.poll_from_next_queue()?;
+            let message = self
+                .poll_from_next_queue()
+                .map_err(SourceReaderError::other_definite)?;
             attempts += 1;
 
             if let Some(message) = message {
