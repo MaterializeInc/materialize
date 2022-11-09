@@ -649,6 +649,11 @@ SELECT '{"a":[null]}'::JSONB#>>'{a,0}'::STRING[]
 ----
 NULL
 
+query T
+SELECT '{"a": [1]}'::jsonb #>> '{a,1}';
+----
+NULL
+
 query BB
 SELECT '{"a":1}'::JSONB ? 'a','{"a":1}'::JSONB ? 'b'
 ----
