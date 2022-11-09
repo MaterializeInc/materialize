@@ -383,7 +383,6 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         // Drop compute sinks.
-        // TODO(chae): Drop storage sinks when they're moved over
         let mut compute = self.controller.active_compute();
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
