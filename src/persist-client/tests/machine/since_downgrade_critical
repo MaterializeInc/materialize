@@ -48,6 +48,16 @@ compare-and-downgrade-since expect_opaque=11 opaque=111 since=(3) reader_id=c111
 ----
 v7 111 [3]
 
+# Downgrade again with yet another new opaque value, without asking to advance since
+compare-and-downgrade-since expect_opaque=111 opaque=1111 since=(3) reader_id=c11111111-1111-1111-1111-111111111111
+----
+v8 1111 [3]
+
+# Make sure identical opaque and since are idempotent
+compare-and-downgrade-since expect_opaque=1111 opaque=1111 since=(3) reader_id=c11111111-1111-1111-1111-111111111111
+----
+v9 1111 [3]
+
 # Shard since doesn't change until the meet (min) of all handle sinces changes.
 shard-desc
 ----
@@ -57,7 +67,7 @@ since=[2] upper=[0]
 # handle's since capability, not the shard's global since
 compare-and-downgrade-since expect_opaque=0 opaque=0 since=(5) reader_id=c00000000-0000-0000-0000-000000000000
 ----
-v8 0 [5]
+v10 0 [5]
 
 shard-desc
 ----
@@ -66,12 +76,12 @@ since=[3] upper=[0]
 # Downgrading to the same since is a no-op (but still gets linearized)
 compare-and-downgrade-since expect_opaque=0 opaque=0 since=(5) reader_id=c00000000-0000-0000-0000-000000000000
 ----
-v9 0 [5]
+v11 0 [5]
 
 # Since does not regress
 compare-and-downgrade-since expect_opaque=0 opaque=0 since=(0) reader_id=c00000000-0000-0000-0000-000000000000
 ----
-v10 0 [5]
+v12 0 [5]
 
 shard-desc
 ----
@@ -80,7 +90,7 @@ since=[3] upper=[0]
 # Shard since unaffected by handle with since > shard since expiring.
 expire-critical-reader reader_id=c00000000-0000-0000-0000-000000000000
 ----
-v11 ok
+v13 ok
 
 shard-desc
 ----
@@ -89,12 +99,12 @@ since=[3] upper=[0]
 # Create a third handle. It gets the current since of 3.
 register-critical-reader reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v12 [3]
+v14 [3]
 
 # Shard since doesn't change until the meet (min) of all handle sinces changes.
 compare-and-downgrade-since expect_opaque=0 opaque=22 since=(10) reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v13 22 [10]
+v15 22 [10]
 
 shard-desc
 ----
@@ -106,7 +116,7 @@ since=[3] upper=[0]
 # Switch this assertion back when we re-enable this.
 expire-critical-reader reader_id=c11111111-1111-1111-1111-111111111111
 ----
-v14 ok
+v16 ok
 
 shard-desc
 ----
@@ -118,7 +128,7 @@ since=[3] upper=[0]
 # Switch this assertion back when we re-enable this.
 expire-critical-reader reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v15 ok
+v17 ok
 
 shard-desc
 ----
@@ -126,4 +136,4 @@ since=[3] upper=[0]
 
 register-critical-reader reader_id=c33333333-3333-3333-3333-333333333333
 ----
-v16 [3]
+v18 [3]
