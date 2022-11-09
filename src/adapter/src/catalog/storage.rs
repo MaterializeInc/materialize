@@ -1203,7 +1203,7 @@ impl<'a, S: Append> Transaction<'a, S> {
         Ok((id, compute_instance_id))
     }
 
-    /// Updates persisted information about persisted instrospection source
+    /// Updates persisted information about persisted introspection source
     /// indexes.
     ///
     /// Panics if provided id is not a system id.
