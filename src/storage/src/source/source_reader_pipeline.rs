@@ -934,10 +934,12 @@ where
                 handle.expire().await
             };
 
-            info!("Health for source {source_id} initialized to: {last_reported_status:?}");
-            let now_ms = now();
-            let row = healthcheck::pack_status_row(source_id, last_reported_status.name(), last_reported_status.error(), now_ms);
-            write_to_persist(row, Timestamp::from(now_ms)).await;
+            if is_active_worker {
+                info!("Health for source {source_id} initialized to: {last_reported_status:?}");
+                let now_ms = now();
+                let row = healthcheck::pack_status_row(source_id, last_reported_status.name(), last_reported_status.error(), now_ms);
+                write_to_persist(row, Timestamp::from(now_ms)).await;
+            }
 
             while scheduler.notified().await {
                 if weak_token.upgrade().is_none() {
