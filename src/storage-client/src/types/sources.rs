@@ -39,7 +39,7 @@ use mz_repr::{ColumnType, Diff, GlobalId, RelationDesc, RelationType, Row, Scala
 
 use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use crate::types::connections::aws::AwsConfig;
-use crate::types::connections::{KafkaConnection, PostgresConnection, StringOrSecret};
+use crate::types::connections::{KafkaConnection, PostgresConnection};
 use crate::types::errors::DataflowError;
 use crate::types::hosts::StorageHostConfig;
 
@@ -1142,7 +1142,6 @@ pub trait SourceConnection: Clone {
 pub struct KafkaSourceConnection {
     pub connection: KafkaConnection,
     pub connection_id: GlobalId,
-    pub options: BTreeMap<String, StringOrSecret>,
     pub topic: String,
     // Map from partition -> starting offset
     pub start_offsets: HashMap<i32, i64>,
@@ -1173,7 +1172,6 @@ impl Arbitrary for KafkaSourceConnection {
         (
             any::<KafkaConnection>(),
             any::<GlobalId>(),
-            proptest::collection::btree_map(any::<String>(), any::<StringOrSecret>(), 1..4),
             any::<String>(),
             proptest::collection::hash_map(any::<i32>(), any::<i64>(), 1..4),
             any::<Option<String>>(),
@@ -1188,7 +1186,6 @@ impl Arbitrary for KafkaSourceConnection {
                 |(
                     connection,
                     connection_id,
-                    options,
                     topic,
                     start_offsets,
                     group_id_prefix,
@@ -1201,7 +1198,6 @@ impl Arbitrary for KafkaSourceConnection {
                 )| KafkaSourceConnection {
                     connection,
                     connection_id,
-                    options,
                     topic,
                     start_offsets,
                     group_id_prefix,
@@ -1222,11 +1218,6 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
         ProtoKafkaSourceConnection {
             connection: Some(self.connection.into_proto()),
             connection_id: Some(self.connection_id.into_proto()),
-            options: self
-                .options
-                .iter()
-                .map(|(k, v)| (k.clone(), v.into_proto()))
-                .collect(),
             topic: self.topic.clone(),
             start_offsets: self.start_offsets.clone(),
             group_id_prefix: self.group_id_prefix.clone(),
@@ -1241,11 +1232,6 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
     }
 
     fn from_proto(proto: ProtoKafkaSourceConnection) -> Result<Self, TryFromProtoError> {
-        let options: Result<_, TryFromProtoError> = proto
-            .options
-            .into_iter()
-            .map(|(k, v)| StringOrSecret::from_proto(v).map(|v| (k, v)))
-            .collect();
         Ok(KafkaSourceConnection {
             connection: proto
                 .connection
@@ -1253,7 +1239,6 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
             connection_id: proto
                 .connection_id
                 .into_rust_if_some("ProtoKafkaSourceConnection::connection_id")?,
-            options: options?,
             topic: proto.topic,
             start_offsets: proto.start_offsets,
             group_id_prefix: proto.group_id_prefix,

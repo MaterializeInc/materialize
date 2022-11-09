@@ -27,7 +27,6 @@ use tracing::warn;
 
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::AvroSchemaGenerator;
-use mz_kafka_util::KafkaAddrs;
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
@@ -45,8 +44,9 @@ use mz_storage_client::types::connections::aws::{
     AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri,
 };
 use mz_storage_client::types::connections::{
-    AwsPrivateLinkConnection, Connection, CsrConnectionHttpAuth, KafkaConnection, KafkaSecurity,
-    KafkaTlsConfig, SaslConfig, StringOrSecret, TlsIdentity,
+    AwsPrivatelinkConnection, Connection, CsrConnectionHttpAuth, KafkaAwsPrivateLink,
+    KafkaConnection, KafkaSecurity, KafkaTlsConfig, PostgresTunnel, SaslConfig, StringOrSecret,
+    TlsIdentity,
 };
 use mz_storage_client::types::sinks::{
     KafkaConsistencyConfig, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
@@ -68,7 +68,7 @@ use crate::ast::display::AstDisplay;
 use crate::ast::{
     AlterConnectionStatement, AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement,
     AlterSecretStatement, AvroSchema, AvroSchemaOption, AvroSchemaOptionName, AwsConnectionOption,
-    AwsConnectionOptionName, AwsPrivateLinkConnectionOption, AwsPrivateLinkConnectionOptionName,
+    AwsConnectionOptionName, AwsPrivatelinkConnectionOption, AwsPrivatelinkConnectionOptionName,
     ClusterOption, ClusterOptionName, ColumnOption, Compression, CreateClusterReplicaStatement,
     CreateClusterStatement, CreateConnection, CreateConnectionStatement, CreateDatabaseStatement,
     CreateIndexStatement, CreateMaterializedViewStatement, CreateReferencedSubsources,
@@ -80,7 +80,8 @@ use crate::ast::{
     CsrConnectionAvro, CsrConnectionOption, CsrConnectionOptionName, CsrConnectionProtobuf,
     CsrSeedProtobuf, CsvColumns, DbzMode, DropClusterReplicasStatement, DropClustersStatement,
     DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
-    Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConfigOptionName,
+    Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaBroker,
+    KafkaBrokerAwsPrivatelinkOption, KafkaBrokerAwsPrivatelinkOptionName, KafkaConfigOptionName,
     KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint, LoadGeneratorOption,
     LoadGeneratorOptionName, ObjectType, PgConfigOption, PgConfigOptionName,
     PostgresConnectionOption, PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica,
@@ -380,7 +381,7 @@ pub fn plan_create_source(
             key: _,
         }) => {
             let connection_item = scx.get_item_by_resolved_name(connection_name)?;
-            let kafka_connection = match connection_item.connection()? {
+            let mut kafka_connection = match connection_item.connection()? {
                 Connection::Kafka(connection) => connection.clone(),
                 _ => sql_bail!("{} is not a kafka connection", connection_item.name()),
             };
@@ -404,7 +405,10 @@ pub fn plan_create_source(
 
             let optional_start_offset =
                 Option::<kafka_util::KafkaStartOffsetType>::try_from(&extracted_options)?;
-            let options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
+
+            for (k, v) in kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0 {
+                kafka_connection.options.insert(k, v);
+            }
 
             let topic = extracted_options
                 .topic
@@ -436,7 +440,6 @@ pub fn plan_create_source(
             let mut connection = KafkaSourceConnection {
                 connection: kafka_connection,
                 connection_id: connection_item.id(),
-                options,
                 topic,
                 start_offsets,
                 group_id_prefix,
@@ -1870,7 +1873,7 @@ fn kafka_sink_builder(
 ) -> Result<StorageSinkConnectionBuilder, PlanError> {
     let item = scx.get_item_by_resolved_name(&connection)?;
     // Get Kafka connection
-    let connection = match item.connection()? {
+    let mut connection = match item.connection()? {
         Connection::Kafka(connection) => connection.clone(),
         _ => sql_bail!("{} is not a kafka connection", item.name()),
     };
@@ -1890,7 +1893,11 @@ fn kafka_sink_builder(
     )?;
 
     let extracted_options: KafkaConfigOptionExtracted = with_options.try_into()?;
-    let config_options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
+
+    for (k, v) in kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0 {
+        connection.options.insert(k, v);
+    }
+
     let connection_id = item.id();
     let KafkaConfigOptionExtracted {
         topic,
@@ -2012,7 +2019,6 @@ fn kafka_sink_builder(
         KafkaSinkConnectionBuilder {
             connection_id,
             connection,
-            options: config_options,
             format,
             topic_name,
             consistency_config,
@@ -2518,8 +2524,8 @@ pub fn describe_create_connection(
 
 generate_extracted_config!(
     KafkaConnectionOption,
-    (Broker, String),
-    (Brokers, Vec<String>),
+    (Broker, Vec<KafkaBroker<Aug>>),
+    (Brokers, Vec<KafkaBroker<Aug>>),
     (ProgressTopic, String),
     (SslKey, with_options::Secret),
     (SslCertificate, StringOrSecret),
@@ -2530,26 +2536,58 @@ generate_extracted_config!(
 );
 
 impl KafkaConnectionOptionExtracted {
-    pub fn get_brokers(&self) -> Result<Vec<String>, PlanError> {
+    pub fn get_brokers(
+        &self,
+        scx: &StatementContext,
+    ) -> Result<Vec<mz_storage_client::types::connections::KafkaBroker>, PlanError> {
         let mut brokers = match (&self.broker, &self.brokers) {
             (Some(_), Some(_)) => sql_bail!("invalid CONNECTION: cannot set BROKER and BROKERS"),
             (None, None) => sql_bail!("invalid CONNECTION: must set either BROKER or BROKERS"),
-            (Some(v), None) => vec![v.to_string()],
+            (Some(v), None) => v.to_vec(),
             (None, Some(v)) => v.to_vec(),
         };
 
+        let mut out = vec![];
         for broker in &mut brokers {
-            // Normalize Kafka addresses
-            *broker = KafkaAddrs::from_str(broker)
-                .map_err(|e| sql_err!("parsing kafka broker: {e}"))?
-                .to_string();
-            if broker.contains(',') {
+            if broker.address.contains(',') {
                 sql_bail!("invalid CONNECTION: cannot specify multiple Kafka broker addresses in one string.\n\n
 Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'kafka:9093')");
             }
+
+            let aws_privatelink = match &broker.aws_privatelink {
+                None => None,
+                Some(aws_privatelink) => {
+                    let KafkaBrokerAwsPrivatelinkOptionExtracted { port, seen: _ } =
+                        KafkaBrokerAwsPrivatelinkOptionExtracted::try_from(
+                            aws_privatelink.options.clone(),
+                        )?;
+
+                    let id = match &aws_privatelink.connection {
+                        ResolvedObjectName::Object { id, .. } => id,
+                        _ => sql_bail!(
+                            "internal error: Kafka PrivateLink connection was not resolved"
+                        ),
+                    };
+                    let entry = scx.catalog.get_item(id);
+                    match entry.connection()? {
+                        Connection::AwsPrivatelink(_) => Some(KafkaAwsPrivateLink {
+                            connection_id: *id,
+                            port,
+                        }),
+                        _ => {
+                            sql_bail!("{} is not an AWS PRIVATELINK connection", entry.name().item)
+                        }
+                    }
+                }
+            };
+
+            out.push(mz_storage_client::types::connections::KafkaBroker {
+                address: broker.address.clone(),
+                aws_privatelink,
+            });
         }
 
-        Ok(brokers)
+        Ok(out)
     }
     pub fn ssl_config(&self) -> HashSet<KafkaConnectionOptionName> {
         use KafkaConnectionOptionName::*;
@@ -2622,19 +2660,26 @@ impl TryFrom<&KafkaConnectionOptionExtracted> for Option<KafkaSecurity> {
     }
 }
 
-impl TryFrom<KafkaConnectionOptionExtracted> for KafkaConnection {
-    type Error = PlanError;
-    fn try_from(value: KafkaConnectionOptionExtracted) -> Result<Self, Self::Error> {
+impl KafkaConnectionOptionExtracted {
+    fn to_connection(
+        self,
+        scx: &StatementContext,
+    ) -> Result<mz_storage_client::types::connections::KafkaConnection, PlanError> {
         Ok(KafkaConnection {
-            brokers: value.get_brokers()?,
-            security: (&value).try_into()?,
-            progress_topic: value.progress_topic,
+            brokers: self.get_brokers(scx)?,
+            security: Option::<KafkaSecurity>::try_from(&self)?,
+            progress_topic: self.progress_topic,
+            options: BTreeMap::new(),
         })
     }
 }
 
+generate_extracted_config!(KafkaBrokerAwsPrivatelinkOption, (Port, u16));
+
 generate_extracted_config!(
     CsrConnectionOption,
+    (AwsPrivatelink, with_options::Object),
+    (Port, u16),
     (Url, String),
     (SslKey, with_options::Secret),
     (SslCertificate, StringOrSecret),
@@ -2643,19 +2688,22 @@ generate_extracted_config!(
     (Password, with_options::Secret)
 );
 
-impl TryFrom<CsrConnectionOptionExtracted>
-    for mz_storage_client::types::connections::CsrConnection
-{
-    type Error = PlanError;
-    fn try_from(ccsr_options: CsrConnectionOptionExtracted) -> Result<Self, Self::Error> {
-        let url = match ccsr_options.url {
+impl CsrConnectionOptionExtracted {
+    fn to_connection(
+        self,
+        scx: &StatementContext,
+    ) -> Result<mz_storage_client::types::connections::CsrConnection, PlanError> {
+        let url: reqwest::Url = match self.url {
             Some(url) => url
                 .parse()
                 .map_err(|e| sql_err!("parsing schema registry url: {e}"))?,
             None => sql_bail!("invalid CONNECTION: must specify URL"),
         };
-        let cert = ccsr_options.ssl_certificate;
-        let key = ccsr_options.ssl_key.map(|secret| secret.into());
+        let _ = url
+            .host_str()
+            .ok_or_else(|| sql_err!("invalid CONNECTION: URL must specify domain name"))?;
+        let cert = self.ssl_certificate;
+        let key = self.ssl_key.map(|secret| secret.into());
         let tls_identity = match (cert, key) {
             (None, None) => None,
             (Some(cert), Some(key)) => Some(TlsIdentity { cert, key }),
@@ -2663,21 +2711,34 @@ impl TryFrom<CsrConnectionOptionExtracted>
                 "invalid CONNECTION: reading from SSL-auth Confluent Schema Registry requires both SSL KEY and SSL CERTIFICATE"
             ),
         };
-        let http_auth = ccsr_options.username.map(|username| CsrConnectionHttpAuth {
+        let http_auth = self.username.map(|username| CsrConnectionHttpAuth {
             username,
-            password: ccsr_options.password.map(|secret| secret.into()),
+            password: self.password.map(|secret| secret.into()),
         });
+        let aws_privatelink_id = match self.aws_privatelink {
+            None => None,
+            Some(aws_privatelink) => {
+                let id = GlobalId::from(aws_privatelink);
+                let entry = scx.catalog.get_item(&id);
+                match entry.connection()? {
+                    Connection::AwsPrivatelink(_) => Some(id),
+                    _ => sql_bail!("{} is not an AWS PRIVATELINK connection", entry.name().item),
+                }
+            }
+        };
         Ok(mz_storage_client::types::connections::CsrConnection {
             url,
-            tls_root_cert: ccsr_options.ssl_certificate_authority,
+            tls_root_cert: self.ssl_certificate_authority,
             tls_identity,
             http_auth,
+            aws_privatelink_id,
         })
     }
 }
 
 generate_extracted_config!(
     PostgresConnectionOption,
+    (AwsPrivatelink, with_options::Object),
     (Database, String),
     (Host, String),
     (Password, with_options::Secret),
@@ -2714,29 +2775,44 @@ impl PostgresConnectionOptionExtracted {
             Some(m) => sql_bail!("invalid CONNECTION: unknown SSL MODE {}", m.quoted()),
         };
 
-        // Validate that the SSH tunnel ID is indeed an SSH connection
-        let ssh_tunnel_id = self.ssh_tunnel.map(|ssh_tunnel| ssh_tunnel.into());
-        let ssh_tunnel = if let Some(ref ssh_tunnel) = ssh_tunnel_id {
-            let ssh_tunnel = scx.catalog.get_item(ssh_tunnel);
-            match ssh_tunnel.connection()? {
-                Connection::Ssh(ssh) => Some(ssh.clone()),
-                _ => sql_bail!("{} is not an SSH connection", ssh_tunnel.name().item),
+        let tunnel = match (self.ssh_tunnel, self.aws_privatelink) {
+            (None, None) => PostgresTunnel::Direct,
+            (Some(ssh_tunnel), None) => {
+                let id = GlobalId::from(ssh_tunnel);
+                let ssh_tunnel = scx.catalog.get_item(&id);
+                match ssh_tunnel.connection()? {
+                    Connection::Ssh(connection) => PostgresTunnel::Ssh {
+                        connection_id: id,
+                        connection: connection.clone(),
+                    },
+                    _ => sql_bail!("{} is not an SSH connection", ssh_tunnel.name().item),
+                }
             }
-        } else {
-            None
+            (None, Some(aws_privatelink)) => {
+                let id = GlobalId::from(aws_privatelink);
+                let entry = scx.catalog.get_item(&id);
+                match entry.connection()? {
+                    Connection::AwsPrivatelink(_) => {
+                        PostgresTunnel::AwsPrivateLink { connection_id: id }
+                    }
+                    _ => sql_bail!("{} is not an AWS PRIVATELINK connection", entry.name().item),
+                }
+            }
+            (Some(_), Some(_)) => {
+                sql_bail!("cannot specify both SSH TUNNEL and AWS PRIVATELINK");
+            }
         };
 
         Ok(mz_storage_client::types::connections::PostgresConnection {
             database: self
                 .database
                 .ok_or_else(|| sql_err!("DATABASE option is required"))?,
+            password: self.password.map(|password| password.into()),
             host: self
                 .host
                 .ok_or_else(|| sql_err!("HOST option is required"))?,
-            password: self.password.map(|password| password.into()),
             port: self.port,
-            ssh_tunnel_id,
-            ssh_tunnel,
+            tunnel,
             tls_mode,
             tls_root_cert: self.ssl_certificate_authority,
             tls_identity,
@@ -2817,16 +2893,16 @@ impl TryFrom<AwsConnectionOptionExtracted> for AwsConfig {
 }
 
 generate_extracted_config!(
-    AwsPrivateLinkConnectionOption,
+    AwsPrivatelinkConnectionOption,
     (ServiceName, String),
     (AvailabilityZones, Vec<String>)
 );
 
-impl TryFrom<AwsPrivateLinkConnectionOptionExtracted> for AwsPrivateLinkConnection {
+impl TryFrom<AwsPrivatelinkConnectionOptionExtracted> for AwsPrivatelinkConnection {
     type Error = PlanError;
 
-    fn try_from(options: AwsPrivateLinkConnectionOptionExtracted) -> Result<Self, Self::Error> {
-        Ok(AwsPrivateLinkConnection {
+    fn try_from(options: AwsPrivatelinkConnectionOptionExtracted) -> Result<Self, Self::Error> {
+        Ok(AwsPrivatelinkConnection {
             service_name: options
                 .service_name
                 .ok_or_else(|| sql_err!("SERVICE NAME option is required"))?,
@@ -2849,28 +2925,26 @@ pub fn plan_create_connection(
     } = stmt;
     let connection = match connection {
         CreateConnection::Kafka { with_options } => {
-            let k = KafkaConnectionOptionExtracted::try_from(with_options)?;
-            Connection::Kafka(KafkaConnection::try_from(k)?)
+            let c = KafkaConnectionOptionExtracted::try_from(with_options)?;
+            Connection::Kafka(c.to_connection(scx)?)
         }
         CreateConnection::Csr { with_options } => {
             let c = CsrConnectionOptionExtracted::try_from(with_options)?;
-            let connection = mz_storage_client::types::connections::CsrConnection::try_from(c)?;
-            Connection::Csr(connection)
+            Connection::Csr(c.to_connection(scx)?)
         }
         CreateConnection::Postgres { with_options } => {
             let c = PostgresConnectionOptionExtracted::try_from(with_options)?;
-            let connection = c.to_connection(scx)?;
-            Connection::Postgres(connection)
+            Connection::Postgres(c.to_connection(scx)?)
         }
         CreateConnection::Aws { with_options } => {
             let c = AwsConnectionOptionExtracted::try_from(with_options)?;
             let connection = AwsConfig::try_from(c)?;
             Connection::Aws(connection)
         }
-        CreateConnection::AwsPrivateLink { with_options } => {
-            let c = AwsPrivateLinkConnectionOptionExtracted::try_from(with_options)?;
-            let connection = AwsPrivateLinkConnection::try_from(c)?;
-            Connection::AwsPrivateLink(connection)
+        CreateConnection::AwsPrivatelink { with_options } => {
+            let c = AwsPrivatelinkConnectionOptionExtracted::try_from(with_options)?;
+            let connection = AwsPrivatelinkConnection::try_from(c)?;
+            Connection::AwsPrivatelink(connection)
         }
         CreateConnection::Ssh { with_options } => {
             let c = SshConnectionOptionExtracted::try_from(with_options)?;

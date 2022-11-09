@@ -155,14 +155,24 @@ where
         // Reconnect to the storage host.
         let client = Retry::default()
             .clamp_backoff(Duration::from_secs(1))
-            .retry_async(|_| {
+            .retry_async(|state| {
                 let addr = self.addr.clone();
                 let version = self.build_info.semver_version();
                 async move {
-                    match StorageGrpcClient::connect(addr, version).await {
+                    match StorageGrpcClient::connect(addr.clone(), version).await {
                         Ok(client) => Ok(client),
                         Err(e) => {
-                            warn!("error connecting to storage host, retrying: {e}");
+                            if state.i >= mz_service::retry::INFO_MIN_RETRIES {
+                                tracing::info!(
+                                    "error connecting to storage host {addr}, retrying in {:?}: {e}",
+                                    state.next_backoff.unwrap()
+                                );
+                            } else {
+                                tracing::debug!(
+                                    "error connecting to storage host {addr}, retrying in {:?}: {e}",
+                                    state.next_backoff.unwrap()
+                                );
+                            }
                             Err(e)
                         }
                     }
@@ -197,7 +207,7 @@ where
                 .await
                 .expect("error creating persist client");
             let from_read_handle = persist_client
-                .open_reader::<SourceData, (), T, Diff>(
+                .open_leased_reader::<SourceData, (), T, Diff>(
                     export.description.from_storage_metadata.data_shard,
                 )
                 .await
@@ -308,14 +318,7 @@ where
                         .insert(export.id, Antichain::from_elem(T::minimum()));
                 }
             }
-            StorageCommand::AllowCompaction(frontiers) => {
-                for (id, frontier) in frontiers {
-                    if frontier.is_empty() {
-                        self.sources.remove(id);
-                        self.uppers.remove(id);
-                    }
-                }
-            }
+            StorageCommand::AllowCompaction(_frontiers) => {}
         }
     }
 
@@ -325,21 +328,13 @@ where
                 let mut new_uppers = Vec::new();
 
                 for (id, new_upper) in list {
-                    if let Some(reported) = self.uppers.get_mut(&id) {
-                        if PartialOrder::less_than(reported, &new_upper) {
-                            reported.clone_from(&new_upper);
-                            new_uppers.push((id, new_upper));
-                        }
-                    } else {
-                        // It can happen during source shutdown that we remove
-                        // the tracked upper from our state but a
-                        // `FrontierUppers` response is still on the wire.
-                        //
-                        // This is very fine to ignore, especially now that
-                        // these upper updates are plain `Antichains`, and not
-                        // `ChangeBatches` where we need to be extra careful
-                        // about not messing up our state.
-                        tracing::info!("RehydratingStorageClient received FrontierUppers response {new_upper:?} for absent identifier {id}");
+                    let reported = match self.uppers.get_mut(&id) {
+                        Some(reported) => reported,
+                        None => panic!("Reference to absent collection: {id}"),
+                    };
+                    if PartialOrder::less_than(reported, &new_upper) {
+                        reported.clone_from(&new_upper);
+                        new_uppers.push((id, new_upper));
                     }
                 }
                 if !new_uppers.is_empty() {
@@ -347,6 +342,13 @@ where
                 } else {
                     None
                 }
+            }
+            StorageResponse::DroppedIds(dropped_ids) => {
+                for id in dropped_ids.iter() {
+                    self.sources.remove(id);
+                    self.uppers.remove(id);
+                }
+                Some(StorageResponse::DroppedIds(dropped_ids))
             }
         }
     }

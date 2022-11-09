@@ -308,6 +308,7 @@ impl MetricsVecs {
             register: self.cmd_metrics("register"),
             clone_reader: self.cmd_metrics("clone_reader"),
             compare_and_append: self.cmd_metrics("compare_and_append"),
+            compare_and_downgrade_since: self.cmd_metrics("compare_and_downgrade_since"),
             downgrade_since: self.cmd_metrics("downgrade_since"),
             heartbeat_reader: self.cmd_metrics("heartbeat_reader"),
             heartbeat_writer: self.cmd_metrics("heartbeat_writer"),
@@ -480,6 +481,7 @@ pub struct CmdsMetrics {
     pub(crate) register: CmdMetrics,
     pub(crate) clone_reader: CmdMetrics,
     pub(crate) compare_and_append: CmdMetrics,
+    pub(crate) compare_and_downgrade_since: CmdMetrics,
     pub(crate) downgrade_since: CmdMetrics,
     pub(crate) heartbeat_writer: CmdMetrics,
     pub(crate) heartbeat_reader: CmdMetrics,
@@ -772,6 +774,7 @@ impl GcMetrics {
 #[derive(Debug)]
 pub struct LeaseMetrics {
     pub(crate) timeout_read: IntCounter,
+    pub(crate) dropped_part: IntCounter,
 }
 
 impl LeaseMetrics {
@@ -780,6 +783,10 @@ impl LeaseMetrics {
             timeout_read: registry.register(metric!(
                 name: "mz_persist_lease_timeout_read",
                 help: "count of readers whose lease timed out",
+            )),
+            dropped_part: registry.register(metric!(
+                name: "mz_persist_lease_dropped_part",
+                help: "count of LeasedBatchParts that were dropped without being politely returned",
             )),
         }
     }

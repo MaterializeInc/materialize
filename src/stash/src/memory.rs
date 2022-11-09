@@ -311,6 +311,10 @@ impl<S: Stash> Stash for Memory<S> {
     async fn confirm_leadership(&mut self) -> Result<(), StashError> {
         self.stash.confirm_leadership().await
     }
+
+    fn epoch(&self) -> Option<i64> {
+        self.stash.epoch()
+    }
 }
 
 #[async_trait]

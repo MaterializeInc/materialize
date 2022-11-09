@@ -14,8 +14,17 @@
 # limitations under the License.
 
 import pytest
+from dbt.tests.adapter.basic.expected_catalog import (
+    base_expected_catalog,
+    expected_references_catalog,
+    no_stats,
+)
 from dbt.tests.adapter.basic.test_adapter_methods import BaseAdapterMethod
 from dbt.tests.adapter.basic.test_base import BaseSimpleMaterializations
+from dbt.tests.adapter.basic.test_docs_generate import (
+    BaseDocsGenerate,
+    BaseDocsGenReferences,
+)
 from dbt.tests.adapter.basic.test_empty import BaseEmpty
 from dbt.tests.adapter.basic.test_ephemeral import BaseEphemeral
 from dbt.tests.adapter.basic.test_generic_tests import BaseGenericTests
@@ -143,3 +152,41 @@ class TestBaseAdapterMethodMaterialize(BaseAdapterMethod):
 select * from {{ upstream }}
 """
     pass
+
+
+# We skip doc tests for binary versions of Materialize because the `materialize__get_catalog`
+# macro that is used to generate the docs must stay consistent with the latest Materialize release.
+# The `type` of a materialized view in changed to kebab-case in v0.29.
+# Users running earlier versions of Materialize will see seeds referenced as 'view'
+# types instead of 'materializedview' types in the generated docs.
+@pytest.mark.skip_profile("materialize_binary")
+class TestDocsGenerateMaterialize(BaseDocsGenerate):
+    @pytest.fixture(scope="class")
+    def expected_catalog(self, project, profile_user):
+        return base_expected_catalog(
+            project,
+            role=None,
+            id_type="integer",
+            text_type="text",
+            time_type="timestamp",
+            view_type="view",
+            table_type="materializedview",
+            model_stats=no_stats(),
+        )
+
+
+@pytest.mark.skip_profile("materialize_binary")
+class TestDocsGenReferencesMaterialize(BaseDocsGenReferences):
+    @pytest.fixture(scope="class")
+    def expected_catalog(self, project, profile_user):
+        return expected_references_catalog(
+            project,
+            role=None,
+            id_type="integer",
+            text_type="text",
+            time_type="timestamp",
+            bigint_type="bigint",
+            view_type="view",
+            table_type="materializedview",
+            model_stats=no_stats(),
+        )

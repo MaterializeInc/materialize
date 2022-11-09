@@ -7,14 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-syntax = "proto3";
+//! Retry utilities.
 
-package mz_kafka_util.addr;
-
-message ProtoKafkaAddrs {
-    message ProtoKafkaAddr {
-        string host = 1;
-        uint32 port = 2;
-    }
-    repeated ProtoKafkaAddr addrs = 1;
-}
+/// The number of retries required before upgrading a log level from `debug`
+/// to `info`.
+pub const INFO_MIN_RETRIES: usize = 5;

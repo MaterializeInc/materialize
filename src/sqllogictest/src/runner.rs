@@ -309,6 +309,7 @@ impl<'a> fmt::Display for OutcomesDisplay<'a> {
 
 pub(crate) struct Runner {
     server_addr: SocketAddr,
+    internal_server_addr: SocketAddr,
     // Drop order matters for these fields.
     client: tokio_postgres::Client,
     clients: HashMap<String, tokio_postgres::Client>,
@@ -709,6 +710,7 @@ impl Runner {
         // share a Tokio runtime, tasks from the last file's server would still
         // be live at the start of the next file's server.
         let (server_addr_tx, server_addr_rx) = oneshot::channel();
+        let (internal_server_addr_tx, internal_server_addr_rx) = oneshot::channel();
         let (shutdown_trigger, shutdown_tripwire) = oneshot::channel();
         let server_thread = thread::spawn(|| {
             let runtime = match Runtime::new() {
@@ -732,13 +734,18 @@ impl Runner {
             server_addr_tx
                 .send(Ok(server.sql_local_addr()))
                 .expect("receiver should not drop first");
+            internal_server_addr_tx
+                .send(server.internal_sql_local_addr())
+                .expect("receiver should not drop first");
             let _ = runtime.block_on(shutdown_tripwire);
         });
         let server_addr = server_addr_rx.await??;
-        let client = connect(server_addr).await;
+        let internal_server_addr = internal_server_addr_rx.await?;
+        let client = connect(server_addr, None).await;
 
         Ok(Runner {
             server_addr,
+            internal_server_addr,
             _shutdown_trigger: shutdown_trigger,
             _server_thread: server_thread.join_on_drop(),
             _temp_dir: temp_dir,
@@ -794,11 +801,15 @@ impl Runner {
             } => self.run_query(sql, output, location.clone()).await,
             Record::Simple {
                 conn,
+                user,
                 sql,
                 output,
                 location,
                 ..
-            } => self.run_simple(*conn, sql, output, location.clone()).await,
+            } => {
+                self.run_simple(*conn, *user, sql, output, location.clone())
+                    .await
+            }
             Record::Copy {
                 table_name,
                 tsv_path,
@@ -1045,12 +1056,21 @@ impl Runner {
         Ok(Outcome::Success)
     }
 
-    async fn get_conn(&mut self, name: Option<&str>) -> &tokio_postgres::Client {
+    async fn get_conn(
+        &mut self,
+        name: Option<&str>,
+        user: Option<&str>,
+    ) -> &tokio_postgres::Client {
         match name {
             None => &self.client,
             Some(name) => {
                 if !self.clients.contains_key(name) {
-                    let client = connect(self.server_addr).await;
+                    let addr = if matches!(user, Some("mz_system")) {
+                        self.internal_server_addr
+                    } else {
+                        self.server_addr
+                    };
+                    let client = connect(addr, user).await;
                     self.clients.insert(name.into(), client);
                 }
                 self.clients.get(name).unwrap()
@@ -1061,11 +1081,12 @@ impl Runner {
     async fn run_simple<'a>(
         &mut self,
         conn: Option<&'a str>,
+        user: Option<&'a str>,
         sql: &'a str,
         output: &'a Output,
         location: Location,
     ) -> Result<Outcome<'a>, anyhow::Error> {
-        let client = self.get_conn(conn).await;
+        let client = self.get_conn(conn, user).await;
         let actual = Output::Values(match client.simple_query(sql).await {
             Ok(result) => result
                 .into_iter()
@@ -1099,9 +1120,14 @@ impl Runner {
     }
 }
 
-async fn connect(addr: SocketAddr) -> tokio_postgres::Client {
+async fn connect(addr: SocketAddr, user: Option<&str>) -> tokio_postgres::Client {
     let (client, connection) = tokio_postgres::connect(
-        &format!("host={} port={} user=materialize", addr.ip(), addr.port()),
+        &format!(
+            "host={} port={} user={}",
+            addr.ip(),
+            addr.port(),
+            user.unwrap_or("materialize")
+        ),
         NoTls,
     )
     .await

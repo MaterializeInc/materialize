@@ -33,7 +33,7 @@ pub fn encode_copy_row_binary(
         )
     })?;
 
-    out.extend(&count.to_be_bytes());
+    out.extend(count.to_be_bytes());
     let mut buf = BytesMut::new();
     for (field, typ) in row
         .iter()
@@ -41,12 +41,12 @@ pub fn encode_copy_row_binary(
         .map(|(datum, typ)| (mz_pgrepr::Value::from_datum(datum, &typ.scalar_type), typ))
     {
         match field {
-            None => out.extend(&NULL_BYTES),
+            None => out.extend(NULL_BYTES),
             Some(field) => {
                 buf.clear();
                 field.encode_binary(&mz_pgrepr::Type::from(&typ.scalar_type), &mut buf)?;
                 out.extend(
-                    &i32::try_from(buf.len())
+                    i32::try_from(buf.len())
                         .map_err(|_| {
                             io::Error::new(
                                 io::ErrorKind::Other,

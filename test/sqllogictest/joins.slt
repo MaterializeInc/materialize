@@ -115,7 +115,7 @@ Explained Query:
     Project (#0, #2, #4) // { arity: 3 }
       Join on=(#1 = (#0 + 1) AND #3 = (#0 + #1)) type=differential // { arity: 5 }
         implementation
-          l0 » %0[(#0 + 1)] » %2[#0]
+          %1:l0 » %0:l0[(#0 + 1)]KA » %2:l0[#0]KA
         ArrangeBy keys=[[(#0 + 1)]] // { arity: 1 }
           Project (#0) // { arity: 1 }
             Get l0 // { arity: 2 }
@@ -156,14 +156,14 @@ Explained Query:
     Project (#0, #1) // { arity: 2 }
       Join on=(#0 = #2) type=differential // { arity: 3 }
         implementation
-          materialize.public.l » %1[#0]
+          %0:l » %1[#0]UKA
         Get materialize.public.l // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 1 }
           Distinct group_by=[#0] // { arity: 1 }
             Project (#0) // { arity: 1 }
               Join on=(eq(#1, #2, #3)) type=differential // { arity: 4 }
                 implementation
-                  %0 » %1[#0] » %2[#0]
+                  %0:l1 » %1[#0]UKAf » %2[#0]UKAf
                 Filter (#0 = (#1 + 1)) // { arity: 2 }
                   Get l1 // { arity: 2 }
                 ArrangeBy keys=[[#0]] // { arity: 1 }
@@ -180,7 +180,7 @@ Explained Query:
     cte l1 =
       CrossJoin type=differential // { arity: 2 }
         implementation
-          l0 » %0[]
+          %1:l0 » %0[×]A
         ArrangeBy keys=[[]] // { arity: 1 }
           Distinct group_by=[#0] // { arity: 1 }
             Get l0 // { arity: 1 }
@@ -317,7 +317,7 @@ Explained Query:
             Project (#0, #1) // { arity: 2 }
               Join on=(#0 = #2) type=differential // { arity: 3 }
                 implementation
-                  materialize.public.l » %1[#0]
+                  %0:l » %1[#0]UKA
                 Get materialize.public.l // { arity: 2 }
                 ArrangeBy keys=[[#0]] // { arity: 1 }
                   Distinct group_by=[#0] // { arity: 1 }
@@ -331,7 +331,7 @@ Explained Query:
       Project (#0, #1, #3) // { arity: 3 }
         Join on=(#0 = #2) type=differential // { arity: 4 }
           implementation
-            %1 » %0[#0]
+            %1:r » %0:l[#0]KA
           ArrangeBy keys=[[#0]] // { arity: 2 }
             Filter (#0) IS NOT NULL // { arity: 2 }
               Get materialize.public.l // { arity: 2 }
@@ -357,7 +357,7 @@ Explained Query:
               Project (#0, #1) // { arity: 2 }
                 Join on=(#0 = #2) type=differential // { arity: 3 }
                   implementation
-                    materialize.public.r » %1[#0]
+                    %0:r » %1[#0]UKA
                   Get materialize.public.r // { arity: 2 }
                   ArrangeBy keys=[[#0]] // { arity: 1 }
                     Distinct group_by=[#0] // { arity: 1 }
@@ -371,7 +371,7 @@ Explained Query:
       Project (#0, #1, #3) // { arity: 3 }
         Join on=(#0 = #2) type=differential // { arity: 4 }
           implementation
-            %1 » %0[#0]
+            %1:r » %0:l[#0]KA
           ArrangeBy keys=[[#0]] // { arity: 2 }
             Filter (#0) IS NOT NULL // { arity: 2 }
               Get materialize.public.l // { arity: 2 }
@@ -397,7 +397,7 @@ Explained Query:
               Project (#0, #1) // { arity: 2 }
                 Join on=(#0 = #2) type=differential // { arity: 3 }
                   implementation
-                    materialize.public.r » l1[#0]
+                    %0:r » %1:l1[#0]UKA
                   Get materialize.public.r // { arity: 2 }
                   Get l1 // { arity: 1 }
             Get materialize.public.r // { arity: 2 }
@@ -407,7 +407,7 @@ Explained Query:
             Project (#0, #1) // { arity: 2 }
               Join on=(#0 = #2) type=differential // { arity: 3 }
                 implementation
-                  materialize.public.l » l1[#0]
+                  %0:l » %1:l1[#0]UKA
                 Get materialize.public.l // { arity: 2 }
                 Get l1 // { arity: 1 }
           Get materialize.public.l // { arity: 2 }
@@ -423,7 +423,7 @@ Explained Query:
       Project (#0, #1, #3) // { arity: 3 }
         Join on=(#0 = #2) type=differential // { arity: 4 }
           implementation
-            %1 » %0[#0]
+            %1:r » %0:l[#0]KA
           ArrangeBy keys=[[#0]] // { arity: 2 }
             Filter (#0) IS NOT NULL // { arity: 2 }
               Get materialize.public.l // { arity: 2 }
@@ -449,7 +449,7 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM l INNER JOIN r ON mod(l.la, 2) = m
 Explained Query:
   Join on=((#0 % 2) = (#2 % 2)) type=differential // { arity: 4 }
     implementation
-      %1 » %0[(#0 % 2)]
+      %1:r » %0:l[(#0 % 2)]KA
     ArrangeBy keys=[[(#0 % 2)]] // { arity: 2 }
       Filter (#0) IS NOT NULL // { arity: 2 }
         Get materialize.public.l // { arity: 2 }
@@ -506,7 +506,7 @@ Explained Query:
     Project (#0, #1) // { arity: 2 }
       Join on=(#0 = #2) type=differential // { arity: 3 }
         implementation
-          %1 » %0[#0]
+          %1 » %0:t4362[#0]KA
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Get materialize.public.t4362 // { arity: 2 }
         Union // { arity: 1 }
@@ -576,7 +576,7 @@ Explained Query:
   Project (#1, #3) // { arity: 2 }
     Join on=(#0 = #2) type=differential // { arity: 4 }
       implementation
-        %1 » %0[#0]
+        %1:r3 » %0:l3[#0]KA
       ArrangeBy keys=[[#0]] // { arity: 2 }
         Filter (#0) IS NOT NULL // { arity: 2 }
           Get materialize.public.l3 // { arity: 2 }
@@ -603,7 +603,7 @@ Explained Query:
   Project (#1, #3) // { arity: 2 }
     Join on=(#0 = #2) type=differential // { arity: 4 }
       implementation
-        materialize.public.r3 » %0[#0]
+        %1:r3 » %0:l3[#0]KA
       ArrangeBy keys=[[#0]] // { arity: 2 }
         Get materialize.public.l3 // { arity: 2 }
       Get materialize.public.r3 // { arity: 2 }
@@ -624,7 +624,7 @@ Explained Query:
   Project (#1, #3) // { arity: 2 }
     Join on=(#0 = #2) type=differential // { arity: 4 }
       implementation
-        materialize.public.r3 » %0[#0]
+        %1:r3 » %0:l3[#0]KA
       ArrangeBy keys=[[#0]] // { arity: 2 }
         Get materialize.public.l3 // { arity: 2 }
       Get materialize.public.r3 // { arity: 2 }

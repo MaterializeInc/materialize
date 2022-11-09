@@ -162,7 +162,7 @@ EXPLAIN SHOW COLUMNS IN t
 ----
 Explained Query (fast path):
   Project (#1, #3, #4)
-    ReadExistingIndex mz_internal.mz_show_columns_ind lookup value ("u1")
+    ReadExistingIndex mz_internal.mz_show_columns_ind lookup_value=("u1")
 
 Used Indexes:
   - mz_internal.mz_show_columns_ind

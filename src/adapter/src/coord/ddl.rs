@@ -137,9 +137,9 @@ impl<S: Append + 'static> Coordinator<S> {
                             mz_storage_client::types::connections::Connection::Ssh(_) => {
                                 secrets_to_drop.push(*id);
                             }
-                            // PrivateLink connections have an associated VpcEndpoint K8S resource
-                            // that should be dropped
-                            mz_storage_client::types::connections::Connection::AwsPrivateLink(
+                            // AWS PrivateLink connections have an associated
+                            // VpcEndpoint K8S resource that should be dropped
+                            mz_storage_client::types::connections::Connection::AwsPrivatelink(
                                 _,
                             ) => {
                                 vpc_endpoints_to_drop.push(*id);
@@ -312,7 +312,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn drop_sources(&mut self, sources: Vec<GlobalId>) {
         for id in &sources {
-            self.drop_read_policy(id);
+            self.drop_storage_read_policy(id);
         }
         self.controller.storage.drop_sources(sources).await.unwrap();
     }
@@ -341,18 +341,18 @@ impl<S: Append + 'static> Coordinator<S> {
 
     pub(crate) async fn drop_storage_sinks(&mut self, sinks: Vec<GlobalId>) {
         for id in &sinks {
-            self.drop_read_policy(id);
+            self.drop_storage_read_policy(id);
         }
         self.controller.storage.drop_sinks(sinks).await.unwrap();
     }
 
     pub(crate) async fn drop_indexes(&mut self, indexes: Vec<(ComputeInstanceId, GlobalId)>) {
-        let mut by_compute_instance = HashMap::new();
+        let mut by_compute_instance: HashMap<_, Vec<_>> = HashMap::new();
         for (compute_instance, id) in indexes {
-            if self.drop_read_policy(&id) {
+            if self.drop_compute_read_policy(&id) {
                 by_compute_instance
                     .entry(compute_instance)
-                    .or_insert(vec![])
+                    .or_default()
                     .push(id);
             } else {
                 tracing::error!("Instructed to drop a non-index index");
@@ -368,13 +368,13 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     async fn drop_materialized_views(&mut self, mviews: Vec<(ComputeInstanceId, GlobalId)>) {
-        let mut by_compute_instance = HashMap::new();
+        let mut by_compute_instance: HashMap<_, Vec<_>> = HashMap::new();
         let mut source_ids = Vec::new();
         for (compute_instance, id) in mviews {
-            if self.drop_read_policy(&id) {
+            if self.drop_compute_read_policy(&id) {
                 by_compute_instance
                     .entry(compute_instance)
-                    .or_insert(vec![])
+                    .or_default()
                     .push(id);
                 source_ids.push(id);
             } else {
@@ -396,6 +396,9 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         // Drop storage sources.
+        for id in &source_ids {
+            self.drop_storage_read_policy(id);
+        }
         self.controller
             .storage
             .drop_sources(source_ids)
@@ -416,9 +419,7 @@ impl<S: Append + 'static> Coordinator<S> {
             if let Err(e) = self
                 .cloud_resource_controller
                 .as_ref()
-                .ok_or(AdapterError::Unsupported(
-                    "PrivateLink connections are only allowed in cloud.",
-                ))
+                .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))
                 .unwrap()
                 .delete_vpc_endpoint(vpc_endpoint)
                 .await
@@ -450,9 +451,9 @@ impl<S: Append + 'static> Coordinator<S> {
         // Validate `sink.from` is in fact a storage collection
         self.controller.storage.collection(sink.from)?;
 
-        // This is disabled for the moment because we want to attempt to roll out the change slowly as we're
+        // This is in unsafe mode for the moment because we want to attempt to roll out the change slowly as we're
         // stressing persist in a new way.
-        let status_id = if false {
+        let status_id = if self.catalog.config().unsafe_mode {
             Some(self.catalog.resolve_builtin_storage_collection(
                 &crate::catalog::builtin::MZ_SINK_STATUS_HISTORY,
             ))
@@ -568,6 +569,7 @@ impl<S: Append + 'static> Coordinator<S> {
         ops: &Vec<catalog::Op>,
         conn_id: ConnectionId,
     ) -> Result<(), AdapterError> {
+        let mut new_aws_privatelink_connections = 0;
         let mut new_tables = 0;
         let mut new_sources = 0;
         let mut new_sinks = 0;
@@ -609,15 +611,22 @@ impl<S: Append + 'static> Coordinator<S> {
                         ))
                         .or_insert(0) += 1;
                     match item {
+                        CatalogItem::Connection(connection) => match connection.connection {
+                            mz_storage_client::types::connections::Connection::AwsPrivatelink(
+                                _,
+                            ) => {
+                                new_aws_privatelink_connections += 1;
+                            }
+                            _ => (),
+                        },
                         CatalogItem::Table(_) => {
                             new_tables += 1;
                         }
                         CatalogItem::Source(source) => {
-                            match source.data_source {
+                            if source.is_external() {
                                 // Only sources that ingest data from an external system count
                                 // towards resource limits.
-                                DataSourceDesc::Ingestion(_) => new_sources += 1,
-                                DataSourceDesc::Source | DataSourceDesc::Introspection(_) => {}
+                                new_sources += 1
                             }
                         }
                         CatalogItem::Sink(_) => new_sinks += 1,
@@ -631,8 +640,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         | CatalogItem::View(_)
                         | CatalogItem::Index(_)
                         | CatalogItem::Type(_)
-                        | CatalogItem::Func(_)
-                        | CatalogItem::Connection(_) => {}
+                        | CatalogItem::Func(_) => {}
                     }
                 }
                 Op::DropDatabase { .. } => {
@@ -659,15 +667,22 @@ impl<S: Append + 'static> Coordinator<S> {
                         ))
                         .or_insert(0) -= 1;
                     match entry.item() {
+                        CatalogItem::Connection(connection) => match connection.connection {
+                            mz_storage_client::types::connections::Connection::AwsPrivatelink(
+                                _,
+                            ) => {
+                                new_aws_privatelink_connections -= 1;
+                            }
+                            _ => (),
+                        },
                         CatalogItem::Table(_) => {
                             new_tables -= 1;
                         }
                         CatalogItem::Source(source) => {
-                            match source.data_source {
+                            if source.is_external() {
                                 // Only sources that ingest data from an external system count
                                 // towards resource limits.
-                                DataSourceDesc::Ingestion(_) => new_sources -= 1,
-                                DataSourceDesc::Source | DataSourceDesc::Introspection(_) => {}
+                                new_sources -= 1;
                             }
                         }
                         CatalogItem::Sink(_) => new_sinks -= 1,
@@ -681,8 +696,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         | CatalogItem::View(_)
                         | CatalogItem::Index(_)
                         | CatalogItem::Type(_)
-                        | CatalogItem::Func(_)
-                        | CatalogItem::Connection(_) => {}
+                        | CatalogItem::Func(_) => {}
                     }
                 }
                 Op::AlterSink { .. }
@@ -700,13 +714,35 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         self.validate_resource_limit(
+            self.catalog
+                .user_connections()
+                .filter(|c| {
+                    matches!(
+                        c.connection().unwrap().connection,
+                        mz_storage_client::types::connections::Connection::AwsPrivatelink(_),
+                    )
+                })
+                .count(),
+            new_aws_privatelink_connections,
+            SystemVars::max_aws_privatelink_connections,
+            "AWS PrivateLink Connection",
+        )?;
+        self.validate_resource_limit(
             self.catalog.user_tables().count(),
             new_tables,
             SystemVars::max_tables,
             "Table",
         )?;
+        // Only sources that ingest data from an external system count
+        // towards resource limits.
+        let current_sources = self
+            .catalog
+            .user_sources()
+            .filter_map(|source| source.source())
+            .filter(|source| source.is_external())
+            .count();
         self.validate_resource_limit(
-            self.catalog.user_sources().count(),
+            current_sources,
             new_sources,
             SystemVars::max_sources,
             "Source",

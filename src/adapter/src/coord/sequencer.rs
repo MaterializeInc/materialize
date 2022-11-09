@@ -15,11 +15,11 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use maplit::btreeset;
-use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpointSpec;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, OwnedMutexGuard};
 use tracing::{event, warn, Level};
 
+use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::command::{BuildDesc, DataflowDesc, IndexDesc, ReplicaId};
 use mz_compute_client::controller::{
     ComputeInstanceId, ComputeReplicaConfig, ComputeReplicaLogging,
@@ -32,7 +32,6 @@ use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
 };
-use mz_ore::ssh_key::SshKeyset;
 use mz_ore::task;
 use mz_repr::explain_new::Explainee;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
@@ -52,6 +51,7 @@ use mz_sql::plan::{
     ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
     SubscribeFrom, SubscribePlan, View,
 };
+use mz_ssh_util::keys::SshKeyPairSet;
 use mz_stash::Append;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
@@ -602,22 +602,19 @@ impl<S: Append + 'static> Coordinator<S> {
 
         match connection {
             mz_storage_client::types::connections::Connection::Ssh(ref mut ssh) => {
-                let keyset = SshKeyset::new()?;
+                let key_set = SshKeyPairSet::new()?;
                 self.secrets_controller
-                    .ensure(connection_gid, &keyset.to_bytes())
+                    .ensure(connection_gid, &key_set.to_bytes())
                     .await?;
-
-                ssh.public_keys = Some(keyset.public_keys());
+                ssh.public_keys = Some(key_set.public_keys());
             }
-            mz_storage_client::types::connections::Connection::AwsPrivateLink(ref privatelink) => {
+            mz_storage_client::types::connections::Connection::AwsPrivatelink(ref privatelink) => {
                 self.cloud_resource_controller
                     .as_ref()
-                    .ok_or(AdapterError::Unsupported(
-                        "PrivateLink connections are only allowed in cloud.",
-                    ))?
+                    .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))?
                     .ensure_vpc_endpoint(
                         connection_gid,
-                        VpcEndpointSpec {
+                        VpcEndpointConfig {
                             aws_service_name: privatelink.service_name.to_owned(),
                             availability_zone_ids: privatelink.availability_zones.to_owned(),
                         },
@@ -654,16 +651,16 @@ impl<S: Append + 'static> Coordinator<S> {
         id: GlobalId,
     ) -> Result<ExecuteResponse, AdapterError> {
         let secret = self.secrets_controller.reader().read(id).await?;
-        let previous_keyset = SshKeyset::from_bytes(&secret)?;
-        let new_keyset = previous_keyset.rotate()?;
+        let previous_key_set = SshKeyPairSet::from_bytes(&secret)?;
+        let new_key_set = previous_key_set.rotate()?;
         self.secrets_controller
-            .ensure(id, &new_keyset.to_bytes())
+            .ensure(id, &new_key_set.to_bytes())
             .await?;
 
         let ops = vec![catalog::Op::UpdateRotatedKeys {
             id,
-            previous_public_keypair: previous_keyset.public_keys(),
-            new_public_keypair: new_keyset.public_keys(),
+            previous_public_key_pair: previous_key_set.public_keys(),
+            new_public_key_pair: new_key_set.public_keys(),
         }];
 
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {

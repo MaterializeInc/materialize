@@ -9,7 +9,8 @@
 
 syntax = "proto3";
 
-import "kafka-util/src/addr.proto";
+import "google/protobuf/empty.proto";
+
 import "repr/src/global_id.proto";
 import "repr/src/url.proto";
 import "proto/src/tokio_postgres.proto";
@@ -48,12 +49,23 @@ message ProtoKafkaConnectionSecurity {
     }
 }
 
+message ProtoKafkaBroker {
+    string address = 1;
+    ProtoKafkaAwsPrivateLink aws_privatelink = 2;
+}
+
+message ProtoKafkaAwsPrivateLink {
+    mz_repr.global_id.ProtoGlobalId connection_id = 1;
+    optional uint32 port = 2;
+}
+
 message ProtoKafkaConnection {
     reserved 1, 2;
-    reserved "broker", "options";
-    repeated string brokers = 3;
-    optional string progress_topic = 5;
+    reserved "broker";
+    repeated ProtoKafkaBroker brokers = 3;
     optional ProtoKafkaConnectionSecurity security = 4;
+    optional string progress_topic = 5;
+    map<string, mz_storage_client.types.connections.ProtoStringOrSecret> options = 6;
 }
 
 message ProtoCsrConnection {
@@ -61,6 +73,7 @@ message ProtoCsrConnection {
     ProtoStringOrSecret tls_root_cert = 2;
     ProtoTlsIdentity tls_identity = 3;
     ProtoCsrConnectionHttpAuth http_auth = 4;
+    mz_repr.global_id.ProtoGlobalId aws_privatelink_id = 5;
 }
 
 message ProtoCsrConnectionHttpAuth {
@@ -77,8 +90,16 @@ message ProtoPostgresConnection {
     mz_proto.tokio_postgres.ProtoSslMode tls_mode = 6;
     ProtoStringOrSecret tls_root_cert = 7;
     ProtoTlsIdentity tls_identity = 8;
-    mz_repr.global_id.ProtoGlobalId ssh_tunnel_id = 9;
-    ProtoSshConnection ssh_tunnel = 10;
+    oneof tunnel {
+        google.protobuf.Empty direct = 9;
+        ProtoPostgresSshTunnel ssh = 10;
+        mz_repr.global_id.ProtoGlobalId aws_privatelink = 11;
+    }
+}
+
+message ProtoPostgresSshTunnel {
+    mz_repr.global_id.ProtoGlobalId connection_id = 1;
+    ProtoSshConnection connection = 10;
 }
 
 message ProtoSshConnection {

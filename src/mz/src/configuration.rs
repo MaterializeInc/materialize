@@ -70,7 +70,7 @@ impl Configuration {
 
     pub(crate) fn load() -> Result<Configuration> {
         fn path_exists(path: &PathBuf) -> bool {
-            fs::metadata(&path).is_ok()
+            fs::metadata(path).is_ok()
         }
 
         let mut config_path = get_config_path()?;

@@ -7,13 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::env;
+//! SSH utility library.
 
-fn main() {
-    env::set_var("PROTOC", protobuf_src::protoc());
-
-    prost_build::Config::new()
-        .type_attribute(".", "#[allow(missing_docs)]")
-        .compile_protos(&["kafka-util/src/addr.proto"], &[".."])
-        .unwrap();
-}
+pub mod keys;
+pub mod tunnel;

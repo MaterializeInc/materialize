@@ -39,7 +39,7 @@ use url::Url;
 use uuid::Uuid;
 
 use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageHostSizeMap};
-use mz_cloud_resources::CloudResourceController;
+use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
 use mz_environmentd::{TlsConfig, TlsMode, BUILD_INFO};
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
@@ -347,8 +347,8 @@ pub struct Args {
     /// Prefix for an external ID to be supplied to all AWS AssumeRole operations.
     ///
     /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
-    #[clap(long, env = "AWS_EXTERNAL_ID_PREFIX", value_name = "ID")]
-    aws_external_id_prefix: Option<String>,
+    #[clap(long, env = "AWS_EXTERNAL_ID_PREFIX", value_name = "ID", parse(from_str = AwsExternalIdPrefix::new_from_cli_argument_or_environment_variable))]
+    aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     /// Availability zones in which storage and compute resources may be
     /// deployed.
     #[clap(long, env = "AVAILABILITY_ZONE", use_value_delimiter = true)]
@@ -564,6 +564,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                             .collect(),
                         service_account: args.orchestrator_kubernetes_service_account,
                         image_pull_policy: args.orchestrator_kubernetes_image_pull_policy,
+                        aws_external_id_prefix: args.aws_external_id_prefix.clone(),
                     }))
                     .context("creating kubernetes orchestrator")?,
             );

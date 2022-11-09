@@ -98,7 +98,7 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE ((f1 is null)::int - 1)::string LIKE '1' and ((f1 is null) or not (((f1 is null)::int - 1)::string LIKE '1'))
 ----
 Explained Query (fast path):
-  Constant
+  Constant <empty>
 
 EOF
 

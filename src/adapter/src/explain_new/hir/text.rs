@@ -78,10 +78,14 @@ impl<'a> Displayable<'a, HirRelationExpr> {
         use HirRelationExpr::*;
         match &self.0 {
             Constant { rows, .. } => {
-                writeln!(f, "{}Constant", ctx.indent)?;
-                ctx.indented(|ctx| {
-                    fmt_text_constant_rows(f, rows.iter().map(|row| (row, &1)), &mut ctx.indent)
-                })?;
+                if !rows.is_empty() {
+                    writeln!(f, "{}Constant", ctx.indent)?;
+                    ctx.indented(|ctx| {
+                        fmt_text_constant_rows(f, rows.iter().map(|row| (row, &1)), &mut ctx.indent)
+                    })?;
+                } else {
+                    writeln!(f, "{}Constant <empty>", ctx.indent)?;
+                }
             }
             Let {
                 name: _,

@@ -169,6 +169,7 @@ impl Drop for DropSafeLeaseStream {
 /// All times emitted will have been [advanced by] the given `as_of` frontier.
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
+#[allow(clippy::needless_borrow)]
 pub fn persist_source_core<G, YFn>(
     scope: &G,
     source_id: GlobalId,
@@ -231,6 +232,11 @@ where
     let handle_creation_token = Arc::new(());
     let weak_handle_token = Arc::downgrade(&handle_creation_token);
 
+    // This channel functions as a token that can be awaited. We never send a message on this
+    // channel, but we rely on the drop behavior. If the transmitter is dropped the receiver will
+    // return an error. Before the drop occurs the receiver will never return from await.
+    let (drop_tx, drop_rx) = tokio::sync::oneshot::channel::<()>();
+
     let until_clone = until.clone();
     // This is a generator that sets up an async `Stream` that can be continuously polled to get the
     // values that are `yield`-ed from it's body.
@@ -258,7 +264,7 @@ where
 
         let read = read
             .expect("could not open persist client")
-            .open_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(data_shard)
+            .open_leased_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(data_shard)
             .await;
 
         // This is a moment where we may have dropped our source if our token
@@ -285,13 +291,24 @@ where
         // `as_of`.
         yield (Vec::new(), as_of_stream.clone());
 
-        let subscription = read.subscribe(as_of_stream.clone()).await;
+        // Always poll drop_rx first. drop_rx returns only if drop_tx has been dropped.
+        // In this case, we deliberately do not continue on the subscribe. but terminate this task
+        let subscription = tokio::select! {
+            biased;
+            _ = drop_rx => None,
+            x = read.subscribe(as_of_stream.clone()) => Some(x),
+        };
 
         // This is a moment where we may have let persist compact if our token
         // has been dropped, but if we still hold it we should be good to go.
         if weak_handle_token.upgrade().is_none() {
             return;
         }
+
+        // We get here only when the token is still present, hence the subscription select
+        // must have returned from the subscribe and hence we can be sure that subscripbtion
+        // is Some.
+        let subscription = subscription.unwrap();
 
         let mut subscription = subscription.unwrap_or_else(|e| {
             panic!(
@@ -303,7 +320,8 @@ where
         let mut done = false;
         while !done {
             while let Ok(leased_part) = consumed_part_rx.try_recv() {
-                subscription.return_leased_part(leased_part.into());
+                subscription
+                    .return_leased_part(subscription.leased_part_from_exchangeable(leased_part));
             }
 
             let (parts, progress) = subscription.next().await;
@@ -320,7 +338,8 @@ where
         // This keeps the `ReadHandle` alive until we have confirmed each lease as read.
         mz_ore::task::spawn(|| "LeaseReturner", async move {
             while let Some(leased_part) = consumed_part_rx.recv().await {
-                subscription.return_leased_part(leased_part.into());
+                subscription
+                    .return_leased_part(subscription.leased_part_from_exchangeable(leased_part));
             }
         });
     });
@@ -401,7 +420,7 @@ where
             .open(metadata.persist_location.clone())
             .await
             .expect("could not open persist client")
-            .open_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(data_shard)
+            .open_leased_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(data_shard)
             .await
             .expect("could not open persist shard")
             .batch_fetcher()
@@ -424,8 +443,9 @@ where
                 let mut consumed_part_session = consumed_part_output_handle.session(&cap);
 
                 for (_idx, part) in buffer.drain(..) {
-                    let (consumed_part, fetched_part) =
-                        fetcher.fetch_leased_part(part.into()).await;
+                    let (consumed_part, fetched_part) = fetcher
+                        .fetch_leased_part(fetcher.leased_part_from_exchangeable(part))
+                        .await;
                     let fetched_part = fetched_part
                         .expect("shard_id generated for sources must match across all workers");
                     // SUBTLE: This operator yields back to timely whenever an await returns a
@@ -546,7 +566,7 @@ where
         }
     });
 
-    let token = Rc::new((token, handle_creation_token));
+    let token = Rc::new((token, handle_creation_token, drop_tx));
 
     (update_output_stream, token)
 }

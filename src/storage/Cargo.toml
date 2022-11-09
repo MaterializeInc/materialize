@@ -1,7 +1,7 @@
 [package]
 name = "mz-storage"
 description = "Materialize's storage layer."
-version = "0.31.0-dev"
+version = "0.32.0-dev"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -26,16 +26,18 @@ futures = "0.3.24"
 globset = { version = "0.4.9", features = ["serde1"] }
 http = "0.2.8"
 itertools = { version = "0.10.5" }
+maplit = "1.0.2"
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
+mz-cloud-resources = { path = "../cloud-resources" }
 mz-expr = { path = "../expr" }
 mz-http-util = { path = "../http-util" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-kinesis-util = { path = "../kinesis-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
-mz-ore = { path = "../ore", features = ["ssh", "task", "tracing_"] }
+mz-ore = { path = "../ore", features = ["task", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }
 mz-pgcopy = { path = "../pgcopy" }
 mz-pid-file = { path = "../pid-file" }
@@ -49,9 +51,9 @@ mz-timely-util = { path = "../timely-util" }
 once_cell = { version = "1.15.0" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 prometheus = { version = "0.13.2", default-features = false }
-prost = { version = "0.11.0", features = ["no-recursion-limit"] }
+prost = { version = "0.11.2", features = ["no-recursion-limit"] }
 rand = "0.8.5"
-rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
+rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = { version = "1.6.0" }
 serde = { version = "1.0.147", features = ["derive"] }
 serde_json = { version = "1.0.86" }

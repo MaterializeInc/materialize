@@ -45,7 +45,7 @@ mz-proto = { path = "../proto" }
 prometheus = { version = "0.13.2", default-features = false }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
-prost = { version = "0.11.0", features = ["no-recursion-limit"] }
+prost = { version = "0.11.2", features = ["no-recursion-limit"] }
 sentry-tracing = "0.27.0"
 semver = "1.0.14"
 serde = { version = "1.0.147", features = ["derive"] }
@@ -71,6 +71,7 @@ num_cpus = "1.13.1"
 num_enum = "0.5.7"
 serde_json = "1.0.86"
 tempfile = "3.2.0"
+tokio-test = "0.4.2"
 
 [build-dependencies]
 prost-build = "0.11.1"

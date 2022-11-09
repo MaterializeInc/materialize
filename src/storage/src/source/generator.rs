@@ -22,6 +22,7 @@ use mz_storage_client::types::sources::{
 use super::metrics::SourceBaseMetrics;
 use super::{SourceMessage, SourceMessageType};
 use crate::source::commit::LogCommitter;
+use crate::source::types::SourceConnectionBuilder;
 use crate::source::{NextMessage, SourceReader, SourceReaderError};
 
 mod auction;
@@ -70,26 +71,22 @@ pub struct LoadGeneratorSourceReader {
     reported_unconsumed_partitions: bool,
 }
 
-impl SourceReader for LoadGeneratorSourceReader {
-    type Key = ();
-    type Value = Row;
-    // LoadGenerator can produce deletes that cause retractions
-    type Diff = Diff;
+impl SourceConnectionBuilder for LoadGeneratorSourceConnection {
+    type Reader = LoadGeneratorSourceReader;
     type OffsetCommitter = LogCommitter;
-    type Connection = LoadGeneratorSourceConnection;
 
-    fn new(
+    fn into_reader(
+        self,
         _source_name: String,
         source_id: GlobalId,
         worker_id: usize,
         worker_count: usize,
         _consumer_activator: SyncActivator,
-        connection: Self::Connection,
         start_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         _metrics: SourceBaseMetrics,
         _connection_context: ConnectionContext,
-    ) -> Result<(Self, Self::OffsetCommitter), anyhow::Error> {
+    ) -> Result<(Self::Reader, Self::OffsetCommitter), anyhow::Error> {
         let active_read_worker =
             crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
 
@@ -104,17 +101,17 @@ impl SourceReader for LoadGeneratorSourceReader {
             })
             .unwrap_or_default();
 
-        let mut rows = as_generator(&connection.load_generator)
-            .by_seed(mz_ore::now::SYSTEM_TIME.clone(), None);
+        let mut rows =
+            as_generator(&self.load_generator).by_seed(mz_ore::now::SYSTEM_TIME.clone(), None);
 
         // Skip forward to the requested offset.
         for _ in 0..offset.offset {
             rows.next();
         }
 
-        let tick = Duration::from_micros(connection.tick_micros.unwrap_or(1_000_000));
+        let tick = Duration::from_micros(self.tick_micros.unwrap_or(1_000_000));
         Ok((
-            Self {
+            LoadGeneratorSourceReader {
                 rows: Box::new(rows),
                 // Subtract tick so we immediately produce a row.
                 last: Instant::now() - tick,
@@ -130,6 +127,13 @@ impl SourceReader for LoadGeneratorSourceReader {
             },
         ))
     }
+}
+
+impl SourceReader for LoadGeneratorSourceReader {
+    type Key = ();
+    type Value = Row;
+    // LoadGenerator can produce deletes that cause retractions
+    type Diff = Diff;
 
     fn get_next_message(
         &mut self,

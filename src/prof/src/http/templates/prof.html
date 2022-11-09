@@ -3,6 +3,11 @@
 {% block title %}Profiling{% endblock %}
 
 {% block content %}
+{% if ever_symbolicated %}
+<strong>Note.</strong> This page has been used during the lifetime of the process, so RAM usage will be permanently increased by about 500MiB - 1GiB.
+{% else %}
+<strong style="color:Red">Warning.</strong> Using this page will cause a one-time permanent increase in RAM usage of about 500MiB - 1GiB.
+{% endif %}
 <h2>Memory Profiling</h2>
 {% match mem_prof %}
 {% when crate::http::MemProfilingStatus::Enabled with (start_time) %}

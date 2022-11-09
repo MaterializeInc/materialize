@@ -9,21 +9,28 @@
 
 //! Helpers for working with Kafka's client API.
 
+use std::collections::HashMap;
+use std::error::Error;
 use std::time::Duration;
 
 use anyhow::bail;
 use mz_ore::collections::CollectionExt;
-use rdkafka::client::Client;
+use rdkafka::client::{BrokerAddr, Client, NativeClient, OAuthToken};
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
-use rdkafka::consumer::ConsumerContext;
+use rdkafka::consumer::{ConsumerContext, Rebalance};
+use rdkafka::error::{KafkaError, KafkaResult};
 use rdkafka::producer::{DefaultProducerContext, DeliveryResult, ProducerContext};
-use rdkafka::ClientContext;
+use rdkafka::types::RDKafkaRespErr;
+use rdkafka::util::Timeout;
+use rdkafka::{ClientContext, Statistics, TopicPartitionList};
 use tracing::{debug, error, info, warn, Level};
 
-/// A `ClientContext` implementation that uses `tracing` instead of `log` macros.
+/// A `ClientContext` implementation that uses `tracing` instead of `log`
+/// macros.
 ///
-/// All code in Materialize that constructs Kafka clients should use this context or
-/// a custom context that delegates the `log` and `error` methods to this implementation.
+/// All code in Materialize that constructs Kafka clients should use this
+/// context or a custom context that delegates the `log` and `error` methods to
+/// this implementation.
 pub struct MzClientContext;
 
 impl ClientContext for MzClientContext {
@@ -41,16 +48,15 @@ impl ClientContext for MzClientContext {
             Debug => debug!(target: "librdkafka", "{} {}", fac, log_message),
         }
     }
-    // Refer to the comment on the `log` callback.
-    fn error(&self, error: rdkafka::error::KafkaError, reason: &str) {
+
+    fn error(&self, error: KafkaError, reason: &str) {
+        // Refer to the comment in the `log` callback.
         error!(target: "librdkafka", "{}: {}", error, reason);
     }
 }
 
-// Implement `ConsumerContext` and `ProducerContext` for `MzClientContext`, so that it can be used
-// in place of `DefaultProducerContext` and `DefaultConsumerContext`, but use tracing for logging.
-// (These trait have a `: ClientContext` super-trait bound)
 impl ConsumerContext for MzClientContext {}
+
 impl ProducerContext for MzClientContext {
     type DeliveryOpaque = <DefaultProducerContext as ProducerContext>::DeliveryOpaque;
     fn delivery(
@@ -59,6 +65,135 @@ impl ProducerContext for MzClientContext {
         delivery_opaque: Self::DeliveryOpaque,
     ) {
         DefaultProducerContext.delivery(delivery_result, delivery_opaque);
+    }
+}
+
+/// A client context that supports rewriting broker addresses.
+pub struct BrokerRewritingClientContext<C> {
+    inner: C,
+    overrides: HashMap<BrokerAddr, BrokerAddr>,
+}
+
+impl<C> BrokerRewritingClientContext<C> {
+    /// Constructs a new context that wraps `inner`.
+    pub fn new(inner: C) -> BrokerRewritingClientContext<C> {
+        BrokerRewritingClientContext {
+            inner,
+            overrides: HashMap::new(),
+        }
+    }
+
+    /// Adds a broker rewrite rule.
+    ///
+    /// Connections to the specified `broker` will be rewritten to connect to
+    /// `rewrite_host` and `rewrite_port` instead. If `rewrite_port` is omitted,
+    /// only the host is rewritten.
+    pub fn add_broker_rewrite(
+        &mut self,
+        broker: &str,
+        rewrite_host: &str,
+        rewrite_port: Option<u16>,
+    ) {
+        let mut parts = broker.splitn(2, ':');
+        let broker = BrokerAddr {
+            host: parts.next().expect("at least one part").into(),
+            port: parts.next().unwrap_or("9092").into(),
+        };
+        let rewrite = BrokerAddr {
+            host: rewrite_host.into(),
+            port: match rewrite_port {
+                None => broker.port.clone(),
+                Some(port) => port.to_string(),
+            },
+        };
+        self.overrides.insert(broker, rewrite);
+    }
+
+    /// Returns a reference to the wrapped context.
+    pub fn inner(&self) -> &C {
+        &self.inner
+    }
+}
+
+impl<C> ClientContext for BrokerRewritingClientContext<C>
+where
+    C: ClientContext,
+{
+    const ENABLE_REFRESH_OAUTH_TOKEN: bool = C::ENABLE_REFRESH_OAUTH_TOKEN;
+
+    fn rewrite_broker_addr(&self, addr: BrokerAddr) -> BrokerAddr {
+        match self.overrides.get(&addr) {
+            None => addr,
+            Some(o) => o.clone(),
+        }
+    }
+
+    fn log(&self, level: RDKafkaLogLevel, fac: &str, log_message: &str) {
+        self.inner.log(level, fac, log_message)
+    }
+
+    fn error(&self, error: KafkaError, reason: &str) {
+        self.inner.error(error, reason)
+    }
+
+    fn stats(&self, statistics: Statistics) {
+        self.inner.stats(statistics)
+    }
+
+    fn stats_raw(&self, statistics: &[u8]) {
+        self.inner.stats_raw(statistics)
+    }
+
+    fn generate_oauth_token(
+        &self,
+        oauthbearer_config: Option<&str>,
+    ) -> Result<OAuthToken, Box<dyn Error>> {
+        self.inner.generate_oauth_token(oauthbearer_config)
+    }
+}
+
+impl<C> ConsumerContext for BrokerRewritingClientContext<C>
+where
+    C: ConsumerContext,
+{
+    fn rebalance(
+        &self,
+        native_client: &NativeClient,
+        err: RDKafkaRespErr,
+        tpl: &mut TopicPartitionList,
+    ) {
+        self.inner.rebalance(native_client, err, tpl)
+    }
+
+    fn pre_rebalance<'a>(&self, rebalance: &Rebalance<'a>) {
+        self.inner.pre_rebalance(rebalance)
+    }
+
+    fn post_rebalance<'a>(&self, rebalance: &Rebalance<'a>) {
+        self.inner.post_rebalance(rebalance)
+    }
+
+    fn commit_callback(&self, result: KafkaResult<()>, offsets: &TopicPartitionList) {
+        self.inner.commit_callback(result, offsets)
+    }
+
+    fn main_queue_min_poll_interval(&self) -> Timeout {
+        self.inner.main_queue_min_poll_interval()
+    }
+}
+
+impl<C> ProducerContext for BrokerRewritingClientContext<C>
+where
+    C: ProducerContext,
+{
+    type DeliveryOpaque = C::DeliveryOpaque;
+
+    fn delivery(
+        &self,
+        delivery_result: &DeliveryResult<'_>,
+        delivery_opaque: Self::DeliveryOpaque,
+    ) {
+        self.inner.delivery(delivery_result, delivery_opaque)
     }
 }
 

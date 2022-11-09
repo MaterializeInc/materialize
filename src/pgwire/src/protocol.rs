@@ -1549,9 +1549,9 @@ where
             // 11-byte signature.
             out.extend(b"PGCOPY\n\xFF\r\n\0");
             // 32-bit flags field.
-            out.extend(&[0, 0, 0, 0]);
+            out.extend([0, 0, 0, 0]);
             // 32-bit header extension length field.
-            out.extend(&[0, 0, 0, 0]);
+            out.extend([0, 0, 0, 0]);
         }
 
         let mut count = 0;
@@ -1622,7 +1622,7 @@ where
         // Send required trailers.
         if let CopyFormat::Binary = format {
             let trailer: i16 = -1;
-            out.extend(&trailer.to_be_bytes());
+            out.extend(trailer.to_be_bytes());
             self.send(BackendMessage::CopyData(mem::take(&mut out)))
                 .await?;
         }

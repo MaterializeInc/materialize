@@ -53,7 +53,7 @@ mod source_reader_pipeline;
 pub mod testscript;
 pub mod types;
 
-pub use delimited_value_reader::DelimitedValueSource;
+pub use delimited_value_reader::DelimitedValueSourceConnection;
 pub use generator::LoadGeneratorSourceReader;
 pub use kafka::KafkaSourceReader;
 pub use kinesis::KinesisSourceReader;

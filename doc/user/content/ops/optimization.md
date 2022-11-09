@@ -34,14 +34,14 @@ Speed up a query involving a `WHERE` clause with equality comparisons to literal
 | `WHERE 2 * x = 64`                                | `CREATE INDEX ON obj_name (2 * x);`    |
 | `WHERE upper(y) = 'HELLO'`                        | `CREATE INDEX ON obj_name (upper(y));` |
 
-You can verify that Materialize is accessing the input by an index lookup using `EXPLAIN`. Check for `lookup` after the index name to confirm that an index lookup is happening, i.e., that Materialize is only reading the matching elements of the index instead of scanning the entire index:
+You can verify that Materialize is accessing the input by an index lookup using `EXPLAIN`. Check for `lookup_value` after the index name to confirm that an index lookup is happening, i.e., that Materialize is only reading the matching elements of the index instead of scanning the entire index:
 ```
 materialize=> EXPLAIN SELECT * FROM foo WHERE x = 42 AND y = 'hello';
                                Optimized Plan
 -----------------------------------------------------------------------------
  Explained Query (fast path):                                               +
    Project (#0, #1)                                                         +
-     ReadExistingIndex materialize.public.foo_x_y lookup value (42, "hello")+
+     ReadExistingIndex materialize.public.foo_x_y lookup_value=(42, "hello")+
                                                                             +
  Used Indexes:                                                              +
    - materialize.public.foo_x_y                                             +
@@ -97,7 +97,7 @@ Clause          | Index                             |
 
 ### Default
 
-Create a default index when there is no particular `WHERE`, `JOIN`, or `GROUP BY` clause to fulfill. This can still speed up your query by reading input from memory.
+Create a default index when there is no particular `WHERE`, `JOIN`, or `GROUP BY` clause to fulfill. This can still speed up your query by reading the input from memory.
 
 Clause                                               | Index                               |
 -----------------------------------------------------|-------------------------------------|

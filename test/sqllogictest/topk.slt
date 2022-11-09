@@ -111,7 +111,7 @@ EXPLAIN WITH(arity, join_impls) SELECT state, COUNT(*) FROM (
     GROUP BY state
 ----
 Explained Query (fast path):
-  Constant
+  Constant <empty>
 
 EOF
 

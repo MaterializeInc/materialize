@@ -25,7 +25,7 @@ pub async fn run_execute(
 
     let expected_output = cmd.input.join("\n");
     let output = Command::new("psql")
-        .args(&[
+        .args([
             // Ignore .psqlrc so that local execution of testdrive isn't
             // affected by it.
             "--no-psqlrc",

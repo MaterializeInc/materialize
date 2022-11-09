@@ -3110,6 +3110,7 @@ dependencies = [
  "mz-segment",
  "mz-sql",
  "mz-sql-parser",
+ "mz-ssh-util",
  "mz-stash",
  "mz-storage-client",
  "mz-transform",
@@ -3244,7 +3245,7 @@ dependencies = [
 
 [[package]]
 name = "mz-compute"
-version = "0.31.0-dev"
+version = "0.32.0-dev"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3342,7 +3343,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.31.0-dev"
+version = "0.32.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -3374,7 +3375,6 @@ dependencies = [
  "mz-controller",
  "mz-frontegg-auth",
  "mz-http-util",
- "mz-kafka-util",
  "mz-npm",
  "mz-orchestrator",
  "mz-orchestrator-kubernetes",
@@ -3753,9 +3753,7 @@ dependencies = [
  "sentry",
  "sentry-tracing",
  "serde",
- "serde_json",
  "smallvec",
- "ssh-key",
  "stacker",
  "tokio",
  "tokio-native-tls",
@@ -3764,7 +3762,6 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
- "zeroize",
 ]
 
 [[package]]
@@ -3868,6 +3865,7 @@ dependencies = [
  "tempfile",
  "timely",
  "tokio",
+ "tokio-test",
  "tracing",
  "uuid",
 ]
@@ -3959,17 +3957,18 @@ name = "mz-postgres-util"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "mz-cloud-resources",
  "mz-ore",
  "mz-proto",
+ "mz-repr",
+ "mz-ssh-util",
  "openssh",
  "openssl",
  "postgres-openssl",
  "proptest",
  "prost",
  "protobuf-src",
- "rand",
  "serde",
- "tempfile",
  "tokio",
  "tokio-postgres",
  "tonic-build",
@@ -4158,6 +4157,7 @@ dependencies = [
  "itertools",
  "mz-build-info",
  "mz-ccsr",
+ "mz-cloud-resources",
  "mz-compute-client",
  "mz-expr",
  "mz-expr-test-util",
@@ -4248,6 +4248,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-ssh-util"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "mz-ore",
+ "openssh",
+ "openssl",
+ "rand",
+ "serde",
+ "serde_json",
+ "ssh-key",
+ "tempfile",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
 name = "mz-stash"
 version = "0.0.0"
 dependencies = [
@@ -4291,7 +4308,7 @@ dependencies = [
 
 [[package]]
 name = "mz-storage"
-version = "0.31.0-dev"
+version = "0.32.0-dev"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -4313,9 +4330,11 @@ dependencies = [
  "globset",
  "http",
  "itertools",
+ "maplit",
  "mz-avro",
  "mz-build-info",
  "mz-ccsr",
+ "mz-cloud-resources",
  "mz-expr",
  "mz-http-util",
  "mz-interchange",
@@ -4368,7 +4387,6 @@ dependencies = [
  "aws-smithy-http",
  "aws-types",
  "bytes",
- "datadriven",
  "derivative",
  "differential-dataflow",
  "futures",
@@ -4378,6 +4396,7 @@ dependencies = [
  "itertools",
  "mz-build-info",
  "mz-ccsr",
+ "mz-cloud-resources",
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
@@ -4391,6 +4410,7 @@ dependencies = [
  "mz-repr",
  "mz-secrets",
  "mz-service",
+ "mz-ssh-util",
  "mz-stash",
  "mz-timely-util",
  "proptest",
@@ -4504,9 +4524,11 @@ version = "0.0.0"
 dependencies = [
  "differential-dataflow",
  "futures-util",
+ "mz-ore",
  "proptest",
  "serde",
  "timely",
+ "timely_communication",
  "tokio",
 ]
 
@@ -4547,9 +4569,9 @@ dependencies = [
 
 [[package]]
 name = "native-tls"
-version = "0.2.10"
+version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd7e2f3618557f980e0b17e8856252eee3c97fa12c54dff0ca290fb6266ca4a9"
+checksum = "07226173c32f2926027b63cce4bcd8076c3552846cbe7925f3aaffeac0a3b92e"
 dependencies = [
  "lazy_static",
  "libc",
@@ -5443,9 +5465,9 @@ dependencies = [
 
 [[package]]
 name = "prost"
-version = "0.11.0"
+version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "399c3c31cdec40583bb68f0b18403400d01ec4289c383aa047560439952c4dd7"
+checksum = "a0841812012b2d4a6145fae9a6af1534873c32aa67fff26bd09f8fa42c83f95a"
 dependencies = [
  "bytes",
  "prost-derive",
@@ -5645,8 +5667,8 @@ dependencies = [
 
 [[package]]
 name = "rdkafka"
-version = "0.28.0"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#fe99e1fb18433debc5ba6ca811de983c535e1804"
+version = "0.29.0"
+source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#8ea07c4d2b96636ff093e670bc921892aee0d56a"
 dependencies = [
  "futures-channel",
  "futures-util",
@@ -5662,8 +5684,8 @@ dependencies = [
 
 [[package]]
 name = "rdkafka-sys"
-version = "4.2.0+1.8.2"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#fe99e1fb18433debc5ba6ca811de983c535e1804"
+version = "4.3.0+1.9.2"
+source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#8ea07c4d2b96636ff093e670bc921892aee0d56a"
 dependencies = [
  "cmake",
  "libc",
@@ -6651,7 +6673,7 @@ checksum = "42657b1a6f4d817cda8e7a0ace261fe0cc946cf3a80314390b22cc61ae080792"
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#9548bf9c53418284a811ffc0d397d3d9c26c78ff"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#157b80dead4f943a2ee6548eb2245787fbe9c5bd"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -6669,12 +6691,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#9548bf9c53418284a811ffc0d397d3d9c26c78ff"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#157b80dead4f943a2ee6548eb2245787fbe9c5bd"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#9548bf9c53418284a811ffc0d397d3d9c26c78ff"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#157b80dead4f943a2ee6548eb2245787fbe9c5bd"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -6690,7 +6712,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#9548bf9c53418284a811ffc0d397d3d9c26c78ff"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#157b80dead4f943a2ee6548eb2245787fbe9c5bd"
 dependencies = [
  "columnation",
  "serde",
@@ -6699,7 +6721,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#9548bf9c53418284a811ffc0d397d3d9c26c78ff"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#157b80dead4f943a2ee6548eb2245787fbe9c5bd"
 
 [[package]]
 name = "tinytemplate"
@@ -6832,6 +6854,19 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+]
+
+[[package]]
+name = "tokio-test"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53474327ae5e166530d17f2d956afcb4f8a004de581b3cae10f12006bc8163e3"
+dependencies = [
+ "async-stream",
+ "bytes",
+ "futures-core",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
