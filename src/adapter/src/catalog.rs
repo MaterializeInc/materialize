@@ -1827,6 +1827,11 @@ impl CatalogEntry {
         matches!(self.item(), CatalogItem::Secret(_))
     }
 
+    /// Reports whether this catalog entry is a introspection source.
+    pub fn is_introspection_source(&self) -> bool {
+        matches!(self.item(), CatalogItem::Log(_))
+    }
+
     /// Collects the identifiers of the dataflows that this dataflow depends
     /// upon.
     pub fn uses(&self) -> &[GlobalId] {
@@ -1887,14 +1892,14 @@ pub struct SystemObjectMapping {
 }
 
 pub enum CatalogItemRebuilder {
-    SystemTable(CatalogItem),
+    SystemSource(CatalogItem),
     Object(String),
 }
 
 impl CatalogItemRebuilder {
     fn new(entry: &CatalogEntry, id: GlobalId, ancestor_ids: &HashMap<GlobalId, GlobalId>) -> Self {
-        if id.is_system() && entry.is_table() {
-            Self::SystemTable(entry.item().clone())
+        if id.is_system() && (entry.is_table() || entry.is_introspection_source()) {
+            Self::SystemSource(entry.item().clone())
         } else {
             let create_sql = entry.create_sql().to_string();
             assert_ne!(create_sql.to_lowercase(), CREATE_SQL_TODO.to_lowercase());
@@ -1906,7 +1911,7 @@ impl CatalogItemRebuilder {
 
     fn build<S: Append>(self, catalog: &Catalog<S>) -> CatalogItem {
         match self {
-            Self::SystemTable(item) => item,
+            Self::SystemSource(item) => item,
             Self::Object(create_sql) => catalog
                 .parse_item(create_sql.clone(), None)
                 .unwrap_or_else(|error| {
@@ -1924,7 +1929,8 @@ pub struct BuiltinMigrationMetadata {
     // Used to update in memory catalog state
     pub all_drop_ops: Vec<GlobalId>,
     pub all_create_ops: Vec<(GlobalId, u32, QualifiedObjectName, CatalogItemRebuilder)>,
-    pub introspection_source_index_updates: HashMap<ComputeInstanceId, Vec<(LogVariant, GlobalId)>>,
+    pub introspection_source_index_updates:
+        HashMap<ComputeInstanceId, Vec<(LogVariant, String, GlobalId)>>,
     // Used to update persisted on disk catalog state
     pub migrated_system_table_mappings: HashMap<GlobalId, SystemObjectMapping>,
     pub user_drop_ops: Vec<GlobalId>,
@@ -2242,7 +2248,7 @@ impl<S: Append> Catalog<S> {
                     introspection_source_index_gids
                         .get(log.name)
                         .cloned()
-                        // We don't migrate indexes so we can hardcode the fingerprint as 0
+                        // We migrate introspection sources later so we can hardcode the fingerprint as ""
                         .map(|id| (id, "".to_string()))
                 })
                 .await?;
@@ -2663,8 +2669,12 @@ impl<S: Append> Catalog<S> {
         let mut visited_set: HashSet<_> = migrated_ids.iter().map(|(id, _)| (*id)).collect();
         let mut topological_sort = Vec::new();
         let mut ancestor_ids = HashMap::new();
+        let mut migrated_log_ids = HashMap::new();
 
         let id_fingerprint_map: HashMap<GlobalId, String> = migrated_ids.into_iter().collect();
+        let log_name_map: HashMap<_, _> = BUILTINS::logs()
+            .map(|log| (log.variant.clone(), log.name))
+            .collect();
 
         while let Some(id) = object_queue.pop_front() {
             let entry = self.get_entry(&id);
@@ -2735,12 +2745,29 @@ impl<S: Append> Catalog<S> {
                 CatalogItem::MaterializedView(_) => {
                     migration_metadata.previous_materialized_view_ids.push(id)
                 }
-                // TODO(jkosh44) Implement log migration
-                CatalogItem::Log(_) => {
-                    panic!("Log migration is unimplemented")
+                CatalogItem::Log(log) => {
+                    migrated_log_ids.insert(id, log.variant.clone());
                 }
-                CatalogItem::View(_) | CatalogItem::Index(_) => {
-                    // Views and indexes don't have any objects in STORAGE to drop.
+                CatalogItem::Index(index) => {
+                    if id.is_system() {
+                        if let Some(variant) = migrated_log_ids.get(&index.on) {
+                            migration_metadata
+                                .introspection_source_index_updates
+                                .entry(index.compute_instance)
+                                .or_default()
+                                .push((
+                                    variant.clone(),
+                                    log_name_map
+                                        .get(variant)
+                                        .expect("all variants have a name")
+                                        .to_string(),
+                                    new_id,
+                                ));
+                        }
+                    }
+                }
+                CatalogItem::View(_) => {
+                    // Views don't have any external objects to drop.
                 }
                 CatalogItem::Type(_)
                 | CatalogItem::Func(_)
@@ -2794,19 +2821,16 @@ impl<S: Append> Catalog<S> {
             let item = item_rebuilder.build(self);
             self.state.insert_item(id, oid, name, item);
         }
-        for (compute_instance, updates) in migration_metadata
-            .introspection_source_index_updates
-            .drain()
-        {
+        for (compute_instance, updates) in &migration_metadata.introspection_source_index_updates {
             let log_indexes = &mut self
                 .state
                 .compute_instances_by_id
-                .get_mut(&compute_instance)
-                .expect("invalid compute instance {compute_instance}")
+                .get_mut(compute_instance)
+                .unwrap_or_else(|| panic!("invalid compute instance {compute_instance}"))
                 .log_indexes;
-            for (variant, new_id) in updates {
-                log_indexes.remove(&variant);
-                log_indexes.insert(variant, new_id);
+            for (variant, _name, new_id) in updates {
+                log_indexes.remove(variant);
+                log_indexes.insert(variant.clone(), new_id.clone());
             }
         }
 
@@ -2831,6 +2855,20 @@ impl<S: Append> Catalog<S> {
                 .drain()
                 .collect(),
         )?;
+        tx.update_introspection_source_index_gids(
+            migration_metadata
+                .introspection_source_index_updates
+                .drain()
+                .map(|(compute_instance_id, updates)| {
+                    (
+                        compute_instance_id,
+                        updates
+                            .into_iter()
+                            .map(|(_variant, name, index_id)| (name, index_id)),
+                    )
+                }),
+        )?;
+
         tx.commit().await?;
 
         Ok(())
