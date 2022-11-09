@@ -280,7 +280,7 @@ mz_arrangement_sharing_internal_s2_primary_idx              mz_arrangement_shari
 mz_compute_exports_s2_primary_idx                           mz_compute_exports                          mz_introspection    {export_id,worker_id}
 mz_dataflow_addresses_s2_primary_idx                        mz_dataflow_addresses                       mz_introspection    {id,worker_id}
 mz_dataflow_channels_s2_primary_idx                         mz_dataflow_channels                        mz_introspection    {id,worker_id}
-mz_dataflow_operator_reachability_internal_s2_primary_idx   mz_dataflow_operator_reachability_internal  mz_introspection    {address,port,worker_id,update_type,timestamp}
+mz_dataflow_operator_reachability_internal_s2_primary_idx   mz_dataflow_operator_reachability_internal  mz_introspection    {address,port,worker_id,update_type,time}
 mz_dataflow_operators_s2_primary_idx                        mz_dataflow_operators                       mz_introspection    {id,worker_id}
 mz_message_counts_received_internal_s2_primary_idx          mz_message_counts_received_internal         mz_introspection    {channel_id,from_worker_id,to_worker_id}
 mz_message_counts_sent_internal_s2_primary_idx              mz_message_counts_sent_internal             mz_introspection    {channel_id,from_worker_id,to_worker_id}

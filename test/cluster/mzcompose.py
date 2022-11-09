@@ -502,7 +502,7 @@ def workflow_test_builtin_migration(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     with c.override(
-        # Random commit before pg_proc was updated.
+        # Random commit before pg_proc and mz_dataflow_operator_reachability was updated.
         Materialized(
             image="materialize/materialized:devel-aa4128c9c485322f90ab0af2b9cb4d16e1c470c0",
             default_size=1,
@@ -522,6 +522,13 @@ def workflow_test_builtin_migration(c: Composition) -> None:
         5
         ! SELECT DISTINCT proowner FROM pg_proc;
         contains:column "proowner" does not exist
+
+        # Populate mz_dataflow_operator_reachability
+        > CREATE TABLE t (a INT);
+        > CREATE DEFAULT INDEX ON t;
+
+        > SELECT pg_typeof(address) FROM mz_internal.mz_dataflow_operator_reachability LIMIT 1;
+        "bigint list"
     """
             )
         )
@@ -545,6 +552,9 @@ def workflow_test_builtin_migration(c: Composition) -> None:
        # This column is new after the migration
        > SELECT DISTINCT proowner FROM pg_proc;
        <null>
+
+       > SELECT pg_typeof(address) FROM mz_internal.mz_dataflow_operator_reachability LIMIT 1;
+       "uint8 list"
     """
             )
         )

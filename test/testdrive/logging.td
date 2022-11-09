@@ -114,7 +114,7 @@ SID   address     1           list
 SID   port        2           uint8
 SID   worker_id   3           uint8
 SID   update_type 4           text
-SID   timestamp   5           uint8
+SID   time        5           mz_timestamp
 SID   count       6           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
