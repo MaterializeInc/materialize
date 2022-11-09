@@ -30,6 +30,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
 use futures::future::Either;
 use itertools::Itertools;
@@ -52,19 +53,21 @@ use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
-use mz_repr::{GlobalId, Timestamp};
+use mz_persist_client::Upper;
+use mz_repr::{GlobalId, Row, Timestamp};
 use mz_storage_client::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use mz_storage_client::source::util::async_source;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::SourceError;
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
-use mz_storage_client::types::sources::{AsyncSourceToken, MzOffset, SourceToken};
+use mz_storage_client::types::sources::{AsyncSourceToken, MzOffset, SourceData, SourceToken};
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::operator::StreamExt as _;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
 use crate::source::antichain::{MutableOffsetAntichain, OffsetAntichain};
-use crate::source::healthcheck::Healthchecker;
+use crate::source::healthcheck;
+
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockFollower, ReclockOperator};
 use crate::source::types::{
@@ -264,36 +267,20 @@ where
     S: SourceReader + 'static,
 {
     let RawSourceCreationConfig {
-        name,
+        name: _,
         id,
         num_outputs: _,
         worker_id,
         worker_count,
         timestamp_interval,
         encoding: _,
-        storage_metadata,
+        storage_metadata: _,
         resume_upper: _,
         base_metrics: _,
-        now,
-        persist_clients,
+        now: _,
+        persist_clients: _,
     } = config;
     Box::pin(async_stream::stream!({
-        let mut healthchecker = if storage_metadata.status_shard.is_some() {
-            match Healthchecker::new(id, true, &persist_clients, &storage_metadata, now.clone())
-                .await
-            {
-                Ok(h) => Some(h),
-                Err(e) => {
-                    panic!(
-                        "Failed to create healthchecker for source {}: {:#}",
-                        &name, e
-                    );
-                }
-            }
-        } else {
-            None
-        };
-
         // Most recent batch upper frontier, does not regress.
         // TODO(aljoscha): We track this as we go, but we could also derive it
         // by iterating over all messages in a batch when we emit it.
@@ -378,10 +365,7 @@ where
                                     }
                                     untimestamped_messages.entry(pid).or_default().push((message, offset));
                                 }
-                                SourceMessageType::SourceStatus(update) => {
-                                    if let Some(healthchecker) = &mut healthchecker {
-                                        healthchecker.update_status(update).await;
-                                    }
+                                SourceMessageType::SourceStatus(_update) => {
                                 }
                             }
                         }
@@ -454,6 +438,23 @@ pub enum HealthStatus {
     Starting,
     Running,
     StalledWithError(String),
+}
+
+impl HealthStatus {
+    fn name(&self) -> &'static str {
+        match self {
+            HealthStatus::Starting => "starting",
+            HealthStatus::Running => "running",
+            HealthStatus::StalledWithError(_) => "stalled",
+        }
+    }
+
+    fn error(&self) -> Option<&str> {
+        match self {
+            HealthStatus::Starting | HealthStatus::Running => None,
+            HealthStatus::StalledWithError(e) => Some(e),
+        }
+    }
 }
 
 type WorkerId = usize;
@@ -839,6 +840,9 @@ where
         worker_id: healthcheck_worker_id,
         worker_count,
         id: source_id,
+        storage_metadata,
+        persist_clients,
+        now,
         ..
     } = config;
 
@@ -870,7 +874,73 @@ where
         scope.clone(),
         move |mut _capabilities, _frontiers, scheduler| async move {
             let mut buffer = Vec::new();
-            info!("Health for source {source_id} initialized to: {last_reported_status:?}");
+
+            let mut persist_clients = persist_clients.lock().await;
+            let persist_client = persist_clients
+                .open(storage_metadata.persist_location.clone())
+                .await
+                .expect("error creating persist client for Healthchecker");
+            drop(persist_clients);
+
+            let client_ref = &persist_client;
+
+            let write_to_persist = |row: Row, timestamp: Timestamp| async move {
+                let status_shard = match storage_metadata.status_shard {
+                    Some(s) => s,
+                    None => return,
+                };
+                let handle = client_ref
+                    .open_writer(status_shard)
+                    .await;
+
+                let mut handle = match handle {
+                    Ok(stuff) => stuff,
+                    Err(e) => {
+                        panic!("Invalid usage of the persist client for source {source_id} status history shard: {e:?}");
+                    }
+                };
+
+                let mut recent_upper = handle.upper().clone();
+                let mut append_ts = timestamp;
+                'retry_loop: loop {
+                    // We don't actually care so much about the timestamp we append at; it's best-effort.
+                    // Ensure that the append timestamp is not less than the current upper, and the new upper
+                    // is past that timestamp. (Unless we've advanced to the empty antichain, but in
+                    // that case we're already in trouble.)
+                    for t in recent_upper.elements() {
+                        append_ts.join_assign(t);
+                    }
+                    let mut new_upper = Antichain::from_elem(append_ts.step_forward());
+                    new_upper.join_assign(&recent_upper);
+
+                    let updates = vec![
+                        ((SourceData(Ok(row.clone())), ()), append_ts, 1i64)
+                    ];
+                    let cas_result = handle.compare_and_append(updates, recent_upper.clone(), new_upper).await;
+                    match cas_result {
+                        Ok(Ok(Ok(()))) => break 'retry_loop,
+                        Ok(Ok(Err(Upper(upper)))) => {
+                            recent_upper = upper;
+                        }
+                        Ok(Err(e)) => {
+                            panic!("Invalid usage of the persist client for source {source_id} status history shard: {e:?}");
+                        }
+                        Err(e) => {
+                            trace!("compare_and_append in update_status failed: {e}");
+                        }
+                    }
+                }
+
+                handle.expire().await
+            };
+
+            if is_active_worker {
+                info!("Health for source {source_id} initialized to: {last_reported_status:?}");
+                let now_ms = now();
+                let row = healthcheck::pack_status_row(source_id, last_reported_status.name(), last_reported_status.error(), now_ms);
+                write_to_persist(row, Timestamp::from(now_ms)).await;
+            }
+
             while scheduler.notified().await {
                 if weak_token.upgrade().is_none() {
                     return;
@@ -882,17 +952,19 @@ where
                         if !is_active_worker {
                             warn!("Health messages for source {source_id} passed to an unexpected worker id: {healthcheck_worker_id}")
                         }
-                        let prev_health = &healths[worker_id];
-                        if prev_health != &health_event {
-                            healths[worker_id] = health_event;
-                            let new_status = overall_status(&healths);
-                            if &last_reported_status != new_status {
-                                info!("Health transition for source {source_id}: {last_reported_status:?} -> {new_status:?}");
-                                last_reported_status = new_status.clone();
-                            }
-                        }
+                        healths[worker_id] = health_event;
                     }
-                })
+                });
+
+                let new_status = overall_status(&healths);
+                if &last_reported_status != new_status {
+                    info!("Health transition for source {source_id}: {last_reported_status:?} -> {new_status:?}");
+                    let now_ms = now();
+                    let row = healthcheck::pack_status_row(source_id, new_status.name(), new_status.error(), now_ms);
+                    write_to_persist(row, Timestamp::from(now_ms)).await;
+
+                    last_reported_status = new_status.clone();
+                }
             }
         },
     );

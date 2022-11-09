@@ -10,9 +10,6 @@
 # Specify the behaviour of the status history tables
 $ set-regex match="\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d(\.\d\d\d)?" replacement="<TIMESTAMP>"
 
-# History starts out empty when there are no sources
-> select * from mz_internal.mz_source_status_history
-
 $ kafka-create-topic topic=status-history
 
 > CREATE CONNECTION kafka_conn
@@ -31,6 +28,12 @@ $ kafka-create-topic topic=status-history
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
+$ set-from-sql var=source_id
+SELECT id FROM mz_sources WHERE name = 'kafka_source'
+
+> select * from mz_internal.mz_source_status_history where source_id = '${source_id}' order by occurred_at;
+"<TIMESTAMP> UTC" ${source_id} starting <null> <null>
+
 $ set-from-sql var=sink_id
 SELECT id FROM mz_sinks WHERE name = 'kafka_sink'
 
@@ -43,7 +46,6 @@ a
 b
 c
 d
-
 
 > SELECT * FROM kafka_source ORDER BY 1;
 a
@@ -60,3 +62,7 @@ $ kafka-verify-data format=avro sink=materialize.public.kafka_sink sort-messages
 > SELECT * FROM mz_internal.mz_sink_status_history WHERE sink_id = '${sink_id}' ORDER BY occurred_at;
 "<TIMESTAMP> UTC" ${sink_id} starting <null> <null>
 "<TIMESTAMP> UTC" ${sink_id} running <null> <null>
+
+> select * from mz_internal.mz_source_status_history where source_id = '${source_id}' order by occurred_at;
+"<TIMESTAMP> UTC" ${source_id} starting <null> <null>
+"<TIMESTAMP> UTC" ${source_id} running <null> <null>

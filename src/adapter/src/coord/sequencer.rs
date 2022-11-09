@@ -507,10 +507,7 @@ impl<S: Append + 'static> Coordinator<S> {
         {
             Ok(()) => {
                 for (source_id, source) in sources {
-                    // This is disabled for the moment because it has unusual upper
-                    // advancement behavior.
-                    // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
-                    let status_collection_id = if false {
+                    let source_status_collection_id = if self.catalog.config().unsafe_mode {
                         Some(self.catalog.resolve_builtin_storage_collection(
                             &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
                         ))
@@ -518,7 +515,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         None
                     };
 
-                    let data_source = match source.data_source {
+                    let (data_source, status_collection_id) = match source.data_source {
                         DataSourceDesc::Ingestion(ingestion) => {
                             let mut source_imports = BTreeMap::new();
                             for source_import in ingestion.source_imports {
@@ -540,15 +537,18 @@ impl<S: Append + 'static> Coordinator<S> {
                                 source_exports.insert(subsource, export);
                             }
 
-                            DataSource::Ingestion(IngestionDescription {
-                                desc: ingestion.desc,
-                                ingestion_metadata: (),
-                                source_imports,
-                                source_exports,
-                                host_config: ingestion.host_config,
-                            })
+                            (
+                                DataSource::Ingestion(IngestionDescription {
+                                    desc: ingestion.desc,
+                                    ingestion_metadata: (),
+                                    source_imports,
+                                    source_exports,
+                                    host_config: ingestion.host_config,
+                                }),
+                                source_status_collection_id,
+                            )
                         }
-                        DataSourceDesc::Source => DataSource::Other,
+                        DataSourceDesc::Source => (DataSource::Other, None),
                         DataSourceDesc::Introspection(_) => {
                             unreachable!("cannot create sources with introspection data sources")
                         }
