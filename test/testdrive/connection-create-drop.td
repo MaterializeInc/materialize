@@ -366,8 +366,10 @@ contains: unknown catalog item 'foo'
 ! CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK foo, PORT 1234)
 contains: unknown catalog item 'foo'
 
+# Error in mzcompose: AWS PrivateLink connections are not supported
+# Error in cloudtest/K8s: AWS PrivateLink Connection resource limit of 0 cannot be exceeded
 ! CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (
     SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
     AVAILABILITY ZONES ('use1-az1', 'use1-az4')
   )
-contains: AWS PrivateLink connections are not supported
+contains: AWS PrivateLink
