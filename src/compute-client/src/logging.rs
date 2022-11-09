@@ -425,11 +425,11 @@ impl LogView {
                     port,
                     worker_id,
                     update_type,
-                    timestamp,
+                    time,
                     pg_catalog.count(*) as count
                  FROM
                     mz_internal.mz_dataflow_operator_reachability_internal_{}
-                 GROUP BY address, port, worker_id, update_type, timestamp",
+                 GROUP BY address, port, worker_id, update_type, time",
                 "mz_dataflow_operator_reachability_{}",
             ),
 
