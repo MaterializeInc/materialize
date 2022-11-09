@@ -11,6 +11,9 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Instant;
 
+use mz_ore::metric;
+use mz_ore::metrics::MetricsRegistry;
+use prometheus::IntCounterVec;
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
@@ -53,6 +56,23 @@ impl Handle {
     }
 }
 
+#[derive(Debug, Clone)]
+struct Metrics {
+    pub commands: IntCounterVec,
+}
+
+impl Metrics {
+    pub fn register_into(registry: &MetricsRegistry) -> Metrics {
+        Metrics {
+            commands: registry.register(metric!(
+                name: "mz_adapter_commands",
+                help: "The total number of adapter commands issued of the given type since process start.",
+                var_labels: ["command_type", "status"],
+            )),
+        }
+    }
+}
+
 /// A coordinator client.
 ///
 /// A coordinator client is a simple handle to a communication channel with the
@@ -62,15 +82,20 @@ impl Handle {
 /// outstanding clients have dropped.
 #[derive(Debug, Clone)]
 pub struct Client {
-    cmd_tx: mpsc::UnboundedSender<Command>,
+    inner_cmd_tx: mpsc::UnboundedSender<Command>,
     id_alloc: Arc<IdAllocator<ConnectionId>>,
+    metrics: Metrics,
 }
 
 impl Client {
-    pub(crate) fn new(cmd_tx: mpsc::UnboundedSender<Command>) -> Client {
+    pub(crate) fn new(
+        cmd_tx: mpsc::UnboundedSender<Command>,
+        registry: &MetricsRegistry,
+    ) -> Client {
         Client {
-            cmd_tx,
+            inner_cmd_tx: cmd_tx,
             id_alloc: Arc::new(IdAllocator::new(1, 1 << 16)),
+            metrics: Metrics::register_into(registry),
         }
     }
 
@@ -83,6 +108,12 @@ impl Client {
                 .ok_or(AdapterError::IdExhaustionError)?,
             inner: self.clone(),
         })
+    }
+
+    fn send(&self, cmd: Command) {
+        self.inner_cmd_tx
+            .send(cmd)
+            .expect("coordinator unexpectedly gone");
     }
 }
 
@@ -154,13 +185,10 @@ impl ConnClient {
 
     /// Cancels the query currently running on another connection.
     pub fn cancel_request(&mut self, conn_id: ConnectionId, secret_key: u32) {
-        self.inner
-            .cmd_tx
-            .send(Command::CancelRequest {
-                conn_id,
-                secret_key,
-            })
-            .expect("coordinator unexpectedly gone");
+        self.inner.send(Command::CancelRequest {
+            conn_id,
+            secret_key,
+        });
     }
 
     async fn send<T, F>(&mut self, f: F) -> T
@@ -168,10 +196,7 @@ impl ConnClient {
         F: FnOnce(oneshot::Sender<T>) -> Command,
     {
         let (tx, rx) = oneshot::channel();
-        self.inner
-            .cmd_tx
-            .send(f(tx))
-            .expect("coordinator unexpectedly gone");
+        self.inner.send(f(tx));
         rx.await.expect("coordinator unexpectedly canceled request")
     }
 }
@@ -359,7 +384,43 @@ impl SessionClient {
         F: FnOnce(oneshot::Sender<Response<T>>, Session) -> Command,
     {
         let session = self.session.take().expect("session invariant violated");
-        let res = self.inner.send(|tx| f(tx, session)).await;
+        let mut typ = None;
+        let res = self
+            .inner
+            .send(|tx| {
+                let cmd = f(tx, session);
+                // Measure the success and error rate of certain commands:
+                // - declare reports success of SQL statement planning
+                // - execute reports success of dataflow execution
+                match cmd {
+                    Command::Declare { .. } => typ = Some("declare"),
+                    Command::Execute { .. } => typ = Some("execute"),
+                    Command::Startup { .. }
+                    | Command::Describe { .. }
+                    | Command::VerifyPreparedStatement { .. }
+                    | Command::StartTransaction { .. }
+                    | Command::Commit { .. }
+                    | Command::CancelRequest { .. }
+                    | Command::DumpCatalog { .. }
+                    | Command::CopyRows { .. }
+                    | Command::Terminate { .. } => {}
+                };
+                cmd
+            })
+            .await;
+        let status = if res.result.is_ok() {
+            "success"
+        } else {
+            "error"
+        };
+        if let Some(typ) = typ {
+            self.inner
+                .inner
+                .metrics
+                .commands
+                .with_label_values(&[typ, status])
+                .inc();
+        }
         self.session = Some(res.session);
         res.result
     }
@@ -371,11 +432,7 @@ impl Drop for SessionClient {
         // a response. In this case, it is the coordinator's responsibility to
         // terminate the session.
         if let Some(session) = self.session.take() {
-            self.inner
-                .inner
-                .cmd_tx
-                .send(Command::Terminate { session })
-                .expect("coordinator unexpectedly gone");
+            self.inner.inner.send(Command::Terminate { session });
         }
     }
 }
