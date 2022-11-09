@@ -229,7 +229,7 @@ Here, the model depends on the view defined above, and is referenced as such via
 In Materialize, a [sink](/sql/create-sink) describes an **external** system you want to write data to, and provides details about how to encode that data. You can instruct dbt to create a sink using the custom `sink` materialization.
 
 {{< tabs tabID="1" >}} {{< tab "Kafka">}}
-Create a [Kafka sink](/sql/create-sink/kafka/).
+Create a [Kafka sink](/sql/create-sink).
 
 **Filename:** sinks/kafka_topic_c.sql
 ```sql
