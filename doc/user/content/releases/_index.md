@@ -41,6 +41,9 @@ in a future release of Materialize.
 We announce both planned and unplanned maintenance windows on our [status
 page](https://status.materialize.com).
 
+You can also use our [status page API](https://status.materialize.com/api) to
+programmatically access the information on our status page.
+
 ## Versioning
 
 Each release is associated with an internal version number. You can determine
