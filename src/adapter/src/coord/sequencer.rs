@@ -3250,8 +3250,12 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Re-fetch the updated item from the catalog
         let entry = self.catalog.get_entry(&id);
+        let full_name = self
+            .catalog
+            .resolve_full_name(entry.name(), Some(session.conn_id()))
+            .to_string();
         let updated_sink = entry.sink().ok_or_else(|| CatalogError::UnexpectedType {
-            name: entry.name().to_string(),
+            name: full_name,
             actual_type: entry.item_type(),
             expected_type: CatalogItemType::Sink,
         })?;
@@ -3275,8 +3279,12 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Re-fetch the updated item from the catalog
         let entry = self.catalog.get_entry(&id);
+        let full_name = self
+            .catalog
+            .resolve_full_name(entry.name(), Some(session.conn_id()))
+            .to_string();
         let updated_source = entry.source().ok_or_else(|| CatalogError::UnexpectedType {
-            name: entry.name().to_string(),
+            name: full_name,
             actual_type: entry.item_type(),
             expected_type: CatalogItemType::Source,
         })?;

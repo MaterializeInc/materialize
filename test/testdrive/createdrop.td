@@ -100,40 +100,40 @@ contains:catalog item 's' already exists
 
 # Test that objects do not get dropped if the drop command does not specify the correct type
 ! DROP SOURCE v
-contains:v is a materialized view not a source
+exact:"materialize.public.v" is a materialized view not a source
 
 ! DROP SOURCE IF EXISTS v
-contains:v is a materialized view not a source
+exact:"materialize.public.v" is a materialized view not a source
 
 ! DROP INDEX v
-contains:v is a materialized view not a index
+exact:"materialize.public.v" is a materialized view not a index
 
 ! DROP INDEX IF EXISTS v
-contains:v is a materialized view not a index
+exact:"materialize.public.v" is a materialized view not a index
 
 ! DROP SOURCE i
-contains:i is a index not a source
+exact:"materialize.public.i" is a index not a source
 
 ! DROP SOURCE IF EXISTS i
-contains:i is a index not a source
+exact:"materialize.public.i" is a index not a source
 
 ! DROP VIEW i
-contains:i is a index not a view
+exact:"materialize.public.i" is a index not a view
 
 ! DROP VIEW IF EXISTS i
-contains:i is a index not a view
+exact:"materialize.public.i" is a index not a view
 
 ! DROP INDEX s
-contains:s is a source not a index
+exact:"materialize.public.s" is a source not a index
 
 ! DROP INDEX IF EXISTS s
-contains:s is a source not a index
+exact:"materialize.public.s" is a source not a index
 
 ! DROP VIEW s
-contains:s is a source not a view
+exact:"materialize.public.s" is a source not a view
 
 ! DROP VIEW IF EXISTS s
-contains:s is a source not a view
+exact:"materialize.public.s" is a source not a view
 
 # Delete objects
 

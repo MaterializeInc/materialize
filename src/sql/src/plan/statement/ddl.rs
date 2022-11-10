@@ -3183,7 +3183,7 @@ pub fn plan_drop_item(
         return Err(PlanError::DropViewOnMaterializedView(name));
     } else if object_type != item_type {
         sql_bail!(
-            "{} is a {} not a {}",
+            "\"{}\" is a {} not a {}",
             scx.catalog.resolve_full_name(catalog_entry.name()),
             catalog_entry.item_type(),
             format!("{object_type}").to_lowercase(),
@@ -3321,7 +3321,7 @@ pub fn plan_alter_index_options(
     };
     if entry.item_type() != CatalogItemType::Index {
         sql_bail!(
-            "{} is a {} not a index",
+            "\"{}\" is a {} not a index",
             scx.catalog.resolve_full_name(entry.name()),
             entry.item_type()
         )
@@ -3373,7 +3373,7 @@ pub fn plan_alter_object_rename(
                 ));
             } else if object_type != item_type {
                 sql_bail!(
-                    "{} is a {} not a {}",
+                    "\"{}\" is a {} not a {}",
                     full_name,
                     entry.item_type(),
                     format!("{object_type}").to_lowercase()
@@ -3432,7 +3432,7 @@ pub fn plan_alter_secret(
     };
     if entry.item_type() != CatalogItemType::Secret {
         sql_bail!(
-            "{} is a {} not a secret",
+            "\"{}\" is a {} not a secret",
             scx.catalog.resolve_full_name(entry.name()),
             entry.item_type()
         )
@@ -3472,7 +3472,7 @@ pub fn plan_alter_sink(
     };
     if entry.item_type() != CatalogItemType::Sink {
         sql_bail!(
-            "{} is a {} not a sink",
+            "\"{}\" is a {} not a sink",
             scx.catalog.resolve_full_name(entry.name()),
             entry.item_type()
         )
@@ -3556,7 +3556,7 @@ pub fn plan_alter_source(
     };
     if entry.item_type() != CatalogItemType::Source {
         sql_bail!(
-            "{} is a {} not a source",
+            "\"{}\" is a {} not a source",
             scx.catalog.resolve_full_name(entry.name()),
             entry.item_type()
         )
