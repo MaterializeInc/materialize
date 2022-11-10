@@ -17,7 +17,7 @@ mz-cloud-resources = { path = "../cloud-resources" }
 mz-orchestrator = { path = "../orchestrator" }
 mz-secrets = { path = "../secrets" }
 mz-repr = { path = "../repr" }
-k8s-openapi = { version = "0.15.0", features = ["v1_22"] }
+k8s-openapi = { version = "0.16.0", features = ["v1_22"] }
 kube = { version = "0.76.0", features = ["runtime", "ws"] }
 serde_json = "1.0.86"
 sha2 = "0.10.6"
