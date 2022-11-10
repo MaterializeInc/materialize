@@ -1215,8 +1215,8 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         if let Some(create_inst_command) = create_inst_command {
             self.commands.push(create_inst_command);
         }
+        self.dataflow_count = live_dataflows.len();
         if !live_dataflows.is_empty() {
-            self.dataflow_count = live_dataflows.len();
             self.commands
                 .push(ComputeCommand::CreateDataflows(live_dataflows));
         }
