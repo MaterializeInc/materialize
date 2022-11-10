@@ -351,6 +351,16 @@ impl<T: TimestampManipulation> Session<T> {
                     continue;
                 }
             }
+            // Suppress replica NotReady notices until they don't occur on
+            // create/drop replica, as that leads to user confusion.
+            //
+            // TODO: Removing this variant completely, since it's the only call
+            // to broadcast_notice, causes Rust to warn about various unused
+            // functions. If we don't find another usage of notices, consider
+            // removing the entire notice system.
+            if matches!(notice, AdapterNotice::ClusterReplicaStatusChanged { .. }) {
+                continue;
+            }
             // De-duplicate identical notices. This routinely happens for
             // ClusterReplicaStatusChanged messages.
             if Some(&notice) == self.prev_notice.as_ref() {
