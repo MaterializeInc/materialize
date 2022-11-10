@@ -4346,6 +4346,7 @@ dependencies = [
  "mz-orchestrator-tracing",
  "mz-ore",
  "mz-persist-client",
+ "mz-persist-types",
  "mz-pgcopy",
  "mz-pid-file",
  "mz-postgres-util",

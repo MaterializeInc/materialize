@@ -84,6 +84,13 @@ impl KinesisMetrics {
 pub(super) struct SourceSpecificMetrics {
     pub(super) capability: UIntGaugeVec,
     pub(super) resume_upper: IntGaugeVec,
+    /// A timestamp gauge representing forward progress
+    /// in the data shard.
+    pub(super) progress: IntGaugeVec,
+    pub(super) rows: IntCounterVec,
+    /// A counter representing the actual numbers of
+    /// errors being committed to the data shard.
+    pub(super) errors: IntCounterVec,
 }
 
 impl SourceSpecificMetrics {
@@ -99,6 +106,21 @@ impl SourceSpecificMetrics {
                 // TODO(guswynn): should this also track the resumption frontier operator?
                 help: "The timestamp-domain resumption frontier chosen for a source's ingestion",
                 var_labels: ["source_id"],
+            )),
+            progress: registry.register(metric!(
+                name: "mz_source_progress",
+                help: "A timestamp gauge representing forward progess in the data shard",
+                var_labels: ["source_id", "output", "shard"],
+            )),
+            rows: registry.register(metric!(
+                name: "mz_source_rows",
+                help: "A counter representing the actual number of rows being committed to the data shard",
+                var_labels: ["source_id", "output", "shard"],
+            )),
+            errors: registry.register(metric!(
+                name: "mz_source_errors",
+                help: "A counter representing the actual number of errors being committed to the data shard",
+                var_labels: ["source_id", "output", "shard"],
             )),
         }
     }

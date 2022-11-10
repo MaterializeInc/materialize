@@ -29,7 +29,19 @@ use mz_storage_client::types::sources::SourceData;
 use mz_timely_util::activator::LimitingActivator;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
+use crate::source::types::SourcePersistSinkMetrics;
 use crate::storage_state::StorageState;
+
+struct BatchBuilderAndCounts<K, V, T, D>
+where
+    T: timely::progress::Timestamp
+        + differential_dataflow::lattice::Lattice
+        + mz_persist_types::Codec64,
+{
+    builder: mz_persist_client::batch::BatchBuilder<K, V, T, D>,
+    rows: u64,
+    errors: u64,
+}
 
 pub fn render<G>(
     scope: &mut G,
@@ -37,6 +49,7 @@ pub fn render<G>(
     metadata: CollectionMetadata,
     source_data: Collection<G, Result<Row, DataflowError>, Diff>,
     storage_state: &mut StorageState,
+    metrics: SourcePersistSinkMetrics,
     token: Rc<dyn Any>,
 ) where
     G: Scope<Timestamp = Timestamp>,
@@ -131,17 +144,31 @@ pub fn render<G>(
                     // per-timestamp.
                     for (row, ts, diff) in buffer.drain(..) {
                         if write.upper().less_equal(&ts) {
-                            stashed_batches
-                                .entry(ts)
-                                .or_insert_with(|| {
-                                    // TODO: the lower has to be the min because we don't know
-                                    // what the minimum ts of data we will see is. In the future,
-                                    // this lower should be declared in `finish` instead.
-                                    write.builder(100, Antichain::from_elem(Timestamp::minimum()))
-                                })
+                            let builder = stashed_batches.entry(ts).or_insert_with(|| {
+                                BatchBuilderAndCounts {
+                                    builder: write.builder(
+                                        // TODO: the lower has to be the min because we don't know
+                                        // what the minimum ts of data we will see is. In the future,
+                                        // this lower should be declared in `finish` instead.
+                                        100,
+                                        Antichain::from_elem(Timestamp::minimum()),
+                                    ),
+                                    rows: 0,
+                                    errors: 0,
+                                }
+                            });
+
+                            let ok = row.is_ok();
+                            builder
+                                .builder
                                 .add(&SourceData(row), &(), &ts, &diff)
                                 .await
                                 .expect("invalid usage");
+                            if ok {
+                                builder.rows += 1;
+                            } else {
+                                builder.errors += 1;
+                            }
                         }
                     }
                 }
@@ -171,6 +198,10 @@ pub fn render<G>(
                             .expect("cannot append updates")
                             .expect("invalid/outdated upper");
 
+                        metrics
+                            .progress
+                            .set(mz_persist_client::metrics::encode_ts_metric(&input_upper));
+
                         // advance our stashed frontier
                         *current_upper.borrow_mut() = input_upper.clone();
                         // wait for more data or a new input frontier
@@ -192,9 +223,12 @@ pub fn render<G>(
                             Antichain::from_elem(ts.step_forward())
                         };
 
-                        let mut batch = stashed_batches
+                        let batch_builder = stashed_batches
                             .remove(&ts)
-                            .expect("batch for timestamp to still be there")
+                            .expect("batch for timestamp to still be there");
+
+                        let mut batch = batch_builder
+                            .builder
                             .finish(new_upper.clone())
                             .await
                             .expect("invalid usage");
@@ -209,6 +243,12 @@ pub fn render<G>(
                             .expect("cannot append updates")
                             .expect("cannot append updates")
                             .expect("invalid/outdated upper");
+
+                        metrics.rows.inc_by(batch_builder.rows);
+                        metrics.errors.inc_by(batch_builder.errors);
+                        metrics
+                            .progress
+                            .set(mz_persist_client::metrics::encode_ts_metric(&new_upper));
 
                         // next `expected_upper` is the one we just successfully appended
                         expected_upper = new_upper;
