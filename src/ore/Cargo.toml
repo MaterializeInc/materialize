@@ -52,7 +52,7 @@ tracing-opentelemetry = { git = "https://github.com/MaterializeInc/tracing.git",
 tonic = { version = "0.8.2", features = ["transport"], optional = true }
 tokio-native-tls = { version = "0.3.0", optional = true }
 native-tls = { version = "0.2.11", features = ["alpn"], optional = true }
-hyper = { version = "0.14.20", features = ["http1", "server"], optional = true }
+hyper = { version = "0.14.23", features = ["http1", "server"], optional = true }
 hyper-tls = { version = "0.5.0", optional = true }
 opentelemetry = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git", features = ["rt-tokio", "trace"], optional = true }
 opentelemetry-otlp = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git", optional = true }
