@@ -280,7 +280,7 @@ mz_arrangement_sharing_internal_s2_primary_idx              mz_arrangement_shari
 mz_compute_exports_s2_primary_idx                           mz_compute_exports                          mz_introspection    {export_id,worker_id}
 mz_dataflow_addresses_s2_primary_idx                        mz_dataflow_addresses                       mz_introspection    {id,worker_id}
 mz_dataflow_channels_s2_primary_idx                         mz_dataflow_channels                        mz_introspection    {id,worker_id}
-mz_dataflow_operator_reachability_internal_s2_primary_idx   mz_dataflow_operator_reachability_internal  mz_introspection    {address,port,worker_id,update_type,timestamp}
+mz_dataflow_operator_reachability_internal_s2_primary_idx   mz_dataflow_operator_reachability_internal  mz_introspection    {address,port,worker_id,update_type,time}
 mz_dataflow_operators_s2_primary_idx                        mz_dataflow_operators                       mz_introspection    {id,worker_id}
 mz_message_counts_received_internal_s2_primary_idx          mz_message_counts_received_internal         mz_introspection    {channel_id,from_worker_id,to_worker_id}
 mz_message_counts_sent_internal_s2_primary_idx              mz_message_counts_sent_internal             mz_introspection    {channel_id,from_worker_id,to_worker_id}
@@ -290,7 +290,7 @@ mz_raw_worker_compute_delays_s2_primary_idx                 mz_raw_worker_comput
 mz_scheduling_elapsed_internal_s2_primary_idx               mz_scheduling_elapsed_internal              mz_introspection    {id,worker_id}
 mz_scheduling_parks_internal_s2_primary_idx                 mz_scheduling_parks_internal                mz_introspection    {worker_id,slept_for,requested}
 mz_show_all_objects_ind                                     mz_objects                                  mz_introspection    {schema_id}
-mz_show_cluster_replicas_ind                                mz_show_cluster_replicas                    mz_introspection    {cluster,replica,size}
+mz_show_cluster_replicas_ind                                mz_show_cluster_replicas                    mz_introspection    {cluster,replica,size,ready}
 mz_show_clusters_ind                                        mz_clusters                                 mz_introspection    {name}
 mz_show_columns_ind                                         mz_columns                                  mz_introspection    {id}
 mz_show_connections_ind                                     mz_connections                              mz_introspection    {schema_id}

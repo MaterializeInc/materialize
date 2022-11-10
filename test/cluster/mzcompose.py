@@ -58,6 +58,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-github-12251",
         "test-github-15535",
         "test-github-15799",
+        "test-github-15930",
         "test-remote-storaged",
         "test-drop-default-cluster",
         "test-upsert",
@@ -304,6 +305,91 @@ def workflow_test_github_15799(c: Composition) -> None:
     )
 
 
+def workflow_test_github_15930(c: Composition) -> None:
+    """
+    Test that triggering reconciliation does not wedge the mz_worker_compute_frontiers
+    introspection source.
+
+    Regression test for https://github.com/MaterializeInc/materialize/issues/15930.
+    """
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Testdrive(no_reset=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.up("computed_1")
+        c.wait_for_materialized()
+
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (
+                logging_on (
+                    REMOTE ['computed_1:2100'],
+                    COMPUTE ['computed_1:2102'],
+                    WORKERS 2
+                )
+            );
+            """
+        )
+
+        # verify that we can query the introspection source
+        c.testdrive(
+            input=dedent(
+                """
+            > SET cluster = cluster1;
+            > SELECT 1 FROM mz_internal.mz_worker_compute_frontiers LIMIT 1;
+            1
+                """
+            )
+        )
+
+        # Restart environmentd to trigger a reconciliation on computed.
+        c.kill("materialized")
+        c.up("materialized")
+        c.wait_for_materialized()
+
+        # verify again that we can query the introspection source
+        c.testdrive(
+            input=dedent(
+                """
+            > SET cluster = cluster1;
+            > SELECT 1 FROM mz_internal.mz_worker_compute_frontiers LIMIT 1;
+            1
+                """
+            )
+        )
+
+        c.sql(
+            """
+            SET cluster = cluster1;
+            -- now let's give it another go with user-defined objects
+            CREATE TABLE t (a int);
+            CREATE DEFAULT INDEX ON t;
+            INSERT INTO t VALUES (42);
+            """
+        )
+
+        # Restart environmentd to trigger yet another reconciliation on computed.
+        c.kill("materialized")
+        c.up("materialized")
+        c.wait_for_materialized()
+
+        # verify yet again that we can query the introspection source and now the table.
+        c.testdrive(
+            input=dedent(
+                """
+            > SET cluster = cluster1;
+            > SELECT 1 FROM mz_internal.mz_worker_compute_frontiers LIMIT 1;
+            1
+            > SELECT * FROM t;
+            42
+                """
+            )
+        )
+
+
 def workflow_test_upsert(c: Composition) -> None:
     """Test creating upsert sources and continuing to ingest them after a restart."""
     with c.override(
@@ -416,7 +502,7 @@ def workflow_test_builtin_migration(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     with c.override(
-        # Random commit before pg_proc was updated.
+        # Random commit before pg_proc and mz_dataflow_operator_reachability was updated.
         Materialized(
             image="materialize/materialized:devel-aa4128c9c485322f90ab0af2b9cb4d16e1c470c0",
             default_size=1,
@@ -436,6 +522,13 @@ def workflow_test_builtin_migration(c: Composition) -> None:
         5
         ! SELECT DISTINCT proowner FROM pg_proc;
         contains:column "proowner" does not exist
+
+        # Populate mz_dataflow_operator_reachability
+        > CREATE TABLE t (a INT);
+        > CREATE DEFAULT INDEX ON t;
+
+        > SELECT pg_typeof(address) FROM mz_internal.mz_dataflow_operator_reachability LIMIT 1;
+        "bigint list"
     """
             )
         )
@@ -459,6 +552,9 @@ def workflow_test_builtin_migration(c: Composition) -> None:
        # This column is new after the migration
        > SELECT DISTINCT proowner FROM pg_proc;
        <null>
+
+       > SELECT pg_typeof(address) FROM mz_internal.mz_dataflow_operator_reachability LIMIT 1;
+       "uint8 list"
     """
             )
         )

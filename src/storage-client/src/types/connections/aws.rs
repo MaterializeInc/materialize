@@ -10,14 +10,15 @@
 //! AWS configuration for sources and sinks.
 
 use http::Uri;
-use mz_secrets::SecretsReader;
 use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::URL_PATTERN;
 use mz_repr::GlobalId;
+use mz_secrets::SecretsReader;
 
 use super::StringOrSecret;
 
@@ -57,23 +58,6 @@ impl RustType<ProtoSerdeUri> for SerdeUri {
         Ok(SerdeUri(proto.uri.parse()?))
     }
 }
-
-/// A prefix for an [external ID] to use for all AWS AssumeRole operations.
-/// It should be concatenanted with a non-user-provided suffix identifying the source or sink.
-/// The ID used for the suffix should never be reused if the source or sink is deleted.
-///
-/// **WARNING:** it is critical for security that this ID is **not**
-/// provided by end users of Materialize. It must be provided by the
-/// operator of the Materialize service.
-///
-/// This type protects against accidental construction of an
-/// `AwsExternalIdPrefix`. The only approved way to construct an `AwsExternalIdPrefix`
-/// is via [`ConnectionContext::from_cli_args`].
-///
-/// [`ConnectionContext::from_cli_args`]: crate::types::connections::ConnectionContext::from_cli_args
-/// [external ID]: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct AwsExternalIdPrefix(pub(super) String);
 
 /// AWS configuration overrides for a source or sink.
 ///
@@ -214,9 +198,9 @@ impl AwsConfig {
             }
             if let Some(external_id_prefix) = external_id_prefix {
                 let external_id = if let Some(suffix) = external_id_suffix {
-                    format!("{}-{}", external_id_prefix.0, suffix)
+                    format!("{}-{}", external_id_prefix, suffix)
                 } else {
-                    external_id_prefix.0.to_owned()
+                    external_id_prefix.to_string()
                 };
                 role = role.external_id(external_id);
             }

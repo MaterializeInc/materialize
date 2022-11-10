@@ -9,6 +9,7 @@
 
 //! Provides tooling to handle `WITH` options.
 
+use mz_sql_parser::ast::KafkaBroker;
 use mz_sql_parser::ast::ReplicaDefinition;
 use serde::{Deserialize, Serialize};
 
@@ -376,7 +377,8 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
             | WithOptionValue::Object(_)
             | WithOptionValue::Secret(_)
             | WithOptionValue::DataType(_)
-            | WithOptionValue::ClusterReplicas(_) => sql_bail!(
+            | WithOptionValue::ClusterReplicas(_)
+            | WithOptionValue::ConnectionKafkaBroker(_) => sql_bail!(
                 "incompatible value types: cannot convert {} to {}",
                 match v {
                     WithOptionValue::Sequence(_) => "sequences",
@@ -384,6 +386,7 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
                     WithOptionValue::Secret(_) => "secrets",
                     WithOptionValue::DataType(_) => "data types",
                     WithOptionValue::ClusterReplicas(_) => "cluster replicas",
+                    WithOptionValue::ConnectionKafkaBroker(_) => "connection kafka brokers",
                     _ => unreachable!(),
                 },
                 V::name()
@@ -422,5 +425,32 @@ impl TryFromValue<WithOptionValue<Aug>> for Vec<ReplicaDefinition<Aug>> {
 impl ImpliedValue for Vec<ReplicaDefinition<Aug>> {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide a set of cluster replicas")
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for Vec<KafkaBroker<Aug>> {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        let mut out = vec![];
+        match v {
+            WithOptionValue::ConnectionKafkaBroker(broker) => {
+                out.push(broker);
+            }
+            WithOptionValue::Sequence(values) => {
+                for value in values {
+                    out.extend(Self::try_from_value(value)?);
+                }
+            }
+            _ => sql_bail!("cannot use value as a kafka broker"),
+        }
+        Ok(out)
+    }
+    fn name() -> String {
+        "kafka broker".to_string()
+    }
+}
+
+impl ImpliedValue for Vec<KafkaBroker<Aug>> {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a kafka broker")
     }
 }

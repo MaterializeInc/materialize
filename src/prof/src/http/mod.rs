@@ -187,8 +187,8 @@ mod disabled {
     pub struct ProfForm {
         action: String,
         threads: Option<String>,
-        time_secs: u64,
-        hz: u32,
+        time_secs: Option<u64>,
+        hz: Option<u32>,
     }
 
     pub async fn handle_post(
@@ -202,7 +202,22 @@ mod disabled {
     ) -> impl IntoResponse {
         let merge_threads = threads.as_deref() == Some("merge");
         match action.as_ref() {
-            "time_fg" => Ok(time_prof(merge_threads, build_info, time_secs, hz).await),
+            "time_fg" => {
+                let time_secs = time_secs.ok_or_else(|| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        "Expected value for `time_secs`".to_owned(),
+                    )
+                })?;
+                let hz = hz.ok_or_else(|| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        "Expected value for `hz`".to_owned(),
+                    )
+                })?;
+
+                Ok(time_prof(merge_threads, build_info, time_secs, hz).await)
+            }
             _ => Err((
                 StatusCode::BAD_REQUEST,
                 format!("unrecognized `action` parameter: {}", action),
@@ -251,8 +266,8 @@ mod enabled {
     pub struct ProfForm {
         action: String,
         threads: Option<String>,
-        time_secs: u64,
-        hz: u32,
+        time_secs: Option<u64>,
+        hz: Option<u32>,
     }
 
     pub async fn handle_post(
@@ -373,9 +388,23 @@ mod enabled {
                         .into_response(),
                 )
             }
-            "time_fg" => Ok(time_prof(merge_threads, build_info, time_secs, hz)
-                .await
-                .into_response()),
+            "time_fg" => {
+                let time_secs = time_secs.ok_or_else(|| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        "Expected value for `time_secs`".to_owned(),
+                    )
+                })?;
+                let hz = hz.ok_or_else(|| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        "Expected value for `hz`".to_owned(),
+                    )
+                })?;
+                Ok(time_prof(merge_threads, build_info, time_secs, hz)
+                    .await
+                    .into_response())
+            }
             x => Err((
                 StatusCode::BAD_REQUEST,
                 format!("unrecognized `action` parameter: {}", x),

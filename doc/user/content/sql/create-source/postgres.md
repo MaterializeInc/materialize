@@ -171,4 +171,4 @@ The smallest source size (`3xsmall`) is a resonable default to get started. For 
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
 - [`CREATE SOURCE`](../)
-- [Change Data Capture (Postgres) guide](/integrations/cdc-postgres/#direct-postgres-source)
+- [Change Data Capture (PostgreSQL) guide](/integrations/cdc-postgres/#direct-postgres-source)

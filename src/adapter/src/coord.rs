@@ -86,8 +86,7 @@ use tracing::{info, span, warn, Level};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
-use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpointSpec;
-use mz_cloud_resources::CloudResourceController;
+use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
 use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId};
 use mz_ore::cast::CastFrom;
@@ -545,7 +544,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // This is disabled for the moment because it has unusual upper
         // advancement behavior.
         // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
-        let source_status_collection_id = if false {
+        let source_status_collection_id = if self.catalog.config().unsafe_mode {
             Some(self.catalog.resolve_builtin_storage_collection(
                 &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
             ))
@@ -568,7 +567,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // using a single dataflow, we have to make sure the rebuild process re-runs
                 // the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
-                    let data_source = match &source.data_source {
+                    let (data_source, status_collection_id) = match &source.data_source {
                         // Re-announce the source description.
                         DataSourceDesc::Ingestion(ingestion) => {
                             let mut source_imports = BTreeMap::new();
@@ -591,17 +590,20 @@ impl<S: Append + 'static> Coordinator<S> {
                                 source_exports.insert(subsource, export);
                             }
 
-                            DataSource::Ingestion(IngestionDescription {
-                                desc: ingestion.desc.clone(),
-                                ingestion_metadata: (),
-                                source_imports,
-                                source_exports,
-                                host_config: ingestion.host_config.clone(),
-                            })
+                            (
+                                DataSource::Ingestion(IngestionDescription {
+                                    desc: ingestion.desc.clone(),
+                                    ingestion_metadata: (),
+                                    source_imports,
+                                    source_exports,
+                                    host_config: ingestion.host_config.clone(),
+                                }),
+                                source_status_collection_id,
+                            )
                         }
-                        DataSourceDesc::Source => DataSource::Other,
+                        DataSourceDesc::Source => (DataSource::Other, None),
                         DataSourceDesc::Introspection(introspection) => {
-                            DataSource::Introspection(*introspection)
+                            (DataSource::Introspection(*introspection), None)
                         }
                     };
 
@@ -613,7 +615,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 desc: source.desc.clone(),
                                 data_source,
                                 since: None,
-                                status_collection_id: source_status_collection_id,
+                                status_collection_id,
                             },
                         )])
                         .await
@@ -738,12 +740,12 @@ impl<S: Append + 'static> Coordinator<S> {
                     );
                 }
                 CatalogItem::Connection(catalog_connection) => {
-                    if let mz_storage_client::types::connections::Connection::AwsPrivateLink(conn) =
+                    if let mz_storage_client::types::connections::Connection::AwsPrivatelink(conn) =
                         &catalog_connection.connection
                     {
                         privatelink_connections.insert(
                             entry.id(),
-                            VpcEndpointSpec {
+                            VpcEndpointConfig {
                                 aws_service_name: conn.service_name.clone(),
                                 availability_zone_ids: conn.availability_zones.clone(),
                             },

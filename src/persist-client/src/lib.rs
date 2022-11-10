@@ -36,18 +36,20 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::async_runtime::CpuHeavyRuntime;
+use crate::critical::{CriticalReaderId, SinceHandle};
 use crate::error::InvalidUsage;
 use crate::internal::compact::Compactor;
 use crate::internal::encoding::parse_id;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::state_versions::StateVersions;
-use crate::read::{ReadHandle, ReaderId};
+use crate::read::{LeasedReaderId, ReadHandle};
 use crate::write::{WriteHandle, WriterId};
 
 pub mod async_runtime;
 pub mod batch;
 pub mod cache;
+pub mod critical;
 pub mod error;
 pub mod fetch;
 pub mod inspect;
@@ -239,6 +241,8 @@ pub struct PersistConfig {
     /// Length of time after a reader's last operation after which the reader
     /// may be expired.
     pub reader_lease_duration: Duration,
+    /// Length of time between critical handles' calls to downgrade since
+    pub critical_downgrade_interval: Duration,
 }
 
 // Tuning inputs:
@@ -304,6 +308,7 @@ impl PersistConfig {
             consensus_connection_pool_max_size: 50,
             writer_lease_duration: 60 * Duration::from_secs(60),
             reader_lease_duration: Self::DEFAULT_READ_LEASE_DURATION,
+            critical_downgrade_interval: Duration::from_secs(30),
         }
     }
 }
@@ -394,7 +399,7 @@ impl PersistClient {
     {
         Ok((
             self.open_writer(shard_id).await?,
-            self.open_reader(shard_id).await?,
+            self.open_leased_reader(shard_id).await?,
         ))
     }
 
@@ -403,7 +408,7 @@ impl PersistClient {
     /// Use this to save latency and a bit of persist traffic if you're just
     /// going to immediately drop or expire the [WriteHandle].
     #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
-    pub async fn open_reader<K, V, T, D>(
+    pub async fn open_leased_reader<K, V, T, D>(
         &self,
         shard_id: ShardId,
     ) -> Result<ReadHandle<K, V, T, D>, InvalidUsage<T>>
@@ -428,10 +433,10 @@ impl PersistClient {
         .await?;
         let gc = GarbageCollector::new(machine.clone());
 
-        let reader_id = ReaderId::new();
+        let reader_id = LeasedReaderId::new();
         let heartbeat_ts = (self.cfg.now)();
         let (_, read_cap) = machine
-            .register_reader(&reader_id, self.cfg.reader_lease_duration, heartbeat_ts)
+            .register_leased_reader(&reader_id, self.cfg.reader_lease_duration, heartbeat_ts)
             .await;
         let reader = ReadHandle::new(
             self.cfg.clone(),
@@ -446,6 +451,89 @@ impl PersistClient {
         .await;
 
         Ok(reader)
+    }
+
+    /// A convenience [CriticalReaderId] for Materialize controllers.
+    ///
+    /// For most (soon to be all?) shards in Materialize, a centralized
+    /// "controller" is the authority for when a user no longer needs to read at
+    /// a given frontier. (Other uses are temporary holds where correctness of
+    /// the overall system can be maintained through a lease timeout.) To make
+    /// [SinceHandle] easier to work with, we offer this convenience id for
+    /// Materialize controllers, so they don't have to durably record it.
+    ///
+    /// TODO: We're still shaking out whether the controller should be the only
+    /// critical since hold or if there are other places we want them. If the
+    /// former, we should remove [CriticalReaderId] and bake in the singular
+    /// nature of the controller critical handle.
+    ///
+    /// ```rust
+    /// // This prints as something that is not 0 but is visually recognizable.
+    /// assert_eq!(
+    ///     mz_persist_client::PersistClient::CONTROLLER_CRITICAL_SINCE.to_string(),
+    ///     "c00000000-1111-2222-3333-444444444444",
+    /// )
+    /// ```
+    pub const CONTROLLER_CRITICAL_SINCE: CriticalReaderId =
+        CriticalReaderId([0, 0, 0, 0, 17, 17, 34, 34, 51, 51, 68, 68, 68, 68, 68, 68]);
+
+    /// Provides a capability for the durable TVC identified by `shard_id` at
+    /// its current since frontier.
+    ///
+    /// In contrast to the time-leased [ReadHandle] returned by [Self::open] and
+    /// [Self::open_leased_reader], this handle and its associated capability
+    /// are not leased. A [SinceHandle] only releases its since capability when
+    /// [SinceHandle::expire] is called. Also unlike `ReadHandle`, expire is not
+    /// called on drop. This is less ergonomic, but useful for "critical" since
+    /// holds which must survive even lease timeouts.
+    ///
+    /// **IMPORTANT**: The above means that if a SinceHandle is registered and
+    /// then lost, the shard's since will be permanently "stuck", forever
+    /// preventing logical compaction. Users are advised to durably record
+    /// (preferably in code) the intended [CriticalReaderId] _before_ registering
+    /// a SinceHandle (in case the process crashes at the wrong time).
+    ///
+    /// If `shard_id` has never been used before, initializes a new shard and
+    /// return a handle with its `since` frontier set to the initial value of
+    /// `Antichain::from_elem(T::minimum())`.
+    #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
+    pub async fn open_critical_since<K, V, T, D, O>(
+        &self,
+        shard_id: ShardId,
+        reader_id: CriticalReaderId,
+    ) -> Result<SinceHandle<K, V, T, D, O>, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
+        O: Clone + Codec64 + Default,
+    {
+        let state_versions = StateVersions::new(
+            self.cfg.clone(),
+            Arc::clone(&self.consensus),
+            Arc::clone(&self.blob),
+            Arc::clone(&self.metrics),
+        );
+        let mut machine = Machine::new(
+            self.cfg.clone(),
+            shard_id,
+            Arc::clone(&self.metrics),
+            Arc::new(state_versions),
+        )
+        .await?;
+        let gc = GarbageCollector::new(machine.clone());
+
+        let state = machine.register_critical_reader::<O>(&reader_id).await;
+        let handle = SinceHandle::new(
+            machine,
+            gc,
+            reader_id,
+            state.since,
+            Codec64::decode(state.opaque.0),
+        );
+
+        Ok(handle)
     }
 
     /// [Self::open], but returning only a [WriteHandle].
@@ -701,11 +789,11 @@ mod tests {
             .await
             .expect("codec mismatch");
         let mut read1 = client
-            .open_reader::<String, String, u64, i64>(shard_id)
+            .open_leased_reader::<String, String, u64, i64>(shard_id)
             .await
             .expect("codec mismatch");
         let mut read2 = client
-            .open_reader::<String, String, u64, i64>(shard_id)
+            .open_leased_reader::<String, String, u64, i64>(shard_id)
             .await
             .expect("codec mismatch");
         let mut write2 = client
@@ -795,7 +883,7 @@ mod tests {
             // set.
             assert_eq!(
                 client
-                    .open_reader::<Vec<u8>, String, u64, i64>(shard_id0)
+                    .open_leased_reader::<Vec<u8>, String, u64, i64>(shard_id0)
                     .await
                     .unwrap_err(),
                 InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
@@ -1424,7 +1512,7 @@ mod tests {
 
         let (_, _, maintenance) = read
             .machine
-            .heartbeat_reader(&read.reader_id, now.load(Ordering::SeqCst))
+            .heartbeat_leased_reader(&read.reader_id, now.load(Ordering::SeqCst))
             .await;
         maintenance
             .perform(&read.machine.clone(), &read.gc.clone())
@@ -1446,12 +1534,12 @@ mod tests {
             "ShardId(00000000-0000-0000-0000-000000000000)"
         );
         assert_eq!(
-            format!("{}", ReaderId([0u8; 16])),
+            format!("{}", LeasedReaderId([0u8; 16])),
             "r00000000-0000-0000-0000-000000000000"
         );
         assert_eq!(
-            format!("{:?}", ReaderId([0u8; 16])),
-            "ReaderId(00000000-0000-0000-0000-000000000000)"
+            format!("{:?}", LeasedReaderId([0u8; 16])),
+            "LeasedReaderId(00000000-0000-0000-0000-000000000000)"
         );
 
         // ShardId can be parsed back from its Display/to_string format.

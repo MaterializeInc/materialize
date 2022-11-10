@@ -18,12 +18,11 @@ use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
 use tokio::time::Duration;
 
-use mz_kafka_util::client::{create_new_client_config, MzClientContext};
+use mz_kafka_util::client::{BrokerRewritingClientContext, MzClientContext};
 use mz_ore::task;
-use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{AstInfo, KafkaConfigOption, KafkaConfigOptionName};
-use mz_storage_client::types::connections::{KafkaConnection, StringOrSecret};
+use mz_storage_client::types::connections::{ConnectionContext, KafkaConnection, StringOrSecret};
 
 use crate::names::Aug;
 use crate::normalize::generate_extracted_config;
@@ -218,33 +217,20 @@ impl TryFrom<&KafkaConfigOptionExtracted> for Option<KafkaStartOffsetType> {
 ///
 /// - `librdkafka` cannot create a BaseConsumer using the provided `options`.
 pub async fn create_consumer(
-    topic: &str,
+    connection_context: &ConnectionContext,
     kafka_connection: &KafkaConnection,
-    options: &BTreeMap<String, StringOrSecret>,
-    librdkafka_log_level: tracing::Level,
-    secrets_reader: &dyn SecretsReader,
-) -> Result<Arc<BaseConsumer<KafkaErrCheckContext>>, PlanError> {
-    let mut config = create_new_client_config(librdkafka_log_level);
-    mz_storage_client::types::connections::populate_client_config(
-        kafka_connection.clone(),
-        options,
-        std::collections::HashSet::new(),
-        &mut config,
-        secrets_reader,
-    )
-    .await;
+    topic: &str,
+) -> Result<Arc<BaseConsumer<BrokerRewritingClientContext<KafkaErrCheckContext>>>, PlanError> {
+    let consumer: BaseConsumer<_> = kafka_connection
+        .create_with_context(
+            connection_context,
+            KafkaErrCheckContext::default(),
+            &BTreeMap::new(),
+        )
+        .await
+        .map_err(|e| sql_err!("{}", e))?;
+    let consumer = Arc::new(consumer);
 
-    // We need this only for logging which broker we're connecting to; the
-    // setting itself makes its way into `config`.
-    let broker = config
-        .get("bootstrap.servers")
-        .expect("callers must have already set bootstrap.servers");
-
-    let consumer: Arc<BaseConsumer<KafkaErrCheckContext>> = Arc::new(
-        config
-            .create_with_context(KafkaErrCheckContext::default())
-            .map_err(|e| sql_err!("{}", e))?,
-    );
     let context = Arc::clone(consumer.context());
     let owned_topic = String::from(topic);
     // Wait for a metadata request for up to one second. This greatly
@@ -252,7 +238,7 @@ pub async fn create_consumer(
     // e.g. the hostname was mistyped. librdkafka doesn't expose a
     // better API for asking whether a connection succeeded or failed,
     // unfortunately.
-    task::spawn_blocking(move || format!("kafka_set_metadata:{broker}:{topic}"), {
+    task::spawn_blocking(move || format!("kafka_get_metadata:{topic}"), {
         let consumer = Arc::clone(&consumer);
         move || {
             let _ = consumer.fetch_metadata(Some(&owned_topic), Duration::from_secs(1));
@@ -260,7 +246,7 @@ pub async fn create_consumer(
     })
     .await
     .map_err(|e| sql_err!("{}", e))?;
-    let error = context.error.lock().expect("lock poisoned");
+    let error = context.inner().error.lock().expect("lock poisoned");
     if let Some(error) = &*error {
         sql_bail!("librdkafka: {}", error)
     }
@@ -282,12 +268,15 @@ pub async fn create_consumer(
 ///
 /// If `START TIMESTAMP` has not been configured, an empty Option is
 /// returned.
-pub async fn lookup_start_offsets(
-    consumer: Arc<BaseConsumer<KafkaErrCheckContext>>,
+pub async fn lookup_start_offsets<C>(
+    consumer: Arc<BaseConsumer<C>>,
     topic: &str,
     offsets: KafkaStartOffsetType,
     now: u64,
-) -> Result<Option<Vec<i64>>, PlanError> {
+) -> Result<Option<Vec<i64>>, PlanError>
+where
+    C: ConsumerContext + 'static,
+{
     let time_offset = match offsets {
         KafkaStartOffsetType::StartTimestamp(time) => time,
         _ => return Ok(None),
@@ -362,11 +351,10 @@ pub async fn lookup_start_offsets(
 // If that ever changes, we will want to first collect all pids that have no
 // offset for a given timestamp and then do a single request (instead of doing
 // a request for each partition individually).
-fn fetch_end_offset(
-    consumer: &BaseConsumer<KafkaErrCheckContext>,
-    topic: &str,
-    pid: i32,
-) -> Result<i64, PlanError> {
+fn fetch_end_offset<C>(consumer: &BaseConsumer<C>, topic: &str, pid: i32) -> Result<i64, PlanError>
+where
+    C: ConsumerContext,
+{
     let (_low, high) = consumer
         .fetch_watermarks(topic, pid, Duration::from_secs(10))
         .map_err(|e| sql_err!("{}", e))?;

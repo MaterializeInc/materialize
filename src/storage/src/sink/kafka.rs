@@ -20,10 +20,10 @@ use anyhow::{anyhow, bail, Context};
 use differential_dataflow::{Collection, Hashable};
 use futures::{StreamExt, TryFutureExt};
 use itertools::Itertools;
+use maplit::btreemap;
 use prometheus::core::AtomicU64;
 use rdkafka::client::ClientContext;
-use rdkafka::config::ClientConfig;
-use rdkafka::consumer::{BaseConsumer, Consumer};
+use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::{KafkaError, KafkaResult, RDKafkaErrorCode};
 use rdkafka::message::{Header, Message, OwnedHeaders, OwnedMessage, ToBytes};
 use rdkafka::producer::Producer;
@@ -45,7 +45,7 @@ use tracing::{debug, error, info, warn};
 use mz_interchange::avro::{AvroEncoder, AvroSchemaGenerator};
 use mz_interchange::encode::Encode;
 use mz_interchange::json::JsonEncoder;
-use mz_kafka_util::client::{create_new_client_config, MzClientContext};
+use mz_kafka_util::client::{BrokerRewritingClientContext, MzClientContext};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
@@ -54,7 +54,7 @@ use mz_ore::task;
 use mz_persist_client::ShardId;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::types::connections::{ConnectionContext, PopulateClientConfig};
+use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::DataflowError;
 use mz_storage_client::types::sinks::{
     KafkaSinkConnection, PublishedSchemaInfo, SinkAsOf, SinkEnvelope, StorageSinkDesc,
@@ -263,7 +263,7 @@ impl ProducerContext for SinkProducerContext {
 #[derive(Clone)]
 struct KafkaTxProducer {
     name: String,
-    inner: Arc<ThreadedProducer<SinkProducerContext>>,
+    inner: Arc<ThreadedProducer<BrokerRewritingClientContext<SinkProducerContext>>>,
     timeout: Duration,
 }
 
@@ -396,7 +396,7 @@ struct KafkaSinkState {
 
     progress_topic: String,
     progress_key: String,
-    progress_client_config: rdkafka::ClientConfig,
+    progress_client: Arc<BaseConsumer<BrokerRewritingClientContext<MzClientContext>>>,
 
     healthchecker: Arc<Mutex<Option<Healthchecker>>>,
     gate_ts: Rc<Cell<Option<Timestamp>>>,
@@ -426,12 +426,6 @@ impl KafkaSinkState {
         connection_context: &ConnectionContext,
         gate_ts: Rc<Cell<Option<Timestamp>>>,
     ) -> Self {
-        let transactional_id = format!("mz-producer-{sink_id}-{worker_id}");
-        let config =
-            Self::create_producer_config(&connection, connection_context, transactional_id);
-        let progress_client_config =
-            Self::create_progress_client_config(&connection, connection_context, *sink_id);
-
         let metrics = Arc::new(SinkMetrics::new(
             metrics,
             &connection.topic,
@@ -441,18 +435,60 @@ impl KafkaSinkState {
 
         let retry_manager = Arc::new(Mutex::new(KafkaSinkSendRetryManager::new()));
 
+        let producer_context =
+            SinkProducerContext::new(Arc::clone(&metrics), Arc::clone(&retry_manager));
+        let producer = TokioHandle::current()
+            .block_on(connection.connection.create_with_context(
+                connection_context,
+                producer_context,
+                &btreemap! {
+                    // Ensure that messages are sinked in order and without
+                    // duplicates. Note that this only applies to a single
+                    // instance of a producer - in the case of restarts, all
+                    // bets are off and full exactly once support is required.
+                    "enable.idempotence" => "true".into(),
+                    // Increase limits for the Kafka producer's internal
+                    // buffering of messages Currently we don't have a great
+                    // backpressure mechanism to tell indexes or views to slow
+                    // down, so the only thing we can do with a message that we
+                    // can't immediately send is to put it in a buffer and
+                    // there's no point having buffers within the dataflow layer
+                    // and Kafka If the sink starts falling behind and the
+                    // buffers start consuming too much memory the best thing to
+                    // do is to drop the sink Sets the buffer size to be 16 GB
+                    // (note that this setting is in KB)
+                    "queue.buffering.max.kbytes" => format!("{}", 16 << 20),
+                    // Set the max messages buffered by the producer at any time
+                    // to 10MM which is the maximum allowed value.
+                    "queue.buffering.max.messages" => format!("{}", 10_000_000),
+                    // Make the Kafka producer wait at least 10 ms before
+                    // sending out MessageSets TODO(rkhaitan): experiment with
+                    // different settings for this value to see if it makes a
+                    // big difference.
+                    "queue.buffering.max.ms" => format!("{}", 10),
+                    "transactional.id" => format!("mz-producer-{sink_id}-{worker_id}"),
+                },
+            ))
+            .expect("creating Kafka producer for sink failed");
         let producer = KafkaTxProducer {
             name: sink_name.clone(),
-            inner: Arc::new(
-                config
-                    .create_with_context::<_, ThreadedProducer<_>>(SinkProducerContext::new(
-                        Arc::clone(&metrics),
-                        Arc::clone(&retry_manager),
-                    ))
-                    .expect("creating kafka producer for Kafka sink failed"),
-            ),
+            inner: Arc::new(producer),
             timeout: Duration::from_secs(5),
         };
+
+        let progress_client = TokioHandle::current()
+            .block_on(connection.connection.create_with_context(
+                connection_context,
+                MzClientContext,
+                &btreemap! {
+                    "group.id" => format!("materialize-bootstrap-sink-{sink_id}"),
+                    "isolation.level" => "read_committed".into(),
+                    "enable.auto.commit" => "false".into(),
+                    "auto.offset.reset" => "earliest".into(),
+                    "enable.partition.eof" => "true".into(),
+                },
+            ))
+            .expect("creating Kafka progress client for sink failed");
 
         KafkaSinkState {
             name: sink_name,
@@ -464,70 +500,12 @@ impl KafkaSinkState {
             retry_manager,
             progress_topic: connection.progress.topic,
             progress_key: format!("mz-sink-{sink_id}"),
-            progress_client_config,
+            progress_client: Arc::new(progress_client),
             healthchecker: Arc::new(Mutex::new(None)),
             gate_ts,
             latest_progress_ts: Timestamp::minimum(),
             write_frontier,
         }
-    }
-
-    fn create_producer_config(
-        connection: &KafkaSinkConnection,
-        connection_context: &ConnectionContext,
-        transactional_id: String,
-    ) -> ClientConfig {
-        let mut config = create_new_client_config(connection_context.librdkafka_log_level);
-        TokioHandle::current().block_on(
-            connection.populate_client_config(&mut config, &*connection_context.secrets_reader),
-        );
-
-        // Ensure that messages are sinked in order and without duplicates. Note that
-        // this only applies to a single instance of a producer - in the case of restarts,
-        // all bets are off and full exactly once support is required.
-        config.set("enable.idempotence", "true");
-
-        // Increase limits for the Kafka producer's internal buffering of messages
-        // Currently we don't have a great backpressure mechanism to tell indexes or
-        // views to slow down, so the only thing we can do with a message that we
-        // can't immediately send is to put it in a buffer and there's no point
-        // having buffers within the dataflow layer and Kafka
-        // If the sink starts falling behind and the buffers start consuming
-        // too much memory the best thing to do is to drop the sink
-        // Sets the buffer size to be 16 GB (note that this setting is in KB)
-        config.set("queue.buffering.max.kbytes", &format!("{}", 16 << 20));
-
-        // Set the max messages buffered by the producer at any time to 10MM which
-        // is the maximum allowed value
-        config.set("queue.buffering.max.messages", &format!("{}", 10_000_000));
-
-        // Make the Kafka producer wait at least 10 ms before sending out MessageSets
-        // TODO(rkhaitan): experiment with different settings for this value to see
-        // if it makes a big difference
-        config.set("queue.buffering.max.ms", &format!("{}", 10));
-
-        config.set("transactional.id", transactional_id);
-
-        config
-    }
-
-    fn create_progress_client_config(
-        connection: &KafkaSinkConnection,
-        connection_context: &ConnectionContext,
-        id: GlobalId,
-    ) -> ClientConfig {
-        let mut config = create_new_client_config(connection_context.librdkafka_log_level);
-        TokioHandle::current().block_on(
-            connection.populate_client_config(&mut config, &*connection_context.secrets_reader),
-        );
-
-        config
-            .set("group.id", format!("materialize-bootstrap-sink-{id}"))
-            .set("isolation.level", "read_committed")
-            .set("enable.auto.commit", "false")
-            .set("auto.offset.reset", "earliest")
-            .set("enable.partition.eof", "true");
-        config
     }
 
     async fn send<'a, K, P>(&self, mut record: BaseRecord<'a, K, P>)
@@ -608,10 +586,13 @@ impl KafkaSinkState {
     async fn determine_latest_progress_record(&self) -> Result<Option<Timestamp>, anyhow::Error> {
         // Polls a message from a Kafka Source.  Blocking so should always be called on background
         // thread.
-        fn get_next_message(
-            consumer: &mut BaseConsumer,
+        fn get_next_message<C>(
+            consumer: &BaseConsumer<C>,
             timeout: Duration,
-        ) -> Result<Option<(Vec<u8>, Vec<u8>, i64)>, anyhow::Error> {
+        ) -> Result<Option<(Vec<u8>, Vec<u8>, i64)>, anyhow::Error>
+        where
+            C: ConsumerContext,
+        {
             if let Some(result) = consumer.poll(timeout) {
                 match result {
                     Ok(message) => match message.payload() {
@@ -632,25 +613,27 @@ impl KafkaSinkState {
 
         // Retrieves the latest committed timestamp from the progress topic.  Blocking so should
         // always be called on background thread
-        fn get_latest_ts(
+        fn get_latest_ts<C>(
             progress_topic: &str,
             progress_key: &str,
-            config: &ClientConfig,
+            progress_client: &BaseConsumer<C>,
             timeout: Duration,
-        ) -> Result<Option<Timestamp>, anyhow::Error> {
-            let mut consumer = config
-                .create::<BaseConsumer>()
-                .context("creating consumer client failed")?;
-
+        ) -> Result<Option<Timestamp>, anyhow::Error>
+        where
+            C: ConsumerContext,
+        {
             // ensure the progress topic has exactly one partition
-            let partitions =
-                mz_kafka_util::client::get_partitions(consumer.client(), progress_topic, timeout)
-                    .with_context(|| {
-                    format!(
-                        "Unable to fetch metadata about progress topic {}",
-                        progress_topic
-                    )
-                })?;
+            let partitions = mz_kafka_util::client::get_partitions(
+                progress_client.client(),
+                progress_topic,
+                timeout,
+            )
+            .with_context(|| {
+                format!(
+                    "Unable to fetch metadata about progress topic {}",
+                    progress_topic
+                )
+            })?;
 
             if partitions.len() != 1 {
                 bail!(
@@ -673,14 +656,14 @@ impl KafkaSinkState {
             tps.add_partition(progress_topic, partition);
             tps.set_partition_offset(progress_topic, partition, Offset::Beginning)?;
 
-            consumer.assign(&tps).with_context(|| {
+            progress_client.assign(&tps).with_context(|| {
                 format!(
                     "Error seeking in progress topic {}:{}",
                     progress_topic, partition
                 )
             })?;
 
-            let (lo, hi) = consumer
+            let (lo, hi) = progress_client
                 .fetch_watermarks(progress_topic, 0, timeout)
                 .map_err(|e| {
                     anyhow!(
@@ -698,7 +681,7 @@ impl KafkaSinkState {
             let mut latest_offset = None;
 
             let progress_key_bytes = progress_key.as_bytes();
-            while let Some((key, message, offset)) = get_next_message(&mut consumer, timeout)? {
+            while let Some((key, message, offset)) = get_next_message(progress_client, timeout)? {
                 debug_assert!(offset >= latest_offset.unwrap_or(0));
                 latest_offset = Some(offset);
 
@@ -733,14 +716,14 @@ impl KafkaSinkState {
             .retry_async(|_| async {
                 let progress_topic = self.progress_topic.clone();
                 let progress_key = self.progress_key.clone();
-                let progress_client_config = self.progress_client_config.clone();
+                let progress_client = Arc::clone(&self.progress_client);
                 task::spawn_blocking(
                     || format!("get_latest_ts:{}", self.name),
                     move || {
                         get_latest_ts(
                             &progress_topic,
                             &progress_key,
-                            &progress_client_config,
+                            &progress_client,
                             Duration::from_secs(10),
                         )
                     },

@@ -34,10 +34,32 @@ use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::{DecodeError, SourceErrorDetails};
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
 use mz_storage_client::types::sources::MzOffset;
-use mz_storage_client::types::sources::SourceConnection;
 
 use crate::source::healthcheck::SourceStatusUpdate;
 use crate::source::metrics::SourceBaseMetrics;
+
+/// Extension trait to the SourceConnection trait that defines how to intantiate a particular
+/// connetion into a reader and offset committer
+pub trait SourceConnectionBuilder {
+    type Reader: SourceReader + 'static;
+    type OffsetCommitter: OffsetCommitter + Send + Sync + 'static;
+
+    /// Turn this connection into a new source reader.
+    ///
+    /// This function returns the source reader and its corresponding offset committed.
+    fn into_reader(
+        self,
+        source_name: String,
+        source_id: GlobalId,
+        worker_id: usize,
+        worker_count: usize,
+        consumer_activator: SyncActivator,
+        restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
+        encoding: SourceDataEncoding,
+        metrics: crate::source::metrics::SourceBaseMetrics,
+        connection_context: ConnectionContext,
+    ) -> Result<(Self::Reader, Self::OffsetCommitter), anyhow::Error>;
+}
 
 /// This trait defines the interface between Materialize and external sources,
 /// and must be implemented for every new kind of source.
@@ -68,29 +90,6 @@ pub trait SourceReader {
     type Key: timely::Data + MaybeLength;
     type Value: timely::Data + MaybeLength;
     type Diff: timely::Data;
-    type Connection: SourceConnection;
-
-    type OffsetCommitter: OffsetCommitter + Send + Sync + 'static;
-
-    /// Create a new source reader.
-    ///
-    /// This function returns the source reader and optionally, any "partition" it's
-    /// already reading. In practice, the partition is only non-None for static sources
-    /// that either don't truly have partitions or have a fixed number of partitions.
-    fn new(
-        source_name: String,
-        source_id: GlobalId,
-        worker_id: usize,
-        worker_count: usize,
-        consumer_activator: SyncActivator,
-        connection: Self::Connection,
-        restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
-        encoding: SourceDataEncoding,
-        metrics: crate::source::metrics::SourceBaseMetrics,
-        connection_context: ConnectionContext,
-    ) -> Result<(Self, Self::OffsetCommitter), anyhow::Error>
-    where
-        Self: Sized;
 
     /// Returns the next message available from the source.
     ///

@@ -19,6 +19,7 @@ use mz_storage_client::types::sources::encoding::SourceDataEncoding;
 use mz_storage_client::types::sources::{MzOffset, TestScriptSourceConnection};
 
 use crate::source::commit::LogCommitter;
+use crate::source::types::SourceConnectionBuilder;
 use crate::source::{SourceMessage, SourceMessageType, SourceReader, SourceReaderError};
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -47,27 +48,23 @@ pub struct TestScriptSourceReader {
     script: Script,
 }
 
-#[async_trait::async_trait(?Send)]
-impl SourceReader for TestScriptSourceReader {
-    type Key = Option<Vec<u8>>;
-    type Value = Option<Vec<u8>>;
-    type Diff = ();
+impl SourceConnectionBuilder for TestScriptSourceConnection {
+    type Reader = TestScriptSourceReader;
     type OffsetCommitter = LogCommitter;
-    type Connection = TestScriptSourceConnection;
 
-    fn new(
+    fn into_reader(
+        self,
         _source_name: String,
         source_id: GlobalId,
         worker_id: usize,
         worker_count: usize,
         _consumer_activator: SyncActivator,
-        conn: Self::Connection,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         _metrics: crate::source::metrics::SourceBaseMetrics,
         _connection_context: ConnectionContext,
-    ) -> Result<(Self, Self::OffsetCommitter), anyhow::Error> {
-        let commands: Vec<ScriptCommand> = serde_json::from_str(&conn.desc_json)?;
+    ) -> Result<(Self::Reader, Self::OffsetCommitter), anyhow::Error> {
+        let commands: Vec<ScriptCommand> = serde_json::from_str(&self.desc_json)?;
         Ok((
             TestScriptSourceReader {
                 script: Script {
@@ -81,6 +78,14 @@ impl SourceReader for TestScriptSourceReader {
             },
         ))
     }
+}
+
+#[async_trait::async_trait(?Send)]
+impl SourceReader for TestScriptSourceReader {
+    type Key = Option<Vec<u8>>;
+    type Value = Option<Vec<u8>>;
+    type Diff = ();
+
     async fn next(
         &mut self,
         timestamp_granularity: Duration,

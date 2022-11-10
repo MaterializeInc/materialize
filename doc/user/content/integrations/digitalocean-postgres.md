@@ -21,5 +21,5 @@ For more information, see the [Managed PostgreSQL](https://docs.digitalocean.com
 
 ## Related pages
 
-- [Connect Materialize to PostgreSQL](/integrations/cdc-postgres/)
-- [`CREATE SOURCE FROM POSTGRES`](/sql/create-source/postgres/)
+- [`CREATE SOURCE`: PostgreSQL](/sql/create-source/postgres/)
+- [PostgreSQL CDC guide](../cdc-postgres/)

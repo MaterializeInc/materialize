@@ -9,8 +9,6 @@
 
 //! Types and traits related to reporting changing collections out of `dataflow`.
 
-use std::collections::{BTreeMap, HashSet};
-
 use mz_persist_client::ShardId;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -22,9 +20,7 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc};
 
 use crate::controller::CollectionMetadata;
-use crate::types::connections::{
-    CsrConnection, KafkaConnection, PopulateClientConfig, StringOrSecret,
-};
+use crate::types::connections::{CsrConnection, KafkaConnection};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -259,7 +255,6 @@ impl RustType<ProtoKafkaSinkProgressConnection> for KafkaSinkProgressConnection 
 pub struct KafkaSinkConnection {
     pub connection: KafkaConnection,
     pub connection_id: GlobalId,
-    pub options: BTreeMap<String, StringOrSecret>,
     pub topic: String,
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     pub relation_key_indices: Option<Vec<usize>>,
@@ -271,23 +266,10 @@ pub struct KafkaSinkConnection {
     pub fuel: usize,
 }
 
-impl PopulateClientConfig for KafkaSinkConnection {
-    fn kafka_connection(&self) -> &KafkaConnection {
-        &self.connection
-    }
-    fn options(&self) -> &BTreeMap<String, StringOrSecret> {
-        &self.options
-    }
-    fn drop_option_keys() -> HashSet<&'static str> {
-        ["statistics.interval.ms", "isolation.level"].into()
-    }
-}
-
 proptest::prop_compose! {
     fn any_kafka_sink_connection()(
         connection in any::<KafkaConnection>(),
         connection_id in any::<GlobalId>(),
-        options in any::<BTreeMap<String, StringOrSecret>>(),
         topic in any::<String>(),
         key_desc_and_indices in any::<Option<(RelationDesc, Vec<usize>)>>(),
         relation_key_indices in any::<Option<Vec<usize>>>(),
@@ -299,7 +281,6 @@ proptest::prop_compose! {
         KafkaSinkConnection {
             connection,
             connection_id,
-            options,
             topic,
             key_desc_and_indices,
             relation_key_indices,
@@ -359,11 +340,6 @@ impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
         ProtoKafkaSinkConnection {
             connection: Some(self.connection.into_proto()),
             connection_id: Some(self.connection_id.into_proto()),
-            options: self
-                .options
-                .iter()
-                .map(|(k, v)| (k.clone(), v.into_proto()))
-                .collect(),
             topic: self.topic.clone(),
             key_desc_and_indices: self.key_desc_and_indices.into_proto(),
             relation_key_indices: self.relation_key_indices.into_proto(),
@@ -375,12 +351,6 @@ impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
     }
 
     fn from_proto(proto: ProtoKafkaSinkConnection) -> Result<Self, TryFromProtoError> {
-        let options: Result<_, TryFromProtoError> = proto
-            .options
-            .into_iter()
-            .map(|(k, v)| StringOrSecret::from_proto(v).map(|v| (k, v)))
-            .collect();
-
         Ok(KafkaSinkConnection {
             connection: proto
                 .connection
@@ -388,7 +358,6 @@ impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
             connection_id: proto
                 .connection_id
                 .into_rust_if_some("ProtoKafkaSinkConnection::connection_id")?,
-            options: options?,
             topic: proto.topic,
             key_desc_and_indices: proto.key_desc_and_indices.into_rust()?,
             relation_key_indices: proto.relation_key_indices.into_rust()?,
@@ -460,7 +429,6 @@ pub enum KafkaConsistencyConfig {
 pub struct KafkaSinkConnectionBuilder {
     pub connection_id: GlobalId,
     pub connection: KafkaConnection,
-    pub options: BTreeMap<String, StringOrSecret>,
     pub format: KafkaSinkFormat,
     /// A natural key of the sinked relation (view or source).
     pub relation_key_indices: Option<Vec<usize>>,
@@ -473,18 +441,6 @@ pub struct KafkaSinkConnectionBuilder {
     pub replication_factor: i32,
     pub fuel: usize,
     pub retention: KafkaSinkConnectionRetention,
-}
-
-impl PopulateClientConfig for KafkaSinkConnectionBuilder {
-    fn kafka_connection(&self) -> &KafkaConnection {
-        &self.connection
-    }
-    fn options(&self) -> &BTreeMap<String, StringOrSecret> {
-        &self.options
-    }
-    fn drop_option_keys() -> HashSet<&'static str> {
-        ["statistics.interval.ms", "isolation.level"].into()
-    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

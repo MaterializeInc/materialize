@@ -1,5 +1,11 @@
 # dbt-materialize Changelog
 
+## 1.3.0 - 2022-11-09
+
+* Upgrade to `dbt-postgres` v1.3.0.
+
+* Migrate cross-database macros from [`materialize-dbt-utils`](https://github.com/MaterializeInc/materialize-dbt-utils) into the adapter, as a result of [dbt-core #5298](https://github.com/dbt-labs/dbt-core/pull/5298). The `utils` macros will be deprecated in the upcoming release of the package, and removed in a subsequent release.
+
 ## 1.2.1 - 2022-11-01
 
 * Add `cluster` to the connection parameters returned on `dbt debug`.

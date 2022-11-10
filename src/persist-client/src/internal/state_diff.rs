@@ -21,13 +21,14 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::debug;
 
+use crate::critical::CriticalReaderId;
 use crate::internal::paths::PartialRollupKey;
 use crate::internal::state::{
-    HollowBatch, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, ReaderState,
-    State, StateCollections, WriterState,
+    CriticalReaderState, HollowBatch, LeasedReaderState, ProtoStateField, ProtoStateFieldDiffType,
+    ProtoStateFieldDiffs, State, StateCollections, WriterState,
 };
 use crate::internal::trace::{FueledMergeRes, Trace};
-use crate::read::ReaderId;
+use crate::read::LeasedReaderId;
 use crate::write::WriterId;
 use crate::{Metrics, PersistConfig};
 
@@ -68,7 +69,8 @@ pub struct StateDiff<T> {
     pub(crate) latest_rollup_key: PartialRollupKey,
     pub(crate) rollups: Vec<StateFieldDiff<SeqNo, PartialRollupKey>>,
     pub(crate) last_gc_req: Vec<StateFieldDiff<(), SeqNo>>,
-    pub(crate) readers: Vec<StateFieldDiff<ReaderId, ReaderState<T>>>,
+    pub(crate) leased_readers: Vec<StateFieldDiff<LeasedReaderId, LeasedReaderState<T>>>,
+    pub(crate) critical_readers: Vec<StateFieldDiff<CriticalReaderId, CriticalReaderState<T>>>,
     pub(crate) writers: Vec<StateFieldDiff<WriterId, WriterState>>,
     pub(crate) since: Vec<StateFieldDiff<(), Antichain<T>>>,
     pub(crate) spine: Vec<StateFieldDiff<HollowBatch<T>, ()>>,
@@ -88,7 +90,8 @@ impl<T: Timestamp + Codec64> StateDiff<T> {
             latest_rollup_key,
             rollups: Vec::default(),
             last_gc_req: Vec::default(),
-            readers: Vec::default(),
+            leased_readers: Vec::default(),
+            critical_readers: Vec::default(),
             writers: Vec::default(),
             since: Vec::default(),
             spine: Vec::default(),
@@ -108,7 +111,8 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                 StateCollections {
                     last_gc_req: from_last_gc_req,
                     rollups: from_rollups,
-                    readers: from_readers,
+                    leased_readers: from_leased_readers,
+                    critical_readers: from_critical_readers,
                     writers: from_writers,
                     trace: from_trace,
                 },
@@ -122,7 +126,8 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                 StateCollections {
                     last_gc_req: to_last_gc_req,
                     rollups: to_rollups,
-                    readers: to_readers,
+                    leased_readers: to_leased_readers,
+                    critical_readers: to_critical_readers,
                     writers: to_writers,
                     trace: to_trace,
                 },
@@ -139,7 +144,16 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         );
         diff_field_single(from_last_gc_req, to_last_gc_req, &mut diffs.last_gc_req);
         diff_field_sorted_iter(from_rollups.iter(), to_rollups, &mut diffs.rollups);
-        diff_field_sorted_iter(from_readers.iter(), to_readers, &mut diffs.readers);
+        diff_field_sorted_iter(
+            from_leased_readers.iter(),
+            to_leased_readers,
+            &mut diffs.leased_readers,
+        );
+        diff_field_sorted_iter(
+            from_critical_readers.iter(),
+            to_critical_readers,
+            &mut diffs.critical_readers,
+        );
         diff_field_sorted_iter(from_writers.iter(), to_writers, &mut diffs.writers);
         diff_field_single(from_trace.since(), to_trace.since(), &mut diffs.since);
         diff_field_spine(from_trace, to_trace, &mut diffs.spine);
@@ -251,32 +265,40 @@ impl<K, V, T: Timestamp + Lattice, D> State<K, V, T, D> {
         }
         self.seqno = diff.seqno_to;
 
-        apply_diffs_map("rollups", diff.rollups, &mut self.collections.rollups)?;
-        apply_diffs_single(
-            "last_gc_req",
-            diff.last_gc_req,
-            &mut self.collections.last_gc_req,
-        )?;
-        apply_diffs_map("readers", diff.readers, &mut self.collections.readers)?;
-        apply_diffs_map("writers", diff.writers, &mut self.collections.writers)?;
+        // Deconstruct collections so we get a compile failure if new fields are
+        // added.
+        let StateCollections {
+            last_gc_req,
+            rollups,
+            leased_readers,
+            critical_readers,
+            writers,
+            trace,
+        } = &mut self.collections;
+
+        apply_diffs_map("rollups", diff.rollups, rollups)?;
+        apply_diffs_single("last_gc_req", diff.last_gc_req, last_gc_req)?;
+        apply_diffs_map("leased_readers", diff.leased_readers, leased_readers)?;
+        apply_diffs_map("critical_readers", diff.critical_readers, critical_readers)?;
+        apply_diffs_map("writers", diff.writers, writers)?;
 
         for x in diff.since {
             match x.val {
                 Update(from, to) => {
-                    if self.collections.trace.since() != &from {
+                    if trace.since() != &from {
                         return Err(format!(
                             "since update didn't match: {:?} vs {:?}",
                             self.collections.trace.since(),
                             &from
                         ));
                     }
-                    self.collections.trace.downgrade_since(&to);
+                    trace.downgrade_since(&to);
                 }
                 Insert(_) => return Err("cannot insert since field".to_string()),
                 Delete(_) => return Err("cannot delete since field".to_string()),
             }
         }
-        apply_diffs_spine(metrics, diff.spine, &mut self.collections.trace)?;
+        apply_diffs_spine(metrics, diff.spine, trace)?;
 
         // There's various sanity checks that this method could run (e.g. since,
         // upper, seqno_since, etc don't regress or that diff.latest_rollup ==

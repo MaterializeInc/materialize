@@ -856,7 +856,7 @@ where
             {
                 Some(
                     durable_metadata
-                        .remove(&status_collection_id)
+                        .get(&status_collection_id)
                         .ok_or(StorageError::IdentifierMissing(status_collection_id))?
                         .data_shard,
                 )
@@ -1364,6 +1364,11 @@ where
             None => Ok(()),
             Some(StorageResponse::FrontierUppers(updates)) => {
                 self.update_write_frontiers(&updates).await?;
+                Ok(())
+            }
+            Some(StorageResponse::DroppedIds(_ids)) => {
+                // TODO(petrosagg): It looks like the storage controller never cleans up GlobalIds
+                // from its state. It should probably be done as a reaction to this response.
                 Ok(())
             }
         }

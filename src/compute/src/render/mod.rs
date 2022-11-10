@@ -112,6 +112,7 @@ use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Timestamp;
 use timely::worker::Worker as TimelyWorker;
+use timely::PartialOrder;
 
 use mz_compute_client::command::{BuildDesc, DataflowDescription, IndexDesc};
 use mz_compute_client::plan::Plan;
@@ -311,6 +312,11 @@ where
         idx: &IndexDesc,
     ) {
         if let Some(traces) = compute_state.traces.get_mut(&idx_id) {
+            assert!(
+                PartialOrder::less_equal(&traces.compaction_frontier(), &self.as_of_frontier),
+                "Index {idx_id} has been allowed to compact beyond the dataflow as_of"
+            );
+
             let token = traces.to_drop().clone();
             let (ok_arranged, ok_button) = traces.oks_mut().import_frontier_core(
                 scope,

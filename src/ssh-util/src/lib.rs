@@ -7,14 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-syntax = "proto3";
+//! SSH utility library.
 
-package mz_kafka_util.addr;
-
-message ProtoKafkaAddrs {
-    message ProtoKafkaAddr {
-        string host = 1;
-        uint32 port = 2;
-    }
-    repeated ProtoKafkaAddr addrs = 1;
-}
+pub mod keys;
+pub mod tunnel;

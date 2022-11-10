@@ -425,11 +425,11 @@ impl LogView {
                     port,
                     worker_id,
                     update_type,
-                    timestamp,
+                    time,
                     pg_catalog.count(*) as count
                  FROM
                     mz_internal.mz_dataflow_operator_reachability_internal_{}
-                 GROUP BY address, port, worker_id, update_type, timestamp",
+                 GROUP BY address, port, worker_id, update_type, time",
                 "mz_dataflow_operator_reachability_{}",
             ),
 
@@ -680,7 +680,7 @@ impl LogVariant {
                 .with_column(
                     "address",
                     ScalarType::List {
-                        element_type: Box::new(ScalarType::Int64),
+                        element_type: Box::new(ScalarType::UInt64),
                         custom_id: None,
                     }
                     .nullable(false),
@@ -688,7 +688,7 @@ impl LogVariant {
                 .with_column("port", ScalarType::UInt64.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("update_type", ScalarType::String.nullable(false))
-                .with_column("timestamp", ScalarType::UInt64.nullable(true)),
+                .with_column("time", ScalarType::MzTimestamp.nullable(true)),
 
             LogVariant::Differential(DifferentialLog::ArrangementBatches)
             | LogVariant::Differential(DifferentialLog::ArrangementRecords)
@@ -729,7 +729,7 @@ impl LogVariant {
                 .with_column("id", ScalarType::Uuid.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("index_id", ScalarType::String.nullable(false))
-                .with_column("time", ScalarType::Int64.nullable(false))
+                .with_column("time", ScalarType::MzTimestamp.nullable(false))
                 .with_key(vec![0, 1]),
 
             LogVariant::Compute(ComputeLog::PeekDuration) => RelationDesc::empty()

@@ -569,6 +569,16 @@ class Composition:
                 service["command"] = []
             self._write_compose()
 
+        if "materialized" in services:
+            # Work around https://github.com/MaterializeInc/materialize/issues/15725
+            # by cleaning up Process Orchestrator metadata on restart
+            self.run(
+                "materialized",
+                "-c",
+                "rm -rf /mzdata/*.pid /mzdata/*.ports",
+                entrypoint="bash",
+            )
+
         self.invoke("up", *(["--detach"] if detach else []), *services)
 
         if persistent:

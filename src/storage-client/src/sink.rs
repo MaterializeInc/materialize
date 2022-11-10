@@ -7,15 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
+use rdkafka::ClientContext;
 
-use mz_kafka_util::client::{create_new_client_config, MzClientContext};
+use mz_kafka_util::client::MzClientContext;
 use mz_ore::collections::CollectionExt;
 
-use crate::types::connections::{ConnectionContext, PopulateClientConfig};
+use crate::types::connections::ConnectionContext;
 use crate::types::sinks::{
     KafkaConsistencyConfig, KafkaSinkConnection, KafkaSinkConnectionBuilder,
     KafkaSinkConnectionRetention, KafkaSinkFormat, KafkaSinkProgressConnection,
@@ -34,13 +36,16 @@ pub async fn build_sink_connection(
     }
 }
 
-async fn ensure_kafka_topic(
-    client: &AdminClient<MzClientContext>,
+async fn ensure_kafka_topic<C>(
+    client: &AdminClient<C>,
     topic: &str,
     mut partition_count: i32,
     mut replication_factor: i32,
     retention: KafkaSinkConnectionRetention,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), anyhow::Error>
+where
+    C: ClientContext,
+{
     // if either partition count or replication factor should be defaulted to the broker's config
     // (signaled by a value of -1), explicitly poll the broker to discover the defaults.
     // Newer versions of Kafka can instead send create topic requests with -1 and have this happen
@@ -190,16 +195,12 @@ async fn build_kafka(
     builder: KafkaSinkConnectionBuilder,
     connection_context: ConnectionContext,
 ) -> Result<StorageSinkConnection, anyhow::Error> {
-    // Create Kafka topic
-    let mut config = create_new_client_config(connection_context.librdkafka_log_level);
-    builder
-        .populate_client_config(&mut config, &*connection_context.secrets_reader)
-        .await;
-
-    let client: AdminClient<_> = config
-        .create_with_context(MzClientContext)
+    // Create Kafka topic.
+    let client: AdminClient<_> = builder
+        .connection
+        .create_with_context(&connection_context, MzClientContext, &BTreeMap::new())
+        .await
         .context("creating admin client failed")?;
-
     ensure_kafka_topic(
         &client,
         &builder.topic_name,
@@ -257,7 +258,6 @@ async fn build_kafka(
     Ok(StorageSinkConnection::Kafka(KafkaSinkConnection {
         connection: builder.connection,
         connection_id: builder.connection_id,
-        options: builder.options,
         topic: builder.topic_name,
         relation_key_indices: builder.relation_key_indices,
         key_desc_and_indices: builder.key_desc_and_indices,

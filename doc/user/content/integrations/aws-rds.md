@@ -42,5 +42,5 @@ For more information, see the [Amazon RDS](https://docs.aws.amazon.com/AmazonRDS
 
 ## Related pages
 
-- [Change Data Capture (Postgres)](../cdc-postgres/)
-- [`CREATE SOURCE FROM POSTGRES`](/sql/create-source/postgres/)
+- [`CREATE SOURCE`: PostgreSQL](/sql/create-source/postgres/)
+- [PostgreSQL CDC guide](../cdc-postgres/)

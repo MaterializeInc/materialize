@@ -729,6 +729,10 @@ impl ExprHumanizer for DummyCatalog {
         DummyHumanizer.humanize_id(id)
     }
 
+    fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String> {
+        DummyHumanizer.humanize_id_unqualified(id)
+    }
+
     fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
         DummyHumanizer.humanize_scalar_type(ty)
     }
