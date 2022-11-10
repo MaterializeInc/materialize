@@ -33,7 +33,6 @@ To follow this guide, you will need:
         PORT <SSH_BASTION_PORT>
     );
     ```
-    
     This command creates a connection object named `ssh_connection` and generates an SSH key pair.
     The public key is made available in the `mz_ssh_tunnel_connections` system table.
 
@@ -75,5 +74,4 @@ To follow this guide, you will need:
     CONNECTION pg_connection
     PUBLICATION 'mz_source'
     ```
-    
 Upon creating the source, Materialize will attempt to connect to your Postgres DB via the SSH tunnel.
