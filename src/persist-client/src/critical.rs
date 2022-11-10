@@ -333,10 +333,10 @@ mod tests {
             .await
             .expect("codec mismatch");
 
-        assert_eq!(since.opaque(), &0);
+        assert_eq!(since.opaque(), &i64::initial());
 
         since
-            .compare_and_downgrade_since(&0, (&5, &Antichain::from_elem(0)))
+            .compare_and_downgrade_since(&i64::initial(), (&5, &Antichain::from_elem(0)))
             .await
             .unwrap();
 
