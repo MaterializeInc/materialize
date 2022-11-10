@@ -15,3 +15,4 @@ Check the current status of our services on our [status page](https://status.mat
 
 You can also use our [status page API](https://status.materialize.com/api) to
 programmatically access the information on our status page.
+
