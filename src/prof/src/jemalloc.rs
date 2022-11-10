@@ -12,11 +12,14 @@
 //! (1) Turn jemalloc profiling on and off, and dump heap profiles (`PROF_CTL`)
 //! (2) Parse jemalloc heap files and make them into a hierarchical format (`parse_jeheap` and `collate_stacks`)
 
+use std::collections::HashMap;
 use std::os::unix::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use std::{ffi::CString, io::BufRead, time::Instant};
 use tokio::sync::Mutex;
+use tracing::error;
 
 use anyhow::bail;
 use once_cell::sync::Lazy;
@@ -25,6 +28,8 @@ use tikv_jemalloc_ctl::{epoch, raw, stats};
 
 use mz_ore::metric;
 use mz_ore::metrics::{IntGauge, MetricsRegistry};
+
+use crate::Mapping;
 
 use super::{ProfStartTime, StackProfile, WeightedStack};
 
@@ -51,6 +56,18 @@ pub struct JemallocProfCtl {
     md: JemallocProfMetadata,
 }
 
+#[cfg(target_os = "linux")]
+static BUILD_IDS: Lazy<Result<HashMap<PathBuf, Vec<u8>>, anyhow::Error>> = Lazy::new(|| {
+    // SAFETY: We are on Linux, and this is the only place in the program this
+    // function is called.
+    unsafe { mz_build_id::all_build_ids() }
+});
+
+#[cfg(not(target_os = "linux"))]
+static BUILD_IDS: Lazy<Result<HashMap<PathBuf, Vec<u8>>, anyhow::Error>> = Lazy::new(|| {
+    anyhow::bail!("Build ID fetching is only supported on Linux");
+});
+
 /// Parse a jemalloc profile file, producing a vector of stack traces along with their weights.
 pub fn parse_jeheap<R: BufRead>(r: R) -> anyhow::Result<StackProfile> {
     let mut cur_stack = None;
@@ -65,9 +82,14 @@ pub fn parse_jeheap<R: BufRead>(r: R) -> anyhow::Result<StackProfile> {
     // TODO(benesch): rewrite to avoid `as`.
     #[allow(clippy::as_conversions)]
     let sampling_rate = str::parse::<usize>(first_line.trim_start_matches("heap_v2/"))? as f64;
-    for line in lines {
+    let mut found_mapped_libraries_section = false;
+    while let Some(line) = lines.next() {
         let line = line?;
         let line = line.trim();
+        if line == "MAPPED_LIBRARIES:" {
+            found_mapped_libraries_section = true;
+            break;
+        }
         let words = line.split_ascii_whitespace().collect::<Vec<_>>();
         if words.len() > 0 && words[0] == "@" {
             if cur_stack.is_some() {
@@ -125,6 +147,60 @@ pub fn parse_jeheap<R: BufRead>(r: R) -> anyhow::Result<StackProfile> {
     if cur_stack.is_some() {
         bail!("Stack without corresponding weight!")
     }
+
+    if found_mapped_libraries_section {
+        let build_ids = match &*BUILD_IDS {
+            Ok(ok) => Some(ok),
+            Err(e) => {
+                error!("Failed to get build IDs: {e}. jemalloc traces might be hard to interpret.");
+                None
+            }
+        };
+
+        println!("[btv] build IDs: {build_ids:?}");
+
+        // jemalloc just dumps the contents of /proc/[pid]/maps.
+        // type `man 5 proc` and search for "/proc/[pid]/maps" (without the quotes) for details
+        // of the format.
+        while let Some(line) = lines.next() {
+            let line = line?;
+            let line = line.trim();
+            let words = line.split_ascii_whitespace().collect::<Vec<_>>();
+            const PATHNAME_IDX: usize = 5;
+            const ADDR_IDX: usize = 0;
+            const OFFSET_IDX: usize = 2;
+            let Some(pathname) = words.get(PATHNAME_IDX) else {
+                continue;
+            };
+            let Some(addr) = words.get(ADDR_IDX) else {
+                continue;
+            };
+            let Some(offset) = words.get(OFFSET_IDX) else {
+                continue;
+            };
+
+            let (begin, end) = addr
+                .split_once('-')
+                .ok_or_else(|| anyhow::anyhow!("bad address range: {addr}"))?;
+            let begin = usize::from_str_radix(begin, 16)?;
+            let end = usize::from_str_radix(end, 16)?;
+            let offset = usize::from_str_radix(offset, 16)?;
+            println!("[btv] pathname: {pathname}");
+            let build_id = build_ids
+                .and_then(|bis| bis.get(Path::new(*pathname)))
+                .cloned();
+            println!("[btv] corresponding build ID: {build_id:?}");
+
+            profile.push_mapping(Mapping {
+                begin,
+                end,
+                offset,
+                pathname: pathname.to_string(),
+                build_id,
+            })
+        }
+    }
+
     Ok(profile)
 }
 

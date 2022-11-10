@@ -24,9 +24,9 @@ use crate::{ProfStartTime, StackProfile};
 
 cfg_if! {
     if #[cfg(any(target_os = "macos", not(feature = "jemalloc")))] {
-        use disabled::{handle_get, handle_post};
+        use disabled::{handle_get, handle_post, handle_pprof};
     } else {
-        use enabled::{handle_get, handle_post};
+        use enabled::{handle_get, handle_post, handle_pprof};
     }
 }
 
@@ -54,6 +54,7 @@ pub fn router(build_info: &'static BuildInfo) -> Router {
             "/",
             routing::get(move |query, headers| handle_get(query, headers, build_info)),
         )
+        .route("/pprof", routing::get(handle_pprof))
         .route(
             "/",
             routing::post(move |form| handle_post(form, build_info)),
@@ -155,6 +156,8 @@ fn flamegraph(
 mod disabled {
     use axum::extract::{Form, Query};
     use axum::response::IntoResponse;
+    use axum::TypedHeader;
+    use headers::ContentType;
     use http::header::HeaderMap;
     use http::StatusCode;
     use serde::Deserialize;
@@ -181,6 +184,20 @@ mod disabled {
             mem_prof: MemProfilingStatus::Disabled,
             ever_symbolicated: ever_symbolicated(),
         })
+    }
+
+    #[derive(Deserialize)]
+    pub struct PprofQuery {
+        #[serde(default)]
+        polar_signals_mode: bool,
+    }
+
+    #[allow(clippy::unused_async)]
+    pub async fn handle_pprof(_: Query<PprofQuery>, _: HeaderMap) -> impl IntoResponse {
+        Err::<(TypedHeader<ContentType>, Vec<u8>), _>((
+            StatusCode::BAD_REQUEST,
+            "jemalloc profiling not enabled; can't collect allocations pprof".to_string(),
+        ))
     }
 
     #[derive(Deserialize)]
@@ -431,6 +448,30 @@ mod enabled {
             )),
             None => Ok(render_template(prof_ctl, build_info).await.into_response()),
         }
+    }
+
+    #[derive(Deserialize)]
+    pub struct PprofQuery {
+        #[serde(default)]
+        polar_signals_mode: bool,
+    }
+
+    pub async fn handle_pprof(
+        Query(PprofQuery { polar_signals_mode }): Query<PprofQuery>,
+        _h: HeaderMap,
+    ) -> impl IntoResponse {
+        let prof_ctl = PROF_CTL.as_ref().unwrap();
+        let mut borrow = prof_ctl.lock().await;
+        let f = borrow
+            .dump()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let r = BufReader::new(f);
+        let stacks =
+            parse_jeheap(r).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let pprof = stacks.to_pprof("allocations", "bytes", 1, None, polar_signals_mode);
+        Ok::<_, (StatusCode, String)>(
+            (TypedHeader(ContentType::octet_stream()), pprof).into_response(),
+        )
     }
 
     async fn render_template(
