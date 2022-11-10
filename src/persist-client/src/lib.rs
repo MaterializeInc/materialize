@@ -27,7 +27,7 @@ use mz_build_info::BuildInfo;
 use mz_ore::now::NowFn;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{Blob, Consensus, ExternalError};
-use mz_persist_types::{Codec, Codec64};
+use mz_persist_types::{Codec, Codec64, Opaque};
 use proptest_derive::Arbitrary;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -507,7 +507,7 @@ impl PersistClient {
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
-        O: Clone + Codec64 + Default,
+        O: Opaque + Codec64,
     {
         let state_versions = StateVersions::new(
             self.cfg.clone(),

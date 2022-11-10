@@ -15,7 +15,7 @@ use std::time::Duration;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::now::EpochMillis;
-use mz_persist_types::{Codec, Codec64};
+use mz_persist_types::{Codec, Codec64, Opaque};
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use tracing::instrument;
@@ -101,7 +101,7 @@ where
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
-    O: Codec64 + Default,
+    O: Opaque + Codec64,
 {
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) gc: GarbageCollector<K, V, T, D>,
@@ -118,7 +118,7 @@ where
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
-    O: Clone + Codec64 + Default,
+    O: Opaque + Codec64,
 {
     pub(crate) fn new(
         machine: Machine<K, V, T, D>,
