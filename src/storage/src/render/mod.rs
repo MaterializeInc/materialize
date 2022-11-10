@@ -107,10 +107,9 @@ use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
-use mz_persist_client::ShardId;
 use mz_repr::GlobalId;
 use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::types::sinks::StorageSinkDesc;
+use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_client::types::sources::IngestionDescription;
 
 use crate::storage_state::StorageState;
@@ -175,7 +174,7 @@ pub fn build_export_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     storage_state: &mut StorageState,
     id: GlobalId,
-    description: StorageSinkDesc<CollectionMetadata, ShardId, mz_repr::Timestamp>,
+    description: StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let debug_name = id.to_string();

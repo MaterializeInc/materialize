@@ -20,8 +20,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
-use std::fmt;
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -59,7 +58,9 @@ use crate::client::{
 use crate::controller::hosts::{StorageHosts, StorageHostsConfig};
 use crate::types::errors::DataflowError;
 use crate::types::hosts::StorageHostConfig;
-use crate::types::sinks::{ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc};
+use crate::types::sinks::{
+    MetadataUnfilled, ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc,
+};
 use crate::types::sources::{IngestionDescription, SourceExport};
 
 mod hosts;
@@ -142,7 +143,7 @@ impl<T> From<RelationDesc> for CollectionDescription<T> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExportDescription<T = mz_repr::Timestamp> {
-    pub sink: StorageSinkDesc<(), GlobalId, T>,
+    pub sink: StorageSinkDesc<MetadataUnfilled, T>,
     /// The address of a `storaged` process on which to install the sink or the
     /// settings for spinning up a controller-managed process.
     pub host_config: StorageHostConfig,
