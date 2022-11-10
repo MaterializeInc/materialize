@@ -73,7 +73,7 @@ steps:
 
   - wait: ~
 
-  - command: bin/ci-builder run stable bin/pyactivate -m ci.nightly.trim_pipeline
+  - command: bin/ci-builder run stable bin/pyactivate -m materialize.ci_util.trim_pipeline nightly
     if: build.source == "ui"
     agents:
       queue: linux
