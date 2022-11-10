@@ -35,9 +35,7 @@ use mz_storage_client::types::sources::{KafkaSourceConnection, MzOffset};
 
 use crate::source::commit::LogCommitter;
 use crate::source::types::{OffsetCommitter, SourceConnectionBuilder};
-use crate::source::{
-    NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
-};
+use crate::source::{SourceMessage, SourceMessageType, SourceReader, SourceReaderError};
 
 use self::metrics::KafkaPartitionMetrics;
 
@@ -281,23 +279,8 @@ impl SourceReader for KafkaSourceReader {
         timestamp_granularity: Duration,
     ) -> Option<Result<SourceMessageType<Self::Key, Self::Value, Self::Diff>, SourceReaderError>>
     {
-        /// This function polls from the next consumer for which a message is available. This function
-        /// polls the set round-robin: when a consumer is polled, it is placed at the back of the
-        /// queue.
-        ///
-        /// If a message has an offset that is smaller than the next expected offset for this consumer
-        /// (and this partition) we skip this message, and seek to the appropriate offset
-        fn get_next_message(
-            s: &mut KafkaSourceReader,
-        ) -> Result<
-            NextMessage<
-                <KafkaSourceReader as SourceReader>::Key,
-                <KafkaSourceReader as SourceReader>::Value,
-                <KafkaSourceReader as SourceReader>::Diff,
-            >,
-            SourceReaderError,
-        > {
-            let partition_info = s.partition_info.lock().unwrap().take();
+        loop {
+            let partition_info = self.partition_info.lock().unwrap().take();
             if let Some(partitions) = partition_info {
                 // NOTE: We're somewhat inefficient with Vec allocations and the
                 // like. Shouldn't be a problem though, because we rarely hear about
@@ -305,19 +288,25 @@ impl SourceReader for KafkaSourceReader {
                 let mut unconsumed_partitions = Vec::new();
                 for pid in partitions {
                     let pid = PartitionId::Kafka(pid);
-                    if crate::source::responsible_for(&s.id, s.worker_id, s.worker_count, &pid) {
-                        s.ensure_partition(pid);
+                    if crate::source::responsible_for(
+                        &self.id,
+                        self.worker_id,
+                        self.worker_count,
+                        &pid,
+                    ) {
+                        self.ensure_partition(pid);
                     } else {
                         unconsumed_partitions.push(pid);
                     }
                 }
                 if !unconsumed_partitions.is_empty() {
-                    return Ok(NextMessage::Ready(
-                        SourceMessageType::DropPartitionCapabilities(unconsumed_partitions),
-                    ));
+                    return Some(Ok(SourceMessageType::DropPartitionCapabilities(
+                        unconsumed_partitions,
+                    )));
                 }
             }
-            let mut next_message = NextMessage::Pending;
+            let mut next_message = None;
+            let mut sleep_duration = timestamp_granularity;
 
             // Poll the consumer once. We split the consumer's partitions out into separate queues and
             // poll those individually, but it's still necessary to drive logic that consumes from
@@ -326,57 +315,53 @@ impl SourceReader for KafkaSourceReader {
             // Additionally, assigning topics and splitting them off into separate queues is not
             // atomic, so we expect to see at least some messages to show up when polling the consumer
             // directly.
-            if let Some(result) = s.consumer.poll(Duration::from_secs(0)) {
+            if let Some(result) = self.consumer.poll(Duration::from_secs(0)) {
                 match result {
                     Err(e) => error!(
                         "kafka error when polling consumer for source: {} topic: {} : {}",
-                        s.source_name, s.topic_name, e
+                        self.source_name, self.topic_name, e
                     ),
                     Ok(message) => {
-                        let source_message = construct_source_message(&message, s.include_headers)?;
-                        next_message = s.handle_message(source_message);
+                        let source_message =
+                            match construct_source_message(&message, self.include_headers) {
+                                Err(e) => return Some(Err(e.into())),
+                                Ok(r) => r,
+                            };
+                        next_message = self.handle_message(source_message);
                     }
                 }
             }
 
-            s.update_stats();
+            self.update_stats();
 
-            let consumer_count = s.get_partition_consumers_count();
+            let consumer_count = self.get_partition_consumers_count();
             let mut attempts = 0;
             while attempts < consumer_count {
                 // First, see if we have a message already, either from polling the consumer, above, or
                 // from polling the partition queues below.
-                if let NextMessage::Ready(_) = next_message {
+                if next_message.is_some() {
                     // Found a message, exit the loop and return message
                     break;
                 }
 
-                let message = s.poll_from_next_queue()?;
+                let message = match self.poll_from_next_queue() {
+                    Err(e) => return Some(Err(e.into())),
+                    Ok(r) => r,
+                };
                 attempts += 1;
 
                 if let Some(message) = message {
-                    next_message = s.handle_message(message);
+                    next_message = self.handle_message(message);
+                    if next_message.is_none() {
+                        // There was a temporary hiccup in getting messages, check again asap.
+                        sleep_duration = Duration::from_millis(1);
+                    }
                 }
             }
 
-            Ok(next_message)
-        }
-
-        // Compatiblity implementation that delegates to the deprecated [Self::get_next_method]
-        // call. Once all source implementations have been transitioned to implement
-        // [SourceReader::next] directly this provided implementation should be removed and the
-        // method should become a required method.
-        loop {
-            match get_next_message(&mut self) {
-                Ok(NextMessage::Ready(msg)) => return Some(Ok(msg)),
-                Err(err) => return Some(Err(err)),
-                // There was a temporary hiccup in getting messages, check again asap.
-                Ok(NextMessage::TransientDelay) => {
-                    tokio::time::sleep(Duration::from_millis(1)).await
-                }
-                // There were no new messages, check again after a delay
-                Ok(NextMessage::Pending) => tokio::time::sleep(timestamp_granularity).await,
-                Ok(NextMessage::Finished) => return None,
+            match next_message {
+                Some(msg) => return Some(Ok(msg)),
+                None => tokio::time::sleep(sleep_duration).await,
             }
         }
     }
@@ -613,7 +598,7 @@ impl KafkaSourceReader {
     fn handle_message(
         &mut self,
         message: SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()>,
-    ) -> NextMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()> {
+    ) -> Option<SourceMessageType<Option<Vec<u8>>, Option<Vec<u8>>, ()>> {
         let partition = match message.partition {
             PartitionId::Kafka(pid) => pid,
             _ => unreachable!(),
@@ -659,10 +644,10 @@ impl KafkaSourceReader {
             // We explicitly should not consume the message as we have already processed it
             // However, we make sure to activate the source to make sure that we get a chance
             // to read from this consumer again (even if no new data arrives)
-            NextMessage::TransientDelay
+            None
         } else {
             *last_offset_ref = offset_as_i64;
-            NextMessage::Ready(SourceMessageType::Finalized(message))
+            Some(SourceMessageType::Finalized(message))
         }
     }
 }
