@@ -1,5 +1,5 @@
 ---
-title: "How to use dbt to manage Materialize"
+title: "dbt"
 description: "How to use dbt and Materialize to transform streaming data in real time."
 aliases:
   - /guides/dbt/
@@ -67,7 +67,7 @@ dbt manages all your connection configurations (or, profiles) in a file called [
 
     **Note:** If you started from an existing project but it's your first time setting up dbt, it's possible that this file doesn't exist yet. You can manually create it in the suggested location.
 
-1. Open `profiles.yml` and adapt it to connect to your Materialize instance using the reference [profile configuration](https://docs.getdbt.com/reference/warehouse-profiles/materialize-profile#connecting-to-materialize-with-dbt-materialize).
+1. Open `profiles.yml` and adapt it to connect to Materialize using the reference [profile configuration](https://docs.getdbt.com/reference/warehouse-profiles/materialize-profile#connecting-to-materialize-with-dbt-materialize).
 
     As an example, the following profile would allow you to connect to Materialize in two different environments: a developer environment (`dev`) and a production environment (`prod`).
 
@@ -125,12 +125,11 @@ Create a materialization for each SQL statement you're planning to deploy. Each 
 
 ### Sources
 
-In dbt, using a [source](https://docs.getdbt.com/docs/building-a-dbt-project/using-sources) makes it possible to name and describe the data loaded into Materialize.
-You can instruct dbt to create a [source](/sql/create-source) in Materialize using the custom `source` materialization, which allows for injecting the complete source statement into your `.sql` file.
+In Materialize, a [source](/sql/create-source) describes an **external** system you want to read data from, and provides details about how to decode and interpret that data. You can instruct dbt to create a source using the custom `source` materialization. Once a source has been defined, it can be referenced from another model using the dbt [`source()`](https://docs.getdbt.com/reference/dbt-jinja-functions/source) function.
 
 {{< note >}}
-To connect to a Kafka broker or PostgreSQL database, you first need to create a connection that specifies access and authentication parameters.
-Once created, a connection is **reusable** across multiple `CREATE SOURCE` statements. For more details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
+To connect to a Kafka broker or PostgreSQL database, you first need to [create a connection](/sql/create-connection) that specifies access and authentication parameters.
+Once created, a connection is **reusable** across multiple source models.
 {{</ note >}}
 
 {{< tabs tabID="1" >}} {{< tab "Kafka">}}
@@ -159,7 +158,8 @@ CREATE SOURCE IF NOT EXISTS {{ this }}
   WITH (SIZE = '3xsmall')
 ```
 
-The [pre-hook](https://docs.getdbt.com/reference/resource-configs/pre-hook-post-hook) defined above is used to create the replication views that reproduce the publication's original tables.
+Materialize will automatically create a **subsource** for each table in the `mz_source` publication. Pulling subsources into the dbt context automatically isn't supported yet. Follow the discussion in [dbt-core #6104](https://github.com/dbt-labs/dbt-core/discussions/6104#discussioncomment-3957001) for updates!
+
 {{< /tab >}} {{< /tabs >}}
 
 Sources are defined in `.yml` files nested under a `sources:` key.
@@ -224,19 +224,55 @@ FROM {{ ref('view_a') }}
 The model above would be compiled to `database.schema.materialized_view_a`.
 Here, the model depends on the view defined above, and is referenced as such via the dbt [ref()](https://docs.getdbt.com/reference/dbt-jinja-functions/ref) function.
 
-### Configuration
+### Sinks
+
+In Materialize, a [sink](/sql/create-sink) describes an **external** system you want to write data to, and provides details about how to encode that data. You can instruct dbt to create a sink using the custom `sink` materialization.
+
+{{< tabs tabID="1" >}} {{< tab "Kafka">}}
+Create a [Kafka sink](/sql/create-sink).
+
+**Filename:** sinks/kafka_topic_c.sql
+```sql
+{{ config(materialized='sink') }}
+
+CREATE SINK IF NOT EXISTS {{ this }}
+  FROM {{ ref('materialized_view_a') }}
+  INTO KAFKA CONNECTION kafka_connection (TOPIC 'topic_c')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  ENVELOPE DEBEZIUM
+  WITH (SIZE = '3xsmall')
+```
+
+The sink above would be compiled to:
+```
+database.schema.kafka_topic_c
+```
+
+{{< /tab >}} {{< /tabs >}}
+
+* Use the `{{ this }}` [relation](https://docs.getdbt.com/reference/dbt-jinja-functions/this) to generate a fully-qualified name for the sink from the base model name.
+
+### Configuration: clusters, databases and indexes {#configuration}
 
 #### Clusters
 
-Use the [cluster](/sql/create-cluster/) option to specify the cluster in which a `materialized view` is created. If unspecified, the default cluster for the connection is used.
+Use the `cluster` option to specify the [cluster](/sql/create-cluster/) in which a `materialized view` is created. If unspecified, the default cluster for the connection is used.
 
 ```sql
 {{ config(materialized='materializedview', cluster='cluster_a') }}
 ```
 
+#### Databases
+
+Use the `database` option to specify the [database](/sql/namespaces/#database-details) in which a `source`, `view`, `materialized view` or `sink` is created. If unspecified, the default database for the connection is used.
+
+```sql
+{{ config(materialized='materializedview', database='database_a') }}
+```
+
 #### Indexes
 
-Use the indexes option to define a list of [indexes](/sql/create-index/) on `source`, `view`, or `materialized view` materializations. Each Materialize index can have the following components:
+Use the `indexes` option to define a list of [indexes](/sql/create-index/) on `source`, `view`, or `materialized view` materializations. Each index option can have the following components:
 
 Component                            | Value     | Description
 -------------------------------------|-----------|--------------------------------------------------
@@ -246,6 +282,7 @@ Component                            | Value     | Description
 `default`                            | `bool`    | Default: `False`. If set to `True`, creates a default index that uses all columns.
 
 ##### Creating a multi-column index
+
 ```sql
 {{ config(materialized='view',
           indexes=[{'columns': ['col_a','col_b'], 'cluster': 'cluster_a'}]) }}
@@ -297,7 +334,7 @@ That's it! From here on, Materialize makes sure that your models are **increment
 
 ## Test and document a dbt project
 
-### Continuous testing
+### Configure continuous testing
 
 Using dbt in a streaming context means that you're able to run data quality and integrity [tests](https://docs.getdbt.com/docs/building-a-dbt-project/tests) non-stop, and monitor failures as soon as they happen. This is useful for unit testing during the development of your dbt models, and later in production to trigger **real-time alerts** downstream.
 
@@ -363,7 +400,7 @@ Using dbt in a streaming context means that you're able to run data quality and 
 
 With continuous testing in place, you can then build alerts off of the test materialized views using any common PostgreSQL-compatible [client library](/integrations/#client-libraries-and-orms) and [`SUBSCRIBE`](/sql/subscribe/) (see the [Python cheatsheet](/integrations/python/#stream) for a reference implementation).
 
-### Documentation
+### Generate documentation
 
 dbt can automatically generate [documentation](https://docs.getdbt.com/docs/building-a-dbt-project/documentation) for your project as a shareable website. This brings **data governance** to your streaming pipelines, speeding up life-saving processes like data discovery (_where_ to find _what_ data) and lineage (the path data takes from source(s) to sink(s), as well as the transformations that happen along the way).
 

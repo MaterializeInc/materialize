@@ -33,3 +33,8 @@ To connect GCP Cloud SQL to Materialize via the direct [Postgres Source](/sql/cr
     The `mz_source` publication will contain the set of change events generated from the specified tables, and will later be used to ingest the replication stream.
 
 For more information, see the [Cloud SQL](https://cloud.google.com/sql/docs/postgres/replication/configure-logical-replication#configuring-your-postgresql-instance) documentation.
+
+## Related pages
+
+- [`CREATE SOURCE`: PostgreSQL](/sql/create-source/postgres/)
+- [PostgreSQL CDC guide](../cdc-postgres/)
