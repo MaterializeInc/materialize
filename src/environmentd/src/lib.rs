@@ -167,7 +167,11 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(
         &config.adapter_stash_url,
     )?)?;
-    let stash = mz_stash::Postgres::new(config.adapter_stash_url.clone(), None, tls).await?;
+    let stash = config
+        .controller
+        .postgres_factory
+        .open(config.adapter_stash_url.clone(), None, tls)
+        .await?;
     let stash = mz_stash::Memory::new(stash);
 
     // Validate TLS configuration, if present.

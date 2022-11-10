@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
+use mz_stash::PostgresFactory;
 use serde::{Deserialize, Serialize};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
@@ -73,6 +74,8 @@ pub struct ControllerConfig {
     pub computed_image: String,
     /// The now function to advance the controller's introspection collections.
     pub now: NowFn,
+    /// The postgres stash factory.
+    pub postgres_factory: PostgresFactory,
 }
 
 /// Responses that [`Controller`] can produce.
@@ -220,6 +223,7 @@ where
             config.orchestrator.namespace("storage"),
             config.storaged_image,
             config.now,
+            &config.postgres_factory,
         )
         .await;
 

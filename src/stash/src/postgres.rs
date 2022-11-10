@@ -18,6 +18,7 @@ use futures::future::{self, try_join3, try_join4, try_join_all, BoxFuture};
 use futures::future::{try_join, TryFutureExt};
 use futures::StreamExt;
 use postgres_openssl::MakeTlsConnector;
+use prometheus::{IntCounter, IntCounterVec};
 use serde_json::Value;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::Antichain;
@@ -25,8 +26,10 @@ use timely::PartialOrder;
 use tokio::sync::mpsc;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Statement};
-use tracing::{error, event, warn, Level};
+use tracing::{error, event, info, warn, Level};
 
+use mz_ore::metric;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::retry::Retry;
 
 use crate::{
@@ -211,6 +214,141 @@ enum TransactionMode {
     Savepoint,
 }
 
+#[derive(Debug, Clone)]
+pub struct PostgresFactory {
+    metrics: Arc<Metrics>,
+}
+
+impl PostgresFactory {
+    pub fn new(registry: &MetricsRegistry) -> PostgresFactory {
+        PostgresFactory {
+            metrics: Arc::new(Metrics::register_into(registry)),
+        }
+    }
+
+    /// Opens the stash stored at the specified path.
+    pub async fn open(
+        &self,
+        url: String,
+        schema: Option<String>,
+        tls: MakeTlsConnector,
+    ) -> Result<Postgres, StashError> {
+        self.open_inner(TransactionMode::Writeable, url, schema, tls)
+            .await
+    }
+
+    /// Opens the stash stored at the specified path in readonly mode: any
+    /// mutating query will fail, and the epoch is not incremented on start.
+    pub async fn open_readonly(
+        &self,
+        url: String,
+        schema: Option<String>,
+        tls: MakeTlsConnector,
+    ) -> Result<Postgres, StashError> {
+        self.open_inner(TransactionMode::Readonly, url, schema, tls)
+            .await
+    }
+
+    /// Opens the stash stored at the specified path in savepoint mode: mutating
+    /// queries are allowed, but they will never be committed, and the epoch is
+    /// not incremented on start. This mode is used to test migrations on a
+    /// running stash.
+    pub async fn open_savepoint(
+        &self,
+        url: String,
+        tls: MakeTlsConnector,
+    ) -> Result<Postgres, StashError> {
+        self.open_inner(TransactionMode::Savepoint, url, None, tls)
+            .await
+    }
+
+    async fn open_inner(
+        &self,
+        txn_mode: TransactionMode,
+        url: String,
+        schema: Option<String>,
+        tls: MakeTlsConnector,
+    ) -> Result<Postgres, StashError> {
+        let (sinces_tx, mut sinces_rx) = mpsc::unbounded_channel();
+
+        let mut conn = Postgres {
+            txn_mode,
+            url: url.clone(),
+            schema,
+            tls: tls.clone(),
+            client: None,
+            is_cockroach: None,
+            statements: None,
+            epoch: None,
+            // The call to rand::random here assumes that the seed source is from a secure
+            // source that will differ per thread. The docs for ThreadRng say it "is
+            // automatically seeded from OsRng", which meets this requirement.
+            nonce: rand::random(),
+            sinces_tx,
+            metrics: Arc::clone(&self.metrics),
+        };
+        // Do the initial connection once here so we don't get stuck in
+        // transact's retry loop if the url is bad.
+        loop {
+            let res = conn.connect().await;
+            if let Err(StashError {
+                inner: InternalStashError::Postgres(err),
+            }) = &res
+            {
+                // We want this function (`new`) to quickly return an error if
+                // the connection string is bad or the server is unreachable. If
+                // the server returns a retryable transaction error though,
+                // allow it to retry. This is mostly useful for tests which hit
+                // this particular error a lot, but is also good for production.
+                // See: https://www.cockroachlabs.com/docs/stable/transaction-retry-error-reference.html
+                if let Some(dberr) = err.as_db_error() {
+                    if dberr.code() == &SqlState::T_R_SERIALIZATION_FAILURE
+                        && dberr.message().contains("restart transaction")
+                    {
+                        warn!("tokio-postgres stash connection error, retrying: {err}");
+                        continue;
+                    }
+                }
+            }
+            res?;
+            break;
+        }
+
+        if matches!(conn.txn_mode, TransactionMode::Savepoint) {
+            // In savepoint mode, pretend that we're consolidating things.
+            mz_ore::task::spawn(|| "stash consolidation dropper", async move {
+                while let Some(_) = sinces_rx.recv().await {}
+            });
+        } else {
+            Consolidator::start(url, tls, sinces_rx);
+        }
+
+        Ok(conn)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Metrics {
+    transactions: IntCounter,
+    transaction_errors: IntCounterVec,
+}
+
+impl Metrics {
+    pub fn register_into(registry: &MetricsRegistry) -> Metrics {
+        Metrics {
+            transactions: registry.register(metric!(
+                name: "mz_stash_transactions",
+                help: "Total number of started transactions.",
+            )),
+            transaction_errors: registry.register(metric!(
+                name: "mz_stash_transaction_errors",
+                help: "Total number of transaction errors.",
+                var_labels: ["cause"],
+            )),
+        }
+    }
+}
+
 /// A Stash whose data is stored in a Postgres database. The format of the
 /// tables are not specified and should not be relied upon. The only promise is
 /// stability. Any changes to the table schemas will be accompanied by a clear
@@ -226,6 +364,7 @@ pub struct Postgres {
     epoch: Option<i64>,
     nonce: [u8; 16],
     sinces_tx: mpsc::UnboundedSender<(Id, Antichain<Timestamp>)>,
+    metrics: Arc<Metrics>,
 }
 
 impl std::fmt::Debug for Postgres {
@@ -282,95 +421,6 @@ impl Postgres {
                 }
             })
             .await
-    }
-
-    /// Opens the stash stored at the specified path.
-    pub async fn new(
-        url: String,
-        schema: Option<String>,
-        tls: MakeTlsConnector,
-    ) -> Result<Postgres, StashError> {
-        Self::new_inner(TransactionMode::Writeable, url, schema, tls).await
-    }
-
-    /// Opens the stash stored at the specified path in readonly mode: any
-    /// mutating query will fail, and the epoch is not incremented on start.
-    pub async fn new_readonly(
-        url: String,
-        schema: Option<String>,
-        tls: MakeTlsConnector,
-    ) -> Result<Postgres, StashError> {
-        Self::new_inner(TransactionMode::Readonly, url, schema, tls).await
-    }
-
-    /// Opens the stash stored at the specified path in savepoint mode: mutating
-    /// queries are allowed, but they will never be committed, and the epoch is
-    /// not incremented on start. This mode is used to test migrations on a
-    /// running stash.
-    pub async fn new_savepoint(url: String, tls: MakeTlsConnector) -> Result<Postgres, StashError> {
-        Self::new_inner(TransactionMode::Savepoint, url, None, tls).await
-    }
-
-    async fn new_inner(
-        txn_mode: TransactionMode,
-        url: String,
-        schema: Option<String>,
-        tls: MakeTlsConnector,
-    ) -> Result<Postgres, StashError> {
-        let (sinces_tx, mut sinces_rx) = mpsc::unbounded_channel();
-
-        let mut conn = Postgres {
-            txn_mode,
-            url: url.clone(),
-            schema,
-            tls: tls.clone(),
-            client: None,
-            is_cockroach: None,
-            statements: None,
-            epoch: None,
-            // The call to rand::random here assumes that the seed source is from a secure
-            // source that will differ per thread. The docs for ThreadRng say it "is
-            // automatically seeded from OsRng", which meets this requirement.
-            nonce: rand::random(),
-            sinces_tx,
-        };
-        // Do the initial connection once here so we don't get stuck in
-        // transact's retry loop if the url is bad.
-        loop {
-            let res = conn.connect().await;
-            if let Err(StashError {
-                inner: InternalStashError::Postgres(err),
-            }) = &res
-            {
-                // We want this function (`new`) to quickly return an error if
-                // the connection string is bad or the server is unreachable. If
-                // the server returns a retryable transaction error though,
-                // allow it to retry. This is mostly useful for tests which hit
-                // this particular error a lot, but is also good for production.
-                // See: https://www.cockroachlabs.com/docs/stable/transaction-retry-error-reference.html
-                if let Some(dberr) = err.as_db_error() {
-                    if dberr.code() == &SqlState::T_R_SERIALIZATION_FAILURE
-                        && dberr.message().contains("restart transaction")
-                    {
-                        warn!("tokio-postgres stash connection error, retrying: {err}");
-                        continue;
-                    }
-                }
-            }
-            res?;
-            break;
-        }
-
-        if matches!(conn.txn_mode, TransactionMode::Savepoint) {
-            // In savepoint mode, pretend that we're consolidating things.
-            mz_ore::task::spawn(|| "stash consolidation dropper", async move {
-                while let Some(_) = sinces_rx.recv().await {}
-            });
-        } else {
-            Consolidator::start(url, tls, sinces_rx);
-        }
-
-        Ok(conn)
     }
 
     /// Sets `client` to a new connection to the Postgres server.
@@ -507,6 +557,7 @@ impl Postgres {
             &'a Client,
         ) -> BoxFuture<'a, Result<T, StashError>>,
     {
+        self.metrics.transactions.inc();
         let retry = Retry::default()
             .clamp_backoff(Duration::from_secs(1))
             .into_retry_stream();
@@ -537,7 +588,18 @@ impl Postgres {
                                 }
                             }
                             attempt += 1;
-                            error!("tokio-postgres stash error, retry attempt {attempt}: {pgerr}");
+                            let cause = if let Some(code) = pgerr.code() {
+                                code.code()
+                            } else if pgerr.is_closed() {
+                                "closed"
+                            } else {
+                                "other"
+                            };
+                            self.metrics
+                                .transaction_errors
+                                .with_label_values(&[cause])
+                                .inc();
+                            info!("tokio-postgres stash error, retry attempt {attempt}: {pgerr}");
                             retry.next().await;
                         }
                         _ => return Err(e),

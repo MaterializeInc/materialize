@@ -37,7 +37,7 @@ use mz_ore::{
     now::SYSTEM_TIME,
 };
 use mz_secrets::InMemorySecretsController;
-use mz_stash::{Append, Postgres, Stash};
+use mz_stash::{Append, PostgresFactory, Stash};
 use mz_storage_client::controller as storage;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
@@ -87,7 +87,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(
         &args.postgres_url,
     )?)?;
-    let mut stash = Postgres::new_readonly(args.postgres_url.clone(), None, tls.clone()).await?;
+    let factory = PostgresFactory::new(&MetricsRegistry::new());
+    let mut stash = factory
+        .open_readonly(args.postgres_url.clone(), None, tls.clone())
+        .await?;
     let usage = Usage::from_stash(&mut stash).await?;
 
     match args.action {
@@ -105,12 +108,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             value,
         } => {
             // edit needs a mutable stash, so reconnect.
-            let stash = Postgres::new(args.postgres_url, None, tls).await?;
+            let stash = factory.open(args.postgres_url, None, tls).await?;
             edit(stash, usage, collection, key, value).await
         }
         Action::UpgradeCheck => {
             // upgrade needs fake writes, so use a savepoint.
-            let stash = Postgres::new_savepoint(args.postgres_url, tls).await?;
+            let stash = factory.open_savepoint(args.postgres_url, tls).await?;
             upgrade_check(stash, usage).await
         }
     }
