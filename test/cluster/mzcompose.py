@@ -339,8 +339,8 @@ def workflow_test_github_15930(c: Composition) -> None:
             input=dedent(
                 """
             > SET cluster = cluster1;
-            > SELECT 1 FROM mz_internal.mz_worker_compute_frontiers LIMIT 1;
-            1
+            > SELECT worker_id < 2 FROM mz_internal.mz_worker_compute_frontiers LIMIT 1;
+            true
                 """
             )
         )
@@ -355,8 +355,8 @@ def workflow_test_github_15930(c: Composition) -> None:
             input=dedent(
                 """
             > SET cluster = cluster1;
-            > SELECT 1 FROM mz_internal.mz_worker_compute_frontiers LIMIT 1;
-            1
+            > SELECT worker_id < 2 FROM mz_internal.mz_worker_compute_frontiers LIMIT 1;
+            true
                 """
             )
         )
@@ -381,8 +381,8 @@ def workflow_test_github_15930(c: Composition) -> None:
             input=dedent(
                 """
             > SET cluster = cluster1;
-            > SELECT 1 FROM mz_internal.mz_worker_compute_frontiers LIMIT 1;
-            1
+            > SELECT worker_id < 2 FROM mz_internal.mz_worker_compute_frontiers LIMIT 1;
+            true
             > SELECT * FROM t;
             42
                 """
