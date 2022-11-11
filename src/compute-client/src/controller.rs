@@ -30,7 +30,6 @@
 //! recover each dataflow to its current state in case of failure or other reconfiguration.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::error::Error;
 use std::fmt;
 use std::num::NonZeroUsize;
 use std::str::FromStr;
@@ -59,6 +58,10 @@ use crate::logging::{LogVariant, LogView, LoggingConfig};
 use crate::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
+use self::error::{
+    CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
+    InstanceExists, InstanceMissing, PeekError, ReplicaCreationError, ReplicaDropError,
+};
 use self::instance::{ActiveInstance, Instance};
 use self::orchestrator::ComputeOrchestrator;
 
@@ -66,7 +69,10 @@ mod instance;
 mod orchestrator;
 mod replica;
 
+pub mod error;
+
 pub use mz_orchestrator::ServiceStatus as ComputeInstanceStatus;
+
 /// An abstraction allowing us to name different compute instances.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum ComputeInstanceId {
@@ -135,88 +141,6 @@ pub enum ComputeControllerResponse<T> {
     /// A notification that we heard a response from the given replica at the
     /// given time.
     ReplicaHeartbeat(ReplicaId, DateTime<Utc>),
-}
-
-/// Errors arising from compute commands.
-#[derive(Debug)]
-pub enum ComputeError {
-    /// Command referenced an instance that was not present.
-    InstanceMissing(ComputeInstanceId),
-    /// Command referenced an identifier that was not present.
-    IdentifierMissing(GlobalId),
-    /// Command referenced a replica that was not present.
-    ReplicaMissing(ReplicaId),
-    /// The identified instance exists already.
-    InstanceExists(ComputeInstanceId),
-    /// Dataflow was malformed (e.g. missing `as_of`).
-    DataflowMalformed,
-    /// The dataflow `as_of` was not greater than the `since` of the identifier.
-    DataflowSinceViolation(GlobalId),
-    /// The peek `timestamp` was not greater than the `since` of the identifier.
-    PeekSinceViolation(GlobalId),
-    /// An error from the underlying client.
-    ClientError(anyhow::Error),
-    /// An error during an interaction with Storage
-    StorageError(StorageError),
-}
-
-impl Error for ComputeError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::InstanceMissing(_)
-            | Self::IdentifierMissing(_)
-            | Self::ReplicaMissing(_)
-            | Self::InstanceExists(_)
-            | Self::DataflowMalformed
-            | Self::DataflowSinceViolation(_)
-            | Self::PeekSinceViolation(_) => None,
-            Self::ClientError(err) => Some(err.root_cause()),
-            Self::StorageError(err) => err.source(),
-        }
-    }
-}
-
-impl fmt::Display for ComputeError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("compute error: ")?;
-        match self {
-            Self::InstanceMissing(id) => write!(
-                f,
-                "command referenced an instance that was not present: {id}"
-            ),
-            Self::ReplicaMissing(id) => {
-                write!(f, "command referenced a replica that was not present: {id}")
-            }
-            Self::IdentifierMissing(id) => write!(
-                f,
-                "command referenced an identifier that was not present: {id}"
-            ),
-            Self::InstanceExists(id) => write!(f, "an instance with this ID exists already: {id}"),
-            Self::DataflowMalformed => write!(f, "dataflow was malformed"),
-            Self::DataflowSinceViolation(id) => write!(
-                f,
-                "dataflow as_of was not greater than the `since` of the identifier: {id}"
-            ),
-            Self::PeekSinceViolation(id) => write!(
-                f,
-                "peek timestamp was not greater than the `since` of the identifier: {id}"
-            ),
-            Self::ClientError(err) => write!(f, "underlying client error: {err}"),
-            Self::StorageError(err) => write!(f, "storage interaction error: {err}"),
-        }
-    }
-}
-
-impl From<StorageError> for ComputeError {
-    fn from(error: StorageError) -> Self {
-        Self::StorageError(error)
-    }
-}
-
-impl From<anyhow::Error> for ComputeError {
-    fn from(error: anyhow::Error) -> Self {
-        Self::ClientError(error)
-    }
 }
 
 /// Replica configuration
@@ -359,24 +283,20 @@ impl<T> ComputeController<T> {
     }
 
     /// Return a reference to the indicated compute instance.
-    fn instance(&self, id: ComputeInstanceId) -> Result<&Instance<T>, ComputeError> {
-        self.instances
-            .get(&id)
-            .ok_or(ComputeError::InstanceMissing(id))
+    fn instance(&self, id: ComputeInstanceId) -> Result<&Instance<T>, InstanceMissing> {
+        self.instances.get(&id).ok_or(InstanceMissing(id))
     }
 
     /// Return a mutable reference to the indicated compute instance.
-    fn instance_mut(&mut self, id: ComputeInstanceId) -> Result<&mut Instance<T>, ComputeError> {
-        self.instances
-            .get_mut(&id)
-            .ok_or(ComputeError::InstanceMissing(id))
+    fn instance_mut(&mut self, id: ComputeInstanceId) -> Result<&mut Instance<T>, InstanceMissing> {
+        self.instances.get_mut(&id).ok_or(InstanceMissing(id))
     }
 
     /// Return a read-only handle to the indicated compute instance.
     pub fn instance_ref(
         &self,
         id: ComputeInstanceId,
-    ) -> Result<ComputeInstanceRef<T>, ComputeError> {
+    ) -> Result<ComputeInstanceRef<T>, InstanceMissing> {
         self.instance(id).map(|instance| ComputeInstanceRef {
             instance_id: id,
             instance,
@@ -388,8 +308,9 @@ impl<T> ComputeController<T> {
         &self,
         instance_id: ComputeInstanceId,
         collection_id: GlobalId,
-    ) -> Result<&CollectionState<T>, ComputeError> {
-        self.instance(instance_id)?.collection(collection_id)
+    ) -> Result<&CollectionState<T>, CollectionLookupError> {
+        let collection = self.instance(instance_id)?.collection(collection_id)?;
+        Ok(collection)
     }
 
     /// Acquire an [`ActiveComputeController`] by supplying a storage connection.
@@ -415,9 +336,9 @@ where
         id: ComputeInstanceId,
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
         max_result_size: u32,
-    ) -> Result<(), ComputeError> {
+    ) -> Result<(), InstanceExists> {
         if self.instances.contains_key(&id) {
-            return Err(ComputeError::InstanceExists(id));
+            return Err(InstanceExists(id));
         }
 
         self.instances.insert(
@@ -531,12 +452,12 @@ impl<T> ActiveComputeController<'_, T> {
         &self,
         instance_id: ComputeInstanceId,
         collection_id: GlobalId,
-    ) -> Result<&CollectionState<T>, ComputeError> {
+    ) -> Result<&CollectionState<T>, CollectionLookupError> {
         self.compute.collection(instance_id, collection_id)
     }
 
     /// Return a handle to the indicated compute instance.
-    fn instance(&mut self, id: ComputeInstanceId) -> Result<ActiveInstance<T>, ComputeError> {
+    fn instance(&mut self, id: ComputeInstanceId) -> Result<ActiveInstance<T>, InstanceMissing> {
         self.compute
             .instance_mut(id)
             .map(|c| c.activate(self.storage))
@@ -554,7 +475,7 @@ where
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
         config: ComputeReplicaConfig,
-    ) -> Result<(), ComputeError> {
+    ) -> Result<(), ReplicaCreationError> {
         let (enable_logging, interval_ns) = match config.logging.interval {
             Some(interval) => (true, interval.as_nanos()),
             None => (false, 1_000_000_000),
@@ -576,7 +497,8 @@ where
 
         self.instance(instance_id)?
             .add_replica(replica_id, config.location, logging_config)
-            .await
+            .await?;
+        Ok(())
     }
 
     /// Removes a replica from an instance, including its service in the orchestrator.
@@ -584,8 +506,11 @@ where
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
-    ) -> Result<(), ComputeError> {
-        self.instance(instance_id)?.remove_replica(replica_id).await
+    ) -> Result<(), ReplicaDropError> {
+        self.instance(instance_id)?
+            .remove_replica(replica_id)
+            .await?;
+        Ok(())
     }
 
     /// Create and maintain the described dataflows, and initialize state for their output.
@@ -599,10 +524,11 @@ where
         &mut self,
         instance_id: ComputeInstanceId,
         dataflows: Vec<DataflowDescription<crate::plan::Plan<T>, (), T>>,
-    ) -> Result<(), ComputeError> {
+    ) -> Result<(), DataflowCreationError> {
         self.instance(instance_id)?
             .create_dataflows(dataflows)
-            .await
+            .await?;
+        Ok(())
     }
 
     /// Drop the read capability for the given collections and allow their resources to be
@@ -611,10 +537,11 @@ where
         &mut self,
         instance_id: ComputeInstanceId,
         collection_ids: Vec<GlobalId>,
-    ) -> Result<(), ComputeError> {
+    ) -> Result<(), CollectionUpdateError> {
         self.instance(instance_id)?
             .drop_collections(collection_ids)
-            .await
+            .await?;
+        Ok(())
     }
 
     /// Initiate a peek request for the contents of the given collection at `timestamp`.
@@ -628,7 +555,7 @@ where
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
         target_replica: Option<ReplicaId>,
-    ) -> Result<(), ComputeError> {
+    ) -> Result<(), PeekError> {
         self.instance(instance_id)?
             .peek(
                 collection_id,
@@ -639,7 +566,8 @@ where
                 map_filter_project,
                 target_replica,
             )
-            .await
+            .await?;
+        Ok(())
     }
 
     /// Cancel existing peek requests.
@@ -657,7 +585,7 @@ where
         &mut self,
         instance_id: ComputeInstanceId,
         uuids: BTreeSet<Uuid>,
-    ) -> Result<(), ComputeError> {
+    ) -> Result<(), InstanceMissing> {
         self.instance(instance_id)?.cancel_peeks(uuids);
         Ok(())
     }
@@ -674,8 +602,11 @@ where
         &mut self,
         instance_id: ComputeInstanceId,
         policies: Vec<(GlobalId, ReadPolicy<T>)>,
-    ) -> Result<(), ComputeError> {
-        self.instance(instance_id)?.set_read_policy(policies).await
+    ) -> Result<(), CollectionUpdateError> {
+        self.instance(instance_id)?
+            .set_read_policy(policies)
+            .await?;
+        Ok(())
     }
 
     /// Update the max size in bytes of any result.
@@ -683,7 +614,7 @@ where
         &mut self,
         instance_id: ComputeInstanceId,
         max_result_size: u32,
-    ) -> Result<(), ComputeError> {
+    ) -> Result<(), InstanceMissing> {
         self.instance(instance_id)?
             .update_max_result_size(max_result_size);
         Ok(())
@@ -696,7 +627,7 @@ where
     ///
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
-    pub async fn process(&mut self) -> Result<Option<ComputeControllerResponse<T>>, ComputeError> {
+    pub async fn process(&mut self) -> Result<Option<ComputeControllerResponse<T>>, StorageError> {
         // Rehydrate any failed replicas.
         for instance in self.compute.instances.values_mut() {
             instance
@@ -724,8 +655,16 @@ where
 
         // Process pending responses from replicas.
         if let Some((instance_id, replica_id, response)) = self.compute.stashed_response.take() {
-            let mut instance = self.instance(instance_id)?;
-            instance.handle_response(response, replica_id).await
+            if let Ok(mut instance) = self.instance(instance_id) {
+                instance.handle_response(response, replica_id).await
+            } else {
+                tracing::warn!(
+                    ?instance_id,
+                    ?response,
+                    "processed response from unknown instance"
+                );
+                Ok(None)
+            }
         } else {
             Ok(None)
         }
@@ -746,7 +685,7 @@ impl<T> ComputeInstanceRef<'_, T> {
     }
 
     /// Return a read-only handle to the indicated collection.
-    pub fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, ComputeError> {
+    pub fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, CollectionMissing> {
         self.instance.collection(id)
     }
 }
