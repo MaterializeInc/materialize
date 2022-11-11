@@ -78,6 +78,7 @@ use mz_sql_parser::{
     ast::{display::AstDisplay, CreateIndexStatement, RawObjectName, Statement as AstStatement},
     parser,
 };
+use mz_stash::PostgresFactory;
 use mz_storage_client::types::connections::ConnectionContext;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
@@ -658,6 +659,7 @@ impl Runner {
             &metrics_registry,
         );
         let persist_clients = Arc::new(Mutex::new(persist_clients));
+        let postgres_factory = PostgresFactory::new(&metrics_registry);
         let server_config = mz_environmentd::Config {
             adapter_stash_url,
             controller: ControllerConfig {
@@ -672,6 +674,7 @@ impl Runner {
                 persist_clients,
                 storage_stash_url,
                 now: SYSTEM_TIME.clone(),
+                postgres_factory: postgres_factory.clone(),
             },
             secrets_controller: Arc::clone(&orchestrator) as Arc<dyn SecretsController>,
             cloud_resource_controller: None,

@@ -28,7 +28,9 @@ use itertools::Itertools;
 use mz_adapter::catalog::{Catalog, ConnCatalog};
 use mz_adapter::session::Session;
 use mz_kafka_util::client::{create_new_client_config_simple, MzClientContext};
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NOW_ZERO;
+use mz_stash::PostgresFactory;
 use once_cell::sync::Lazy;
 use rand::Rng;
 use rdkafka::producer::Producer;
@@ -157,6 +159,7 @@ pub struct State {
     backoff_factor: f64,
     regex: Option<Regex>,
     regex_replacement: String,
+    postgres_factory: PostgresFactory,
 
     // === Materialize state. ===
     materialize_catalog_postgres_stash: Option<String>,
@@ -348,7 +351,10 @@ impl State {
     {
         if let Some(url) = &self.materialize_catalog_postgres_stash {
             let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new()).unwrap();
-            let stash = mz_stash::Postgres::new_readonly(url.clone(), None, tls).await?;
+            let stash = self
+                .postgres_factory
+                .open_readonly(url.clone(), None, tls)
+                .await?;
             let catalog = Catalog::open_debug(stash, NOW_ZERO.clone()).await?;
             let res = f(catalog.for_session(&Session::dummy()));
             Ok(Some(res))
@@ -965,6 +971,7 @@ pub async fn create_state(
         backoff_factor: config.backoff_factor,
         regex: None,
         regex_replacement: set::DEFAULT_REGEX_REPLACEMENT.into(),
+        postgres_factory: PostgresFactory::new(&MetricsRegistry::new()),
 
         // === Materialize state. ===
         materialize_catalog_postgres_stash,

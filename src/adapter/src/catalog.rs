@@ -66,7 +66,7 @@ use mz_sql::plan::{
 use mz_sql::{plan, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{CreateSinkOption, CreateSourceOption, Statement, WithOptionValue};
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_stash::{Append, Postgres, Sqlite};
+use mz_stash::{Append, Postgres, PostgresFactory, Sqlite};
 use mz_storage_client::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 use mz_storage_client::types::sinks::{
     SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder,
@@ -1975,7 +1975,8 @@ impl Catalog<Postgres> {
         now: NowFn,
     ) -> Result<Catalog<Postgres>, anyhow::Error> {
         let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new()).unwrap();
-        let stash = mz_stash::Postgres::new(url, schema, tls).await?;
+        let factory = PostgresFactory::new(&MetricsRegistry::new());
+        let stash = factory.open(url, schema, tls).await?;
         Catalog::open_debug(stash, now).await
     }
 }
