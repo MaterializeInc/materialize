@@ -1064,6 +1064,7 @@ pub async fn serve<S: Append + 'static>(
     let handle = TokioHandle::current();
 
     let initial_timestamps = catalog.get_all_persisted_timestamps().await?;
+    let inner_metrics_registry = metrics_registry.clone();
     let thread = thread::Builder::new()
         // The Coordinator thread tends to keep a lot of data on its stack. To
         // prevent a stack overflow we allocate a stack twice as big as the default
@@ -1114,7 +1115,7 @@ pub async fn serve<S: Append + 'static>(
                 storage_usage_client,
                 storage_usage_collection_interval,
                 segment_client,
-                metrics: Metrics::register_with(&metrics_registry),
+                metrics: Metrics::register_with(&inner_metrics_registry),
             };
             let bootstrap =
                 handle.block_on(coord.bootstrap(builtin_migration_metadata, builtin_table_updates));
@@ -1138,7 +1139,7 @@ pub async fn serve<S: Append + 'static>(
                 start_instant,
                 _thread: thread.join_on_drop(),
             };
-            let client = Client::new(cmd_tx.clone());
+            let client = Client::new(cmd_tx.clone(), &metrics_registry);
             Ok((handle, client))
         }
         Err(e) => Err(e),
