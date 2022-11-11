@@ -51,6 +51,8 @@ pub struct StorageHostsConfig {
     pub orchestrator: Arc<dyn NamespacedOrchestrator>,
     /// The storaged image to use when starting new storage hosts.
     pub storaged_image: String,
+    /// The init container image to use for storaged.
+    pub init_container_image: Option<String>,
 }
 
 /// Manages provisioning of storage hosts and assignment of storage objects
@@ -65,6 +67,8 @@ pub struct StorageHosts<T> {
     orchestrator: Arc<dyn NamespacedOrchestrator>,
     /// The storaged image to use when starting new storage hosts.
     storaged_image: String,
+    /// The init container image to use for storaged.
+    init_container_image: Option<String>,
     /// The known storage hosts, identified by network address.
     hosts: HashMap<StorageHostAddr, StorageHost<T>>,
     /// The assignment of storage objects to storage hosts.
@@ -100,6 +104,7 @@ where
             build_info: config.build_info,
             orchestrator: config.orchestrator,
             storaged_image: config.storaged_image,
+            init_container_image: config.init_container_image,
             objects: HashMap::new(),
             hosts: HashMap::new(),
             initialized: false,
@@ -232,6 +237,7 @@ where
                 &id.to_string(),
                 ServiceConfig {
                     image: self.storaged_image.clone(),
+                    init_container_image: self.init_container_image.clone(),
                     args: &|assigned| {
                         vec![
                             format!("--workers={}", allocation.workers),

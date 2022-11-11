@@ -19,8 +19,9 @@ use clap::ArgEnum;
 use futures::stream::{BoxStream, StreamExt};
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
-    Affinity, Container, ContainerPort, Pod, PodAffinityTerm, PodAntiAffinity, PodSpec,
-    PodTemplateSpec, ResourceRequirements, Secret, Service as K8sService, ServicePort, ServiceSpec,
+    Affinity, Container, ContainerPort, EnvVar, EnvVarSource, ObjectFieldSelector, Pod,
+    PodAffinityTerm, PodAntiAffinity, PodSpec, PodTemplateSpec, ResourceRequirements, Secret,
+    Service as K8sService, ServicePort, ServiceSpec,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, LabelSelectorRequirement};
@@ -209,6 +210,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         id: &str,
         ServiceConfig {
             image,
+            init_container_image,
             args,
             ports: ports_in,
             memory_limit,
@@ -357,6 +359,50 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             .context("`image` is not ORG/NAME:VERSION")?
             .to_string();
 
+        let init_containers = init_container_image.map(|image| {
+            vec![Container {
+                name: "k8s-init-container".to_string(),
+                image: Some(image),
+                image_pull_policy: Some(self.config.image_pull_policy.to_string()),
+                env: Some(vec![
+                    EnvVar {
+                        name: "MZ_NAMESPACE".to_string(),
+                        value_from: Some(EnvVarSource {
+                            field_ref: Some(ObjectFieldSelector {
+                                field_path: "metadata.namespace".to_string(),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    EnvVar {
+                        name: "MZ_POD_NAME".to_string(),
+                        value_from: Some(EnvVarSource {
+                            field_ref: Some(ObjectFieldSelector {
+                                field_path: "metadata.name".to_string(),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    EnvVar {
+                        name: "MZ_NODE_NAME".to_string(),
+                        value_from: Some(EnvVarSource {
+                            field_ref: Some(ObjectFieldSelector {
+                                field_path: "spec.nodeName".to_string(),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                ]),
+                ..Default::default()
+            }]
+        });
+
         let mut pod_template_spec = PodTemplateSpec {
             metadata: Some(ObjectMeta {
                 labels: Some(labels.clone()),
@@ -364,6 +410,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 ..Default::default()
             }),
             spec: Some(PodSpec {
+                init_containers,
                 containers: vec![Container {
                     name: container_name,
                     image: Some(image),

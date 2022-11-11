@@ -205,6 +205,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             orchestrator: Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
             storaged_image: "storaged".into(),
             computed_image: "computed".into(),
+            init_container_image: None,
             persist_location: PersistLocation {
                 blob_uri: format!("file://{}/persist/blob", data_directory.display()),
                 consensus_uri,
