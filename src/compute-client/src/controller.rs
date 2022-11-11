@@ -107,7 +107,7 @@ impl FromStr for ComputeInstanceId {
         match s.chars().next().unwrap() {
             's' => Ok(Self::System(val)),
             'u' => Ok(Self::User(val)),
-            _ => Err(anyhow!("couldn't parse role id {}", s)),
+            _ => Err(anyhow!("couldn't parse compute instance id {}", s)),
         }
     }
 }
@@ -366,7 +366,8 @@ where
     /// Remove a compute instance.
     ///
     /// # Panics
-    /// - If the identified `instance` still has active replicas.
+    ///
+    /// Panics if the identified `instance` still has active replicas.
     pub fn drop_instance(&mut self, id: ComputeInstanceId) {
         if let Some(compute_state) = self.instances.remove(&id) {
             compute_state.drop();
@@ -633,8 +634,7 @@ where
             instance
                 .activate(self.storage)
                 .rehydrate_failed_replicas()
-                .await
-                .expect("error rehydrating failed replicas");
+                .await?;
         }
 
         // Process pending ready responses.

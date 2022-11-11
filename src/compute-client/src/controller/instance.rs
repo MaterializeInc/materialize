@@ -229,7 +229,8 @@ where
     /// Drop this compute instance.
     ///
     /// # Panics
-    /// - If the compute instance still has active replicas.
+    ///
+    /// Panics if the compute instance still has active replicas.
     pub fn drop(self) {
         assert!(
             self.replicas.is_empty(),
@@ -418,6 +419,10 @@ where
     ///
     /// This method does not cause an orchestrator removal of the replica, so it is suitable for
     /// removing the replica temporarily, e.g., during rehydration.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the specified replica does not exist in the compute state.
     async fn remove_replica_state(&mut self, id: ReplicaId) -> Result<(), StorageError> {
         // Remove frontier tracking for this replica.
         self.remove_write_frontiers(id).await?;
@@ -782,6 +787,10 @@ where
     }
 
     /// Accept write frontier updates from the compute layer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any of the `updates` references an absent collection.
     #[tracing::instrument(level = "debug", skip(self))]
     async fn update_write_frontiers(
         &mut self,
@@ -796,7 +805,7 @@ where
             let collection = self
                 .compute
                 .collection_mut(*id)
-                .expect("Reference to absent collection");
+                .expect("reference to absent collection");
 
             if PartialOrder::less_than(&collection.write_frontier, new_upper) {
                 advanced_collections.push(*id);
