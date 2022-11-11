@@ -369,6 +369,17 @@ literally, i.e.,  their values are *not* treated as regular expression patterns.
 For example, a variable with value `my.+name` will match the string `my.+name`,
 not `my friend's name`.
 
+Additionally, you can add one or both of the following, after the error
+expectation field:
+```
+detail:expected detail
+hint:expected hint
+```
+
+These assert that the `DETAIL` or `HINT` fields _contains_ the expected message.
+These fields in the postgres error response are otherwise ignored. If both
+are specified, `detail` must come before `hint`.
+
 ## Executing statements in multiple sessions
 
 By default, `testdrive` will run all `>` and `!` statements in a single connection. A limited form of multiple connections is provided by the `$ postgres-connect` action. See the "Connecting to databases over the pgwire protocol" section below.
