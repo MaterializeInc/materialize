@@ -1568,30 +1568,32 @@ impl CatalogItem {
 
     pub fn func(
         &self,
-        name: &QualifiedObjectName,
+        entry: &CatalogEntry,
     ) -> Result<&'static mz_sql::func::Func, SqlCatalogError> {
         match &self {
             CatalogItem::Func(func) => Ok(func.inner),
-            _ => Err(SqlCatalogError::UnexpectedType(
-                name.item.to_string(),
-                CatalogItemType::Func,
-            )),
+            _ => Err(SqlCatalogError::UnexpectedType {
+                name: entry.name().item.to_string(),
+                actual_type: entry.item_type(),
+                expected_type: CatalogItemType::Func,
+            }),
         }
     }
 
     pub fn source_desc(
         &self,
-        name: &QualifiedObjectName,
+        entry: &CatalogEntry,
     ) -> Result<Option<&SourceDesc>, SqlCatalogError> {
         match &self {
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion(ingestion) => Ok(Some(&ingestion.desc)),
                 DataSourceDesc::Source | DataSourceDesc::Introspection(_) => Ok(None),
             },
-            _ => Err(SqlCatalogError::UnexpectedType(
-                name.item.clone(),
-                CatalogItemType::Source,
-            )),
+            _ => Err(SqlCatalogError::UnexpectedType {
+                name: entry.name().item.to_string(),
+                actual_type: entry.item_type(),
+                expected_type: CatalogItemType::Source,
+            }),
         }
     }
 
@@ -1749,7 +1751,7 @@ impl CatalogEntry {
 
     /// Returns the [`mz_sql::func::Func`] associated with this `CatalogEntry`.
     pub fn func(&self) -> Result<&'static mz_sql::func::Func, SqlCatalogError> {
-        self.item.func(self.name())
+        self.item.func(self)
     }
 
     /// Returns the inner [`Index`] if this entry is an index, else `None`.
@@ -1794,7 +1796,7 @@ impl CatalogEntry {
     /// Returns the [`mz_storage_client::types::sources::SourceDesc`] associated with
     /// this `CatalogEntry`, if any.
     pub fn source_desc(&self) -> Result<Option<&SourceDesc>, SqlCatalogError> {
-        self.item.source_desc(self.name())
+        self.item.source_desc(self)
     }
 
     /// Reports whether this catalog entry is a connection.

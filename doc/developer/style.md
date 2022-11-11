@@ -116,7 +116,7 @@ Some key principles to highlight are:
 * Use quotes to delimit file names, user-supplied identifiers, and other variables that might contain words.
 * Use double quotes when quoting is appropriate.
 * Use past tense if an attempt to do something failed, but could perhaps succeed next time (perhaps after fixing some problem). Use present tense if the failure is certainly permanent.
-* When citing the name of an object, state what kind of object it is.
+* When citing the name of an object, state what kind of object it is. Print the type in all lowercase.
 * Avoid mentioning called function names. Instead say what the code was trying to do.
 * Tricky words to avoid: unable, bad, illegal, unknown.
 * Avoid contractions and spell out words in full.
