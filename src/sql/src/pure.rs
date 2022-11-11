@@ -17,7 +17,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
-use itertools::Itertools;
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
@@ -47,7 +46,7 @@ use crate::ast::{
     CreateSourceStatement, CreateSourceSubsource, CreateSubsourceStatement, CsrConnectionAvro,
     CsrConnectionProtobuf, CsvColumns, Format, ProtobufSchema, Value, WithOptionValue,
 };
-use crate::catalog::SessionCatalog;
+use crate::catalog::{ErsatzCatalog, SessionCatalog};
 use crate::kafka_util;
 use crate::kafka_util::KafkaConfigOptionExtracted;
 use crate::names::{Aug, RawDatabaseSpecifier, ResolvedObjectName};
@@ -62,9 +61,9 @@ fn subsource_gen<'a, T>(
 ) -> Result<Vec<(UnresolvedObjectName, UnresolvedObjectName, &'a T)>, PlanError> {
     let mut validated_requested_subsources = vec![];
 
-    for subsource in selected_subsources {
-        let upstream_name = normalize::unresolved_object_name(subsource.reference.clone())?;
+    let catalog = ErsatzCatalog(tables_by_name);
 
+    for subsource in selected_subsources {
         let subsource_name = match &subsource.subsource {
             Some(name) => match name {
                 DeferredObjectName::Deferred(name) => name.clone(),
@@ -76,49 +75,14 @@ fn subsource_gen<'a, T>(
                 // Use the entered name as the upstream reference, and then use
                 // the item as the subsource name to ensure it's created in the
                 // current schema, not mirroring the schema of the reference.
-                UnresolvedObjectName::unqualified(&upstream_name.item)
+                UnresolvedObjectName::unqualified(
+                    &normalize::unresolved_object_name(subsource.reference.clone())?.item,
+                )
             }
         };
 
-        let schemas = match tables_by_name.get(&upstream_name.item) {
-            Some(schemas) => schemas,
-            None => sql_bail!("table {upstream_name} not found in source"),
-        };
+        let (qualified_upstream_name, desc) = catalog.resolve(subsource.reference.clone())?;
 
-        let schema = match &upstream_name.schema {
-            Some(schema) => schema,
-            None => match schemas.keys().exactly_one() {
-                Ok(schema) => schema,
-                Err(_) => {
-                    sql_bail!("table {upstream_name} is ambiguous, consider specifying the schema")
-                }
-            },
-        };
-
-        let databases = match schemas.get(schema) {
-            Some(databases) => databases,
-            None => sql_bail!("schema {schema} not found in source"),
-        };
-
-        let database = match &upstream_name.database {
-            Some(database) => database,
-            None => match databases.keys().exactly_one() {
-                Ok(database) => database,
-                Err(_) => {
-                    sql_bail!(
-                        "table {upstream_name} is ambiguous, consider specifying the database"
-                    )
-                }
-            },
-        };
-
-        let desc = match databases.get(database) {
-            Some(desc) => *desc,
-            None => sql_bail!("database {database} not found source"),
-        };
-
-        let qualified_upstream_name =
-            UnresolvedObjectName::qualified(&[database, schema, &upstream_name.item]);
         validated_requested_subsources.push((qualified_upstream_name, subsource_name, desc));
     }
 
