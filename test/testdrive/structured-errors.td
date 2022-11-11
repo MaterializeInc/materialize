@@ -18,8 +18,16 @@
     PASSWORD SECRET pgpass
   )
 
-# TODO(guswynn): make testdrive support `startswith`, and hints and details
+# TODO(guswynn): make testdrive support `startswith`
 ! CREATE SOURCE "test_error"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR ALL TABLES
 exact:failed to fetch publication information from PostgreSQL database
+detail:error connecting to server:
+
+> CREATE MATERIALIZED VIEW mv as SELECT 1;
+
+# test that `hint:` works!
+! DROP VIEW mv
+contains:is not a view
+hint:Use DROP MATERIALIZED VIEW to remove a materialized view.
