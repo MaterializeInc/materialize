@@ -117,7 +117,7 @@ true
   ORDER BY
     l_returnflag,
     l_linestatus;
-4 values hashing to a7dd389a2d447201b18915e8aefa6ece
+4 values hashing to e350d21706985f8be572176f2301222f
 
 # Query 02
 > SELECT
@@ -179,7 +179,7 @@ true
   ORDER BY
       revenue DESC,
       o_orderdate;
-119 values hashing to 68d3ae75653e81e1b4ded8e9b14dac11
+127 values hashing to 637be0ff3f50cd612b004a69958bfccb
 
 # Query 04
 > SELECT
@@ -203,7 +203,7 @@ true
       o_orderpriority
   ORDER BY
       o_orderpriority;
-4 values hashing to 9c9139fe642f2a3ab3c151dcfef4f3f0
+4 values hashing to 320decef503bc240bc73101fc659a1db
 
 # Query 05
 > SELECT
@@ -230,7 +230,7 @@ true
       n_name
   ORDER BY
       revenue DESC;
-5 values hashing to 0c8219cc57219d9d3462441df16b8112
+5 values hashing to 8e24fa90f7160fb0dc1e7bfaaa3e9c73
 
 # Query 06
 > SELECT
@@ -242,7 +242,7 @@ true
       AND l_shipdate >= DATE '1994-01-01'
       AND l_shipdate < DATE '1994-01-01' + INTERVAL '1' year
       AND l_discount BETWEEN 0.06 - 0.01 AND 0.07;
-1 values hashing to 34350c2d18d4c3607df2e48361faeb5b
+1 values hashing to d9c979f1eed5940788ff3653321acac4
 
 # Query 07
 > SELECT
@@ -284,7 +284,7 @@ true
       supp_nation,
       cust_nation,
       l_year;
-4 values hashing to 3fa442567ee218fd56c71afcebe22558
+4 values hashing to 0ab7e162c0d17f7fbdebbcb6e6eb4e7f
 
 # Query 08
 > SELECT
@@ -359,7 +359,7 @@ true
   ORDER BY
       nation,
       o_year DESC;
-174 values hashing to f9fe9448bbf58bf7bc6d030f07b0cb12
+172 values hashing to b0fbcce5ec14e4786bb47cc6a365d7e3
 
 # Query 10
 > SELECT
@@ -394,7 +394,7 @@ true
       c_comment
   ORDER BY
       revenue DESC;
-400 values hashing to 5aff97ea00cdcf957e5382269bf303a5
+366 values hashing to 23dd20e994576aec9e5898b128a6b5a5
 
 # Query 11
 > SELECT
@@ -455,7 +455,7 @@ true
       l_shipmode
   ORDER BY
       l_shipmode;
-2 values hashing to 073eefcd66f3621883f99713bfcca326
+2 values hashing to 3c31b94c99bd77e96003c2059416ed7a
 
 # Query 13
 > SELECT
@@ -478,7 +478,7 @@ true
   ORDER BY
       custdist DESC,
       c_count DESC;
-27 values hashing to 4db7211f1bec42092d8f3dfea7f385e2
+24 values hashing to 0425a49d65f09ba044a8ae4e34fe2fef
 
 # Query 14
 > SELECT
@@ -494,7 +494,7 @@ true
       l_partkey = p_partkey
       AND l_shipdate >= DATE '1995-09-01'
       AND l_shipdate < DATE '1995-09-01' + INTERVAL '1' month;
-1 values hashing to f14bf0e7e0cf534cca34f52d32f34ba3
+1 values hashing to 52009b01ec2cea22a360dbb1de1e5acf
 
 # Query 15
 > SELECT
@@ -516,7 +516,7 @@ true
       )
   ORDER BY
       s_suppkey;
-1 values hashing to e38533aeeb7f6fdfd3c4c95247ef052a
+1 values hashing to cef6c8859cb05a1680529bf4b688bbdb
 
 # Query 16
 > SELECT
@@ -569,7 +569,7 @@ true
       WHERE
         l_partkey = p_partkey
     );
-1 values hashing to ff8016d8983e2de3c211e66fbfaecf04
+1 values hashing to 6ea48615d6dd1ff31045cd67a15ef60a
 
 # Query 18
 > SELECT
@@ -604,7 +604,7 @@ true
   ORDER BY
       o_totalprice DESC,
       o_orderdate;
-3 values hashing to 0a0929b4453ef769efd3665c57fdee2d
+3 values hashing to 321256b5aef1aedab78f125c5925de92
 
 # Query 19
 > SELECT
@@ -642,7 +642,7 @@ true
           AND l_shipmode IN ('AIR', 'AIR REG')
           AND l_shipinstruct = 'DELIVER IN PERSON'
       );
-1 values hashing to 260226981739c518e3611adbe5764c77
+1 values hashing to 7df1074bd6f415369eb335bff3ad1781
 
 # Query 20
 > SELECT
@@ -682,7 +682,7 @@ true
       AND n_name = 'CANADA'
   ORDER BY
       s_name;
-1 values hashing to c33785f534c9d1a0abc37e05972a624d
+2 values hashing to d093f99c74b217399be0eccc998662af
 
 # Query 21
 > SELECT
@@ -724,7 +724,7 @@ true
   ORDER BY
       numwait DESC,
       s_name;
-2 values hashing to 9a281f0b2da0c7a03a0b0f447c420733
+2 values hashing to fd48e843525a4c80b8fe0b7064b35254
 
 # Query 22
 > SELECT
@@ -838,7 +838,7 @@ true
   ORDER BY
     l_returnflag,
     l_linestatus;
-4 values hashing to a7dd389a2d447201b18915e8aefa6ece
+4 values hashing to e350d21706985f8be572176f2301222f
 
 # Query 02
 > SELECT
@@ -900,7 +900,7 @@ true
   ORDER BY
       revenue DESC,
       o_orderdate;
-119 values hashing to 68d3ae75653e81e1b4ded8e9b14dac11
+127 values hashing to 637be0ff3f50cd612b004a69958bfccb
 
 # Query 04
 > SELECT
@@ -924,7 +924,7 @@ true
       o_orderpriority
   ORDER BY
       o_orderpriority;
-4 values hashing to 9c9139fe642f2a3ab3c151dcfef4f3f0
+4 values hashing to 320decef503bc240bc73101fc659a1db
 
 # Query 05
 > SELECT
@@ -951,7 +951,7 @@ true
       n_name
   ORDER BY
       revenue DESC;
-5 values hashing to 0c8219cc57219d9d3462441df16b8112
+5 values hashing to 8e24fa90f7160fb0dc1e7bfaaa3e9c73
 
 # Query 06
 > SELECT
@@ -963,7 +963,7 @@ true
       AND l_shipdate >= DATE '1994-01-01'
       AND l_shipdate < DATE '1994-01-01' + INTERVAL '1' year
       AND l_discount BETWEEN 0.06 - 0.01 AND 0.07;
-1 values hashing to 34350c2d18d4c3607df2e48361faeb5b
+1 values hashing to d9c979f1eed5940788ff3653321acac4
 
 # Query 07
 > SELECT
@@ -1005,7 +1005,7 @@ true
       supp_nation,
       cust_nation,
       l_year;
-4 values hashing to 3fa442567ee218fd56c71afcebe22558
+4 values hashing to 0ab7e162c0d17f7fbdebbcb6e6eb4e7f
 
 # Query 08
 > SELECT
@@ -1080,7 +1080,7 @@ true
   ORDER BY
       nation,
       o_year DESC;
-174 values hashing to f9fe9448bbf58bf7bc6d030f07b0cb12
+172 values hashing to b0fbcce5ec14e4786bb47cc6a365d7e3
 
 # Query 10
 > SELECT
@@ -1115,7 +1115,7 @@ true
       c_comment
   ORDER BY
       revenue DESC;
-400 values hashing to 5aff97ea00cdcf957e5382269bf303a5
+366 values hashing to 23dd20e994576aec9e5898b128a6b5a5
 
 # Query 11
 > SELECT
@@ -1176,7 +1176,7 @@ true
       l_shipmode
   ORDER BY
       l_shipmode;
-2 values hashing to 073eefcd66f3621883f99713bfcca326
+2 values hashing to 3c31b94c99bd77e96003c2059416ed7a
 
 # Query 13
 > SELECT
@@ -1199,7 +1199,7 @@ true
   ORDER BY
       custdist DESC,
       c_count DESC;
-27 values hashing to 4db7211f1bec42092d8f3dfea7f385e2
+24 values hashing to 0425a49d65f09ba044a8ae4e34fe2fef
 
 # Query 14
 > SELECT
@@ -1215,7 +1215,7 @@ true
       l_partkey = p_partkey
       AND l_shipdate >= DATE '1995-09-01'
       AND l_shipdate < DATE '1995-09-01' + INTERVAL '1' month;
-1 values hashing to f14bf0e7e0cf534cca34f52d32f34ba3
+1 values hashing to 52009b01ec2cea22a360dbb1de1e5acf
 
 # Query 15
 > SELECT
@@ -1237,7 +1237,7 @@ true
       )
   ORDER BY
       s_suppkey;
-1 values hashing to e38533aeeb7f6fdfd3c4c95247ef052a
+1 values hashing to cef6c8859cb05a1680529bf4b688bbdb
 
 # Query 16
 > SELECT
@@ -1290,7 +1290,7 @@ true
       WHERE
         l_partkey = p_partkey
     );
-1 values hashing to ff8016d8983e2de3c211e66fbfaecf04
+1 values hashing to 6ea48615d6dd1ff31045cd67a15ef60a
 
 # Query 18
 > SELECT
@@ -1325,7 +1325,7 @@ true
   ORDER BY
       o_totalprice DESC,
       o_orderdate;
-3 values hashing to 0a0929b4453ef769efd3665c57fdee2d
+3 values hashing to 321256b5aef1aedab78f125c5925de92
 
 # Query 19
 > SELECT
@@ -1363,7 +1363,7 @@ true
           AND l_shipmode IN ('AIR', 'AIR REG')
           AND l_shipinstruct = 'DELIVER IN PERSON'
       );
-1 values hashing to 260226981739c518e3611adbe5764c77
+1 values hashing to 7df1074bd6f415369eb335bff3ad1781
 
 # Query 20
 > SELECT
@@ -1403,7 +1403,7 @@ true
       AND n_name = 'CANADA'
   ORDER BY
       s_name;
-1 values hashing to c33785f534c9d1a0abc37e05972a624d
+2 values hashing to d093f99c74b217399be0eccc998662af
 
 # Query 21
 > SELECT
@@ -1445,7 +1445,7 @@ true
   ORDER BY
       numwait DESC,
       s_name;
-2 values hashing to 9a281f0b2da0c7a03a0b0f447c420733
+2 values hashing to fd48e843525a4c80b8fe0b7064b35254
 
 # Query 22
 > SELECT
