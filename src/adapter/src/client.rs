@@ -428,7 +428,11 @@ impl Display for TimeoutType {
 
 impl From<TimeoutType> for AdapterError {
     fn from(timeout: TimeoutType) -> Self {
-        match timeout { TimeoutType::IdleInTransactionSession(_) => AdapterError::IdleInTransactionSessionTimeout }
+        match timeout {
+            TimeoutType::IdleInTransactionSession(_) => {
+                AdapterError::IdleInTransactionSessionTimeout
+            }
+        }
     }
 }
 
