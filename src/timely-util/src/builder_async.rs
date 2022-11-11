@@ -11,8 +11,6 @@
 
 use std::cell::RefCell;
 use std::future::Future;
-use std::mem::ManuallyDrop;
-use std::mem::{transmute, transmute_copy};
 use std::pin::Pin;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,6 +18,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
 use futures_util::task::ArcWake;
+use polonius_the_crab::{polonius, WithLifetime};
 use timely::communication::{message::RefOrMut, Pull};
 use timely::dataflow::channels::pact::ParallelizationContractCore;
 use timely::dataflow::channels::pushers::TeeCore;
@@ -83,17 +82,6 @@ impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> AsyncInputHandle<T, 
     pub fn next(&mut self) -> impl Future<Output = Option<Event<'_, T, D>>> + '_ {
         NextFut { handle: Some(self) }
     }
-
-    fn next_sync<'handle>(
-        &'handle mut self,
-    ) -> Option<(
-        ManuallyDrop<CapabilityRef<'handle, T>>,
-        RefOrMut<'handle, D>,
-    )> {
-        self.sync_handle
-            .next()
-            .map(|(cap, data)| (ManuallyDrop::new(cap), data))
-    }
 }
 
 /// The future returned by `AsyncInputHandle::next`
@@ -117,53 +105,22 @@ impl<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> Future
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let handle: &'handle mut AsyncInputHandle<T, D, P> =
             self.handle.take().expect("future polled after completion");
-        match AsyncInputHandle::next_sync(handle) {
-            Some((cap, data)) => {
-                // SAFETY: This is necessary only due to a limitation in the borrow checker. Once
-                // Rust starts using the polonius borrow checker the transmute can be removed.
-                //
-                // We have created a `&'handle mut AsyncInputHandle` value on the stack by taking
-                // the handle out of the Option stored in our state. This value is then used as-is
-                // to call `AsyncInputHandle::next_sync`, with no auto-deref happening, whose
-                // function signature is:
-                // for<'a> fn(&'a mut AsyncInputHandle) -> Option<(CapabilityRef<'a, T>, RefOrMut<'a, D>)>
-                //
-                // Therefore, by calling it with our `'handle` lifetimed handle we get back
-                // `'handle` lifetimed capability and data.
-                //
-                // An additional argument for safety is that the current borrow checker is happy
-                // accepting the body of this function without transmutes when either the Some or
-                // None branch is replaced by a panic!(). Therefore each individual path is safe on
-                // its own and in the full version we only ever call one of them, therefore the
-                // composition is also safe.
-                //
-                // ## Safety of ManuallyDrop
-                // `next_sync` wraps the returned `CapabilityRef` into a `ManuallyDrop` in order to
-                // not interfere with the borrow checker that will otherwise infer that `cap` may
-                // live until the end of this function and doesn't compile even when transmuting.
-                //
-                // ## Safety of transmute_copy
-                //
-                // We are forced to use `transmute_copy` and not a simple transmute because the
-                // compiler cannot understand that the two types have the same size, even though
-                // they clearly do, since they only differ in their lifetime. `transmute_copy` will
-                // create a bit copy of the capability and at the same time remove the wrapping
-                // `ManuallyDrop`. This is safe because `ManuallyDrop` is marked as
-                // `#[repr(transparent)]`, therefore it has the same layout as the T it wraps.
-                // Finally we don't need to care about running mem::forget() on the original cap
-                // that we created a copy out because it is wrapped in `ManuallyDrop` so no
-                // destructor will run.
-                //
-                let cap = unsafe {
-                    transmute_copy::<ManuallyDrop<CapabilityRef<'_, T>>, CapabilityRef<'handle, T>>(
-                        &cap,
-                    )
-                };
-                let data = unsafe { transmute::<RefOrMut<'_, D>, RefOrMut<'handle, D>>(data) };
 
-                Poll::Ready(Some(Event::Data(cap, data)))
-            }
-            None => {
+        // This type serves as a type-level function that "shows" the `polonius` function how to
+        // create a version of the output type with a specific lifetime 'lt. It does this by
+        // implementing the `WithLifetime` trait for all lifetimes 'lt and setting the associated
+        // type to the output type with all lifetimes set to 'lt.
+        type NextHTB<T, D> =
+            dyn for<'lt> WithLifetime<'lt, T = (CapabilityRef<'lt, T>, RefOrMut<'lt, D>)>;
+
+        // The polonius function encodes a safe but rejected pattern by the current borrow checker.
+        // Explaining is beyond the scope of this comment but the docs have a great explanation:
+        // https://docs.rs/polonius-the-crab/latest/polonius_the_crab/index.html
+        match polonius::<NextHTB<T, D>, _, _, _>(handle, |handle| {
+            handle.sync_handle.next().ok_or(())
+        }) {
+            Ok((cap, data)) => Poll::Ready(Some(Event::Data(cap, data))),
+            Err((handle, ())) => {
                 // There is no more data but there may be a pending frontier notification
                 let mut shared_frontiers = handle.shared_frontiers.borrow_mut();
                 let (ref frontier, ref mut pending) = shared_frontiers[handle.index];
