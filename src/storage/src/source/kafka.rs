@@ -262,23 +262,13 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
     }
 }
 
-#[async_trait(?Send)]
-impl SourceReader for KafkaSourceReader {
-    type Key = Option<Vec<u8>>;
-    type Value = Option<Vec<u8>>;
-    type Diff = ();
-
-    /// This function polls from the next consumer for which a message is available. This function
-    /// polls the set round-robin: when a consumer is polled, it is placed at the back of the
-    /// queue.
-    ///
-    /// If a message has an offset that is smaller than the next expected offset for this consumer
-    /// (and this partition) we skip this message, and seek to the appropriate offset
-    async fn next(
+impl KafkaSourceReader {
+    /// A Kafka source never completes. This is effectively a helper method for `poll` but without
+    /// the option wrapper, which allows for `?` use and a bit more concision.
+    async fn poll(
         &mut self,
         timestamp_granularity: Duration,
-    ) -> Option<Result<SourceMessageType<Self::Key, Self::Value, Self::Diff>, SourceReaderError>>
-    {
+    ) -> Result<SourceMessageType<Option<Vec<u8>>, Option<Vec<u8>>, ()>, SourceReaderError> {
         loop {
             let partition_info = self.partition_info.lock().unwrap().take();
             if let Some(partitions) = partition_info {
@@ -300,9 +290,9 @@ impl SourceReader for KafkaSourceReader {
                     }
                 }
                 if !unconsumed_partitions.is_empty() {
-                    return Some(Ok(SourceMessageType::DropPartitionCapabilities(
+                    return Ok(SourceMessageType::DropPartitionCapabilities(
                         unconsumed_partitions,
-                    )));
+                    ));
                 }
             }
             let mut next_message = None;
@@ -323,10 +313,7 @@ impl SourceReader for KafkaSourceReader {
                     ),
                     Ok(message) => {
                         let source_message =
-                            match construct_source_message(&message, self.include_headers) {
-                                Err(e) => return Some(Err(e.into())),
-                                Ok(r) => r,
-                            };
+                            construct_source_message(&message, self.include_headers)?;
                         next_message = self.handle_message(source_message);
                     }
                 }
@@ -344,10 +331,7 @@ impl SourceReader for KafkaSourceReader {
                     break;
                 }
 
-                let message = match self.poll_from_next_queue() {
-                    Err(e) => return Some(Err(e.into())),
-                    Ok(r) => r,
-                };
+                let message = self.poll_from_next_queue()?;
                 attempts += 1;
 
                 if let Some(message) = message {
@@ -360,10 +344,32 @@ impl SourceReader for KafkaSourceReader {
             }
 
             match next_message {
-                Some(msg) => return Some(Ok(msg)),
+                Some(msg) => return Ok(msg),
                 None => tokio::time::sleep(sleep_duration).await,
             }
         }
+    }
+}
+
+#[async_trait(?Send)]
+impl SourceReader for KafkaSourceReader {
+    type Key = Option<Vec<u8>>;
+    type Value = Option<Vec<u8>>;
+    type Diff = ();
+
+    /// This function polls from the next consumer for which a message is available. This function
+    /// polls the set round-robin: when a consumer is polled, it is placed at the back of the
+    /// queue.
+    ///
+    /// If a message has an offset that is smaller than the next expected offset for this consumer
+    /// (and this partition) we skip this message, and seek to the appropriate offset
+    async fn next(
+        &mut self,
+        timestamp_granularity: Duration,
+    ) -> Option<Result<SourceMessageType<Self::Key, Self::Value, Self::Diff>, SourceReaderError>>
+    {
+        let result = self.poll(timestamp_granularity).await;
+        Some(result)
     }
 }
 
