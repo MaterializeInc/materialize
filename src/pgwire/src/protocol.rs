@@ -324,13 +324,13 @@ where
     }
 
     async fn advance_ready(&mut self) -> Result<State, io::Error> {
-        let message = tokio::select! {
-            message = self.conn.recv() => message?,
+        // Handle timeouts first so we don't execute any statements when there's a pending timeout.
+        let message = select! {
+            biased;
+
             Some(timeout) = self.adapter_client.as_mut().expect(Self::ADAPTER_CLIENT_INVARIANT).recv_timeout() =>
-                return Ok(match self.adapter_client().handle_timeout(timeout) {
-                    Ok(()) => State::Ready,
-                    Err(e) => State::TimedOut(ErrorResponse::from_adapter_error(Severity::Fatal, e)),
-                })
+                return Ok(State::TimedOut(ErrorResponse::from_adapter_error(Severity::Fatal, timeout.into()))),
+            message = self.conn.recv() => message?,
         };
 
         self.adapter_client().reset_canceled();

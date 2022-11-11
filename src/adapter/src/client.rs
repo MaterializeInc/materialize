@@ -394,18 +394,6 @@ impl SessionClient {
     pub async fn recv_timeout(&mut self) -> Option<TimeoutType> {
         self.timeouts.recv().await
     }
-
-    pub fn handle_timeout(&mut self, timeout: TimeoutType) -> Result<(), AdapterError> {
-        if self.timeouts.remove_timeout(&timeout) {
-            match timeout {
-                TimeoutType::IdleInTransactionSession(_) => {
-                    Err(AdapterError::IdleInTransactionSessionTimeout)
-                }
-            }
-        } else {
-            Ok(())
-        }
-    }
 }
 
 impl Drop for SessionClient {
@@ -435,6 +423,12 @@ impl Display for TimeoutType {
                 writeln!(f, "Idle in transaction session for transaction '{txn_id}'")
             }
         }
+    }
+}
+
+impl From<TimeoutType> for AdapterError {
+    fn from(timeout: TimeoutType) -> Self {
+        match timeout { TimeoutType::IdleInTransactionSession(_) => AdapterError::IdleInTransactionSessionTimeout }
     }
 }
 
@@ -469,7 +463,18 @@ impl Timeout {
         self.active_timeouts.insert(timeout_key, handle);
     }
 
-    fn remove_timeout(&mut self, timout: &TimeoutType) -> bool {
-        self.active_timeouts.remove(timout).is_some()
+    fn remove_timeout(&mut self, timeout: &TimeoutType) {
+        self.active_timeouts.remove(timeout);
+
+        // Remove the timeout from the rx queue if it exists.
+        let mut timeouts = Vec::new();
+        while let Ok(pending_timeout) = self.rx.try_recv() {
+            if timeout != &pending_timeout {
+                timeouts.push(pending_timeout);
+            }
+        }
+        for pending_timeout in timeouts {
+            self.tx.send(pending_timeout).expect("rx is in this struct");
+        }
     }
 }
