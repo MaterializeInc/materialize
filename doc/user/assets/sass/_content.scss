@@ -18,6 +18,10 @@ h6 {
         background: none !important;
         border: none !important;
     }
+
+    & + & {
+        margin-top: var(--micro);
+    }
 }
 
 h1 {
@@ -100,6 +104,10 @@ p + p {
         &:not(:last-child) {
             margin-bottom: var(--pico);
         }
+
+        pre {
+            margin-left: 1.8rem;
+        }
     }
 
     p,
@@ -130,7 +138,6 @@ p + p {
     .note {
         font-size: 1.5rem;
         font-weight: 400;
-        line-height: 1.625rem;
     }
 
     code {
@@ -748,6 +755,32 @@ p + p {
         &.level-not-supported {
             color: $danger;
         }
+    }
+}
+
+.level-of-support {
+    display: inline-block;
+    width: 17px;
+    height: 17px;
+    position: relative;
+    top: 5px;
+
+    &.level-production {
+        color: $success;
+    }
+
+    &.level-alpha,
+    &.level-beta {
+        color: $progress;
+    }
+
+    &.level-in-progress {
+        color: $warning;
+    }
+
+    &.level-researching,
+    &.level-not-supported {
+        color: $danger;
     }
 }
 
