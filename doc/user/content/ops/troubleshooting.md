@@ -142,8 +142,8 @@ grouped by dataflow. The amount of memory used
 by Materialize should correlate with the number of arrangement records that are
 displayed by either the visual interface or the SQL queries.
 
-The memory usage visualization is available at `http://<materialized
-host>:6876/memory`.
+You can access the memory usage visualization for your Materialize region at
+`https://<region host>/memory`.
 
 ## Is work distributed equally across workers?
 
