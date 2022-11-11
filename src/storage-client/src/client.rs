@@ -20,7 +20,6 @@ use std::iter;
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
-use mz_persist_client::ShardId;
 use proptest::prelude::{any, Arbitrary};
 use proptest::prop_oneof;
 use proptest::strategy::{BoxedStrategy, Strategy};
@@ -39,7 +38,7 @@ use mz_timely_util::progress::any_antichain;
 use crate::client::proto_storage_client::ProtoStorageClient;
 use crate::client::proto_storage_server::ProtoStorage;
 use crate::controller::CollectionMetadata;
-use crate::types::sinks::StorageSinkDesc;
+use crate::types::sinks::{MetadataFilled, StorageSinkDesc};
 use crate::types::sources::IngestionDescription;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.client.rs"));
@@ -189,7 +188,7 @@ impl RustType<ProtoCreateSinkCommand> for CreateSinkCommand<mz_repr::Timestamp> 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct CreateSinkCommand<T> {
     pub id: GlobalId,
-    pub description: StorageSinkDesc<CollectionMetadata, ShardId, T>,
+    pub description: StorageSinkDesc<MetadataFilled, T>,
 }
 
 impl Arbitrary for CreateSinkCommand<mz_repr::Timestamp> {
@@ -199,7 +198,7 @@ impl Arbitrary for CreateSinkCommand<mz_repr::Timestamp> {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
             any::<GlobalId>(),
-            any::<StorageSinkDesc<CollectionMetadata, ShardId, mz_repr::Timestamp>>(),
+            any::<StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>>(),
         )
             .prop_map(|(id, description)| Self { id, description })
             .boxed()

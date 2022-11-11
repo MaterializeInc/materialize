@@ -31,7 +31,7 @@ use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_storage_client::client::{StorageCommand, StorageResponse};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::sinks::StorageSinkDesc;
+use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_client::types::sources::{IngestionDescription, SourceData};
 
 use crate::decode::metrics::DecodeMetrics;
@@ -73,8 +73,7 @@ pub struct StorageState {
     /// Descriptions of each installed ingestion.
     pub ingestions: HashMap<GlobalId, IngestionDescription<CollectionMetadata>>,
     /// Descriptions of each installed export.
-    pub exports:
-        HashMap<GlobalId, StorageSinkDesc<CollectionMetadata, ShardId, mz_repr::Timestamp>>,
+    pub exports: HashMap<GlobalId, StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>>,
     /// Undocumented
     pub now: NowFn,
     /// Metrics for the source-specific side of dataflows.

@@ -9,6 +9,8 @@
 
 //! Types and traits related to reporting changing collections out of `dataflow`.
 
+use std::fmt::Debug;
+
 use mz_persist_client::ShardId;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -29,17 +31,36 @@ include!(concat!(
 
 /// A sink for updates to a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct StorageSinkDesc<S = (), I = GlobalId, T = mz_repr::Timestamp> {
+pub struct StorageSinkDesc<S: StorageSinkDescFillState, T = mz_repr::Timestamp> {
     pub from: GlobalId,
     pub from_desc: RelationDesc,
     pub connection: StorageSinkConnection,
     pub envelope: Option<SinkEnvelope>,
     pub as_of: SinkAsOf<T>,
-    pub status_id: Option<I>,
-    pub from_storage_metadata: S,
+    pub status_id: Option<<S as StorageSinkDescFillState>::StatusId>,
+    pub from_storage_metadata: <S as StorageSinkDescFillState>::StorageMetadata,
 }
 
-impl Arbitrary for StorageSinkDesc<CollectionMetadata, ShardId, mz_repr::Timestamp> {
+pub trait StorageSinkDescFillState {
+    type StatusId: Debug + Clone + Serialize + for<'a> Deserialize<'a> + Eq + PartialEq;
+    type StorageMetadata: Debug + Clone + Serialize + for<'a> Deserialize<'a> + Eq + PartialEq;
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct MetadataUnfilled;
+impl StorageSinkDescFillState for MetadataUnfilled {
+    type StatusId = GlobalId;
+    type StorageMetadata = ();
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct MetadataFilled;
+impl StorageSinkDescFillState for MetadataFilled {
+    type StatusId = ShardId;
+    type StorageMetadata = CollectionMetadata;
+}
+
+impl Arbitrary for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -78,9 +99,7 @@ impl Arbitrary for StorageSinkDesc<CollectionMetadata, ShardId, mz_repr::Timesta
     }
 }
 
-impl RustType<ProtoStorageSinkDesc>
-    for StorageSinkDesc<CollectionMetadata, ShardId, mz_repr::Timestamp>
-{
+impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoStorageSinkDesc {
         ProtoStorageSinkDesc {
             connection: Some(self.connection.into_proto()),
