@@ -380,10 +380,10 @@ p + p {
             &:before {
                 content: counter(list-counter);
                 color: var(--orchid);
-                font-size: 5rem;
+                font-size: 4.5rem;
                 font-weight: 100;
                 position: absolute;
-                top: -0.2rem;
+                top: 2.4rem;
                 left: 1rem;
             }
 
