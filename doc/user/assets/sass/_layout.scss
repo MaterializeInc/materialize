@@ -80,7 +80,7 @@
     overflow-y: auto;
     height: 100vh;
     display: flex;
-    font-size: var(--sm);
+    font-size: 1.3rem;
 
     @media (max-width: 1570px) {
         padding-left: var(--milli);
@@ -95,7 +95,7 @@
         display: block;
         cursor: pointer;
         position: relative;
-        padding: 6px 0 6px 15px;
+        padding: 3px 0 3px 15px;
         text-decoration: none;
 
         &:hover,
