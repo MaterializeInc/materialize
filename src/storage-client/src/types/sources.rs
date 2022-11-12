@@ -1994,7 +1994,7 @@ pub trait Generator {
         &self,
         now: NowFn,
         seed: Option<u64>,
-    ) -> Box<dyn Iterator<Item = (usize, GeneratorMessageType, Row)>>;
+    ) -> Box<dyn Iterator<Item = (usize, GeneratorMessageType, Row, i64)>>;
 }
 
 #[derive(Clone, Copy, Debug)]
