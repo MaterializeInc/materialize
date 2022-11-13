@@ -10,9 +10,9 @@ publish = false
 anyhow = "1.0.65"
 async-stream = "0.3.3"
 async-trait = "0.1.57"
-aws-config = { version = "0.49.0", default-features = false, features = ["native-tls"] }
-aws-smithy-http = "0.49.0"
-aws-types = { version = "0.49.0", features = ["hardcoded-credentials"] }
+aws-config = { version = "0.51.0", default-features = false, features = ["native-tls"] }
+aws-smithy-http = "0.51.0"
+aws-types = { version = "0.51.0", features = ["hardcoded-credentials"] }
 bytes = "1.2.1"
 derivative = "2.2.0"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
