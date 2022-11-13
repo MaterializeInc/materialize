@@ -100,12 +100,12 @@
 
         &:hover,
         &.active {
-            color: var(--purple);
+            color: var(--highlight);
             text-decoration: none;
             svg {
                 color: var(--divider-light);
                 .darker {
-                    color: var(--purple);
+                    color: var(--highlight);
                 }
             }
         }
@@ -135,7 +135,7 @@
 
         &:hover,
         &.active {
-            border-color: var(--purple);
+            border-color: var(--highlight);
         }
     }
 
@@ -257,7 +257,7 @@
         &.active,
         &:hover,
         &:focus {
-            color: var(--purple);
+            color: var(--highlight);
             text-decoration: none;
         }
     }

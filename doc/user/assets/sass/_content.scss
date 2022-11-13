@@ -140,10 +140,6 @@ p + p {
         font-weight: 400;
     }
 
-    code {
-        color: var(--purple);
-    }
-
     a:not(a[class]) {
         &,
         strong {
@@ -293,7 +289,7 @@ p + p {
 
     th {
         color: $dark-black-v2;
-        border-bottom: 1px $purple-v2 solid;
+        border-bottom: 1px var(--highlight) solid;
         text-align: left;
         padding: 8px;
         font-size: 1.3rem;
@@ -333,7 +329,7 @@ p + p {
     }
 
     code {
-        color: $orchid-v2;
+        color: var(--code-pink);
         font-family: "Fira Code", Courier, monospace;
         font-variant-ligatures: none;
         font-size: 1.3rem;
@@ -814,6 +810,14 @@ pre {
 }
 
 body.dark .content {
+    .table-scrollable {
+        thead th {
+            &:after {
+                border-bottom: 2px solid var(--link);
+            }
+        }
+    }
+
     pre code {
         color: var(--sub);
     }
