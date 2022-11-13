@@ -90,7 +90,7 @@ pub async fn initialize_networking(
             ))
         }
         Err(err) => {
-            error!(process = process, "failed to initialize network: {err}");
+            warn!(process = process, "failed to initialize network: {err}");
             Err(anyhow::Error::from(err).context("failed to initialize networking from sockets"))
         }
     }
