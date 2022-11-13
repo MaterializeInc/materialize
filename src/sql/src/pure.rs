@@ -12,12 +12,11 @@
 //! See the [crate-level documentation](crate) for details.
 
 use std::collections::HashMap;
-use std::error::Error as StdError;
 use std::iter;
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, Context};
 use itertools::Itertools;
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
@@ -29,6 +28,7 @@ use mz_ccsr::Schema as CcsrSchema;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError};
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_ore::cast::CastFrom;
+use mz_ore::str::StrExt;
 use mz_proto::RustType;
 use mz_repr::{strconv, GlobalId};
 use mz_secrets::SecretsReader;
@@ -59,7 +59,7 @@ use crate::plan::StatementContext;
 fn subsource_gen<'a, T>(
     selected_subsources: &mut Vec<CreateSourceSubsource<Aug>>,
     tables_by_name: HashMap<String, HashMap<String, HashMap<String, &'a T>>>,
-) -> Result<Vec<(UnresolvedObjectName, UnresolvedObjectName, &'a T)>, anyhow::Error> {
+) -> Result<Vec<(UnresolvedObjectName, UnresolvedObjectName, &'a T)>, PlanError> {
     let mut validated_requested_subsources = vec![];
 
     for subsource in selected_subsources {
@@ -68,7 +68,9 @@ fn subsource_gen<'a, T>(
         let subsource_name = match &subsource.subsource {
             Some(name) => match name {
                 DeferredObjectName::Deferred(name) => name.clone(),
-                DeferredObjectName::Named(..) => bail!("Cannot manually ID qualify subsources"),
+                DeferredObjectName::Named(..) => {
+                    sql_bail!("Cannot manually ID qualify subsources")
+                }
             },
             None => {
                 // Use the entered name as the upstream reference, and then use
@@ -80,7 +82,7 @@ fn subsource_gen<'a, T>(
 
         let schemas = match tables_by_name.get(&upstream_name.item) {
             Some(schemas) => schemas,
-            None => bail!("table {upstream_name} not found in source"),
+            None => sql_bail!("table {upstream_name} not found in source"),
         };
 
         let schema = match &upstream_name.schema {
@@ -88,14 +90,14 @@ fn subsource_gen<'a, T>(
             None => match schemas.keys().exactly_one() {
                 Ok(schema) => schema,
                 Err(_) => {
-                    bail!("table {upstream_name} is ambiguous, consider specifying the schema")
+                    sql_bail!("table {upstream_name} is ambiguous, consider specifying the schema")
                 }
             },
         };
 
         let databases = match schemas.get(schema) {
             Some(databases) => databases,
-            None => bail!("schema {schema} not found in source"),
+            None => sql_bail!("schema {schema} not found in source"),
         };
 
         let database = match &upstream_name.database {
@@ -103,14 +105,16 @@ fn subsource_gen<'a, T>(
             None => match databases.keys().exactly_one() {
                 Ok(database) => database,
                 Err(_) => {
-                    bail!("table {upstream_name} is ambiguous, consider specifying the database")
+                    sql_bail!(
+                        "table {upstream_name} is ambiguous, consider specifying the database"
+                    )
                 }
             },
         };
 
         let desc = match databases.get(database) {
             Some(desc) => *desc,
-            None => bail!("database {database} not found source"),
+            None => sql_bail!("database {database} not found source"),
         };
 
         let qualified_upstream_name =
@@ -135,7 +139,7 @@ pub async fn purify_create_source(
         Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
         CreateSourceStatement<Aug>,
     ),
-    anyhow::Error,
+    PlanError,
 > {
     let CreateSourceStatement {
         connection,
@@ -154,7 +158,7 @@ pub async fn purify_create_source(
         } in subsources
         {
             if let Some(DeferredObjectName::Named(_)) = subsource {
-                bail!("Cannot manually ID qualify subsources");
+                sql_bail!("Cannot manually ID qualify subsources");
             }
         }
     }
@@ -176,7 +180,7 @@ pub async fn purify_create_source(
                 // Get Kafka connection
                 match item.connection()? {
                     Connection::Kafka(connection) => connection.clone(),
-                    _ => bail!("{} is not a kafka connection", item.name()),
+                    _ => sql_bail!("{} is not a kafka connection", item.name()),
                 }
             };
 
@@ -243,7 +247,7 @@ pub async fn purify_create_source(
                 let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
                     Connection::Aws(aws) => aws.clone(),
-                    _ => bail!("{} is not an AWS connection", item.name()),
+                    _ => sql_bail!("{} is not an AWS connection", item.name()),
                 }
             };
             validate_aws_credentials(
@@ -259,7 +263,7 @@ pub async fn purify_create_source(
                 let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
                     Connection::Aws(aws) => aws.clone(),
-                    _ => bail!("{} is not an AWS connection", item.name()),
+                    _ => sql_bail!("{} is not an AWS connection", item.name()),
                 }
             };
             validate_aws_credentials(
@@ -278,7 +282,7 @@ pub async fn purify_create_source(
                 let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
                     Connection::Postgres(connection) => connection.clone(),
-                    _ => bail!("{} is not a postgres connection", item.name()),
+                    _ => sql_bail!("{} is not a postgres connection", item.name()),
                 }
             };
             let crate::plan::statement::PgConfigOptionExtracted { publication, .. } =
@@ -290,7 +294,11 @@ pub async fn purify_create_source(
             let config = connection
                 .config(&*connection_context.secrets_reader)
                 .await?;
-            let tables = mz_postgres_util::publication_info(&config, &publication).await?;
+            let tables = mz_postgres_util::publication_info(&config, &publication)
+                .await
+                .map_err(|cause| PlanError::FetchingPostgresPublicationInfoFailed {
+                    cause: Arc::new(cause),
+                })?;
 
             let mut targeted_subsources = vec![];
 
@@ -419,7 +427,9 @@ pub async fn purify_create_source(
                 Some(CreateReferencedSubsources::All) => {
                     let available_subsources = match &available_subsources {
                         Some(available_subsources) => available_subsources,
-                        None => bail!("FOR ALL TABLES is only valid for multi-output sources"),
+                        None => {
+                            sql_bail!("FOR ALL TABLES is only valid for multi-output sources")
+                        }
                     };
                     for (name, (_, desc)) in available_subsources {
                         let upstream_name = UnresolvedObjectName::from(name.clone());
@@ -430,7 +440,9 @@ pub async fn purify_create_source(
                 Some(CreateReferencedSubsources::Subset(selected_subsources)) => {
                     let available_subsources = match &available_subsources {
                         Some(available_subsources) => available_subsources,
-                        None => bail!("FOR TABLES (..) is only valid for multi-output sources"),
+                        None => {
+                            sql_bail!("FOR TABLES (..) is only valid for multi-output sources")
+                        }
                     };
                     // The user manually selected a subset of upstream tables so we need to
                     // validate that the names actually exist and are not ambiguous
@@ -456,7 +468,7 @@ pub async fn purify_create_source(
                 }
                 None => {
                     if available_subsources.is_some() {
-                        bail!("multi-output sources require a FOR TABLES (..) or FOR ALL TABLES statement");
+                        sql_bail!("multi-output sources require a FOR TABLES (..) or FOR ALL TABLES statement");
                     }
                 }
             };
@@ -551,7 +563,7 @@ async fn purify_source_format(
     connection: &mut CreateSourceConnection<Aug>,
     envelope: &Option<Envelope>,
     connection_context: &ConnectionContext,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), PlanError> {
     if matches!(format, CreateSourceFormat::KeyValue { .. })
         && !matches!(
             connection,
@@ -559,7 +571,7 @@ async fn purify_source_format(
         )
     {
         // We don't mention `TestScript` to users here
-        bail!("Kafka sources are the only source type that can provide KEY/VALUE formats")
+        sql_bail!("Kafka sources are the only source type that can provide KEY/VALUE formats")
     }
 
     match format {
@@ -585,7 +597,7 @@ async fn purify_source_format_single(
     connection: &mut CreateSourceConnection<Aug>,
     envelope: &Option<Envelope>,
     connection_context: &ConnectionContext,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), PlanError> {
     match format {
         Format::Avro(schema) => match schema {
             AvroSchema::Csr { csr_connection } => {
@@ -621,10 +633,10 @@ async fn purify_source_format_single(
                 match connection {
                     CreateSourceConnection::S3 { .. } => {
                         if names.is_empty() {
-                            bail!("CSV WITH HEADER for S3 sources requires specifying the header columns");
+                            sql_bail!("CSV WITH HEADER for S3 sources requires specifying the header columns");
                         }
                     }
-                    _ => bail!("CSV WITH HEADER is only supported for S3 sources"),
+                    _ => sql_bail!("CSV WITH HEADER is only supported for S3 sources"),
                 }
             }
         }
@@ -639,7 +651,7 @@ async fn purify_csr_connection_proto(
     csr_connection: &mut CsrConnectionProtobuf<Aug>,
     envelope: &Option<Envelope>,
     connection_context: &ConnectionContext,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), PlanError> {
     let topic = if let CreateSourceConnection::Kafka(KafkaSourceConnection {
         connection: KafkaConnection { options, .. },
         ..
@@ -651,7 +663,7 @@ async fn purify_csr_connection_proto(
             .expect("already verified options valid provided");
         topic.expect("already validated topic provided")
     } else {
-        bail!("Confluent Schema Registry is only supported with Kafka sources")
+        sql_bail!("Confluent Schema Registry is only supported with Kafka sources")
     };
 
     let CsrConnectionProtobuf {
@@ -667,7 +679,7 @@ async fn purify_csr_connection_proto(
 
             let ccsr_connection = match scx.get_item_by_resolved_name(connection)?.connection()? {
                 Connection::Csr(connection) => connection.clone(),
-                _ => bail!("{} is not a schema registry connection", connection),
+                _ => sql_bail!("{} is not a schema registry connection", connection),
             };
 
             let ccsr_client = ccsr_connection
@@ -680,7 +692,7 @@ async fn purify_csr_connection_proto(
                 .ok();
 
             if matches!(envelope, Some(Envelope::Debezium(DbzMode::Plain))) && key.is_none() {
-                bail!("Key schema is required for ENVELOPE DEBEZIUM");
+                sql_bail!("Key schema is required for ENVELOPE DEBEZIUM");
             }
 
             *seed = Some(CsrSeedProtobuf { value, key });
@@ -697,7 +709,7 @@ async fn purify_csr_connection_avro(
     csr_connection: &mut CsrConnectionAvro<Aug>,
     envelope: &Option<Envelope>,
     connection_context: &ConnectionContext,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), PlanError> {
     let topic = if let CreateSourceConnection::Kafka(KafkaSourceConnection {
         connection: KafkaConnection { options, .. },
         ..
@@ -709,7 +721,7 @@ async fn purify_csr_connection_avro(
             .expect("already verified options valid provided");
         topic.expect("already validated topic provided")
     } else {
-        bail!("Confluent Schema Registry is only supported with Kafka sources")
+        sql_bail!("Confluent Schema Registry is only supported with Kafka sources")
     };
 
     let CsrConnectionAvro {
@@ -722,7 +734,7 @@ async fn purify_csr_connection_avro(
         let scx = StatementContext::new(None, &*catalog);
         let csr_connection = match scx.get_item_by_resolved_name(connection)?.connection()? {
             Connection::Csr(connection) => connection.clone(),
-            _ => bail!("{} is not a schema registry connection", connection),
+            _ => sql_bail!("{} is not a schema registry connection", connection),
         };
         let ccsr_client = csr_connection
             .connect(&*connection_context.secrets_reader)
@@ -739,7 +751,7 @@ async fn purify_csr_connection_avro(
         )
         .await?;
         if matches!(envelope, Some(Envelope::Debezium(DbzMode::Plain))) && key_schema.is_none() {
-            bail!("Key schema is required for ENVELOPE DEBEZIUM");
+            sql_bail!("Key schema is required for ENVELOPE DEBEZIUM");
         }
 
         *seed = Some(CsrSeedAvro {
@@ -757,60 +769,30 @@ pub struct Schema {
     pub value_schema: String,
 }
 
-#[derive(Debug)]
-pub enum GetSchemaError {
-    Subject(GetBySubjectError),
-    Id(GetByIdError),
-}
-
-impl From<GetBySubjectError> for GetSchemaError {
-    fn from(inner: GetBySubjectError) -> Self {
-        Self::Subject(inner)
-    }
-}
-
-impl From<GetByIdError> for GetSchemaError {
-    fn from(inner: GetByIdError) -> Self {
-        Self::Id(inner)
-    }
-}
-
-impl std::fmt::Display for GetSchemaError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            GetSchemaError::Subject(e) => write!(f, "failed to look up schema by subject: {e}"),
-            GetSchemaError::Id(e) => write!(f, "failed to look up schema by id: {e}"),
-        }
-    }
-}
-
-impl StdError for GetSchemaError {
-    fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        match self {
-            GetSchemaError::Subject(e) => Some(e),
-            GetSchemaError::Id(e) => Some(e),
-        }
-    }
-}
-
 async fn get_schema_with_strategy(
     client: &Client,
     strategy: ReaderSchemaSelectionStrategy,
     subject: &str,
-) -> Result<Option<String>, GetSchemaError> {
+) -> Result<Option<String>, PlanError> {
     match strategy {
         ReaderSchemaSelectionStrategy::Latest => {
             match client.get_schema_by_subject(subject).await {
                 Ok(CcsrSchema { raw, .. }) => Ok(Some(raw)),
                 Err(GetBySubjectError::SubjectNotFound) => Ok(None),
-                Err(e) => Err(e.into()),
+                Err(e) => Err(PlanError::FetchingCsrSchemaFailed {
+                    schema_lookup: format!("subject {}", subject.quoted()),
+                    cause: Arc::new(e),
+                }),
             }
         }
         ReaderSchemaSelectionStrategy::Inline(raw) => Ok(Some(raw)),
         ReaderSchemaSelectionStrategy::ById(id) => match client.get_schema_by_id(id).await {
             Ok(CcsrSchema { raw, .. }) => Ok(Some(raw)),
             Err(GetByIdError::SchemaNotFound) => Ok(None),
-            Err(e) => Err(e.into()),
+            Err(e) => Err(PlanError::FetchingCsrSchemaFailed {
+                schema_lookup: format!("ID {}", id),
+                cause: Arc::new(e),
+            }),
         },
     }
 }
@@ -820,16 +802,10 @@ async fn get_remote_csr_schema(
     key_strategy: ReaderSchemaSelectionStrategy,
     value_strategy: ReaderSchemaSelectionStrategy,
     topic: String,
-) -> Result<Schema, anyhow::Error> {
+) -> Result<Schema, PlanError> {
     let value_schema_name = format!("{}-value", topic);
-    let value_schema = get_schema_with_strategy(ccsr_client, value_strategy, &value_schema_name)
-        .await
-        .with_context(|| {
-            format!(
-                "fetching latest schema for subject '{}' from registry",
-                value_schema_name
-            )
-        })?;
+    let value_schema =
+        get_schema_with_strategy(ccsr_client, value_strategy, &value_schema_name).await?;
     let value_schema = value_schema.ok_or_else(|| anyhow!("No value schema found"))?;
     let subject = format!("{}-key", topic);
     let key_schema = get_schema_with_strategy(ccsr_client, key_strategy, &subject).await?;
@@ -843,9 +819,14 @@ async fn get_remote_csr_schema(
 async fn compile_proto(
     subject_name: &String,
     ccsr_client: &Client,
-) -> Result<CsrSeedProtobufSchema, anyhow::Error> {
-    let (primary_subject, dependency_subjects) =
-        ccsr_client.get_subject_and_references(subject_name).await?;
+) -> Result<CsrSeedProtobufSchema, PlanError> {
+    let (primary_subject, dependency_subjects) = ccsr_client
+        .get_subject_and_references(subject_name)
+        .await
+        .map_err(|e| PlanError::FetchingCsrSchemaFailed {
+            schema_lookup: format!("subject {}", subject_name.quoted()),
+            cause: Arc::new(e),
+        })?;
 
     // Compile .proto files into a file descriptor set.
     let mut source_tree = VirtualSourceTree::new();
@@ -858,7 +839,8 @@ async fn compile_proto(
     let mut db = SourceTreeDescriptorDatabase::new(source_tree.as_mut());
     let fds = db
         .as_mut()
-        .build_file_descriptor_set(&[Path::new(&primary_subject.name)])?;
+        .build_file_descriptor_set(&[Path::new(&primary_subject.name)])
+        .map_err(|cause| PlanError::InvalidProtobufSchema { cause })?;
 
     // Ensure there is exactly one message in the file.
     let primary_fd = fds.file(0);
@@ -869,8 +851,11 @@ async fn compile_proto(
     };
 
     // Encode the file descriptor set into a SQL byte string.
+    let bytes = &fds
+        .serialize()
+        .map_err(|cause| PlanError::InvalidProtobufSchema { cause })?;
     let mut schema = String::new();
-    strconv::format_bytes(&mut schema, &fds.serialize()?);
+    strconv::format_bytes(&mut schema, bytes);
 
     Ok(CsrSeedProtobufSchema {
         schema,
@@ -884,7 +869,7 @@ async fn validate_aws_credentials(
     config: &AwsConfig,
     external_id_prefix: Option<&AwsExternalIdPrefix>,
     secrets_reader: &dyn SecretsReader,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), PlanError> {
     let config = config.load(external_id_prefix, None, secrets_reader).await;
     let sts_client = aws_sdk_sts::Client::new(&config);
     let _ = sts_client
