@@ -4088,6 +4088,7 @@ impl<S: Append> Catalog<S> {
                             mz_audit_log::CreateComputeReplicaV1 {
                                 cluster_id: compute_instance_id.to_string(),
                                 cluster_name: on_cluster_name.clone(),
+                                replica_id: Some(replica_id.to_string()),
                                 replica_name: name.clone(),
                                 logical_size: size.clone(),
                             },
@@ -4364,6 +4365,7 @@ impl<S: Append> Catalog<S> {
                         EventDetails::DropComputeReplicaV1(mz_audit_log::DropComputeReplicaV1 {
                             cluster_id: instance.id.to_string(),
                             cluster_name: instance.name.clone(),
+                            replica_id: Some(replica_id.to_string()),
                             replica_name: name.clone(),
                         });
                     state.add_to_audit_log(

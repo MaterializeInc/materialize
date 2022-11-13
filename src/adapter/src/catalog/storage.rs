@@ -328,6 +328,7 @@ async fn migrate<S: Append>(
                                 cluster_id: DEFAULT_USER_COMPUTE_INSTANCE_ID.to_string(),
                                 cluster_name: default_instance.name,
                                 replica_name: default_replica.name,
+                                replica_id: Some(DEFAULT_REPLICA_ID.to_string()),
                                 logical_size: bootstrap_args.default_cluster_replica_size.clone(),
                             },
                         ),
