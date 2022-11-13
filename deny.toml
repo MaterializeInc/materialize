@@ -55,6 +55,7 @@ wrappers = [
     "tracing-log",
     "tracing",
     "tungstenite",
+    "ureq",
     "want",
     "wasm-bindgen-backend",
 ]
