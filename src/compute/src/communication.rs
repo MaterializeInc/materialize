@@ -46,7 +46,7 @@ use mz_compute_client::command::ComputeStartupEpoch;
 use mz_ore::cast::CastFrom;
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::allocator::GenericBuilder;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use mz_compute_client::command::CommunicationConfig;
 
@@ -82,11 +82,15 @@ pub async fn initialize_networking(
     }
 
     match initialize_networking_from_sockets(sockets, *process, *workers, Box::new(|_| None)) {
-        Ok((stuff, guard)) => Ok((
-            stuff.into_iter().map(GenericBuilder::ZeroCopy).collect(),
-            Box::new(guard),
-        )),
+        Ok((stuff, guard)) => {
+            info!(process = process, "successfully initialized network");
+            Ok((
+                stuff.into_iter().map(GenericBuilder::ZeroCopy).collect(),
+                Box::new(guard),
+            ))
+        }
         Err(err) => {
+            error!(process = process, "failed to initialize network: {err}");
             Err(anyhow::Error::from(err).context("failed to initialize networking from sockets"))
         }
     }
