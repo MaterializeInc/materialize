@@ -46,7 +46,7 @@ use mz_compute_client::command::ComputeStartupEpoch;
 use mz_ore::cast::CastFrom;
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::allocator::GenericBuilder;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use mz_compute_client::command::CommunicationConfig;
 
