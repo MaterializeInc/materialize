@@ -721,7 +721,7 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
     with c.override(
         Testdrive(no_reset=True),
         Materialized(
-            options="--bootstrap-system-vars=\"allowed_cluster_replica_sizes='1', '2', 'oops'\"",
+            options="--bootstrap-system-parameter=\"allowed_cluster_replica_sizes='1', '2', 'oops'\"",
         ),
     ):
         dependencies = [
@@ -737,7 +737,7 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
         Testdrive(no_reset=True),
         Materialized(
             environment_extra=[
-                """ MZ_BOOTSTRAP_SYSTEM_VARS=allowed_cluster_replica_sizes='1', '2', 'oops'""".strip()
+                """ MZ_BOOTSTRAP_SYSTEM_PARAMETER=allowed_cluster_replica_sizes='1', '2', 'oops'""".strip()
             ],
         ),
     ):

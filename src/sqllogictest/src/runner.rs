@@ -696,7 +696,7 @@ impl Runner {
             cluster_replica_sizes: Default::default(),
             bootstrap_default_cluster_replica_size: "1".into(),
             bootstrap_builtin_cluster_replica_size: "1".into(),
-            bootstrap_system_vars: None,
+            bootstrap_system_parameters: Default::default(),
             storage_host_sizes: Default::default(),
             default_storage_host_size: None,
             availability_zones: Default::default(),

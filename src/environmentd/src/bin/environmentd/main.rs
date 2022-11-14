@@ -380,10 +380,15 @@ pub struct Args {
         default_value = "1"
     )]
     bootstrap_builtin_cluster_replica_size: String,
-    /// An optional semicolon-separated list of $var_name=$var_value pairs for
-    /// bootstraping system variables that are not already modified.
-    #[clap(long, env = "BOOTSTRAP_SYSTEM_VARS")]
-    bootstrap_system_vars: Option<String>,
+    /// An list of NAME=VALUE pairs for bootstrapping system parameters that are
+    /// not already modified.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_SYSTEM_PARAMETER",
+        multiple = true,
+        value_delimiter = ';'
+    )]
+    bootstrap_system_parameter: Vec<KeyValueArg<String, String>>,
     /// A map from size name to resource allocations for storage hosts.
     #[clap(long, env = "STORAGE_HOST_SIZES")]
     storage_host_sizes: Option<String>,
@@ -741,7 +746,11 @@ max log level: {max_log_level}",
         cluster_replica_sizes,
         bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
         bootstrap_builtin_cluster_replica_size: args.bootstrap_builtin_cluster_replica_size,
-        bootstrap_system_vars: args.bootstrap_system_vars,
+        bootstrap_system_parameters: args
+            .bootstrap_system_parameter
+            .into_iter()
+            .map(|kv| (kv.key, kv.value))
+            .collect(),
         storage_host_sizes,
         default_storage_host_size: args.default_storage_host_size,
         availability_zones: args.availability_zone,

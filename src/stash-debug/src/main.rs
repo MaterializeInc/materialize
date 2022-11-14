@@ -335,7 +335,7 @@ impl Usage {
             cluster_replica_sizes: Default::default(),
             storage_host_sizes: Default::default(),
             default_storage_host_size: None,
-            bootstrap_system_vars: None,
+            bootstrap_system_parameters: Default::default(),
             availability_zones: vec![],
             secrets_reader,
             egress_ips: vec![],

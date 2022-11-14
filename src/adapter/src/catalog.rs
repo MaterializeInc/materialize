@@ -2361,13 +2361,9 @@ impl<S: Append> Catalog<S> {
             .await?;
 
         let system_config = catalog.storage().await.load_system_configuration().await?;
-        if let Some(bootstrap_system_vars) = config.bootstrap_system_vars {
-            for entry in bootstrap_system_vars.trim().split(';') {
-                if let Some((name, value)) = entry.split_once('=') {
-                    if !system_config.contains_key(name) {
-                        catalog.state.insert_system_configuration(name, value)?;
-                    }
-                }
+        for (name, value) in &config.bootstrap_system_parameters {
+            if !system_config.contains_key(name) {
+                catalog.state.insert_system_configuration(name, value)?;
             }
         }
         for (name, value) in system_config {
@@ -2965,7 +2961,7 @@ impl<S: Append> Catalog<S> {
             cluster_replica_sizes: Default::default(),
             storage_host_sizes: Default::default(),
             default_storage_host_size: None,
-            bootstrap_system_vars: None,
+            bootstrap_system_parameters: Default::default(),
             availability_zones: vec![],
             secrets_reader,
             egress_ips: vec![],
