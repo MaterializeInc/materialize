@@ -399,7 +399,7 @@ where
                             yield Some(
                                 SourceReaderOperatorOutput {
                                     messages: std::mem::take(&mut untimestamped_messages),
-                                    status_update,
+                                    status_update: status_update.take(),
                                     source_errors: source_errors.drain(..).collect_vec(),
                                     unconsumed_partitions,
                                     source_upper: source_upper.clone(),
