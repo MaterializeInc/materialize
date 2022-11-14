@@ -52,6 +52,7 @@ use tracing::{info, trace, warn};
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
+use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::Upper;
 use mz_repr::{GlobalId, Row, Timestamp};
@@ -1343,19 +1344,10 @@ where
             let remap_upper = &frontiers[1].frontier();
             if PartialOrder::less_than(&prev_remap_upper.borrow(), remap_upper) {
                 trace!("reclock({id}) {worker_id}/{worker_count}: remap upper: {remap_upper:?}");
-                let mut updates = Vec::with_capacity(remap_updates_stash.len());
-                // TODO(petrosagg) replace with Vec::drain_filter when it's stable.
-                let mut i = 0;
-                while i < remap_updates_stash.len() {
-                    let (_, ref ts, _) = &remap_updates_stash[i];
-                    if !remap_upper.less_equal(ts) {
-                        updates.push(remap_updates_stash.swap_remove(i));
-                    } else {
-                        i += 1;
-                    }
-                }
                 let remap_trace_batch = ReclockBatch {
-                    updates,
+                    updates: remap_updates_stash
+                        .drain_filter_swapping(|(_, ts, _)| !remap_upper.less_equal(ts))
+                        .collect(),
                     upper: remap_upper.to_owned(),
                 };
                 timestamper.push_trace_batch(remap_trace_batch);
