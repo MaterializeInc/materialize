@@ -377,7 +377,10 @@ where
                                         SourceStatusUpdate { status: SourceStatus::Starting, ..} => Some(HealthStatus::Starting),
                                         SourceStatusUpdate { status: SourceStatus::Running, ..} => Some(HealthStatus::Running),
                                         SourceStatusUpdate { status: SourceStatus::Stalled, error: Some(e)} => Some(HealthStatus::StalledWithError(e)),
-                                        _ => None,
+                                        other => {
+                                            warn!("Received currently-unhandled source status update: {other:?}");
+                                            None
+                                        },
                                     };
                                     status_update = update.or(status_update);
                                 }
@@ -815,8 +818,8 @@ where
                             // a (temporary) stall.
                             Some(status.clone())
                         }
-                        (_, _, true) => Some(HealthStatus::Running),
-                        (None, _, false) => None,
+                        (None, None, true) => Some(HealthStatus::Running),
+                        (None, None, false) => None,
                     };
 
                     if let Some(health) = maybe_health {
