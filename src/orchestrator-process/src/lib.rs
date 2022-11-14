@@ -12,6 +12,7 @@ use std::ffi::OsStr;
 use std::fmt::Debug;
 use std::fs::Permissions;
 use std::net::{IpAddr, Ipv4Addr};
+use std::num::NonZeroI64;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -110,7 +111,7 @@ impl ProcessOrchestrator {
 }
 
 impl Orchestrator for ProcessOrchestrator {
-    fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator> {
+    fn namespace(&self, namespace: &str, _epoch: NonZeroI64) -> Arc<dyn NamespacedOrchestrator> {
         let mut namespaces = self.namespaces.lock().expect("lock poisoned");
         Arc::clone(namespaces.entry(namespace.into()).or_insert_with(|| {
             Arc::new(NamespacedProcessOrchestrator {
@@ -312,9 +313,14 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         Ok(())
     }
 
-    async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {
+    async fn list_services(&self) -> Result<Vec<(String, NonZeroI64)>, anyhow::Error> {
         let supervisors = self.supervisors.lock().expect("lock poisoned");
-        Ok(supervisors.keys().cloned().collect())
+        // The process orchestrator does not have a concept of epochs and thus always returns epoch 0
+        Ok(supervisors
+            .keys()
+            .cloned()
+            .map(|x| (x, NonZeroI64::new(1).unwrap()))
+            .collect())
     }
 
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
@@ -356,6 +362,10 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             }
         };
         Box::pin(stream)
+    }
+
+    fn epoch(&self) -> NonZeroI64 {
+        NonZeroI64::new(1).unwrap()
     }
 }
 

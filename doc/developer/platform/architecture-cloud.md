@@ -54,6 +54,12 @@ Additionally, the service that invokes `environmentd` can pass
 `--orchestrator-service-label` to specify additional labels that should be
 attached to *all* pods and services created by the Kubernetes orchestrator.
 
+StatefulSets created by the orchestrator store the epoch of the creating
+environmentd in a label:
+
+  * `environmentd.materialize.cloud/epoch`: the epoch of the creating
+    orchestrator.
+
 ### Secrets
 
 See the [secret design doc](../design/20220303_secrets.md).

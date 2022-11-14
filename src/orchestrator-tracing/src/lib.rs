@@ -10,13 +10,13 @@
 //! Service orchestration for tracing-aware services.
 
 use std::ffi::OsString;
-use std::fmt;
 #[cfg(feature = "tokio-console")]
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 #[cfg(feature = "tokio-console")]
 use std::time::Duration;
+use std::{fmt, num::NonZeroI64};
 
 use async_trait::async_trait;
 use clap::{FromArgMatches, IntoApp};
@@ -259,10 +259,10 @@ impl TracingOrchestrator {
 }
 
 impl Orchestrator for TracingOrchestrator {
-    fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator> {
+    fn namespace(&self, namespace: &str, epoch: NonZeroI64) -> Arc<dyn NamespacedOrchestrator> {
         Arc::new(NamespacedTracingOrchestrator {
             namespace: namespace.to_string(),
-            inner: self.inner.namespace(namespace),
+            inner: self.inner.namespace(namespace, epoch),
             tracing_args: self.tracing_args.clone(),
         })
     }
@@ -365,12 +365,16 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
         self.inner.drop_service(id).await
     }
 
-    async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {
+    async fn list_services(&self) -> Result<Vec<(String, NonZeroI64)>, anyhow::Error> {
         self.inner.list_services().await
     }
 
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
         self.inner.watch_services()
+    }
+
+    fn epoch(&self) -> NonZeroI64 {
+        self.inner.epoch()
     }
 }
 

@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
-use std::num::NonZeroUsize;
+use std::num::{NonZeroI64, NonZeroUsize};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context};
@@ -124,7 +124,7 @@ impl KubernetesOrchestrator {
 }
 
 impl Orchestrator for KubernetesOrchestrator {
-    fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator> {
+    fn namespace(&self, namespace: &str, epoch: NonZeroI64) -> Arc<dyn NamespacedOrchestrator> {
         let mut namespaces = self.namespaces.lock().expect("lock poisoned");
         Arc::clone(namespaces.entry(namespace.into()).or_insert_with(|| {
             Arc::new(NamespacedKubernetesOrchestrator {
@@ -136,6 +136,7 @@ impl Orchestrator for KubernetesOrchestrator {
                 namespace: namespace.into(),
                 config: self.config.clone(),
                 service_scales: std::sync::Mutex::new(HashMap::new()),
+                epoch,
             })
         }))
     }
@@ -150,6 +151,7 @@ struct NamespacedKubernetesOrchestrator {
     namespace: String,
     config: KubernetesOrchestratorConfig,
     service_scales: std::sync::Mutex<HashMap<String, NonZeroUsize>>,
+    epoch: NonZeroI64,
 }
 
 impl fmt::Debug for NamespacedKubernetesOrchestrator {
@@ -207,7 +209,7 @@ impl k8s_openapi::Metadata for PodMetrics {
 impl NamespacedKubernetesOrchestrator {
     /// Return a `ListParams` instance that limits results to the namespace
     /// assigned to this orchestrator.
-    fn list_params(&self) -> ListParams {
+    fn list_pod_params(&self) -> ListParams {
         let ns_selector = format!(
             "environmentd.materialize.cloud/namespace={}",
             self.namespace
@@ -374,6 +376,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         for (key, value) in &self.config.service_labels {
             labels.insert(key.clone(), value.clone());
         }
+
         let mut limits = BTreeMap::new();
         if let Some(memory_limit) = memory_limit {
             limits.insert(
@@ -591,6 +594,13 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let stateful_set = StatefulSet {
             metadata: ObjectMeta {
                 name: Some(name.clone()),
+                labels: Some(
+                    [(
+                        "environmentd.materialize.cloud/epoch".to_string(),
+                        self.epoch().to_string(),
+                    )]
+                    .into(),
+                ),
                 ..Default::default()
             },
             spec: Some(StatefulSetSpec {
@@ -681,17 +691,30 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
     }
 
     /// Lists the identifiers of all known services.
-    async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {
-        let stateful_sets = self.stateful_set_api.list(&self.list_params()).await?;
+    async fn list_services(&self) -> Result<Vec<(String, NonZeroI64)>, anyhow::Error> {
+        let stateful_sets = self.stateful_set_api.list(&Default::default()).await?;
         let name_prefix = format!("{}-", self.namespace);
         Ok(stateful_sets
             .into_iter()
             .filter_map(|ss| {
-                ss.metadata
+                let name = ss
+                    .metadata
                     .name
                     .unwrap()
                     .strip_prefix(&name_prefix)
-                    .map(Into::into)
+                    .map(Into::into);
+                name.map(|name: String| {
+                    (
+                        name,
+                        ss.metadata
+                            .labels
+                            .and_then(|x| {
+                                x.get("environmentd.materialize.cloud/epoch")
+                                    .and_then(|x| x.parse::<NonZeroI64>().ok())
+                            })
+                            .unwrap_or(NonZeroI64::new(1).unwrap()),
+                    )
+                })
             })
             .collect())
     }
@@ -732,10 +755,14 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             })
         }
 
-        let stream = watcher(self.pod_api.clone(), self.list_params())
+        let stream = watcher(self.pod_api.clone(), self.list_pod_params())
             .touched_objects()
             .map(|object| object.map_err(Into::into).and_then(into_service_event));
         Box::pin(stream)
+    }
+
+    fn epoch(&self) -> NonZeroI64 {
+        self.epoch
     }
 }
 

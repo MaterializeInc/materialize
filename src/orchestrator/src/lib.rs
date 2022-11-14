@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::net::IpAddr;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroI64, NonZeroUsize};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -38,11 +38,14 @@ include!(concat!(env!("OUT_DIR"), "/mz_orchestrator.rs"));
 /// isolated at the network level, however: services in one namespace can
 /// communicate with services in another namespace with no restrictions.
 ///
+/// The namespace is uniquely identified by the namespace string, epoch
+/// is merely used to add epoch metainformation to created services.
+///
 /// The intent is that you can implement `Orchestrator` with pods in Kubernetes,
 /// containers in Docker, or processes on your local machine.
 pub trait Orchestrator: fmt::Debug + Send + Sync {
     /// Enter a namespace in the orchestrator.
-    fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator>;
+    fn namespace(&self, namespace: &str, epoch: NonZeroI64) -> Arc<dyn NamespacedOrchestrator>;
 }
 
 /// An orchestrator restricted to a single namespace.
@@ -63,7 +66,7 @@ pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
     async fn drop_service(&self, id: &str) -> Result<(), anyhow::Error>;
 
     /// Lists the identifiers of all known services.
-    async fn list_services(&self) -> Result<Vec<String>, anyhow::Error>;
+    async fn list_services(&self) -> Result<Vec<(String, NonZeroI64)>, anyhow::Error>;
 
     /// Watch for status changes of all known services.
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>>;
@@ -78,6 +81,9 @@ pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
         &self,
         id: &str,
     ) -> Result<Vec<ServiceProcessMetrics>, anyhow::Error>;
+
+    /// Returns the epoch this orchestrator is assigning to its services
+    fn epoch(&self) -> NonZeroI64;
 }
 
 /// An event describing a status change of an orchestrated service.

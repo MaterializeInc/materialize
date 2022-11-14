@@ -223,7 +223,7 @@ where
             config.storage_stash_url,
             config.persist_location,
             config.persist_clients,
-            config.orchestrator.namespace("storage"),
+            config.orchestrator.namespace("storage", envd_epoch),
             config.storaged_image,
             config.init_container_image.clone(),
             config.now,
@@ -234,7 +234,7 @@ where
 
         let compute_controller = ComputeController::new(
             config.build_info,
-            config.orchestrator.namespace("compute"),
+            config.orchestrator.namespace("compute", envd_epoch),
             config.computed_image,
             config.init_container_image,
             envd_epoch,
