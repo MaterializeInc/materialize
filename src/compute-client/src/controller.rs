@@ -341,12 +341,17 @@ impl<T> ComputeController<T> {
         build_info: &'static BuildInfo,
         orchestrator: Arc<dyn NamespacedOrchestrator>,
         computed_image: String,
+        init_container_image: Option<String>,
         envd_epoch: i64,
     ) -> Self {
         Self {
             instances: BTreeMap::new(),
             build_info,
-            orchestrator: ComputeOrchestrator::new(orchestrator, computed_image),
+            orchestrator: ComputeOrchestrator::new(
+                orchestrator,
+                computed_image,
+                init_container_image,
+            ),
             initialized: false,
             stashed_response: None,
             replica_heartbeats: BTreeMap::new(),

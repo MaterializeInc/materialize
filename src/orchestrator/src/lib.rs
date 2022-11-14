@@ -142,6 +142,9 @@ pub struct ServiceConfig<'a> {
     ///
     /// Often names a container on Docker Hub or a path on the local machine.
     pub image: String,
+    /// For the Kubernetes orchestrator, this is an init container to
+    /// configure for the pod running the service.
+    pub init_container_image: Option<String>,
     /// A function that generates the arguments for each process of the service
     /// given the assignments that the orchestrator has made.
     #[derivative(Debug = "ignore")]

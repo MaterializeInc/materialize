@@ -146,6 +146,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         id: &str,
         ServiceConfig {
             image,
+            init_container_image: _,
             args,
             ports: ports_in,
             memory_limit: _,

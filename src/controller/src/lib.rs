@@ -72,6 +72,8 @@ pub struct ControllerConfig {
     pub storaged_image: String,
     /// The computed image to use when starting new compute processes.
     pub computed_image: String,
+    /// The init container image to use for storaged and computed.
+    pub init_container_image: Option<String>,
     /// The now function to advance the controller's introspection collections.
     pub now: NowFn,
     /// The postgres stash factory.
@@ -222,6 +224,7 @@ where
             config.persist_clients,
             config.orchestrator.namespace("storage"),
             config.storaged_image,
+            config.init_container_image.clone(),
             config.now,
             &config.postgres_factory,
         )
@@ -231,6 +234,7 @@ where
             config.build_info,
             config.orchestrator.namespace("compute"),
             config.computed_image,
+            config.init_container_image,
             envd_epoch,
         );
 

@@ -1394,6 +1394,7 @@ where
         persist_clients: Arc<Mutex<PersistClientCache>>,
         orchestrator: Arc<dyn NamespacedOrchestrator>,
         storaged_image: String,
+        init_container_image: Option<String>,
         now: NowFn,
         postgres_factory: &PostgresFactory,
     ) -> Self {
@@ -1406,6 +1407,7 @@ where
                     build_info,
                     orchestrator,
                     storaged_image,
+                    init_container_image,
                 },
                 Arc::clone(&persist_clients),
             ),

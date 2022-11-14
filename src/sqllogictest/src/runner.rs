@@ -667,6 +667,7 @@ impl Runner {
                 orchestrator: Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
                 storaged_image: "storaged".into(),
                 computed_image: "computed".into(),
+                init_container_image: None,
                 persist_location: PersistLocation {
                     blob_uri: format!("file://{}/persist/blob", temp_dir.path().display()),
                     consensus_uri,
