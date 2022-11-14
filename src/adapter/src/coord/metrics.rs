@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use prometheus::{IntCounterVec, IntGauge};
+use prometheus::{HistogramVec, IntCounterVec, IntGauge};
 
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
@@ -17,6 +17,7 @@ pub struct Metrics {
     pub query_total: IntCounterVec,
     pub active_sessions: IntGauge,
     pub active_subscribes: IntGauge,
+    pub queue_busy_time: HistogramVec,
 }
 
 impl Metrics {
@@ -34,6 +35,10 @@ impl Metrics {
             active_subscribes: registry.register(metric!(
                 name: "mz_active_subscribes",
                 help: "The number of active SUBSCRIBE queries.",
+            )),
+            queue_busy_time: registry.register(metric!(
+                name: "mz_coord_queue_busy_time",
+                help: "The number of seconds the coord queue was processing before it was empty. This is a sampled metric and does not measure the full coord queue wait/idle times.",
             )),
         }
     }
