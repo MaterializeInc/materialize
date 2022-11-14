@@ -68,13 +68,13 @@ pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
     /// Watch for status changes of all known services.
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>>;
 
-    /// Get resource usage metrics for all processes associated with a service.
+    /// Gets resource usage metrics for all processes associated with a service.
     ///
     /// Returns `Err` if the entire process failed. Returns `Ok(v)` otherwise,
     /// with one element in `v` for each process of the service,
     /// even in not all metrics could be collected for all processes.
     /// In such a case, the corresponding fields of `ServiceProcessMetrics` will be `None`.
-    async fn service_metrics(&self, id: &str) -> Result<Vec<ServiceProcessMetrics>, anyhow::Error>;
+    async fn fetch_service_metrics(&self, id: &str) -> Result<Vec<ServiceProcessMetrics>, anyhow::Error>;
 }
 
 /// An event describing a status change of an orchestrated service.

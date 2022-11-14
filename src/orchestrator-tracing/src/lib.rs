@@ -277,9 +277,10 @@ struct NamespacedTracingOrchestrator {
 
 #[async_trait]
 impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
-    async fn service_metrics(&self, id: &str) -> Result<Vec<ServiceProcessMetrics>, anyhow::Error> {
-        self.inner.service_metrics(id).await
+    async fn fetch_service_metrics(&self, id: &str) -> Result<Vec<ServiceProcessMetrics>, anyhow::Error> {
+        self.inner.fetch_service_metrics(id).await
     }
+
     async fn ensure_service(
         &self,
         id: &str,
