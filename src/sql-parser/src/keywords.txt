@@ -314,7 +314,6 @@ Sqs
 Ssh
 Ssl
 Start
-Statistics
 Stdin
 Stdout
 Strategy

@@ -51,7 +51,6 @@ pub fn validate_options_for_context<T: AstInfo>(
             FetchMessageMaxBytes => None,
             GroupIdPrefix => None,
             IsolationLevel => None,
-            StatisticsIntervalMs => None,
             Topic => None,
             TopicMetadataRefreshIntervalMs => None,
             TransactionTimeoutMs => None,
@@ -89,7 +88,6 @@ generate_extracted_config!(
         String,
         Default(String::from("read_committed"))
     ),
-    (StatisticsIntervalMs, i32, Default(1_000)),
     (Topic, String),
     (TopicMetadataRefreshIntervalMs, i32),
     (TransactionTimeoutMs, i32),
@@ -114,7 +112,6 @@ impl TryFrom<&KafkaConfigOptionExtracted> for LibRdKafkaConfig {
             enable_idempotence,
             fetch_message_max_bytes,
             isolation_level,
-            statistics_interval_ms,
             topic_metadata_refresh_interval_ms,
             transaction_timeout_ms,
             ..
@@ -141,12 +138,6 @@ impl TryFrom<&KafkaConfigOptionExtracted> for LibRdKafkaConfig {
 
         fill_options!(acks, "acks");
         fill_options!(client_id, "client.id");
-        fill_options!(
-            Some(statistics_interval_ms),
-            "statistics.interval.ms",
-            |i: &i32| { 0 <= *i && *i <= 86_400_000 },
-            "STATISTICS INTERVAL MS must be within [0, 86,400,000]"
-        );
         fill_options!(
             topic_metadata_refresh_interval_ms,
             "topic.metadata.refresh.interval.ms",

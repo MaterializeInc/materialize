@@ -871,7 +871,6 @@ pub enum KafkaConfigOptionName {
     FetchMessageMaxBytes,
     GroupIdPrefix,
     IsolationLevel,
-    StatisticsIntervalMs,
     Topic,
     TopicMetadataRefreshIntervalMs,
     TransactionTimeoutMs,
@@ -892,7 +891,6 @@ impl AstDisplay for KafkaConfigOptionName {
             KafkaConfigOptionName::FetchMessageMaxBytes => "FETCH MESSAGE MAX BYTES",
             KafkaConfigOptionName::GroupIdPrefix => "GROUP ID PREFIX",
             KafkaConfigOptionName::IsolationLevel => "ISOLATION LEVEL",
-            KafkaConfigOptionName::StatisticsIntervalMs => "STATISTICS INTERVAL MS",
             KafkaConfigOptionName::Topic => "TOPIC",
             KafkaConfigOptionName::TopicMetadataRefreshIntervalMs => {
                 "TOPIC METADATA REFRESH INTERVAL MS"
