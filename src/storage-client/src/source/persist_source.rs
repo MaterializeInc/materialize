@@ -508,7 +508,9 @@ where
                             // tradeoff in tuning yield_fn.
                             differential_dataflow::consolidation::consolidate_updates(&mut updates);
                             update_session.give_vec(&mut updates);
-                            force_yield().await;
+                            // Force a yield to give back the timely thread, reactivating on our
+                            // way out.
+                            tokio::task::yield_now().await;
                             decode_start = Instant::now();
                         }
                     }
@@ -569,24 +571,4 @@ where
     let token = Rc::new((token, handle_creation_token, drop_tx));
 
     (update_output_stream, token)
-}
-
-// The build_async operator yields to timely whenever the Future handed to it
-// (in practice an async/await state machine) returns from `poll` with a
-// `Pending`. Force a yield by constructing a future that returns Pending the
-// first time it's polled and `Ready` the second.
-//
-// This allows us to yield without having to do anything special to stash
-// in-progress work. (Basically, the async/await state machine does it for us.)
-async fn force_yield() {
-    let mut polled = false;
-    let () = futures::future::poll_fn(move |cx| match polled {
-        true => Poll::Ready(()),
-        false => {
-            polled = true;
-            cx.waker().wake_by_ref();
-            Poll::Pending
-        }
-    })
-    .await;
 }
