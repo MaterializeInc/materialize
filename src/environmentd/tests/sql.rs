@@ -1955,5 +1955,13 @@ fn test_idle_in_transaction_session_timeout() -> Result<(), Box<dyn Error>> {
     client.query("SELECT 1", &[])?;
     client.batch_execute("COMMIT")?;
 
+    // 0 timeout indicated no timeout.
+    let mut client = server.connect(postgres::NoTls)?;
+    client.batch_execute("SET idle_in_transaction_session_timeout TO 0")?;
+    client.batch_execute("BEGIN")?;
+    std::thread::sleep(Duration::from_millis(5));
+    client.query("SELECT 1", &[])?;
+    client.batch_execute("COMMIT")?;
+
     Ok(())
 }
