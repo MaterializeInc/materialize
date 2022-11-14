@@ -640,13 +640,19 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 }
             }
         }
-        self.service_scales.lock().expect("poisoned lock").insert(id.to_string(), scale);
+        self.service_scales
+            .lock()
+            .expect("poisoned lock")
+            .insert(id.to_string(), scale);
         Ok(Box::new(KubernetesService { hosts, ports }))
     }
 
     /// Drops the identified service, if it exists.
     async fn drop_service(&self, id: &str) -> Result<(), anyhow::Error> {
-        self.service_scales.lock().expect("poisoned lock").remove(id);
+        self.service_scales
+            .lock()
+            .expect("poisoned lock")
+            .remove(id);
         let name = format!("{}-{id}", self.namespace);
         let res = self
             .stateful_set_api

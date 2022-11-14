@@ -74,7 +74,10 @@ pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
     /// with one element in `v` for each process of the service,
     /// even in not all metrics could be collected for all processes.
     /// In such a case, the corresponding fields of `ServiceProcessMetrics` will be `None`.
-    async fn fetch_service_metrics(&self, id: &str) -> Result<Vec<ServiceProcessMetrics>, anyhow::Error>;
+    async fn fetch_service_metrics(
+        &self,
+        id: &str,
+    ) -> Result<Vec<ServiceProcessMetrics>, anyhow::Error>;
 }
 
 /// An event describing a status change of an orchestrated service.
