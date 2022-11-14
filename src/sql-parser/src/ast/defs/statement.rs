@@ -559,7 +559,7 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub if_not_exists: bool,
     pub key_constraint: Option<KeyConstraint>,
     pub with_options: Vec<CreateSourceOption<T>>,
-    pub subsources: Option<CreateReferencedSubsources<T>>,
+    pub referenced_subsources: Option<ReferencedSubsources<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
@@ -599,7 +599,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
             f.write_node(envelope);
         }
 
-        if let Some(subsources) = &self.subsources {
+        if let Some(subsources) = &self.referenced_subsources {
             f.write_str(" ");
             f.write_node(subsources);
         }
@@ -632,14 +632,14 @@ impl<T: AstInfo> AstDisplay for CreateSourceSubsource<T> {
 impl_display_t!(CreateSourceSubsource);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CreateReferencedSubsources<T: AstInfo> {
+pub enum ReferencedSubsources<T: AstInfo> {
     /// A subset defined with FOR TABLES (...)
     Subset(Vec<CreateSourceSubsource<T>>),
     /// FOR ALL TABLES
     All,
 }
 
-impl<T: AstInfo> AstDisplay for CreateReferencedSubsources<T> {
+impl<T: AstInfo> AstDisplay for ReferencedSubsources<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             Self::Subset(subsources) => {
@@ -651,7 +651,7 @@ impl<T: AstInfo> AstDisplay for CreateReferencedSubsources<T> {
         }
     }
 }
-impl_display_t!(CreateReferencedSubsources);
+impl_display_t!(ReferencedSubsources);
 
 /// `CREATE SUBSOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

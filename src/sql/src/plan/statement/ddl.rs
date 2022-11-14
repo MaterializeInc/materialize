@@ -71,23 +71,23 @@ use crate::ast::{
     AwsConnectionOptionName, AwsPrivatelinkConnectionOption, AwsPrivatelinkConnectionOptionName,
     ClusterOption, ClusterOptionName, ColumnOption, Compression, CreateClusterReplicaStatement,
     CreateClusterStatement, CreateConnection, CreateConnectionStatement, CreateDatabaseStatement,
-    CreateIndexStatement, CreateMaterializedViewStatement, CreateReferencedSubsources,
-    CreateRoleOption, CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement,
-    CreateSinkConnection, CreateSinkOption, CreateSinkOptionName, CreateSinkStatement,
-    CreateSourceConnection, CreateSourceFormat, CreateSourceOption, CreateSourceOptionName,
-    CreateSourceStatement, CreateSubsourceStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeStatement, CreateViewStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
-    CsrConnectionAvro, CsrConnectionOption, CsrConnectionOptionName, CsrConnectionProtobuf,
-    CsrSeedProtobuf, CsvColumns, DbzMode, DropClusterReplicasStatement, DropClustersStatement,
-    DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
-    Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaBroker,
-    KafkaBrokerAwsPrivatelinkOption, KafkaBrokerAwsPrivatelinkOptionName, KafkaBrokerTunnel,
-    KafkaConfigOptionName, KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint,
-    LoadGeneratorOption, LoadGeneratorOptionName, ObjectType, PgConfigOption, PgConfigOptionName,
+    CreateIndexStatement, CreateMaterializedViewStatement, CreateRoleOption, CreateRoleStatement,
+    CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
+    CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceFormat,
+    CreateSourceOption, CreateSourceOptionName, CreateSourceStatement, CreateSubsourceStatement,
+    CreateTableStatement, CreateTypeAs, CreateTypeStatement, CreateViewStatement, CsrConfigOption,
+    CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionOption,
+    CsrConnectionOptionName, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DbzMode,
+    DropClusterReplicasStatement, DropClustersStatement, DropDatabaseStatement,
+    DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope, Expr, Format, Ident,
+    IfExistsBehavior, IndexOption, IndexOptionName, KafkaBroker, KafkaBrokerAwsPrivatelinkOption,
+    KafkaBrokerAwsPrivatelinkOptionName, KafkaBrokerTunnel, KafkaConfigOptionName,
+    KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint, LoadGeneratorOption,
+    LoadGeneratorOptionName, ObjectType, PgConfigOption, PgConfigOptionName,
     PostgresConnectionOption, PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica,
-    ReplicaDefinition, ReplicaOption, ReplicaOptionName, SourceIncludeMetadata,
-    SourceIncludeMetadataType, SshConnectionOptionName, Statement, TableConstraint,
-    UnresolvedDatabaseName, Value, ViewDefinition,
+    ReferencedSubsources, ReplicaDefinition, ReplicaOption, ReplicaOptionName,
+    SourceIncludeMetadata, SourceIncludeMetadataType, SshConnectionOptionName, Statement,
+    TableConstraint, UnresolvedDatabaseName, Value, ViewDefinition,
 };
 use crate::catalog::{
     CatalogCluster, CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails,
@@ -349,7 +349,7 @@ pub fn plan_create_source(
         key_constraint,
         include_metadata,
         with_options,
-        subsources,
+        referenced_subsources,
     } = &stmt;
 
     let envelope = envelope.clone().unwrap_or(Envelope::None);
@@ -833,8 +833,11 @@ pub fn plan_create_source(
         }
     };
 
-    let (available_subsources, requested_subsources) = match (available_subsources, subsources) {
-        (Some(available_subsources), Some(CreateReferencedSubsources::Subset(subsources))) => {
+    let (available_subsources, requested_subsources) = match (
+        available_subsources,
+        referenced_subsources,
+    ) {
+        (Some(available_subsources), Some(ReferencedSubsources::Subset(subsources))) => {
             let mut requested_subsources = vec![];
             for subsource in subsources {
                 let name = subsource.reference.clone();
@@ -871,7 +874,7 @@ pub fn plan_create_source(
             // Multi-output sources must have a table selection clause
             sql_bail!("This is a multi-output source. Use `FOR TABLE (..)` or `FOR ALL TABLES` to select which ones to ingest");
         }
-        (None, Some(_)) | (Some(_), Some(CreateReferencedSubsources::All)) => {
+        (None, Some(_)) | (Some(_), Some(ReferencedSubsources::All)) => {
             sql_bail!("[internal error] subsources should be resolved during purification")
         }
         (None, None) => (BTreeMap::new(), vec![]),
