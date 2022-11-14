@@ -2175,7 +2175,7 @@ mod persist_write_handles {
                                                 // if it is still appropriate, not retrying if it has advanced
                                                 // to `new_upper`, and panicking if it is anything else.
                                                 while let Err(indeterminate) = result {
-                                                    tracing::warn!("Retrying indeterminate table write: {:#}", indeterminate);
+                                                    tracing::warn!("Retrying indeterminate persist worker write: {:#}", indeterminate);
                                                     write.fetch_recent_upper().await;
                                                     if write.upper() == &persist_upper {
                                                         // If the upper frontier is the prior frontier, the commit
@@ -2203,7 +2203,13 @@ mod persist_write_handles {
                                                         // results in the meantime.
                                                         result = Ok(Ok(Ok(())))
                                                     } else {
-                                                        panic!("Table write failed: `write.upper` set to value that signals we have lost leadership");
+                                                        tracing::info!(
+                                                            "Persist writer failed: `write.upper` for {:?} advanced by
+                                                            other writer. Actual upper {:?}; Expected new upper: {:?};
+                                                            Persist upper: {:?}",
+                                                            id, write.upper(), new_upper, persist_upper,
+                                                        );
+                                                        return Err(*id);
                                                     }
                                                 }
 
