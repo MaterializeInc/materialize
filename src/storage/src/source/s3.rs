@@ -966,7 +966,7 @@ impl SourceReader for S3SourceReader {
                     Ok(NextMessage::Pending)
                 }
                 e @ (S3Error::ListObjectsFailed { .. } | S3Error::IoError { .. }) => {
-                    Err(anyhow::Error::new(e).into())
+                    Err(SourceReaderError::other_definite(anyhow::Error::new(e)))
                 }
             },
             None => Ok(NextMessage::Pending),

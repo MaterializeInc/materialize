@@ -346,8 +346,8 @@ impl TryFrom<&str> for SourceStatus {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceStatusUpdate {
-    status: SourceStatus,
-    error: Option<String>,
+    pub status: SourceStatus,
+    pub error: Option<String>,
     // TODO(andrioni): figure out later how to accept a JSON as metadata
 }
 
