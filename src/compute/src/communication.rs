@@ -82,11 +82,15 @@ pub async fn initialize_networking(
     }
 
     match initialize_networking_from_sockets(sockets, *process, *workers, Box::new(|_| None)) {
-        Ok((stuff, guard)) => Ok((
-            stuff.into_iter().map(GenericBuilder::ZeroCopy).collect(),
-            Box::new(guard),
-        )),
+        Ok((stuff, guard)) => {
+            info!(process = process, "successfully initialized network");
+            Ok((
+                stuff.into_iter().map(GenericBuilder::ZeroCopy).collect(),
+                Box::new(guard),
+            ))
+        }
         Err(err) => {
+            warn!(process, "failed to initialize network: {err}");
             Err(anyhow::Error::from(err).context("failed to initialize networking from sockets"))
         }
     }
