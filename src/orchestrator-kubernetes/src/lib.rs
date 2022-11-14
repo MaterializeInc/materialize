@@ -284,7 +284,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             //
             // Note that https://github.com/sombralibre/k8s-quantity-parser doesn't support the (undocumented) `n` suffix,
             // so we can't use it.
-            let cpu = if cpu_str.ends_with("n") {
+            let cpu = if cpu_str.ends_with('n') {
                 let rest = &cpu_str[0..cpu_str.len() - 1];
                 match rest.parse::<u64>() {
                     Ok(val) => Some(val),
