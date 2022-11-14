@@ -184,7 +184,9 @@ steps:
   - id: limits-instance-size
     label: "Instance size limits"
     agents:
-      queue: linux-x86_64
+      # A larger instance is needed due to the
+      # many containers that are being created
+      queue: builder-linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: limits
@@ -261,7 +263,9 @@ steps:
     label: "Zippy Kafka Sources"
     timeout_in_minutes: 120
     agents:
-      queue: linux-x86_64
+      # Workload takes slightly more than 8Gb, so it OOMs
+      # on the instances from the linux-x86_64 queue
+      queue: builder-linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
