@@ -2414,13 +2414,13 @@ impl<'a> Parser<'a> {
             None
         };
 
-        let subsources = if self.parse_keywords(&[FOR, TABLES]) {
+        let referenced_subsources = if self.parse_keywords(&[FOR, TABLES]) {
             self.expect_token(&Token::LParen)?;
             let subsources = self.parse_comma_separated(Parser::parse_subsource_references)?;
             self.expect_token(&Token::RParen)?;
-            Some(CreateReferencedSubsources::Subset(subsources))
+            Some(ReferencedSubsources::Subset(subsources))
         } else if self.parse_keywords(&[FOR, ALL, TABLES]) {
-            Some(CreateReferencedSubsources::All)
+            Some(ReferencedSubsources::All)
         } else {
             None
         };
@@ -2446,7 +2446,7 @@ impl<'a> Parser<'a> {
             if_not_exists,
             key_constraint,
             with_options,
-            subsources,
+            referenced_subsources,
         }))
     }
 

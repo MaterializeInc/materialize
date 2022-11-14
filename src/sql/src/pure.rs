@@ -44,9 +44,9 @@ use mz_storage_client::types::connections::{Connection, ConnectionContext};
 use mz_storage_client::types::sources::PostgresSourcePublicationDetails;
 
 use crate::ast::{
-    AvroSchema, CreateReferencedSubsources, CreateSourceConnection, CreateSourceFormat,
-    CreateSourceStatement, CreateSourceSubsource, CreateSubsourceStatement, CsrConnectionAvro,
-    CsrConnectionProtobuf, CsvColumns, Format, ProtobufSchema, Value, WithOptionValue,
+    AvroSchema, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,
+    CreateSourceSubsource, CreateSubsourceStatement, CsrConnectionAvro, CsrConnectionProtobuf,
+    CsvColumns, Format, ProtobufSchema, ReferencedSubsources, Value, WithOptionValue,
 };
 use crate::catalog::{ErsatzCatalog, SessionCatalog};
 use crate::kafka_util;
@@ -110,12 +110,12 @@ pub async fn purify_create_source(
         format,
         envelope,
         include_metadata: _,
-        subsources: requested_subsources,
+        referenced_subsources: requested_subsources,
         ..
     } = &mut stmt;
 
     // Disallow manually targetting subsources, this syntax is reserved for purification only
-    if let Some(CreateReferencedSubsources::Subset(subsources)) = requested_subsources {
+    if let Some(ReferencedSubsources::Subset(subsources)) = requested_subsources {
         for CreateSourceSubsource {
             subsource,
             reference: _,
@@ -285,7 +285,7 @@ pub async fn purify_create_source(
 
             let mut validated_requested_subsources = vec![];
             match requested_subsources {
-                Some(CreateReferencedSubsources::All) => {
+                Some(ReferencedSubsources::All) => {
                     for table in &publication_tables {
                         let upstream_name = UnresolvedObjectName::qualified(&[
                             &connection.database,
@@ -296,7 +296,7 @@ pub async fn purify_create_source(
                         validated_requested_subsources.push((upstream_name, subsource_name, table));
                     }
                 }
-                Some(CreateReferencedSubsources::Subset(subsources)) => {
+                Some(ReferencedSubsources::Subset(subsources)) => {
                     // The user manually selected a subset of upstream tables so we need to
                     // validate that the names actually exist and are not ambiguous
 
@@ -458,7 +458,7 @@ pub async fn purify_create_source(
                 });
             }
 
-            *requested_subsources = Some(CreateReferencedSubsources::Subset(targeted_subsources));
+            *requested_subsources = Some(ReferencedSubsources::Subset(targeted_subsources));
 
             // Remove any old detail references
             options.retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
@@ -486,7 +486,7 @@ pub async fn purify_create_source(
 
             let mut validated_requested_subsources = vec![];
             match requested_subsources {
-                Some(CreateReferencedSubsources::All) => {
+                Some(ReferencedSubsources::All) => {
                     let available_subsources = match &available_subsources {
                         Some(available_subsources) => available_subsources,
                         None => {
@@ -499,7 +499,7 @@ pub async fn purify_create_source(
                         validated_requested_subsources.push((upstream_name, subsource_name, desc));
                     }
                 }
-                Some(CreateReferencedSubsources::Subset(selected_subsources)) => {
+                Some(ReferencedSubsources::Subset(selected_subsources)) => {
                     let available_subsources = match &available_subsources {
                         Some(available_subsources) => available_subsources,
                         None => {
@@ -566,8 +566,7 @@ pub async fn purify_create_source(
                 subsources.push((transient_id, subsource));
             }
             if available_subsources.is_some() {
-                *requested_subsources =
-                    Some(CreateReferencedSubsources::Subset(targeted_subsources));
+                *requested_subsources = Some(ReferencedSubsources::Subset(targeted_subsources));
             }
         }
     }

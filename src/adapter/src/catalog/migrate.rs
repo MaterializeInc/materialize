@@ -11,11 +11,11 @@ use semver::Version;
 use std::collections::BTreeMap;
 
 use mz_ore::collections::CollectionExt;
+use mz_sql::ast::Raw;
 use mz_sql::ast::{
     display::AstDisplay, CreateSourceStatement, CreateSourceSubsource, DeferredObjectName,
-    RawObjectName, Statement, UnresolvedObjectName,
+    RawObjectName, ReferencedSubsources, Statement, UnresolvedObjectName,
 };
-use mz_sql::ast::{CreateReferencedSubsources, Raw};
 
 use crate::catalog::{Catalog, ConnCatalog, SerializedCatalogItem, SYSTEM_CONN_ID};
 
@@ -101,7 +101,7 @@ fn deferred_object_name_rewrite(
     stmt: &mut mz_sql::ast::Statement<Raw>,
 ) -> Result<(), anyhow::Error> {
     if let Statement::CreateSource(CreateSourceStatement {
-        subsources: Some(CreateReferencedSubsources::Subset(create_source_subsources)),
+        referenced_subsources: Some(ReferencedSubsources::Subset(create_source_subsources)),
         ..
     }) = stmt
     {

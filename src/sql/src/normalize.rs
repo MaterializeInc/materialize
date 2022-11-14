@@ -306,7 +306,7 @@ pub fn create_statement(
             if_not_exists,
             key_constraint: _,
             with_options: _,
-            subsources: _,
+            referenced_subsources: _,
         }) => {
             *name = allocate_name(name)?;
             *if_not_exists = false;
