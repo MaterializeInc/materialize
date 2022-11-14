@@ -1,0 +1,49 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+steps:
+  - block: Release Qualification test selection
+    prompt: |
+      What tests would you like to run? As a convenience, leaving all tests
+      unchecked will run all tests.
+    blocked_state: running
+    fields:
+      - select: Tests
+        key: tests
+        options:
+          - { value: zippy-kafka-sources }
+        multiple: true
+        required: false
+    if: build.source == "ui"
+
+  - id: build-x86_64
+    label: Build x86_64
+    command: bin/ci-builder run stable bin/pyactivate -m ci.test.build x86_64
+    timeout_in_minutes: 60
+    agents:
+      queue: builder-linux-x86_64
+
+  - wait: ~
+
+  - command: bin/ci-builder run stable bin/pyactivate -m materialize.ci_util.trim_pipeline release-qualification
+    if: build.source == "ui"
+    agents:
+      queue: linux
+
+  - wait: ~
+
+  - id: zippy-kafka-sources
+    label: "Zippy Kafka Sources"
+    timeout_in_minutes: 120
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: zippy
+          args: [--scenario=KafkaSources, --actions=1000]

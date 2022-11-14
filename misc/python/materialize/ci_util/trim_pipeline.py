@@ -7,25 +7,29 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-"""Skips unselected tests in the nightly pipeline."""
+"""Skips unselected tests in the pipeline.yml in the ci subdirectory provided as argument."""
 
+import argparse
 import subprocess
 import sys
-from pathlib import Path
 
 import yaml
 
-from materialize import spawn
+from materialize import ROOT, spawn
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("pipeline")
+    args = parser.parse_args()
+
     # If the test filter metadata doesn't exist, run all tests.
     exists = subprocess.run(["buildkite-agent", "meta-data", "exists", "tests"])
     if exists.returncode == 100:
         return 0
 
     # Otherwise, filter down to the selected tests.
-    with open(Path(__file__).parent / "pipeline.yml") as f:
+    with open(ROOT / "ci" / args.pipeline / "pipeline.yml") as f:
         pipeline = yaml.safe_load(f.read())
     selected_tests = set(
         spawn.capture(["buildkite-agent", "meta-data", "get", "tests"]).splitlines()
