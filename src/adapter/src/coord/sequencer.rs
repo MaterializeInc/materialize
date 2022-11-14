@@ -49,10 +49,9 @@ use mz_sql::plan::{
     CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
     CreateTypePlan, CreateViewPlan, DropComputeInstancesPlan, DropComputeReplicasPlan,
     DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
-    FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView, MutationKind,
-    OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan,
-    ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
-    SubscribeFrom, SubscribePlan, View,
+    FetchPlan, IndexOption, InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan,
+    Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan, ResetVariablePlan, RotateKeysPlan,
+    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, SubscribeFrom, SubscribePlan, View,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_stash::Append;
@@ -2390,7 +2389,7 @@ impl<S: Append + 'static> Coordinator<S> {
         plan: ExplainPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         match plan.stage {
-            ExplainStage::Timestamp => self.sequence_explain_timestamp(session, plan.raw_plan),
+            ExplainStage::Timestamp => self.sequence_explain_timestamp(session, plan),
             _ => self.sequence_explain_plan(session, plan),
         }
     }
@@ -2405,6 +2404,7 @@ impl<S: Append + 'static> Coordinator<S> {
         use ExplainStage::*;
 
         let compute_instance = self.catalog.active_compute_instance(session)?.id;
+        let window_functions = self.catalog.system_config().window_functions();
 
         let ExplainPlan {
             raw_plan,
@@ -2433,8 +2433,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 });
 
                 // run optimization pipeline
+                let explainee_is_view = matches!(explainee, Explainee::Dataflow(_));
                 let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {
                     qgm_optimizations: session.vars().qgm_optimizations(),
+                    window_functions: window_functions || explainee_is_view,
                 })?;
 
                 self.validate_timeline(decorrelated_plan.depends_on())?;
@@ -2569,12 +2571,21 @@ impl<S: Append + 'static> Coordinator<S> {
     fn sequence_explain_timestamp(
         &mut self,
         session: &Session,
-        raw_plan: HirRelationExpr,
+        plan: ExplainPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let compute_instance = self.catalog.active_compute_instance(session)?.id;
+        let ExplainPlan {
+            raw_plan,
+            explainee,
+            ..
+        } = plan;
 
+        let compute_instance = self.catalog.active_compute_instance(session)?.id;
+        let window_functions = self.catalog.system_config().window_functions();
+
+        let explainee_is_view = matches!(explainee, Explainee::Dataflow(_));
         let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {
             qgm_optimizations: session.vars().qgm_optimizations(),
+            window_functions: window_functions || explainee_is_view,
         })?;
         let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
         let timeline = self.validate_timeline(optimized_plan.depends_on())?;

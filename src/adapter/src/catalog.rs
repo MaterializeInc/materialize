@@ -5745,6 +5745,12 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.config()
     }
 
+    fn window_functions(&self) -> bool {
+        // Always enable this feature for system connections in order to protect
+        // the system against breaking when in the Catalog::open re-hydration phase.
+        self.conn_id == SYSTEM_CONN_ID || self.state.system_config().window_functions()
+    }
+
     fn now(&self) -> EpochMillis {
         (self.state.config().now)()
     }
