@@ -256,7 +256,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             anyhow::bail!("spec.replicas not found for statefulset {id}");
         };
         /// Get metrics for a particular service and process, converting them into a sane (i.e., numeric) format.
-        /// 
+        ///
         /// Note that we want to keep going even if a lookup fails for whatever reason,
         /// so this function is infallible. If we fail to get cpu or memory for a particular pod,
         /// we just log a warning and install `None` in the returned struct.
