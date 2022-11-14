@@ -346,6 +346,7 @@ where
             StorageResponse::DroppedIds(dropped_ids) => {
                 for id in dropped_ids.iter() {
                     self.sources.remove(id);
+                    self.sinks.remove(id);
                     self.uppers.remove(id);
                 }
                 Some(StorageResponse::DroppedIds(dropped_ids))
