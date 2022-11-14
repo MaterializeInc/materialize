@@ -30,7 +30,7 @@ use crate::catalog::CatalogItem;
 use crate::client::ConnectionId;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
-use crate::coord::Coordinator;
+use crate::coord::{timeline, Coordinator};
 use crate::util::ResultExt;
 use crate::AdapterError;
 
@@ -138,11 +138,24 @@ impl<T: TimestampManipulation> TimestampOracle<T> {
 /// Interval used to persist durable timestamps. See [`DurableTimestampOracle`] for more
 /// details.
 pub static TIMESTAMP_PERSIST_INTERVAL: Lazy<mz_repr::Timestamp> = Lazy::new(|| {
-    Duration::from_secs(15)
+    Duration::from_secs(5)
         .as_millis()
         .try_into()
-        .expect("15 seconds can fit into `Timestamp`")
+        .expect("5 seconds can fit into `Timestamp`")
 });
+
+/// The Coordinator tries to prevent the persisted timestamp from exceeding
+/// a value [`TIMESTAMP_INTERVAL_UPPER_BOUND`] times [`TIMESTAMP_PERSIST_INTERVAL`]
+/// larger than the current system time.
+pub const TIMESTAMP_INTERVAL_UPPER_BOUND: u64 = 2;
+
+/// Convenience function for calculating the current upper bound that we want to
+/// prevent the global timestamp from exceeding.
+pub fn upper_bound(now: &Timestamp) -> Timestamp {
+    now.saturating_add(
+        TIMESTAMP_PERSIST_INTERVAL.saturating_mul(Timestamp::from(TIMESTAMP_INTERVAL_UPPER_BOUND)),
+    )
+}
 
 /// A type that wraps a [`TimestampOracle`] and provides durable timestamps. This allows us to
 /// recover a timestamp that is larger than all previous timestamps on restart. The protocol
@@ -325,8 +338,12 @@ impl<S: Append + 'static> Coordinator<S> {
     /// to block group commits by.
     pub(crate) async fn apply_local_write(&mut self, timestamp: Timestamp) {
         let now = self.now().into();
-        if timestamp > now {
-            error!("Setting local read timestamp to {timestamp} which is ahead of now, {now}");
+        if timestamp > timeline::upper_bound(&now) {
+            error!(
+                "Setting local read timestamp to {timestamp}, which is more than \
+                {TIMESTAMP_INTERVAL_UPPER_BOUND} intervals of size {} larger than now, {now}",
+                *TIMESTAMP_PERSIST_INTERVAL
+            );
         }
         self.global_timelines
             .get_mut(&Timeline::EpochMilliseconds)
