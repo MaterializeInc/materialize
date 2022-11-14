@@ -13,6 +13,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
+use futures::FutureExt;
 use openssl::ssl::{Ssl, SslContext};
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, Interest, ReadBuf, Ready};
 use tokio_openssl::SslStream;
@@ -23,6 +24,7 @@ use mz_ore::netio::AsyncReady;
 
 use crate::codec::{self, FramedConn, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION};
 use crate::message::FrontendStartupMessage;
+use crate::metrics::{Metrics, MetricsConfig};
 use crate::protocol;
 
 /// Configures a [`Server`].
@@ -41,6 +43,8 @@ pub struct Config {
     /// a valid Frontegg API token as a password to authenticate. Otherwise,
     /// password authentication is disabled.
     pub frontegg: Option<FronteggAuthentication>,
+    /// The registry entries that the pgwire server uses to report metrics.
+    pub metrics: MetricsConfig,
     /// Whether this is an internal server that permits access to restricted
     /// system resources.
     pub internal: bool,
@@ -70,6 +74,7 @@ pub struct Server {
     tls: Option<TlsConfig>,
     adapter_client: mz_adapter::Client,
     frontegg: Option<FronteggAuthentication>,
+    metrics: Metrics,
     internal: bool,
 }
 
@@ -80,6 +85,7 @@ impl Server {
             tls: config.tls,
             adapter_client: config.adapter_client,
             frontegg: config.frontegg,
+            metrics: Metrics::new(config.metrics, config.internal),
             internal: config.internal,
         }
     }
@@ -96,7 +102,9 @@ impl Server {
         let frontegg = self.frontegg.clone();
         let tls = self.tls.clone();
         let internal = self.internal;
-        async {
+        let metrics = self.metrics.clone();
+
+        async move {
             let mut adapter_client = adapter_client?;
             let conn_id = adapter_client.conn_id();
             let mut conn = Conn::Unencrypted(conn);
@@ -166,6 +174,13 @@ impl Server {
                 }
             }
         }
+        .inspect(move |result| {
+            let status = match result {
+                Ok(()) => "success",
+                Err(_) => "error",
+            };
+            metrics.connection_status(status).inc();
+        })
     }
 }
 

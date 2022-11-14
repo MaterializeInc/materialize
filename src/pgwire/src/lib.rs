@@ -24,9 +24,11 @@
 
 mod codec;
 mod message;
+mod metrics;
 mod protocol;
 mod server;
 
 pub use message::Severity;
+pub use metrics::MetricsConfig;
 pub use protocol::match_handshake;
 pub use server::{Config, Server, TlsConfig, TlsMode};
