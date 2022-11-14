@@ -11,8 +11,10 @@ menu:
 disable_toc: true
 ---
 
+## Top K using a `LATERAL` subquery and `LIMIT`
+
 Suppose you want to group rows in a table by some key, then filter out all but
-the first _k_ elements within each group according to some ordering. In other
+the first _K_ elements within each group according to some ordering. In other
 databases you might use window functions. In Materialize, we recommend using a
 [`LATERAL` subquery](/sql/join/#lateral-subqueries). The general form of the
 query looks like this:
@@ -60,7 +62,7 @@ SELECT state, name FROM
         SELECT name FROM cities
         WHERE state = grp.state
         ORDER BY pop DESC LIMIT 3
-    )
+    );
 ```
 ```nofmt
 AZ  Phoenix
@@ -86,3 +88,14 @@ EXPLAIN SELECT state, name FROM ...
 | TopK group=(#1) order=(#2 desc) limit=3 offset=0
 | Project (#1, #0)
 ```
+
+## Top 1 using `DISTINCT ON`
+
+If _K_ = 1, i.e., you would like to see only the most populous city in each state, then a simpler approach is to use `DISTINCT ON`:
+
+```sql
+SELECT DISTINCT ON(state) state, name
+FROM cities
+ORDER BY state, pop DESC;
+```
+Note that the `ORDER BY` clause should start with the expressions that are in the `DISTINCT ON`.

@@ -242,7 +242,7 @@ SELECT * FROM valid_buckets;
 (3 rows)
 ```
 
-It's is possible to go even more beyond aggregating by the buckets:
+We can continue with aggregating by the buckets:
 
 ```sql
 SELECT
@@ -259,5 +259,5 @@ GROUP BY 1;
 (1 row)
 ```
 
-For this case querying and aggregating is relatively effortless;
+For this case, querying and aggregating is relatively effortless;
 if the aggregation query were expensive, creating a materialized view doing the aggregation would make more sense.
