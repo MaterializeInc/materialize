@@ -3567,10 +3567,7 @@ dependencies = [
  "mz-avro",
  "mz-ccsr",
  "mz-ore",
- "mz-proto",
  "num_cpus",
- "proptest",
- "proptest-derive",
  "prost",
  "prost-build",
  "protobuf-src",
@@ -4256,7 +4253,6 @@ name = "mz-ssh-util"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "mz-ore",
  "openssh",
  "openssl",
  "rand",
