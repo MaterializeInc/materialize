@@ -341,8 +341,10 @@ impl From<anyhow::Error> for SourceReaderError {
 /// Source-specific metrics in the persist sink
 pub struct SourcePersistSinkMetrics {
     pub(crate) progress: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
-    pub(crate) rows: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) errors: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) row_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) row_retractions: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) error_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) error_retractions: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
 
 impl SourcePersistSinkMetrics {
@@ -360,16 +362,38 @@ impl SourcePersistSinkMetrics {
                 output_index.to_string(),
                 shard.clone(),
             ]),
-            rows: base.source_specific.rows.get_delete_on_drop_counter(vec![
-                source_id.to_string(),
-                output_index.to_string(),
-                shard.clone(),
-            ]),
-            errors: base.source_specific.errors.get_delete_on_drop_counter(vec![
-                source_id.to_string(),
-                output_index.to_string(),
-                shard,
-            ]),
+            row_inserts: base
+                .source_specific
+                .row_inserts
+                .get_delete_on_drop_counter(vec![
+                    source_id.to_string(),
+                    output_index.to_string(),
+                    shard.clone(),
+                ]),
+            row_retractions: base
+                .source_specific
+                .row_retractions
+                .get_delete_on_drop_counter(vec![
+                    source_id.to_string(),
+                    output_index.to_string(),
+                    shard.clone(),
+                ]),
+            error_inserts: base
+                .source_specific
+                .error_inserts
+                .get_delete_on_drop_counter(vec![
+                    source_id.to_string(),
+                    output_index.to_string(),
+                    shard.clone(),
+                ]),
+            error_retractions: base
+                .source_specific
+                .error_retractions
+                .get_delete_on_drop_counter(vec![
+                    source_id.to_string(),
+                    output_index.to_string(),
+                    shard,
+                ]),
         }
     }
 }

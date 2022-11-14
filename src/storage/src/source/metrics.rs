@@ -87,10 +87,10 @@ pub(super) struct SourceSpecificMetrics {
     /// A timestamp gauge representing forward progress
     /// in the data shard.
     pub(super) progress: IntGaugeVec,
-    pub(super) rows: IntCounterVec,
-    /// A counter representing the actual numbers of
-    /// errors being committed to the data shard.
-    pub(super) errors: IntCounterVec,
+    pub(super) row_inserts: IntCounterVec,
+    pub(super) row_retractions: IntCounterVec,
+    pub(super) error_inserts: IntCounterVec,
+    pub(super) error_retractions: IntCounterVec,
 }
 
 impl SourceSpecificMetrics {
@@ -112,14 +112,24 @@ impl SourceSpecificMetrics {
                 help: "A timestamp gauge representing forward progess in the data shard",
                 var_labels: ["source_id", "output", "shard"],
             )),
-            rows: registry.register(metric!(
-                name: "mz_source_rows",
-                help: "A counter representing the actual number of rows being committed to the data shard",
+            row_inserts: registry.register(metric!(
+                name: "mz_source_row_inserts",
+                help: "A counter representing the actual number of rows being inserted to the data shard",
                 var_labels: ["source_id", "output", "shard"],
             )),
-            errors: registry.register(metric!(
-                name: "mz_source_errors",
-                help: "A counter representing the actual number of errors being committed to the data shard",
+            row_retractions: registry.register(metric!(
+                name: "mz_source_row_retractions",
+                help: "A counter representing the actual number of rows being retracted from the data shard",
+                var_labels: ["source_id", "output", "shard"],
+            )),
+            error_inserts: registry.register(metric!(
+                name: "mz_source_error_inserts",
+                help: "A counter representing the actual number of errors being inserted to the data shard",
+                var_labels: ["source_id", "output", "shard"],
+            )),
+            error_retractions: registry.register(metric!(
+                name: "mz_source_error_retractions",
+                help: "A counter representing the actual number of errors being retracted from the data shard",
                 var_labels: ["source_id", "output", "shard"],
             )),
         }

@@ -39,8 +39,27 @@ where
         + mz_persist_types::Codec64,
 {
     builder: mz_persist_client::batch::BatchBuilder<K, V, T, D>,
-    rows: u64,
-    errors: u64,
+    inserts: u64,
+    retractions: u64,
+    error_inserts: u64,
+    error_retractions: u64,
+}
+
+impl<K, V, T, D> BatchBuilderAndCounts<K, V, T, D>
+where
+    T: timely::progress::Timestamp
+        + differential_dataflow::lattice::Lattice
+        + mz_persist_types::Codec64,
+{
+    fn new(bb: mz_persist_client::batch::BatchBuilder<K, V, T, D>) -> Self {
+        BatchBuilderAndCounts {
+            builder: bb,
+            inserts: 0,
+            retractions: 0,
+            error_inserts: 0,
+            error_retractions: 0,
+        }
+    }
 }
 
 pub fn render<G>(
@@ -145,29 +164,30 @@ pub fn render<G>(
                     for (row, ts, diff) in buffer.drain(..) {
                         if write.upper().less_equal(&ts) {
                             let builder = stashed_batches.entry(ts).or_insert_with(|| {
-                                BatchBuilderAndCounts {
-                                    builder: write.builder(
-                                        // TODO: the lower has to be the min because we don't know
-                                        // what the minimum ts of data we will see is. In the future,
-                                        // this lower should be declared in `finish` instead.
-                                        100,
-                                        Antichain::from_elem(Timestamp::minimum()),
-                                    ),
-                                    rows: 0,
-                                    errors: 0,
-                                }
+                                BatchBuilderAndCounts::new(write.builder(
+                                    // TODO: the lower has to be the min because we don't know
+                                    // what the minimum ts of data we will see is. In the future,
+                                    // this lower should be declared in `finish` instead.
+                                    100,
+                                    Antichain::from_elem(Timestamp::minimum()),
+                                ))
                             });
 
-                            let ok = row.is_ok();
+                            let is_value = row.is_ok();
                             builder
                                 .builder
                                 .add(&SourceData(row), &(), &ts, &diff)
                                 .await
                                 .expect("invalid usage");
-                            if ok {
-                                builder.rows += 1;
-                            } else {
-                                builder.errors += 1;
+
+                            // Note that we assume `diff` is either +1 or -1 here, being anything
+                            // else is a logic bug we can't handle at the metric layer. We also
+                            // assume this addition doesn't overflow.
+                            match (is_value, diff.is_positive()) {
+                                (true, true) => builder.inserts += diff.unsigned_abs(),
+                                (true, false) => builder.retractions += diff.unsigned_abs(),
+                                (false, true) => builder.error_inserts += diff.unsigned_abs(),
+                                (false, false) => builder.error_retractions += diff.unsigned_abs(),
                             }
                         }
                     }
@@ -244,8 +264,12 @@ pub fn render<G>(
                             .expect("cannot append updates")
                             .expect("invalid/outdated upper");
 
-                        metrics.rows.inc_by(batch_builder.rows);
-                        metrics.errors.inc_by(batch_builder.errors);
+                        metrics.row_inserts.inc_by(batch_builder.inserts);
+                        metrics.row_retractions.inc_by(batch_builder.retractions);
+                        metrics.error_inserts.inc_by(batch_builder.error_inserts);
+                        metrics
+                            .error_retractions
+                            .inc_by(batch_builder.error_retractions);
                         metrics
                             .progress
                             .set(mz_persist_client::metrics::encode_ts_metric(&new_upper));
