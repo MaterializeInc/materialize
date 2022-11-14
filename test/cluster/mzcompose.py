@@ -56,6 +56,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for name in [
         "test-cluster",
         "test-github-12251",
+        "test-github-15531",
         "test-github-15535",
         "test-github-15799",
         "test-github-15930",
@@ -198,6 +199,117 @@ def workflow_test_github_12251(c: Composition) -> None:
 
     # Ensure we can select from tables after cancellation.
     c.sql("SELECT * FROM log_table;")
+
+
+def workflow_test_github_15531(c: Composition) -> None:
+    """
+    Test that compute command history does not leak peek commands.
+
+    Regression test for https://github.com/MaterializeInc/materialize/issues/15531.
+
+    The test currently only inspects the history on computed, and it should be
+    extended in the future to also consider the history size in the compute
+    controller.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("computed_1")
+    c.wait_for_materialized()
+
+    # helper function to get command history metrics for computed
+    def find_computed_command_history_metrics(c: Composition) -> Tuple[int, int]:
+        metrics = c.exec(
+            "computed_1", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+
+        history_len = None
+        dataflow_count = None
+        for metric in metrics.splitlines():
+            if metric.startswith("mz_compute_comamnd_history_size"):
+                history_len = int(metric[len("mz_compute_comamnd_history_size") :])
+            elif metric.startswith("mz_compute_dataflow_count_in_history"):
+                dataflow_count = int(
+                    metric[len("mz_compute_dataflow_count_in_history") :]
+                )
+
+        assert (
+            history_len is not None
+        ), "command history length not found in computed metrics"
+        assert (
+            dataflow_count is not None
+        ), "dataflow count in history not found in computed metrics"
+
+        return (history_len, dataflow_count)
+
+    # Set up a cluster with an indexed table and an unindexed one.
+    c.sql(
+        """
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (
+            REMOTE ['computed_1:2100'],
+            COMPUTE ['computed_1:2102'],
+            WORKERS 2
+        ));
+        SET cluster = cluster1;
+        -- table for fast-path peeks
+        CREATE TABLE t (a int);
+        CREATE DEFAULT INDEX ON t;
+        INSERT INTO t VALUES (42);
+        -- table for slow-path peeks
+        CREATE TABLE t2 (a int);
+        INSERT INTO t2 VALUES (84);
+        """
+    )
+
+    # obtain initial history size and dataflow count
+    (
+        computed_history_len,
+        computed_dataflow_count,
+    ) = find_computed_command_history_metrics(c)
+    assert (
+        computed_dataflow_count == 1
+    ), "more dataflows than expected in computed history"
+    assert computed_history_len > 0, "computed history cannot be empty"
+
+    # execute 400 fast- and slow-path peeks
+    for i in range(20):
+        c.sql(
+            """
+            SELECT * FROM t;
+            SELECT * FROM t2;
+            SELECT * FROM t;
+            SELECT * FROM t2;
+            SELECT * FROM t;
+            SELECT * FROM t2;
+            SELECT * FROM t;
+            SELECT * FROM t2;
+            SELECT * FROM t;
+            SELECT * FROM t2;
+            SELECT * FROM t;
+            SELECT * FROM t2;
+            SELECT * FROM t;
+            SELECT * FROM t2;
+            SELECT * FROM t;
+            SELECT * FROM t2;
+            SELECT * FROM t;
+            SELECT * FROM t2;
+            SELECT * FROM t;
+            SELECT * FROM t2;
+            """
+        )
+
+    # check that dataflow count is the same and
+    # that history size is well-behaved
+    (
+        computed_history_len,
+        computed_dataflow_count,
+    ) = find_computed_command_history_metrics(c)
+    assert (
+        computed_dataflow_count == 1
+    ), "more dataflows than expected in computed history"
+    assert (
+        computed_history_len < 100
+    ), "computed history grew more than expected after peeks"
 
 
 def workflow_test_github_15535(c: Composition) -> None:

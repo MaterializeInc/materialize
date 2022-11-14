@@ -37,6 +37,7 @@ use mz_compute_client::command::{
     BuildDesc, ComputeCommand, ComputeCommandHistory, DataflowDescription,
 };
 use mz_compute_client::command::{CommunicationConfig, ComputeStartupEpoch};
+use mz_compute_client::metrics::ComputeMetrics;
 use mz_compute_client::response::ComputeResponse;
 use mz_compute_client::service::ComputeClient;
 use mz_ore::halt;
@@ -72,6 +73,8 @@ struct ClusterClient<C> {
     timely_container: TimelyContainerRef,
     /// The dataflow trace metrics.
     trace_metrics: TraceMetrics,
+    /// The compute metrics.
+    compute_metrics: ComputeMetrics,
     /// Handle to the persist infrastructure.
     persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
     /// The handle to the Tokio runtime.
@@ -103,6 +106,7 @@ pub fn serve(
 ) -> Result<(TimelyContainerRef, impl Fn() -> Box<dyn ComputeClient>), Error> {
     // Various metrics related things.
     let trace_metrics = TraceMetrics::register_with(&config.metrics_registry);
+    let compute_metrics = ComputeMetrics::register_with(&config.metrics_registry);
 
     let persist_clients = PersistClientCache::new(
         PersistConfig::new(config.build_info, config.now.clone()),
@@ -118,6 +122,7 @@ pub fn serve(
             let client = ClusterClient::new(
                 Arc::clone(&timely_container),
                 trace_metrics.clone(),
+                compute_metrics.clone(),
                 Arc::clone(&persist_clients),
                 tokio_executor.clone(),
             );
@@ -132,6 +137,7 @@ impl ClusterClient<PartitionedClient> {
     fn new(
         timely_container: TimelyContainerRef,
         trace_metrics: TraceMetrics,
+        compute_metrics: ComputeMetrics,
         persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
         tokio_handle: tokio::runtime::Handle,
     ) -> Self {
@@ -139,6 +145,7 @@ impl ClusterClient<PartitionedClient> {
             timely_container,
             inner: None,
             trace_metrics,
+            compute_metrics,
             persist_clients,
             tokio_handle,
         }
@@ -148,6 +155,7 @@ impl ClusterClient<PartitionedClient> {
         comm_config: CommunicationConfig,
         epoch: ComputeStartupEpoch,
         trace_metrics: TraceMetrics,
+        compute_metrics: ComputeMetrics,
         persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
         tokio_executor: Handle,
     ) -> Result<TimelyContainer, Error> {
@@ -171,12 +179,14 @@ impl ClusterClient<PartitionedClient> {
                     .take()
                     .unwrap();
                 let _trace_metrics = trace_metrics.clone();
+                let _compute_metrics = compute_metrics.clone();
                 let persist_clients = Arc::clone(&persist_clients);
                 Worker {
                     timely_worker,
                     client_rx,
                     compute_state: None,
                     trace_metrics: trace_metrics.clone(),
+                    compute_metrics: compute_metrics.clone(),
                     persist_clients,
                 }
                 .run()
@@ -206,6 +216,7 @@ impl ClusterClient<PartitionedClient> {
         // creating a fair share of confusion in the orchestrator.
 
         let trace_metrics = self.trace_metrics.clone();
+        let compute_metrics = self.compute_metrics.clone();
         let persist_clients = Arc::clone(&self.persist_clients);
         let handle = self.tokio_handle.clone();
 
@@ -223,9 +234,15 @@ impl ClusterClient<PartitionedClient> {
                 existing
             }
             None => {
-                let build_timely_result =
-                    Self::build_timely(comm_config, epoch, trace_metrics, persist_clients, handle)
-                        .await;
+                let build_timely_result = Self::build_timely(
+                    comm_config,
+                    epoch,
+                    trace_metrics,
+                    compute_metrics,
+                    persist_clients,
+                    handle,
+                )
+                .await;
                 match build_timely_result {
                     Err(e) => {
                         warn!("timely initialization failed: {e}");
@@ -269,6 +286,7 @@ impl<C: Debug> Debug for ClusterClient<C> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ClusterClient")
             .field("trace_metrics", &self.trace_metrics)
+            .field("compute_metrics", &self.compute_metrics)
             .field("persist_clients", &self.persist_clients)
             .field("inner", &self.inner)
             .finish_non_exhaustive()
@@ -369,6 +387,8 @@ struct Worker<'w, A: Allocate> {
     compute_state: Option<ComputeState>,
     /// Trace metrics.
     trace_metrics: TraceMetrics,
+    /// Compute metrics.
+    compute_metrics: ComputeMetrics,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
@@ -608,6 +628,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     persist_clients: Arc::clone(&self.persist_clients),
                     command_history: ComputeCommandHistory::default(),
                     max_result_size: config.max_result_size,
+                    metrics: self.compute_metrics.clone(),
                 });
             }
             ComputeCommand::DropInstance => {
@@ -867,6 +888,16 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 command_history.push(command.clone(), &compute_state.pending_peeks);
             }
             compute_state.command_history = command_history;
+            compute_state.metrics.command_history_size.set(
+                u64::try_from(compute_state.command_history.len()).expect(
+                    "The compute command history size must be non-negative and fit a 64-bit number",
+                ),
+            );
+            compute_state.metrics.dataflow_count_in_history.set(
+                u64::try_from(compute_state.command_history.dataflow_count()).expect(
+                    "The number of dataflows in the compute history must be non-negative and fit a 64-bit number",
+                ),
+            );
         }
         Ok(())
     }

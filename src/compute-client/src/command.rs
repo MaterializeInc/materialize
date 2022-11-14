@@ -1059,6 +1059,8 @@ pub struct ComputeCommandHistory<T = mz_repr::Timestamp> {
     /// or removed given the context of other commands, for example compaction commands that
     /// can be unified, or dataflows that can be dropped due to allowed compaction.
     commands: Vec<ComputeCommand<T>>,
+    /// The number of dataflows in the compute command history.
+    dataflow_count: usize,
 }
 
 impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
@@ -1071,11 +1073,24 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         command: ComputeCommand<T>,
         peeks: &std::collections::HashMap<uuid::Uuid, V>,
     ) {
+        if let ComputeCommand::CreateDataflows(dataflows) = &command {
+            self.dataflow_count += dataflows.len();
+        }
         self.commands.push(command);
         if self.commands.len() > 2 * self.reduced_count {
             self.retain_peeks(peeks);
             self.reduce();
         }
+    }
+
+    /// Obtains the length of this compute command history in number of commands.
+    pub fn len(&self) -> usize {
+        self.commands.len()
+    }
+
+    /// Obtains the number of dataflows in this compute command history.
+    pub fn dataflow_count(&self) -> usize {
+        self.dataflow_count
     }
 
     /// Reduces `self.history` to a minimal form.
@@ -1200,6 +1215,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         if let Some(create_inst_command) = create_inst_command {
             self.commands.push(create_inst_command);
         }
+        self.dataflow_count = live_dataflows.len();
         if !live_dataflows.is_empty() {
             self.commands
                 .push(ComputeCommand::CreateDataflows(live_dataflows));
@@ -1255,6 +1271,7 @@ impl<T> Default for ComputeCommandHistory<T> {
         Self {
             reduced_count: 0,
             commands: Vec::new(),
+            dataflow_count: 0,
         }
     }
 }

@@ -31,6 +31,7 @@ use mz_compute_client::command::{
     ComputeCommand, ComputeCommandHistory, DataflowDescription, InstanceConfig, Peek,
 };
 use mz_compute_client::logging::LoggingConfig;
+use mz_compute_client::metrics::ComputeMetrics;
 use mz_compute_client::plan::Plan;
 use mz_compute_client::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use mz_ore::cast::CastFrom;
@@ -80,6 +81,8 @@ pub struct ComputeState {
     pub command_history: ComputeCommandHistory,
     /// Max size in bytes of any result.
     pub max_result_size: u32,
+    /// Metrics for this replica.
+    pub metrics: ComputeMetrics,
 }
 
 impl ComputeState {
@@ -115,6 +118,16 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         self.compute_state
             .command_history
             .push(cmd.clone(), &self.compute_state.pending_peeks);
+        self.compute_state.metrics.command_history_size.set(
+            u64::try_from(self.compute_state.command_history.len()).expect(
+                "The compute command history size must be non-negative and fit a 64-bit number",
+            ),
+        );
+        self.compute_state.metrics.dataflow_count_in_history.set(
+            u64::try_from(self.compute_state.command_history.dataflow_count()).expect(
+                "The number of dataflows in the compute history must be non-negative and fit a 64-bit number",
+            ),
+        );
         match cmd {
             CreateTimely { .. } => panic!("CreateTimely must be captured before"),
             CreateInstance(config) => self.handle_create_instance(config),

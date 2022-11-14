@@ -3304,6 +3304,7 @@ dependencies = [
  "mz-storage-client",
  "mz-timely-util",
  "once_cell",
+ "prometheus",
  "proptest",
  "proptest-derive",
  "prost",
