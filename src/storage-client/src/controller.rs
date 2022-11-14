@@ -20,8 +20,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
-use std::fmt;
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -50,7 +49,7 @@ use mz_persist_client::{PersistLocation, ShardId};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
-use mz_stash::{self, StashError, TypedCollection};
+use mz_stash::{self, PostgresFactory, StashError, TypedCollection};
 
 use crate::client::{
     CreateSinkCommand, CreateSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
@@ -59,7 +58,9 @@ use crate::client::{
 use crate::controller::hosts::{StorageHosts, StorageHostsConfig};
 use crate::types::errors::DataflowError;
 use crate::types::hosts::StorageHostConfig;
-use crate::types::sinks::{ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc};
+use crate::types::sinks::{
+    MetadataUnfilled, ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc,
+};
 use crate::types::sources::{IngestionDescription, SourceExport};
 
 mod hosts;
@@ -142,7 +143,7 @@ impl<T> From<RelationDesc> for CollectionDescription<T> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExportDescription<T = mz_repr::Timestamp> {
-    pub sink: StorageSinkDesc<(), GlobalId, T>,
+    pub sink: StorageSinkDesc<MetadataUnfilled, T>,
     /// The address of a `storaged` process on which to install the sink or the
     /// settings for spinning up a controller-managed process.
     pub host_config: StorageHostConfig,
@@ -739,13 +740,15 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
         postgres_url: String,
         tx: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
         now: NowFn,
+        factory: &PostgresFactory,
     ) -> Self {
         let tls = mz_postgres_util::make_tls(
             &tokio_postgres::config::Config::from_str(&postgres_url)
                 .expect("invalid postgres url for storage stash"),
         )
         .expect("could not make storage TLS connection");
-        let stash = mz_stash::Postgres::new(postgres_url, None, tls)
+        let stash = factory
+            .open(postgres_url, None, tls)
             .await
             .expect("could not connect to postgres storage stash");
         let stash = mz_stash::Memory::new(stash);
@@ -856,7 +859,7 @@ where
             {
                 Some(
                     durable_metadata
-                        .remove(&status_collection_id)
+                        .get(&status_collection_id)
                         .ok_or(StorageError::IdentifierMissing(status_collection_id))?
                         .data_shard,
                 )
@@ -1366,6 +1369,11 @@ where
                 self.update_write_frontiers(&updates).await?;
                 Ok(())
             }
+            Some(StorageResponse::DroppedIds(_ids)) => {
+                // TODO(petrosagg): It looks like the storage controller never cleans up GlobalIds
+                // from its state. It should probably be done as a reaction to this response.
+                Ok(())
+            }
         }
     }
 }
@@ -1386,17 +1394,20 @@ where
         persist_clients: Arc<Mutex<PersistClientCache>>,
         orchestrator: Arc<dyn NamespacedOrchestrator>,
         storaged_image: String,
+        init_container_image: Option<String>,
         now: NowFn,
+        postgres_factory: &PostgresFactory,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         Self {
-            state: StorageControllerState::new(postgres_url, tx, now).await,
+            state: StorageControllerState::new(postgres_url, tx, now, postgres_factory).await,
             hosts: StorageHosts::new(
                 StorageHostsConfig {
                     build_info,
                     orchestrator,
                     storaged_image,
+                    init_container_image,
                 },
                 Arc::clone(&persist_clients),
             ),

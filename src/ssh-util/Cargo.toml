@@ -8,7 +8,6 @@ publish = false
 
 [dependencies]
 anyhow = { version = "1.0.65" }
-mz-ore = { path = "../ore" }
 openssh = "0.9.7"
 openssl = { version = "0.10.42", features = ["vendored"] }
 rand = "0.8.5"

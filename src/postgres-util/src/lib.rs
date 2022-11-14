@@ -11,7 +11,6 @@
 
 use std::time::Duration;
 
-use anyhow::{anyhow, bail};
 use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
@@ -29,8 +28,37 @@ use crate::desc::{PostgresColumnDesc, PostgresTableDesc};
 
 pub mod desc;
 
+/// An error representing pg, ssh, ssl, and other failures.
+#[derive(Debug, thiserror::Error)]
+pub enum PostgresError {
+    /// Any other error we bail on.
+    #[error(transparent)]
+    Generic(#[from] anyhow::Error),
+    /// Error using ssh.
+    #[error(transparent)]
+    Ssh(#[from] openssh::Error),
+    /// Error doing io to setup an ssh connection.
+    #[error(transparent)]
+    SshIo(#[from] std::io::Error),
+    /// A postgres error.
+    #[error(transparent)]
+    Postgres(#[from] tokio_postgres::Error),
+    /// Error setting up postgres ssl.
+    #[error(transparent)]
+    PostgresSsl(#[from] openssl::error::ErrorStack),
+}
+
+macro_rules! bail_generic {
+    ($fmt:expr, $($arg:tt)*) => {
+        return Err(PostgresError::Generic(anyhow::anyhow!($fmt, $($arg)*)))
+    };
+    ($err:expr $(,)?) => {
+        return Err(PostgresError::Generic(anyhow::anyhow!($err)))
+    };
+}
+
 /// Creates a TLS connector for the given [`Config`].
-pub fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, anyhow::Error> {
+pub fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, PostgresError> {
     let mut builder = SslConnector::builder(SslMethod::tls_client())?;
     // The mode dictates whether we verify peer certs and hostnames. By default, Postgres is
     // pretty relaxed and recommends SslMode::VerifyCa or SslMode::VerifyFull for security.
@@ -62,8 +90,12 @@ pub fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, any
             builder.set_certificate(&*X509::from_pem(ssl_cert)?)?;
             builder.set_private_key(&*PKey::private_key_from_pem(ssl_key)?)?;
         }
-        (None, Some(_)) => bail!("must provide both sslcert and sslkey, but only provided sslkey"),
-        (Some(_), None) => bail!("must provide both sslcert and sslkey, but only provided sslcert"),
+        (None, Some(_)) => {
+            bail_generic!("must provide both sslcert and sslkey, but only provided sslkey")
+        }
+        (Some(_), None) => {
+            bail_generic!("must provide both sslcert and sslkey, but only provided sslcert")
+        }
         _ => {}
     }
     if let Some(ssl_root_cert) = config.get_ssl_root_cert() {
@@ -96,7 +128,7 @@ pub fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, any
 pub async fn publication_info(
     config: &Config,
     publication: &str,
-) -> Result<Vec<PostgresTableDesc>, anyhow::Error> {
+) -> Result<Vec<PostgresTableDesc>, PostgresError> {
     let client = config.connect("postgres_publication_info").await?;
 
     client
@@ -106,7 +138,7 @@ pub async fn publication_info(
         )
         .await?
         .get(0)
-        .ok_or_else(|| anyhow!("publication {:?} does not exist", publication))?;
+        .ok_or_else(|| anyhow::anyhow!("publication {:?} does not exist", publication))?;
 
     let tables = client
         .query(
@@ -162,7 +194,7 @@ pub async fn publication_info(
                     primary_key,
                 })
             })
-            .collect::<Result<Vec<_>, anyhow::Error>>()?;
+            .collect::<Result<Vec<_>, PostgresError>>()?;
 
         table_infos.push(PostgresTableDesc {
             oid,
@@ -175,7 +207,7 @@ pub async fn publication_info(
     Ok(table_infos)
 }
 
-pub async fn drop_replication_slots(config: Config, slots: &[&str]) -> Result<(), anyhow::Error> {
+pub async fn drop_replication_slots(config: Config, slots: &[&str]) -> Result<(), PostgresError> {
     let client = config.connect("postgres_drop_replication_slots").await?;
     let replication_client = config.connect_replication().await?;
     for slot in slots {
@@ -197,10 +229,10 @@ pub async fn drop_replication_slots(config: Config, slots: &[&str]) -> Result<()
                     .await?;
             }
             _ => {
-                return Err(anyhow!(
+                return Err(PostgresError::Generic(anyhow::anyhow!(
                     "multiple pg_replication_slots entries for slot {}",
                     &slot
-                ))
+                )))
             }
         }
     }
@@ -238,7 +270,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn new(inner: tokio_postgres::Config, tunnel: TunnelConfig) -> Result<Self, anyhow::Error> {
+    pub fn new(inner: tokio_postgres::Config, tunnel: TunnelConfig) -> Result<Self, PostgresError> {
         let config = Self { inner, tunnel };
 
         // Early validate that the configuration contains only a single TCP
@@ -249,12 +281,12 @@ impl Config {
     }
 
     /// Connects to the configured PostgreSQL database.
-    pub async fn connect(&self, task_name: &str) -> Result<Client, anyhow::Error> {
+    pub async fn connect(&self, task_name: &str) -> Result<Client, PostgresError> {
         self.connect_internal(task_name, |_| ()).await
     }
 
     /// Starts a replication connection to the configured PostgreSQL database.
-    pub async fn connect_replication(&self) -> Result<Client, anyhow::Error> {
+    pub async fn connect_replication(&self) -> Result<Client, PostgresError> {
         self.connect_internal("postgres_connect_replication", |config| {
             config
                 .replication_mode(ReplicationMode::Logical)
@@ -264,10 +296,10 @@ impl Config {
         .await
     }
 
-    fn address(&self) -> Result<(&str, u16), anyhow::Error> {
+    fn address(&self) -> Result<(&str, u16), PostgresError> {
         match (self.inner.get_hosts(), self.inner.get_ports()) {
             ([Host::Tcp(host)], [port]) => Ok((host, *port)),
-            _ => bail!("only TCP connections to a single PostgreSQL server are supported"),
+            _ => bail_generic!("only TCP connections to a single PostgreSQL server are supported"),
         }
     }
 
@@ -275,7 +307,7 @@ impl Config {
         &self,
         task_name: &str,
         configure: F,
-    ) -> Result<Client, anyhow::Error>
+    ) -> Result<Client, PostgresError>
     where
         F: FnOnce(&mut tokio_postgres::Config),
     {

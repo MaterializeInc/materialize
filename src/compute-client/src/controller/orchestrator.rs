@@ -31,13 +31,19 @@ use super::{
 pub(super) struct ComputeOrchestrator {
     inner: Arc<dyn NamespacedOrchestrator>,
     computed_image: String,
+    init_container_image: Option<String>,
 }
 
 impl ComputeOrchestrator {
-    pub(super) fn new(inner: Arc<dyn NamespacedOrchestrator>, computed_image: String) -> Self {
+    pub(super) fn new(
+        inner: Arc<dyn NamespacedOrchestrator>,
+        computed_image: String,
+        init_container_image: Option<String>,
+    ) -> Self {
         Self {
             inner,
             computed_image,
+            init_container_image,
         }
     }
     pub(super) async fn ensure_replica_location(
@@ -97,6 +103,7 @@ impl ComputeOrchestrator {
                 &service_name,
                 ServiceConfig {
                     image: self.computed_image.clone(),
+                    init_container_image: self.init_container_image.clone(),
                     args: &|assigned| {
                         let mut compute_opts = vec![
                             format!(

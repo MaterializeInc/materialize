@@ -18,6 +18,7 @@ use tokio::sync::OwnedMutexGuard;
 use tracing::warn;
 
 use mz_ore::task;
+use mz_ore::vec::VecExt;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_sql::plan::Plan;
 use mz_stash::Append;
@@ -212,16 +213,10 @@ impl<S: Append + 'static> Coordinator<S> {
             self.defer_write(Deferred::GroupCommit);
 
             // Without the write lock we can only apply writes to system tables.
-            // TODO(jkosh44) replace with drain_filter when it's stable.
-            let mut pending_writes = Vec::new();
-            let mut i = 0;
-            while i < self.pending_writes.len() {
-                if matches!(&self.pending_writes[i], PendingWriteTxn::System { .. }) {
-                    pending_writes.push(self.pending_writes.swap_remove(i));
-                } else {
-                    i += 1;
-                }
-            }
+            let pending_writes = self
+                .pending_writes
+                .drain_filter_swapping(|w| matches!(w, PendingWriteTxn::System { .. }))
+                .collect();
             (None, pending_writes)
         };
 

@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use differential_dataflow::consolidation::consolidate_updates;
@@ -19,6 +19,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_persist_client::critical::SinceHandle;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -29,7 +30,7 @@ use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHandle};
 use mz_persist_client::async_runtime::CpuHeavyRuntime;
-use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
+use mz_persist_client::read::{Listen, ListenEvent};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Metrics, PersistClient, PersistConfig, ShardId};
 
@@ -102,10 +103,9 @@ pub struct MaelstromVal(Vec<u64>);
 pub struct Transactor {
     shard_id: ShardId,
     client: PersistClient,
-    read: ReadHandle<MaelstromKey, MaelstromVal, u64, i64>,
+    since: SinceHandle<MaelstromKey, MaelstromVal, u64, i64, u64>,
     write: WriteHandle<MaelstromKey, MaelstromVal, u64, i64>,
 
-    since_ts: u64,
     read_ts: u64,
 
     // Keep a long-lived listen, which is incrementally read as we go. Then
@@ -122,19 +122,21 @@ pub struct Transactor {
 impl Transactor {
     pub async fn new(client: &PersistClient, shard_id: ShardId) -> Result<Self, MaelstromError> {
         let (mut write, mut read) = client.open(shard_id).await?;
-        let since_ts = Self::extract_ts(read.since())?;
+        // Use the CONTROLLER_CRITICAL_SINCE id for all nodes so we get coverage
+        // of contending traffic.
+        let since = client
+            .open_critical_since(shard_id, PersistClient::CONTROLLER_CRITICAL_SINCE)
+            .await?;
         let read_ts = Self::maybe_init_shard(&mut write).await?;
 
         let mut long_lived_updates = Vec::new();
-        let as_of = Antichain::from_elem(since_ts);
+        let as_of = since.since().clone();
         let mut updates = read
             .snapshot_and_fetch(as_of.clone())
             .await
             .expect("as_of unexpectedly unavailable");
         long_lived_updates.append(&mut updates);
         let long_lived_listen = read
-            .clone()
-            .await
             .listen(as_of.clone())
             .await
             .expect("as_of unexpectedly unavailable");
@@ -142,9 +144,8 @@ impl Transactor {
         Ok(Transactor {
             client: client.clone(),
             shard_id,
-            read,
+            since,
             write,
-            since_ts,
             read_ts,
             long_lived_updates,
             long_lived_listen,
@@ -232,37 +233,38 @@ impl Transactor {
         // snapshot and listen at any ts in `[since_ts, read_ts]`. Intentionally
         // pick one that uses a combination of both to get coverage.
         let as_of = Antichain::from_elem(self.read_ts);
-        assert!(self.read_ts >= self.since_ts);
-        let snap_ts = self.since_ts + (self.read_ts - self.since_ts) / 2;
+        let since_ts = Self::extract_ts(self.since.since())?;
+        assert!(self.read_ts >= since_ts);
+        let snap_ts = since_ts + (self.read_ts - since_ts) / 2;
         let snap_as_of = Antichain::from_elem(snap_ts);
 
-        // Intentionally create this from scratch instead from a clone of the
-        // ReadHandle so we get a brand new copy of state and exercise some more
-        // code paths.
-        let listen = self
+        // Intentionally create this from scratch so we get a brand new copy of
+        // state and exercise some more code paths.
+        let mut read = self
             .client
-            .open_reader(self.shard_id)
+            .open_leased_reader(self.shard_id)
             .await
-            .expect("codecs should match")
-            .listen(snap_as_of.clone())
-            .await
-            .map_err(|since| MaelstromError {
-                code: ErrorCode::Abort,
-                text: format!(
-                    "listen cannot serve requested as_of {} since is {:?}",
-                    snap_ts,
-                    since.0.as_option(),
-                ),
-            })?;
+            .expect("codecs should match");
 
-        let mut updates = self
-            .read
+        let mut updates = read
             .snapshot_and_fetch(snap_as_of.clone())
             .await
             .map_err(|since| MaelstromError {
                 code: ErrorCode::Abort,
                 text: format!(
                     "snapshot cannot serve requested as_of {} since is {:?}",
+                    snap_ts,
+                    since.0.as_option(),
+                ),
+            })?;
+
+        let listen = read
+            .listen(snap_as_of)
+            .await
+            .map_err(|since| MaelstromError {
+                code: ErrorCode::Abort,
+                text: format!(
+                    "listen cannot serve requested as_of {} since is {:?}",
                     snap_ts,
                     since.0.as_option(),
                 ),
@@ -448,12 +450,26 @@ impl Transactor {
     async fn advance_since(&mut self) {
         // To keep things interesting, advance the since.
         const SINCE_LAG: u64 = 10;
-        let new_since = self.read_ts.saturating_sub(SINCE_LAG);
-        debug!("downgrading since to {}", new_since);
-        self.read
-            .downgrade_since(&Antichain::from_elem(new_since))
+        let new_since = Antichain::from_elem(self.read_ts.saturating_sub(SINCE_LAG));
+
+        let expected_opaque = self.since.opaque().clone();
+        let res = self
+            .since
+            .maybe_compare_and_downgrade_since(&expected_opaque, (&expected_opaque, &new_since))
             .await;
-        self.since_ts = new_since;
+        match res {
+            Some(Ok(_latest_since)) => {
+                // Success!
+            }
+            Some(Err(actual_opaque)) => {
+                // For now, we don't perform any fencing of SinceHandles, and each handle
+                // should share the same opaque value.
+                assert_eq!(actual_opaque, expected_opaque);
+            }
+            None => {
+                panic!("should not no-op `maybe_compare_and_downgrade_since` during testing");
+            }
+        }
     }
 
     fn extract_ts<T: TotalOrder + Copy>(frontier: &Antichain<T>) -> Result<T, MaelstromError> {
@@ -513,7 +529,10 @@ impl Service for TransactorService {
         let blob = CachingBlob::new(blob);
 
         // Construct requested Consensus.
-        let config = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+        let mut config = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+        // to simplify some downstream logic (+ a bit more stress testing),
+        // always downgrade the since of critical handles when asked
+        config.critical_downgrade_interval = Duration::from_secs(0);
         let metrics = Arc::new(Metrics::new(&config, &MetricsRegistry::new()));
         let consensus = match &args.consensus_uri {
             Some(consensus_uri) => {

@@ -57,6 +57,7 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
 use mz_secrets::SecretsController;
+use mz_stash::PostgresFactory;
 use mz_storage_client::types::connections::ConnectionContext;
 
 mod sys;
@@ -303,6 +304,11 @@ pub struct Args {
         default_value = "mzdata"
     )]
     orchestrator_process_data_directory: PathBuf,
+
+    /// The init container to use for computed and storaged when using the
+    /// kubernetes orchestrator.
+    #[clap(long)]
+    k8s_init_container_image: Option<String>,
 
     // === Storage options. ===
     /// Where the persist library should store its blob data.
@@ -624,7 +630,9 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         storage_stash_url: args.storage_stash_url,
         storaged_image: args.storaged_image.expect("clap enforced"),
         computed_image: args.computed_image.expect("clap enforced"),
+        init_container_image: args.k8s_init_container_image,
         now: SYSTEM_TIME.clone(),
+        postgres_factory: PostgresFactory::new(&metrics_registry),
     };
 
     // When inside a cgroup with a cpu limit,

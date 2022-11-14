@@ -2317,9 +2317,9 @@ dependencies = [
 
 [[package]]
 name = "httparse"
-version = "1.6.0"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9100414882e15fb7feccb4897e5f0ff0ff1ca7d1a86a23208ada4d7a18e6c6c4"
+checksum = "d897f394bad6a705d5f4104762e116a75639e470d80901eed05a860a95cb1904"
 
 [[package]]
 name = "httpdate"
@@ -2335,9 +2335,9 @@ checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
 
 [[package]]
 name = "hyper"
-version = "0.14.20"
+version = "0.14.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02c929dc5c39e335a03c405292728118860721b10190d98c2a0f0efd5baafbac"
+checksum = "034711faac9d2166cb1baf1a2fb0b60b1f277f8492fd72176c17f3515e1abd3c"
 dependencies = [
  "bytes",
  "futures-channel",
@@ -2461,12 +2461,13 @@ dependencies = [
 
 [[package]]
 name = "indicatif"
-version = "0.17.1"
+version = "0.17.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfddc9561e8baf264e0e45e197fd7696320026eb10a8180340debc27b18f535b"
+checksum = "4295cbb7573c16d310e99e713cf9e75101eb190ab31fccd35f2d2691b4352b19"
 dependencies = [
  "console",
  "number_prefix",
+ "portable-atomic",
  "unicode-width",
 ]
 
@@ -3245,7 +3246,7 @@ dependencies = [
 
 [[package]]
 name = "mz-compute"
-version = "0.31.0-dev"
+version = "0.32.0-dev"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3303,6 +3304,7 @@ dependencies = [
  "mz-storage-client",
  "mz-timely-util",
  "once_cell",
+ "prometheus",
  "proptest",
  "proptest-derive",
  "prost",
@@ -3334,6 +3336,7 @@ dependencies = [
  "mz-persist-types",
  "mz-proto",
  "mz-repr",
+ "mz-stash",
  "mz-storage-client",
  "serde",
  "timely",
@@ -3343,7 +3346,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.31.0-dev"
+version = "0.32.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -3565,10 +3568,7 @@ dependencies = [
  "mz-avro",
  "mz-ccsr",
  "mz-ore",
- "mz-proto",
  "num_cpus",
- "proptest",
- "proptest-derive",
  "prost",
  "prost-build",
  "protobuf-src",
@@ -3968,6 +3968,7 @@ dependencies = [
  "prost",
  "protobuf-src",
  "serde",
+ "thiserror",
  "tokio",
  "tokio-postgres",
  "tonic-build",
@@ -4181,6 +4182,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "thiserror",
  "tokio",
  "tokio-postgres",
  "tracing",
@@ -4232,6 +4234,7 @@ dependencies = [
  "mz-secrets",
  "mz-sql",
  "mz-sql-parser",
+ "mz-stash",
  "mz-storage-client",
  "once_cell",
  "postgres-protocol",
@@ -4251,7 +4254,6 @@ name = "mz-ssh-util"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "mz-ore",
  "openssh",
  "openssl",
  "rand",
@@ -4274,7 +4276,9 @@ dependencies = [
  "futures",
  "mz-ore",
  "mz-postgres-util",
+ "once_cell",
  "postgres-openssl",
+ "prometheus",
  "rand",
  "rusqlite",
  "serde",
@@ -4307,7 +4311,7 @@ dependencies = [
 
 [[package]]
 name = "mz-storage"
-version = "0.31.0-dev"
+version = "0.32.0-dev"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -4386,7 +4390,6 @@ dependencies = [
  "aws-smithy-http",
  "aws-types",
  "bytes",
- "datadriven",
  "derivative",
  "differential-dataflow",
  "futures",
@@ -4525,6 +4528,7 @@ dependencies = [
  "differential-dataflow",
  "futures-util",
  "mz-ore",
+ "polonius-the-crab",
  "proptest",
  "serde",
  "timely",
@@ -5208,6 +5212,18 @@ checksum = "521fa9638fa597e1dc53e9412a4f9cefb01187ee1f7413076f9e6749e2885ba9"
 dependencies = [
  "plotters-backend",
 ]
+
+[[package]]
+name = "polonius-the-crab"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0119ad75060c93b2017796396280ab9c1870738bf3b66a8cb20deb3c9075426"
+
+[[package]]
+name = "portable-atomic"
+version = "0.3.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15eb2c6e362923af47e13c23ca5afb859e83d54452c55b0b9ac763b8f7c1ac16"
 
 [[package]]
 name = "postgres"
@@ -6315,9 +6331,9 @@ checksum = "45456094d1983e2ee2a18fdfebce3189fa451699d0502cb8e3b49dba5ba41451"
 
 [[package]]
 name = "socket2"
-version = "0.4.4"
+version = "0.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66d72b759436ae32898a2af0a14218dbf55efde3feeb170eb623637db85ee1e0"
+checksum = "02e2d2db9033d13a1567121ddd7a095ee144db4e1ca1b1bda3419bc0da294ebd"
 dependencies = [
  "libc",
  "winapi",

@@ -31,6 +31,7 @@ use mz_compute_client::command::{
     ComputeCommand, ComputeCommandHistory, DataflowDescription, InstanceConfig, Peek,
 };
 use mz_compute_client::logging::LoggingConfig;
+use mz_compute_client::metrics::ComputeMetrics;
 use mz_compute_client::plan::Plan;
 use mz_compute_client::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use mz_ore::cast::CastFrom;
@@ -41,7 +42,7 @@ use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::operator::CollectionExt;
-use tracing::{span, Level};
+use tracing::{error, span, Level};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
@@ -80,6 +81,8 @@ pub struct ComputeState {
     pub command_history: ComputeCommandHistory,
     /// Max size in bytes of any result.
     pub max_result_size: u32,
+    /// Metrics for this replica.
+    pub metrics: ComputeMetrics,
 }
 
 impl ComputeState {
@@ -115,6 +118,16 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         self.compute_state
             .command_history
             .push(cmd.clone(), &self.compute_state.pending_peeks);
+        self.compute_state.metrics.command_history_size.set(
+            u64::try_from(self.compute_state.command_history.len()).expect(
+                "The compute command history size must be non-negative and fit a 64-bit number",
+            ),
+        );
+        self.compute_state.metrics.dataflow_count_in_history.set(
+            u64::try_from(self.compute_state.command_history.dataflow_count()).expect(
+                "The number of dataflows in the compute history must be non-negative and fit a 64-bit number",
+            ),
+        );
         match cmd {
             CreateTimely { .. } => panic!("CreateTimely must be captured before"),
             CreateInstance(config) => self.handle_create_instance(config),
@@ -156,10 +169,14 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
             // Initialize frontiers for each object, and optionally log their construction.
             for (object_id, collection_id) in exported_ids {
-                self.compute_state.reported_frontiers.insert(
+                if let Some(frontier) = self.compute_state.reported_frontiers.insert(
                     object_id,
                     Antichain::from_elem(timely::progress::Timestamp::minimum()),
-                );
+                ) {
+                    error!(
+                        "existing frontier {frontier:?} for newly created dataflow id {object_id}"
+                    );
+                }
 
                 // Log dataflow construction, frontier construction, and any dependencies.
                 if let Some(logger) = self.compute_state.compute_logger.as_mut() {
@@ -204,7 +221,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                     .expect("Dropped compute collection with no frontier");
                 if let Some(logger) = self.compute_state.compute_logger.as_mut() {
                     logger.log(ComputeEvent::Dataflow(id, false));
-                    for time in prev_frontier.elements().iter() {
+                    if let Some(time) = prev_frontier.get(0) {
                         logger.log(ComputeEvent::Frontier(id, *time, -1));
                     }
                 }
@@ -529,10 +546,14 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         let index_ids = logging.index_logs.values().copied();
         let sink_ids = logging.sink_logs.values().map(|(id, _)| *id);
         for id in index_ids.chain(sink_ids) {
-            self.compute_state.reported_frontiers.insert(
+            if let Some(frontier) = self.compute_state.reported_frontiers.insert(
                 id,
                 Antichain::from_elem(timely::progress::Timestamp::minimum()),
-            );
+            ) {
+                error!(
+                    "existing frontier {frontier:?} for newly initialized logging export id {id}"
+                );
+            }
             logger.log(ComputeEvent::Frontier(
                 id,
                 timely::progress::Timestamp::minimum(),

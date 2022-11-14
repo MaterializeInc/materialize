@@ -167,7 +167,11 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(
         &config.adapter_stash_url,
     )?)?;
-    let stash = mz_stash::Postgres::new(config.adapter_stash_url.clone(), None, tls).await?;
+    let stash = config
+        .controller
+        .postgres_factory
+        .open(config.adapter_stash_url.clone(), None, tls)
+        .await?;
     let stash = mz_stash::Memory::new(stash);
 
     // Validate TLS configuration, if present.
@@ -310,12 +314,14 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         .send(adapter_client.clone())
         .expect("internal HTTP server should not drop first");
 
+    let metrics = mz_pgwire::MetricsConfig::register_into(&config.metrics_registry);
     // Launch SQL server.
     task::spawn(|| "sql_server", {
         let sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
             tls: pgwire_tls,
             adapter_client: adapter_client.clone(),
             frontegg: config.frontegg.clone(),
+            metrics: metrics.clone(),
             internal: false,
         });
         server::serve(sql_conns, sql_server)
@@ -327,6 +333,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             tls: None,
             adapter_client: adapter_client.clone(),
             frontegg: None,
+            metrics,
             internal: true,
         });
         server::serve(internal_sql_conns, internal_sql_server)

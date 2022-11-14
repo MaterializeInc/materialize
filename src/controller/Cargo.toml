@@ -18,6 +18,7 @@ mz-persist-types = { path = "../persist-types" }
 mz-proto = { path = "../proto" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
+mz-stash = { path = "../stash" }
 mz-storage-client = { path = "../storage-client" }
 serde = { version = "1.0.147", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }

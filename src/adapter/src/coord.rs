@@ -544,7 +544,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // This is disabled for the moment because it has unusual upper
         // advancement behavior.
         // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
-        let source_status_collection_id = if false {
+        let source_status_collection_id = if self.catalog.config().unsafe_mode {
             Some(self.catalog.resolve_builtin_storage_collection(
                 &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
             ))
@@ -567,7 +567,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // using a single dataflow, we have to make sure the rebuild process re-runs
                 // the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
-                    let data_source = match &source.data_source {
+                    let (data_source, status_collection_id) = match &source.data_source {
                         // Re-announce the source description.
                         DataSourceDesc::Ingestion(ingestion) => {
                             let mut source_imports = BTreeMap::new();
@@ -590,17 +590,20 @@ impl<S: Append + 'static> Coordinator<S> {
                                 source_exports.insert(subsource, export);
                             }
 
-                            DataSource::Ingestion(IngestionDescription {
-                                desc: ingestion.desc.clone(),
-                                ingestion_metadata: (),
-                                source_imports,
-                                source_exports,
-                                host_config: ingestion.host_config.clone(),
-                            })
+                            (
+                                DataSource::Ingestion(IngestionDescription {
+                                    desc: ingestion.desc.clone(),
+                                    ingestion_metadata: (),
+                                    source_imports,
+                                    source_exports,
+                                    host_config: ingestion.host_config.clone(),
+                                }),
+                                source_status_collection_id,
+                            )
                         }
-                        DataSourceDesc::Source => DataSource::Other,
+                        DataSourceDesc::Source => (DataSource::Other, None),
                         DataSourceDesc::Introspection(introspection) => {
-                            DataSource::Introspection(*introspection)
+                            (DataSource::Introspection(*introspection), None)
                         }
                     };
 
@@ -612,7 +615,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 desc: source.desc.clone(),
                                 data_source,
                                 since: None,
-                                status_collection_id: source_status_collection_id,
+                                status_collection_id,
                             },
                         )])
                         .await
@@ -1061,6 +1064,7 @@ pub async fn serve<S: Append + 'static>(
     let handle = TokioHandle::current();
 
     let initial_timestamps = catalog.get_all_persisted_timestamps().await?;
+    let inner_metrics_registry = metrics_registry.clone();
     let thread = thread::Builder::new()
         // The Coordinator thread tends to keep a lot of data on its stack. To
         // prevent a stack overflow we allocate a stack twice as big as the default
@@ -1111,7 +1115,7 @@ pub async fn serve<S: Append + 'static>(
                 storage_usage_client,
                 storage_usage_collection_interval,
                 segment_client,
-                metrics: Metrics::register_with(&metrics_registry),
+                metrics: Metrics::register_with(&inner_metrics_registry),
             };
             let bootstrap =
                 handle.block_on(coord.bootstrap(builtin_migration_metadata, builtin_table_updates));
@@ -1135,7 +1139,7 @@ pub async fn serve<S: Append + 'static>(
                 start_instant,
                 _thread: thread.join_on_drop(),
             };
-            let client = Client::new(cmd_tx.clone());
+            let client = Client::new(cmd_tx.clone(), &metrics_registry);
             Ok((handle, client))
         }
         Err(e) => Err(e),

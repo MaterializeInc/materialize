@@ -31,7 +31,7 @@ use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_storage_client::client::{StorageCommand, StorageResponse};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::sinks::StorageSinkDesc;
+use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_client::types::sources::{IngestionDescription, SourceData};
 
 use crate::decode::metrics::DecodeMetrics;
@@ -73,8 +73,7 @@ pub struct StorageState {
     /// Descriptions of each installed ingestion.
     pub ingestions: HashMap<GlobalId, IngestionDescription<CollectionMetadata>>,
     /// Descriptions of each installed export.
-    pub exports:
-        HashMap<GlobalId, StorageSinkDesc<CollectionMetadata, ShardId, mz_repr::Timestamp>>,
+    pub exports: HashMap<GlobalId, StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>>,
     /// Undocumented
     pub now: NowFn,
     /// Metrics for the source-specific side of dataflows.
@@ -98,6 +97,8 @@ pub struct StorageState {
     pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
     /// See: [SinkHandle]
     pub sink_handles: HashMap<GlobalId, SinkHandle>,
+    /// Collection ids that have been dropped but not yet reported as dropped
+    pub dropped_ids: Vec<GlobalId>,
 }
 
 /// This maintains an additional read hold on the source data for a sink, alongside
@@ -131,7 +132,7 @@ impl SinkHandle {
                 .expect("opening persist client");
 
             let mut read_handle: ReadHandle<SourceData, (), Timestamp, Diff> = client
-                .open_reader(shard_id)
+                .open_leased_reader(shard_id)
                 .await
                 .expect("opening reader for shard");
 
@@ -218,6 +219,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 self.timely_worker.step_or_park(None);
             } else {
                 self.timely_worker.step();
+            }
+
+            // Rerport any dropped ids
+            if !self.storage_state.dropped_ids.is_empty() {
+                let ids = std::mem::take(&mut self.storage_state.dropped_ids);
+                self.send_storage_response(&response_tx, StorageResponse::DroppedIds(ids));
             }
 
             self.report_frontier_progress(&response_tx);
@@ -325,6 +332,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         self.storage_state.source_tokens.remove(&id);
                         self.storage_state.sink_tokens.remove(&id);
                         self.storage_state.sink_handles.remove(&id);
+                        self.storage_state.dropped_ids.push(id);
                     }
                 }
             }

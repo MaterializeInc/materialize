@@ -383,7 +383,6 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         // Drop compute sinks.
-        // TODO(chae): Drop storage sinks when they're moved over
         let mut compute = self.controller.active_compute();
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
@@ -623,11 +622,10 @@ impl<S: Append + 'static> Coordinator<S> {
                             new_tables += 1;
                         }
                         CatalogItem::Source(source) => {
-                            match source.data_source {
+                            if source.is_external() {
                                 // Only sources that ingest data from an external system count
                                 // towards resource limits.
-                                DataSourceDesc::Ingestion(_) => new_sources += 1,
-                                DataSourceDesc::Source | DataSourceDesc::Introspection(_) => {}
+                                new_sources += 1
                             }
                         }
                         CatalogItem::Sink(_) => new_sinks += 1,
@@ -680,11 +678,10 @@ impl<S: Append + 'static> Coordinator<S> {
                             new_tables -= 1;
                         }
                         CatalogItem::Source(source) => {
-                            match source.data_source {
+                            if source.is_external() {
                                 // Only sources that ingest data from an external system count
                                 // towards resource limits.
-                                DataSourceDesc::Ingestion(_) => new_sources -= 1,
-                                DataSourceDesc::Source | DataSourceDesc::Introspection(_) => {}
+                                new_sources -= 1;
                             }
                         }
                         CatalogItem::Sink(_) => new_sinks -= 1,
@@ -735,8 +732,16 @@ impl<S: Append + 'static> Coordinator<S> {
             SystemVars::max_tables,
             "Table",
         )?;
+        // Only sources that ingest data from an external system count
+        // towards resource limits.
+        let current_sources = self
+            .catalog
+            .user_sources()
+            .filter_map(|source| source.source())
+            .filter(|source| source.is_external())
+            .count();
         self.validate_resource_limit(
-            self.catalog.user_sources().count(),
+            current_sources,
             new_sources,
             SystemVars::max_sources,
             "Source",

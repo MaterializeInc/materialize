@@ -2021,11 +2021,11 @@ pub const MZ_DATAFLOW_OPERATOR_REACHABILITY: BuiltinView = BuiltinView {
     port,
     worker_id,
     update_type,
-    timestamp,
+    time,
     pg_catalog.count(*) as count
 FROM
     mz_internal.mz_dataflow_operator_reachability_internal
-GROUP BY address, port, worker_id, update_type, timestamp",
+GROUP BY address, port, worker_id, update_type, time",
 };
 
 pub const MZ_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {

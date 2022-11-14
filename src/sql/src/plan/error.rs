@@ -9,8 +9,10 @@
 
 use std::error::Error;
 use std::fmt;
+use std::io;
 use std::num::ParseIntError;
 use std::num::TryFromIntError;
+use std::sync::Arc;
 
 use mz_expr::EvalError;
 use mz_ore::stack::RecursionLimitError;
@@ -91,6 +93,16 @@ pub enum PlanError {
         column: String,
         e: TypeFromOidError,
     },
+    FetchingCsrSchemaFailed {
+        schema_lookup: String,
+        cause: Arc<dyn Error + Send + Sync>,
+    },
+    FetchingPostgresPublicationInfoFailed {
+        cause: Arc<mz_postgres_util::PostgresError>,
+    },
+    InvalidProtobufSchema {
+        cause: protobuf_native::OperationFailedError,
+    },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -110,6 +122,9 @@ impl PlanError {
                 column: _,
                 e,
             } => Some(format!("{e}")),
+            Self::FetchingCsrSchemaFailed { cause, .. } => Some(cause.to_string()),
+            Self::FetchingPostgresPublicationInfoFailed { cause } => Some(cause.to_string()),
+            Self::InvalidProtobufSchema { cause } => Some(cause.to_string()),
             _ => None,
         }
     }
@@ -143,6 +158,20 @@ impl PlanError {
                 Try excluding the table from the publication."
                     .into(),
             ),
+            Self::FetchingPostgresPublicationInfoFailed { cause } => {
+                if let Some(cause) = cause.source() {
+                    if let Some(cause) = cause.downcast_ref::<io::Error>() {
+                        if cause.kind() == io::ErrorKind::TimedOut {
+                            return Some(
+                                "Do you have a firewall or security group that is \
+                                preventing Materialize from conecting to your PostgreSQL server?"
+                                    .into(),
+                            );
+                        }
+                    }
+                }
+                None
+            }
             _ => None,
         }
     }
@@ -246,6 +275,15 @@ impl fmt::Display for PlanError {
                 "column {} uses unrecognized type",
                 format!("{}.{}", table, column).quoted()
             ),
+            Self::FetchingCsrSchemaFailed { schema_lookup, .. } => {
+                write!(f, "failed to fetch schema {schema_lookup} from schema registry")
+            }
+            Self::FetchingPostgresPublicationInfoFailed { .. } => {
+                write!(f, "failed to fetch publication information from PostgreSQL database")
+            }
+            Self::InvalidProtobufSchema { .. } => {
+                write!(f, "invalid protobuf schema")
+            }
             Self::DropSubsource{subsource, source: _} => write!(f, "SOURCE {subsource} is a subsource and cannot be dropped independently of its primary source"),
         }
     }

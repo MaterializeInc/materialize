@@ -144,6 +144,8 @@ pub enum ComputeError {
     InstanceMissing(ComputeInstanceId),
     /// Command referenced an identifier that was not present.
     IdentifierMissing(GlobalId),
+    /// Command referenced a replica that was not present.
+    ReplicaMissing(ReplicaId),
     /// The identified instance exists already.
     InstanceExists(ComputeInstanceId),
     /// Dataflow was malformed (e.g. missing `as_of`).
@@ -163,6 +165,7 @@ impl Error for ComputeError {
         match self {
             Self::InstanceMissing(_)
             | Self::IdentifierMissing(_)
+            | Self::ReplicaMissing(_)
             | Self::InstanceExists(_)
             | Self::DataflowMalformed
             | Self::DataflowSinceViolation(_)
@@ -181,6 +184,9 @@ impl fmt::Display for ComputeError {
                 f,
                 "command referenced an instance that was not present: {id}"
             ),
+            Self::ReplicaMissing(id) => {
+                write!(f, "command referenced a replica that was not present: {id}")
+            }
             Self::IdentifierMissing(id) => write!(
                 f,
                 "command referenced an identifier that was not present: {id}"
@@ -335,12 +341,17 @@ impl<T> ComputeController<T> {
         build_info: &'static BuildInfo,
         orchestrator: Arc<dyn NamespacedOrchestrator>,
         computed_image: String,
+        init_container_image: Option<String>,
         envd_epoch: i64,
     ) -> Self {
         Self {
             instances: BTreeMap::new(),
             build_info,
-            orchestrator: ComputeOrchestrator::new(orchestrator, computed_image),
+            orchestrator: ComputeOrchestrator::new(
+                orchestrator,
+                computed_image,
+                init_container_image,
+            ),
             initialized: false,
             stashed_response: None,
             replica_heartbeats: BTreeMap::new(),

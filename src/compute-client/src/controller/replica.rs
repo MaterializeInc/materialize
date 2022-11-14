@@ -17,6 +17,7 @@ use timely::progress::Timestamp;
 use tokio::select;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::task::JoinHandle;
 
 use mz_build_info::BuildInfo;
 use mz_ore::retry::Retry;
@@ -47,6 +48,8 @@ pub(super) struct Replica<T> {
     pub location: ComputeReplicaLocation,
     /// The logging config specific to this replica.
     pub logging_config: LoggingConfig,
+    /// Handle to the active-replication-replica task.
+    pub replica_task: Option<JoinHandle<()>>,
 }
 
 impl<T> Replica<T>
@@ -68,7 +71,7 @@ where
         // the replica.
         let (command_tx, command_rx) = unbounded_channel();
         let (response_tx, response_rx) = unbounded_channel();
-        mz_ore::task::spawn(
+        let replica_task = mz_ore::task::spawn(
             || format!("active-replication-replica-{id}"),
             ReplicaTask {
                 instance_id,
@@ -89,6 +92,7 @@ where
             response_rx,
             location,
             logging_config,
+            replica_task: Some(replica_task),
         }
     }
 
@@ -162,7 +166,6 @@ where
             epoch,
         } = self;
 
-        let is_managed = matches!(location, ComputeReplicaLocation::Managed { .. });
         let (addrs, comm_config) = orchestrator
             .ensure_replica_location(instance_id, replica_id, location)
             .await?;
@@ -173,7 +176,7 @@ where
             epoch,
         };
 
-        let res = run_message_loop(
+        run_message_loop(
             replica_id,
             command_rx,
             response_tx,
@@ -181,13 +184,7 @@ where
             addrs,
             cmd_spec,
         )
-        .await;
-
-        if res.is_ok() && is_managed {
-            orchestrator.drop_replica(instance_id, replica_id).await?;
-        };
-
-        res
+        .await
     }
 }
 

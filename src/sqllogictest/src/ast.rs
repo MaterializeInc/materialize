@@ -128,6 +128,7 @@ pub enum Record<'a> {
     Simple {
         location: Location,
         conn: Option<&'a str>,
+        user: Option<&'a str>,
         sql: &'a str,
         output: Output,
         output_str: &'a str,

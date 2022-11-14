@@ -1,0 +1,109 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests to exercise downgrade_since on leased ReadHandles.
+
+# The shard global since == 0 initially
+shard-desc
+----
+since=[0] upper=[0]
+
+# A newly registered reader gets that since.
+register-leased-reader reader_id=r00000000-0000-0000-0000-000000000000
+----
+v2 [0]
+
+# Greater
+downgrade-since since=(2) reader_id=r00000000-0000-0000-0000-000000000000
+----
+v3 [2]
+
+shard-desc
+----
+since=[2] upper=[0]
+
+# Equal (no-op)
+downgrade-since since=(2) reader_id=r00000000-0000-0000-0000-000000000000
+----
+v4 [2]
+
+# Less (no-op)
+downgrade-since since=(1) reader_id=r00000000-0000-0000-0000-000000000000
+----
+v5 [2]
+
+# Create a second reader. This gets the current since for a capability.
+register-leased-reader reader_id=r11111111-1111-1111-1111-111111111111
+----
+v6 [2]
+
+# Shard since doesn't change until the meet (min) of all reader sinces changes.
+downgrade-since since=(3) reader_id=r11111111-1111-1111-1111-111111111111
+----
+v7 [3]
+
+shard-desc
+----
+since=[2] upper=[0]
+
+# Shard since == 3 when all readers have since >= 3.
+downgrade-since since=(5) reader_id=r00000000-0000-0000-0000-000000000000
+----
+v8 [5]
+
+shard-desc
+----
+since=[3] upper=[0]
+
+# Shard since unaffected readers with since > shard since expiring.
+expire-leased-reader reader_id=r00000000-0000-0000-0000-000000000000
+----
+v9 ok
+
+shard-desc
+----
+since=[3] upper=[0]
+
+# Create a third reader. It gets the current since of 3.
+register-leased-reader reader_id=r22222222-2222-2222-2222-222222222222
+----
+v10 [3]
+
+# Shard since doesn't change until the meet (min) of all reader sinces changes.
+downgrade-since since=(10) reader_id=r22222222-2222-2222-2222-222222222222
+----
+v11 [10]
+
+shard-desc
+----
+since=[3] upper=[0]
+
+# Shard since advances when reader with the minimal since expires.
+#
+# TODO: expiry temporarily doesn't advance since until we have #15511.
+# Switch this assertion back when we re-enable this.
+expire-leased-reader reader_id=r11111111-1111-1111-1111-111111111111
+----
+v12 ok
+
+shard-desc
+----
+since=[3] upper=[0]
+
+# Shard since unaffected when all readers are expired.
+#
+# TODO: expiry temporarily doesn't advance since until we have #15511.
+# Switch this assertion back when we re-enable this.
+expire-leased-reader reader_id=r22222222-2222-2222-2222-222222222222
+----
+v13 ok
+
+shard-desc
+----
+since=[3] upper=[0]

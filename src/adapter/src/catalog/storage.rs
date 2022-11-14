@@ -328,6 +328,7 @@ async fn migrate<S: Append>(
                                 cluster_id: DEFAULT_USER_COMPUTE_INSTANCE_ID.to_string(),
                                 cluster_name: default_instance.name,
                                 replica_name: default_replica.name,
+                                replica_id: Some(DEFAULT_REPLICA_ID.to_string()),
                                 logical_size: bootstrap_args.default_cluster_replica_size.clone(),
                             },
                         ),
@@ -1201,6 +1202,35 @@ impl<'a, S: Append> Transaction<'a, S> {
             )));
         };
         Ok((id, compute_instance_id))
+    }
+
+    /// Updates persisted information about persisted introspection source
+    /// indexes.
+    ///
+    /// Panics if provided id is not a system id.
+    pub fn update_introspection_source_index_gids(
+        &mut self,
+        mappings: impl Iterator<Item = (ComputeInstanceId, impl Iterator<Item = (String, GlobalId)>)>,
+    ) -> Result<(), Error> {
+        for (compute_id, updates) in mappings {
+            for (name, id) in updates {
+                let index_id = if let GlobalId::System(index_id) = id {
+                    index_id
+                } else {
+                    panic!("Introspection source index should have a system id")
+                };
+                let prev = self.introspection_sources.set(
+                    ComputeIntrospectionSourceIndexKey { compute_id, name },
+                    Some(ComputeIntrospectionSourceIndexValue { index_id }),
+                )?;
+                if prev.is_none() {
+                    return Err(Error {
+                        kind: ErrorKind::FailedBuiltinSchemaMigration(format!("{id}")),
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn insert_item(

@@ -18,11 +18,11 @@ use tempfile::NamedTempFile;
 use timely::progress::Antichain;
 use tokio_postgres::Config;
 
-use mz_ore::assert_contains;
+use mz_ore::{assert_contains, metrics::MetricsRegistry};
 
 use mz_stash::{
-    Append, Memory, Postgres, Sqlite, Stash, StashCollection, StashError, TableTransaction,
-    Timestamp, TypedCollection,
+    Append, Memory, Postgres, PostgresFactory, Sqlite, Stash, StashCollection, StashError,
+    TableTransaction, Timestamp, TypedCollection,
 };
 
 #[tokio::test]
@@ -56,10 +56,12 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
     mz_ore::test::init_logging();
 
     let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
+    let factory = PostgresFactory::new(&MetricsRegistry::new());
 
     {
         // Verify invalid URLs fail on connect.
-        assert!(Postgres::new("host=invalid".into(), None, tls.clone())
+        assert!(factory
+            .open("host=invalid".into(), None, tls.clone(),)
             .await
             .unwrap_err()
             .to_string()
@@ -73,31 +75,36 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
             return Ok(());
         }
     };
-    async fn connect(connstr: &str, tls: MakeTlsConnector, clear: bool) -> Postgres {
+    async fn connect(
+        factory: &PostgresFactory,
+        connstr: &str,
+        tls: MakeTlsConnector,
+        clear: bool,
+    ) -> Postgres {
         if clear {
             Postgres::clear(connstr, tls.clone()).await.unwrap();
         }
-        Postgres::new(connstr.to_string(), None, tls).await.unwrap()
+        factory.open(connstr.to_string(), None, tls).await.unwrap()
     }
     {
-        connect(&connstr, tls.clone(), true).await;
-        let stash = test_stash(|| async { connect(&connstr, tls.clone(), false).await })
+        connect(&factory, &connstr, tls.clone(), true).await;
+        let stash = test_stash(|| async { connect(&factory, &connstr, tls.clone(), false).await })
             .await
             .unwrap();
         stash.verify().await.unwrap();
     }
     {
-        connect(&connstr, tls.clone(), true).await;
-        let stash = test_append(|| async { connect(&connstr, tls.clone(), false).await })
+        connect(&factory, &connstr, tls.clone(), true).await;
+        let stash = test_append(|| async { connect(&factory, &connstr, tls.clone(), false).await })
             .await
             .unwrap();
         stash.verify().await.unwrap();
     }
     // Test the fence.
     {
-        let mut conn1 = connect(&connstr, tls.clone(), true).await;
+        let mut conn1 = connect(&factory, &connstr, tls.clone(), true).await;
         // Don't clear the stash tables.
-        let mut conn2 = connect(&connstr, tls.clone(), false).await;
+        let mut conn2 = connect(&factory, &connstr, tls.clone(), false).await;
         assert!(match conn1.collection::<String, String>("c").await {
             Err(e) => e.is_unrecoverable(),
             _ => panic!("expected error"),
@@ -107,7 +114,8 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
     // Test readonly.
     {
         Postgres::clear(&connstr, tls.clone()).await.unwrap();
-        let mut stash_rw = Postgres::new(connstr.to_string(), None, tls.clone())
+        let mut stash_rw = factory
+            .open(connstr.to_string(), None, tls.clone())
             .await
             .unwrap();
         let col_rw = stash_rw.collection::<i64, i64>("c1").await.unwrap();
@@ -117,7 +125,8 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
 
         // Now make a readonly stash. We should fail to create new collections,
         // but be able to read existing collections.
-        let mut stash_ro = Postgres::new_readonly(connstr.to_string(), None, tls.clone())
+        let mut stash_ro = factory
+            .open_readonly(connstr.to_string(), None, tls.clone())
             .await
             .unwrap();
         let res = stash_ro.collection::<i64, i64>("c2").await;
@@ -134,7 +143,8 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
     }
     // Test savepoint.
     {
-        let mut stash_rw = Postgres::new(connstr.to_string(), None, tls.clone())
+        let mut stash_rw = factory
+            .open(connstr.to_string(), None, tls.clone())
             .await
             .unwrap();
         // Data still present from previous test.
@@ -142,7 +152,8 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
 
         // Now make a savepoint stash. We should be allowed to create anything
         // we want, but it shouldn't be viewable to other stashes.
-        let mut stash_sp = Postgres::new_savepoint(connstr.to_string(), tls)
+        let mut stash_sp = factory
+            .open_savepoint(connstr.to_string(), tls)
             .await
             .unwrap();
         let c1_sp = stash_rw.collection::<i64, i64>("c1").await.unwrap();

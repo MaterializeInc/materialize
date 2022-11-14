@@ -169,7 +169,7 @@ pub fn construct<A: Allocate>(
                             Datum::UInt64(u64::cast_from(*port)),
                             Datum::UInt64(u64::cast_from(*worker)),
                             Datum::String(update_type),
-                            Datum::from(ts.and_then(|ts| i64::try_from(ts).ok())),
+                            Datum::from(ts.clone()),
                         ];
                         row_buf.packer().extend(datums);
                         row_buf.clone()
@@ -205,7 +205,7 @@ pub fn construct<A: Allocate>(
                                 Datum::UInt64(u64::cast_from(*port)),
                                 Datum::UInt64(u64::cast_from(*worker)),
                                 Datum::String(update_type),
-                                Datum::from(ts.and_then(|ts| i64::try_from(ts).ok())),
+                                Datum::from(ts.clone()),
                             ];
                             row_buf.packer().extend(key.iter().map(|k| datums[*k]));
                             let key_row = row_buf.clone();

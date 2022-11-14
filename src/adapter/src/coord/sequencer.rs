@@ -36,7 +36,10 @@ use mz_ore::task;
 use mz_repr::explain_new::Explainee;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
-use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails};
+use mz_sql::catalog::{
+    CatalogComputeInstance, CatalogError, CatalogItem as SqlCatalogItem, CatalogItemType,
+    CatalogTypeDetails,
+};
 use mz_sql::names::QualifiedObjectName;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
@@ -46,10 +49,9 @@ use mz_sql::plan::{
     CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
     CreateTypePlan, CreateViewPlan, DropComputeInstancesPlan, DropComputeReplicasPlan,
     DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
-    FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView, MutationKind,
-    OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan,
-    ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
-    SubscribeFrom, SubscribePlan, View,
+    FetchPlan, IndexOption, InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan,
+    Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan, ResetVariablePlan, RotateKeysPlan,
+    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, SubscribeFrom, SubscribePlan, View,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_stash::Append;
@@ -507,10 +509,7 @@ impl<S: Append + 'static> Coordinator<S> {
         {
             Ok(()) => {
                 for (source_id, source) in sources {
-                    // This is disabled for the moment because it has unusual upper
-                    // advancement behavior.
-                    // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
-                    let status_collection_id = if false {
+                    let source_status_collection_id = if self.catalog.config().unsafe_mode {
                         Some(self.catalog.resolve_builtin_storage_collection(
                             &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
                         ))
@@ -518,7 +517,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         None
                     };
 
-                    let data_source = match source.data_source {
+                    let (data_source, status_collection_id) = match source.data_source {
                         DataSourceDesc::Ingestion(ingestion) => {
                             let mut source_imports = BTreeMap::new();
                             for source_import in ingestion.source_imports {
@@ -540,15 +539,18 @@ impl<S: Append + 'static> Coordinator<S> {
                                 source_exports.insert(subsource, export);
                             }
 
-                            DataSource::Ingestion(IngestionDescription {
-                                desc: ingestion.desc,
-                                ingestion_metadata: (),
-                                source_imports,
-                                source_exports,
-                                host_config: ingestion.host_config,
-                            })
+                            (
+                                DataSource::Ingestion(IngestionDescription {
+                                    desc: ingestion.desc,
+                                    ingestion_metadata: (),
+                                    source_imports,
+                                    source_exports,
+                                    host_config: ingestion.host_config,
+                                }),
+                                source_status_collection_id,
+                            )
                         }
-                        DataSourceDesc::Source => DataSource::Other,
+                        DataSourceDesc::Source => (DataSource::Other, None),
                         DataSourceDesc::Introspection(_) => {
                             unreachable!("cannot create sources with introspection data sources")
                         }
@@ -2387,7 +2389,7 @@ impl<S: Append + 'static> Coordinator<S> {
         plan: ExplainPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         match plan.stage {
-            ExplainStage::Timestamp => self.sequence_explain_timestamp(session, plan.raw_plan),
+            ExplainStage::Timestamp => self.sequence_explain_timestamp(session, plan),
             _ => self.sequence_explain_plan(session, plan),
         }
     }
@@ -2402,6 +2404,7 @@ impl<S: Append + 'static> Coordinator<S> {
         use ExplainStage::*;
 
         let compute_instance = self.catalog.active_compute_instance(session)?.id;
+        let window_functions = self.catalog.system_config().window_functions();
 
         let ExplainPlan {
             raw_plan,
@@ -2430,8 +2433,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 });
 
                 // run optimization pipeline
+                let explainee_is_view = matches!(explainee, Explainee::Dataflow(_));
                 let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {
                     qgm_optimizations: session.vars().qgm_optimizations(),
+                    window_functions: window_functions || explainee_is_view,
                 })?;
 
                 self.validate_timeline(decorrelated_plan.depends_on())?;
@@ -2566,12 +2571,21 @@ impl<S: Append + 'static> Coordinator<S> {
     fn sequence_explain_timestamp(
         &mut self,
         session: &Session,
-        raw_plan: HirRelationExpr,
+        plan: ExplainPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let compute_instance = self.catalog.active_compute_instance(session)?.id;
+        let ExplainPlan {
+            raw_plan,
+            explainee,
+            ..
+        } = plan;
 
+        let compute_instance = self.catalog.active_compute_instance(session)?.id;
+        let window_functions = self.catalog.system_config().window_functions();
+
+        let explainee_is_view = matches!(explainee, Explainee::Dataflow(_));
         let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {
             qgm_optimizations: session.vars().qgm_optimizations(),
+            window_functions: window_functions || explainee_is_view,
         })?;
         let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
         let timeline = self.validate_timeline(optimized_plan.depends_on())?;
@@ -3244,8 +3258,14 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Re-fetch the updated item from the catalog
         let entry = self.catalog.get_entry(&id);
-        let updated_sink = entry.sink().ok_or_else(|| {
-            CatalogError::UnexpectedType(entry.name().to_string(), CatalogItemType::Sink)
+        let full_name = self
+            .catalog
+            .resolve_full_name(entry.name(), Some(session.conn_id()))
+            .to_string();
+        let updated_sink = entry.sink().ok_or_else(|| CatalogError::UnexpectedType {
+            name: full_name,
+            actual_type: entry.item_type(),
+            expected_type: CatalogItemType::Sink,
         })?;
 
         self.controller
@@ -3267,8 +3287,14 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Re-fetch the updated item from the catalog
         let entry = self.catalog.get_entry(&id);
-        let updated_source = entry.source().ok_or_else(|| {
-            CatalogError::UnexpectedType(entry.name().to_string(), CatalogItemType::Source)
+        let full_name = self
+            .catalog
+            .resolve_full_name(entry.name(), Some(session.conn_id()))
+            .to_string();
+        let updated_source = entry.source().ok_or_else(|| CatalogError::UnexpectedType {
+            name: full_name,
+            actual_type: entry.item_type(),
+            expected_type: CatalogItemType::Source,
         })?;
         if let DataSourceDesc::Ingestion(Ingestion { host_config, .. }) =
             &updated_source.data_source

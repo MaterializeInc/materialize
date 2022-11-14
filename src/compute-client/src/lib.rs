@@ -17,6 +17,7 @@ pub mod command;
 pub mod controller;
 pub mod explain;
 pub mod logging;
+pub mod metrics;
 pub mod plan;
 pub mod response;
 pub mod service;

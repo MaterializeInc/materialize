@@ -32,7 +32,7 @@ mod postgres;
 mod sqlite;
 
 pub use crate::memory::Memory;
-pub use crate::postgres::Postgres;
+pub use crate::postgres::{Postgres, PostgresFactory};
 pub use crate::sqlite::Sqlite;
 
 pub type Diff = i64;

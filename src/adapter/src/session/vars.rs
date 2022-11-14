@@ -274,6 +274,13 @@ static ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<ServerVar<Vec<String>>> = Lazy::new(|
     description: "The allowed sizes when creating a new cluster replica (Materialize).",
 });
 
+/// Feature flag indicating whether window functions are enabled.
+static WINDOW_FUNCTIONS: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("window_functions"),
+    value: &true,
+    description: "Feature flag indicating whether window functions are enabled.",
+};
+
 /// Session variables.
 ///
 /// Materialize roughly follows the PostgreSQL configuration model, which works
@@ -830,6 +837,7 @@ pub struct SystemVars {
     max_roles: SystemVar<u32>,
     max_result_size: SystemVar<u32>,
     allowed_cluster_replica_sizes: SystemVar<Vec<String>>, // TODO: BTreeSet<String> will be better
+    window_functions: SystemVar<bool>,
 }
 
 impl Default for SystemVars {
@@ -849,6 +857,7 @@ impl Default for SystemVars {
             max_roles: SystemVar::new(&MAX_ROLES),
             max_result_size: SystemVar::new(&MAX_RESULT_SIZE),
             allowed_cluster_replica_sizes: SystemVar::new(&ALLOWED_CLUSTER_REPLICA_SIZES),
+            window_functions: SystemVar::new(&WINDOW_FUNCTIONS),
         }
     }
 }
@@ -872,6 +881,7 @@ impl SystemVars {
             &self.max_roles,
             &self.max_result_size,
             &self.allowed_cluster_replica_sizes,
+            &self.window_functions,
         ]
         .into_iter()
     }
@@ -915,6 +925,8 @@ impl SystemVars {
             Ok(&self.max_result_size)
         } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
             Ok(&self.allowed_cluster_replica_sizes)
+        } else if name == WINDOW_FUNCTIONS.name {
+            Ok(&self.window_functions)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -956,6 +968,8 @@ impl SystemVars {
             self.max_result_size.set(value)
         } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
             self.allowed_cluster_replica_sizes.set(value)
+        } else if name == WINDOW_FUNCTIONS.name {
+            self.window_functions.set(value)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -995,6 +1009,8 @@ impl SystemVars {
             self.max_result_size.reset()
         } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
             self.allowed_cluster_replica_sizes.reset()
+        } else if name == WINDOW_FUNCTIONS.name {
+            self.window_functions.reset()
         } else {
             return Err(AdapterError::UnknownParameter(name.into()));
         }
@@ -1069,6 +1085,11 @@ impl SystemVars {
     /// Returns the value of the `allowed_cluster_replica_sizes` configuration parameter.
     pub fn allowed_cluster_replica_sizes(&self) -> &Vec<String> {
         self.allowed_cluster_replica_sizes.value()
+    }
+
+    /// Returns the `window_functions` configuration parameter.
+    pub fn window_functions(&self) -> bool {
+        *self.window_functions.value()
     }
 }
 

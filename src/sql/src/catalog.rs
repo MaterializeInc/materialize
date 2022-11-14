@@ -188,6 +188,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Returns the configuration of the catalog.
     fn config(&self) -> &CatalogConfig;
 
+    /// Check if window functions are supported by the current system configuration.
+    fn window_functions(&self) -> bool;
+
     /// Returns the number of milliseconds since the system epoch. For normal use
     /// this means the Unix epoch. This can safely be mocked in tests and start
     /// at 0.
@@ -564,7 +567,14 @@ pub enum CatalogError {
     /// Unknown connection.
     UnknownConnection(String),
     /// Expected the catalog item to have the given type, but it did not.
-    UnexpectedType(String, CatalogItemType),
+    UnexpectedType {
+        /// The item's name.
+        name: String,
+        /// The actual type of the item.
+        actual_type: CatalogItemType,
+        /// The expected type of the item.
+        expected_type: CatalogItemType,
+    },
     /// Invalid attempt to depend on a non-dependable item.
     InvalidDependency {
         /// The invalid item's name.
@@ -587,8 +597,12 @@ impl fmt::Display for CatalogError {
                 write!(f, "unknown cluster replica '{}'", name)
             }
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
-            Self::UnexpectedType(name, item_type) => {
-                write!(f, "\"{name}\" is not of type {item_type}")
+            Self::UnexpectedType {
+                name,
+                actual_type,
+                expected_type,
+            } => {
+                write!(f, "\"{name}\" is a {actual_type} not a {expected_type}")
             }
             Self::InvalidDependency { name, typ } => write!(
                 f,
@@ -713,6 +727,10 @@ impl SessionCatalog for DummyCatalog {
 
     fn config(&self) -> &CatalogConfig {
         &DUMMY_CONFIG
+    }
+
+    fn window_functions(&self) -> bool {
+        true
     }
 
     fn now(&self) -> EpochMillis {

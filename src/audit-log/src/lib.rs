@@ -181,6 +181,9 @@ pub struct RenameItemV1 {
 pub struct DropComputeReplicaV1 {
     pub cluster_id: String,
     pub cluster_name: String,
+    // Events that predate v0.32.0 will not have this field set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replica_id: Option<String>,
     pub replica_name: String,
 }
 
@@ -188,6 +191,9 @@ pub struct DropComputeReplicaV1 {
 pub struct CreateComputeReplicaV1 {
     pub cluster_id: String,
     pub cluster_name: String,
+    // Events that predate v0.32.0 will not have this field set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replica_id: Option<String>,
     pub replica_name: String,
     pub logical_size: String,
 }
