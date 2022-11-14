@@ -51,7 +51,7 @@ impl CloudResourceController for KubernetesOrchestrator {
                 availability_zone_ids: config.availability_zone_ids,
                 role_suffix: match &self.config.aws_external_id_prefix {
                     None => id.to_string(),
-                    Some(external_id) => format!("{external_id}/{id}"),
+                    Some(external_id) => format!("{external_id}_{id}"),
                 },
             },
             status: None,
