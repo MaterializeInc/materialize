@@ -264,6 +264,7 @@ pub fn render<G>(
                             .expect("cannot append updates")
                             .expect("invalid/outdated upper");
 
+                        metrics.processed_batches.inc();
                         metrics.row_inserts.inc_by(batch_builder.inserts);
                         metrics.row_retractions.inc_by(batch_builder.retractions);
                         metrics.error_inserts.inc_by(batch_builder.error_inserts);

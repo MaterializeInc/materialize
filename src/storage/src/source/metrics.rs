@@ -91,6 +91,7 @@ pub(super) struct SourceSpecificMetrics {
     pub(super) row_retractions: IntCounterVec,
     pub(super) error_inserts: IntCounterVec,
     pub(super) error_retractions: IntCounterVec,
+    pub(super) persist_sink_processed_batches: IntCounterVec,
 }
 
 impl SourceSpecificMetrics {
@@ -130,6 +131,12 @@ impl SourceSpecificMetrics {
             error_retractions: registry.register(metric!(
                 name: "mz_source_error_retractions",
                 help: "A counter representing the actual number of errors being retracted from the data shard",
+                var_labels: ["source_id", "output", "shard"],
+            )),
+            persist_sink_processed_batches: registry.register(metric!(
+                name: "mz_source_processed_batches",
+                help: "A counter representing the number of persist sink batches with actual data \
+                we have successfully processed.",
                 var_labels: ["source_id", "output", "shard"],
             )),
         }
