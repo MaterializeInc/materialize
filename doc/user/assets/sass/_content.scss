@@ -105,8 +105,13 @@ p + p {
             margin-bottom: var(--pico);
         }
 
+        .highlight {
+            display: inline-block;
+        }
+
         pre {
             margin-left: 1.8rem;
+            margin: 1rem 0 0 1.8rem;
         }
     }
 
@@ -460,7 +465,7 @@ p + p {
         .gutter {
             position: absolute;
             left: 1.6rem;
-            top: 1.6rem;
+            top: 1.8rem;
             line-height: 23px;
             font-size: 1.2rem;
             font-weight: bold;
