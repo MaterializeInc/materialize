@@ -426,7 +426,7 @@ p + p {
         }
 
         .gutter {
-            color: #766c18;
+            color: #807403;
         }
     }
 
@@ -815,6 +815,10 @@ pre {
 }
 
 body.dark .content {
+    .note .gutter {
+        color: #c9b607;
+    }
+
     .table-scrollable {
         thead th {
             &:after {
