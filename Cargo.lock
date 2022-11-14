@@ -3680,8 +3680,10 @@ dependencies = [
  "mz-orchestrator",
  "mz-repr",
  "mz-secrets",
+ "serde",
  "serde_json",
  "sha2",
+ "tracing",
 ]
 
 [[package]]

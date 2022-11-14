@@ -321,14 +321,6 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let ret = futures::future::join_all((0..scale).map(|i| get_metrics(self, id, i)));
 
         Ok(ret.await)
-        // Ok(ret)
-        // let mut ret = vec![];
-        // for i in 0..scale {
-        //     let name = format!("{id}-{i}");
-
-        // }
-        // let metrics = self.metrics_api.get("environmentd-0").await.unwrap();
-        // dbg!(metrics);
     }
 
     async fn ensure_service(
