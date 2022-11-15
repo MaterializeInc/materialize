@@ -357,20 +357,12 @@ Explained Query:
         filter=((#2 OR #3))
         map=((#1 = 4), (#1 = 6))
       source={ relation=1, key=[#0] }
-    ArrangeBy
-      input_key=[#0]
+    Get::PassArrangements materialize.public.t1
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-      Get::PassArrangements materialize.public.t1
-        raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-    ArrangeBy
-      input_key=[#0]
+    Get::PassArrangements materialize.public.t2
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-      Get::PassArrangements materialize.public.t2
-        raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
   - materialize.public.t1_f1_ind
