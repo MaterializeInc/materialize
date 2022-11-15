@@ -242,7 +242,7 @@ SELECT * FROM valid_buckets;
 (3 rows)
 ```
 
-We can continue with aggregating by the buckets:
+You can then use these time buckets in aggregations:
 
 ```sql
 SELECT
