@@ -3991,6 +3991,7 @@ dependencies = [
  "headers",
  "http",
  "include_dir",
+ "libc",
  "mime",
  "mz-build-info",
  "mz-http-util",
