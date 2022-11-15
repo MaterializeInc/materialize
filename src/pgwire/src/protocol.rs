@@ -322,8 +322,7 @@ where
             biased;
 
             // `recv_timeout()` is cancel-safe as per it's docs.
-            Some(timeout) = self.adapter_client.recv_timeout() =>
-            {
+            Some(timeout) = self.adapter_client.recv_timeout() => {
                 let error_response = ErrorResponse::from_adapter_error(Severity::Fatal, timeout.into());
                 self.adapter_client.terminate();
                 // We must wait for the client to send a request before we can send the error response.
