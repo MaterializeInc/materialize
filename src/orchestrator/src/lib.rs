@@ -67,6 +67,17 @@ pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
 
     /// Watch for status changes of all known services.
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>>;
+
+    /// Gets resource usage metrics for all processes associated with a service.
+    ///
+    /// Returns `Err` if the entire process failed. Returns `Ok(v)` otherwise,
+    /// with one element in `v` for each process of the service,
+    /// even in not all metrics could be collected for all processes.
+    /// In such a case, the corresponding fields of `ServiceProcessMetrics` will be `None`.
+    async fn fetch_service_metrics(
+        &self,
+        id: &str,
+    ) -> Result<Vec<ServiceProcessMetrics>, anyhow::Error>;
 }
 
 /// An event describing a status change of an orchestrated service.
@@ -96,6 +107,12 @@ pub trait Service: fmt::Debug + Send + Sync {
     ///
     /// Panics if `port` does not name a valid port.
     fn addresses(&self, port: &str) -> Vec<String>;
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub struct ServiceProcessMetrics {
+    pub nano_cpus: Option<u64>,
+    pub bytes_memory: Option<u64>,
 }
 
 /// A simple language for describing assertions about a label's existence and value.

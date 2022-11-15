@@ -30,6 +30,7 @@ use tracing_subscriber::filter::Targets;
 use mz_orchestrator::ServicePort;
 use mz_orchestrator::{
     NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
+    ServiceProcessMetrics,
 };
 use mz_ore::cli::{DefaultTrue, KeyValueArg};
 #[cfg(feature = "tokio-console")]
@@ -276,6 +277,13 @@ struct NamespacedTracingOrchestrator {
 
 #[async_trait]
 impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
+    async fn fetch_service_metrics(
+        &self,
+        id: &str,
+    ) -> Result<Vec<ServiceProcessMetrics>, anyhow::Error> {
+        self.inner.fetch_service_metrics(id).await
+    }
+
     async fn ensure_service(
         &self,
         id: &str,

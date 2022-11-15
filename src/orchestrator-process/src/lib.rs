@@ -32,7 +32,7 @@ use tracing::{error, info};
 
 use mz_orchestrator::{
     NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
-    ServiceStatus,
+    ServiceProcessMetrics, ServiceStatus,
 };
 use mz_ore::id_gen::PortAllocator;
 use mz_pid_file::PidFile;
@@ -141,6 +141,13 @@ struct NamespacedProcessOrchestrator {
 
 #[async_trait]
 impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
+    async fn fetch_service_metrics(
+        &self,
+        _id: &str,
+    ) -> Result<Vec<ServiceProcessMetrics>, anyhow::Error> {
+        anyhow::bail!("metrics are not supported on the process orchestrator");
+    }
+
     async fn ensure_service(
         &self,
         id: &str,

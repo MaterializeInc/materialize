@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
@@ -31,15 +32,17 @@ use kube::error::Error;
 use kube::runtime::{watcher, WatchStreamExt};
 use kube::ResourceExt;
 use maplit::btreemap;
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use tracing::warn;
 
 use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_cloud_resources::AwsExternalIdPrefix;
-use mz_orchestrator::LabelSelector as MzLabelSelector;
 use mz_orchestrator::{
     LabelSelectionLogic, NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments,
     ServiceConfig, ServiceEvent, ServiceStatus,
 };
+use mz_orchestrator::{LabelSelector as MzLabelSelector, ServiceProcessMetrics};
 
 pub mod cloud_resource_controller;
 pub mod secrets;
@@ -121,24 +124,27 @@ impl KubernetesOrchestrator {
 impl Orchestrator for KubernetesOrchestrator {
     fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator> {
         Arc::new(NamespacedKubernetesOrchestrator {
+            metrics_api: Api::default_namespaced(self.client.clone()),
             service_api: Api::default_namespaced(self.client.clone()),
             stateful_set_api: Api::default_namespaced(self.client.clone()),
             pod_api: Api::default_namespaced(self.client.clone()),
             kubernetes_namespace: self.kubernetes_namespace.clone(),
             namespace: namespace.into(),
             config: self.config.clone(),
+            service_scales: std::sync::Mutex::new(HashMap::new()),
         })
     }
 }
 
-#[derive(Clone)]
 struct NamespacedKubernetesOrchestrator {
+    metrics_api: Api<PodMetrics>,
     service_api: Api<K8sService>,
     stateful_set_api: Api<StatefulSet>,
     pod_api: Api<Pod>,
     kubernetes_namespace: String,
     namespace: String,
     config: KubernetesOrchestratorConfig,
+    service_scales: std::sync::Mutex<HashMap<String, NonZeroUsize>>,
 }
 
 impl fmt::Debug for NamespacedKubernetesOrchestrator {
@@ -148,6 +154,48 @@ impl fmt::Debug for NamespacedKubernetesOrchestrator {
             .field("namespace", &self.namespace)
             .field("config", &self.config)
             .finish()
+    }
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct PodMetricsContainer {
+    pub name: String,
+    pub usage: PodMetricsContainerUsage,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct PodMetricsContainerUsage {
+    pub cpu: Quantity,
+    pub memory: Quantity,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct PodMetrics {
+    pub metadata: ObjectMeta,
+    pub timestamp: String,
+    pub window: String,
+    pub containers: Vec<PodMetricsContainer>,
+}
+
+impl k8s_openapi::Resource for PodMetrics {
+    const GROUP: &'static str = "metrics.k8s.io";
+    const KIND: &'static str = "PodMetrics";
+    const VERSION: &'static str = "v1beta1";
+    const API_VERSION: &'static str = "metrics.k8s.io/v1beta1";
+    const URL_PATH_SEGMENT: &'static str = "pods";
+
+    type Scope = k8s_openapi::NamespaceResourceScope;
+}
+
+impl k8s_openapi::Metadata for PodMetrics {
+    type Ty = ObjectMeta;
+
+    fn metadata(&self) -> &Self::Ty {
+        &self.metadata
+    }
+
+    fn metadata_mut(&mut self) -> &mut Self::Ty {
+        &mut self.metadata
     }
 }
 
@@ -205,6 +253,83 @@ impl NamespacedKubernetesOrchestrator {
 
 #[async_trait]
 impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
+    async fn fetch_service_metrics(
+        &self,
+        id: &str,
+    ) -> Result<Vec<ServiceProcessMetrics>, anyhow::Error> {
+        let Some(&scale) = self.service_scales.lock().expect("poisoned lock").get(id) else {
+            // This should have been set in `ensure_service`.
+            tracing::error!("Failed to get scale for {id}");
+            anyhow::bail!("Failed to get scale for {id}");
+        };
+        /// Get metrics for a particular service and process, converting them into a sane (i.e., numeric) format.
+        ///
+        /// Note that we want to keep going even if a lookup fails for whatever reason,
+        /// so this function is infallible. If we fail to get cpu or memory for a particular pod,
+        /// we just log a warning and install `None` in the returned struct.
+        async fn get_metrics(
+            self_: &NamespacedKubernetesOrchestrator,
+            id: &str,
+            i: usize,
+        ) -> ServiceProcessMetrics {
+            let name = format!("{id}-{i}");
+            let metrics = match self_.metrics_api.get(&name).await {
+                Ok(metrics) => metrics,
+                Err(e) => {
+                    warn!("Failed to get metrics for {name}: {e}");
+                    return ServiceProcessMetrics::default();
+                }
+            };
+            let Some(PodMetricsContainer { usage: PodMetricsContainerUsage { cpu: Quantity(cpu_str), memory: Quantity(mem_str) }, .. }) = metrics.containers.get(0) else {
+                warn!("metrics result contained no containers for {name}");
+                return ServiceProcessMetrics::default();
+            };
+            // Parsing a k8s Quantity is kind of complicated:
+            // See https://github.com/kubernetes/apimachinery/blob/master/pkg/api/resource/quantity.go
+            // for details. We can rewrite this correct parsing code in Rust if needed in the future, but let's see if we can get away with
+            // just assuming CPU is always a positive integer number of nano-CPUs and memory is always in KiB for now.
+            //
+            // Note that https://github.com/sombralibre/k8s-quantity-parser doesn't support the (undocumented) `n` suffix,
+            // so we can't use it.
+            let cpu = match cpu_str.strip_suffix('n') {
+                Some(rest) => match rest.parse::<u64>() {
+                    Ok(val) => Some(val),
+                    Err(_e) => {
+                        tracing::error!("metrics-server CPU value in unexpected format: {cpu_str}");
+                        None
+                    }
+                },
+                None => {
+                    tracing::error!("metrics-server CPU value in unexpected format: {cpu_str}");
+                    None
+                }
+            };
+            let memory = match mem_str.strip_suffix("Ki") {
+                Some(rest) => match rest.parse::<u64>() {
+                    Ok(val) => Some(val),
+                    Err(_e) => {
+                        tracing::error!(
+                            "metrics-server memory value in unexpected format: {mem_str}"
+                        );
+                        None
+                    }
+                },
+                None => {
+                    tracing::error!("metrics-server memory value in unexpected format: {mem_str}");
+                    None
+                }
+            }
+            .map(|kib| kib * 1024);
+            ServiceProcessMetrics {
+                nano_cpus: cpu,
+                bytes_memory: memory,
+            }
+        }
+        let ret = futures::future::join_all((0..scale.get()).map(|i| get_metrics(self, id, i)));
+
+        Ok(ret.await)
+    }
+
     async fn ensure_service(
         &self,
         id: &str,
@@ -515,11 +640,19 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 }
             }
         }
+        self.service_scales
+            .lock()
+            .expect("poisoned lock")
+            .insert(id.to_string(), scale);
         Ok(Box::new(KubernetesService { hosts, ports }))
     }
 
     /// Drops the identified service, if it exists.
     async fn drop_service(&self, id: &str) -> Result<(), anyhow::Error> {
+        self.service_scales
+            .lock()
+            .expect("poisoned lock")
+            .remove(id);
         let name = format!("{}-{id}", self.namespace);
         let res = self
             .stateful_set_api
