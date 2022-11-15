@@ -107,16 +107,16 @@ p+p {
         }
 
         .highlight {
-            display: inline-block;
+            display: block;
         }
 
         pre {
             margin-left: 1.8rem;
-            margin: 1rem 0 0 1.8rem;
+            margin: 1rem 0;
+            display: block;
         }
     }
 
-    p,
     ul>li:first-child>p:first-child {
         margin: 0;
     }
@@ -131,8 +131,9 @@ p+p {
     ol+p,
     .highlight+p,
     pre+p,
-    table+p {
-        margin-top: 1rem;
+    table+p,
+    *+p {
+        margin-top: 1.6rem;
     }
 
     p+table {
@@ -160,18 +161,18 @@ p+p {
             text-decoration: none;
             border-bottom: 1px solid transparent;
 
-            &::after {
-                content: "";
-                background-image: url("../images/icon_external_link.svg");
-                background-repeat: no-repeat;
-                // Use padding rather than `display-inline: block; width: 16px` to keep
-                // the icon from wrapping onto a new line.
-                padding-left: 16px;
-                filter: invert(50%);
-                background-position: center;
-                transition: all 0.2s;
-                transition-delay: 50ms;
-            }
+            // &::after {
+            //     content: "";
+            //     background-image: url("../images/icon_external_link.svg");
+            //     background-repeat: no-repeat;
+            //     // Use padding rather than `display-inline: block; width: 16px` to keep
+            //     // the icon from wrapping onto a new line.
+            //     padding-left: 16px;
+            //     filter: invert(50%);
+            //     background-position: center;
+            //     transition: all 0.2s;
+            //     transition-delay: 50ms;
+            // }
         }
 
         &:hover,
@@ -299,7 +300,7 @@ p+p {
     }
 
     th {
-        color: $dark-black-v2;
+        color: var(--important);
         border-bottom: 1px var(--highlight) solid;
         text-align: left;
         padding: 8px;
@@ -371,6 +372,12 @@ p+p {
         }
     }
 
+    li {
+        h4 {
+            margin-top: 0;
+        }
+    }
+
     ol.has-p {
         list-style-type: none;
         counter-reset: list-counter;
@@ -381,7 +388,7 @@ p+p {
             counter-increment: list-counter;
             min-height: 5rem;
             position: relative;
-            padding: 0.4rem 0 1.6rem 6rem;
+            padding: 1.6rem 0 1.6rem 6rem;
             border-top: 1px solid var(--divider-light);
 
             &:before {
@@ -390,7 +397,7 @@ p+p {
                 font-size: 4.5rem;
                 font-weight: 100;
                 position: absolute;
-                top: 2.4rem;
+                top: .5rem;
                 left: 1rem;
             }
 
@@ -635,7 +642,7 @@ p+p {
 
     .table-scrollable {
         box-shadow: inset 0 -4px 3px -3px $medium-grey-v2;
-        margin: 1rem 0;
+        margin: 1rem 0 3rem;
         overflow: auto;
 
         table {
@@ -657,13 +664,16 @@ p+p {
                 position: absolute;
             }
         }
+
+        &+* {
+            margin-top: 3rem !important;
+        }
     }
 
     .notify_button {
         padding: 7px 5px 6px 5px;
         border: none;
         color: $dark-black-v2;
-        font-family: "Encode Sans Expanded";
         font-size: 0.8rem;
         background-color: $grey-light;
         height: 26px;
@@ -702,7 +712,6 @@ p+p {
             display: flex;
 
             input[type="email"] {
-                font-family: "Encode Sans Expanded";
                 font-size: 0.8rem;
                 padding: 7px 5px 6px 5px;
                 border-radius: $border-radius;
@@ -802,11 +811,16 @@ p+p {
     top: 10px;
     right: 10px;
     line-height: 2;
+    font-family: 'Inter', sans-serif;
 
     &.success {
         opacity: 0.8;
         background: #70f2a3;
     }
+}
+
+tr .copy_button {
+    display: none !important;
 }
 
 pre {
