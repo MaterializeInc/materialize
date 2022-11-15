@@ -9,10 +9,9 @@
 
 //! Types related to the creation of dataflow raw sources.
 //!
-//! Raw sources are streams (currently, Timely streams) of data directly produced by the
+//! Raw sources are differential dataflow  collections of data directly produced by the
 //! upstream service. The main export of this module is [`create_raw_source`],
-//! which turns [`RawSourceCreationConfig`]s, [`SourceReader::Connection`]s,
-//! and [`SourceReader`] implementations into the aforementioned streams.
+//! which turns [`RawSourceCreationConfig`]s into the aforementioned streams.
 //!
 //! The full source, which is the _differential_ stream that represents the actual object
 //! created by a `CREATE SOURCE` statement, is created by composing
@@ -21,6 +20,7 @@
 
 // https://github.com/tokio-rs/prost/issues/237
 #![allow(missing_docs)]
+#![allow(clippy::needless_borrow)]
 
 use std::any::Any;
 use std::collections::hash_map::Entry;
@@ -30,6 +30,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
 use futures::future::Either;
 use itertools::Itertools;
@@ -40,40 +41,41 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::OperatorInfo;
 use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::operators::{Broadcast, CapabilitySet, Partition};
-use timely::dataflow::Scope;
+use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
 use tokio::sync::Mutex;
 use tokio::time::MissedTickBehavior;
-use tokio_stream::{Stream, StreamExt};
+use tokio_stream::StreamExt;
 use tracing::{info, trace, warn};
 
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
+use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
-use mz_repr::{GlobalId, Timestamp};
+use mz_persist_client::Upper;
+use mz_repr::{GlobalId, Row, Timestamp};
+use mz_storage_client::controller::{CollectionMetadata, ResumptionFrontierCalculator};
+use mz_storage_client::source::util::async_source;
+use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_client::types::errors::SourceError;
+use mz_storage_client::types::sources::encoding::SourceDataEncoding;
+use mz_storage_client::types::sources::{AsyncSourceToken, MzOffset, SourceData, SourceToken};
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::operator::StreamExt as _;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
-use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
-use crate::source::antichain::MutableOffsetAntichain;
-use crate::source::antichain::OffsetAntichain;
-use crate::source::healthcheck::Healthchecker;
+use crate::source::antichain::{MutableOffsetAntichain, OffsetAntichain};
+use crate::source::healthcheck;
+use crate::source::healthcheck::{SourceStatus, SourceStatusUpdate};
+
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockFollower, ReclockOperator};
-use crate::source::types::SourceOutput;
-use crate::source::types::SourceReaderError;
 use crate::source::types::{
-    AsyncSourceToken, SourceMessage, SourceMetrics, SourceReader, SourceReaderMetrics, SourceToken,
+    MaybeLength, SourceConnectionBuilder, SourceMessage, SourceMessageType, SourceMetrics,
+    SourceOutput, SourceReader, SourceReaderError, SourceReaderMetrics,
 };
-use crate::source::types::{MaybeLength, SourceMessageType};
-use crate::source::util::async_source;
-use crate::types::connections::ConnectionContext;
-use crate::types::errors::SourceError;
-use crate::types::sources::encoding::SourceDataEncoding;
-use crate::types::sources::MzOffset;
 
 // Interval after which the source operator will yield control.
 const YIELD_INTERVAL: Duration = Duration::from_millis(10);
@@ -118,6 +120,8 @@ struct SourceMessageBatch<Key, Value, Diff> {
     /// be _definite_: re-running the source will produce the same error. If an error
     /// is added to this collection, the source will be permanently wedged.
     source_errors: Vec<SourceError>,
+    /// The latest status update for the batch, if any.
+    status_update: Option<HealthStatus>,
     /// The current upper of the `SourceReader`, at the time this batch was
     /// emitted. Source uppers emitted via batches must never regress.
     source_upper: OffsetAntichain,
@@ -149,22 +153,31 @@ struct BatchUpperSummary {
 ///
 /// See the [`source` module docs](crate::source) for more details about how raw
 /// sources are used.
-pub fn create_raw_source<G, S: 'static, R>(
+pub fn create_raw_source<G, C, R>(
     scope: &G,
     config: RawSourceCreationConfig,
-    source_connection: S::Connection,
+    source_connection: C,
     connection_context: ConnectionContext,
     calc: R,
 ) -> (
     (
-        Vec<timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>>,
-        timely::dataflow::Stream<G, SourceError>,
+        Vec<
+            Stream<
+                G,
+                SourceOutput<
+                    <C::Reader as SourceReader>::Key,
+                    <C::Reader as SourceReader>::Value,
+                    <C::Reader as SourceReader>::Diff,
+                >,
+            >,
+        >,
+        Stream<G, SourceError>,
     ),
     Option<Rc<dyn Any>>,
 )
 where
     G: Scope<Timestamp = Timestamp> + Clone,
-    S: SourceReader,
+    C: SourceConnectionBuilder + Clone + 'static,
     R: ResumptionFrontierCalculator<Timestamp> + 'static,
 {
     info!(
@@ -186,13 +199,13 @@ where
     };
 
     let (
-        SourceReaderStreams {
+        SourceConnectionStreams {
             batches,
             batch_upper_summaries,
             health_stream,
         },
         source_reader_token,
-    ) = source_reader_operator::<G, S>(
+    ) = source_reader_operator(
         scope,
         config.clone(),
         source_connection,
@@ -202,9 +215,9 @@ where
     );
 
     let (remap_stream, remap_token) =
-        remap_operator::<G, S>(scope, config.clone(), batch_upper_summaries, &resume_stream);
+        remap_operator(scope, config.clone(), batch_upper_summaries, &resume_stream);
 
-    let ((reclocked_stream, reclocked_err_stream), _reclock_token) = reclock_operator::<G, S>(
+    let ((reclocked_stream, reclocked_err_stream), _reclock_token) = reclock_operator(
         scope,
         config.clone(),
         reclock_follower,
@@ -232,6 +245,8 @@ type MessageAndOffset<S> = (
 struct SourceReaderOperatorOutput<S: SourceReader> {
     /// Messages and their offsets from the source reader.
     messages: HashMap<PartitionId, Vec<MessageAndOffset<S>>>,
+    /// The latest status update for this worker, if any.
+    status_update: Option<HealthStatus>,
     /// See `SourceMessageBatch`.
     source_errors: Vec<SourceReaderError>,
     /// A list of partitions that this source reader instance
@@ -245,50 +260,33 @@ struct SourceReaderOperatorOutput<S: SourceReader> {
     batch_upper: OffsetAntichain,
 }
 
-fn build_source_reader_stream<G, S>(
+fn build_source_reader_stream<S>(
     source_reader: S,
     config: RawSourceCreationConfig,
     initial_source_upper: OffsetAntichain,
     mut source_upper: OffsetAntichain,
 ) -> Pin<
     // TODO(guswynn): determine if this boxing is necessary
-    Box<impl Stream<Item = Option<SourceReaderOperatorOutput<S>>>>,
+    Box<impl tokio_stream::Stream<Item = Option<SourceReaderOperatorOutput<S>>>>,
 >
 where
-    G: Scope<Timestamp = Timestamp>,
     S: SourceReader + 'static,
 {
     let RawSourceCreationConfig {
-        name,
+        name: _,
         id,
         num_outputs: _,
         worker_id,
         worker_count,
         timestamp_interval,
         encoding: _,
-        storage_metadata,
+        storage_metadata: _,
         resume_upper: _,
         base_metrics: _,
-        now,
-        persist_clients,
+        now: _,
+        persist_clients: _,
     } = config;
     Box::pin(async_stream::stream!({
-        let mut healthchecker = if storage_metadata.status_shard.is_some() {
-            match Healthchecker::new(id, true, &persist_clients, &storage_metadata, now.clone())
-                .await
-            {
-                Ok(h) => Some(h),
-                Err(e) => {
-                    panic!(
-                        "Failed to create healthchecker for source {}: {:#}",
-                        &name, e
-                    );
-                }
-            }
-        } else {
-            None
-        };
-
         // Most recent batch upper frontier, does not regress.
         // TODO(aljoscha): We track this as we go, but we could also derive it
         // by iterating over all messages in a batch when we emit it.
@@ -300,6 +298,7 @@ where
         // not advance its downstream frontier.
         yield Some(SourceReaderOperatorOutput {
             messages: HashMap::new(),
+            status_update: None,
             source_errors: Vec::new(),
             unconsumed_partitions: Vec::new(),
             source_upper: initial_source_upper,
@@ -319,6 +318,7 @@ where
         let mut untimestamped_messages = HashMap::<_, Vec<_>>::new();
         let mut unconsumed_partitions = Vec::new();
         let mut source_errors = vec![];
+        let mut status_update = None;
         loop {
             // TODO(guswyn): move lots of this out of the macro so rustfmt works better
             tokio::select! {
@@ -374,9 +374,16 @@ where
                                     untimestamped_messages.entry(pid).or_default().push((message, offset));
                                 }
                                 SourceMessageType::SourceStatus(update) => {
-                                    if let Some(healthchecker) = &mut healthchecker {
-                                        healthchecker.update_status(update).await;
-                                    }
+                                    let update = match update {
+                                        SourceStatusUpdate { status: SourceStatus::Starting, ..} => Some(HealthStatus::Starting),
+                                        SourceStatusUpdate { status: SourceStatus::Running, ..} => Some(HealthStatus::Running),
+                                        SourceStatusUpdate { status: SourceStatus::Stalled, error: Some(e)} => Some(HealthStatus::StalledWithError(e)),
+                                        other => {
+                                            warn!("Received currently-unhandled source status update: {other:?}");
+                                            None
+                                        },
+                                    };
+                                    status_update = update.or(status_update);
                                 }
                             }
                         }
@@ -393,6 +400,7 @@ where
                             yield Some(
                                 SourceReaderOperatorOutput {
                                     messages: std::mem::take(&mut untimestamped_messages),
+                                    status_update: status_update.take(),
                                     source_errors: source_errors.drain(..).collect_vec(),
                                     unconsumed_partitions,
                                     source_upper: source_upper.clone(),
@@ -429,6 +437,7 @@ where
                     yield Some(
                         SourceReaderOperatorOutput {
                             messages: std::mem::take(&mut untimestamped_messages),
+                            status_update: status_update.take(),
                             source_errors: source_errors.drain(..).collect_vec(),
                             unconsumed_partitions: unconsumed_partitions.clone(),
                             source_upper: source_upper.clone(),
@@ -451,12 +460,36 @@ pub enum HealthStatus {
     StalledWithError(String),
 }
 
+impl HealthStatus {
+    fn name(&self) -> &'static str {
+        match self {
+            HealthStatus::Starting => "starting",
+            HealthStatus::Running => "running",
+            HealthStatus::StalledWithError(_) => "stalled",
+        }
+    }
+
+    fn error(&self) -> Option<&str> {
+        match self {
+            HealthStatus::Starting | HealthStatus::Running => None,
+            HealthStatus::StalledWithError(e) => Some(e),
+        }
+    }
+}
+
 type WorkerId = usize;
 
-struct SourceReaderStreams<G: Scope<Timestamp = Timestamp>, S: SourceReader> {
-    batches: timely::dataflow::Stream<G, SourceMessageBatch<S::Key, S::Value, S::Diff>>,
-    batch_upper_summaries: timely::dataflow::Stream<G, BatchUpperSummary>,
-    health_stream: timely::dataflow::Stream<G, (WorkerId, HealthStatus)>,
+struct SourceConnectionStreams<G: Scope<Timestamp = Timestamp>, C: SourceConnectionBuilder> {
+    batches: Stream<
+        G,
+        SourceMessageBatch<
+            <C::Reader as SourceReader>::Key,
+            <C::Reader as SourceReader>::Value,
+            <C::Reader as SourceReader>::Diff,
+        >,
+    >,
+    batch_upper_summaries: Stream<G, BatchUpperSummary>,
+    health_stream: Stream<G, (WorkerId, HealthStatus)>,
 }
 
 /// Reads from a [`SourceReader`] and returns a stream of "un-timestamped"
@@ -464,17 +497,17 @@ struct SourceReaderStreams<G: Scope<Timestamp = Timestamp>, S: SourceReader> {
 /// learn about the `source_upper` that all the source reader instances now
 /// about. This second stream will be used by `remap_operator` to mint new
 /// timestamp bindings into the remap shard.
-fn source_reader_operator<G, S: 'static>(
+fn source_reader_operator<G, C>(
     scope: &G,
     config: RawSourceCreationConfig,
-    source_connection: S::Connection,
+    source_connection: C,
     connection_context: ConnectionContext,
     reclock_follower: ReclockFollower,
-    resume_stream: &timely::dataflow::Stream<G, ()>,
-) -> (SourceReaderStreams<G, S>, Option<AsyncSourceToken>)
+    resume_stream: &Stream<G, ()>,
+) -> (SourceConnectionStreams<G, C>, Option<AsyncSourceToken>)
 where
     G: Scope<Timestamp = Timestamp>,
-    S: SourceReader,
+    C: SourceConnectionBuilder + Clone + 'static,
 {
     let sub_config = config.clone();
     let RawSourceCreationConfig {
@@ -531,19 +564,20 @@ where
                 });
                 trace!("source_reader({id}) {worker_id}/{worker_count}: source_upper after thinning: {source_upper:?}");
 
-                let (source_reader, offset_committer) = S::new(
-                    name.clone(),
-                    id,
-                    worker_id,
-                    worker_count,
-                    sync_activator,
-                    source_connection.clone(),
-                    source_upper.as_vec(),
-                    encoding,
-                    base_metrics,
-                    connection_context.clone(),
-                )
-                .expect("Failed to create source");
+                let (source_reader, offset_committer) = source_connection
+                    .clone()
+                    .into_reader(
+                        name.clone(),
+                        id,
+                        worker_id,
+                        worker_count,
+                        sync_activator,
+                        source_upper.as_vec(),
+                        encoding,
+                        base_metrics,
+                        connection_context.clone(),
+                    )
+                    .expect("Failed to create source");
 
                 let offset_commit_handle = crate::source::commit::drive_offset_committer(
                     offset_committer,
@@ -552,7 +586,7 @@ where
                     worker_count,
                 );
 
-                let mut source_reader = build_source_reader_stream::<G, S>(
+                let mut source_reader = build_source_reader_stream(
                     source_reader,
                     sub_config,
                     initial_source_upper,
@@ -650,6 +684,7 @@ where
                     };
                     let SourceReaderOperatorOutput {
                         messages,
+                        status_update,
                         source_errors,
                         unconsumed_partitions,
                         source_upper,
@@ -712,6 +747,7 @@ where
 
                     let message_batch = SourceMessageBatch {
                         messages,
+                        status_update,
                         source_errors,
                         source_upper: extended_source_upper,
                         batch_upper: batch_upper.clone(),
@@ -770,16 +806,21 @@ where
                     let has_errors = batch.source_errors.first();
                     let has_messages = batch.messages.values().any(|vs| !vs.is_empty());
 
-                    let maybe_health = match (has_errors, has_messages) {
-                        (Some(error), _) => {
+                    let maybe_health = match (has_errors, &batch.status_update, has_messages) {
+                        (Some(error), _, _) => {
                             // Arguably this case should be "failed", since generally a source
                             // cannot recover by the time an error reaches this far down the pipe.
                             // However, we don't actually shut down the source on error yet, so
                             // treating this as a possibly-temporary stall for now.
                             Some(HealthStatus::StalledWithError(error.error.to_string()))
                         }
-                        (_, true) => Some(HealthStatus::Running),
-                        (None, false) => None,
+                        (_, Some(status), _) => {
+                            // This is the transient error case, and is correctly represented as
+                            // a (temporary) stall.
+                            Some(status.clone())
+                        }
+                        (None, None, true) => Some(HealthStatus::Running),
+                        (None, None, false) => None,
                     };
 
                     if let Some(health) = maybe_health {
@@ -800,7 +841,7 @@ where
     });
 
     (
-        SourceReaderStreams {
+        SourceConnectionStreams {
             batches: batch_stream,
             batch_upper_summaries: summary_stream,
             health_stream,
@@ -817,7 +858,7 @@ where
 fn health_operator<G>(
     scope: &G,
     config: RawSourceCreationConfig,
-    health_stream: timely::dataflow::Stream<G, (usize, HealthStatus)>,
+    health_stream: Stream<G, (usize, HealthStatus)>,
 ) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -826,6 +867,9 @@ where
         worker_id: healthcheck_worker_id,
         worker_count,
         id: source_id,
+        storage_metadata,
+        persist_clients,
+        now,
         ..
     } = config;
 
@@ -857,7 +901,73 @@ where
         scope.clone(),
         move |mut _capabilities, _frontiers, scheduler| async move {
             let mut buffer = Vec::new();
-            info!("Health for source {source_id} initialized to: {last_reported_status:?}");
+
+            let mut persist_clients = persist_clients.lock().await;
+            let persist_client = persist_clients
+                .open(storage_metadata.persist_location.clone())
+                .await
+                .expect("error creating persist client for Healthchecker");
+            drop(persist_clients);
+
+            let client_ref = &persist_client;
+
+            let write_to_persist = |row: Row, timestamp: Timestamp| async move {
+                let status_shard = match storage_metadata.status_shard {
+                    Some(s) => s,
+                    None => return,
+                };
+                let handle = client_ref
+                    .open_writer(status_shard)
+                    .await;
+
+                let mut handle = match handle {
+                    Ok(stuff) => stuff,
+                    Err(e) => {
+                        panic!("Invalid usage of the persist client for source {source_id} status history shard: {e:?}");
+                    }
+                };
+
+                let mut recent_upper = handle.upper().clone();
+                let mut append_ts = timestamp;
+                'retry_loop: loop {
+                    // We don't actually care so much about the timestamp we append at; it's best-effort.
+                    // Ensure that the append timestamp is not less than the current upper, and the new upper
+                    // is past that timestamp. (Unless we've advanced to the empty antichain, but in
+                    // that case we're already in trouble.)
+                    for t in recent_upper.elements() {
+                        append_ts.join_assign(t);
+                    }
+                    let mut new_upper = Antichain::from_elem(append_ts.step_forward());
+                    new_upper.join_assign(&recent_upper);
+
+                    let updates = vec![
+                        ((SourceData(Ok(row.clone())), ()), append_ts, 1i64)
+                    ];
+                    let cas_result = handle.compare_and_append(updates, recent_upper.clone(), new_upper).await;
+                    match cas_result {
+                        Ok(Ok(Ok(()))) => break 'retry_loop,
+                        Ok(Ok(Err(Upper(upper)))) => {
+                            recent_upper = upper;
+                        }
+                        Ok(Err(e)) => {
+                            panic!("Invalid usage of the persist client for source {source_id} status history shard: {e:?}");
+                        }
+                        Err(e) => {
+                            trace!("compare_and_append in update_status failed: {e}");
+                        }
+                    }
+                }
+
+                handle.expire().await
+            };
+
+            if is_active_worker {
+                info!("Health for source {source_id} initialized to: {last_reported_status:?}");
+                let now_ms = now();
+                let row = healthcheck::pack_status_row(source_id, last_reported_status.name(), last_reported_status.error(), now_ms);
+                write_to_persist(row, Timestamp::from(now_ms)).await;
+            }
+
             while scheduler.notified().await {
                 if weak_token.upgrade().is_none() {
                     return;
@@ -869,17 +979,19 @@ where
                         if !is_active_worker {
                             warn!("Health messages for source {source_id} passed to an unexpected worker id: {healthcheck_worker_id}")
                         }
-                        let prev_health = &healths[worker_id];
-                        if prev_health != &health_event {
-                            healths[worker_id] = health_event;
-                            let new_status = overall_status(&healths);
-                            if &last_reported_status != new_status {
-                                info!("Health transition for source {source_id}: {last_reported_status:?} -> {new_status:?}");
-                                last_reported_status = new_status.clone();
-                            }
-                        }
+                        healths[worker_id] = health_event;
                     }
-                })
+                });
+
+                let new_status = overall_status(&healths);
+                if &last_reported_status != new_status {
+                    info!("Health transition for source {source_id}: {last_reported_status:?} -> {new_status:?}");
+                    let now_ms = now();
+                    let row = healthcheck::pack_status_row(source_id, new_status.name(), new_status.error(), now_ms);
+                    write_to_persist(row, Timestamp::from(now_ms)).await;
+
+                    last_reported_status = new_status.clone();
+                }
             }
         },
     );
@@ -892,18 +1004,14 @@ where
 ///
 /// Only one worker will be active and write to the remap shard. All source
 /// upper summaries will be exchanged to it.
-fn remap_operator<G, S: 'static>(
+fn remap_operator<G>(
     scope: &G,
     config: RawSourceCreationConfig,
-    batch_upper_summaries: timely::dataflow::Stream<G, BatchUpperSummary>,
-    resume_stream: &timely::dataflow::Stream<G, ()>,
-) -> (
-    timely::dataflow::Stream<G, (PartitionId, Timestamp, MzOffset)>,
-    Rc<dyn Any>,
-)
+    batch_upper_summaries: Stream<G, BatchUpperSummary>,
+    resume_stream: &Stream<G, ()>,
+) -> (Stream<G, (PartitionId, Timestamp, MzOffset)>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
-    S: SourceReader,
 {
     let RawSourceCreationConfig {
         name,
@@ -1120,22 +1228,24 @@ where
 /// Receives un-timestamped batches from the source reader and updates to the
 /// remap trace on a second input. This operator takes the remap information,
 /// reclocks incoming batches and sends them forward.
-fn reclock_operator<G, S: 'static>(
+fn reclock_operator<G, K, V, D>(
     scope: &G,
     config: RawSourceCreationConfig,
     mut timestamper: ReclockFollower,
-    batches: timely::dataflow::Stream<G, SourceMessageBatch<S::Key, S::Value, S::Diff>>,
-    remap_trace_updates: timely::dataflow::Stream<G, (PartitionId, Timestamp, MzOffset)>,
+    batches: Stream<G, SourceMessageBatch<K, V, D>>,
+    remap_trace_updates: Stream<G, (PartitionId, Timestamp, MzOffset)>,
 ) -> (
     (
-        Vec<timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>>,
-        timely::dataflow::Stream<G, SourceError>,
+        Vec<Stream<G, SourceOutput<K, V, D>>>,
+        Stream<G, SourceError>,
     ),
     Option<SourceToken>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
-    S: SourceReader,
+    K: timely::Data + MaybeLength,
+    V: timely::Data + MaybeLength,
+    D: timely::Data,
 {
     let RawSourceCreationConfig {
         name,
@@ -1260,19 +1370,10 @@ where
             let remap_upper = &frontiers[1].frontier();
             if PartialOrder::less_than(&prev_remap_upper.borrow(), remap_upper) {
                 trace!("reclock({id}) {worker_id}/{worker_count}: remap upper: {remap_upper:?}");
-                let mut updates = Vec::with_capacity(remap_updates_stash.len());
-                // TODO(petrosagg) replace with Vec::drain_filter when it's stable.
-                let mut i = 0;
-                while i < remap_updates_stash.len() {
-                    let (_, ref ts, _) = &remap_updates_stash[i];
-                    if !remap_upper.less_equal(ts) {
-                        updates.push(remap_updates_stash.swap_remove(i));
-                    } else {
-                        i += 1;
-                    }
-                }
                 let remap_trace_batch = ReclockBatch {
-                    updates,
+                    updates: remap_updates_stash
+                        .drain_filter_swapping(|(_, ts, _)| !remap_upper.less_equal(ts))
+                        .collect(),
                     upper: remap_upper.to_owned(),
                 };
                 timestamper.push_trace_batch(remap_trace_batch);
@@ -1330,7 +1431,7 @@ where
                             message.offset,
                             ts
                         );
-                        handle_message::<S>(
+                        handle_message(
                             message,
                             &mut bytes_read,
                             &cap_set,
@@ -1475,27 +1576,22 @@ where
 ///
 /// TODO: This function is a bit of a mess rn but hopefully this function makes
 /// the existing mess more obvious and points towards ways to improve it.
-fn handle_message<S: SourceReader>(
-    message: SourceMessage<S::Key, S::Value, S::Diff>,
+fn handle_message<K, V, D>(
+    message: SourceMessage<K, V, D>,
     bytes_read: &mut usize,
     cap_set: &CapabilitySet<Timestamp>,
     output: &mut OutputHandle<
         Timestamp,
-        (
-            usize,
-            Result<SourceOutput<S::Key, S::Value, S::Diff>, SourceError>,
-        ),
-        Tee<
-            Timestamp,
-            (
-                usize,
-                Result<SourceOutput<S::Key, S::Value, S::Diff>, SourceError>,
-            ),
-        >,
+        (usize, Result<SourceOutput<K, V, D>, SourceError>),
+        Tee<Timestamp, (usize, Result<SourceOutput<K, V, D>, SourceError>)>,
     >,
     metric_updates: &mut HashMap<PartitionId, (MzOffset, Timestamp, i64)>,
     ts: Timestamp,
-) {
+) where
+    K: timely::Data + MaybeLength,
+    V: timely::Data + MaybeLength,
+    D: timely::Data,
+{
     let partition = message.partition.clone();
     let offset = message.offset;
 

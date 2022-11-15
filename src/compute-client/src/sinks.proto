@@ -13,7 +13,7 @@ import "google/protobuf/empty.proto";
 import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
 import "repr/src/relation_and_scalar.proto";
-import "storage/src/controller.proto";
+import "storage-client/src/controller.proto";
 
 package mz_compute_client.sinks;
 
@@ -38,5 +38,5 @@ message ProtoSinkAsOf {
 
 message ProtoPersistSinkConnection {
     mz_repr.relation_and_scalar.ProtoRelationDesc value_desc = 1;
-    mz_storage.controller.ProtoCollectionMetadata storage_metadata = 2;
+    mz_storage_client.controller.ProtoCollectionMetadata storage_metadata = 2;
 }

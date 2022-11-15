@@ -21,20 +21,70 @@ use mz_orchestrator::{
     ServiceEvent, ServicePort,
 };
 
-use crate::command::ReplicaId;
+use crate::command::{CommunicationConfig, ReplicaId};
 
-use super::{ComputeInstanceEvent, ComputeInstanceId, ComputeReplicaAllocation};
+use super::{
+    ComputeInstanceEvent, ComputeInstanceId, ComputeReplicaAllocation, ComputeReplicaLocation,
+};
 
+#[derive(Clone, Debug)]
 pub(super) struct ComputeOrchestrator {
     inner: Arc<dyn NamespacedOrchestrator>,
     computed_image: String,
+    init_container_image: Option<String>,
 }
 
 impl ComputeOrchestrator {
-    pub(super) fn new(inner: Arc<dyn NamespacedOrchestrator>, computed_image: String) -> Self {
+    pub(super) fn new(
+        inner: Arc<dyn NamespacedOrchestrator>,
+        computed_image: String,
+        init_container_image: Option<String>,
+    ) -> Self {
         Self {
             inner,
             computed_image,
+            init_container_image,
+        }
+    }
+    pub(super) async fn ensure_replica_location(
+        &self,
+        instance_id: ComputeInstanceId,
+        replica_id: ReplicaId,
+        location: ComputeReplicaLocation,
+    ) -> Result<(Vec<String>, CommunicationConfig), anyhow::Error> {
+        match location {
+            ComputeReplicaLocation::Remote {
+                addrs,
+                compute_addrs,
+                workers,
+            } => {
+                let addrs = addrs.into_iter().collect();
+                let comm_config = CommunicationConfig {
+                    workers: workers.get(),
+                    process: 0,
+                    addresses: compute_addrs.into_iter().collect(),
+                };
+                Ok((addrs, comm_config))
+            }
+            ComputeReplicaLocation::Managed {
+                allocation,
+                availability_zone,
+                ..
+            } => {
+                let service = self
+                    .ensure_replica(instance_id, replica_id, allocation, availability_zone)
+                    .await?;
+
+                let addrs = service.addresses("controller");
+                let comm_config = CommunicationConfig {
+                    workers: allocation.workers.get(),
+                    process: 0,
+                    addresses: service.addresses("compute"),
+                };
+
+                tracing::debug!("Obtained comm_config: {:?}", comm_config);
+                Ok((addrs, comm_config))
+            }
         }
     }
 
@@ -53,6 +103,7 @@ impl ComputeOrchestrator {
                 &service_name,
                 ServiceConfig {
                     image: self.computed_image.clone(),
+                    init_container_image: self.init_container_image.clone(),
                     args: &|assigned| {
                         let mut compute_opts = vec![
                             format!(

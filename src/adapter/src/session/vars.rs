@@ -176,6 +176,12 @@ const TRANSACTION_ISOLATION: ServerVar<IsolationLevel> = ServerVar {
     description: "Sets the current transaction's isolation level (PostgreSQL).",
 };
 
+const MAX_AWS_PRIVATELINK_CONNECTIONS: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("max_aws_privatelink_connections"),
+    value: &0,
+    description: "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize).",
+};
+
 const MAX_TABLES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_tables"),
     value: &25,
@@ -259,6 +265,13 @@ static ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<ServerVar<Vec<String>>> = Lazy::new(|
     value: &DEFAULT_ALLOWED_CLUSTER_REPLICA_SIZES,
     description: "The allowed sizes when creating a new cluster replica (Materialize).",
 });
+
+/// Feature flag indicating whether window functions are enabled.
+static WINDOW_FUNCTIONS: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("window_functions"),
+    value: &true,
+    description: "Feature flag indicating whether window functions are enabled.",
+};
 
 /// Session variables.
 ///
@@ -389,6 +402,8 @@ impl SessionVars {
             &self.integer_datetimes,
             &self.server_version,
             &self.standard_conforming_strings,
+            &self.timezone,
+            &self.interval_style,
         ]
         .into_iter()
     }
@@ -777,6 +792,7 @@ impl SessionVars {
 /// See [`SessionVars`] for more details on the Materialize configuration model.
 #[derive(Debug, Clone)]
 pub struct SystemVars {
+    max_aws_privatelink_connections: SystemVar<u32>,
     max_tables: SystemVar<u32>,
     max_sources: SystemVar<u32>,
     max_sinks: SystemVar<u32>,
@@ -790,11 +806,13 @@ pub struct SystemVars {
     max_roles: SystemVar<u32>,
     max_result_size: SystemVar<u32>,
     allowed_cluster_replica_sizes: SystemVar<Vec<String>>, // TODO: BTreeSet<String> will be better
+    window_functions: SystemVar<bool>,
 }
 
 impl Default for SystemVars {
     fn default() -> Self {
         SystemVars {
+            max_aws_privatelink_connections: SystemVar::new(&MAX_AWS_PRIVATELINK_CONNECTIONS),
             max_tables: SystemVar::new(&MAX_TABLES),
             max_sources: SystemVar::new(&MAX_SOURCES),
             max_sinks: SystemVar::new(&MAX_SINKS),
@@ -808,6 +826,7 @@ impl Default for SystemVars {
             max_roles: SystemVar::new(&MAX_ROLES),
             max_result_size: SystemVar::new(&MAX_RESULT_SIZE),
             allowed_cluster_replica_sizes: SystemVar::new(&ALLOWED_CLUSTER_REPLICA_SIZES),
+            window_functions: SystemVar::new(&WINDOW_FUNCTIONS),
         }
     }
 }
@@ -817,7 +836,8 @@ impl SystemVars {
     /// values on disk.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
         vec![
-            &self.max_tables as &dyn Var,
+            &self.max_aws_privatelink_connections as &dyn Var,
+            &self.max_tables,
             &self.max_sources,
             &self.max_sinks,
             &self.max_materialized_views,
@@ -830,6 +850,7 @@ impl SystemVars {
             &self.max_roles,
             &self.max_result_size,
             &self.allowed_cluster_replica_sizes,
+            &self.window_functions,
         ]
         .into_iter()
     }
@@ -845,7 +866,9 @@ impl SystemVars {
     /// example, `self.get("max_tables").value()` returns the string
     /// `"25"` or the current value, while `self.max_tables()` returns an i32.
     pub fn get(&self, name: &str) -> Result<&dyn Var, AdapterError> {
-        if name == MAX_TABLES.name {
+        if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
+            Ok(&self.max_aws_privatelink_connections)
+        } else if name == MAX_TABLES.name {
             Ok(&self.max_tables)
         } else if name == MAX_SOURCES.name {
             Ok(&self.max_sources)
@@ -871,6 +894,8 @@ impl SystemVars {
             Ok(&self.max_result_size)
         } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
             Ok(&self.allowed_cluster_replica_sizes)
+        } else if name == WINDOW_FUNCTIONS.name {
+            Ok(&self.window_functions)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -884,7 +909,9 @@ impl SystemVars {
     /// configuration parameter, or if the named configuration parameter does
     /// not exist, an error is returned.
     pub fn set(&mut self, name: &str, value: &str) -> Result<(), AdapterError> {
-        if name == MAX_TABLES.name {
+        if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
+            self.max_aws_privatelink_connections.set(value)
+        } else if name == MAX_TABLES.name {
             self.max_tables.set(value)
         } else if name == MAX_SOURCES.name {
             self.max_sources.set(value)
@@ -910,6 +937,8 @@ impl SystemVars {
             self.max_result_size.set(value)
         } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
             self.allowed_cluster_replica_sizes.set(value)
+        } else if name == WINDOW_FUNCTIONS.name {
+            self.window_functions.set(value)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -921,7 +950,9 @@ impl SystemVars {
     /// insensitively. If the named configuration parameter does not exist, an
     /// error is returned.
     pub fn reset(&mut self, name: &str) -> Result<(), AdapterError> {
-        if name == MAX_TABLES.name {
+        if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
+            self.max_aws_privatelink_connections.reset()
+        } else if name == MAX_TABLES.name {
             self.max_tables.reset()
         } else if name == MAX_SOURCES.name {
             self.max_sources.reset()
@@ -947,10 +978,17 @@ impl SystemVars {
             self.max_result_size.reset()
         } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
             self.allowed_cluster_replica_sizes.reset()
+        } else if name == WINDOW_FUNCTIONS.name {
+            self.window_functions.reset()
         } else {
             return Err(AdapterError::UnknownParameter(name.into()));
         }
         Ok(())
+    }
+
+    /// Returns the value of the `max_aws_privatelink_connections` configuration parameter.
+    pub fn max_aws_privatelink_connections(&self) -> u32 {
+        *self.max_aws_privatelink_connections.value()
     }
 
     /// Returns the value of the `max_tables` configuration parameter.
@@ -1016,6 +1054,11 @@ impl SystemVars {
     /// Returns the value of the `allowed_cluster_replica_sizes` configuration parameter.
     pub fn allowed_cluster_replica_sizes(&self) -> &Vec<String> {
         self.allowed_cluster_replica_sizes.value()
+    }
+
+    /// Returns the `window_functions` configuration parameter.
+    pub fn window_functions(&self) -> bool {
+        *self.window_functions.value()
     }
 }
 

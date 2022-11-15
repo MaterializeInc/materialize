@@ -328,14 +328,20 @@ impl<'a> Parser<'a> {
     ) -> Result<Record<'a>, anyhow::Error> {
         let location = self.location();
         let mut conn = None;
+        let mut user = None;
         if let Some(options) = words.next() {
             for option in options.split(',') {
                 if let Some(value) = option.strip_prefix("conn=") {
                     conn = Some(value);
+                } else if let Some(value) = option.strip_prefix("user=") {
+                    user = Some(value);
                 } else {
                     bail!("Unrecognized option {:?} in {:?}", option, options);
                 }
             }
+        }
+        if user.is_some() && conn.is_none() {
+            bail!("cannot set user without also setting conn");
         }
         static QUERY_OUTPUT_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\r?\n----").unwrap());
         static DOUBLE_LINE_REGEX: Lazy<Regex> =
@@ -346,6 +352,7 @@ impl<'a> Parser<'a> {
         Ok(Record::Simple {
             location,
             conn,
+            user,
             sql,
             output,
             output_str,

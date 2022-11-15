@@ -13,13 +13,13 @@
 //! produced by the upstream service. The main export of this module is
 //! [`create_raw_source`], which turns
 //! [`RawSourceCreationConfigs`](RawSourceCreationConfig),
-//! [`SourceConnections`](crate::types::sources::SourceConnection), and
+//! [`SourceConnections`](mz_storage_client::types::sources::SourceConnection), and
 //! [`SourceReader`] implementations into the aforementioned streams.
 //!
 //! The full source, which is the _differential_ stream that represents the
 //! actual object created by a `CREATE SOURCE` statement, is created by
 //! composing [`create_raw_source`] with decoding,
-//! [`SourceEnvelope`](crate::types::sources::SourceEnvelope) rendering, and
+//! [`SourceEnvelope`](mz_storage_client::types::sources::SourceEnvelope) rendering, and
 //! more.
 
 // https://github.com/tokio-rs/prost/issues/237
@@ -29,10 +29,8 @@ use differential_dataflow::Hashable;
 
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
-use mz_ore::now::NowFn;
 use mz_repr::GlobalId;
 
-use crate::controller::CollectionMetadata;
 use crate::source::types::SourceMessageType;
 use crate::source::types::SourceReaderError;
 use crate::source::types::{NextMessage, SourceMessage, SourceReader};
@@ -41,11 +39,10 @@ mod antichain;
 mod commit;
 mod delimited_value_reader;
 pub mod generator;
-mod healthcheck;
+pub mod healthcheck;
 mod kafka;
 mod kinesis;
 pub mod metrics;
-pub mod persist_source;
 mod postgres;
 mod reclock;
 mod resumption;
@@ -55,9 +52,8 @@ mod source_reader_pipeline;
 #[doc(hidden)]
 pub mod testscript;
 pub mod types;
-pub mod util;
 
-pub use delimited_value_reader::DelimitedValueSource;
+pub use delimited_value_reader::DelimitedValueSourceConnection;
 pub use generator::LoadGeneratorSourceReader;
 pub use kafka::KafkaSourceReader;
 pub use kinesis::KinesisSourceReader;

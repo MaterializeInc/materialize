@@ -108,11 +108,12 @@ use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
 use mz_repr::GlobalId;
+use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
+use mz_storage_client::types::sources::IngestionDescription;
 
-use crate::controller::CollectionMetadata;
+use crate::source::types::SourcePersistSinkMetrics;
 use crate::storage_state::StorageState;
-use crate::types::sinks::StorageSinkDesc;
-use crate::types::sources::IngestionDescription;
 
 mod debezium;
 mod persist_sink;
@@ -154,12 +155,21 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             for (target, export) in description.source_exports {
                 let (ok, err) = &outputs[export.output_index];
                 let source_data = ok.map(Ok).concat(&err.map(Err));
+
+                let metrics = SourcePersistSinkMetrics::new(
+                    &storage_state.source_metrics,
+                    &export.storage_metadata.data_shard,
+                    id,
+                    export.output_index,
+                );
+
                 crate::render::persist_sink::render(
                     region,
                     target,
                     export.storage_metadata,
                     source_data,
                     storage_state,
+                    metrics,
                     Rc::clone(&token),
                 );
             }
@@ -174,7 +184,7 @@ pub fn build_export_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     storage_state: &mut StorageState,
     id: GlobalId,
-    description: StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,
+    description: StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let debug_name = id.to_string();

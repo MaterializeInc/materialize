@@ -130,7 +130,7 @@ where
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) gc: GarbageCollector<K, V, T, D>,
-    pub(crate) compact: Option<Compactor<T, D>>,
+    pub(crate) compact: Option<Compactor<K, V, T, D>>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
     pub(crate) cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
     pub(crate) writer_id: WriterId,
@@ -154,7 +154,7 @@ where
         metrics: Arc<Metrics>,
         machine: Machine<K, V, T, D>,
         gc: GarbageCollector<K, V, T, D>,
-        compact: Option<Compactor<T, D>>,
+        compact: Option<Compactor<K, V, T, D>>,
         blob: Arc<dyn Blob + Send + Sync>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         writer_id: WriterId,
@@ -646,6 +646,15 @@ where
         let elapsed_since_last_heartbeat =
             Duration::from_millis(heartbeat_ts.saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
+            if elapsed_since_last_heartbeat > self.machine.cfg.writer_lease_duration {
+                warn!(
+                    "writer ({}) of shard ({}) went {}s between heartbeats",
+                    self.writer_id,
+                    self.machine.shard_id(),
+                    elapsed_since_last_heartbeat.as_secs_f64()
+                );
+            }
+
             let (_, existed, maintenance) = self
                 .machine
                 .heartbeat_writer(&self.writer_id, heartbeat_ts)

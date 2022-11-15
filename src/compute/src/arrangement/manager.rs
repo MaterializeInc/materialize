@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Instant;
 
+use differential_dataflow::lattice::antichain_join;
 use differential_dataflow::trace::TraceReader;
 use prometheus::core::{AtomicF64, AtomicU64};
 use timely::progress::frontier::{Antichain, AntichainRef};
@@ -232,5 +233,13 @@ impl TraceBundle {
     /// Returns a reference to the `to_drop` tokens.
     pub fn to_drop(&self) -> &Option<Rc<dyn Any>> {
         &self.to_drop
+    }
+
+    /// Returns the frontier up to which the traces have been allowed to compact.
+    pub fn compaction_frontier(&mut self) -> Antichain<Timestamp> {
+        antichain_join(
+            &self.oks.get_logical_compaction(),
+            &self.errs.get_logical_compaction(),
+        )
     }
 }

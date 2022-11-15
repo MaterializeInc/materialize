@@ -25,22 +25,24 @@ use timely::progress::frontier::Antichain;
 use timely::progress::reachability::logging::TrackerEvent;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, Mutex};
+use uuid::Uuid;
 
 use mz_compute_client::command::{
-    ComputeCommand, ComputeCommandHistory, DataflowDescription, InstanceConfig, Peek, ReplicaId,
+    ComputeCommand, ComputeCommandHistory, DataflowDescription, InstanceConfig, Peek,
 };
 use mz_compute_client::logging::LoggingConfig;
+use mz_compute_client::metrics::ComputeMetrics;
 use mz_compute_client::plan::Plan;
 use mz_compute_client::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_storage::controller::CollectionMetadata;
-use mz_storage::types::errors::DataflowError;
+use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::operator::CollectionExt;
-use tracing::{span, Level};
+use tracing::{error, span, Level};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
@@ -51,8 +53,6 @@ use crate::logging::compute::ComputeEvent;
 /// This state is restricted to the COMPUTE state, the deterministic, idempotent work
 /// done between data ingress and egress.
 pub struct ComputeState {
-    /// The ID of the replica this worker belongs to.
-    pub replica_id: ReplicaId,
     /// The traces available for sharing across dataflows.
     pub traces: TraceManager,
     /// Tokens that should be dropped when a dataflow is dropped to clean up
@@ -67,7 +67,7 @@ pub struct ComputeState {
     /// equal to this frontier)
     pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
     /// Peek commands that are awaiting fulfillment.
-    pub pending_peeks: Vec<PendingPeek>,
+    pub pending_peeks: HashMap<Uuid, PendingPeek>,
     /// Tracks the frontier information that has been sent over `response_tx`.
     pub reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
     /// Collections that were recently dropped and whose removal needs to be reported.
@@ -81,6 +81,8 @@ pub struct ComputeState {
     pub command_history: ComputeCommandHistory,
     /// Max size in bytes of any result.
     pub max_result_size: u32,
+    /// Metrics for this replica.
+    pub metrics: ComputeMetrics,
 }
 
 impl ComputeState {
@@ -113,9 +115,21 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         use ComputeCommand::*;
-        self.compute_state.command_history.push(cmd.clone());
+        self.compute_state
+            .command_history
+            .push(cmd.clone(), &self.compute_state.pending_peeks);
+        self.compute_state.metrics.command_history_size.set(
+            u64::try_from(self.compute_state.command_history.len()).expect(
+                "The compute command history size must be non-negative and fit a 64-bit number",
+            ),
+        );
+        self.compute_state.metrics.dataflow_count_in_history.set(
+            u64::try_from(self.compute_state.command_history.dataflow_count()).expect(
+                "The number of dataflows in the compute history must be non-negative and fit a 64-bit number",
+            ),
+        );
         match cmd {
-            CreateTimely(_) => panic!("CreateTimely must be captured before"),
+            CreateTimely { .. } => panic!("CreateTimely must be captured before"),
             CreateInstance(config) => self.handle_create_instance(config),
             DropInstance => (),
             InitializationComplete => (),
@@ -133,9 +147,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     }
 
     fn handle_create_instance(&mut self, config: InstanceConfig) {
-        if let Some(logging) = config.logging {
-            self.initialize_logging(&logging);
-        }
+        self.initialize_logging(&config.logging);
     }
 
     fn handle_create_dataflows(
@@ -157,10 +169,14 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
             // Initialize frontiers for each object, and optionally log their construction.
             for (object_id, collection_id) in exported_ids {
-                self.compute_state.reported_frontiers.insert(
+                if let Some(frontier) = self.compute_state.reported_frontiers.insert(
                     object_id,
                     Antichain::from_elem(timely::progress::Timestamp::minimum()),
-                );
+                ) {
+                    error!(
+                        "existing frontier {frontier:?} for newly created dataflow id {object_id}"
+                    );
+                }
 
                 // Log dataflow construction, frontier construction, and any dependencies.
                 if let Some(logger) = self.compute_state.compute_logger.as_mut() {
@@ -205,7 +221,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                     .expect("Dropped compute collection with no frontier");
                 if let Some(logger) = self.compute_state.compute_logger.as_mut() {
                     logger.log(ComputeEvent::Dataflow(id, false));
-                    for time in prev_frontier.elements().iter() {
+                    if let Some(time) = prev_frontier.get(0) {
                         logger.log(ComputeEvent::Frontier(id, *time, -1));
                     }
                 }
@@ -230,13 +246,6 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
     #[tracing::instrument(level = "debug", skip(self))]
     fn handle_peek(&mut self, peek: Peek) {
-        // Only handle peeks that are not targeted at a different replica.
-        if let Some(target) = peek.target_replica {
-            if target != self.compute_state.replica_id {
-                return;
-            }
-        }
-
         // Acquire a copy of the trace suitable for fulfilling the peek.
         let mut trace_bundle = self.compute_state.traces.get(&peek.id).unwrap().clone();
         let timestamp_frontier = Antichain::from_elem(peek.timestamp);
@@ -270,7 +279,9 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             self.send_peek_response(peek, response);
         } else {
             peek.span = span!(parent: &peek.span, Level::DEBUG, "pending peek");
-            self.compute_state.pending_peeks.push(peek);
+            self.compute_state
+                .pending_peeks
+                .insert(peek.peek.uuid, peek);
         }
     }
 
@@ -278,13 +289,13 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         let pending_peeks_len = self.compute_state.pending_peeks.len();
         let mut pending_peeks = std::mem::replace(
             &mut self.compute_state.pending_peeks,
-            Vec::with_capacity(pending_peeks_len),
+            HashMap::with_capacity(pending_peeks_len),
         );
-        for peek in pending_peeks.drain(..) {
-            if uuids.contains(&peek.peek.uuid) {
+        for (uuid, peek) in pending_peeks.drain() {
+            if uuids.contains(&uuid) {
                 self.send_peek_response(peek, PeekResponse::Canceled);
             } else {
-                self.compute_state.pending_peeks.push(peek);
+                self.compute_state.pending_peeks.insert(uuid, peek);
             }
         }
     }
@@ -507,38 +518,42 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
         // Install traces as maintained indexes
         for (log, (trace, token)) in t_traces {
-            let id = logging.active_logs[&log];
+            let id = logging.index_logs[&log];
             self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
         }
         for (log, (trace, token)) in r_traces {
-            let id = logging.active_logs[&log];
+            let id = logging.index_logs[&log];
             self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
         }
         for (log, (trace, token)) in d_traces {
-            let id = logging.active_logs[&log];
+            let id = logging.index_logs[&log];
             self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
         }
         for (log, (trace, token)) in c_traces {
-            let id = logging.active_logs[&log];
+            let id = logging.index_logs[&log];
             self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
         }
 
         // Initialize frontier reporting for all logging indexes and sinks.
-        let index_ids = logging.active_logs.values().copied();
+        let index_ids = logging.index_logs.values().copied();
         let sink_ids = logging.sink_logs.values().map(|(id, _)| *id);
         for id in index_ids.chain(sink_ids) {
-            self.compute_state.reported_frontiers.insert(
+            if let Some(frontier) = self.compute_state.reported_frontiers.insert(
                 id,
                 Antichain::from_elem(timely::progress::Timestamp::minimum()),
-            );
+            ) {
+                error!(
+                    "existing frontier {frontier:?} for newly initialized logging export id {id}"
+                );
+            }
             logger.log(ComputeEvent::Frontier(
                 id,
                 timely::progress::Timestamp::minimum(),
@@ -637,16 +652,16 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         let pending_peeks_len = self.compute_state.pending_peeks.len();
         let mut pending_peeks = std::mem::replace(
             &mut self.compute_state.pending_peeks,
-            Vec::with_capacity(pending_peeks_len),
+            HashMap::with_capacity(pending_peeks_len),
         );
-        for mut peek in pending_peeks.drain(..) {
+        for (uuid, mut peek) in pending_peeks.drain() {
             if let Some(response) =
                 peek.seek_fulfillment(&mut upper, self.compute_state.max_result_size)
             {
                 let _span = tracing::info_span!(parent: &peek.span,  "process_peek").entered();
                 self.send_peek_response(peek, response);
             } else {
-                self.compute_state.pending_peeks.push(peek);
+                self.compute_state.pending_peeks.insert(uuid, peek);
             }
         }
     }
@@ -674,7 +689,9 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     /// Scan the shared subscribe response buffer, and forward results along.
     pub fn process_subscribes(&mut self) {
         let mut subscribe_responses = self.compute_state.subscribe_response_buffer.borrow_mut();
-        for (sink_id, response) in subscribe_responses.drain(..) {
+        for (sink_id, mut response) in subscribe_responses.drain(..) {
+            response
+                .to_error_if_exceeds(usize::try_from(self.compute_state.max_result_size).unwrap());
             self.send_compute_response(ComputeResponse::SubscribeResponse(sink_id, response));
         }
     }

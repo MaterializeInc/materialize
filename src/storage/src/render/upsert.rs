@@ -15,7 +15,6 @@ use std::rc::Rc;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection};
-use mz_ore::permutations::inverse_argsort;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Capability, CapabilityRef, Concat, OkErr, Operator};
@@ -26,14 +25,15 @@ use timely::progress::{Antichain, ChangeBatch};
 use tracing::{error, info};
 
 use mz_expr::{EvalError, MirScalarExpr};
+use mz_ore::permutations::inverse_argsort;
 use mz_repr::{Datum, DatumVec, DatumVecBorrow, Diff, Row, RowArena, Timestamp};
+use mz_storage_client::types::errors::{
+    DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertValueError,
+};
+use mz_storage_client::types::sources::{MzOffset, UpsertEnvelope, UpsertStyle};
 use mz_timely_util::operator::StreamExt;
 
 use crate::source::types::DecodeResult;
-use crate::types::errors::{
-    DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertValueError,
-};
-use crate::types::sources::{MzOffset, UpsertEnvelope, UpsertStyle};
 
 #[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 struct UpsertSourceData {

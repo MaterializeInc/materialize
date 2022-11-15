@@ -22,10 +22,10 @@ SHOW CLUSTER REPLICAS;
 ```
 
 ```nofmt
-    cluster    | replica |  size  |
----------------+---------|--------|
- auction_house | bigger  | xlarge |
- default       | r1      | xsmall |
+    cluster    | replica |  size  | ready |
+---------------+---------|--------|-------|
+ auction_house | bigger  | xlarge | t     |
+ default       | r1      | xsmall | t     |
 ```
 
 ```sql
@@ -33,9 +33,9 @@ SHOW CLUSTER REPLICAS WHERE cluster='default';
 ```
 
 ```nofmt
-    cluster    | replica |  size  |
----------------+---------|--------|
- default       | r1      | xsmall |
+    cluster    | replica |  size  | ready|
+---------------+---------|--------|-------
+ default       | r1      | xsmall | t    |
 ```
 
 

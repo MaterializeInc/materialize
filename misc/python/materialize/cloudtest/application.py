@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import os
 import subprocess
 from typing import List, Optional
 
@@ -24,6 +25,7 @@ from materialize.cloudtest.k8s.redpanda import REDPANDA_RESOURCES
 from materialize.cloudtest.k8s.role_binding import AdminRoleBinding
 from materialize.cloudtest.k8s.ssh import SSH_RESOURCES
 from materialize.cloudtest.k8s.testdrive import Testdrive
+from materialize.cloudtest.k8s.vpc_endpoints_cluster_role import VpcEndpointsClusterRole
 from materialize.cloudtest.wait import wait
 
 
@@ -71,11 +73,22 @@ class MaterializeApplication(Application):
         release_mode: bool = True,
         tag: Optional[str] = None,
         aws_region: Optional[str] = None,
+        log_filter: Optional[str] = None,
     ) -> None:
         self.environmentd = EnvironmentdService()
         self.testdrive = Testdrive(release_mode=release_mode, aws_region=aws_region)
         self.release_mode = release_mode
         self.aws_region = aws_region
+
+        # Register the VpcEndpoint CRD
+        self.kubectl(
+            "apply",
+            "-f",
+            os.path.join(
+                os.path.abspath(ROOT),
+                "src/cloud-resources/src/crd/gen/vpcendpoints.json",
+            ),
+        )
 
         self.resources = [
             *POSTGRES_RESOURCES,
@@ -84,8 +97,11 @@ class MaterializeApplication(Application):
             *DEBEZIUM_RESOURCES,
             *SSH_RESOURCES,
             Minio(),
+            VpcEndpointsClusterRole(),
             AdminRoleBinding(),
-            EnvironmentdStatefulSet(release_mode=release_mode, tag=tag),
+            EnvironmentdStatefulSet(
+                release_mode=release_mode, tag=tag, log_filter=log_filter
+            ),
             self.environmentd,
             self.testdrive,
         ]

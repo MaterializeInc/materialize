@@ -11,11 +11,11 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use mz_expr::PartitionId;
 use timely::progress::frontier::MutableAntichain;
 use timely::PartialOrder;
 
-use crate::types::sources::MzOffset;
+use mz_expr::PartitionId;
+use mz_storage_client::types::sources::MzOffset;
 
 /// OffsetAntichain is similar to a timely `Antichain<(PartitionId, T: TotalOrder)>`,
 /// but additionally:

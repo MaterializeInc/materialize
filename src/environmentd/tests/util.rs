@@ -38,13 +38,12 @@ use mz_ore::task;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
 use mz_secrets::SecretsController;
-use mz_storage::types::connections::ConnectionContext;
+use mz_stash::PostgresFactory;
+use mz_storage_client::types::connections::ConnectionContext;
 
-pub static KAFKA_ADDRS: Lazy<mz_kafka_util::KafkaAddrs> =
-    Lazy::new(|| match env::var("KAFKA_ADDRS") {
-        Ok(addr) => addr.parse().expect("unable to parse KAFKA_ADDRS"),
-        _ => "localhost:9092".parse().unwrap(),
-    });
+pub static KAFKA_ADDRS: Lazy<String> =
+    Lazy::new(|| env::var("KAFKA_ADDRS").unwrap_or_else(|_| "localhost:9092".into()));
+
 // Port 2181 is used by ZooKeeper.
 static PORT_ALLOCATOR: Lazy<Arc<PortAllocator>> =
     Lazy::new(|| Arc::new(PortAllocator::new_with_filter(2100, 2600, &[2181])));
@@ -200,6 +199,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     persist_cfg.consensus_connection_pool_max_size = 1;
     let persist_clients = PersistClientCache::new(persist_cfg, &metrics_registry);
     let persist_clients = Arc::new(Mutex::new(persist_clients));
+    let postgres_factory = PostgresFactory::new(&metrics_registry);
     let inner = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
         adapter_stash_url,
         controller: ControllerConfig {
@@ -207,6 +207,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             orchestrator: Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
             storaged_image: "storaged".into(),
             computed_image: "computed".into(),
+            init_container_image: None,
             persist_location: PersistLocation {
                 blob_uri: format!("file://{}/persist/blob", data_directory.display()),
                 consensus_uri,
@@ -214,8 +215,10 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             persist_clients,
             storage_stash_url,
             now: SYSTEM_TIME.clone(),
+            postgres_factory,
         },
         secrets_controller: Arc::clone(&orchestrator) as Arc<dyn SecretsController>,
+        cloud_resource_controller: None,
         sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         internal_sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -231,7 +234,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         cluster_replica_sizes: Default::default(),
         bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
         bootstrap_builtin_cluster_replica_size: config.builtin_cluster_replica_size,
-        bootstrap_system_vars: None,
+        bootstrap_system_parameters: Default::default(),
         storage_host_sizes: Default::default(),
         default_storage_host_size: None,
         availability_zones: Default::default(),

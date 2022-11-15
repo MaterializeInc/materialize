@@ -34,14 +34,17 @@ dbt-materialize:
       threads: 1
       host: [host]
       port: [port]
-      user: materialize
+      user: [user@domain.com]
       pass: [password]
       dbname: [database]
-      schema: [name of your dbt schema]
+      schema: [dbt schema]
+      cluster: [cluster] # default 'default'
+      sslmode: require
+      keepalives_idle: 0 # default 0
+
 ```
 
-Complete sample profiles (including for [Materialize Cloud](https://materialize.com/docs/cloud/get-started-with-cloud/#sign-up)) can be found in
-[sample_profiles.yml](dbt/include/materialize/sample_profiles.yml).
+Complete sample profiles can be found in [sample_profiles.yml](dbt/include/materialize/sample_profiles.yml).
 
 ## Supported Features
 
@@ -53,10 +56,20 @@ Type               | Supported? | Details
 `view`             | YES        | Creates a [view].
 `materializedview` | YES        | Creates a [materialized view].
 `table`            | YES        | Creates a [materialized view]. (Actual table support pending [#5266].)
-`index`            | YES        | (Deprecated) Creates an index. Use the `indexes` config to create indexes on `materializedview`, `view` or `source` relations instead.
 `sink`             | YES        | Creates a [sink].
 `ephemeral`        | YES        | Executes queries using CTEs.
 `incremental`      | NO         | Use the `materializedview` materialization instead! dbt's incremental models are valuable because they only spend your time and money transforming your new data as it arrives. Luckily, this is exactly what Materialize's materialized views were built to do! Better yet, our materialized views will always return up-to-date results without manual or configured refreshes. For more information, check out [our documentation](https://materialize.com/docs/).
+
+### Indexes
+
+Use the indexes option to define a list of [indexes](/sql/create-index/) on `source`, `view`, or `materialized view` materializations. Each Materialize index can have the following components:
+
+Component                            | Value     | Description
+-------------------------------------|-----------|--------------------------------------------------
+`columns`                            | `list`    | One or more columns on which the index is defined. To create an index that uses _all_ columns, use the `default` component instead.
+`name`                               | `string`  | The name for the index. If unspecified, Materialize will use the materialization name and column names provided.
+`cluster`                            | `string`  | The cluster to use to create the index. If unspecified, indexes will be created in the cluster used to create the materialization.
+`default`                            | `bool`    | Default: `False`. If set to `True`, creates a default index that uses all columns.
 
 ### Additional macros
 
@@ -82,7 +95,9 @@ Not tested.
 
 ### Sources
 
-Not tested.
+You can instruct dbt to create a [`dbt source`](https://docs.getdbt.com/docs/build/sources) in Materialize using the custom [source] materialization, which allows for injecting the complete source statement into your .sql file.
+
+`source freshness` is not supported because using Materialize, your sources will always be fresh.
 
 ### Documentation
 [`dbt docs`](https://docs.getdbt.com/reference/commands/cmd-docs) is supported.

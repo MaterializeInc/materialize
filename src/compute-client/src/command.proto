@@ -20,12 +20,17 @@ import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
 import "repr/src/relation_and_scalar.proto";
 import "repr/src/row.proto";
-import "storage/src/controller.proto";
-import "storage/src/protocol/client.proto";
+import "storage-client/src/controller.proto";
+import "storage-client/src/client.proto";
 
 import "google/protobuf/empty.proto";
 
 package mz_compute_client.command;
+
+message ProtoComputeStartupEpoch {
+  int64 envd = 1;
+  uint64 replica = 2;
+}
 
 message ProtoComputeCommand {
     message ProtoCreateDataflows {
@@ -36,23 +41,27 @@ message ProtoComputeCommand {
         repeated mz_proto.ProtoU128 uuids = 1;
     }
 
+    message ProtoCreateTimely {
+        ProtoCommunicationConfig comm_config = 1;
+        ProtoComputeStartupEpoch epoch = 2;
+    }
+
     oneof kind {
         ProtoInstanceConfig create_instance = 1;
         google.protobuf.Empty drop_instance = 2;
         ProtoCreateDataflows create_dataflows = 3;
-        mz_storage.protocol.client.ProtoAllowCompaction allow_compaction = 4;
+        mz_storage_client.client.ProtoAllowCompaction allow_compaction = 4;
         ProtoPeek peek = 5;
         ProtoCancelPeeks cancel_peeks = 6;
         google.protobuf.Empty initialization_complete = 7;
         ProtoUpdateMaxResultSize update_max_result_size = 8;
-        ProtoCommunicationConfig create_timely = 9;
+        ProtoCreateTimely create_timely = 9;
     }
 }
 
 message ProtoInstanceConfig {
     mz_compute_client.logging.ProtoLoggingConfig logging = 1;
-    uint64 replica_id = 2;
-    uint32 max_result_size = 3;
+    uint32 max_result_size = 2;
 }
 
 message ProtoCommunicationConfig {
@@ -109,7 +118,7 @@ message ProtoBuildDesc {
 
 message ProtoSourceInstanceDesc {
     ProtoSourceInstanceArguments arguments = 1;
-    mz_storage.controller.ProtoCollectionMetadata storage_metadata = 2;
+    mz_storage_client.controller.ProtoCollectionMetadata storage_metadata = 2;
     mz_repr.relation_and_scalar.ProtoRelationType typ = 3;
 }
 
@@ -124,8 +133,7 @@ message ProtoPeek {
     uint64 timestamp = 4;
     mz_expr.relation.ProtoRowSetFinishing finishing = 5;
     mz_expr.linear.ProtoSafeMfpPlan map_filter_project = 6;
-    optional uint64 target_replica = 7;
-    map<string, string> otel_ctx = 8;
+    map<string, string> otel_ctx = 7;
 }
 
 message ProtoUpdateMaxResultSize {

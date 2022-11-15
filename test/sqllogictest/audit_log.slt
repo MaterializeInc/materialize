@@ -84,7 +84,7 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 2  create  schema  {"database_name":"materialize","id":"3","name":"public"}  NULL
 3  create  role  {"id":"1","name":"materialize"}  NULL
 4  create  cluster  {"id":"u1","name":"default"}  NULL
-5  create  cluster-replica  {"cluster_id":"u1","cluster_name":"default","logical_size":"1","replica_name":"r1"}  NULL
+5  create  cluster-replica  {"cluster_id":"u1","cluster_name":"default","logical_size":"1","replica_id":"1","replica_name":"r1"}  NULL
 6  create  database  {"id":"2","name":"test"}  materialize
 7  create  schema  {"database_name":"test","id":"6","name":"public"}  materialize
 8  create  schema  {"database_name":"test","id":"7","name":"sc1"}  materialize
@@ -96,7 +96,7 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 14  create  role  {"id":"u2","name":"foo"}  materialize
 15  drop  role  {"id":"u2","name":"foo"}  materialize
 16  create  cluster  {"id":"u2","name":"foo"}  materialize
-17  create  cluster-replica  {"cluster_id":"u2","cluster_name":"foo","logical_size":"1","replica_name":"r"}  materialize
+17  create  cluster-replica  {"cluster_id":"u2","cluster_name":"foo","logical_size":"1","replica_id":"4","replica_name":"r"}  materialize
 18  create  materialized-view  {"database":"materialize","id":"u1","item":"v2","schema":"public"}  materialize
 19  create  view  {"database":"materialize","id":"u2","item":"unmat","schema":"public"}  materialize
 20  create  table  {"database":"materialize","id":"u3","item":"t","schema":"public"}  materialize
@@ -116,5 +116,5 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 34  create  source  {"database":"materialize","id":"u11","item":"organizations","schema":"public","size":null}  materialize
 35  create  source  {"database":"materialize","id":"u12","item":"users","schema":"public","size":null}  materialize
 36  create  source  {"database":"materialize","id":"u13","item":"multiplex","schema":"public","size":"1"}  materialize
-37  drop  cluster-replica  {"cluster_id":"u2","cluster_name":"foo","replica_name":"r"}  materialize
+37  drop  cluster-replica  {"cluster_id":"u2","cluster_name":"foo","replica_id":"4","replica_name":"r"}  materialize
 38  drop  cluster  {"id":"u2","name":"foo"}  materialize

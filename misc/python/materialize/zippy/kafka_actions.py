@@ -8,6 +8,8 @@
 # by the Apache License, Version 2.0.
 
 import random
+import threading
+from textwrap import dedent
 from typing import List, Set, Type
 
 from materialize.mzcompose import Composition
@@ -116,19 +118,37 @@ class Ingest(Action):
 class KafkaInsert(Ingest):
     """Inserts data into a Kafka topic."""
 
+    def parallel(self) -> bool:
+        return False
+
     def run(self, c: Composition) -> None:
         prev_max = self.topic.watermarks.max
         self.topic.watermarks.max = prev_max + self.delta
         assert self.topic.watermarks.max >= 0
         assert self.topic.watermarks.min >= 0
-        c.testdrive(
-            f"""
-{SCHEMA}
 
-$ kafka-ingest format=avro key-format=avro topic={self.topic.name} schema=${{schema}} key-schema=${{keyschema}} start-iteration={prev_max + 1} repeat={self.delta}
-{{"key": ${{kafka-ingest.iteration}}}} {{"f1": ${{kafka-ingest.iteration}}}}
-"""
+        testdrive_str = SCHEMA + dedent(
+            f"""
+            $ kafka-ingest format=avro key-format=avro topic={self.topic.name} schema=${{schema}} key-schema=${{keyschema}} start-iteration={prev_max + 1} repeat={self.delta}
+            {{"key": ${{kafka-ingest.iteration}}}} {{"f1": ${{kafka-ingest.iteration}}}}
+            """
         )
+
+        if self.parallel():
+            threading.Thread(target=c.testdrive, args=[testdrive_str]).start()
+        else:
+            c.testdrive(testdrive_str)
+
+
+class KafkaInsertParallel(KafkaInsert):
+    """Inserts data into a Kafka topic using background threads."""
+
+    @classmethod
+    def require_explicit_mention(self) -> bool:
+        return True
+
+    def parallel(self) -> bool:
+        return True
 
 
 class KafkaDeleteFromHead(Ingest):

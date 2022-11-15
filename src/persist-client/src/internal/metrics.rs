@@ -308,6 +308,7 @@ impl MetricsVecs {
             register: self.cmd_metrics("register"),
             clone_reader: self.cmd_metrics("clone_reader"),
             compare_and_append: self.cmd_metrics("compare_and_append"),
+            compare_and_downgrade_since: self.cmd_metrics("compare_and_downgrade_since"),
             downgrade_since: self.cmd_metrics("downgrade_since"),
             heartbeat_reader: self.cmd_metrics("heartbeat_reader"),
             heartbeat_writer: self.cmd_metrics("heartbeat_writer"),
@@ -480,6 +481,7 @@ pub struct CmdsMetrics {
     pub(crate) register: CmdMetrics,
     pub(crate) clone_reader: CmdMetrics,
     pub(crate) compare_and_append: CmdMetrics,
+    pub(crate) compare_and_downgrade_since: CmdMetrics,
     pub(crate) downgrade_since: CmdMetrics,
     pub(crate) heartbeat_writer: CmdMetrics,
     pub(crate) heartbeat_reader: CmdMetrics,
@@ -593,6 +595,7 @@ impl BatchWriteMetrics {
 #[derive(Debug)]
 pub struct CompactionMetrics {
     pub(crate) requested: IntCounter,
+    pub(crate) dropped: IntCounter,
     pub(crate) skipped: IntCounter,
     pub(crate) started: IntCounter,
     pub(crate) applied: IntCounter,
@@ -601,7 +604,6 @@ pub struct CompactionMetrics {
     pub(crate) noop: IntCounter,
     pub(crate) seconds: Counter,
     pub(crate) concurrency_waits: IntCounter,
-    pub(crate) single_batch_fast_path: IntCounter,
     pub(crate) memory_violations: IntCounter,
     pub(crate) runs_compacted: IntCounter,
     pub(crate) chunks_compacted: IntCounter,
@@ -631,6 +633,10 @@ impl CompactionMetrics {
             requested: registry.register(metric!(
                 name: "mz_persist_compaction_requested",
                 help: "count of total compaction requests",
+            )),
+            dropped: registry.register(metric!(
+                name: "mz_persist_compaction_dropped",
+                help: "count of total compaction requests dropped due to a full queue",
             )),
             skipped: registry.register(metric!(
                 name: "mz_persist_compaction_skipped",
@@ -663,10 +669,6 @@ impl CompactionMetrics {
             concurrency_waits: registry.register(metric!(
                 name: "mz_persist_compaction_concurrency_waits",
                 help: "count of compaction requests that ever blocked due to concurrency limit",
-            )),
-            single_batch_fast_path: registry.register(metric!(
-                name: "mz_persist_compaction_single_batch_fast_path",
-                help: "count of single nonempty batch fast path compactions",
             )),
             memory_violations: registry.register(metric!(
                 name: "mz_persist_compaction_memory_violations",
@@ -772,6 +774,7 @@ impl GcMetrics {
 #[derive(Debug)]
 pub struct LeaseMetrics {
     pub(crate) timeout_read: IntCounter,
+    pub(crate) dropped_part: IntCounter,
 }
 
 impl LeaseMetrics {
@@ -780,6 +783,10 @@ impl LeaseMetrics {
             timeout_read: registry.register(metric!(
                 name: "mz_persist_lease_timeout_read",
                 help: "count of readers whose lease timed out",
+            )),
+            dropped_part: registry.register(metric!(
+                name: "mz_persist_lease_dropped_part",
+                help: "count of LeasedBatchParts that were dropped without being politely returned",
             )),
         }
     }
@@ -880,6 +887,8 @@ impl CodecMetrics {
 pub struct StateMetrics {
     pub(crate) apply_spine_fast_path: IntCounter,
     pub(crate) apply_spine_slow_path: IntCounter,
+    pub(crate) apply_spine_slow_path_lenient: IntCounter,
+    pub(crate) apply_spine_slow_path_lenient_adjustment: IntCounter,
     pub(crate) apply_spine_slow_path_with_reconstruction: IntCounter,
     pub(crate) update_state_fast_path: IntCounter,
     pub(crate) update_state_slow_path: IntCounter,
@@ -896,6 +905,14 @@ impl StateMetrics {
             apply_spine_slow_path: registry.register(metric!(
                 name: "mz_persist_state_apply_spine_slow_path",
                 help: "count of spine diff applications that hit the slow path",
+            )),
+            apply_spine_slow_path_lenient: registry.register(metric!(
+                name: "mz_persist_state_apply_spine_slow_path_lenient",
+                help: "count of spine diff applications that hit the lenient compaction apply path",
+            )),
+            apply_spine_slow_path_lenient_adjustment: registry.register(metric!(
+                name: "mz_persist_state_apply_spine_slow_path_lenient_adjustment",
+                help: "count of adjustments made by the lenient compaction apply path",
             )),
             apply_spine_slow_path_with_reconstruction: registry.register(metric!(
                 name: "mz_persist_state_apply_spine_slow_path_with_reconstruction",

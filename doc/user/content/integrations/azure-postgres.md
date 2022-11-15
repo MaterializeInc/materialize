@@ -26,5 +26,5 @@ For more information, see the [Azure Database for PostgreSQL](https://docs.micro
 
 ## Related pages
 
-- [Change Data Capture (Postgres)](../cdc-postgres/)
-- [`CREATE SOURCE FROM POSTGRES`](/sql/create-source/postgres/)
+- [`CREATE SOURCE`: PostgreSQL](/sql/create-source/postgres/)
+- [PostgreSQL CDC guide](../cdc-postgres/)

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 use std::iter::once;
 use std::time::Duration;
@@ -30,7 +30,7 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_stash::{Append, AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
-use mz_storage::types::sources::Timeline;
+use mz_storage_client::types::sources::Timeline;
 
 use crate::catalog;
 use crate::catalog::builtin::{
@@ -328,6 +328,7 @@ async fn migrate<S: Append>(
                                 cluster_id: DEFAULT_USER_COMPUTE_INSTANCE_ID.to_string(),
                                 cluster_name: default_instance.name,
                                 replica_name: default_replica.name,
+                                replica_id: Some(DEFAULT_REPLICA_ID.to_string()),
                                 logical_size: bootstrap_args.default_cluster_replica_size.clone(),
                             },
                         ),
@@ -1203,6 +1204,35 @@ impl<'a, S: Append> Transaction<'a, S> {
         Ok((id, compute_instance_id))
     }
 
+    /// Updates persisted information about persisted introspection source
+    /// indexes.
+    ///
+    /// Panics if provided id is not a system id.
+    pub fn update_introspection_source_index_gids(
+        &mut self,
+        mappings: impl Iterator<Item = (ComputeInstanceId, impl Iterator<Item = (String, GlobalId)>)>,
+    ) -> Result<(), Error> {
+        for (compute_id, updates) in mappings {
+            for (name, id) in updates {
+                let index_id = if let GlobalId::System(index_id) = id {
+                    index_id
+                } else {
+                    panic!("Introspection source index should have a system id")
+                };
+                let prev = self.introspection_sources.set(
+                    ComputeIntrospectionSourceIndexKey { compute_id, name },
+                    Some(ComputeIntrospectionSourceIndexValue { index_id }),
+                )?;
+                if prev.is_none() {
+                    return Err(Error {
+                        kind: ErrorKind::FailedBuiltinSchemaMigration(format!("{id}")),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn insert_item(
         &mut self,
         id: GlobalId,
@@ -1236,21 +1266,16 @@ impl<'a, S: Append> Transaction<'a, S> {
         let next_id = id
             .checked_add(1)
             .ok_or_else(|| Error::new(ErrorKind::IdExhaustion))?;
-        let diff = self.id_allocator.update(|k, _v| {
-            if k.name == key {
-                Some(IdAllocValue { next_id })
-            } else {
-                None
-            }
-        })?;
-        assert_eq!(diff, 1);
+        let prev = self
+            .id_allocator
+            .set(IdAllocKey { name: key }, Some(IdAllocValue { next_id }))?;
+        assert!(prev.is_some());
         Ok(id)
     }
 
     pub fn remove_database(&mut self, id: &DatabaseId) -> Result<(), Error> {
-        let n = self.databases.delete(|k, _v| k.id == id.0).len();
-        assert!(n <= 1);
-        if n == 1 {
+        let prev = self.databases.set(DatabaseKey { id: id.0 }, None)?;
+        if prev.is_some() {
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownDatabase(id.to_string()).into())
@@ -1262,9 +1287,8 @@ impl<'a, S: Append> Transaction<'a, S> {
         database_id: &DatabaseId,
         schema_id: &SchemaId,
     ) -> Result<(), Error> {
-        let n = self.schemas.delete(|k, _v| k.id == schema_id.0).len();
-        assert!(n <= 1);
-        if n == 1 {
+        let prev = self.schemas.set(SchemaKey { id: schema_id.0 }, None)?;
+        if prev.is_some() {
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownSchema(format!("{}.{}", database_id.0, schema_id.0)).into())
@@ -1323,16 +1347,44 @@ impl<'a, S: Append> Transaction<'a, S> {
         }
     }
 
+    /// Removes item `id` from the transaction.
+    ///
+    /// Returns an error if `id` is not found.
+    ///
+    /// Runtime is linear with respect to the total number of items in the stash.
+    /// DO NOT call this function in a loop, use [`Self::remove_items`] instead.
     pub fn remove_item(&mut self, id: GlobalId) -> Result<(), Error> {
-        let n = self.items.delete(|k, _v| k.gid == id).len();
-        assert!(n <= 1);
-        if n == 1 {
+        let prev = self.items.set(ItemKey { gid: id }, None)?;
+        if prev.is_some() {
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownItem(id.to_string()).into())
         }
     }
 
+    /// Removes all items in `ids` from the transaction.
+    ///
+    /// Returns an error if any id in `ids` is not found.
+    ///
+    /// NOTE: On error, there still may be some items removed from the transaction. It is
+    /// up to the called to either abort the transaction or commit.
+    pub fn remove_items(&mut self, ids: BTreeSet<GlobalId>) -> Result<(), Error> {
+        let n = self.items.delete(|k, _v| ids.contains(&k.gid)).len();
+        if n == ids.len() {
+            Ok(())
+        } else {
+            let item_gids = self.items.items().keys().map(|k| k.gid).collect();
+            let mut unknown = ids.difference(&item_gids);
+            Err(SqlCatalogError::UnknownItem(unknown.join(", ")).into())
+        }
+    }
+
+    /// Updates item `id` in the transaction to `item_name` and `item`.
+    ///
+    /// Returns an error if `id` is not found.
+    ///
+    /// Runtime is linear with respect to the total number of items in the stash.
+    /// DO NOT call this function in a loop, use [`Self::update_items`] instead.
     pub fn update_item(
         &mut self,
         id: GlobalId,
@@ -1358,15 +1410,45 @@ impl<'a, S: Append> Transaction<'a, S> {
         }
     }
 
-    pub fn update_user_version(&mut self, version: u64) -> Result<(), Error> {
-        let n = self.configs.update(|k, _v| {
-            if k == USER_VERSION {
-                Some(ConfigValue { value: version })
+    /// Updates all items with ids matching the keys of `items` in the transaction, to the
+    /// corresponding value in `items`.
+    ///
+    /// Returns an error if any id in `ids` is not found.
+    ///
+    /// NOTE: On error, there still may be some items updated in the transaction. It is
+    /// up to the called to either abort the transaction or commit.
+    pub fn update_items(
+        &mut self,
+        items: BTreeMap<GlobalId, (String, SerializedCatalogItem)>,
+    ) -> Result<(), Error> {
+        let n = self.items.update(|k, v| {
+            if let Some((item_name, item)) = items.get(&k.gid) {
+                Some(ItemValue {
+                    schema_id: v.schema_id,
+                    name: item_name.clone(),
+                    definition: item.clone(),
+                })
             } else {
                 None
             }
         })?;
-        assert_eq!(n, 1);
+        let n = usize::try_from(n).expect("Must be positive and fit in usize");
+        if n == items.len() {
+            Ok(())
+        } else {
+            let update_ids: BTreeSet<_> = items.into_keys().collect();
+            let item_ids: BTreeSet<_> = self.items.items().keys().map(|k| k.gid).collect();
+            let mut unknown = update_ids.difference(&item_ids);
+            Err(SqlCatalogError::UnknownItem(unknown.join(", ")).into())
+        }
+    }
+
+    pub fn update_user_version(&mut self, version: u64) -> Result<(), Error> {
+        let prev = self.configs.set(
+            USER_VERSION.to_string(),
+            Some(ConfigValue { value: version }),
+        )?;
+        assert!(prev.is_some());
         Ok(())
     }
 
@@ -1412,8 +1494,7 @@ impl<'a, S: Append> Transaction<'a, S> {
         let value = ServerConfigurationValue {
             value: value.to_string(),
         };
-        self.system_configurations.delete(|k, _v| k == &key);
-        self.system_configurations.insert(key, value)?;
+        self.system_configurations.set(key, Some(value))?;
         Ok(())
     }
 
@@ -1422,7 +1503,9 @@ impl<'a, S: Append> Transaction<'a, S> {
         let key = ServerConfigurationKey {
             name: name.to_string(),
         };
-        self.system_configurations.delete(|k, _v| k == &key);
+        self.system_configurations
+            .set(key, None)
+            .expect("cannot have uniqueness violation");
     }
 
     /// Removes all persisted system configurations.
@@ -1432,8 +1515,11 @@ impl<'a, S: Append> Transaction<'a, S> {
 
     pub fn remove_timestamp(&mut self, timeline: Timeline) {
         let timeline_str = timeline.to_string();
-        let n = self.timestamps.delete(|k, _v| k.id == timeline_str).len();
-        assert_eq!(n, 1);
+        let prev = self
+            .timestamps
+            .set(TimestampKey { id: timeline_str }, None)
+            .expect("cannot have uniqueness violation");
+        assert!(prev.is_some());
     }
 
     #[tracing::instrument(level = "debug", skip_all)]

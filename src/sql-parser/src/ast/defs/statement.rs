@@ -29,9 +29,10 @@ use enum_kinds::EnumKind;
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     AstInfo, ColumnDef, CreateConnection, CreateSinkConnection, CreateSourceConnection,
-    CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, Envelope, Expr, Format, Ident,
-    KeyConstraint, Query, SelectItem, SourceIncludeMetadata, TableAlias, TableConstraint,
-    TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, DeferredObjectName, Envelope,
+    Expr, Format, Ident, KeyConstraint, Query, SelectItem, SourceIncludeMetadata, TableAlias,
+    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -429,6 +430,76 @@ impl AstDisplay for CreateSchemaStatement {
 }
 impl_display!(CreateSchemaStatement);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct KafkaBroker<T: AstInfo> {
+    pub address: String,
+    pub aws_privatelink: Option<KafkaBrokerAwsPrivatelink<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for KafkaBroker<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("'");
+        f.write_node(&display::escape_single_quote_string(&self.address));
+        f.write_str("'");
+        if let Some(aws_privatelink) = &self.aws_privatelink {
+            f.write_str(" ");
+            f.write_node(aws_privatelink);
+        }
+    }
+}
+
+impl_display_t!(KafkaBroker);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum KafkaBrokerAwsPrivatelinkOptionName {
+    Port,
+}
+
+impl AstDisplay for KafkaBrokerAwsPrivatelinkOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            Self::Port => f.write_str("PORT"),
+        }
+    }
+}
+impl_display!(KafkaBrokerAwsPrivatelinkOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct KafkaBrokerAwsPrivatelinkOption<T: AstInfo> {
+    pub name: KafkaBrokerAwsPrivatelinkOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for KafkaBrokerAwsPrivatelinkOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(value) = &self.value {
+            f.write_str(" ");
+            f.write_node(value);
+        }
+    }
+}
+impl_display_t!(KafkaBrokerAwsPrivatelinkOption);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct KafkaBrokerAwsPrivatelink<T: AstInfo> {
+    pub connection: T::ObjectName,
+    pub options: Vec<KafkaBrokerAwsPrivatelinkOption<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for KafkaBrokerAwsPrivatelink<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("USING AWS PRIVATELINK ");
+        f.write_node(&self.connection);
+        if !self.options.is_empty() {
+            f.write_str(" (");
+            f.write_node(&display::comma_separated(&self.options));
+            f.write_str(")");
+        }
+    }
+}
+impl_display_t!(KafkaBrokerAwsPrivatelink);
+
 /// `CREATE CONNECTION`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateConnectionStatement<T: AstInfo> {
@@ -462,7 +533,7 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub if_not_exists: bool,
     pub key_constraint: Option<KeyConstraint>,
     pub with_options: Vec<CreateSourceOption<T>>,
-    pub subsources: Option<CreateSourceSubsources<T>>,
+    pub subsources: Option<CreateReferencedSubsources<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
@@ -513,45 +584,33 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
 }
 impl_display_t!(CreateSourceStatement);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// A selected subsource in a FOR TABLES (..) statement
-pub enum CreateSourceSubsource<T: AstInfo> {
-    /// An unaliased subbsource
-    Bare(UnresolvedObjectName),
-    /// An subbsource aliased to a different name
-    Aliased(UnresolvedObjectName, UnresolvedObjectName),
-    /// An subbsource fully resolved to the target catalog object it will be written to
-    Resolved(UnresolvedObjectName, T::ObjectName),
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateSourceSubsource<T: AstInfo> {
+    pub reference: UnresolvedObjectName,
+    pub subsource: Option<DeferredObjectName<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceSubsource<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            Self::Bare(name) => f.write_node(name),
-            Self::Aliased(name, alias) => {
-                f.write_node(name);
-                f.write_str(" AS ");
-                f.write_node(alias);
-            }
-            Self::Resolved(name, target) => {
-                f.write_node(name);
-                f.write_str(" INTO ");
-                f.write_node(target);
-            }
+        f.write_node(&self.reference);
+        if let Some(subsource) = &self.subsource {
+            f.write_str(" AS ");
+            f.write_node(subsource);
         }
     }
 }
 impl_display_t!(CreateSourceSubsource);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CreateSourceSubsources<T: AstInfo> {
+pub enum CreateReferencedSubsources<T: AstInfo> {
     /// A subset defined with FOR TABLES (...)
     Subset(Vec<CreateSourceSubsource<T>>),
     /// FOR ALL TABLES
     All,
 }
 
-impl<T: AstInfo> AstDisplay for CreateSourceSubsources<T> {
+impl<T: AstInfo> AstDisplay for CreateReferencedSubsources<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             Self::Subset(subsources) => {
@@ -563,7 +622,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceSubsources<T> {
         }
     }
 }
-impl_display_t!(CreateSourceSubsources);
+impl_display_t!(CreateReferencedSubsources);
 
 /// `CREATE SUBSOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2151,6 +2210,7 @@ pub enum WithOptionValue<T: AstInfo> {
     Sequence(Vec<WithOptionValue<T>>),
     // Special cases.
     ClusterReplicas(Vec<ReplicaDefinition<T>>),
+    ConnectionKafkaBroker(KafkaBroker<T>),
 }
 
 impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
@@ -2173,6 +2233,9 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 f.write_str("(");
                 f.write_node(&display::comma_separated(replicas));
                 f.write_str(")");
+            }
+            WithOptionValue::ConnectionKafkaBroker(broker) => {
+                f.write_node(broker);
             }
         }
     }

@@ -31,7 +31,8 @@ use tracing::{debug, debug_span, instrument, trace_span, warn, Instrument};
 use uuid::Uuid;
 
 use crate::fetch::{
-    fetch_leased_part, BatchFetcher, LeasedBatchPart, SerdeLeasedBatchPartMetadata,
+    fetch_leased_part, BatchFetcher, LeasedBatchPart, SerdeLeasedBatchPart,
+    SerdeLeasedBatchPartMetadata,
 };
 use crate::internal::machine::Machine;
 use crate::internal::metrics::{Metrics, MetricsRetryStream};
@@ -41,35 +42,35 @@ use crate::{parse_id, GarbageCollector, PersistConfig};
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
-pub struct ReaderId(pub(crate) [u8; 16]);
+pub struct LeasedReaderId(pub(crate) [u8; 16]);
 
-impl std::fmt::Display for ReaderId {
+impl std::fmt::Display for LeasedReaderId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "r{}", Uuid::from_bytes(self.0))
     }
 }
 
-impl std::fmt::Debug for ReaderId {
+impl std::fmt::Debug for LeasedReaderId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ReaderId({})", Uuid::from_bytes(self.0))
+        write!(f, "LeasedReaderId({})", Uuid::from_bytes(self.0))
     }
 }
 
-impl std::str::FromStr for ReaderId {
+impl std::str::FromStr for LeasedReaderId {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_id('r', "ReaderId", s).map(ReaderId)
+        parse_id('r', "LeasedReaderId", s).map(LeasedReaderId)
     }
 }
 
-impl From<ReaderId> for String {
-    fn from(reader_id: ReaderId) -> Self {
+impl From<LeasedReaderId> for String {
+    fn from(reader_id: LeasedReaderId) -> Self {
         reader_id.to_string()
     }
 }
 
-impl TryFrom<String> for ReaderId {
+impl TryFrom<String> for LeasedReaderId {
     type Error = String;
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
@@ -77,9 +78,9 @@ impl TryFrom<String> for ReaderId {
     }
 }
 
-impl ReaderId {
+impl LeasedReaderId {
     pub(crate) fn new() -> Self {
-        ReaderId(*Uuid::new_v4().as_bytes())
+        LeasedReaderId(*Uuid::new_v4().as_bytes())
     }
 }
 
@@ -135,6 +136,11 @@ where
             Some(x) => x,
             None => self.listen.next_parts().await,
         }
+    }
+
+    /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
+    pub fn leased_part_from_exchangeable(&self, x: SerdeLeasedBatchPart) -> LeasedBatchPart<T> {
+        LeasedBatchPart::from(x, Arc::clone(&self.listen.handle.metrics))
     }
 
     /// Returns the given [`LeasedBatchPart`], releasing its lease.
@@ -414,7 +420,7 @@ where
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) gc: GarbageCollector<K, V, T, D>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
-    pub(crate) reader_id: ReaderId,
+    pub(crate) reader_id: LeasedReaderId,
 
     since: Antichain<T>,
     last_heartbeat: EpochMillis,
@@ -437,7 +443,7 @@ where
         machine: Machine<K, V, T, D>,
         gc: GarbageCollector<K, V, T, D>,
         blob: Arc<dyn Blob + Send + Sync>,
-        reader_id: ReaderId,
+        reader_id: LeasedReaderId,
         since: Antichain<T>,
         last_heartbeat: EpochMillis,
     ) -> Self {
@@ -483,6 +489,25 @@ where
             .machine
             .downgrade_since(&self.reader_id, outstanding_seqno, new_since, heartbeat_ts)
             .await;
+
+        // Debugging for #15937.
+        if let Some(outstanding_seqno) = outstanding_seqno {
+            let seqnos_held = outstanding_seqno.0.saturating_sub(_seqno.0);
+            // We get just over 1 seqno-per-second on average for a shard in
+            // prod, so this is about an hour.
+            const SEQNOS_HELD_THRESHOLD: u64 = 60 * 60;
+            if seqnos_held >= SEQNOS_HELD_THRESHOLD {
+                tracing::info!(
+                    "{} reader {} holding an unexpected number of seqnos {} vs {}: {:?}",
+                    self.machine.shard_id(),
+                    self.reader_id,
+                    outstanding_seqno,
+                    _seqno,
+                    self.leased_seqnos,
+                );
+            }
+        }
+
         self.since = current_reader_since.0;
         // A heartbeat is just any downgrade_since traffic, so update the
         // internal rate limiter here to play nicely with `maybe_heartbeat`.
@@ -598,6 +623,7 @@ where
         metadata: SerdeLeasedBatchPartMetadata,
     ) -> impl Iterator<Item = LeasedBatchPart<T>> + '_ {
         batch.parts.into_iter().map(move |part| LeasedBatchPart {
+            metrics: Arc::clone(&self.metrics),
             shard_id: self.machine.shard_id(),
             reader_id: self.reader_id.clone(),
             metadata: metadata.clone(),
@@ -643,11 +669,11 @@ where
         }
     }
 
-    /// Returns an independent [ReadHandle] with a new [ReaderId] but the same
-    /// `since`.
+    /// Returns an independent [ReadHandle] with a new [LeasedReaderId] but the
+    /// same `since`.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn clone(&self) -> Self {
-        let new_reader_id = ReaderId::new();
+        let new_reader_id = LeasedReaderId::new();
         let mut machine = self.machine.clone();
         let heartbeat_ts = (self.cfg.now)();
         let read_cap = machine
@@ -700,13 +726,22 @@ where
         let elapsed_since_last_heartbeat =
             Duration::from_millis(heartbeat_ts.saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
+            if elapsed_since_last_heartbeat > self.machine.cfg.reader_lease_duration {
+                warn!(
+                    "reader ({}) of shard ({}) went {}s between heartbeats",
+                    self.reader_id,
+                    self.machine.shard_id(),
+                    elapsed_since_last_heartbeat.as_secs_f64()
+                );
+            }
+
             let (_, existed, maintenance) = self
                 .machine
-                .heartbeat_reader(&self.reader_id, heartbeat_ts)
+                .heartbeat_leased_reader(&self.reader_id, heartbeat_ts)
                 .await;
             if !existed {
                 panic!(
-                    "ReaderId({}) was expired due to inactivity. Did the machine go to sleep?",
+                    "LeasedReaderId({}) was expired due to inactivity. Did the machine go to sleep?",
                     self.reader_id
                 )
             }
@@ -725,7 +760,7 @@ where
     /// happens.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn expire(mut self) {
-        self.machine.expire_reader(&self.reader_id).await;
+        self.machine.expire_leased_reader(&self.reader_id).await;
         self.explicitly_expired = true;
     }
 
@@ -838,7 +873,7 @@ where
         let _ = handle.spawn_named(
             || format!("ReadHandle::expire ({})", self.reader_id),
             async move {
-                machine.expire_reader(&reader_id).await;
+                machine.expire_leased_reader(&reader_id).await;
             }
             .instrument(expire_span),
         );
@@ -1024,7 +1059,7 @@ mod tests {
 
         // Return any outstanding parts, to prevent a panic!
         for part in subsequent_parts {
-            subscribe.return_leased_part(part.into());
+            subscribe.return_leased_part(subscribe.leased_part_from_exchangeable(part));
         }
 
         drop(subscribe);
@@ -1034,11 +1069,12 @@ mod tests {
     fn reader_id_human_readable_serde() {
         #[derive(Debug, Serialize, Deserialize)]
         struct Container {
-            reader_id: ReaderId,
+            reader_id: LeasedReaderId,
         }
 
         // roundtrip through json
-        let id = ReaderId::from_str("r00000000-1234-5678-0000-000000000000").expect("valid id");
+        let id =
+            LeasedReaderId::from_str("r00000000-1234-5678-0000-000000000000").expect("valid id");
         assert_eq!(
             id,
             serde_json::from_value(serde_json::to_value(id.clone()).expect("serializable"))

@@ -15,9 +15,9 @@
 
 extern crate core;
 
+mod configuration;
 mod login;
 mod password;
-mod profiles;
 mod region;
 mod shell;
 mod utils;
@@ -25,24 +25,24 @@ mod utils;
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
+use configuration::Configuration;
 use login::generate_api_token;
 use password::list_passwords;
 use region::{
     get_provider_by_region_name, get_provider_region_environment, get_region_environment,
     print_environment_status, print_region_enabled,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use clap::{Args, Parser, Subcommand};
 use reqwest::Client;
 use shell::check_environment_health;
-use utils::{
-    exit_with_fail_message, run_loading_spinner, AppPassword, CloudProviderRegion, FromTos,
-};
+use utils::run_loading_spinner;
 
 use crate::login::{login_with_browser, login_with_console};
-use crate::profiles::validate_profile;
-use crate::region::{enable_region_environment, list_cloud_providers, list_regions};
+use crate::region::{
+    enable_region_environment, list_cloud_providers, list_regions, CloudProviderRegion,
+};
 use crate::shell::shell;
 
 /// Command-line interface for Materialize.
@@ -52,9 +52,6 @@ use crate::shell::shell;
 struct Cli {
     #[clap(subcommand)]
     command: Commands,
-    /// Identify using a particular profile
-    #[clap(short, long, env = "MZ_PROFILE", default_value = "default")]
-    profile: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -63,11 +60,19 @@ enum Commands {
     AppPassword(AppPasswordCommand),
     /// Open the docs
     Docs,
-    /// Open the web login
+    /// Login to a profile and make it the active profile
     Login {
         /// Login by typing your email and password
         #[clap(short, long)]
         interactive: bool,
+
+        /// Force reauthentication for the profile
+        #[clap(short, long)]
+        force: bool,
+
+        /// The profile to login to
+        #[clap(default_value = "default")]
+        profile: String,
     },
     /// Show commands to interact with regions
     Region {
@@ -77,7 +82,7 @@ enum Commands {
     /// Connect to a region using a SQL shell
     Shell {
         #[clap(possible_values = CloudProviderRegion::variants())]
-        cloud_provider_region: String,
+        cloud_provider_region: Option<String>,
     },
 }
 
@@ -136,19 +141,6 @@ struct CloudProvider {
     provider: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct FronteggAuth {
-    access_token: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct FronteggAPIToken {
-    client_id: String,
-    secret: String,
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct FronteggAppPassword {
@@ -162,22 +154,6 @@ struct BrowserAPIToken {
     email: String,
     client_id: String,
     secret: String,
-    name: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct Profile {
-    name: String,
-    email: String,
-    #[serde(rename(serialize = "app-password", deserialize = "app-password"))]
-    app_password: AppPassword,
-    region: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct ValidProfile {
-    profile: Profile,
-    frontegg_auth: FronteggAuth,
 }
 
 struct CloudProviderAndRegion {
@@ -185,16 +161,8 @@ struct CloudProviderAndRegion {
     region: Option<Region>,
 }
 
-#[derive(Debug)]
-enum ExitMessage {
-    String(String),
-    Str(&'static str),
-}
-
 /// Constants
-const PROFILES_DIR_NAME: &str = ".config/mz";
-const PROFILES_FILE_NAME: &str = "profiles.toml";
-const CLOUD_PROVIDERS_URL: &str = "https://cloud.materialize.com/api/cloud-providers";
+const CLOUD_PROVIDERS_URL: &str = "https://cloud.materialize.com/_metadata/cloud-regions.json";
 const API_TOKEN_AUTH_URL: &str =
     "https://admin.cloud.materialize.com/identity/resources/users/api-tokens/v1";
 const API_FRONTEGG_TOKEN_AUTH_URL: &str =
@@ -205,41 +173,31 @@ const MACHINE_AUTH_URL: &str =
     "https://admin.cloud.materialize.com/identity/resources/auth/v1/api-token";
 const WEB_LOGIN_URL: &str = "https://cloud.materialize.com/account/login?redirectUrl=/access/cli";
 const WEB_DOCS_URL: &str = "https://www.materialize.com/docs";
-const DEFAULT_PROFILE_NAME: &str = "default";
-const PROFILES_PREFIX: &str = "profiles";
-const ERROR_OPENING_PROFILES_MESSAGE: &str = "Error opening the profiles file";
-const ERROR_PARSING_PROFILES_MESSAGE: &str = "Error parsing the profiles";
-const ERROR_AUTHENTICATING_PROFILE_MESSAGE: &str = "Error authenticating profile";
-const ERROR_PROFILE_NOT_FOUND_MESSAGE: &str =
-    "Profile not found. Please, add one or login using `mz login`.";
-const ERROR_INCORRECT_PROFILE_PASSWORD_MESSAGE: &str = "Invalid app-password.";
-const ERROR_UNKNOWN_REGION: &str = "Unknown region";
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Cli::parse();
-    let profile_name = args.profile;
+    let mut config = Configuration::load()?;
 
     match args.command {
         Commands::AppPassword(password_cmd) => {
+            let profile = config.get_profile()?;
+
             let client = Client::new();
-            let valid_profile = validate_profile(profile_name, &client)
-                .await
-                .with_context(|| "Validating profile.")?;
+            let valid_profile = profile.validate(&client).await?;
 
             match password_cmd.command {
                 AppPasswordSubommand::Create { name } => {
                     let api_token = generate_api_token(&client, valid_profile.frontegg_auth, &name)
                         .await
-                        .with_context(|| "Generating password.")?;
+                        .with_context(|| "failed to create a new app password")?;
 
-                    let app_password: AppPassword = AppPassword::from_api_token(api_token);
-                    println!("{}", app_password)
+                    println!("{}", api_token)
                 }
                 AppPasswordSubommand::List => {
                     let app_passwords = list_passwords(&client, &valid_profile)
                         .await
-                        .with_context(|| "Listing passwords.")?;
+                        .with_context(|| "failed to retrieve app passwords")?;
 
                     println!("{0: <24} | {1: <24} ", "Name", "Created At");
                     println!("----------------------------------------------------");
@@ -263,11 +221,18 @@ async fn main() -> Result<()> {
             open::that(WEB_DOCS_URL).with_context(|| "Opening the browser.")?
         }
 
-        Commands::Login { interactive } => {
-            if interactive {
-                login_with_console(&profile_name).await?
-            } else {
-                login_with_browser(&profile_name).await?
+        Commands::Login {
+            interactive,
+            force,
+            profile,
+        } => {
+            config.update_current_profile(profile.clone());
+            if config.get_profile().is_err() || force {
+                if interactive {
+                    login_with_console(&profile, &mut config).await?
+                } else {
+                    login_with_browser(&profile, &mut config).await?
+                }
             }
         }
 
@@ -277,44 +242,46 @@ async fn main() -> Result<()> {
             match command {
                 RegionCommand::Enable {
                     cloud_provider_region,
-                } => match CloudProviderRegion::from_str(&cloud_provider_region) {
-                    Ok(cloud_provider_region) => {
-                        let valid_profile = validate_profile(profile_name, &client)
+                } => {
+                    let cloud_provider_region =
+                        CloudProviderRegion::from_str(&cloud_provider_region)?;
+                    let mut profile = config.get_profile()?;
+
+                    let valid_profile = profile.validate(&client).await?;
+
+                    let loading_spinner = run_loading_spinner("Enabling region...".to_string());
+                    let cloud_provider = get_provider_by_region_name(
+                        &client,
+                        &valid_profile,
+                        &cloud_provider_region,
+                    )
+                    .await
+                    .with_context(|| "Retrieving cloud provider.")?;
+
+                    let region =
+                        enable_region_environment(&client, &cloud_provider, &valid_profile)
                             .await
-                            .with_context(|| "Validating profile.")?;
-                        let loading_spinner = run_loading_spinner("Enabling region...".to_string());
-                        let cloud_provider = get_provider_by_region_name(
-                            &client,
-                            &valid_profile,
-                            &cloud_provider_region,
-                        )
+                            .with_context(|| "Enabling region.")?;
+
+                    let environment = get_region_environment(&client, &valid_profile, &region)
                         .await
-                        .with_context(|| "Retrieving cloud provider.")?;
+                        .with_context(|| "Retrieving environment data.")?;
 
-                        let region =
-                            enable_region_environment(&client, &cloud_provider, &valid_profile)
-                                .await
-                                .with_context(|| "Enabling region.")?;
-
-                        let environment = get_region_environment(&client, &valid_profile, &region)
-                            .await
-                            .with_context(|| "Retrieving environment data.")?;
-
-                        loop {
-                            if check_environment_health(valid_profile.clone(), &environment) {
-                                break;
-                            }
+                    loop {
+                        if check_environment_health(&valid_profile, &environment)? {
+                            break;
                         }
-
-                        loading_spinner.finish_with_message("Region enabled.");
                     }
-                    Err(_) => exit_with_fail_message(ExitMessage::Str(ERROR_UNKNOWN_REGION)),
-                },
+
+                    loading_spinner.finish_with_message(format!("{cloud_provider_region} enabled"));
+                    profile.set_default_region(cloud_provider_region);
+                }
 
                 RegionCommand::List => {
-                    let valid_profile = validate_profile(profile_name, &client)
-                        .await
-                        .with_context(|| "Authenticating profile.")?;
+                    let profile = config.get_profile()?;
+
+                    let valid_profile = profile.validate(&client).await?;
+
                     let cloud_providers = list_cloud_providers(&client, &valid_profile)
                         .await
                         .with_context(|| "Retrieving cloud providers.")?;
@@ -331,43 +298,50 @@ async fn main() -> Result<()> {
 
                 RegionCommand::Status {
                     cloud_provider_region,
-                } => match CloudProviderRegion::from_str(&cloud_provider_region) {
-                    Ok(cloud_provider_region) => {
-                        let client = Client::new();
-                        let valid_profile = validate_profile(profile_name, &client)
-                            .await
-                            .with_context(|| "Authenticating profile.")?;
-                        let environment = get_provider_region_environment(
-                            &client,
-                            &valid_profile,
-                            &cloud_provider_region,
-                        )
-                        .await
-                        .with_context(|| "Retrieving cloud provider region.")?;
-                        let health = check_environment_health(valid_profile, &environment);
+                } => {
+                    let cloud_provider_region =
+                        CloudProviderRegion::from_str(&cloud_provider_region)?;
 
-                        print_environment_status(environment, health);
-                    }
-                    Err(_) => exit_with_fail_message(ExitMessage::Str(ERROR_UNKNOWN_REGION)),
-                },
+                    let profile = config.get_profile()?;
+
+                    let valid_profile = profile.validate(&client).await?;
+
+                    let environment = get_provider_region_environment(
+                        &client,
+                        &valid_profile,
+                        &cloud_provider_region,
+                    )
+                    .await
+                    .with_context(|| "Retrieving cloud provider region.")?;
+                    let health = check_environment_health(&valid_profile, &environment)?;
+
+                    print_environment_status(environment, health);
+                }
             }
         }
 
         Commands::Shell {
             cloud_provider_region,
-        } => match CloudProviderRegion::from_str(&cloud_provider_region) {
-            Ok(cloud_provider_region) => {
-                let client = Client::new();
-                let valid_profile = validate_profile(profile_name, &client)
-                    .await
-                    .with_context(|| "Authenticating profile.")?;
-                shell(client, valid_profile, cloud_provider_region)
-                    .await
-                    .with_context(|| "Running shell")?;
-            }
-            Err(_) => exit_with_fail_message(ExitMessage::Str(ERROR_UNKNOWN_REGION)),
-        },
+        } => {
+            let profile = config.get_profile()?;
+
+            let cloud_provider_region = match cloud_provider_region {
+                Some(ref cloud_provider_region) => {
+                    CloudProviderRegion::from_str(cloud_provider_region)?
+                }
+                None => profile
+                    .get_default_region()
+                    .context("no region specified and no default region set")?,
+            };
+
+            let client = Client::new();
+            let valid_profile = profile.validate(&client).await?;
+
+            shell(client, valid_profile, cloud_provider_region)
+                .await
+                .with_context(|| "Running shell")?;
+        }
     }
 
-    Ok(())
+    config.close()
 }

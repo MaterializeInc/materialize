@@ -23,8 +23,8 @@ use mz_lowertest::*;
 use mz_ore::now::{EpochMillis, NOW_ZERO};
 use mz_repr::explain_new::{DummyHumanizer, ExprHumanizer};
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
-use mz_storage::types::connections::Connection;
-use mz_storage::types::sources::SourceDesc;
+use mz_storage_client::types::connections::Connection;
+use mz_storage_client::types::sources::SourceDesc;
 
 use crate::ast::Expr;
 use crate::catalog::{
@@ -297,6 +297,10 @@ impl SessionCatalog for TestCatalog {
         &DUMMY_CONFIG
     }
 
+    fn window_functions(&self) -> bool {
+        true
+    }
+
     fn now(&self) -> EpochMillis {
         (self.config().now)()
     }
@@ -309,6 +313,10 @@ impl SessionCatalog for TestCatalog {
 impl ExprHumanizer for TestCatalog {
     fn humanize_id(&self, id: GlobalId) -> Option<String> {
         DummyHumanizer.humanize_id(id)
+    }
+
+    fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String> {
+        DummyHumanizer.humanize_id_unqualified(id)
     }
 
     fn humanize_scalar_type(&self, ty: &ScalarType) -> String {

@@ -52,10 +52,10 @@ use mz_expr::RowSetFinishing;
 use mz_orchestrator::{CpuLimit, MemoryLimit, NamespacedOrchestrator};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
-use mz_storage::controller::{ReadPolicy, StorageController, StorageError};
+use mz_storage_client::controller::{ReadPolicy, StorageController, StorageError};
 
-use crate::command::{CommunicationConfig, DataflowDescription, ProcessId, ReplicaId};
-use crate::logging::{LogVariant, LogView};
+use crate::command::{DataflowDescription, ProcessId, ReplicaId};
+use crate::logging::{LogVariant, LogView, LoggingConfig};
 use crate::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
@@ -67,7 +67,6 @@ mod orchestrator;
 mod replica;
 
 pub use mz_orchestrator::ServiceStatus as ComputeInstanceStatus;
-
 /// An abstraction allowing us to name different compute instances.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum ComputeInstanceId {
@@ -145,6 +144,8 @@ pub enum ComputeError {
     InstanceMissing(ComputeInstanceId),
     /// Command referenced an identifier that was not present.
     IdentifierMissing(GlobalId),
+    /// Command referenced a replica that was not present.
+    ReplicaMissing(ReplicaId),
     /// The identified instance exists already.
     InstanceExists(ComputeInstanceId),
     /// Dataflow was malformed (e.g. missing `as_of`).
@@ -164,6 +165,7 @@ impl Error for ComputeError {
         match self {
             Self::InstanceMissing(_)
             | Self::IdentifierMissing(_)
+            | Self::ReplicaMissing(_)
             | Self::InstanceExists(_)
             | Self::DataflowMalformed
             | Self::DataflowSinceViolation(_)
@@ -182,6 +184,9 @@ impl fmt::Display for ComputeError {
                 f,
                 "command referenced an instance that was not present: {id}"
             ),
+            Self::ReplicaMissing(id) => {
+                write!(f, "command referenced a replica that was not present: {id}")
+            }
             Self::IdentifierMissing(id) => write!(
                 f,
                 "command referenced an identifier that was not present: {id}"
@@ -326,6 +331,8 @@ pub struct ComputeController<T> {
     stashed_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
     /// Times we have last received responses from replicas.
     replica_heartbeats: BTreeMap<ReplicaId, DateTime<Utc>>,
+    /// A number that increases on every `environmentd` restart.
+    envd_epoch: i64,
 }
 
 impl<T> ComputeController<T> {
@@ -334,14 +341,21 @@ impl<T> ComputeController<T> {
         build_info: &'static BuildInfo,
         orchestrator: Arc<dyn NamespacedOrchestrator>,
         computed_image: String,
+        init_container_image: Option<String>,
+        envd_epoch: i64,
     ) -> Self {
         Self {
             instances: BTreeMap::new(),
             build_info,
-            orchestrator: ComputeOrchestrator::new(orchestrator, computed_image),
+            orchestrator: ComputeOrchestrator::new(
+                orchestrator,
+                computed_image,
+                init_container_image,
+            ),
             initialized: false,
             stashed_response: None,
             replica_heartbeats: BTreeMap::new(),
+            envd_epoch,
         }
     }
 
@@ -413,7 +427,14 @@ where
 
         self.instances.insert(
             id,
-            Instance::new(self.build_info, arranged_logs, max_result_size),
+            Instance::new(
+                id,
+                self.build_info,
+                arranged_logs,
+                max_result_size,
+                self.orchestrator.clone(),
+                self.envd_epoch,
+            ),
         );
 
         if self.initialized {
@@ -477,18 +498,20 @@ where
         }
 
         // `Instance::recv` is cancellation safe, so it is safe to construct this `select_all`.
-        let receives = self.instances.iter_mut().map(|(id, instance)| {
-            Box::pin(
-                instance
-                    .recv()
-                    .map(|(replica_id, resp)| (*id, replica_id, resp)),
-            )
-        });
-        let ((instance_id, replica_id, resp), _index, _remaining) =
-            future::select_all(receives).await;
+        let receives = self
+            .instances
+            .iter_mut()
+            .map(|(id, instance)| Box::pin(instance.recv().map(|result| (*id, result))));
+        let ((instance_id, result), _index, _remaining) = future::select_all(receives).await;
 
-        self.replica_heartbeats.insert(replica_id, Utc::now());
-        self.stashed_response = Some((instance_id, replica_id, resp));
+        if let Ok((replica_id, resp)) = result {
+            self.replica_heartbeats.insert(replica_id, Utc::now());
+            self.stashed_response = Some((instance_id, replica_id, resp));
+        } else {
+            // There is nothing to do here. `recv` has already added the failed replica to
+            // `instance.failed_replicas`, so it will be rehydrated in the next call to
+            // `ActiveComputeController::process`.
+        }
     }
 
     /// Listen for changes to compute services reported by the orchestrator.
@@ -537,47 +560,28 @@ where
         replica_id: ReplicaId,
         config: ComputeReplicaConfig,
     ) -> Result<(), ComputeError> {
-        let (addrs, communication_config) = match config.location {
-            ComputeReplicaLocation::Remote {
-                addrs,
-                compute_addrs,
-                workers,
-            } => {
-                let addrs = addrs.into_iter().collect();
-                let comm = CommunicationConfig {
-                    workers: workers.get(),
-                    process: 0,
-                    addresses: compute_addrs.into_iter().collect(),
-                };
-                (addrs, comm)
-            }
-            ComputeReplicaLocation::Managed {
-                allocation,
-                availability_zone,
-                ..
-            } => {
-                let service = self
-                    .compute
-                    .orchestrator
-                    .ensure_replica(instance_id, replica_id, allocation, availability_zone)
-                    .await?;
-
-                let addrs = service.addresses("controller");
-                let comm = CommunicationConfig {
-                    workers: allocation.workers.get(),
-                    process: 0,
-                    addresses: service.addresses("compute"),
-                };
-                (addrs, comm)
-            }
+        let (enable_logging, interval_ns) = match config.logging.interval {
+            Some(interval) => (true, interval.as_nanos()),
+            None => (false, 1_000_000_000),
         };
 
-        self.instance(instance_id)?.add_replica(
-            replica_id,
-            addrs,
-            config.logging,
-            communication_config,
-        )
+        let mut sink_logs = BTreeMap::new();
+        for (variant, id) in config.logging.sources {
+            let storage_meta = self.storage.collection(id)?.collection_metadata.clone();
+            sink_logs.insert(variant, (id, storage_meta));
+        }
+
+        let logging_config = LoggingConfig {
+            interval_ns,
+            enable_logging,
+            log_logging: config.logging.log_logging,
+            index_logs: Default::default(),
+            sink_logs,
+        };
+
+        self.instance(instance_id)?
+            .add_replica(replica_id, config.location, logging_config)
+            .await
     }
 
     /// Removes a replica from an instance, including its service in the orchestrator.
@@ -585,19 +589,8 @@ where
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
-        config: ComputeReplicaConfig,
     ) -> Result<(), ComputeError> {
-        if let ComputeReplicaLocation::Managed { .. } = config.location {
-            self.compute
-                .orchestrator
-                .drop_replica(instance_id, replica_id)
-                .await?;
-        }
-
-        self.instance(instance_id)
-            .unwrap()
-            .remove_replica(replica_id)
-            .await
+        self.instance(instance_id)?.remove_replica(replica_id).await
     }
 
     /// Create and maintain the described dataflows, and initialize state for their output.
@@ -665,12 +658,13 @@ where
     ///   * A `PeekResponse::Canceled` affirming that the peek was canceled.
     ///
     ///   * No `PeekResponse` at all.
-    pub async fn cancel_peeks(
+    pub fn cancel_peeks(
         &mut self,
         instance_id: ComputeInstanceId,
         uuids: BTreeSet<Uuid>,
     ) -> Result<(), ComputeError> {
-        self.instance(instance_id)?.cancel_peeks(uuids).await
+        self.instance(instance_id)?.cancel_peeks(uuids);
+        Ok(())
     }
 
     /// Assign a read policy to specific identifiers.
@@ -765,6 +759,11 @@ impl<T> ComputeInstanceRef<'_, T> {
 /// State maintained about individual collections.
 #[derive(Debug)]
 pub struct CollectionState<T> {
+    /// Whether this collection is a log collection.
+    ///
+    /// Log collections are special in that they are only maintained by a subset of all replicas.
+    log_collection: bool,
+
     /// Accumulation of read capabilities for the collection.
     ///
     /// This accumulation will always contain `self.implied_capability`, but may also contain
@@ -780,14 +779,10 @@ pub struct CollectionState<T> {
     /// Compute identifiers on which this collection depends.
     compute_dependencies: Vec<GlobalId>,
 
-    /// Upper bound of write frontiers reported by all replicas.
-    ///
-    /// Used to determine valid times at which the collection can be read.
-    write_frontier_upper: Antichain<T>,
-    /// Lower bound of write frontiers reported by all replicas.
-    ///
-    /// Used to determine times that can be compacted.
-    write_frontier_lower: Antichain<T>,
+    /// The write frontier of this collection.
+    write_frontier: Antichain<T>,
+    /// The write frontiers reported by individual replicas.
+    replica_write_frontiers: BTreeMap<ReplicaId, Antichain<T>>,
 }
 
 impl<T: Timestamp> CollectionState<T> {
@@ -799,15 +794,24 @@ impl<T: Timestamp> CollectionState<T> {
     ) -> Self {
         let mut read_capabilities = MutableAntichain::new();
         read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
+
         Self {
+            log_collection: false,
             read_capabilities,
             implied_capability: since.clone(),
             read_policy: ReadPolicy::ValidFrom(since),
             storage_dependencies,
             compute_dependencies,
-            write_frontier_upper: Antichain::from_elem(Timestamp::minimum()),
-            write_frontier_lower: Antichain::from_elem(Timestamp::minimum()),
+            write_frontier: Antichain::from_elem(Timestamp::minimum()),
+            replica_write_frontiers: BTreeMap::new(),
         }
+    }
+
+    pub fn new_log_collection() -> Self {
+        let since = Antichain::from_elem(Timestamp::minimum());
+        let mut state = Self::new(since, Vec::new(), Vec::new());
+        state.log_collection = true;
+        state
     }
 
     /// Reports the current read capability.
@@ -822,6 +826,6 @@ impl<T: Timestamp> CollectionState<T> {
 
     /// Reports the current write frontier.
     pub fn write_frontier(&self) -> AntichainRef<T> {
-        self.write_frontier_upper.borrow()
+        self.write_frontier.borrow()
     }
 }

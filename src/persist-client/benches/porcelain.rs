@@ -211,7 +211,7 @@ async fn bench_snapshot_one_iter(
     as_of: &Antichain<u64>,
 ) -> Result<(), anyhow::Error> {
     let mut read = client
-        .open_reader::<Vec<u8>, Vec<u8>, u64, i64>(*shard_id)
+        .open_leased_reader::<Vec<u8>, Vec<u8>, u64, i64>(*shard_id)
         .await?;
 
     let x = read

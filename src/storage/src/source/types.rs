@@ -15,7 +15,6 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::{Send, Sync};
-use std::rc::Rc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -25,20 +24,42 @@ use prometheus::core::{AtomicI64, AtomicU64};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract};
 use timely::scheduling::activate::SyncActivator;
-use timely::scheduling::ActivateOnDrop;
 use timely::Data;
 
 use mz_avro::types::Value;
 use mz_expr::PartitionId;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_client::types::errors::{DecodeError, SourceErrorDetails};
+use mz_storage_client::types::sources::encoding::SourceDataEncoding;
+use mz_storage_client::types::sources::MzOffset;
 
 use crate::source::healthcheck::SourceStatusUpdate;
 use crate::source::metrics::SourceBaseMetrics;
-use crate::types::connections::ConnectionContext;
-use crate::types::errors::{DecodeError, SourceErrorDetails};
-use crate::types::sources::encoding::SourceDataEncoding;
-use crate::types::sources::MzOffset;
+
+/// Extension trait to the SourceConnection trait that defines how to intantiate a particular
+/// connetion into a reader and offset committer
+pub trait SourceConnectionBuilder {
+    type Reader: SourceReader + 'static;
+    type OffsetCommitter: OffsetCommitter + Send + Sync + 'static;
+
+    /// Turn this connection into a new source reader.
+    ///
+    /// This function returns the source reader and its corresponding offset committed.
+    fn into_reader(
+        self,
+        source_name: String,
+        source_id: GlobalId,
+        worker_id: usize,
+        worker_count: usize,
+        consumer_activator: SyncActivator,
+        restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
+        encoding: SourceDataEncoding,
+        metrics: crate::source::metrics::SourceBaseMetrics,
+        connection_context: ConnectionContext,
+    ) -> Result<(Self::Reader, Self::OffsetCommitter), anyhow::Error>;
+}
 
 /// This trait defines the interface between Materialize and external sources,
 /// and must be implemented for every new kind of source.
@@ -69,29 +90,6 @@ pub trait SourceReader {
     type Key: timely::Data + MaybeLength;
     type Value: timely::Data + MaybeLength;
     type Diff: timely::Data;
-    type Connection: SourceConnection;
-
-    type OffsetCommitter: OffsetCommitter + Send + Sync + 'static;
-
-    /// Create a new source reader.
-    ///
-    /// This function returns the source reader and optionally, any "partition" it's
-    /// already reading. In practice, the partition is only non-None for static sources
-    /// that either don't truly have partitions or have a fixed number of partitions.
-    fn new(
-        source_name: String,
-        source_id: GlobalId,
-        worker_id: usize,
-        worker_count: usize,
-        consumer_activator: SyncActivator,
-        connection: Self::Connection,
-        restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
-        encoding: SourceDataEncoding,
-        metrics: crate::source::metrics::SourceBaseMetrics,
-        connection_context: ConnectionContext,
-    ) -> Result<(Self, Self::OffsetCommitter), anyhow::Error>
-    where
-        Self: Sized;
 
     /// Returns the next message available from the source.
     ///
@@ -156,10 +154,6 @@ pub trait SourceReader {
     }
 }
 
-pub trait SourceConnection: Clone {
-    fn name(&self) -> &'static str;
-}
-
 /// A sibling trait to `SourceReader` that represents a source's
 /// ability to _commit offsets_ that have been guaranteed
 /// to be written into persist
@@ -173,23 +167,6 @@ pub trait OffsetCommitter {
         &self,
         offsets: HashMap<PartitionId, MzOffset>,
     ) -> Result<(), anyhow::Error>;
-}
-
-/// A `SourceToken` manages interest in a source.
-///
-/// When the `SourceToken` is dropped the associated source will be stopped.
-pub struct SourceToken {
-    pub(crate) _activator: Rc<ActivateOnDrop<()>>,
-}
-
-/// A `AsyncSourceToken` manages interest in a source.
-///
-/// When the `AsyncSourceToken` is dropped the associated source will be stopped.
-///
-/// This type does the same thing as `SourceToken`, but operates in a way
-/// optimized for async timely operators.
-pub struct AsyncSourceToken {
-    pub(crate) _drop_closes_the_oneshot: tokio::sync::oneshot::Sender<()>,
 }
 
 pub enum NextMessage<Key, Value, Diff> {
@@ -345,18 +322,88 @@ pub struct DecodeResult {
     pub metadata: Row,
 }
 
-/// A structured error for `SourceReader::get_next_message`
-/// implementors. Also implements `From<anyhow::Error>`
-/// for convenience.
+/// A structured error for `SourceReader::get_next_message` implementors.
 #[derive(Debug)]
 pub struct SourceReaderError {
     pub inner: SourceErrorDetails,
 }
 
-impl From<anyhow::Error> for SourceReaderError {
-    fn from(e: anyhow::Error) -> Self {
+impl SourceReaderError {
+    /// This is an unclassified but definite error. This is typically only appropriate
+    /// when the error is permanently fatal for the source... some critical invariant
+    /// is violated or data is corrupted, for example.
+    pub fn other_definite(e: anyhow::Error) -> SourceReaderError {
         SourceReaderError {
             inner: SourceErrorDetails::Other(format!("{}", e)),
+        }
+    }
+}
+
+/// Source-specific metrics in the persist sink
+pub struct SourcePersistSinkMetrics {
+    pub(crate) progress: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub(crate) row_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) row_retractions: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) error_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) error_retractions: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) processed_batches: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+}
+
+impl SourcePersistSinkMetrics {
+    /// Initialises source metrics for a given (source_id, worker_id)
+    pub fn new(
+        base: &SourceBaseMetrics,
+        shard_id: &mz_persist_client::ShardId,
+        source_id: GlobalId,
+        output_index: usize,
+    ) -> SourcePersistSinkMetrics {
+        let shard = shard_id.to_string();
+        SourcePersistSinkMetrics {
+            progress: base.source_specific.progress.get_delete_on_drop_gauge(vec![
+                source_id.to_string(),
+                output_index.to_string(),
+                shard.clone(),
+            ]),
+            row_inserts: base
+                .source_specific
+                .row_inserts
+                .get_delete_on_drop_counter(vec![
+                    source_id.to_string(),
+                    output_index.to_string(),
+                    shard.clone(),
+                ]),
+            row_retractions: base
+                .source_specific
+                .row_retractions
+                .get_delete_on_drop_counter(vec![
+                    source_id.to_string(),
+                    output_index.to_string(),
+                    shard.clone(),
+                ]),
+            error_inserts: base
+                .source_specific
+                .error_inserts
+                .get_delete_on_drop_counter(vec![
+                    source_id.to_string(),
+                    output_index.to_string(),
+                    shard.clone(),
+                ]),
+            error_retractions: base
+                .source_specific
+                .error_retractions
+                .get_delete_on_drop_counter(vec![
+                    source_id.to_string(),
+                    output_index.to_string(),
+                    shard.clone(),
+                ]),
+            processed_batches: base
+                .source_specific
+                .persist_sink_processed_batches
+                .get_delete_on_drop_counter(vec![
+                    source_id.to_string(),
+                    output_index.to_string(),
+                    shard,
+                ]),
         }
     }
 }

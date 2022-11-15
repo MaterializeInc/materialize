@@ -26,8 +26,8 @@ use mz_compute_client::controller::ComputeInstanceId;
 use mz_compute_client::response::PeekResponse;
 use mz_expr::explain::Indices;
 use mz_expr::{EvalError, Id, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_ore::str::Indent;
 use mz_ore::str::StrExt;
-use mz_ore::str::{separated, Indent};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText, ExprHumanizer};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
@@ -81,14 +81,18 @@ where
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
         match self {
             FastPathPlan::Constant(Ok(rows), _) => {
-                writeln!(f, "{}Constant", ctx.as_mut())?;
-                *ctx.as_mut() += 1;
-                fmt_text_constant_rows(
-                    f,
-                    rows.iter().map(|(row, _, diff)| (row, diff)),
-                    ctx.as_mut(),
-                )?;
-                *ctx.as_mut() -= 1;
+                if !rows.is_empty() {
+                    writeln!(f, "{}Constant", ctx.as_mut())?;
+                    *ctx.as_mut() += 1;
+                    fmt_text_constant_rows(
+                        f,
+                        rows.iter().map(|(row, _, diff)| (row, diff)),
+                        ctx.as_mut(),
+                    )?;
+                    *ctx.as_mut() -= 1;
+                } else {
+                    writeln!(f, "{}Constant <empty>", ctx.as_mut())?;
+                }
                 Ok(())
             }
             FastPathPlan::Constant(Err(err), _) => {
@@ -114,25 +118,7 @@ where
                     writeln!(f, "{}Map ({})", ctx.as_mut(), scalars)?;
                     *ctx.as_mut() += 1;
                 }
-                let humanized_index = ctx
-                    .as_ref()
-                    .humanize_id(*id)
-                    .unwrap_or_else(|| id.to_string());
-                if let Some(literal_constraints) = literal_constraints {
-                    write!(
-                        f,
-                        "{}ReadExistingIndex {} lookup ",
-                        ctx.as_mut(),
-                        humanized_index
-                    )?;
-                    if literal_constraints.len() == 1 {
-                        writeln!(f, "value {}", literal_constraints.get(0).unwrap())?;
-                    } else {
-                        writeln!(f, "values [{}]", separated("; ", literal_constraints))?;
-                    }
-                } else {
-                    writeln!(f, "{}ReadExistingIndex {}", ctx.as_mut(), humanized_index)?;
-                }
+                Displayable::fmt_indexed_filter(f, ctx, id, literal_constraints.clone())?;
                 ctx.as_mut().reset();
                 Ok(())
             }
@@ -479,7 +465,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
 
     /// Cancel and remove all pending peeks that were initiated by the client with `conn_id`.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) async fn cancel_pending_peeks(&mut self, conn_id: u32) -> Vec<PendingPeek> {
+    pub(crate) fn cancel_pending_peeks(&mut self, conn_id: u32) -> Vec<PendingPeek> {
         // The peek is present on some specific compute instance.
         // Allow dataflow to cancel any pending peeks.
         if let Some(uuids) = self.client_pending_peeks.remove(&conn_id) {
@@ -491,7 +477,6 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 self.controller
                     .active_compute()
                     .cancel_peeks(compute_instance, uuids)
-                    .await
                     .unwrap();
             }
 
@@ -595,7 +580,7 @@ mod tests {
 
         let constant_err_exp = "Error \"division by zero\"\n";
         let no_lookup_exp = "Project (#1, #4)\n  Map ((#0 OR #2))\n    ReadExistingIndex u10\n";
-        let lookup_exp = "Filter (#0) IS NULL\n  ReadExistingIndex u11 lookup value (5)\n";
+        let lookup_exp = "Filter (#0) IS NULL\n  ReadExistingIndex u11 lookup_value=(5)\n";
 
         assert_eq!(text_string_at(&constant_err, ctx_gen), constant_err_exp);
         assert_eq!(text_string_at(&no_lookup, ctx_gen), no_lookup_exp);
@@ -617,7 +602,8 @@ mod tests {
         );
         constant_rows
             .extend((0..20).map(|i| (Row::pack(Some(Datum::String(&i.to_string()))), 0, 1)));
-        let constant_exp2 = "Constant\n  total_rows: 523\n  first_rows:\n    - (\"hello\")\
+        let constant_exp2 =
+            "Constant\n  total_rows (diffs absed): 523\n  first_rows:\n    - (\"hello\")\
         \n    - ((\"world\") x 2)\n    - ((\"star\") x 500)\n    - (\"0\")\n    - (\"1\")\
         \n    - (\"2\")\n    - (\"3\")\n    - (\"4\")\n    - (\"5\")\n    - (\"6\")\
         \n    - (\"7\")\n    - (\"8\")\n    - (\"9\")\n    - (\"10\")\n    - (\"11\")\

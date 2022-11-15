@@ -82,7 +82,7 @@ query T multiline
 explain with(types) select * from (select * from with_primary_key limit 0);
 ----
 Explained Query (fast path):
-  Constant
+  Constant <empty>
 
 EOF
 

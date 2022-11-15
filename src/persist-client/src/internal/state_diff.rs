@@ -21,13 +21,14 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::debug;
 
+use crate::critical::CriticalReaderId;
 use crate::internal::paths::PartialRollupKey;
 use crate::internal::state::{
-    HollowBatch, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, ReaderState,
-    State, StateCollections, WriterState,
+    CriticalReaderState, HollowBatch, LeasedReaderState, ProtoStateField, ProtoStateFieldDiffType,
+    ProtoStateFieldDiffs, State, StateCollections, WriterState,
 };
 use crate::internal::trace::{FueledMergeRes, Trace};
-use crate::read::ReaderId;
+use crate::read::LeasedReaderId;
 use crate::write::WriterId;
 use crate::{Metrics, PersistConfig};
 
@@ -41,11 +42,22 @@ pub enum StateFieldValDiff<V> {
     Delete(V),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 #[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 pub struct StateFieldDiff<K, V> {
     pub key: K,
     pub val: StateFieldValDiff<V>,
+}
+
+impl<K: Debug, V: Debug> std::fmt::Debug for StateFieldDiff<K, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StateFieldDiff")
+            // In the cases we've seen in the wild, it's been more useful to
+            // have the val printed first.
+            .field("val", &self.val)
+            .field("key", &self.key)
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -57,7 +69,8 @@ pub struct StateDiff<T> {
     pub(crate) latest_rollup_key: PartialRollupKey,
     pub(crate) rollups: Vec<StateFieldDiff<SeqNo, PartialRollupKey>>,
     pub(crate) last_gc_req: Vec<StateFieldDiff<(), SeqNo>>,
-    pub(crate) readers: Vec<StateFieldDiff<ReaderId, ReaderState<T>>>,
+    pub(crate) leased_readers: Vec<StateFieldDiff<LeasedReaderId, LeasedReaderState<T>>>,
+    pub(crate) critical_readers: Vec<StateFieldDiff<CriticalReaderId, CriticalReaderState<T>>>,
     pub(crate) writers: Vec<StateFieldDiff<WriterId, WriterState>>,
     pub(crate) since: Vec<StateFieldDiff<(), Antichain<T>>>,
     pub(crate) spine: Vec<StateFieldDiff<HollowBatch<T>, ()>>,
@@ -77,7 +90,8 @@ impl<T: Timestamp + Codec64> StateDiff<T> {
             latest_rollup_key,
             rollups: Vec::default(),
             last_gc_req: Vec::default(),
-            readers: Vec::default(),
+            leased_readers: Vec::default(),
+            critical_readers: Vec::default(),
             writers: Vec::default(),
             since: Vec::default(),
             spine: Vec::default(),
@@ -97,7 +111,8 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                 StateCollections {
                     last_gc_req: from_last_gc_req,
                     rollups: from_rollups,
-                    readers: from_readers,
+                    leased_readers: from_leased_readers,
+                    critical_readers: from_critical_readers,
                     writers: from_writers,
                     trace: from_trace,
                 },
@@ -111,7 +126,8 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                 StateCollections {
                     last_gc_req: to_last_gc_req,
                     rollups: to_rollups,
-                    readers: to_readers,
+                    leased_readers: to_leased_readers,
+                    critical_readers: to_critical_readers,
                     writers: to_writers,
                     trace: to_trace,
                 },
@@ -128,7 +144,16 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         );
         diff_field_single(from_last_gc_req, to_last_gc_req, &mut diffs.last_gc_req);
         diff_field_sorted_iter(from_rollups.iter(), to_rollups, &mut diffs.rollups);
-        diff_field_sorted_iter(from_readers.iter(), to_readers, &mut diffs.readers);
+        diff_field_sorted_iter(
+            from_leased_readers.iter(),
+            to_leased_readers,
+            &mut diffs.leased_readers,
+        );
+        diff_field_sorted_iter(
+            from_critical_readers.iter(),
+            to_critical_readers,
+            &mut diffs.critical_readers,
+        );
         diff_field_sorted_iter(from_writers.iter(), to_writers, &mut diffs.writers);
         diff_field_single(from_trace.since(), to_trace.since(), &mut diffs.since);
         diff_field_spine(from_trace, to_trace, &mut diffs.spine);
@@ -240,32 +265,40 @@ impl<K, V, T: Timestamp + Lattice, D> State<K, V, T, D> {
         }
         self.seqno = diff.seqno_to;
 
-        apply_diffs_map("rollups", diff.rollups, &mut self.collections.rollups)?;
-        apply_diffs_single(
-            "last_gc_req",
-            diff.last_gc_req,
-            &mut self.collections.last_gc_req,
-        )?;
-        apply_diffs_map("readers", diff.readers, &mut self.collections.readers)?;
-        apply_diffs_map("writers", diff.writers, &mut self.collections.writers)?;
+        // Deconstruct collections so we get a compile failure if new fields are
+        // added.
+        let StateCollections {
+            last_gc_req,
+            rollups,
+            leased_readers,
+            critical_readers,
+            writers,
+            trace,
+        } = &mut self.collections;
+
+        apply_diffs_map("rollups", diff.rollups, rollups)?;
+        apply_diffs_single("last_gc_req", diff.last_gc_req, last_gc_req)?;
+        apply_diffs_map("leased_readers", diff.leased_readers, leased_readers)?;
+        apply_diffs_map("critical_readers", diff.critical_readers, critical_readers)?;
+        apply_diffs_map("writers", diff.writers, writers)?;
 
         for x in diff.since {
             match x.val {
                 Update(from, to) => {
-                    if self.collections.trace.since() != &from {
+                    if trace.since() != &from {
                         return Err(format!(
                             "since update didn't match: {:?} vs {:?}",
                             self.collections.trace.since(),
                             &from
                         ));
                     }
-                    self.collections.trace.downgrade_since(&to);
+                    trace.downgrade_since(&to);
                 }
                 Insert(_) => return Err("cannot insert since field".to_string()),
                 Delete(_) => return Err("cannot delete since field".to_string()),
             }
         }
-        apply_diffs_spine(metrics, diff.spine, &mut self.collections.trace)?;
+        apply_diffs_spine(metrics, diff.spine, trace)?;
 
         // There's various sanity checks that this method could run (e.g. since,
         // upper, seqno_since, etc don't regress or that diff.latest_rollup ==
@@ -460,24 +493,28 @@ fn diff_field_spine<T: Timestamp + Lattice>(
 // want to revisit this.
 fn apply_diffs_spine<T: Timestamp + Lattice>(
     metrics: &Metrics,
-    diffs: Vec<StateFieldDiff<HollowBatch<T>, ()>>,
+    mut diffs: Vec<StateFieldDiff<HollowBatch<T>, ()>>,
     trace: &mut Trace<T>,
 ) -> Result<(), String> {
-    match &diffs[..] {
-        // Fast-path: no diffs.
-        [] => return Ok(()),
-
-        // Fast-path: batch insert.
-        [StateFieldDiff {
-            key,
-            val: StateFieldValDiff::Insert(()),
-        }] => {
-            // Ignore merge_reqs because whichever process generated this diff is
-            // assigned the work.
-            let _merge_reqs = trace.push_batch(key.clone());
+    // Another special case: sniff out a newly inserted batch (one whose lower
+    // lines up with the current upper) and handle that now. Then fall through
+    // to the rest of the handling on whatever is left.
+    if let Some(insert) = sniff_insert(&mut diffs, trace.upper()) {
+        // Ignore merge_reqs because whichever process generated this diff is
+        // assigned the work.
+        let _merge_reqs = trace.push_batch(insert);
+        // If this insert was the only thing in diffs, then return now instead
+        // of falling through to the "no diffs" case in the match so we can inc
+        // the apply_spine_fast_path metric.
+        if diffs.is_empty() {
             metrics.state.apply_spine_fast_path.inc();
             return Ok(());
         }
+    }
+
+    match &diffs[..] {
+        // Fast-path: no diffs.
+        [] => return Ok(()),
 
         // Fast-path: batch insert with both new and most recent batch empty.
         // Spine will happily merge these empty batches together without a call
@@ -536,6 +573,31 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
             metrics.state.apply_spine_fast_path.inc();
             return Ok(());
         }
+
+        // Otherwise, try our lenient application of a compaction result.
+        let mut batches = Vec::new();
+        trace.map_batches(|b| batches.push(b.clone()));
+
+        match apply_compaction_lenient(metrics, batches, &res.output) {
+            Ok(batches) => {
+                let mut new_trace = Trace::default();
+                new_trace.downgrade_since(trace.since());
+                for batch in batches {
+                    // Ignore merge_reqs because whichever process generated
+                    // this diff is assigned the work.
+                    let _merge_reqs = new_trace.push_batch(batch.clone());
+                }
+                *trace = new_trace;
+                metrics.state.apply_spine_slow_path_lenient.inc();
+                return Ok(());
+            }
+            Err(err) => {
+                return Err(format!(
+                    "lenient compaction result apply unexpectedly failed: {}",
+                    err
+                ))
+            }
+        }
     }
 
     // Something complicated is going on, so reconstruct the Trace from scratch.
@@ -590,9 +652,24 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
     Ok(())
 }
 
+fn sniff_insert<T: Timestamp + Lattice>(
+    diffs: &mut Vec<StateFieldDiff<HollowBatch<T>, ()>>,
+    upper: &Antichain<T>,
+) -> Option<HollowBatch<T>> {
+    for idx in 0..diffs.len() {
+        match &diffs[idx] {
+            StateFieldDiff {
+                key,
+                val: StateFieldValDiff::Insert(()),
+            } if key.desc.lower() == upper => return Some(diffs.remove(idx).key),
+            _ => continue,
+        }
+    }
+    None
+}
+
 // TODO: Instead of trying to sniff out a compaction from diffs, should we just
 // be explicit?
-#[allow(dead_code)]
 fn sniff_compaction<'a, T: Timestamp + Lattice>(
     diffs: &'a [StateFieldDiff<HollowBatch<T>, ()>],
 ) -> Option<(Vec<&'a HollowBatch<T>>, HollowBatch<T>)> {
@@ -627,6 +704,128 @@ fn sniff_compaction<'a, T: Timestamp + Lattice>(
     }
 
     Some((compaction_inputs, compaction_output.clone()))
+}
+
+/// Apply a compaction diff that doesn't exactly line up with the set of
+/// HollowBatches.
+///
+/// Because of the way Spine internally optimizes only _some_ empty batches
+/// (immediately merges them in), we can end up in a situation where a
+/// compaction res applied on another copy of state, but when we replay all of
+/// the state diffs against a new Spine locally, it merges empty batches
+/// differently in-mem and we can't exactly apply the compaction diff. Example:
+///
+/// - compact: [1,2),[2,3) -> [1,3)
+/// - this spine: [0,2),[2,3) (0,1 is empty)
+///
+/// Ideally, we'd figure out a way to avoid this, but nothing immediately comes
+/// to mind. In the meantime, force the application (otherwise the shard is
+/// stuck and we can't do anything with it) by manually splitting the empty
+/// batch back out. For the example above:
+///
+/// - [0,1),[1,3) (0,1 is empty)
+///
+/// This can only happen when the batch needing to be split is empty, so error
+/// out if it isn't because that means something unexpected is going on.
+///
+/// TODO: This implementation is certainly not correct if T is actually only
+/// partially ordered.
+fn apply_compaction_lenient<'a, T: Timestamp + Lattice>(
+    metrics: &Metrics,
+    mut trace: Vec<HollowBatch<T>>,
+    replacement: &'a HollowBatch<T>,
+) -> Result<Vec<HollowBatch<T>>, String> {
+    let mut overlapping_batches = Vec::new();
+    trace.retain(|b| {
+        let before_replacement = PartialOrder::less_equal(b.desc.upper(), replacement.desc.lower());
+        let after_replacement = PartialOrder::less_equal(replacement.desc.upper(), b.desc.lower());
+        let overlaps_replacement = !(before_replacement || after_replacement);
+        if overlaps_replacement {
+            overlapping_batches.push(b.clone());
+            false
+        } else {
+            true
+        }
+    });
+
+    {
+        let first_overlapping_batch = match overlapping_batches.first() {
+            Some(x) => x,
+            None => return Err("replacement didn't overlap any batches".into()),
+        };
+        if PartialOrder::less_than(
+            first_overlapping_batch.desc.lower(),
+            replacement.desc.lower(),
+        ) {
+            if first_overlapping_batch.len > 0 {
+                return Err(format!(
+                    "overlapping batch was unexpectedly non-empty: {:?}",
+                    first_overlapping_batch
+                ));
+            }
+            let desc = Description::new(
+                first_overlapping_batch.desc.lower().clone(),
+                replacement.desc.lower().clone(),
+                first_overlapping_batch.desc.since().clone(),
+            );
+            trace.push(HollowBatch {
+                desc,
+                parts: Vec::new(),
+                len: 0,
+                runs: Vec::new(),
+            });
+            metrics.state.apply_spine_slow_path_lenient_adjustment.inc();
+        }
+    }
+
+    {
+        let last_overlapping_batch = match overlapping_batches.last() {
+            Some(x) => x,
+            None => return Err("replacement didn't overlap any batches".into()),
+        };
+        if PartialOrder::less_than(
+            replacement.desc.upper(),
+            last_overlapping_batch.desc.upper(),
+        ) {
+            if last_overlapping_batch.len > 0 {
+                return Err(format!(
+                    "overlapping batch was unexpectedly non-empty: {:?}",
+                    last_overlapping_batch
+                ));
+            }
+            let desc = Description::new(
+                replacement.desc.upper().clone(),
+                last_overlapping_batch.desc.upper().clone(),
+                last_overlapping_batch.desc.since().clone(),
+            );
+            trace.push(HollowBatch {
+                desc,
+                parts: Vec::new(),
+                len: 0,
+                runs: Vec::new(),
+            });
+            metrics.state.apply_spine_slow_path_lenient_adjustment.inc();
+        }
+    }
+    trace.push(replacement.clone());
+
+    // We just inserted stuff at the end, so re-sort them into place.
+    trace.sort_by(|a, b| a.desc.lower().elements().cmp(b.desc.lower().elements()));
+
+    // This impl is a touch complex, so sanity check our work.
+    let mut expected_lower = &Antichain::from_elem(T::minimum());
+    for b in trace.iter() {
+        if b.desc.lower() != expected_lower {
+            return Err(format!(
+                "lower {:?} did not match expected {:?}: {:?}",
+                b.desc.lower(),
+                expected_lower,
+                trace
+            ));
+        }
+        expected_lower = b.desc.upper();
+    }
+    Ok(trace)
 }
 
 impl ProtoStateFieldDiffs {
@@ -754,5 +953,244 @@ impl<'a> Iterator for ProtoStateFieldDiffsIter<'a> {
         };
         self.diff_idx += 1;
         Some(Ok((field, diff)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ops::ControlFlow::Continue;
+
+    use mz_build_info::DUMMY_BUILD_INFO;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_ore::now::SYSTEM_TIME;
+
+    use crate::ShardId;
+
+    use super::*;
+
+    // Regression test for the apply_diffs_spine special case that sniffs out an
+    // insert, applies it, and then lets the remaining diffs (if any) fall
+    // through to the rest of the code. See #15493.
+    #[test]
+    fn regression_15493_sniff_insert() {
+        fn hb(lower: u64, upper: u64, len: usize) -> HollowBatch<u64> {
+            HollowBatch {
+                desc: Description::new(
+                    Antichain::from_elem(lower),
+                    Antichain::from_elem(upper),
+                    Antichain::from_elem(0),
+                ),
+                parts: Vec::new(),
+                len,
+                runs: Vec::new(),
+            }
+        }
+
+        // The bug handled here is essentially a set of batches that look like
+        // the pattern matched by `apply_lenient` _plus_ an insert. In
+        // apply_diffs_spine, we use `sniff_insert` to steal the insert out of
+        // the diffs and fall back to the rest of the logic to handle the
+        // remaining diffs.
+        //
+        // Concretely, something like (the numbers are truncated versions of the
+        // actual bug posted in the issue):
+        // - spine: [0][7094664]0, [7094664][7185234]100
+        // - diffs: [0][6805359]0 del, [6805359][7083793]0 del, [0][7083793]0 ins,
+        //   [7185234][7185859]20 ins
+        //
+        // Where this allows us to handle the [7185234,7185859) and then
+        // apply_lenient handles splitting up [0,7094664) so we can apply the
+        // [0,6805359)+[6805359,7083793)->[0,7083793) swap.
+
+        let batches_before = vec![hb(0, 7094664, 0), hb(7094664, 7185234, 100)];
+
+        let diffs = vec![
+            StateFieldDiff {
+                key: hb(0, 6805359, 0),
+                val: StateFieldValDiff::Delete(()),
+            },
+            StateFieldDiff {
+                key: hb(6805359, 7083793, 0),
+                val: StateFieldValDiff::Delete(()),
+            },
+            StateFieldDiff {
+                key: hb(0, 7083793, 0),
+                val: StateFieldValDiff::Insert(()),
+            },
+            StateFieldDiff {
+                key: hb(7185234, 7185859, 20),
+                val: StateFieldValDiff::Insert(()),
+            },
+        ];
+
+        // Ideally this first batch would be [0][7083793], [7083793,7094664]
+        // here because `apply_lenient` splits it out, but when `apply_lenient`
+        // reconstructs the trace, Spine happens to (deterministically) collapse
+        // them back together. The main value of this test is that the
+        // `apply_diffs_spine` call below doesn't return an Err, so don't worry
+        // too much about this, it's just a sanity check.
+        let batches_after = vec![
+            hb(0, 7094664, 0),
+            hb(7094664, 7185234, 100),
+            hb(7185234, 7185859, 20),
+        ];
+
+        let version = DUMMY_BUILD_INFO.semver_version();
+        let state = State::<(), (), u64, i64>::new(version.clone(), ShardId([0u8; 16]));
+        let state = state.clone_apply(&version, &mut |_seqno, state| {
+            for b in batches_before.iter() {
+                let _merge_reqs = state.trace.push_batch(b.clone());
+            }
+            Continue::<(), ()>(())
+        });
+        let mut state = match state {
+            Continue((_, x)) => x,
+            _ => unreachable!(),
+        };
+
+        let metrics = Metrics::new(
+            &PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
+            &MetricsRegistry::new(),
+        );
+        assert_eq!(
+            apply_diffs_spine(&metrics, diffs, &mut state.collections.trace),
+            Ok(())
+        );
+
+        let mut actual = Vec::new();
+        state
+            .collections
+            .trace
+            .map_batches(|b| actual.push(b.clone()));
+        assert_eq!(actual, batches_after);
+    }
+
+    #[test]
+    fn apply_lenient() {
+        #[track_caller]
+        fn testcase(
+            replacement: (u64, u64, u64, usize),
+            spine: &[(u64, u64, u64, usize)],
+            expected: Result<&[(u64, u64, u64, usize)], &str>,
+        ) {
+            fn batch(x: &(u64, u64, u64, usize)) -> HollowBatch<u64> {
+                let (lower, upper, since, len) = x;
+                let desc = Description::new(
+                    Antichain::from_elem(*lower),
+                    Antichain::from_elem(*upper),
+                    Antichain::from_elem(*since),
+                );
+                HollowBatch {
+                    desc,
+                    parts: Vec::new(),
+                    len: *len,
+                    runs: Vec::new(),
+                }
+            }
+            let replacement = batch(&replacement);
+            let batches = spine.iter().map(batch).collect::<Vec<_>>();
+
+            let metrics = Metrics::new(
+                &PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
+                &MetricsRegistry::new(),
+            );
+            let actual = apply_compaction_lenient(&metrics, batches, &replacement);
+            let expected = match expected {
+                Ok(batches) => Ok(batches.iter().map(batch).collect::<Vec<_>>()),
+                Err(err) => Err(err.to_owned()),
+            };
+            assert_eq!(actual, expected);
+        }
+
+        // Exact swap of N batches
+        testcase(
+            (0, 3, 0, 100),
+            &[(0, 1, 0, 0), (1, 2, 0, 0), (2, 3, 0, 0)],
+            Ok(&[(0, 3, 0, 100)]),
+        );
+
+        // Swap out the middle of a batch
+        testcase(
+            (1, 2, 0, 100),
+            &[(0, 3, 0, 0)],
+            Ok(&[(0, 1, 0, 0), (1, 2, 0, 100), (2, 3, 0, 0)]),
+        );
+
+        // Split batch at replacement lower
+        testcase(
+            (2, 4, 0, 100),
+            &[(0, 3, 0, 0), (3, 4, 0, 0)],
+            Ok(&[(0, 2, 0, 0), (2, 4, 0, 100)]),
+        );
+
+        // Err: split batch at replacement lower not empty
+        testcase(
+            (2, 4, 0, 100),
+            &[(0, 3, 0, 1), (3, 4, 0, 0)],
+            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }, parts: [], len: 1, runs: [] }")
+        );
+
+        // Split batch at replacement lower (untouched batch before the split one)
+        testcase(
+            (2, 4, 0, 100),
+            &[(0, 1, 0, 0), (1, 3, 0, 0), (3, 4, 0, 0)],
+            Ok(&[(0, 1, 0, 0), (1, 2, 0, 0), (2, 4, 0, 100)]),
+        );
+
+        // Split batch at replacement lower (since is preserved)
+        testcase(
+            (2, 4, 0, 100),
+            &[(0, 3, 200, 0), (3, 4, 0, 0)],
+            Ok(&[(0, 2, 200, 0), (2, 4, 0, 100)]),
+        );
+
+        // Split batch at replacement upper
+        testcase(
+            (0, 2, 0, 100),
+            &[(0, 1, 0, 0), (1, 4, 0, 0)],
+            Ok(&[(0, 2, 0, 100), (2, 4, 0, 0)]),
+        );
+
+        // Err: split batch at replacement upper not empty
+        testcase(
+            (0, 2, 0, 100),
+            &[(0, 1, 0, 0), (1, 4, 0, 1)],
+            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [4] }, since: Antichain { elements: [0] } }, parts: [], len: 1, runs: [] }")
+        );
+
+        // Split batch at replacement upper (untouched batch after the split one)
+        testcase(
+            (0, 2, 0, 100),
+            &[(0, 1, 0, 0), (1, 3, 0, 0), (3, 4, 0, 0)],
+            Ok(&[(0, 2, 0, 100), (2, 3, 0, 0), (3, 4, 0, 0)]),
+        );
+
+        // Split batch at replacement upper (since is preserved)
+        testcase(
+            (0, 2, 0, 100),
+            &[(0, 1, 0, 0), (1, 4, 200, 0)],
+            Ok(&[(0, 2, 0, 100), (2, 4, 200, 0)]),
+        );
+
+        // Split batch at replacement lower and upper
+        testcase(
+            (2, 6, 0, 100),
+            &[(0, 3, 0, 0), (3, 5, 0, 0), (5, 8, 0, 0)],
+            Ok(&[(0, 2, 0, 0), (2, 6, 0, 100), (6, 8, 0, 0)]),
+        );
+
+        // Replacement doesn't overlap (after)
+        testcase(
+            (2, 3, 0, 100),
+            &[(0, 1, 0, 0)],
+            Err("replacement didn't overlap any batches"),
+        );
+
+        // Replacement doesn't overlap (before, though this would never happen in practice)
+        testcase(
+            (2, 3, 0, 100),
+            &[(4, 5, 0, 0)],
+            Err("replacement didn't overlap any batches"),
+        );
     }
 }

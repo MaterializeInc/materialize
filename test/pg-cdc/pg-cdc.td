@@ -119,7 +119,8 @@ $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=mat
   )
 ! CREATE SOURCE "no_such_host"
   FROM POSTGRES CONNECTION no_such_host (PUBLICATION 'mz_source');
-contains:failed to lookup address information
+# TODO: assert on `detail` here.
+exact:failed to fetch publication information from PostgreSQL database
 
 > CREATE CONNECTION no_such_port TO POSTGRES (
     HOST postgres,
@@ -130,7 +131,8 @@ contains:failed to lookup address information
   )
 ! CREATE SOURCE "no_such_port"
   FROM POSTGRES CONNECTION no_such_port (PUBLICATION 'mz_source');
-contains:error connecting to server: Connection refused (os error 111)
+# TODO: assert on `detail` here.
+exact:failed to fetch publication information from PostgreSQL database
 
 > CREATE CONNECTION no_such_user TO POSTGRES (
     HOST postgres,
@@ -140,7 +142,8 @@ contains:error connecting to server: Connection refused (os error 111)
   )
 ! CREATE SOURCE "no_such_user"
   FROM POSTGRES CONNECTION no_such_user (PUBLICATION 'mz_source');
-contains:db error: FATAL: role "no_such_user" does not exist
+# TODO: assert on `detail` here.
+exact:failed to fetch publication information from PostgreSQL database
 
 > CREATE SECRET badpass AS 'badpass'
 > CREATE CONNECTION no_such_password TO POSTGRES (
@@ -151,7 +154,8 @@ contains:db error: FATAL: role "no_such_user" does not exist
   )
 ! CREATE SOURCE "no_such_password"
   FROM POSTGRES CONNECTION no_such_password (PUBLICATION 'mz_source');
-contains:db error: FATAL: password authentication failed for user "postgres"
+# TODO: assert on `detail` here.
+exact:failed to fetch publication information from PostgreSQL database
 
 > CREATE CONNECTION no_such_dbname TO POSTGRES (
     HOST postgres,
@@ -161,11 +165,13 @@ contains:db error: FATAL: password authentication failed for user "postgres"
   )
 ! CREATE SOURCE "no_such_dbname"
   FROM POSTGRES CONNECTION no_such_dbname (PUBLICATION 'mz_source');
-contains:db error: FATAL: database "no_such_dbname" does not exist
+# TODO: assert on `detail` here.
+exact:failed to fetch publication information from PostgreSQL database
 
 ! CREATE SOURCE "no_such_publication"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'no_such_publication');
-contains:publication "no_such_publication" does not exist
+# TODO: assert on `detail` here.
+exact:failed to fetch publication information from PostgreSQL database
 
 
 #
@@ -191,6 +197,34 @@ contains:publication "no_such_publication" does not exist
     conflict_schema.conflict_table AS public.conflict_table,
     "space table"
   );
+
+$ set-regex match=\d+ replacement=<NUMBER>
+
+> SHOW SOURCES
+conflict_table        subsource <null>
+escaped_text_table    subsource <null>
+large_text            subsource <null>
+multipart_pk          subsource <null>
+mz_source             postgres  <NUMBER>
+no_replica_identity   subsource <null>
+nonpk_table           subsource <null>
+nulls_table           subsource <null>
+pk_table              subsource <null>
+"space table"         subsource <null>
+trailing_space_nopk   subsource <null>
+trailing_space_pk     subsource <null>
+types_table           subsource <null>
+utf<NUMBER>_table     subsource <null>
+таблица               subsource <null>
+
+$ unset-regex
+
+# Cannot drop subsources independent of primary source
+! DROP SOURCE conflict_table
+contains: SOURCE materialize.public.conflict_table is a subsource and cannot be dropped independently of its primary source
+
+! DROP SOURCE conflict_table CASCADE
+contains: SOURCE materialize.public.conflict_table is a subsource and cannot be dropped independently of its primary source
 
 > SELECT * FROM no_replica_identity;
 1

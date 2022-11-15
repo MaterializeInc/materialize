@@ -15,6 +15,7 @@ from materialize.zippy.framework import Capability
 class ReplicaSizeType(Enum):
     Nodes = 1
     Workers = 2
+    Both = 3
 
 
 class ReplicaExists(Capability):

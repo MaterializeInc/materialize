@@ -18,26 +18,25 @@ default:
   outputs:
     dev:
       type: materialize
-      threads: 1
-      host: localhost
+      host: instance.region.aws.materialize.cloud
       port: 6875
-      user: materialize
+      user: user@domain.com
+      pass: password
+      dbname: materialize
+      schema: dbt_user
+      cluster: dbt_user
+      sslmode: require
+      keepalives_idle: 10
+
+    prod:
+      type: materialize
+      host: instance.region.aws.materialize.cloud
+      port: 6875
+      user: user@domain.com
       pass: password
       dbname: materialize
       schema: public
-
-    authenticated:
-      type: materialize
-      threads: 1
-      host: instance.materialize.cloud
-      port: 6875
-      user: materialize
-      pass: password
-      dbname: materialize
-      schema: analytics
-      sslmode: verify-ca
-      sslcert: materialize.crt
-      sslkey: materialize.key
-      sslrootcert: ca.crt
+      cluster: prod
+      sslmode: require
 
   target: dev

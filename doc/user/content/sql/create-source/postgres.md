@@ -35,7 +35,7 @@ _src_name_  | The name for the source.
 
 Field                                | Value     | Description
 -------------------------------------|-----------|-------------------------------------
-`SIZE`                               | `text`    | **Required.** The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`.
+`SIZE`                               | `text`    | **Required.** The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`, `xlarge`.
 
 ## Features
 
@@ -139,7 +139,7 @@ CREATE CONNECTION pg_connection TO POSTGRES (
 );
 ```
 
-### Creating a source
+### Creating a source {#create-source-example}
 
 ```sql
 CREATE SOURCE mz_source
@@ -171,4 +171,4 @@ The smallest source size (`3xsmall`) is a resonable default to get started. For 
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
 - [`CREATE SOURCE`](../)
-- [Change Data Capture (Postgres) guide](/integrations/cdc-postgres/#direct-postgres-source)
+- [Change Data Capture (PostgreSQL) guide](/integrations/cdc-postgres/#direct-postgres-source)

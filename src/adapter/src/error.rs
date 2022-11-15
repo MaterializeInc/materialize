@@ -23,7 +23,7 @@ use mz_repr::explain_new::ExplainError;
 use mz_repr::NotNullViolation;
 use mz_sql::plan::PlanError;
 use mz_sql::query_model::QGMError;
-use mz_storage::controller::StorageError;
+use mz_storage_client::controller::StorageError;
 use mz_transform::TransformError;
 
 use crate::catalog;
@@ -186,7 +186,7 @@ pub enum AdapterError {
     /// The transaction only supports single table writes
     MultiTableWriteTransaction,
     /// An error occurred in the storage layer
-    Storage(mz_storage::controller::StorageError),
+    Storage(mz_storage_client::controller::StorageError),
     /// An error occurred in the compute layer
     Compute(mz_compute_client::controller::ComputeError),
 }
@@ -476,7 +476,10 @@ impl fmt::Display for AdapterError {
 
 impl From<anyhow::Error> for AdapterError {
     fn from(e: anyhow::Error) -> AdapterError {
-        AdapterError::Unstructured(e)
+        match e.downcast_ref::<PlanError>() {
+            Some(plan_error) => AdapterError::PlanError(plan_error.clone()),
+            None => AdapterError::Unstructured(e),
+        }
     }
 }
 

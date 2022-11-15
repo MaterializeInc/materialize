@@ -7,7 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::{collections::BTreeMap, convert::Infallible};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    convert::Infallible,
+};
 
 use futures::Future;
 use postgres_openssl::MakeTlsConnector;
@@ -15,11 +18,11 @@ use tempfile::NamedTempFile;
 use timely::progress::Antichain;
 use tokio_postgres::Config;
 
-use mz_ore::assert_contains;
+use mz_ore::{assert_contains, metrics::MetricsRegistry};
 
 use mz_stash::{
-    Append, Memory, Postgres, Sqlite, Stash, StashCollection, StashError, TableTransaction,
-    Timestamp, TypedCollection,
+    Append, Memory, Postgres, PostgresFactory, Sqlite, Stash, StashCollection, StashError,
+    TableTransaction, Timestamp, TypedCollection,
 };
 
 #[tokio::test]
@@ -53,10 +56,12 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
     mz_ore::test::init_logging();
 
     let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
+    let factory = PostgresFactory::new(&MetricsRegistry::new());
 
     {
         // Verify invalid URLs fail on connect.
-        assert!(Postgres::new("host=invalid".into(), None, tls.clone())
+        assert!(factory
+            .open("host=invalid".into(), None, tls.clone(),)
             .await
             .unwrap_err()
             .to_string()
@@ -70,44 +75,36 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
             return Ok(());
         }
     };
-    async fn connect(connstr: &str, tls: MakeTlsConnector, clear: bool) -> Postgres {
-        let (client, connection) = tokio_postgres::connect(connstr, tokio_postgres::NoTls)
+    async fn connect(
+        factory: &PostgresFactory,
+        connstr: &str,
+        tls: MakeTlsConnector,
+        clear: bool,
+    ) -> Postgres {
+        if clear {
+            Postgres::clear(connstr, tls.clone()).await.unwrap();
+        }
+        factory.open(connstr.to_string(), None, tls).await.unwrap()
+    }
+    {
+        connect(&factory, &connstr, tls.clone(), true).await;
+        let stash = test_stash(|| async { connect(&factory, &connstr, tls.clone(), false).await })
             .await
             .unwrap();
-        mz_ore::task::spawn(|| "postgres connection", async move {
-            if let Err(e) = connection.await {
-                panic!("connection error: {}", e);
-            }
-        });
-        if clear {
-            client
-                .batch_execute(
-                    "
-                    DROP TABLE IF EXISTS uppers;
-                    DROP TABLE IF EXISTS  sinces;
-                    DROP TABLE IF EXISTS  data;
-                    DROP TABLE IF EXISTS  collections;
-                    DROP TABLE IF EXISTS  fence;
-                ",
-                )
-                .await
-                .unwrap();
-        }
-        Postgres::new(connstr.to_string(), None, tls).await.unwrap()
+        stash.verify().await.unwrap();
     }
     {
-        connect(&connstr, tls.clone(), true).await;
-        test_stash(|| async { connect(&connstr, tls.clone(), false).await }).await?;
-    }
-    {
-        connect(&connstr, tls.clone(), true).await;
-        test_append(|| async { connect(&connstr, tls.clone(), false).await }).await?;
+        connect(&factory, &connstr, tls.clone(), true).await;
+        let stash = test_append(|| async { connect(&factory, &connstr, tls.clone(), false).await })
+            .await
+            .unwrap();
+        stash.verify().await.unwrap();
     }
     // Test the fence.
     {
-        let mut conn1 = connect(&connstr, tls.clone(), true).await;
+        let mut conn1 = connect(&factory, &connstr, tls.clone(), true).await;
         // Don't clear the stash tables.
-        let mut conn2 = connect(&connstr, tls.clone(), false).await;
+        let mut conn2 = connect(&factory, &connstr, tls.clone(), false).await;
         assert!(match conn1.collection::<String, String>("c").await {
             Err(e) => e.is_unrecoverable(),
             _ => panic!("expected error"),
@@ -116,10 +113,11 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
     }
     // Test readonly.
     {
-        let mut stash_rw = Postgres::new(connstr.to_string(), None, tls.clone())
+        Postgres::clear(&connstr, tls.clone()).await.unwrap();
+        let mut stash_rw = factory
+            .open(connstr.to_string(), None, tls.clone())
             .await
             .unwrap();
-        stash_rw.collection::<i64, i64>("c1").await.unwrap();
         let col_rw = stash_rw.collection::<i64, i64>("c1").await.unwrap();
         let mut batch = col_rw.make_batch(&mut stash_rw).await.unwrap();
         col_rw.append_to_batch(&mut batch, &1, &2, 1);
@@ -127,7 +125,8 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
 
         // Now make a readonly stash. We should fail to create new collections,
         // but be able to read existing collections.
-        let mut stash_ro = Postgres::new_readonly(connstr.to_string(), None, tls)
+        let mut stash_ro = factory
+            .open_readonly(connstr.to_string(), None, tls.clone())
             .await
             .unwrap();
         let res = stash_ro.collection::<i64, i64>("c2").await;
@@ -140,12 +139,62 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
 
         // The previous stash should still be the leader.
         assert!(stash_rw.confirm_leadership().await.is_ok());
+        stash_rw.verify().await.unwrap();
+    }
+    // Test savepoint.
+    {
+        let mut stash_rw = factory
+            .open(connstr.to_string(), None, tls.clone())
+            .await
+            .unwrap();
+        // Data still present from previous test.
+        let c1_rw = stash_rw.collection::<i64, i64>("c1").await.unwrap();
+
+        // Now make a savepoint stash. We should be allowed to create anything
+        // we want, but it shouldn't be viewable to other stashes.
+        let mut stash_sp = factory
+            .open_savepoint(connstr.to_string(), tls)
+            .await
+            .unwrap();
+        let c1_sp = stash_rw.collection::<i64, i64>("c1").await.unwrap();
+        let mut batch = c1_sp.make_batch(&mut stash_sp).await.unwrap();
+        c1_sp.append_to_batch(&mut batch, &5, &6, 1);
+        stash_sp.append(&[batch]).await.unwrap();
+        assert_eq!(
+            stash_sp.peek(c1_sp).await.unwrap(),
+            vec![(1, 2, 1), (5, 6, 1)]
+        );
+        // RW collection can't see the new row.
+        assert_eq!(stash_rw.peek(c1_rw).await.unwrap(), vec![(1, 2, 1)]);
+
+        // SP stash can create a new collection, append to it, peek it.
+        let c_savepoint = stash_sp
+            .collection::<i64, i64>("c_savepoint")
+            .await
+            .unwrap();
+        let mut batch = c_savepoint.make_batch(&mut stash_sp).await.unwrap();
+        c_savepoint.append_to_batch(&mut batch, &3, &4, 1);
+        stash_sp.append(&[batch]).await.unwrap();
+        assert_eq!(stash_sp.peek(c_savepoint).await.unwrap(), vec![(3, 4, 1)]);
+        // But the RW collection can't see it.
+        assert_eq!(
+            stash_rw.collections().await.unwrap(),
+            BTreeSet::from(["c1".to_string()])
+        );
+
+        drop(stash_sp);
+
+        // The previous stash should still be the leader.
+        assert!(stash_rw.confirm_leadership().await.is_ok());
+        // Verify c1 didn't change.
+        assert_eq!(stash_rw.peek(c1_rw).await.unwrap(), vec![(1, 2, 1)]);
+        stash_rw.verify().await.unwrap();
     }
 
     Ok(())
 }
 
-async fn test_append<F, S, O>(f: F) -> Result<(), anyhow::Error>
+async fn test_append<F, S, O>(f: F) -> Result<S, anyhow::Error>
 where
     S: Append,
     O: Future<Output = S>,
@@ -328,10 +377,10 @@ where
 
     test_stash_table(&mut stash).await?;
 
-    Ok(())
+    Ok(stash)
 }
 
-async fn test_stash<F, S, O>(f: F) -> Result<(), anyhow::Error>
+async fn test_stash<F, S, O>(f: F) -> Result<S, anyhow::Error>
 where
     S: Stash,
     O: Future<Output = S>,
@@ -522,7 +571,7 @@ where
         Some("bar".to_string())
     );
 
-    Ok(())
+    Ok(stash)
 }
 
 async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> {
@@ -696,6 +745,33 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
     assert_eq!(
         items,
         vec![(1i64.to_le_bytes().to_vec(), "v5".to_string(), 1)]
+    );
+
+    // Test `set`.
+    let items = TABLE.peek_one(stash).await?;
+    let mut table = TableTransaction::new(items, uniqueness_violation);
+    // Uniqueness violation.
+    table
+        .set(2i64.to_le_bytes().to_vec(), Some("v5".to_string()))
+        .unwrap_err();
+    table
+        .set(3i64.to_le_bytes().to_vec(), Some("v6".to_string()))
+        .unwrap();
+    table.set(2i64.to_le_bytes().to_vec(), None).unwrap();
+    table.set(1i64.to_le_bytes().to_vec(), None).unwrap();
+    let pending = table.pending();
+    assert_eq!(
+        pending,
+        vec![
+            (1i64.to_le_bytes().to_vec(), "v5".to_string(), -1),
+            (3i64.to_le_bytes().to_vec(), "v6".to_string(), 1),
+        ]
+    );
+    commit(stash, collection, pending).await?;
+    let items = TABLE.peek_one(stash).await?;
+    assert_eq!(
+        items,
+        BTreeMap::from([(3i64.to_le_bytes().to_vec(), "v6".to_string())])
     );
 
     Ok(())

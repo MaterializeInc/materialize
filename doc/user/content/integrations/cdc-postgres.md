@@ -6,7 +6,7 @@ aliases:
 menu:
   main:
     parent: "integration-guides"
-    name: "PostgreSQL"
+    name: "PostgreSQL CDC"
     weight: 20
 ---
 

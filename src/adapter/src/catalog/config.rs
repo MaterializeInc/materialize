@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -18,7 +18,7 @@ use mz_build_info::BuildInfo;
 use mz_compute_client::controller::ComputeReplicaAllocation;
 use mz_ore::metrics::MetricsRegistry;
 use mz_secrets::SecretsReader;
-use mz_storage::types::hosts::StorageHostResourceAllocation;
+use mz_storage_client::types::hosts::StorageHostResourceAllocation;
 
 use crate::catalog::storage;
 
@@ -47,9 +47,9 @@ pub struct Config<'a, S> {
     pub storage_host_sizes: StorageHostSizeMap,
     /// Default storage host size, should be a key from storage_host_sizes.
     pub default_storage_host_size: Option<String>,
-    /// An optional semicolon-separated list of $var_name=$var_value pairs for
-    /// bootstraping system variables that are not already modified.
-    pub bootstrap_system_vars: Option<String>,
+    /// Values to set for system parameters, if those system parameters have not
+    /// already been set by the system user.
+    pub bootstrap_system_parameters: BTreeMap<String, String>,
     /// Valid availability zones for replicas.
     pub availability_zones: Vec<String>,
     /// A handle to a secrets manager that can only read secrets.
@@ -69,12 +69,14 @@ impl Default for ClusterReplicaSizeMap {
         //     "4": {"scale": 1, "workers": 4},
         //     /// ...
         //     "32": {"scale": 1, "workers": 32}
-        //     /// Testing with multiple processes on a single machine is a novelty, so
-        //     /// we don't bother providing many options.
-        //     "2-2": {"scale": 2, "workers": 2},
+        //     /// Testing with multiple processes on a single machine
         //     "2-4": {"scale": 2, "workers": 4},
+        //     /// Used in mzcompose tests
+        //     "2-2": {"scale": 2, "workers": 2},
+        //     ...
+        //     "16-16": {"scale": 16, "workers": 16},
         //     /// Used in the shared_fate cloudtest tests
-        //     "1-1": {"scale": 1, "workers": 1},
+        //     "2-1": {"scale": 2, "workers": 1},
         //     ...
         //     "16-1": {"scale": 16, "workers": 1},
         // }
@@ -104,17 +106,18 @@ impl Default for ClusterReplicaSizeMap {
                     workers: NonZeroUsize::new(1).unwrap(),
                 },
             );
+
+            inner.insert(
+                format!("{scale}-{scale}"),
+                ComputeReplicaAllocation {
+                    memory_limit: None,
+                    cpu_limit: None,
+                    scale: NonZeroUsize::new(scale).unwrap(),
+                    workers: NonZeroUsize::new(scale).unwrap(),
+                },
+            );
         }
 
-        inner.insert(
-            "2-2".to_string(),
-            ComputeReplicaAllocation {
-                memory_limit: None,
-                cpu_limit: None,
-                scale: NonZeroUsize::new(2).unwrap(),
-                workers: NonZeroUsize::new(2).unwrap(),
-            },
-        );
         inner.insert(
             "2-4".to_string(),
             ComputeReplicaAllocation {

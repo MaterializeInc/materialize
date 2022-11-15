@@ -39,6 +39,7 @@ use url::Url;
 use uuid::Uuid;
 
 use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageHostSizeMap};
+use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
 use mz_environmentd::{TlsConfig, TlsMode, BUILD_INFO};
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
@@ -56,7 +57,8 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
 use mz_secrets::SecretsController;
-use mz_storage::types::connections::ConnectionContext;
+use mz_stash::PostgresFactory;
+use mz_storage_client::types::connections::ConnectionContext;
 
 mod sys;
 
@@ -303,6 +305,11 @@ pub struct Args {
     )]
     orchestrator_process_data_directory: PathBuf,
 
+    /// The init container to use for computed and storaged when using the
+    /// kubernetes orchestrator.
+    #[clap(long)]
+    k8s_init_container_image: Option<String>,
+
     // === Storage options. ===
     /// Where the persist library should store its blob data.
     #[clap(long, env = "PERSIST_BLOB_URL")]
@@ -346,8 +353,8 @@ pub struct Args {
     /// Prefix for an external ID to be supplied to all AWS AssumeRole operations.
     ///
     /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
-    #[clap(long, env = "AWS_EXTERNAL_ID_PREFIX", value_name = "ID")]
-    aws_external_id_prefix: Option<String>,
+    #[clap(long, env = "AWS_EXTERNAL_ID_PREFIX", value_name = "ID", parse(from_str = AwsExternalIdPrefix::new_from_cli_argument_or_environment_variable))]
+    aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     /// Availability zones in which storage and compute resources may be
     /// deployed.
     #[clap(long, env = "AVAILABILITY_ZONE", use_value_delimiter = true)]
@@ -373,10 +380,15 @@ pub struct Args {
         default_value = "1"
     )]
     bootstrap_builtin_cluster_replica_size: String,
-    /// An optional semicolon-separated list of $var_name=$var_value pairs for
-    /// bootstraping system variables that are not already modified.
-    #[clap(long, env = "BOOTSTRAP_SYSTEM_VARS")]
-    bootstrap_system_vars: Option<String>,
+    /// An list of NAME=VALUE pairs for bootstrapping system parameters that are
+    /// not already modified.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_SYSTEM_PARAMETER",
+        multiple = true,
+        value_delimiter = ';'
+    )]
+    bootstrap_system_parameter: Vec<KeyValueArg<String, String>>,
     /// A map from size name to resource allocations for storage hosts.
     #[clap(long, env = "STORAGE_HOST_SIZES")]
     storage_host_sizes: Option<String>,
@@ -465,6 +477,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         runtime.block_on(mz_ore::tracing::configure(
             "environmentd",
             &args.tracing,
+            mz_service::tracing::mz_sentry_event_filter,
             (BUILD_INFO.version, BUILD_INFO.sha, BUILD_INFO.time),
         ))?;
 
@@ -544,7 +557,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     };
 
     // Configure controller.
-    let (orchestrator, secrets_controller) = match args.orchestrator {
+    let (orchestrator, secrets_controller, cloud_resource_controller) = match args.orchestrator {
         OrchestratorKind::Kubernetes => {
             let orchestrator = Arc::new(
                 runtime
@@ -562,12 +575,14 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                             .collect(),
                         service_account: args.orchestrator_kubernetes_service_account,
                         image_pull_policy: args.orchestrator_kubernetes_image_pull_policy,
+                        aws_external_id_prefix: args.aws_external_id_prefix.clone(),
                     }))
                     .context("creating kubernetes orchestrator")?,
             );
             (
                 Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
-                orchestrator as Arc<dyn SecretsController>,
+                Arc::clone(&orchestrator) as Arc<dyn SecretsController>,
+                Some(orchestrator as Arc<dyn CloudResourceController>),
             )
         }
         OrchestratorKind::Process => {
@@ -597,6 +612,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             (
                 Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
                 orchestrator as Arc<dyn SecretsController>,
+                None,
             )
         }
     };
@@ -619,7 +635,9 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         storage_stash_url: args.storage_stash_url,
         storaged_image: args.storaged_image.expect("clap enforced"),
         computed_image: args.computed_image.expect("clap enforced"),
+        init_container_image: args.k8s_init_container_image,
         now: SYSTEM_TIME.clone(),
+        postgres_factory: PostgresFactory::new(&metrics_registry),
     };
 
     // When inside a cgroup with a cpu limit,
@@ -719,6 +737,7 @@ max log level: {max_log_level}",
         adapter_stash_url: args.adapter_stash_url,
         controller,
         secrets_controller,
+        cloud_resource_controller,
         unsafe_mode: args.unsafe_mode,
         persisted_introspection: args.persisted_introspection,
         metrics_registry,
@@ -727,7 +746,11 @@ max log level: {max_log_level}",
         cluster_replica_sizes,
         bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
         bootstrap_builtin_cluster_replica_size: args.bootstrap_builtin_cluster_replica_size,
-        bootstrap_system_vars: args.bootstrap_system_vars,
+        bootstrap_system_parameters: args
+            .bootstrap_system_parameter
+            .into_iter()
+            .map(|kv| (kv.key, kv.value))
+            .collect(),
         storage_host_sizes,
         default_storage_host_size: args.default_storage_host_size,
         availability_zones: args.availability_zone,

@@ -16,6 +16,7 @@ from kubernetes.client import (
     AppsV1Api,
     CoreV1Api,
     RbacAuthorizationV1Api,
+    V1ClusterRole,
     V1ConfigMap,
     V1Deployment,
     V1Pod,
@@ -104,7 +105,7 @@ class K8sService(K8sResource):
             body=self.service, namespace=self.namespace()
         )
 
-    def node_port(self) -> int:
+    def node_port(self, name: Optional[str] = None) -> int:
         assert self.service and self.service.metadata and self.service.metadata.name
         service = self.api().read_namespaced_service(
             self.service.metadata.name, self.namespace()
@@ -117,34 +118,55 @@ class K8sService(K8sResource):
         ports = spec.ports
         assert ports is not None and len(ports) > 0
 
-        port = ports[0]
+        port = next(p for p in ports if name is None or p.name == name)
+
         node_port = port.node_port
         assert node_port is not None
 
         return node_port
 
-    def sql_conn(self) -> Connection:
+    def sql_conn(
+        self,
+        port: Optional[str] = None,
+        user: str = "materialize",
+    ) -> Connection:
         """Get a connection to run SQL queries against the service"""
         return pg8000.connect(
-            host="localhost", port=self.node_port(), user="materialize"
+            host="localhost",
+            port=self.node_port(name=port),
+            user=user,
         )
 
-    def sql_cursor(self) -> Cursor:
+    def sql_cursor(
+        self,
+        port: Optional[str] = None,
+        user: str = "materialize",
+    ) -> Cursor:
         """Get a cursor to run SQL queries against the service"""
-        conn = self.sql_conn()
+        conn = self.sql_conn(port=port, user=user)
         conn.autocommit = True
         return conn.cursor()
 
-    def sql(self, sql: str) -> None:
+    def sql(
+        self,
+        sql: str,
+        port: Optional[str] = None,
+        user: str = "materialize",
+    ) -> None:
         """Run a batch of SQL statements against the service."""
-        with self.sql_cursor() as cursor:
+        with self.sql_cursor(port=port, user=user) as cursor:
             for statement in sqlparse.split(sql):
                 print(f"> {statement}")
                 cursor.execute(statement)
 
-    def sql_query(self, sql: str) -> Any:
+    def sql_query(
+        self,
+        sql: str,
+        port: Optional[str] = None,
+        user: str = "materialize",
+    ) -> Any:
         """Execute a SQL query against the service and return results."""
-        with self.sql_cursor() as cursor:
+        with self.sql_cursor(port=port, user=user) as cursor:
             print(f"> {sql}")
             cursor.execute(sql)
             return cursor.fetchall()
@@ -217,6 +239,28 @@ class K8sConfigMap(K8sResource):
 
         core_v1_api.create_namespaced_config_map(
             body=self.config_map, namespace=self.namespace()
+        )
+
+
+class K8sClusterRole(K8sResource):
+    role: V1ClusterRole
+
+    def kind(self) -> str:
+        return "clusterrole"
+
+    def create(self) -> None:
+        rbac_api = self.rbac_api()
+
+        # kubectl delete all -all does not clean up role bindings
+        try:
+            assert self.role.metadata is not None
+            assert self.role.metadata.name is not None
+            rbac_api.delete_cluster_role(name=self.role.metadata.name)
+        except ApiException:
+            pass
+
+        rbac_api.create_cluster_role(
+            body=self.role,
         )
 
 

@@ -29,8 +29,8 @@ use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use mz_repr::explain_new::{DummyHumanizer, ExprHumanizer};
 use mz_repr::{ColumnName, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::Expr;
-use mz_storage::types::connections::Connection;
-use mz_storage::types::sources::SourceDesc;
+use mz_storage_client::types::connections::Connection;
+use mz_storage_client::types::sources::SourceDesc;
 use uuid::Uuid;
 
 use crate::func::Func;
@@ -187,6 +187,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
 
     /// Returns the configuration of the catalog.
     fn config(&self) -> &CatalogConfig;
+
+    /// Check if window functions are supported by the current system configuration.
+    fn window_functions(&self) -> bool;
 
     /// Returns the number of milliseconds since the system epoch. For normal use
     /// this means the Unix epoch. This can safely be mocked in tests and start
@@ -564,7 +567,14 @@ pub enum CatalogError {
     /// Unknown connection.
     UnknownConnection(String),
     /// Expected the catalog item to have the given type, but it did not.
-    UnexpectedType(String, CatalogItemType),
+    UnexpectedType {
+        /// The item's name.
+        name: String,
+        /// The actual type of the item.
+        actual_type: CatalogItemType,
+        /// The expected type of the item.
+        expected_type: CatalogItemType,
+    },
     /// Invalid attempt to depend on a non-dependable item.
     InvalidDependency {
         /// The invalid item's name.
@@ -587,8 +597,12 @@ impl fmt::Display for CatalogError {
                 write!(f, "unknown cluster replica '{}'", name)
             }
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
-            Self::UnexpectedType(name, item_type) => {
-                write!(f, "\"{name}\" is not of type {item_type}")
+            Self::UnexpectedType {
+                name,
+                actual_type,
+                expected_type,
+            } => {
+                write!(f, "\"{name}\" is a {actual_type} not a {expected_type}")
             }
             Self::InvalidDependency { name, typ } => write!(
                 f,
@@ -715,6 +729,10 @@ impl SessionCatalog for DummyCatalog {
         &DUMMY_CONFIG
     }
 
+    fn window_functions(&self) -> bool {
+        true
+    }
+
     fn now(&self) -> EpochMillis {
         (self.config().now)()
     }
@@ -727,6 +745,10 @@ impl SessionCatalog for DummyCatalog {
 impl ExprHumanizer for DummyCatalog {
     fn humanize_id(&self, id: GlobalId) -> Option<String> {
         DummyHumanizer.humanize_id(id)
+    }
+
+    fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String> {
+        DummyHumanizer.humanize_id_unqualified(id)
     }
 
     fn humanize_scalar_type(&self, ty: &ScalarType) -> String {

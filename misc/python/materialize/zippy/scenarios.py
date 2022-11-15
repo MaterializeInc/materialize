@@ -11,8 +11,14 @@ from typing import Dict, List, Type
 
 from materialize.zippy.debezium_actions import CreateDebeziumSource, DebeziumStart
 from materialize.zippy.framework import Action, Scenario
-from materialize.zippy.kafka_actions import CreateTopic, Ingest, KafkaStart
+from materialize.zippy.kafka_actions import (
+    CreateTopic,
+    Ingest,
+    KafkaInsertParallel,
+    KafkaStart,
+)
 from materialize.zippy.mz_actions import KillComputed, KillStoraged, MzStart, MzStop
+from materialize.zippy.peek_actions import PeekCancellation
 from materialize.zippy.pg_cdc_actions import CreatePostgresCdcTable
 from materialize.zippy.postgres_actions import (
     CreatePostgresTable,
@@ -29,7 +35,7 @@ from materialize.zippy.replica_actions import (
 from materialize.zippy.sink_actions import CreateSink
 from materialize.zippy.source_actions import CreateSource
 from materialize.zippy.table_actions import DML, CreateTable, ValidateTable
-from materialize.zippy.view_actions import CreateView, ValidateView
+from materialize.zippy.view_actions import CreateView, CreateViewSimple, ValidateView
 
 
 class KafkaSources(Scenario):
@@ -49,7 +55,8 @@ class KafkaSources(Scenario):
             CreateView: 5,
             CreateSink: 5,
             ValidateView: 10,
-            Ingest: 50,
+            Ingest: 100,
+            PeekCancellation: 5,
         }
 
 
@@ -87,7 +94,7 @@ class DebeziumPostgres(Scenario):
             KillComputed: 15,
             CreateView: 10,
             ValidateView: 20,
-            PostgresDML: 30,
+            PostgresDML: 100,
         }
 
 
@@ -106,7 +113,7 @@ class PostgresCdc(Scenario):
             PostgresRestart: 10,
             CreateView: 10,
             ValidateView: 20,
-            PostgresDML: 30,
+            PostgresDML: 100,
         }
 
 
@@ -130,6 +137,25 @@ class ClusterReplicas(Scenario):
             CreateView: 20,
             CreateSink: 10,
             ValidateView: 20,
-            Ingest: 25,
-            DML: 25,
+            Ingest: 50,
+            DML: 50,
+            PeekCancellation: 5,
+        }
+
+
+class KafkaParallelInsert(Scenario):
+    """A Zippy test using simple views over Kafka sources with parallel insertion."""
+
+    def bootstrap(self) -> List[Type[Action]]:
+        return [KafkaStart, MzStart]
+
+    def config(self) -> Dict[Type[Action], float]:
+        return {
+            KillStoraged: 5,
+            KillComputed: 5,
+            CreateTopic: 10,
+            CreateSource: 10,
+            CreateViewSimple: 5,
+            ValidateView: 10,
+            KafkaInsertParallel: 50,
         }

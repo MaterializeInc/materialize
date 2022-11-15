@@ -69,6 +69,8 @@ pub struct SqlCommand {
 pub struct FailSqlCommand {
     pub query: String,
     pub expected_error: SqlExpectedError,
+    pub expected_detail: Option<String>,
+    pub expected_hint: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -267,9 +269,34 @@ fn parse_fail_sql(line_reader: &mut LineReader) -> Result<FailSqlCommand, PosErr
                 ),
             });
     };
+
+    let extra_error = |line_reader: &mut LineReader, prefix| {
+        if let Some((_pos, line)) = line_reader.peek() {
+            if let Some(_) = line.strip_prefix(prefix) {
+                let line = line_reader
+                    .next()
+                    .map(|(_, line)| line)
+                    .unwrap()
+                    .strip_prefix(prefix)
+                    .map(|line| line.to_string())
+                    .unwrap();
+                Some(line.trim().to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+    // Expect `hint` to always follow `detail` if they are both present, for now.
+    let expected_detail = extra_error(line_reader, "detail:");
+    let expected_hint = extra_error(line_reader, "hint:");
+
     Ok(FailSqlCommand {
         query: query.trim().to_string(),
         expected_error,
+        expected_detail,
+        expected_hint,
     })
 }
 

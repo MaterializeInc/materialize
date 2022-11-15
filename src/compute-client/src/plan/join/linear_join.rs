@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use crate::plan::join::JoinBuildState;
 use crate::plan::join::JoinClosure;
 use crate::plan::AvailableCollections;
-use mz_expr::MapFilterProject;
+use mz_expr::{JoinInputCharacteristics, MapFilterProject};
 
 use mz_expr::join_permutations;
 use mz_expr::permutation_for_arrangement;
@@ -168,7 +168,7 @@ impl LinearJoinPlan {
         source_relation: usize,
         source_arrangement: Option<&(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)>,
         equivalences: &[Vec<MirScalarExpr>],
-        join_order: &[(usize, Vec<MirScalarExpr>)],
+        join_order: &[(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)],
         input_mapper: mz_expr::JoinInputMapper,
         mfp_above: &mut MapFilterProject,
         available: &[AvailableCollections],
@@ -216,7 +216,7 @@ impl LinearJoinPlan {
 
         // Iterate through the join order instructions, assembling keys and
         // closures to use.
-        for (lookup_relation, lookup_key) in join_order.iter() {
+        for (lookup_relation, lookup_key, _characteristics) in join_order.iter() {
             let available = &available[*lookup_relation];
 
             let (lookup_permutation, lookup_thinning) = available

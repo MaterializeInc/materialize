@@ -86,11 +86,11 @@
 //! ```
 
 use std::collections::{HashMap, HashSet};
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use bytes::{BufMut, BytesMut};
 use fallible_iterator::FallibleIterator;
 use mz_ore::collections::CollectionExt;
@@ -324,7 +324,13 @@ impl PgConn {
                 return Ok((ch, msg));
             };
             // If there was no message, read more bytes.
-            let sz = self.stream.read(&mut buf)?;
+            let sz = match self.stream.read(&mut buf) {
+                Ok(n) => n,
+                // According to the `read` docs, this is a non-fatal retryable error.
+                // https://doc.rust-lang.org/std/io/trait.Read.html#errors
+                Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                Err(e) => return Err(anyhow!(e)),
+            };
             self.recv_buf.extend_from_slice(&buf[..sz]);
         }
     }

@@ -50,6 +50,17 @@ impl CollectionIdBundle {
         }
     }
 
+    /// Extends a `CollectionIdBundle` with the contents of another `CollectionIdBundle`.
+    pub fn extend(&mut self, other: &CollectionIdBundle) {
+        self.storage_ids.extend(&other.storage_ids);
+        for (compute_instance, ids) in &other.compute_ids {
+            self.compute_ids
+                .entry(*compute_instance)
+                .or_default()
+                .extend(ids);
+        }
+    }
+
     /// Returns an iterator over all IDs in the bundle.
     ///
     /// The IDs are iterated in an unspecified order.

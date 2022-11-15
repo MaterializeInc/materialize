@@ -105,7 +105,8 @@ contains:error publishing kafka schemas for sink: unable to publish value schema
 ! CREATE SOURCE data
   FROM KAFKA CONNECTION kafka_ssl (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_without_ssl
-contains:self signed certificate in certificate chain
+contains:failed to fetch schema subject
+detail:self signed certificate in certificate chain
 
 # missing config
 ! CREATE CONNECTION m TO KAFKA (

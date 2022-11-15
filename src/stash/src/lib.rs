@@ -9,6 +9,7 @@
 
 //! Durable metadata storage.
 
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::error::Error;
 use std::fmt::{self, Debug};
@@ -31,7 +32,7 @@ mod postgres;
 mod sqlite;
 
 pub use crate::memory::Memory;
-pub use crate::postgres::Postgres;
+pub use crate::postgres::{Postgres, PostgresFactory};
 pub use crate::sqlite::Sqlite;
 
 pub type Diff = i64;
@@ -391,6 +392,10 @@ pub trait Stash: std::fmt::Debug + Send {
     /// point from the invocation of this method to the return of this
     /// method. Otherwise, returns `Err`.
     async fn confirm_leadership(&mut self) -> Result<(), StashError>;
+
+    /// Returns the stash's epoch number. If `Some`, it is a number that
+    /// increases with each start of a stash.
+    fn epoch(&self) -> Option<i64>;
 }
 
 /// `StashCollection` is like a differential dataflow [`Collection`], but the
@@ -463,8 +468,14 @@ pub struct StashError {
 }
 
 impl StashError {
-    // Returns whether the error is unrecoverable (retrying will never succeed).
+    /// Reports whether the error is unrecoverable (retrying will never
+    /// succeed).
     pub fn is_unrecoverable(&self) -> bool {
+        matches!(self.inner, InternalStashError::Fence(_))
+    }
+
+    /// Reports whether the error is a fence error.
+    pub fn is_fence(&self) -> bool {
         matches!(self.inner, InternalStashError::Fence(_))
     }
 }
@@ -920,7 +931,7 @@ where
     /// Iterates over the items viewable in the current transaction in arbitrary
     /// order.
     pub fn for_values<F: FnMut(&K, &V)>(&self, mut f: F) {
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::with_capacity(self.pending.len());
         for (k, v) in self.pending.iter() {
             seen.insert(k);
             // Deleted items don't exist so shouldn't be visited, but still suppress
@@ -934,6 +945,17 @@ where
             if !seen.contains(k) {
                 f(k, v);
             }
+        }
+    }
+
+    /// Returns the current value of `k`.
+    pub fn get(&self, k: &K) -> Option<&V> {
+        if let Some(v) = self.pending.get(k) {
+            v.as_ref()
+        } else if let Some(v) = self.initial.get(k) {
+            Some(v)
+        } else {
+            None
         }
     }
 
@@ -1000,6 +1022,45 @@ where
         }
     }
 
+    /// Set the value for a key. Returns the previous entry if the key existed,
+    /// otherwise None.
+    ///
+    /// Returns an error if the uniqueness check failed.
+    pub fn set(&mut self, k: K, v: Option<V>) -> Result<Option<V>, StashError> {
+        // Save the pending value for the key so we can restore it in case of
+        // uniqueness violation.
+        let restore = self.pending.get(&k).cloned();
+
+        let prev = match self.pending.entry(k.clone()) {
+            // key hasn't been set in this txn yet. Set it and return the
+            // initial txn's value of k.
+            Entry::Vacant(e) => {
+                e.insert(v);
+                self.initial.get(&k).cloned()
+            }
+            // key has been set in this txn. Set it and return the previous
+            // pending value.
+            Entry::Occupied(mut e) => e.insert(v),
+        };
+
+        // Check for uniqueness violation.
+        if let Err(err) = self.verify() {
+            // Revert self.pending to the state it was in before calling this
+            // function.
+            match restore {
+                Some(v) => {
+                    self.pending.insert(k, v);
+                }
+                None => {
+                    self.pending.remove(&k);
+                }
+            }
+            Err(err)
+        } else {
+            Ok(prev)
+        }
+    }
+
     /// Deletes items for which `f` returns true. Returns the keys and values of
     /// the deleted entries.
     pub fn delete<F: Fn(&K, &V) -> bool>(&mut self, f: F) -> Vec<(K, V)> {
@@ -1013,6 +1074,33 @@ where
         soft_assert!(self.verify().is_ok());
         deleted
     }
+}
+
+/// Helper function to consolidate `serde_json::Value`. `Value` doesn't
+/// implement `Ord` which is required by `consolidate`, so we must serialize and
+/// deserialize through bytes.
+fn consolidate<I>(rows: I) -> impl Iterator<Item = ((Value, Value), Diff)>
+where
+    I: IntoIterator<Item = ((Value, Value), Diff)>,
+{
+    // This assumes the to bytes representation is deterministic. The current
+    // backing of Map is a BTreeMap which is sorted, but this isn't a documented
+    // guarantee.
+    // See: https://github.com/serde-rs/json/blob/44d9c53e2507636c0c2afee0c9c132095dddb7df/src/map.rs#L1-L7
+    let mut rows = rows
+        .into_iter()
+        .map(|((key, value), diff)| {
+            let key = serde_json::to_vec(&key).expect("must serialize");
+            let value = serde_json::to_vec(&value).expect("must serialize");
+            ((key, value), diff)
+        })
+        .collect();
+    differential_dataflow::consolidation::consolidate(&mut rows);
+    rows.into_iter().map(|((key, value), diff)| {
+        let key = serde_json::from_slice(&key).expect("must deserialize");
+        let value = serde_json::from_slice(&value).expect("must deserialize");
+        ((key, value), diff)
+    })
 }
 
 /// Helper function to consolidate `serde_json::Value` updates. `Value` doesn't

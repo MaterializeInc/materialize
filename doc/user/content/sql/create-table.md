@@ -1,6 +1,7 @@
 ---
 title: "CREATE TABLE"
-description: "`CREATE TABLE` creates an in-memory table."
+description: "`CREATE TABLE` creates a table that is persisted in durable storage."
+pagerank: 40
 menu:
   # This should also have a "non-content entry" under Reference, which is
   # configured in doc/user/config.toml
@@ -8,35 +9,21 @@ menu:
     parent: 'commands'
 ---
 
-`CREATE TABLE` creates an in-memory table.
-
-## Conceptual framework
+`CREATE TABLE` defines a table that is persisted in durable storage and can be
+written to, updated and seamlessly joined with other tables, views or sources.
 
 Tables in Materialize are similar to tables in standard relational databases:
 they consist of rows and columns where the columns are fixed when the table is
-created but rows can be added to at will via [INSERT](../insert) statements.
-
-You can seamlessly join tables with other tables, views, and sources in the
-system.
+created but rows can be added to at will via [`INSERT`](../insert) statements.
 
 {{< warning >}}
-At the moment, tables serve a niche use case. They lack many features that are
-standard in relational databases. In most situations you should use
+At the moment, tables serve a niche use case. They lack some features that are
+standard in relational databases. In most situations, you should use
 [sources](/sql/create-source) instead.
 {{< /warning >}}
 
-### When to use a table
-
-A table can be more convenient than a source, but only if all of the following
-statements are true:
-
-1. Your dataset is either static or append only.
-2. You do not need the dataset to survive reboots of Materialize.
-3. Your dataset is several times smaller than the available memory on your
-   machine. See the [memory usage](#memory-usage) section below for details.
-
-If any of those statements do not describe your situation, we recommend that you
-use a [source](/sql/create-source) instead.
+[//]: # "TODO(morsapaes) Bring back When to use a table? once there's more
+clarity around best practices."
 
 ## Syntax
 
@@ -64,6 +51,7 @@ Additionally, tables do not currently support:
 - Unique constraints
 - Check constraints
 - Insert statements that refer to data in other relations, e.g.:
+
   ```sql
   INSERT INTO t1 SELECT * FROM t2
   ```
@@ -77,18 +65,6 @@ connections. They are always created in the special `mz_temp` schema.
 
 Temporary tables may depend upon other temporary database objects, but non-temporary
 tables may not depend on temporary objects.
-
-### Memory usage
-
-Tables presently store their data in memory. Therefore you must ensure that the
-data you store in tables fits in the amount of memory you have available on your
-system. Remember that any additional indexes or derived materialized views will
-count against your memory budget.
-
-If your dataset is too large to fit in memory, consider using an unmaterialized
-[source](/sql/create-source) instead. This lets you defer materialization to
-views derived from this source, which can aggregate or filter the data down to a
-manageable size.
 
 ## Examples
 

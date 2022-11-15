@@ -7,8 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import re
 import time
 from textwrap import dedent
+from typing import Tuple
 
 from pg8000.dbapi import ProgrammingError
 
@@ -54,14 +56,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for name in [
         "test-cluster",
         "test-github-12251",
+        "test-github-15531",
+        "test-github-15535",
+        "test-github-15799",
+        "test-github-15930",
         "test-remote-storaged",
         "test-drop-default-cluster",
         "test-upsert",
         "test-resource-limits",
         "test-invalid-computed-reuse",
-        # Disabled to permit a breaking change.
-        # See: https://materializeinc.slack.com/archives/C02FWJ94HME/p1661288774456699?thread_ts=1661288684.301649&cid=C02FWJ94HME
-        # "test-builtin-migration",
+        "test-builtin-migration",
         "pg-snapshot-resumption",
     ]:
         with c.test_case(name):
@@ -167,7 +171,7 @@ def workflow_test_github_12251(c: Composition) -> None:
     c.sql(
         """
         DROP CLUSTER IF EXISTS cluster1 CASCADE;
-        CREATE CLUSTER cluster1 REPLICAS (replica1 (REMOTE ['computed_1:2100'], WORKERS 2));
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (REMOTE ['computed_1:2100'], COMPUTE ['computed_1:2102'], WORKERS 2));
         SET cluster = cluster1;
         """
     )
@@ -195,6 +199,307 @@ def workflow_test_github_12251(c: Composition) -> None:
 
     # Ensure we can select from tables after cancellation.
     c.sql("SELECT * FROM log_table;")
+
+
+def workflow_test_github_15531(c: Composition) -> None:
+    """
+    Test that compute command history does not leak peek commands.
+
+    Regression test for https://github.com/MaterializeInc/materialize/issues/15531.
+
+    The test currently only inspects the history on computed, and it should be
+    extended in the future to also consider the history size in the compute
+    controller.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("computed_1")
+    c.wait_for_materialized()
+
+    # helper function to get command history metrics for computed
+    def find_computed_command_history_metrics(c: Composition) -> Tuple[int, int]:
+        metrics = c.exec(
+            "computed_1", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+
+        history_len = None
+        dataflow_count = None
+        for metric in metrics.splitlines():
+            if metric.startswith("mz_compute_comamnd_history_size"):
+                history_len = int(metric[len("mz_compute_comamnd_history_size") :])
+            elif metric.startswith("mz_compute_dataflow_count_in_history"):
+                dataflow_count = int(
+                    metric[len("mz_compute_dataflow_count_in_history") :]
+                )
+
+        assert (
+            history_len is not None
+        ), "command history length not found in computed metrics"
+        assert (
+            dataflow_count is not None
+        ), "dataflow count in history not found in computed metrics"
+
+        return (history_len, dataflow_count)
+
+    # Set up a cluster with an indexed table and an unindexed one.
+    c.sql(
+        """
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (
+            REMOTE ['computed_1:2100'],
+            COMPUTE ['computed_1:2102'],
+            WORKERS 2
+        ));
+        SET cluster = cluster1;
+        -- table for fast-path peeks
+        CREATE TABLE t (a int);
+        CREATE DEFAULT INDEX ON t;
+        INSERT INTO t VALUES (42);
+        -- table for slow-path peeks
+        CREATE TABLE t2 (a int);
+        INSERT INTO t2 VALUES (84);
+        """
+    )
+
+    # obtain initial history size and dataflow count
+    (
+        computed_history_len,
+        computed_dataflow_count,
+    ) = find_computed_command_history_metrics(c)
+    assert (
+        computed_dataflow_count == 1
+    ), "more dataflows than expected in computed history"
+    assert computed_history_len > 0, "computed history cannot be empty"
+
+    # execute 400 fast- and slow-path peeks
+    for i in range(20):
+        c.sql(
+            """
+            SELECT * FROM t;
+            SELECT * FROM t2;
+            SELECT * FROM t;
+            SELECT * FROM t2;
+            SELECT * FROM t;
+            SELECT * FROM t2;
+            SELECT * FROM t;
+            SELECT * FROM t2;
+            SELECT * FROM t;
+            SELECT * FROM t2;
+            SELECT * FROM t;
+            SELECT * FROM t2;
+            SELECT * FROM t;
+            SELECT * FROM t2;
+            SELECT * FROM t;
+            SELECT * FROM t2;
+            SELECT * FROM t;
+            SELECT * FROM t2;
+            SELECT * FROM t;
+            SELECT * FROM t2;
+            """
+        )
+
+    # check that dataflow count is the same and
+    # that history size is well-behaved
+    (
+        computed_history_len,
+        computed_dataflow_count,
+    ) = find_computed_command_history_metrics(c)
+    assert (
+        computed_dataflow_count == 1
+    ), "more dataflows than expected in computed history"
+    assert (
+        computed_history_len < 100
+    ), "computed history grew more than expected after peeks"
+
+
+def workflow_test_github_15535(c: Composition) -> None:
+    """
+    Test that compute reconciliation does not produce empty frontiers.
+
+    Regression test for https://github.com/MaterializeInc/materialize/issues/15535.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("computed_1")
+    c.wait_for_materialized()
+
+    # Set up a dataflow on computed.
+    c.sql(
+        """
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (
+            REMOTE ['computed_1:2100'],
+            COMPUTE ['computed_1:2102'],
+            WORKERS 2
+        ));
+        SET cluster = cluster1;
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+        -- wait for the dataflow to be ready
+        SELECT * FROM mv;
+        """
+    )
+
+    # Restart environmentd to trigger a reconciliation on computed.
+    c.kill("materialized")
+    c.up("materialized")
+    c.wait_for_materialized()
+
+    print("Sleeping to wait for frontier updates")
+    time.sleep(10)
+
+    def extract_frontiers(output: str) -> Tuple[str, str]:
+        since_re = re.compile("^\s+since:\[(?P<frontier>.*)\]")
+        upper_re = re.compile("^\s+upper:\[(?P<frontier>.*)\]")
+        since = None
+        upper = None
+        for line in output.splitlines():
+            if match := since_re.match(line):
+                since = match.group("frontier").strip()
+            elif match := upper_re.match(line):
+                upper = match.group("frontier").strip()
+
+        assert since is not None, "since not found in EXPLAIN TIMESTAMP output"
+        assert upper is not None, "upper not found in EXPLAIN TIMESTAMP output"
+        return (since, upper)
+
+    # Verify that there are no empty frontiers.
+    output = c.sql_query("EXPLAIN TIMESTAMP FOR SELECT * FROM mv")
+    mv_since, mv_upper = extract_frontiers(output[0][0])
+    output = c.sql_query("EXPLAIN TIMESTAMP FOR SELECT * FROM t")
+    t_since, t_upper = extract_frontiers(output[0][0])
+
+    assert mv_since, "mv has empty since frontier"
+    assert mv_upper, "mv has empty upper frontier"
+    assert t_since, "t has empty since frontier"
+    assert t_upper, "t has empty upper frontier"
+
+
+def workflow_test_github_15799(c: Composition) -> None:
+    """
+    Test that querying arranged introspection sources on a replica does not
+    crash other replicas in the same cluster that have introspection disabled.
+
+    Regression test for https://github.com/MaterializeInc/materialize/issues/15799.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("computed_1")
+    c.up("computed_2")
+    c.wait_for_materialized()
+
+    c.sql(
+        """
+        CREATE CLUSTER cluster1 REPLICAS (
+            logging_on (
+                REMOTE ['computed_1:2100'],
+                COMPUTE ['computed_1:2102'],
+                WORKERS 2
+            ),
+            logging_off (
+                REMOTE ['computed_2:2100'],
+                COMPUTE ['computed_2:2102'],
+                WORKERS 2,
+                INTROSPECTION INTERVAL 0
+            )
+        );
+        SET cluster = cluster1;
+
+        -- query the arranged introspection sources on the replica with logging enabled
+        SET cluster_replica = logging_on;
+        SELECT * FROM mz_internal.mz_active_peeks, mz_internal.mz_compute_exports;
+
+        -- verify that the other replica has not crashed and still responds
+        SET cluster_replica = logging_off;
+        SELECT * FROM mz_tables, mz_sources;
+        """
+    )
+
+
+def workflow_test_github_15930(c: Composition) -> None:
+    """
+    Test that triggering reconciliation does not wedge the mz_worker_compute_frontiers
+    introspection source.
+
+    Regression test for https://github.com/MaterializeInc/materialize/issues/15930.
+    """
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Testdrive(no_reset=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.up("computed_1")
+        c.wait_for_materialized()
+
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (
+                logging_on (
+                    REMOTE ['computed_1:2100'],
+                    COMPUTE ['computed_1:2102'],
+                    WORKERS 2
+                )
+            );
+            """
+        )
+
+        # verify that we can query the introspection source
+        c.testdrive(
+            input=dedent(
+                """
+            > SET cluster = cluster1;
+            > SELECT 1 FROM mz_internal.mz_worker_compute_frontiers LIMIT 1;
+            1
+                """
+            )
+        )
+
+        # Restart environmentd to trigger a reconciliation on computed.
+        c.kill("materialized")
+        c.up("materialized")
+        c.wait_for_materialized()
+
+        # verify again that we can query the introspection source
+        c.testdrive(
+            input=dedent(
+                """
+            > SET cluster = cluster1;
+            > SELECT 1 FROM mz_internal.mz_worker_compute_frontiers LIMIT 1;
+            1
+                """
+            )
+        )
+
+        c.sql(
+            """
+            SET cluster = cluster1;
+            -- now let's give it another go with user-defined objects
+            CREATE TABLE t (a int);
+            CREATE DEFAULT INDEX ON t;
+            INSERT INTO t VALUES (42);
+            """
+        )
+
+        # Restart environmentd to trigger yet another reconciliation on computed.
+        c.kill("materialized")
+        c.up("materialized")
+        c.wait_for_materialized()
+
+        # verify yet again that we can query the introspection source and now the table.
+        c.testdrive(
+            input=dedent(
+                """
+            > SET cluster = cluster1;
+            > SELECT 1 FROM mz_internal.mz_worker_compute_frontiers LIMIT 1;
+            1
+            > SELECT * FROM t;
+            42
+                """
+            )
+        )
 
 
 def workflow_test_upsert(c: Composition) -> None:
@@ -299,7 +604,7 @@ def workflow_test_resource_limits(c: Composition) -> None:
 
 
 # TODO: Would be nice to update this test to use a builtin table that can be materialized.
-#  pg_roles, and most postgres catalog views, cannot be materialized because they use
+#  pg_proc, and most postgres catalog views, cannot be materialized because they use
 #  pg_catalog.current_database(). So we can't test making indexes and materialized views.
 def workflow_test_builtin_migration(c: Composition) -> None:
     """Exercise the builtin object migration code by upgrading between two versions
@@ -309,9 +614,10 @@ def workflow_test_builtin_migration(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     with c.override(
-        # Random commit before pg_roles was updated.
+        # Random commit before pg_proc and mz_dataflow_operator_reachability was updated.
         Materialized(
-            image="materialize/materialized:devel-9efd269199b1510b3e8f90196cb4fa3072a548a1",
+            image="materialize/materialized:devel-aa4128c9c485322f90ab0af2b9cb4d16e1c470c0",
+            default_size=1,
         ),
         Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
     ):
@@ -322,11 +628,19 @@ def workflow_test_builtin_migration(c: Composition) -> None:
         c.testdrive(
             input=dedent(
                 """
-        > CREATE VIEW v1 AS SELECT COUNT(*) FROM pg_roles;
+        # The limit is added to avoid having to update the number every time we add a function.
+        > CREATE VIEW v1 AS SELECT COUNT(*) FROM (SELECT * FROM pg_proc ORDER BY oid LIMIT 5);
         > SELECT * FROM v1;
-        2
-        ! SELECT DISTINCT rolconnlimit FROM pg_roles;
-        contains:column "rolconnlimit" does not exist
+        5
+        ! SELECT DISTINCT proowner FROM pg_proc;
+        contains:column "proowner" does not exist
+
+        # Populate mz_dataflow_operator_reachability
+        > CREATE TABLE t (a INT);
+        > CREATE DEFAULT INDEX ON t;
+
+        > SELECT pg_typeof(address) FROM mz_internal.mz_dataflow_operator_reachability LIMIT 1;
+        "bigint list"
     """
             )
         )
@@ -346,10 +660,13 @@ def workflow_test_builtin_migration(c: Composition) -> None:
             input=dedent(
                 """
        > SELECT * FROM v1;
-       2
+       5
        # This column is new after the migration
-       > SELECT DISTINCT rolconnlimit FROM pg_roles;
-       -1
+       > SELECT DISTINCT proowner FROM pg_proc;
+       <null>
+
+       > SELECT pg_typeof(address) FROM mz_internal.mz_dataflow_operator_reachability LIMIT 1;
+       "uint8 list"
     """
             )
         )
@@ -404,7 +721,7 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
     with c.override(
         Testdrive(no_reset=True),
         Materialized(
-            options="--bootstrap-system-vars=\"allowed_cluster_replica_sizes='1', '2', 'oops'\"",
+            options="--bootstrap-system-parameter=\"allowed_cluster_replica_sizes='1', '2', 'oops'\"",
         ),
     ):
         dependencies = [
@@ -420,7 +737,7 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
         Testdrive(no_reset=True),
         Materialized(
             environment_extra=[
-                """ MZ_BOOTSTRAP_SYSTEM_VARS=allowed_cluster_replica_sizes='1', '2', 'oops'""".strip()
+                """ MZ_BOOTSTRAP_SYSTEM_PARAMETER=allowed_cluster_replica_sizes='1', '2', 'oops'""".strip()
             ],
         ),
     ):

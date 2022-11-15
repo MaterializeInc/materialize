@@ -27,7 +27,6 @@ use tracing::warn;
 
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::AvroSchemaGenerator;
-use mz_kafka_util::KafkaAddrs;
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
@@ -39,46 +38,50 @@ use mz_sql_parser::ast::{
     AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceStatement,
     AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
     CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    SetVariableValue, SshConnectionOption,
+    DeferredObjectName, SetVariableValue, SshConnectionOption,
 };
-use mz_storage::source::generator::as_generator;
-use mz_storage::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
-use mz_storage::types::connections::{
-    Connection, CsrConnectionHttpAuth, KafkaConnection, KafkaSecurity, KafkaTlsConfig, SaslConfig,
-    StringOrSecret, TlsIdentity,
+use mz_storage_client::types::connections::aws::{
+    AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri,
 };
-use mz_storage::types::sinks::{
+use mz_storage_client::types::connections::{
+    AwsPrivatelinkConnection, Connection, CsrConnectionHttpAuth, KafkaAwsPrivateLink,
+    KafkaConnection, KafkaSecurity, KafkaTlsConfig, PostgresTunnel, SaslConfig, StringOrSecret,
+    TlsIdentity,
+};
+use mz_storage_client::types::sinks::{
     KafkaConsistencyConfig, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
     KafkaSinkFormat, SinkEnvelope, StorageSinkConnectionBuilder,
 };
-use mz_storage::types::sources::encoding::{
+use mz_storage_client::types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
     ProtobufEncoding, RegexEncoding, SourceDataEncoding, SourceDataEncodingInner,
 };
-use mz_storage::types::sources::{
-    IncludedColumnPos, KafkaSourceConnection, KeyEnvelope, KinesisSourceConnection,
-    LoadGeneratorSourceConnection, PostgresSourceConnection, PostgresSourceDetails,
-    ProtoPostgresSourceDetails, S3SourceConnection, SourceConnection, SourceDesc, SourceEnvelope,
-    TestScriptSourceConnection, Timeline, UnplannedSourceEnvelope, UpsertStyle,
+use mz_storage_client::types::sources::{
+    GenericSourceConnection, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope,
+    KinesisSourceConnection, LoadGenerator, LoadGeneratorSourceConnection,
+    PostgresSourceConnection, PostgresSourceDetails, ProtoPostgresSourceDetails,
+    S3SourceConnection, SourceDesc, SourceEnvelope, TestScriptSourceConnection, Timeline,
+    UnplannedSourceEnvelope, UpsertStyle,
 };
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     AlterConnectionStatement, AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement,
     AlterSecretStatement, AvroSchema, AvroSchemaOption, AvroSchemaOptionName, AwsConnectionOption,
-    AwsConnectionOptionName, ClusterOption, ClusterOptionName, ColumnOption, Compression,
-    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnection,
-    CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement,
-    CreateMaterializedViewStatement, CreateRoleOption, CreateRoleStatement, CreateSchemaStatement,
-    CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
-    CreateSinkStatement, CreateSourceConnection, CreateSourceFormat, CreateSourceOption,
-    CreateSourceOptionName, CreateSourceStatement, CreateSourceSubsource, CreateSourceSubsources,
-    CreateSubsourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
-    CreateViewStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection, CsrConnectionAvro,
-    CsrConnectionOption, CsrConnectionOptionName, CsrConnectionProtobuf, CsrSeedProtobuf,
-    CsvColumns, DbzMode, DropClusterReplicasStatement, DropClustersStatement,
+    AwsConnectionOptionName, AwsPrivatelinkConnectionOption, AwsPrivatelinkConnectionOptionName,
+    ClusterOption, ClusterOptionName, ColumnOption, Compression, CreateClusterReplicaStatement,
+    CreateClusterStatement, CreateConnection, CreateConnectionStatement, CreateDatabaseStatement,
+    CreateIndexStatement, CreateMaterializedViewStatement, CreateReferencedSubsources,
+    CreateRoleOption, CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement,
+    CreateSinkConnection, CreateSinkOption, CreateSinkOptionName, CreateSinkStatement,
+    CreateSourceConnection, CreateSourceFormat, CreateSourceOption, CreateSourceOptionName,
+    CreateSourceStatement, CreateSubsourceStatement, CreateTableStatement, CreateTypeAs,
+    CreateTypeStatement, CreateViewStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
+    CsrConnectionAvro, CsrConnectionOption, CsrConnectionOptionName, CsrConnectionProtobuf,
+    CsrSeedProtobuf, CsvColumns, DbzMode, DropClusterReplicasStatement, DropClustersStatement,
     DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
-    Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConfigOptionName,
+    Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaBroker,
+    KafkaBrokerAwsPrivatelinkOption, KafkaBrokerAwsPrivatelinkOptionName, KafkaConfigOptionName,
     KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint, LoadGeneratorOption,
     LoadGeneratorOptionName, ObjectType, PgConfigOption, PgConfigOptionName,
     PostgresConnectionOption, PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica,
@@ -378,7 +381,7 @@ pub fn plan_create_source(
             key: _,
         }) => {
             let connection_item = scx.get_item_by_resolved_name(connection_name)?;
-            let kafka_connection = match connection_item.connection()? {
+            let mut kafka_connection = match connection_item.connection()? {
                 Connection::Kafka(connection) => connection.clone(),
                 _ => sql_bail!("{} is not a kafka connection", connection_item.name()),
             };
@@ -402,7 +405,10 @@ pub fn plan_create_source(
 
             let optional_start_offset =
                 Option::<kafka_util::KafkaStartOffsetType>::try_from(&extracted_options)?;
-            let options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
+
+            for (k, v) in kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0 {
+                kafka_connection.options.insert(k, v);
+            }
 
             let topic = extracted_options
                 .topic
@@ -434,7 +440,6 @@ pub fn plan_create_source(
             let mut connection = KafkaSourceConnection {
                 connection: kafka_connection,
                 connection_id: connection_item.id(),
-                options,
                 topic,
                 start_offsets,
                 group_id_prefix,
@@ -490,7 +495,7 @@ pub fn plan_create_source(
                 }
             }
 
-            let connection = SourceConnection::Kafka(connection);
+            let connection = GenericSourceConnection::Kafka(connection);
 
             (connection, encoding, None)
         }
@@ -517,7 +522,7 @@ pub fn plan_create_source(
             };
 
             let encoding = get_encoding(scx, format, &envelope, Some(connection))?;
-            let connection = SourceConnection::Kinesis(KinesisSourceConnection {
+            let connection = GenericSourceConnection::Kinesis(KinesisSourceConnection {
                 connection_id: connection_item.id(),
                 stream_name,
                 aws,
@@ -542,12 +547,12 @@ pub fn plan_create_source(
             for ks in key_sources {
                 let dtks = match ks {
                     mz_sql_parser::ast::S3KeySource::Scan { bucket } => {
-                        mz_storage::types::sources::S3KeySource::Scan {
+                        mz_storage_client::types::sources::S3KeySource::Scan {
                             bucket: bucket.clone(),
                         }
                     }
                     mz_sql_parser::ast::S3KeySource::SqsNotifications { queue } => {
-                        mz_storage::types::sources::S3KeySource::SqsNotifications {
+                        mz_storage_client::types::sources::S3KeySource::SqsNotifications {
                             queue: queue.clone(),
                         }
                     }
@@ -558,7 +563,7 @@ pub fn plan_create_source(
             if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
                 sql_bail!("S3 sources do not support key decoding");
             }
-            let connection = SourceConnection::S3(S3SourceConnection {
+            let connection = GenericSourceConnection::S3(S3SourceConnection {
                 connection_id: connection_item.id(),
                 key_sources: converted_sources,
                 pattern: pattern
@@ -573,8 +578,8 @@ pub fn plan_create_source(
                     .map_err(|e| sql_err!("parsing glob: {e}"))?,
                 aws,
                 compression: match compression {
-                    Compression::Gzip => mz_storage::types::sources::Compression::Gzip,
-                    Compression::None => mz_storage::types::sources::Compression::None,
+                    Compression::Gzip => mz_storage_client::types::sources::Compression::Gzip,
+                    Compression::None => mz_storage_client::types::sources::Compression::None,
                 },
             });
             (connection, encoding, None)
@@ -679,7 +684,7 @@ pub fn plan_create_source(
                 table_casts.push(column_casts);
             }
 
-            let connection = SourceConnection::Postgres(PostgresSourceConnection {
+            let connection = GenericSourceConnection::Postgres(PostgresSourceConnection {
                 connection,
                 connection_id: connection_item.id(),
                 table_casts,
@@ -700,7 +705,6 @@ pub fn plan_create_source(
                 load_generator_ast_to_generator(generator, options)?;
             let available_subsources = available_subsources
                 .map(|a| BTreeMap::from_iter(a.into_iter().map(|(k, v)| (k, v.0))));
-            let generator = as_generator(&load_generator);
 
             let LoadGeneratorOptionExtracted { tick_interval, .. } = options.clone().try_into()?;
             let tick_micros = match tick_interval {
@@ -710,15 +714,20 @@ pub fn plan_create_source(
                 }
                 None => None,
             };
-            let connection = SourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
-                load_generator,
-                tick_micros,
-            });
-            (connection, generator.data_encoding(), available_subsources)
+
+            let encoding = load_generator.data_encoding();
+
+            let connection =
+                GenericSourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
+                    load_generator,
+                    tick_micros,
+                });
+
+            (connection, encoding, available_subsources)
         }
         CreateSourceConnection::TestScript { desc_json } => {
             scx.require_unsafe_mode("CREATE SOURCE ... FROM TEST SCRIPT")?;
-            let connection = SourceConnection::TestScript(TestScriptSourceConnection {
+            let connection = GenericSourceConnection::TestScript(TestScriptSourceConnection {
                 desc_json: desc_json.clone(),
             });
             // we just use the encoding from the format and envelope
@@ -856,18 +865,36 @@ pub fn plan_create_source(
     };
 
     let (available_subsources, requested_subsources) = match (available_subsources, subsources) {
-        (Some(available_subsources), Some(CreateSourceSubsources::Subset(subsources))) => {
+        (Some(available_subsources), Some(CreateReferencedSubsources::Subset(subsources))) => {
             let mut requested_subsources = vec![];
             for subsource in subsources {
-                let (name, target) = match subsource {
-                    CreateSourceSubsource::Resolved(name, target) => (name, target),
-                    CreateSourceSubsource::Aliased(_, _) | CreateSourceSubsource::Bare(_) => {
-                        sql_bail!(
-                            "[internal error] subsources should be resolved during purification"
-                        )
+                let name = subsource.reference.clone();
+
+                let target = match &subsource.subsource {
+                    Some(subsource) => match subsource {
+                        DeferredObjectName::Named(target) => target.clone(),
+                        DeferredObjectName::Deferred(name) => {
+                            // TODO: remove this after the next release, we need
+                            // it only so we can load the catalog to do the
+                            // proper rewrite.
+                            let partial_subsource_name =
+                                normalize::unresolved_object_name(name.clone())?;
+                            let item = scx.catalog.resolve_item(&partial_subsource_name).unwrap();
+
+                            ResolvedObjectName::Object {
+                                id: item.id(),
+                                qualifiers: item.name().qualifiers.clone(),
+                                full_name: scx.catalog.resolve_full_name(item.name()),
+                                print_id: true,
+                            }
+                        }
+                    },
+                    None => {
+                        sql_bail!("[internal error] subsources must be named during purification")
                     }
                 };
-                requested_subsources.push((name.clone(), target));
+
+                requested_subsources.push((name, target));
             }
             (available_subsources, requested_subsources)
         }
@@ -875,7 +902,7 @@ pub fn plan_create_source(
             // Multi-output sources must have a table selection clause
             sql_bail!("This is a multi-output source. Use `FOR TABLE (..)` or `FOR ALL TABLES` to select which ones to ingest");
         }
-        (None, Some(_)) | (Some(_), Some(CreateSourceSubsources::All)) => {
+        (None, Some(_)) | (Some(_), Some(CreateReferencedSubsources::All)) => {
             sql_bail!("[internal error] subsources should be resolved during purification")
         }
         (None, None) => (BTreeMap::new(), vec![]),
@@ -895,6 +922,7 @@ pub fn plan_create_source(
                 sql_bail!("[internal error] invalid target id")
             }
         };
+
         // TODO(petrosagg): This is the point where we would normally look into the catalog for the
         // item with ID `target` and verify that its RelationDesc is identical to the type of the
         // dataflow output. We can't do that here however because the subsources are created in the
@@ -902,7 +930,7 @@ pub fn plan_create_source(
         // provisional catalogs are made available to the planner we could do the check. For now
         // we don't allow users to manually target subsources and rely on purification generating
         // correct definitions.
-        subsource_exports.insert(*target_id, *idx);
+        subsource_exports.insert(target_id, *idx);
     }
 
     let if_not_exists = *if_not_exists;
@@ -1061,21 +1089,15 @@ pub(crate) fn load_generator_ast_to_generator(
     options: &[LoadGeneratorOption<Aug>],
 ) -> Result<
     (
-        mz_storage::types::sources::LoadGenerator,
+        LoadGenerator,
         Option<BTreeMap<FullObjectName, (usize, RelationDesc)>>,
     ),
     PlanError,
 > {
     let load_generator = match loadgen {
-        mz_sql_parser::ast::LoadGenerator::Auction => {
-            mz_storage::types::sources::LoadGenerator::Auction
-        }
-        mz_sql_parser::ast::LoadGenerator::Counter => {
-            mz_storage::types::sources::LoadGenerator::Counter
-        }
-        mz_sql_parser::ast::LoadGenerator::Datums => {
-            mz_storage::types::sources::LoadGenerator::Datums
-        }
+        mz_sql_parser::ast::LoadGenerator::Auction => LoadGenerator::Auction,
+        mz_sql_parser::ast::LoadGenerator::Counter => LoadGenerator::Counter,
+        mz_sql_parser::ast::LoadGenerator::Datums => LoadGenerator::Datums,
         mz_sql_parser::ast::LoadGenerator::Tpch => {
             let LoadGeneratorOptionExtracted { scale_factor, .. } = options.to_vec().try_into()?;
 
@@ -1103,7 +1125,7 @@ pub(crate) fn load_generator_ast_to_generator(
             let count_orders = f_to_i(150_000f64 * 10f64)?;
             let count_clerk = f_to_i(1_000f64)?;
 
-            mz_storage::types::sources::LoadGenerator::Tpch {
+            LoadGenerator::Tpch {
                 count_supplier,
                 count_part,
                 count_customer,
@@ -1114,15 +1136,14 @@ pub(crate) fn load_generator_ast_to_generator(
     };
 
     let mut available_subsources = BTreeMap::new();
-    let generator = as_generator(&load_generator);
-    for (i, (name, desc)) in generator.views().iter().enumerate() {
+    for (i, (name, desc)) in load_generator.views().iter().enumerate() {
         let name = FullObjectName {
             database: RawDatabaseSpecifier::Name("mz_load_generators".to_owned()),
-            schema: match loadgen {
-                mz_sql_parser::ast::LoadGenerator::Counter => "counter".into(),
-                mz_sql_parser::ast::LoadGenerator::Auction => "auction".into(),
-                mz_sql_parser::ast::LoadGenerator::Datums => "datums".into(),
-                mz_sql_parser::ast::LoadGenerator::Tpch => "tpch".into(),
+            schema: match load_generator {
+                LoadGenerator::Counter => "counter".into(),
+                LoadGenerator::Auction => "auction".into(),
+                LoadGenerator::Datums => "datums".into(),
+                LoadGenerator::Tpch { .. } => "tpch".into(),
                 // Please use `snake_case` for any multi-word load generators
                 // that you add.
             },
@@ -1214,7 +1235,7 @@ generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default
 pub struct Schema {
     pub key_schema: Option<String>,
     pub value_schema: String,
-    pub csr_connection: Option<mz_storage::types::connections::CsrConnection>,
+    pub csr_connection: Option<mz_storage_client::types::connections::CsrConnection>,
     pub confluent_wire_format: bool,
 }
 
@@ -1852,7 +1873,7 @@ fn kafka_sink_builder(
 ) -> Result<StorageSinkConnectionBuilder, PlanError> {
     let item = scx.get_item_by_resolved_name(&connection)?;
     // Get Kafka connection
-    let connection = match item.connection()? {
+    let mut connection = match item.connection()? {
         Connection::Kafka(connection) => connection.clone(),
         _ => sql_bail!("{} is not a kafka connection", item.name()),
     };
@@ -1872,7 +1893,11 @@ fn kafka_sink_builder(
     )?;
 
     let extracted_options: KafkaConfigOptionExtracted = with_options.try_into()?;
-    let config_options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
+
+    for (k, v) in kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0 {
+        connection.options.insert(k, v);
+    }
+
     let connection_id = item.id();
     let KafkaConfigOptionExtracted {
         topic,
@@ -1994,7 +2019,6 @@ fn kafka_sink_builder(
         KafkaSinkConnectionBuilder {
             connection_id,
             connection,
-            options: config_options,
             format,
             topic_name,
             consistency_config,
@@ -2397,15 +2421,8 @@ fn plan_replica_config(
                 .collect::<BTreeSet<String>>();
             let workers = workers.unwrap_or(1);
 
-            if remote_addrs.len() > 1 && (remote_addrs.len() != compute_addrs.len()) {
-                sql_bail!(
-                    "must specify as many REMOTE addresses as COMPUTE addresses for multi-process replicas"
-                );
-            }
-            if compute_addrs.len() > remote_addrs.len() {
-                sql_bail!(
-                    "must specify as many REMOTE addresses as COMPUTE addresses for multi-process replicas"
-                );
+            if remote_addrs.len() != compute_addrs.len() {
+                sql_bail!("must specify as many REMOTE addresses as COMPUTE addresses");
             }
 
             let workers = NonZeroUsize::new(workers.into())
@@ -2507,8 +2524,8 @@ pub fn describe_create_connection(
 
 generate_extracted_config!(
     KafkaConnectionOption,
-    (Broker, String),
-    (Brokers, Vec<String>),
+    (Broker, Vec<KafkaBroker<Aug>>),
+    (Brokers, Vec<KafkaBroker<Aug>>),
     (ProgressTopic, String),
     (SslKey, with_options::Secret),
     (SslCertificate, StringOrSecret),
@@ -2519,26 +2536,58 @@ generate_extracted_config!(
 );
 
 impl KafkaConnectionOptionExtracted {
-    pub fn get_brokers(&self) -> Result<Vec<String>, PlanError> {
+    pub fn get_brokers(
+        &self,
+        scx: &StatementContext,
+    ) -> Result<Vec<mz_storage_client::types::connections::KafkaBroker>, PlanError> {
         let mut brokers = match (&self.broker, &self.brokers) {
             (Some(_), Some(_)) => sql_bail!("invalid CONNECTION: cannot set BROKER and BROKERS"),
             (None, None) => sql_bail!("invalid CONNECTION: must set either BROKER or BROKERS"),
-            (Some(v), None) => vec![v.to_string()],
+            (Some(v), None) => v.to_vec(),
             (None, Some(v)) => v.to_vec(),
         };
 
+        let mut out = vec![];
         for broker in &mut brokers {
-            // Normalize Kafka addresses
-            *broker = KafkaAddrs::from_str(broker)
-                .map_err(|e| sql_err!("parsing kafka broker: {e}"))?
-                .to_string();
-            if broker.contains(',') {
+            if broker.address.contains(',') {
                 sql_bail!("invalid CONNECTION: cannot specify multiple Kafka broker addresses in one string.\n\n
 Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'kafka:9093')");
             }
+
+            let aws_privatelink = match &broker.aws_privatelink {
+                None => None,
+                Some(aws_privatelink) => {
+                    let KafkaBrokerAwsPrivatelinkOptionExtracted { port, seen: _ } =
+                        KafkaBrokerAwsPrivatelinkOptionExtracted::try_from(
+                            aws_privatelink.options.clone(),
+                        )?;
+
+                    let id = match &aws_privatelink.connection {
+                        ResolvedObjectName::Object { id, .. } => id,
+                        _ => sql_bail!(
+                            "internal error: Kafka PrivateLink connection was not resolved"
+                        ),
+                    };
+                    let entry = scx.catalog.get_item(id);
+                    match entry.connection()? {
+                        Connection::AwsPrivatelink(_) => Some(KafkaAwsPrivateLink {
+                            connection_id: *id,
+                            port,
+                        }),
+                        _ => {
+                            sql_bail!("{} is not an AWS PRIVATELINK connection", entry.name().item)
+                        }
+                    }
+                }
+            };
+
+            out.push(mz_storage_client::types::connections::KafkaBroker {
+                address: broker.address.clone(),
+                aws_privatelink,
+            });
         }
 
-        Ok(brokers)
+        Ok(out)
     }
     pub fn ssl_config(&self) -> HashSet<KafkaConnectionOptionName> {
         use KafkaConnectionOptionName::*;
@@ -2611,19 +2660,26 @@ impl TryFrom<&KafkaConnectionOptionExtracted> for Option<KafkaSecurity> {
     }
 }
 
-impl TryFrom<KafkaConnectionOptionExtracted> for KafkaConnection {
-    type Error = PlanError;
-    fn try_from(value: KafkaConnectionOptionExtracted) -> Result<Self, Self::Error> {
+impl KafkaConnectionOptionExtracted {
+    fn to_connection(
+        self,
+        scx: &StatementContext,
+    ) -> Result<mz_storage_client::types::connections::KafkaConnection, PlanError> {
         Ok(KafkaConnection {
-            brokers: value.get_brokers()?,
-            security: (&value).try_into()?,
-            progress_topic: value.progress_topic,
+            brokers: self.get_brokers(scx)?,
+            security: Option::<KafkaSecurity>::try_from(&self)?,
+            progress_topic: self.progress_topic,
+            options: BTreeMap::new(),
         })
     }
 }
 
+generate_extracted_config!(KafkaBrokerAwsPrivatelinkOption, (Port, u16));
+
 generate_extracted_config!(
     CsrConnectionOption,
+    (AwsPrivatelink, with_options::Object),
+    (Port, u16),
     (Url, String),
     (SslKey, with_options::Secret),
     (SslCertificate, StringOrSecret),
@@ -2632,17 +2688,22 @@ generate_extracted_config!(
     (Password, with_options::Secret)
 );
 
-impl TryFrom<CsrConnectionOptionExtracted> for mz_storage::types::connections::CsrConnection {
-    type Error = PlanError;
-    fn try_from(ccsr_options: CsrConnectionOptionExtracted) -> Result<Self, Self::Error> {
-        let url = match ccsr_options.url {
+impl CsrConnectionOptionExtracted {
+    fn to_connection(
+        self,
+        scx: &StatementContext,
+    ) -> Result<mz_storage_client::types::connections::CsrConnection, PlanError> {
+        let url: reqwest::Url = match self.url {
             Some(url) => url
                 .parse()
                 .map_err(|e| sql_err!("parsing schema registry url: {e}"))?,
             None => sql_bail!("invalid CONNECTION: must specify URL"),
         };
-        let cert = ccsr_options.ssl_certificate;
-        let key = ccsr_options.ssl_key.map(|secret| secret.into());
+        let _ = url
+            .host_str()
+            .ok_or_else(|| sql_err!("invalid CONNECTION: URL must specify domain name"))?;
+        let cert = self.ssl_certificate;
+        let key = self.ssl_key.map(|secret| secret.into());
         let tls_identity = match (cert, key) {
             (None, None) => None,
             (Some(cert), Some(key)) => Some(TlsIdentity { cert, key }),
@@ -2650,21 +2711,34 @@ impl TryFrom<CsrConnectionOptionExtracted> for mz_storage::types::connections::C
                 "invalid CONNECTION: reading from SSL-auth Confluent Schema Registry requires both SSL KEY and SSL CERTIFICATE"
             ),
         };
-        let http_auth = ccsr_options.username.map(|username| CsrConnectionHttpAuth {
+        let http_auth = self.username.map(|username| CsrConnectionHttpAuth {
             username,
-            password: ccsr_options.password.map(|secret| secret.into()),
+            password: self.password.map(|secret| secret.into()),
         });
-        Ok(mz_storage::types::connections::CsrConnection {
+        let aws_privatelink_id = match self.aws_privatelink {
+            None => None,
+            Some(aws_privatelink) => {
+                let id = GlobalId::from(aws_privatelink);
+                let entry = scx.catalog.get_item(&id);
+                match entry.connection()? {
+                    Connection::AwsPrivatelink(_) => Some(id),
+                    _ => sql_bail!("{} is not an AWS PRIVATELINK connection", entry.name().item),
+                }
+            }
+        };
+        Ok(mz_storage_client::types::connections::CsrConnection {
             url,
-            tls_root_cert: ccsr_options.ssl_certificate_authority,
+            tls_root_cert: self.ssl_certificate_authority,
             tls_identity,
             http_auth,
+            aws_privatelink_id,
         })
     }
 }
 
 generate_extracted_config!(
     PostgresConnectionOption,
+    (AwsPrivatelink, with_options::Object),
     (Database, String),
     (Host, String),
     (Password, with_options::Secret),
@@ -2681,7 +2755,7 @@ impl PostgresConnectionOptionExtracted {
     fn to_connection(
         self,
         scx: &StatementContext,
-    ) -> Result<mz_storage::types::connections::PostgresConnection, PlanError> {
+    ) -> Result<mz_storage_client::types::connections::PostgresConnection, PlanError> {
         let cert = self.ssl_certificate;
         let key = self.ssl_key.map(|secret| secret.into());
         let tls_identity = match (cert, key) {
@@ -2701,29 +2775,44 @@ impl PostgresConnectionOptionExtracted {
             Some(m) => sql_bail!("invalid CONNECTION: unknown SSL MODE {}", m.quoted()),
         };
 
-        // Validate that the SSH tunnel ID is indeed an SSH connection
-        let ssh_tunnel_id = self.ssh_tunnel.map(|ssh_tunnel| ssh_tunnel.into());
-        let ssh_tunnel = if let Some(ref ssh_tunnel) = ssh_tunnel_id {
-            let ssh_tunnel = scx.catalog.get_item(ssh_tunnel);
-            match ssh_tunnel.connection()? {
-                Connection::Ssh(ssh) => Some(ssh.clone()),
-                _ => sql_bail!("{} is not an SSH connection", ssh_tunnel.name().item),
+        let tunnel = match (self.ssh_tunnel, self.aws_privatelink) {
+            (None, None) => PostgresTunnel::Direct,
+            (Some(ssh_tunnel), None) => {
+                let id = GlobalId::from(ssh_tunnel);
+                let ssh_tunnel = scx.catalog.get_item(&id);
+                match ssh_tunnel.connection()? {
+                    Connection::Ssh(connection) => PostgresTunnel::Ssh {
+                        connection_id: id,
+                        connection: connection.clone(),
+                    },
+                    _ => sql_bail!("{} is not an SSH connection", ssh_tunnel.name().item),
+                }
             }
-        } else {
-            None
+            (None, Some(aws_privatelink)) => {
+                let id = GlobalId::from(aws_privatelink);
+                let entry = scx.catalog.get_item(&id);
+                match entry.connection()? {
+                    Connection::AwsPrivatelink(_) => {
+                        PostgresTunnel::AwsPrivateLink { connection_id: id }
+                    }
+                    _ => sql_bail!("{} is not an AWS PRIVATELINK connection", entry.name().item),
+                }
+            }
+            (Some(_), Some(_)) => {
+                sql_bail!("cannot specify both SSH TUNNEL and AWS PRIVATELINK");
+            }
         };
 
-        Ok(mz_storage::types::connections::PostgresConnection {
+        Ok(mz_storage_client::types::connections::PostgresConnection {
             database: self
                 .database
                 .ok_or_else(|| sql_err!("DATABASE option is required"))?,
+            password: self.password.map(|password| password.into()),
             host: self
                 .host
                 .ok_or_else(|| sql_err!("HOST option is required"))?,
-            password: self.password.map(|password| password.into()),
             port: self.port,
-            ssh_tunnel_id,
-            ssh_tunnel,
+            tunnel,
             tls_mode,
             tls_root_cert: self.ssl_certificate_authority,
             tls_identity,
@@ -2741,11 +2830,13 @@ generate_extracted_config!(
     (User, String)
 );
 
-impl TryFrom<SshConnectionOptionExtracted> for mz_storage::types::connections::SshConnection {
+impl TryFrom<SshConnectionOptionExtracted>
+    for mz_storage_client::types::connections::SshConnection
+{
     type Error = PlanError;
 
     fn try_from(options: SshConnectionOptionExtracted) -> Result<Self, Self::Error> {
-        Ok(mz_storage::types::connections::SshConnection {
+        Ok(mz_storage_client::types::connections::SshConnection {
             host: options
                 .host
                 .ok_or_else(|| sql_err!("HOST option is required"))?,
@@ -2801,6 +2892,27 @@ impl TryFrom<AwsConnectionOptionExtracted> for AwsConfig {
     }
 }
 
+generate_extracted_config!(
+    AwsPrivatelinkConnectionOption,
+    (ServiceName, String),
+    (AvailabilityZones, Vec<String>)
+);
+
+impl TryFrom<AwsPrivatelinkConnectionOptionExtracted> for AwsPrivatelinkConnection {
+    type Error = PlanError;
+
+    fn try_from(options: AwsPrivatelinkConnectionOptionExtracted) -> Result<Self, Self::Error> {
+        Ok(AwsPrivatelinkConnection {
+            service_name: options
+                .service_name
+                .ok_or_else(|| sql_err!("SERVICE NAME option is required"))?,
+            availability_zones: options
+                .availability_zones
+                .ok_or_else(|| sql_err!("AVAILABILITY ZONES option is required"))?,
+        })
+    }
+}
+
 pub fn plan_create_connection(
     scx: &StatementContext,
     stmt: CreateConnectionStatement<Aug>,
@@ -2813,27 +2925,30 @@ pub fn plan_create_connection(
     } = stmt;
     let connection = match connection {
         CreateConnection::Kafka { with_options } => {
-            let k = KafkaConnectionOptionExtracted::try_from(with_options)?;
-            Connection::Kafka(KafkaConnection::try_from(k)?)
+            let c = KafkaConnectionOptionExtracted::try_from(with_options)?;
+            Connection::Kafka(c.to_connection(scx)?)
         }
         CreateConnection::Csr { with_options } => {
             let c = CsrConnectionOptionExtracted::try_from(with_options)?;
-            let connection = mz_storage::types::connections::CsrConnection::try_from(c)?;
-            Connection::Csr(connection)
+            Connection::Csr(c.to_connection(scx)?)
         }
         CreateConnection::Postgres { with_options } => {
             let c = PostgresConnectionOptionExtracted::try_from(with_options)?;
-            let connection = c.to_connection(scx)?;
-            Connection::Postgres(connection)
+            Connection::Postgres(c.to_connection(scx)?)
         }
         CreateConnection::Aws { with_options } => {
             let c = AwsConnectionOptionExtracted::try_from(with_options)?;
             let connection = AwsConfig::try_from(c)?;
             Connection::Aws(connection)
         }
+        CreateConnection::AwsPrivatelink { with_options } => {
+            let c = AwsPrivatelinkConnectionOptionExtracted::try_from(with_options)?;
+            let connection = AwsPrivatelinkConnection::try_from(c)?;
+            Connection::AwsPrivatelink(connection)
+        }
         CreateConnection::Ssh { with_options } => {
             let c = SshConnectionOptionExtracted::try_from(with_options)?;
-            let connection = mz_storage::types::connections::SshConnection::try_from(c)?;
+            let connection = mz_storage_client::types::connections::SshConnection::try_from(c)?;
             Connection::Ssh(connection)
         }
     };
@@ -3142,11 +3257,34 @@ pub fn plan_drop_item(
         return Err(PlanError::DropViewOnMaterializedView(name));
     } else if object_type != item_type {
         sql_bail!(
-            "{} is not of type {}",
+            "\"{}\" is a {} not a {}",
             scx.catalog.resolve_full_name(catalog_entry.name()),
-            object_type,
+            catalog_entry.item_type(),
+            format!("{object_type}").to_lowercase(),
         );
     }
+
+    // We currently prohibit dropping subsources entirely and instead rely on
+    // dropping their primary sources.
+    if item_type == CatalogItemType::Source {
+        if let Some(source_id) = catalog_entry
+            .used_by()
+            .iter()
+            .find(|id| scx.catalog.get_item(id).item_type() == CatalogItemType::Source)
+        {
+            return Err(PlanError::DropSubsource {
+                subsource: scx
+                    .catalog
+                    .resolve_full_name(catalog_entry.name())
+                    .to_string(),
+                source: scx
+                    .catalog
+                    .resolve_full_name(scx.catalog.get_item(source_id).name())
+                    .to_string(),
+            });
+        }
+    }
+
     if !cascade {
         let entry_id = catalog_entry.id();
         // When this item gets dropped it will also drop its subsources, so we need to check the
@@ -3257,7 +3395,7 @@ pub fn plan_alter_index_options(
     };
     if entry.item_type() != CatalogItemType::Index {
         sql_bail!(
-            "{} is a {} not a index",
+            "\"{}\" is a {} not a index",
             scx.catalog.resolve_full_name(entry.name()),
             entry.item_type()
         )
@@ -3309,10 +3447,10 @@ pub fn plan_alter_object_rename(
                 ));
             } else if object_type != item_type {
                 sql_bail!(
-                    "{} is a {} not a {}",
+                    "\"{}\" is a {} not a {}",
                     full_name,
                     entry.item_type(),
-                    object_type
+                    format!("{object_type}").to_lowercase()
                 )
             }
             let proposed_name = QualifiedObjectName {
@@ -3368,7 +3506,7 @@ pub fn plan_alter_secret(
     };
     if entry.item_type() != CatalogItemType::Secret {
         sql_bail!(
-            "{} is a {} not a SECRET",
+            "\"{}\" is a {} not a secret",
             scx.catalog.resolve_full_name(entry.name()),
             entry.item_type()
         )
@@ -3408,7 +3546,7 @@ pub fn plan_alter_sink(
     };
     if entry.item_type() != CatalogItemType::Sink {
         sql_bail!(
-            "{} is a {} not a sink",
+            "\"{}\" is a {} not a sink",
             scx.catalog.resolve_full_name(entry.name()),
             entry.item_type()
         )
@@ -3492,7 +3630,7 @@ pub fn plan_alter_source(
     };
     if entry.item_type() != CatalogItemType::Source {
         sql_bail!(
-            "{} is a {} not a source",
+            "\"{}\" is a {} not a source",
             scx.catalog.resolve_full_name(entry.name()),
             entry.item_type()
         )

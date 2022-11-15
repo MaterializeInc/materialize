@@ -9,12 +9,15 @@
 
 use std::error::Error;
 use std::fmt;
+use std::io;
 use std::num::ParseIntError;
 use std::num::TryFromIntError;
+use std::sync::Arc;
 
 use mz_expr::EvalError;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
+use mz_pgrepr::TypeFromOidError;
 use mz_repr::adt::char::InvalidCharLengthError;
 use mz_repr::adt::numeric::InvalidNumericMaxScaleError;
 use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
@@ -77,10 +80,29 @@ pub enum PlanError {
     Parser(ParserError),
     Qgm(QGMError),
     DropViewOnMaterializedView(String),
+    DropSubsource {
+        subsource: String,
+        source: String,
+    },
     AlterViewOnMaterializedView(String),
     ShowCreateViewOnMaterializedView(String),
     ExplainViewOnMaterializedView(String),
     UnacceptableTimelineName(String),
+    UnrecognizedTypeInPostgresSource {
+        table: String,
+        column: String,
+        e: TypeFromOidError,
+    },
+    FetchingCsrSchemaFailed {
+        schema_lookup: String,
+        cause: Arc<dyn Error + Send + Sync>,
+    },
+    FetchingPostgresPublicationInfoFailed {
+        cause: Arc<mz_postgres_util::PostgresError>,
+    },
+    InvalidProtobufSchema {
+        cause: protobuf_native::OperationFailedError,
+    },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -94,7 +116,17 @@ impl PlanError {
     }
 
     pub fn detail(&self) -> Option<String> {
-        None
+        match self {
+            Self::UnrecognizedTypeInPostgresSource {
+                table: _,
+                column: _,
+                e,
+            } => Some(format!("{e}")),
+            Self::FetchingCsrSchemaFailed { cause, .. } => Some(cause.to_string()),
+            Self::FetchingPostgresPublicationInfoFailed { cause } => Some(cause.to_string()),
+            Self::InvalidProtobufSchema { cause } => Some(cause.to_string()),
+            _ => None,
+        }
     }
 
     pub fn hint(&self) -> Option<String> {
@@ -102,6 +134,9 @@ impl PlanError {
             Self::DropViewOnMaterializedView(_) => {
                 Some("Use DROP MATERIALIZED VIEW to remove a materialized view.".into())
             }
+            Self::DropSubsource { source, .. } => Some(format!(
+                "Use DROP SOURCE {source} to drop this subsource's primary source and all of its other subsources"
+            )),
             Self::AlterViewOnMaterializedView(_) => {
                 Some("Use ALTER MATERIALIZED VIEW to rename a materialized view.".into())
             }
@@ -113,6 +148,29 @@ impl PlanError {
             }
             Self::UnacceptableTimelineName(_) => {
                 Some("The prefix \"mz_\" is reserved for system timelines.".into())
+            }
+            Self::UnrecognizedTypeInPostgresSource {
+                table: _,
+                column: _,
+                e: _,
+            } => Some(
+                "You may be using an unsupported type in Materialize, such as an enum. \
+                Try excluding the table from the publication."
+                    .into(),
+            ),
+            Self::FetchingPostgresPublicationInfoFailed { cause } => {
+                if let Some(cause) = cause.source() {
+                    if let Some(cause) = cause.downcast_ref::<io::Error>() {
+                        if cause.kind() == io::ErrorKind::TimedOut {
+                            return Some(
+                                "Do you have a firewall or security group that is \
+                                preventing Materialize from conecting to your PostgreSQL server?"
+                                    .into(),
+                            );
+                        }
+                    }
+                }
+                None
             }
             _ => None,
         }
@@ -208,6 +266,25 @@ impl fmt::Display for PlanError {
             | Self::AlterViewOnMaterializedView(name)
             | Self::ShowCreateViewOnMaterializedView(name)
             | Self::ExplainViewOnMaterializedView(name) => write!(f, "{name} is not a view"),
+            Self::UnrecognizedTypeInPostgresSource {
+                table,
+                column,
+                e: _,
+            } => write!(
+                f,
+                "column {} uses unrecognized type",
+                format!("{}.{}", table, column).quoted()
+            ),
+            Self::FetchingCsrSchemaFailed { schema_lookup, .. } => {
+                write!(f, "failed to fetch schema {schema_lookup} from schema registry")
+            }
+            Self::FetchingPostgresPublicationInfoFailed { .. } => {
+                write!(f, "failed to fetch publication information from PostgreSQL database")
+            }
+            Self::InvalidProtobufSchema { .. } => {
+                write!(f, "invalid protobuf schema")
+            }
+            Self::DropSubsource{subsource, source: _} => write!(f, "SOURCE {subsource} is a subsource and cannot be dropped independently of its primary source"),
         }
     }
 }

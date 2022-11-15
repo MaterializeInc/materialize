@@ -20,6 +20,7 @@ use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::capture::EventLink;
+use timely::dataflow::operators::Filter;
 use timely::logging::WorkerIdentifier;
 
 use mz_compute_client::logging::LoggingConfig;
@@ -67,12 +68,19 @@ pub fn construct<A: Allocate>(
 
     // A dataflow for multiple log-derived arrangements.
     let traces = worker.dataflow_named("Dataflow: timely reachability logging", move |scope| {
-        let (logs, token) = Some(linked).mz_replay(
+        let (mut logs, token) = Some(linked).mz_replay(
             scope,
             "reachability logs",
             Duration::from_nanos(config.interval_ns as u64),
             activator,
         );
+
+        // If logging is disabled, we still need to install the indexes, but we can leave them
+        // empty. We do so by immediately filtering all logs events.
+        // TODO(teskje): Remove this once we remove the arranged introspection sources.
+        if !config.enable_logging {
+            logs = logs.filter(|_| false);
+        }
 
         use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
@@ -87,7 +95,7 @@ pub fn construct<A: Allocate>(
         // Do we need to construct the common reachability common dataflow?
         let common_needed = logs_active
             .iter()
-            .any(|variant| config.active_logs.contains_key(variant))
+            .any(|variant| config.index_logs.contains_key(variant))
             || sink_common;
 
         let mut result = std::collections::HashMap::new();
@@ -161,7 +169,7 @@ pub fn construct<A: Allocate>(
                             Datum::UInt64(u64::cast_from(*port)),
                             Datum::UInt64(u64::cast_from(*worker)),
                             Datum::String(update_type),
-                            Datum::from(ts.and_then(|ts| i64::try_from(ts).ok())),
+                            Datum::from(ts.clone()),
                         ];
                         row_buf.packer().extend(datums);
                         row_buf.clone()
@@ -171,7 +179,7 @@ pub fn construct<A: Allocate>(
             }
 
             for variant in logs_active {
-                if config.active_logs.contains_key(&variant) {
+                if config.index_logs.contains_key(&variant) {
                     let key = variant.index_by();
                     let (_, value) = permutation_for_arrangement::<HashMap<_, _>>(
                         &key.iter()
@@ -197,7 +205,7 @@ pub fn construct<A: Allocate>(
                                 Datum::UInt64(u64::cast_from(*port)),
                                 Datum::UInt64(u64::cast_from(*worker)),
                                 Datum::String(update_type),
-                                Datum::from(ts.and_then(|ts| i64::try_from(ts).ok())),
+                                Datum::from(ts.clone()),
                             ];
                             row_buf.packer().extend(key.iter().map(|k| datums[*k]));
                             let key_row = row_buf.clone();

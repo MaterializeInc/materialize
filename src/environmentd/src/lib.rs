@@ -13,6 +13,7 @@
 //! [differential dataflow]: ../differential_dataflow/index.html
 //! [timely dataflow]: ../timely/index.html
 
+use std::collections::BTreeMap;
 use std::env;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -21,6 +22,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
+use mz_stash::Stash;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::sync::{mpsc, oneshot};
 use tower_http::cors::AllowOrigin;
@@ -28,6 +30,7 @@ use tower_http::cors::AllowOrigin;
 use mz_adapter::catalog::storage::BootstrapArgs;
 use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageHostSizeMap};
 use mz_build_info::{build_info, BuildInfo};
+use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::metrics::MetricsRegistry;
@@ -36,7 +39,7 @@ use mz_ore::task;
 use mz_ore::tracing::TracingTargetCallbacks;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
-use mz_storage::types::connections::ConnectionContext;
+use mz_storage_client::types::connections::ConnectionContext;
 
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
 use crate::server::ListenerHandle;
@@ -84,6 +87,8 @@ pub struct Config {
     pub controller: ControllerConfig,
     /// Secrets controller configuration.
     pub secrets_controller: Arc<dyn SecretsController>,
+    /// VpcEndpoint controller configuration.
+    pub cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
 
     // === Adapter options. ===
     /// The PostgreSQL URL for the adapter stash.
@@ -101,9 +106,9 @@ pub struct Config {
     pub bootstrap_default_cluster_replica_size: String,
     /// The size of the builtin cluster replicas if bootstrapping.
     pub bootstrap_builtin_cluster_replica_size: String,
-    /// An optional semicolon-separated list of $var_name=$var_value pairs for
-    /// bootstraping system variables that are not already modified.
-    pub bootstrap_system_vars: Option<String>,
+    /// Values to set for system parameters, if those system parameters have not
+    /// already been set by the system user.
+    pub bootstrap_system_parameters: BTreeMap<String, String>,
     /// A map from size name to resource allocations for storage hosts.
     pub storage_host_sizes: StorageHostSizeMap,
     /// Default storage host size, should be a key from storage_host_sizes.
@@ -163,7 +168,11 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(
         &config.adapter_stash_url,
     )?)?;
-    let stash = mz_stash::Postgres::new(config.adapter_stash_url.clone(), None, tls).await?;
+    let stash = config
+        .controller
+        .postgres_factory
+        .open(config.adapter_stash_url.clone(), None, tls)
+        .await?;
     let stash = mz_stash::Memory::new(stash);
 
     // Validate TLS configuration, if present.
@@ -241,6 +250,9 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     {
         bail!("bootstrap default cluster replica size is unknown");
     }
+    let envd_epoch = stash
+        .epoch()
+        .expect("a real environmentd should always have an epoch number");
     let adapter_storage = mz_adapter::catalog::storage::Connection::open(
         stash,
         &BootstrapArgs {
@@ -269,7 +281,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     .context("opening storage usage client")?;
 
     // Initialize controller.
-    let controller = mz_controller::Controller::new(config.controller).await;
+    let controller = mz_controller::Controller::new(config.controller, envd_epoch).await;
 
     // Initialize adapter.
     let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
@@ -282,11 +294,12 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         metrics_registry: config.metrics_registry.clone(),
         now: config.now,
         secrets_controller: config.secrets_controller,
+        cloud_resource_controller: config.cloud_resource_controller,
         cluster_replica_sizes: config.cluster_replica_sizes,
         storage_host_sizes: config.storage_host_sizes,
         default_storage_host_size: config.default_storage_host_size,
         availability_zones: config.availability_zones,
-        bootstrap_system_vars: config.bootstrap_system_vars,
+        bootstrap_system_parameters: config.bootstrap_system_parameters,
         connection_context: config.connection_context,
         storage_usage_client,
         storage_usage_collection_interval: config.storage_usage_collection_interval,
@@ -302,12 +315,14 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         .send(adapter_client.clone())
         .expect("internal HTTP server should not drop first");
 
+    let metrics = mz_pgwire::MetricsConfig::register_into(&config.metrics_registry);
     // Launch SQL server.
     task::spawn(|| "sql_server", {
         let sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
             tls: pgwire_tls,
             adapter_client: adapter_client.clone(),
             frontegg: config.frontegg.clone(),
+            metrics: metrics.clone(),
             internal: false,
         });
         server::serve(sql_conns, sql_server)
@@ -319,6 +334,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             tls: None,
             adapter_client: adapter_client.clone(),
             frontegg: None,
+            metrics,
             internal: true,
         });
         server::serve(internal_sql_conns, internal_sql_server)

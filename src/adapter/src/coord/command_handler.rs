@@ -35,7 +35,7 @@ use crate::coord::peek::PendingPeek;
 use crate::coord::{ConnMeta, Coordinator, CreateSourceStatementReady, Message, PendingTxn};
 use crate::error::AdapterError;
 use crate::session::{PreparedStatement, Session, TransactionStatus};
-use crate::util::ClientTransmitter;
+use crate::util::{ClientTransmitter, ResultExt};
 
 impl<S: Append + 'static> Coordinator<S> {
     pub(crate) async fn handle_command(&mut self, cmd: Command) {
@@ -90,7 +90,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 conn_id,
                 secret_key,
             } => {
-                self.handle_cancel(conn_id, secret_key).await;
+                self.handle_cancel(conn_id, secret_key);
             }
 
             Command::DumpCatalog { session, tx } => {
@@ -470,7 +470,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
     /// the named `conn_id`.
-    async fn handle_cancel(&mut self, conn_id: ConnectionId, secret_key: u32) {
+    fn handle_cancel(&mut self, conn_id: ConnectionId, secret_key: u32) {
         if let Some(conn_meta) = self.active_conns.get(&conn_id) {
             // If the secret key specified by the client doesn't match the
             // actual secret key for the target connection, we treat this as a
@@ -518,7 +518,7 @@ impl<S: Append + 'static> Coordinator<S> {
             for PendingPeek {
                 sender: rows_tx,
                 conn_id: _,
-            } in self.cancel_pending_peeks(conn_id).await
+            } in self.cancel_pending_peeks(conn_id)
             {
                 // Cancel messages can be sent after the connection has hung
                 // up, but before the connection's state has been cleaned up.
@@ -537,9 +537,9 @@ impl<S: Append + 'static> Coordinator<S> {
         self.drop_temp_items(session).await;
         self.catalog
             .drop_temporary_schema(session.conn_id())
-            .expect("unable to drop temporary schema");
+            .unwrap_or_terminate("unable to drop temporary schema");
         self.metrics.active_sessions.dec();
         self.active_conns.remove(&session.conn_id());
-        self.cancel_pending_peeks(session.conn_id()).await;
+        self.cancel_pending_peeks(session.conn_id());
     }
 }

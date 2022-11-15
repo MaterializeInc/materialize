@@ -107,7 +107,7 @@ impl BlobConfig {
                 "unknown blob location params {}: {}",
                 query_params
                     .keys()
-                    .map(|x| x.to_owned())
+                    .map(|x| x.as_ref())
                     .collect::<Vec<_>>()
                     .join(" "),
                 url.as_str(),

@@ -80,6 +80,12 @@ a  b
 ------
 1  dog
 
+! ALTER VIEW mz_data RENAME TO renamed_mz_data;
+exact:"materialize.public.mz_data" is a source not a view
+
+! ALTER INDEX mz_data RENAME TO renamed_mz_data;
+exact:"materialize.public.mz_data" is a source not a index
+
 > ALTER SOURCE mz_data RENAME TO renamed_mz_data;
 
 > SELECT name FROM public_objects WHERE name LIKE 'mz_data%';
@@ -115,6 +121,12 @@ name
 mz_view
 mz_view_primary_idx
 
+! ALTER SOURCE mz_view RENAME TO renamed_mz_view;
+exact:"materialize.public.mz_view" is a view not a source
+
+! ALTER INDEX mz_view RENAME TO renamed_mz_view;
+exact:"materialize.public.mz_view" is a view not a index
+
 > ALTER VIEW mz_view RENAME TO renamed_mz_view;
 
 > SELECT name FROM public_objects WHERE name LIKE 'mz_view%';
@@ -132,6 +144,12 @@ name
 -----
 mz_view_primary_idx
 
+! ALTER VIEW mz_view_primary_idx RENAME TO renamed_index;
+exact:"materialize.public.mz_view_primary_idx" is a index not a view
+
+! ALTER SOURCE mz_view_primary_idx RENAME TO renamed_index;
+exact:"materialize.public.mz_view_primary_idx" is a index not a source
+
 > ALTER INDEX mz_view_primary_idx RENAME TO renamed_index;
 
 > SELECT name FROM public_objects WHERE name LIKE 'mz_view_primary_idx%';
@@ -148,6 +166,9 @@ name
 -----
 sink1
 
+! ALTER VIEW sink1 RENAME TO renamed_sink;
+exact:"materialize.public.sink1" is a sink not a view
+
 > ALTER SINK sink1 RENAME TO renamed_sink
 
 > SELECT name FROM public_objects WHERE name LIKE 'sink1%';
@@ -162,21 +183,17 @@ renamed_sink
 # Clean up temp view
 > DROP VIEW public_objects;
 
-$ set-regex match=\d+ replacement=<SIZE>
-
 # Source was successfully renamed
 > SHOW SOURCES;
 name               type   size
 ------------------------------
-renamed_mz_data    kafka  <SIZE>
+renamed_mz_data    kafka  ${arg.default-storage-size}
 
 # Sink was successfully renamed
 > SHOW SINKS
 name               type   size
 ------------------------------
-renamed_sink       kafka  <SIZE>
-
-$ set-regex match=u\d+|cluster1|default replacement=<VARIABLE_OUTPUT>
+renamed_sink       kafka  ${arg.default-storage-size}
 
 # View was successfully renamed
 > SHOW VIEWS

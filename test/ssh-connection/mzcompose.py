@@ -31,6 +31,13 @@ def restart_mz(c: Composition) -> None:
     c.wait_for_materialized()
 
 
+# restart the bastion, wiping its keys in the process
+def restart_bastion(c: Composition) -> None:
+    c.kill("ssh-bastion-host")
+    c.rm("ssh-bastion-host")
+    c.start_and_wait_for_tcp(services=["ssh-bastion-host"])
+
+
 def workflow_basic_ssh_features(c: Composition) -> None:
     c.start_and_wait_for_tcp(services=["materialized", "ssh-bastion-host", "postgres"])
     c.wait_for_materialized("materialized")
@@ -44,7 +51,7 @@ def workflow_pg_via_ssh_tunnel(c: Composition) -> None:
 
     c.run("testdrive", "setup.td")
 
-    public_key = c.sql_query("SELECT public_key_1 FROM mz_ssh_tunnel_connections;")[0][
+    public_key = c.sql_query("select public_key_1 from mz_ssh_tunnel_connections;")[0][
         0
     ]
 
@@ -58,6 +65,61 @@ def workflow_pg_via_ssh_tunnel(c: Composition) -> None:
     c.wait_for_postgres()
 
     c.run("testdrive", "--no-reset", "pg-source.td")
+
+
+# Test that if we restart the bastion AND change its server keys(s), we can
+# still reconnect in the replication stream.
+def workflow_pg_restart_bastion(c: Composition) -> None:
+    c.start_and_wait_for_tcp(services=["materialized", "ssh-bastion-host", "postgres"])
+    c.wait_for_materialized("materialized")
+
+    c.run("testdrive", "setup.td")
+
+    public_key = c.sql_query("select public_key_1 from mz_ssh_tunnel_connections;")[0][
+        0
+    ]
+    c.exec(
+        "ssh-bastion-host",
+        "bash",
+        "-c",
+        f"echo '{public_key}' > /etc/authorized_keys/mz",
+    )
+    first_fingerprint = c.exec(
+        "ssh-bastion-host",
+        "bash",
+        "-c",
+        f"cat /etc/ssh/keys/ssh_host_ed25519_key.pub",
+        capture=True,
+    ).stdout.strip()
+
+    c.wait_for_postgres()
+
+    c.run("testdrive", "--no-reset", "pg-source.td")
+
+    restart_bastion(c)
+    c.exec(
+        "ssh-bastion-host",
+        "bash",
+        "-c",
+        f"echo '{public_key}' > /etc/authorized_keys/mz",
+    )
+
+    c.run("testdrive", "--no-reset", "pg-source-ingest-more.td")
+
+    # we do this after we assert that we re-connnected
+    # with the passing td file, to ensure that the
+    # docker image was setup before we actually start reading
+    # stuff from it
+    second_fingerprint = c.exec(
+        "ssh-bastion-host",
+        "bash",
+        "-c",
+        f"cat /etc/ssh/keys/ssh_host_ed25519_key.pub",
+        capture=True,
+    ).stdout.strip()
+    assert (
+        first_fingerprint != second_fingerprint
+    ), "this test requires that the ssh server fingerprint changes"
 
 
 def workflow_pg_via_ssh_tunnel_with_ssl(c: Composition) -> None:
@@ -159,3 +221,4 @@ def workflow_default(c: Composition) -> None:
     workflow_rotated_ssh_key_after_restart(c)
     workflow_pg_via_ssh_tunnel(c)
     workflow_pg_via_ssh_tunnel_with_ssl(c)
+    workflow_pg_restart_bastion(c)

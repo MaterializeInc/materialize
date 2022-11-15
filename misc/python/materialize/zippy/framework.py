@@ -84,6 +84,11 @@ class Action:
         """Run this action on the provided copmosition."""
         assert False
 
+    @classmethod
+    def require_explicit_mention(self) -> bool:
+        """Only use if explicitly mentioned by name in a Scenario."""
+        return False
+
 
 class Scenario:
     def bootstrap(self) -> List[Type[Action]]:
@@ -132,11 +137,17 @@ class Test:
         class_weights = []
 
         for action_class in self._scenario.config().keys():
-            for leaf in self._leaf_subclasses(action_class):
+            alternatives = []
+            for subclass in self._all_subclasses(action_class):
                 # Do not pick an Action whose requirements can not be satisfied
-                if self._can_run(leaf):
-                    action_classes.append(leaf)
-                    class_weights.append(self._scenario.config()[action_class])
+                if self._can_run(subclass):
+                    alternatives.append(subclass)
+
+            for alternative in alternatives:
+                action_classes.append(alternative)
+                class_weights.append(
+                    self._scenario.config()[action_class] / len(alternatives)
+                )
 
         assert (
             len(action_classes) > 0
@@ -155,19 +166,13 @@ class Test:
                     return True
             return False
 
-    def _leaf_subclasses(self, cls: Type[Action]) -> List[Type[Action]]:
+    def _all_subclasses(self, cls: Type[Action]) -> List[Type[Action]]:
         """Return all Actions that are a subclass of the given cls."""
-        leafs = []
-        if len(cls.__subclasses__()) == 0:
+        children = [c for c in cls.__subclasses__() if not c.require_explicit_mention()]
+        if len(children) == 0:
             return [cls]
-
-        class_list = [cls]
-        while class_list:
-            parent = class_list.pop()
-            for child in parent.__subclasses__():
-                if child not in leafs:
-                    if len(child.__subclasses__()) == 0:
-                        leafs.append(child)
-                    else:
-                        class_list.append(child)
-        return leafs
+        else:
+            subclasses = []
+            for c in children:
+                subclasses.extend(self._all_subclasses(c))
+            return subclasses

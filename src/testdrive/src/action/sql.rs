@@ -288,11 +288,22 @@ impl fmt::Display for ErrorMatcher {
     }
 }
 
+impl ErrorMatcher {
+    fn fmt_with_type(&self, type_: &str) -> String {
+        match self {
+            ErrorMatcher::Contains(s) => format!("{} containing {}", type_, s.quoted()),
+            ErrorMatcher::Exact(s) => format!("exact {} {}", type_, s.quoted()),
+            ErrorMatcher::Regex(s) => format!("{} matching regex {}", type_, s.as_str().quoted()),
+            ErrorMatcher::Timeout => "timeout".to_string(),
+        }
+    }
+}
+
 pub async fn run_fail_sql(
     cmd: FailSqlCommand,
     state: &mut State,
 ) -> Result<ControlFlow, anyhow::Error> {
-    use Statement::{Commit, Rollback};
+    use Statement::{Commit, Fetch, Rollback};
 
     let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
         .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e));
@@ -315,6 +326,8 @@ pub async fn run_fail_sql(
         SqlExpectedError::Regex(s) => ErrorMatcher::Regex(s.parse()?),
         SqlExpectedError::Timeout => ErrorMatcher::Timeout,
     };
+    let expected_detail = cmd.expected_detail.map(ErrorMatcher::Contains);
+    let expected_hint = cmd.expected_hint.map(ErrorMatcher::Contains);
 
     let query = &cmd.query;
     print_query(query);
@@ -326,6 +339,8 @@ pub async fn run_fail_sql(
         // been aborted, retrying COMMIT or ROLLBACK will actually start succeeding, which
         // causes testdrive to emit a confusing "query succeded but expected error" message.
         Some(Commit(_)) | Some(Rollback(_)) => false,
+        // FETCH should not be retried because it consumes data on each response.
+        Some(Fetch(_)) => false,
         Some(_) => true,
     };
 
@@ -337,10 +352,21 @@ pub async fn run_fail_sql(
             .max_duration(state.timeout)
             .max_tries(state.max_tries),
         false => Retry::default().max_duration(state.timeout).max_tries(1),
-    }.retry_async_canceling(|retry_state| {
+    }
+    .retry_async_canceling(|retry_state| {
         let expected_error = &expected_error;
+        let expected_detail = &expected_detail;
+        let expected_hint = &expected_hint;
         async move {
-            match try_run_fail_sql(state, query, expected_error).await {
+            match try_run_fail_sql(
+                state,
+                query,
+                expected_error,
+                expected_detail.as_ref(),
+                expected_hint.as_ref(),
+            )
+            .await
+            {
                 Ok(()) => {
                     if retry_state.i != 0 {
                         println!();
@@ -350,7 +376,10 @@ pub async fn run_fail_sql(
                 }
                 Err(e) => {
                     if retry_state.i == 0 && should_retry {
-                        print!("query error didn't match; sleeping to see if dataflow produces error shortly");
+                        print!(
+                            "query error didn't match; \
+                                sleeping to see if dataflow produces error shortly"
+                        );
                     }
                     if let Some(backoff) = retry_state.next_backoff {
                         print!(" {:.0?}", backoff);
@@ -362,7 +391,8 @@ pub async fn run_fail_sql(
                 }
             }
         }
-    }).await;
+    })
+    .await;
 
     // If a timeout was expected, check whether the retry operation timed
     // out, which indicates that the test passed.
@@ -386,6 +416,8 @@ async fn try_run_fail_sql(
     state: &State,
     query: &str,
     expected_error: &ErrorMatcher,
+    expected_detail: Option<&ErrorMatcher>,
+    expected_hint: Option<&ErrorMatcher>,
 ) -> Result<(), anyhow::Error> {
     match state.pgclient.query(query, &[]).await {
         Ok(_) => bail!("query succeeded, but expected {}", expected_error),
@@ -400,6 +432,31 @@ async fn try_run_fail_sql(
                 if !expected_error.is_match(&err_string) {
                     bail!("expected {}, got {}", expected_error, err_string.quoted());
                 }
+
+                let check_additional =
+                    |extra: Option<&str>, matcher: Option<&ErrorMatcher>, type_| {
+                        let extra = extra.map(|s| s.to_string());
+                        match (extra, matcher) {
+                            (Some(extra), Some(expected)) => {
+                                if !expected.is_match(&extra) {
+                                    bail!(
+                                        "expected {}, got {}",
+                                        expected.fmt_with_type(type_),
+                                        extra.quoted()
+                                    );
+                                }
+                            }
+                            (None, Some(expected)) => {
+                                bail!("expected {}, but found none", expected.fmt_with_type(type_));
+                            }
+                            _ => {}
+                        }
+                        Ok(())
+                    };
+
+                check_additional(err.detail(), expected_detail, "DETAIL")?;
+                check_additional(err.hint(), expected_hint, "HINT")?;
+
                 Ok(())
             }
             None => Err(err.into()),

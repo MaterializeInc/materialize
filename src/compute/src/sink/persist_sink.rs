@@ -18,8 +18,6 @@ use std::time::Duration;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
-use mz_persist_client::batch::Batch;
-use mz_persist_client::write::WriterEnrichedHollowBatch;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{
@@ -33,11 +31,14 @@ use tokio::sync::Mutex;
 use tracing::trace;
 
 use mz_compute_client::sinks::{ComputeSinkDesc, PersistSinkConnection};
+use mz_persist_client::batch::Batch;
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::write::WriterEnrichedHollowBatch;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_storage::controller::CollectionMetadata;
-use mz_storage::types::errors::DataflowError;
-use mz_storage::types::sources::SourceData;
+use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::types::errors::DataflowError;
+use mz_storage_client::types::sources::SourceData;
+use mz_timely_util::activator::LimitingActivator;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
 use crate::compute_state::ComputeState;
@@ -85,7 +86,7 @@ where
     // `persist_source` to select an appropriate `as_of`. We only care about times beyond the
     // current shard upper anyway.
     let source_as_of = None;
-    let (ok_stream, err_stream, token) = mz_storage::source::persist_source::persist_source(
+    let (ok_stream, err_stream, token) = mz_storage_client::source::persist_source::persist_source(
         &desired_collection.scope(),
         sink_id,
         Arc::clone(&compute_state.persist_clients),
@@ -537,6 +538,7 @@ where
         OperatorBuilder::new(format!("{} write_batches", operator_name), scope.clone());
 
     let activator = scope.activator_for(&write_op.operator_info().address[..]);
+    let mut activator = LimitingActivator::new(activator);
 
     let (mut output, output_stream) = write_op.new_output();
 
@@ -849,6 +851,7 @@ where
     let mut append_op = OperatorBuilder::new(operator_name, scope.clone());
 
     let activator = scope.activator_for(&append_op.operator_info().address[..]);
+    let mut activator = LimitingActivator::new(activator);
 
     // We never output anything, but we update our capabilities based on the
     // persist frontier we know about. So someone can listen on our output

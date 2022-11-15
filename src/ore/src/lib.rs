@@ -55,14 +55,12 @@ pub mod option;
 pub mod panic;
 pub mod path;
 pub mod permutations;
+pub mod process;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "process")))]
 pub mod result;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "network")))]
 #[cfg(feature = "network")]
 pub mod retry;
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "ssh")))]
-#[cfg(feature = "ssh")]
-pub mod ssh_key;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "stack")))]
 #[cfg(feature = "stack")]
 pub mod stack;
@@ -79,3 +77,9 @@ pub mod thread;
 #[cfg(feature = "tracing")]
 pub mod tracing;
 pub mod vec;
+
+#[doc(hidden)]
+pub mod __private {
+    #[cfg(feature = "tracing")]
+    pub use tracing;
+}

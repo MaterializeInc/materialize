@@ -15,7 +15,7 @@ menu:
 Field   | Use
 --------|-----
 _name_  | The identifier of the source you want to alter.
-_value_ | The new value for the source size. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`.
+_value_ | The new value for the source size. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`, `xlarge`.
 
 ## See also
 

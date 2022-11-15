@@ -35,7 +35,7 @@ use mz_expr::{AggregateExpr, AggregateFunc};
 use mz_ore::soft_assert_or_log;
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena};
-use mz_storage::types::errors::DataflowError;
+use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 
 use crate::render::context::{Arrangement, CollectionBundle, Context};

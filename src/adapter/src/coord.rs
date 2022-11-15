@@ -78,21 +78,22 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::StreamExt;
 use itertools::Itertools;
-use mz_ore::retry::Retry;
+use mz_ore::task::spawn;
 use rand::seq::SliceRandom;
-use timely::progress::Timestamp as _;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tracing::{span, warn, Level};
+use tracing::{info, span, warn, Level};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
+use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
 use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
+use mz_ore::retry::Retry;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{stack, task};
@@ -104,10 +105,12 @@ use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statemen
 use mz_sql::names::Aug;
 use mz_sql::plan::{MutationKind, Params};
 use mz_stash::Append;
-use mz_storage::controller::{CollectionDescription, CreateExportToken, DataSource, StorageError};
-use mz_storage::types::connections::ConnectionContext;
-use mz_storage::types::sinks::StorageSinkConnection;
-use mz_storage::types::sources::{IngestionDescription, SourceExport, Timeline};
+use mz_storage_client::controller::{
+    CollectionDescription, CreateExportToken, DataSource, StorageError,
+};
+use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_client::types::sinks::StorageSinkConnection;
+use mz_storage_client::types::sources::{IngestionDescription, SourceExport, Timeline};
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
@@ -121,7 +124,7 @@ use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, PendingWriteTxn}
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::metrics::Metrics;
 use crate::coord::peek::PendingPeek;
-use crate::coord::read_policy::{ReadCapability, ReadHolds};
+use crate::coord::read_policy::ReadCapability;
 use crate::coord::timeline::{TimelineState, WriteTimestamp};
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, Session};
@@ -177,7 +180,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     RemovePendingPeeks {
         conn_id: ConnectionId,
     },
-    LinearizeReads(Vec<PendingTxn>),
+    LinearizeReads(Vec<PendingReadTxn>),
     StorageUsageFetch,
     StorageUsageUpdate(HashMap<Option<ShardId>, u64>),
     Consolidate(Vec<mz_stash::Id>),
@@ -236,11 +239,12 @@ pub struct Config<S> {
     pub metrics_registry: MetricsRegistry,
     pub now: NowFn,
     pub secrets_controller: Arc<dyn SecretsController>,
+    pub cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
     pub availability_zones: Vec<String>,
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     pub storage_host_sizes: StorageHostSizeMap,
     pub default_storage_host_size: Option<String>,
-    pub bootstrap_system_vars: Option<String>,
+    pub bootstrap_system_parameters: BTreeMap<String, String>,
     pub connection_context: ConnectionContext,
     pub storage_usage_client: StorageUsageClient,
     pub storage_usage_collection_interval: Duration,
@@ -298,6 +302,59 @@ pub struct PendingTxn {
     action: EndTransactionAction,
 }
 
+#[derive(Debug)]
+/// A pending read transaction waiting to be linearized.
+pub enum PendingReadTxn {
+    Read {
+        /// The inner transaction.
+        txn: PendingTxn,
+        /// The timestamp of the transaction, if one exists.
+        timestamp: Option<(mz_repr::Timestamp, Option<Timeline>)>,
+    },
+    ReadThenWrite {
+        /// Channel used to alert the transaction that the read has been linearized.
+        tx: oneshot::Sender<()>,
+        /// Timestamp and timeline of the read.
+        timestamp: (mz_repr::Timestamp, Timeline),
+    },
+}
+
+impl PendingReadTxn {
+    /// Return the timestamp and timeline of the pending transaction, if one exists.
+    pub fn timestamp(&self) -> Option<(mz_repr::Timestamp, Option<Timeline>)> {
+        match &self {
+            PendingReadTxn::Read { timestamp, .. } => timestamp.clone(),
+            PendingReadTxn::ReadThenWrite {
+                timestamp: (timestamp, timeline),
+                ..
+            } => Some((*timestamp, Some(timeline.clone()))),
+        }
+    }
+
+    /// Alert the client that the read has been linearized.
+    pub fn finish(self) {
+        match self {
+            PendingReadTxn::Read {
+                txn:
+                    PendingTxn {
+                        client_transmitter,
+                        response,
+                        mut session,
+                        action,
+                    },
+                ..
+            } => {
+                session.vars_mut().end_transaction(action);
+                client_transmitter.send(response, session);
+            }
+            PendingReadTxn::ReadThenWrite { tx, .. } => {
+                // Ignore errors if the caller has hung up.
+                let _ = tx.send(());
+            }
+        }
+    }
+}
+
 /// Glues the external world to the Timely workers.
 pub struct Coordinator<S> {
     /// The controller for the storage and compute layers.
@@ -310,7 +367,7 @@ pub struct Coordinator<S> {
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
 
     /// Channel for strict serializable reads ready to commit.
-    strict_serializable_reads_tx: mpsc::UnboundedSender<PendingTxn>,
+    strict_serializable_reads_tx: mpsc::UnboundedSender<PendingReadTxn>,
 
     /// Channel for catalog stash consolidations.
     consolidations_tx: mpsc::UnboundedSender<Vec<mz_stash::Id>>,
@@ -324,7 +381,7 @@ pub struct Coordinator<S> {
     /// active connections.
     active_conns: HashMap<ConnectionId, ConnMeta>,
 
-    /// For each identifier, its read policy and any transaction holds on time.
+    /// For each identifier in STORAGE, its read policy and any read holds on time.
     ///
     /// Transactions should introduce and remove constraints through the methods
     /// `acquire_read_holds` and `release_read_holds`, respectively. The base
@@ -332,7 +389,17 @@ pub struct Coordinator<S> {
     /// to the controller for it to have an effect.
     ///
     /// Access to this field should be restricted to methods in the [`read_policy`] API.
-    read_capability: HashMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
+    storage_read_capabilities: HashMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
+    /// For each identifier in COMPUTE, its read policy and any read holds on time.
+    ///
+    /// Transactions should introduce and remove constraints through the methods
+    /// `acquire_read_holds` and `release_read_holds`, respectively. The base
+    /// policy can also be updated, though one should be sure to communicate this
+    /// to the controller for it to have an effect.
+    ///
+    /// Access to this field should be restricted to methods in the [`read_policy`] API.
+    compute_read_capabilities: HashMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
+
     /// For each transaction, the pinned storage and compute identifiers and time at
     /// which they are pinned.
     ///
@@ -360,6 +427,10 @@ pub struct Coordinator<S> {
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
     secrets_controller: Arc<dyn SecretsController>,
+
+    /// Handle to a manager that can create and delete kubernetes resources
+    /// (ie: VpcEndpoint objects)
+    cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
 
     /// Extra context to pass through to connection creation.
     connection_context: ConnectionContext,
@@ -393,9 +464,12 @@ impl<S: Append + 'static> Coordinator<S> {
         builtin_migration_metadata: BuiltinMigrationMetadata,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
+        info!("coordinator init: beginning bootstrap");
+
         // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
         let mut policies_to_set: CollectionIdBundle = Default::default();
 
+        info!("coordinator init: creating compute replicas");
         for instance in self.catalog.compute_instances() {
             self.controller.compute.create_instance(
                 instance.id,
@@ -436,6 +510,7 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
+        info!("coordinator init: migrating builtin objects");
         // Migrate builtin objects.
         self.controller
             .storage
@@ -470,7 +545,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // This is disabled for the moment because it has unusual upper
         // advancement behavior.
         // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
-        let status_collection_id = if false {
+        let source_status_collection_id = if self.catalog.config().unsafe_mode {
             Some(self.catalog.resolve_builtin_storage_collection(
                 &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
             ))
@@ -478,7 +553,14 @@ impl<S: Append + 'static> Coordinator<S> {
             None
         };
 
+        info!("coordinator init: installing existing objects in catalog");
+        let mut privatelink_connections = HashMap::new();
         for entry in &entries {
+            info!(
+                "coordinator init: installing {} {}",
+                entry.item().typ(),
+                entry.id()
+            );
             match entry.item() {
                 // Currently catalog item rebuild assumes that sinks and
                 // indexes are always built individually and does not store information
@@ -486,7 +568,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // using a single dataflow, we have to make sure the rebuild process re-runs
                 // the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
-                    let data_source = match &source.data_source {
+                    let (data_source, status_collection_id) = match &source.data_source {
                         // Re-announce the source description.
                         DataSourceDesc::Ingestion(ingestion) => {
                             let mut source_imports = BTreeMap::new();
@@ -509,17 +591,20 @@ impl<S: Append + 'static> Coordinator<S> {
                                 source_exports.insert(subsource, export);
                             }
 
-                            DataSource::Ingestion(IngestionDescription {
-                                desc: ingestion.desc.clone(),
-                                ingestion_metadata: (),
-                                source_imports,
-                                source_exports,
-                                host_config: ingestion.host_config.clone(),
-                            })
+                            (
+                                DataSource::Ingestion(IngestionDescription {
+                                    desc: ingestion.desc.clone(),
+                                    ingestion_metadata: (),
+                                    source_imports,
+                                    source_exports,
+                                    host_config: ingestion.host_config.clone(),
+                                }),
+                                source_status_collection_id,
+                            )
                         }
-                        DataSourceDesc::Source => DataSource::Other,
+                        DataSourceDesc::Source => (DataSource::Other, None),
                         DataSourceDesc::Introspection(introspection) => {
-                            DataSource::Introspection(*introspection)
+                            (DataSource::Introspection(*introspection), None)
                         }
                     };
 
@@ -630,7 +715,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 .retry_async(|_| async {
                                     let builder = builder.clone();
                                     let connection_context = connection_context.clone();
-                                    mz_storage::sink::build_sink_connection(
+                                    mz_storage_client::sink::build_sink_connection(
                                         builder,
                                         connection_context,
                                     )
@@ -655,12 +740,41 @@ impl<S: Append + 'static> Coordinator<S> {
                         },
                     );
                 }
+                CatalogItem::Connection(catalog_connection) => {
+                    if let mz_storage_client::types::connections::Connection::AwsPrivatelink(conn) =
+                        &catalog_connection.connection
+                    {
+                        privatelink_connections.insert(
+                            entry.id(),
+                            VpcEndpointConfig {
+                                aws_service_name: conn.service_name.clone(),
+                                availability_zone_ids: conn.availability_zones.clone(),
+                            },
+                        );
+                    }
+                }
                 // Nothing to do for these cases
                 CatalogItem::Log(_)
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
-                | CatalogItem::Secret(_)
-                | CatalogItem::Connection(_) => {}
+                | CatalogItem::Secret(_) => {}
+            }
+        }
+
+        if let Some(cloud_resource_controller) = &self.cloud_resource_controller {
+            // Clean up any extraneous VpcEndpoints that shouldn't exist.
+            let existing_vpc_endpoints = cloud_resource_controller.list_vpc_endpoints().await?;
+            let desired_vpc_endpoints = privatelink_connections.keys().cloned().collect();
+            let vpc_endpoints_to_remove = existing_vpc_endpoints.difference(&desired_vpc_endpoints);
+            for id in vpc_endpoints_to_remove {
+                cloud_resource_controller.delete_vpc_endpoint(*id).await?;
+            }
+
+            // Ensure desired VpcEndpoints are up to date.
+            for (id, spec) in privatelink_connections {
+                cloud_resource_controller
+                    .ensure_vpc_endpoint(id, spec)
+                    .await?;
             }
         }
 
@@ -668,10 +782,12 @@ impl<S: Append + 'static> Coordinator<S> {
         self.initialize_read_policies(policies_to_set, DEFAULT_LOGICAL_COMPACTION_WINDOW_MS)
             .await;
 
+        info!("coordinator init: announcing completion of initialization to controller");
         // Announce the completion of initialization.
         self.controller.initialization_complete();
 
         // Announce primary and foreign key relationships.
+        info!("coordinator init: announcing primary and foreign key relationships");
         let mz_view_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_KEYS);
         for log in BUILTINS::logs() {
             let log_id = &self.catalog.resolve_builtin_log(log).to_string();
@@ -725,6 +841,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         // Advance all tables to the current timestamp
+        info!("coordinator init: advancing all tables to current timestamp");
         let WriteTimestamp {
             timestamp: _,
             advance_to,
@@ -743,17 +860,24 @@ impl<S: Append + 'static> Coordinator<S> {
             .unwrap();
 
         // Add builtin table updates the clear the contents of all system tables
+        info!("coordinator init: resetting system tables");
         let read_ts = self.get_local_read_ts();
         for system_table in entries
             .iter()
             .filter(|entry| entry.is_table() && entry.id().is_system())
         {
+            info!(
+                "coordinator init: resetting system table {} ({})",
+                self.catalog.resolve_full_name(system_table.name(), None),
+                system_table.id()
+            );
             let current_contents = self
                 .controller
                 .storage
                 .snapshot(system_table.id(), read_ts)
                 .await
                 .unwrap();
+            info!("coordinator init: table size {}", current_contents.len());
             let retractions = current_contents
                 .into_iter()
                 .map(|(row, diff)| BuiltinTableUpdate {
@@ -764,9 +888,11 @@ impl<S: Append + 'static> Coordinator<S> {
             builtin_table_updates.extend(retractions);
         }
 
+        info!("coordinator init: sending builtin table updates");
         self.send_builtin_table_updates(builtin_table_updates, BuiltinTableUpdateSource::DDL)
             .await;
 
+        info!("coordinator init: bootstrap complete");
         Ok(())
     }
 
@@ -777,7 +903,7 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn serve(
         mut self,
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
-        mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingTxn>,
+        mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingReadTxn>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
         mut consolidations_rx: mpsc::UnboundedReceiver<Vec<mz_stash::Id>>,
     ) {
@@ -794,8 +920,23 @@ impl<S: Append + 'static> Coordinator<S> {
             tokio::time::interval(self.catalog.config().timestamp_interval);
         // Watcher that listens for and reports compute service status changes.
         let mut compute_events = self.controller.compute.watch_services();
+        let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
+        let idle_metric = self.metrics.queue_busy_time.with_label_values(&[]);
+        spawn(|| "coord idle metric", async move {
+            // Every 5 seconds, attempt to measure how long it takes for the
+            // coord select loop to be empty, because this message is the last
+            // processed. If it is idle, this will result in some microseconds
+            // of measurement.
+            let mut interval = tokio::time::interval(Duration::from_secs(5));
+            loop {
+                interval.tick().await;
+                // If the buffer is full (or the channel is closed), ignore and
+                // try again later.
+                let _ = idle_tx.try_send(idle_metric.start_timer());
+            }
+        });
 
-        self.schedule_storage_usage_collection().await;
+        self.schedule_storage_usage_collection();
 
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is
@@ -844,6 +985,14 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                     Message::Consolidate(ids.into_iter().collect())
                 }
+
+                // Process the idle metric at the lowest priority to sample queue non-idle time.
+                // `recv()` on `Receiver` is cancellation safe:
+                // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.Receiver.html#cancel-safety
+                timer = idle_rx.recv() => {
+                    timer.expect("does not drop").observe_duration();
+                    continue;
+                }
             };
 
             // All message processing functions trace. Start a parent span for them to make
@@ -874,10 +1023,11 @@ pub async fn serve<S: Append + 'static>(
         metrics_registry,
         now,
         secrets_controller,
+        cloud_resource_controller,
         cluster_replica_sizes,
         storage_host_sizes,
         default_storage_host_size,
-        bootstrap_system_vars,
+        bootstrap_system_parameters,
         mut availability_zones,
         connection_context,
         storage_usage_client,
@@ -888,6 +1038,8 @@ pub async fn serve<S: Append + 'static>(
         consolidations_rx,
     }: Config<S>,
 ) -> Result<(Handle, Client), AdapterError> {
+    info!("coordinator init: beginning");
+
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
     let (strict_serializable_reads_tx, strict_serializable_reads_rx) = mpsc::unbounded_channel();
@@ -906,7 +1058,8 @@ pub async fn serve<S: Append + 'static>(
     // Coordinator::sequence_create_compute_replica.
     availability_zones.shuffle(&mut rand::thread_rng());
 
-    let (mut catalog, builtin_migration_metadata, builtin_table_updates) =
+    info!("coordinator init: opening catalog");
+    let (mut catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
         Catalog::open(catalog::Config {
             storage,
             unsafe_mode,
@@ -919,7 +1072,7 @@ pub async fn serve<S: Append + 'static>(
             cluster_replica_sizes,
             storage_host_sizes,
             default_storage_host_size,
-            bootstrap_system_vars,
+            bootstrap_system_parameters,
             availability_zones,
             secrets_reader: secrets_controller.reader(),
             egress_ips,
@@ -935,6 +1088,7 @@ pub async fn serve<S: Append + 'static>(
     let handle = TokioHandle::current();
 
     let initial_timestamps = catalog.get_all_persisted_timestamps().await?;
+    let inner_metrics_registry = metrics_registry.clone();
     let thread = thread::Builder::new()
         // The Coordinator thread tends to keep a lot of data on its stack. To
         // prevent a stack overflow we allocate a stack twice as big as the default
@@ -943,30 +1097,17 @@ pub async fn serve<S: Append + 'static>(
         .name("coordinator".to_string())
         .spawn(move || {
             let mut timestamp_oracles = BTreeMap::new();
-            for (timeline, initial_timestamp) in initial_timestamps {
-                let oracle = if timeline == Timeline::EpochMilliseconds {
-                    let now = now.clone();
-                    handle.block_on(timeline::DurableTimestampOracle::new(
-                        initial_timestamp,
-                        move || (now)().into(),
-                        *timeline::TIMESTAMP_PERSIST_INTERVAL,
-                        |ts| catalog.persist_timestamp(&timeline, ts),
-                    ))
-                } else {
-                    handle.block_on(timeline::DurableTimestampOracle::new(
-                        initial_timestamp,
-                        Timestamp::minimum,
-                        *timeline::TIMESTAMP_PERSIST_INTERVAL,
-                        |ts| catalog.persist_timestamp(&timeline, ts),
-                    ))
-                };
-                timestamp_oracles.insert(
-                    timeline,
-                    TimelineState {
-                        oracle,
-                        read_holds: ReadHolds::new(initial_timestamp),
-                    },
-                );
+            for (timeline, mut initial_timestamp) in initial_timestamps {
+                if timeline == Timeline::EpochMilliseconds {
+                    initial_timestamp = std::cmp::max(initial_timestamp, (now)().into());
+                }
+                handle.block_on(Coordinator::<S>::ensure_timeline_state_with_initial_time(
+                    &timeline,
+                    initial_timestamp,
+                    now.clone(),
+                    |ts| catalog.persist_timestamp(&timeline, ts),
+                    &mut timestamp_oracles,
+                ));
             }
 
             let segment_client =
@@ -982,7 +1123,8 @@ pub async fn serve<S: Append + 'static>(
                 global_timelines: timestamp_oracles,
                 transient_id_counter: 1,
                 active_conns: HashMap::new(),
-                read_capability: Default::default(),
+                storage_read_capabilities: Default::default(),
+                compute_read_capabilities: Default::default(),
                 txn_reads: Default::default(),
                 pending_peeks: HashMap::new(),
                 client_pending_peeks: HashMap::new(),
@@ -991,12 +1133,13 @@ pub async fn serve<S: Append + 'static>(
                 write_lock_wait_group: VecDeque::new(),
                 pending_writes: Vec::new(),
                 secrets_controller,
+                cloud_resource_controller,
                 connection_context,
                 transient_replica_metadata: HashMap::new(),
                 storage_usage_client,
                 storage_usage_collection_interval,
                 segment_client,
-                metrics: Metrics::register_with(&metrics_registry),
+                metrics: Metrics::register_with(&inner_metrics_registry),
             };
             let bootstrap =
                 handle.block_on(coord.bootstrap(builtin_migration_metadata, builtin_table_updates));
@@ -1014,12 +1157,13 @@ pub async fn serve<S: Append + 'static>(
         .unwrap();
     match bootstrap_rx.await.unwrap() {
         Ok(()) => {
+            info!("coordinator init: complete");
             let handle = Handle {
                 session_id,
                 start_instant,
                 _thread: thread.join_on_drop(),
             };
-            let client = Client::new(cmd_tx.clone());
+            let client = Client::new(cmd_tx.clone(), &metrics_registry);
             Ok((handle, client))
         }
         Err(e) => Err(e),

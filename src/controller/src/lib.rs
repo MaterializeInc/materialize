@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
+use mz_stash::PostgresFactory;
 use serde::{Deserialize, Serialize};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
@@ -47,10 +48,10 @@ use mz_persist_client::PersistLocation;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::{GlobalId, TimestampManipulation};
-use mz_storage::controller::StorageController;
-use mz_storage::protocol::client::{
+use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
+use mz_storage_client::controller::StorageController;
 
 /// Configures a controller.
 #[derive(Debug, Clone)]
@@ -71,8 +72,12 @@ pub struct ControllerConfig {
     pub storaged_image: String,
     /// The computed image to use when starting new compute processes.
     pub computed_image: String,
+    /// The init container image to use for storaged and computed.
+    pub init_container_image: Option<String>,
     /// The now function to advance the controller's introspection collections.
     pub now: NowFn,
+    /// The postgres stash factory.
+    pub postgres_factory: PostgresFactory,
 }
 
 /// Responses that [`Controller`] can produce.
@@ -208,18 +213,20 @@ where
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
-    mz_storage::controller::Controller<T>: StorageController<Timestamp = T>,
+    mz_storage_client::controller::Controller<T>: StorageController<Timestamp = T>,
 {
     /// Creates a new controller.
-    pub async fn new(config: ControllerConfig) -> Self {
-        let storage_controller = mz_storage::controller::Controller::new(
+    pub async fn new(config: ControllerConfig, envd_epoch: i64) -> Self {
+        let storage_controller = mz_storage_client::controller::Controller::new(
             config.build_info,
             config.storage_stash_url,
             config.persist_location,
             config.persist_clients,
             config.orchestrator.namespace("storage"),
             config.storaged_image,
+            config.init_container_image.clone(),
             config.now,
+            &config.postgres_factory,
         )
         .await;
 
@@ -227,6 +234,8 @@ where
             config.build_info,
             config.orchestrator.namespace("compute"),
             config.computed_image,
+            config.init_container_image,
+            envd_epoch,
         );
 
         Self {
