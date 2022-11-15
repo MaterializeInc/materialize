@@ -91,7 +91,7 @@ EXPLAIN SELECT state, name FROM ...
 
 ## Top 1 using `DISTINCT ON`
 
-If _K_ = 1, i.e., you would like to see only the most populous city in each state, then a simpler approach is to use `DISTINCT ON`:
+If _K_ = 1, i.e., you would like to see only the most populous city in each state, another approach is to use `DISTINCT ON`:
 
 ```sql
 SELECT DISTINCT ON(state) state, name
