@@ -200,8 +200,12 @@ pub unsafe fn all_build_ids() -> Result<HashMap<PathBuf, Vec<u8>>, anyhow::Error
             Some(iterate_cb),
             (&mut state) as *mut CallbackState as *mut c_void,
         );
+    };
+    if let Some(err) = state.fatal_error {
+        Err(err)
+    } else {
+        Ok(state.map)
     }
-    Ok(state.map)
 }
 
 impl StackProfile {
