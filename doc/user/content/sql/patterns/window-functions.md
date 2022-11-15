@@ -51,11 +51,11 @@ FROM (
 WHERE row_num <= 3;
 ```
 
-If there are states that have many cities, then it is better for performance to express this query using a lateral join (or `DISTINCT ON` is _K_ = 1) instead of window functions, which we explain in [Top K by group](/sql/patterns/top-k).
+If there are states that have many cities, a more performant way to express this in Materialize is to use a lateral join (or `DISTINCT ON`, if _K_ = 1) instead of window functions. See [Top K by group](/sql/patterns/top-k) for the alternative implementation.
 
 ## `FIRST_VALUE`/`LAST_VALUE` of an entire partition
 
-Suppose that we want to compute the ratio of each city's population vs. the most populous city in the same state. We can do so using window functions as follows:
+Suppose that you want to compute the ratio of each city's population vs. the most populous city in the same state. You can do so using window functions as follows:
 ```
 SELECT state, name,
        CAST(pop AS float) / FIRST_VALUE(pop)
@@ -63,7 +63,7 @@ SELECT state, name,
 FROM cities;
 ```
 
-For better performance, we can rewrite this query as follows: We first compute the largest population of each state by a simple grouped aggregation, and then join against that:
+For better performance, you can rewrite this query to first compute the largest population of each state using an aggregation, and then join against that:
 
 ```
 SELECT cities.state, name, CAST(pop as float) / max_pops.max_pop
@@ -78,7 +78,7 @@ If the `ROW_NUMBER` would be called with an expression that is different from th
 
 ## Aggregate window functions over an entire partition
 
-Suppose that we want to compute the ratio of each city's population vs. the total population of the city's state. We can do so using an aggregate window function as follows:
+Suppose that you want to compute the ratio of each city's population vs. the total population of the city's state. You can do so using an aggregate window function as follows:
 
 ```
 SELECT state, name,
@@ -87,7 +87,7 @@ SELECT state, name,
 FROM cities;
 ```
 
-Aggregate window functions are not yet supported in Materialize, but we can rewrite this query as follows: We first compute the total population of each state by a simple grouped aggregation, and then join against that:
+Aggregate window functions are not yet supported in Materialize, but you can rewrite this query to first compute the total population of each state using an aggregation, and then join against that:
 
 ```
 SELECT cities.state, name, CAST(pop as float) / total_pops.total_pop
@@ -100,7 +100,7 @@ WHERE cities.state = total_pops.state;
 
 ## `LAG`/`LEAD` for time series
 
-If the input has a column that advances by regular amounts, then `LAG` and `LEAD` can be replaced by an equi-join where we perform some arithmetic on the key to related consecutive elements. Suppose that we have the following data:
+If the input has a column that advances by regular amounts, then `LAG` and `LEAD` can be replaced by an equi-join. Suppose that you have the following data:
 
 ```
 CREATE TABLE measurements(time timestamp, value float);
@@ -110,13 +110,13 @@ INSERT INTO measurements VALUES
     (TIMESTAMP '2007-02-01 15:06:01', 12);
 ```
 
-We can compute the differences between consecutive measurements using `LAG()`:
+You can compute the differences between consecutive measurements using `LAG()`:
 ```
 SELECT time, value - LAG(value) OVER (ORDER BY time)
 FROM measurements;
 ```
 
-For better performance, we can rewrite this query using an equi-join:
+For better performance, you can rewrite this query using an equi-join:
 
 ```
 SELECT m2.time, m2.value - m1.value
@@ -124,4 +124,4 @@ FROM measurements m1, measurements m2
 WHERE m2.time = m1.time + INTERVAL '1' MINUTE;
 ```
 
-Note that these queries differ in whether they include the first timestamp (with a `NULL` difference), but we could use a `LEFT JOIN` to make the outputs exactly match.
+Note that these queries differ in whether they include the first timestamp (with a `NULL` difference). Using a `LEFT JOIN` would make the outputs match exactly.
