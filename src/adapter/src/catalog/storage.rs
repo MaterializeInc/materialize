@@ -1722,43 +1722,33 @@ where
 /// Inserts empty values into all new collections, so the collections are readable.
 pub async fn initialize_stash<S: Append>(stash: &mut S) -> Result<(), Error> {
     let mut batches = Vec::new();
-    async fn add_batch<K, V, S>(
-        stash: &mut S,
-        batches: &mut Vec<AppendBatch>,
-        collection: &TypedCollection<K, V>,
-    ) -> Result<(), Error>
-    where
-        K: mz_stash::Data,
-        V: mz_stash::Data,
-        S: Append,
-    {
-        if is_collection_uninitialized(stash, collection).await? {
-            let collection = collection.get(stash).await?;
-            let batch = collection.make_batch(stash).await?;
-            batches.push(batch);
+
+    macro_rules! init_collections {
+        ($($collection:expr),*) => {
+            $(if let Some(batch) = $collection.make_initializing_batch(stash).await? {
+                batches.push(batch);
+            })*
         }
-        Ok(())
     }
-    add_batch(stash, &mut batches, &COLLECTION_CONFIG).await?;
-    add_batch(stash, &mut batches, &COLLECTION_SETTING).await?;
-    add_batch(stash, &mut batches, &COLLECTION_ID_ALLOC).await?;
-    add_batch(stash, &mut batches, &COLLECTION_SYSTEM_GID_MAPPING).await?;
-    add_batch(stash, &mut batches, &COLLECTION_COMPUTE_INSTANCES).await?;
-    add_batch(
-        stash,
-        &mut batches,
+
+    init_collections!(
+        &COLLECTION_CONFIG,
+        &COLLECTION_SETTING,
+        &COLLECTION_ID_ALLOC,
+        &COLLECTION_SYSTEM_GID_MAPPING,
+        &COLLECTION_COMPUTE_INSTANCES,
         &COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX,
-    )
-    .await?;
-    add_batch(stash, &mut batches, &COLLECTION_COMPUTE_REPLICAS).await?;
-    add_batch(stash, &mut batches, &COLLECTION_DATABASE).await?;
-    add_batch(stash, &mut batches, &COLLECTION_SCHEMA).await?;
-    add_batch(stash, &mut batches, &COLLECTION_ITEM).await?;
-    add_batch(stash, &mut batches, &COLLECTION_ROLE).await?;
-    add_batch(stash, &mut batches, &COLLECTION_TIMESTAMP).await?;
-    add_batch(stash, &mut batches, &COLLECTION_SYSTEM_CONFIGURATION).await?;
-    add_batch(stash, &mut batches, &COLLECTION_AUDIT_LOG).await?;
-    add_batch(stash, &mut batches, &COLLECTION_STORAGE_USAGE).await?;
+        &COLLECTION_COMPUTE_REPLICAS,
+        &COLLECTION_DATABASE,
+        &COLLECTION_SCHEMA,
+        &COLLECTION_ITEM,
+        &COLLECTION_ROLE,
+        &COLLECTION_TIMESTAMP,
+        &COLLECTION_SYSTEM_CONFIGURATION,
+        &COLLECTION_AUDIT_LOG,
+        &COLLECTION_STORAGE_USAGE
+    );
+
     stash.append(&batches).await.map_err(|e| e.into())
 }
 

@@ -41,7 +41,7 @@ pub struct ReapableShardMetadata {
     pub reapable: bool,
 }
 
-pub static SHARD_WAL: TypedCollection<ShardId, ReapableShardMetadata> =
+pub(super) static SHARD_WAL: TypedCollection<ShardId, ReapableShardMetadata> =
     TypedCollection::new("storage-retired-shards");
 
 impl<T> Controller<T>
@@ -99,16 +99,6 @@ where
 
     /// Reconcile the state of `REAPABLE_SHARDS` on boot.
     pub(super) async fn reconcile_shards(&mut self) {
-        if super::METADATA_COLLECTION
-            .upper(&mut self.state.stash)
-            .await
-            .expect("must be able to connect to stash")
-            .elements()
-            == [mz_stash::Timestamp::MIN]
-        {
-            // No metadata yet.
-            return;
-        }
         // Get all shards we're aware of from stash.
         let all_shard_data: BTreeMap<_, _> = super::METADATA_COLLECTION
             .peek_one(&mut self.state.stash)
