@@ -3408,6 +3408,7 @@ dependencies = [
  "postgres-protocol",
  "postgres_array",
  "predicates",
+ "prometheus",
  "rand",
  "rdkafka-sys",
  "regex",

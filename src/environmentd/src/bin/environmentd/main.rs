@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::{bail, Context};
 use clap::{ArgEnum, Parser};
@@ -30,7 +31,9 @@ use fail::FailScenario;
 use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
+use mz_ore::metric;
 use once_cell::sync::Lazy;
+use prometheus::IntGauge;
 use sysinfo::{CpuExt, SystemExt};
 use tokio::sync::Mutex;
 use tower_http::cors::{self, AllowOrigin};
@@ -440,6 +443,7 @@ fn main() {
 
 fn run(mut args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::set_abort_on_panic();
+    let envd_start = Instant::now();
 
     // Configure signal handling as soon as possible. We want signals to be
     // handled to our liking ASAP.
@@ -464,6 +468,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     );
 
     let metrics_registry = MetricsRegistry::new();
+    let metrics = Metrics::register_into(&metrics_registry);
 
     // Configure tracing to log the service name when using the process
     // orchestrator, which intermingles log output from multiple services. Other
@@ -765,6 +770,14 @@ max log level: {max_log_level}",
         egress_ips: args.announce_egress_ip,
     }))?;
 
+    metrics.start_time_environmentd.set(
+        envd_start
+            .elapsed()
+            .as_millis()
+            .try_into()
+            .expect("must fit"),
+    );
+
     println!(
         "environmentd {} listening...",
         mz_environmentd::BUILD_INFO.human_version()
@@ -794,4 +807,20 @@ fn build_info() -> Vec<String> {
         openssl_version.to_string_lossy().into_owned(),
         format!("librdkafka v{}", rdkafka_version.to_string_lossy()),
     ]
+}
+
+#[derive(Debug, Clone)]
+struct Metrics {
+    pub start_time_environmentd: IntGauge,
+}
+
+impl Metrics {
+    pub fn register_into(registry: &MetricsRegistry) -> Metrics {
+        Metrics {
+            start_time_environmentd: registry.register(metric!(
+                name: "mz_start_time_environmentd",
+                help: "Time in milliseconds from environmentd start until the adapter is ready.",
+            )),
+        }
+    }
 }
