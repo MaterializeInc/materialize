@@ -46,7 +46,29 @@ pub struct StackProfile {
     stacks: Vec<(WeightedStack, Option<usize>)>,
 }
 
-pub fn all_build_ids() -> Result<HashMap<PathBuf, Vec<u8>>, anyhow::Error> {
+/// Gets the GNU build IDs for all loaded images, including the main
+/// program binary as well as all dynamically loaded libraries.
+/// Intended to be useful for profilers, who can use the supplied IDs
+/// to symbolicate stack traces offline.
+///
+/// Uses `dl_iterate_phdr` to walk the program headers of all images,
+/// and iterates over them looking for note
+/// segments. Then searches the discovered note segments for a note of type
+/// `NT_GNU_BUILD_ID` (aka "3") and name "GNU\0".
+///
+/// SAFETY: This function is written in a hilariously unsafe way: it involves
+/// following pointers to random parts of memory, and then assuming
+/// that particular structures can be found there.
+/// However, it was written by carefully reading `man dl_iterate_phdr`
+/// and `man elf`, and is thus intended to be relatively safe for callers to use.
+/// Assuming I haven't written any bugs (and that the documentation is correct),
+/// the only known safety requirements are:
+///
+/// (1) It must not be called multiple times concurrently, as `dl_iterate_phdr`
+/// is not documented as being thread-safe
+/// (2) The running binary must be in ELF format and running on Linux.
+#[cfg(not(target_os = "macos"))]
+pub unsafe fn all_build_ids() -> Result<HashMap<PathBuf, Vec<u8>>, anyhow::Error> {
     struct CallbackState {
         map: HashMap<PathBuf, Vec<u8>>,
         is_first: bool,
