@@ -76,7 +76,7 @@ impl<T: Transmittable> ClientTransmitter<T> {
         if let Err(res) = self.tx.take().unwrap().send(Response { result, session }) {
             self.internal_cmd_tx
                 .send(Message::Command(Command::Terminate {
-                    session: res.session,
+                    conn_id: res.session.conn_id(),
                 }))
                 .expect("coordinator unexpectedly gone");
         }

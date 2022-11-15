@@ -114,8 +114,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 let _ = tx.send(Response { result, session });
             }
 
-            Command::Terminate { mut session } => {
-                self.handle_terminate(&mut session).await;
+            Command::Terminate { conn_id } => {
+                self.handle_terminate(conn_id).await;
             }
 
             Command::StartTransaction {
@@ -208,6 +208,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 cancel_tx,
                 secret_key,
                 notice_tx: session.retain_notice_transmitter(),
+                drop_sinks: Vec::new(),
             },
         );
 
@@ -518,7 +519,7 @@ impl<S: Append + 'static> Coordinator<S> {
             for PendingPeek {
                 sender: rows_tx,
                 conn_id: _,
-            } in self.cancel_pending_peeks(conn_id)
+            } in self.cancel_pending_peeks(&conn_id)
             {
                 // Cancel messages can be sent after the connection has hung
                 // up, but before the connection's state has been cleaned up.
@@ -531,15 +532,19 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Handle termination of a client session.
     ///
     /// This cleans up any state in the coordinator associated with the session.
-    async fn handle_terminate(&mut self, session: &mut Session) {
-        self.clear_transaction(session).await;
+    async fn handle_terminate(&mut self, conn_id: ConnectionId) {
+        if !self.active_conns.contains_key(&conn_id) {
+            return;
+        }
 
-        self.drop_temp_items(session).await;
+        self.clear_transaction(&conn_id).await;
+
+        self.drop_temp_items(None, &conn_id).await;
         self.catalog
-            .drop_temporary_schema(session.conn_id())
+            .drop_temporary_schema(&conn_id)
             .unwrap_or_terminate("unable to drop temporary schema");
         self.metrics.active_sessions.dec();
-        self.active_conns.remove(&session.conn_id());
-        self.cancel_pending_peeks(session.conn_id());
+        self.active_conns.remove(&conn_id);
+        self.cancel_pending_peeks(&conn_id);
     }
 }

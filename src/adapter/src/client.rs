@@ -161,7 +161,7 @@ impl ConnClient {
         let (cancel_tx, cancel_rx) = watch::channel(Canceled::NotCanceled);
         let cancel_tx = Arc::new(cancel_tx);
         let mut client = SessionClient {
-            inner: self,
+            inner: Some(self),
             session: Some(session),
             cancel_tx: Arc::clone(&cancel_tx),
             cancel_rx,
@@ -215,7 +215,10 @@ impl Drop for ConnClient {
 ///
 /// See also [`Client`].
 pub struct SessionClient {
-    inner: ConnClient,
+    // Invariant: inner may only be `None` after the session has been terminated.
+    // Once the session is terminated, no communication to the Coordinator
+    // should be attempted.
+    inner: Option<ConnClient>,
     // Invariant: session may only be `None` during a method call. Every public
     // method must ensure that `Session` is `Some` before it returns.
     session: Option<Session>,
@@ -329,7 +332,7 @@ impl SessionClient {
 
     /// Cancels the query currently running on another connection.
     pub fn cancel_request(&mut self, conn_id: ConnectionId, secret_key: u32) {
-        self.inner.cancel_request(conn_id, secret_key)
+        self.inner().cancel_request(conn_id, secret_key)
     }
 
     /// Ends a transaction.
@@ -379,9 +382,22 @@ impl SessionClient {
         .await
     }
 
+    /// Terminates the client session.
+    pub fn terminate(&mut self) {
+        let conn_id = self.session().conn_id();
+        self.inner().inner.send(Command::Terminate { conn_id });
+        self.session().reset();
+        self.inner = None;
+    }
+
     /// Returns a mutable reference to the session bound to this client.
     pub fn session(&mut self) -> &mut Session {
-        self.session.as_mut().unwrap()
+        self.session.as_mut().expect("session invariant violated")
+    }
+
+    /// Returns a mutable reference to the inner client.
+    pub fn inner(&mut self) -> &mut ConnClient {
+        self.inner.as_mut().expect("inner invariant violated")
     }
 
     async fn send<T, F>(&mut self, f: F) -> Result<T, AdapterError>
@@ -391,7 +407,7 @@ impl SessionClient {
         let session = self.session.take().expect("session invariant violated");
         let mut typ = None;
         let res = self
-            .inner
+            .inner()
             .send(|tx| {
                 let cmd = f(tx, session);
                 // Measure the success and error rate of certain commands:
@@ -419,7 +435,7 @@ impl SessionClient {
             "error"
         };
         if let Some(typ) = typ {
-            self.inner
+            self.inner()
                 .inner
                 .metrics
                 .commands
@@ -468,8 +484,10 @@ impl Drop for SessionClient {
         // We may not have a session if this client was dropped while awaiting
         // a response. In this case, it is the coordinator's responsibility to
         // terminate the session.
-        if let Some(session) = self.session.take() {
-            self.inner.inner.send(Command::Terminate { session });
+        // We may not have a connection to the Coordinator if the session was
+        // prematurely terminated, for example due to a timeout.
+        if self.session.is_some() && self.inner.is_some() {
+            self.terminate();
         }
     }
 }

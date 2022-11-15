@@ -33,7 +33,6 @@ use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
 use crate::error::AdapterError;
 use crate::session::vars::IsolationLevel;
-use crate::util::ComputeSinkId;
 use crate::AdapterNotice;
 
 pub use self::vars::{
@@ -86,7 +85,6 @@ pub struct Session<T = mz_repr::Timestamp> {
     pcx: Option<PlanContext>,
     user: User,
     vars: SessionVars,
-    drop_sinks: Vec<ComputeSinkId>,
     notices_tx: mpsc::UnboundedSender<AdapterNotice>,
     notices_rx: mpsc::UnboundedReceiver<AdapterNotice>,
     prev_notice: Option<AdapterNotice>,
@@ -123,7 +121,6 @@ impl<T: TimestampManipulation> Session<T> {
             portals: HashMap::new(),
             user,
             vars,
-            drop_sinks: vec![],
             notices_tx,
             notices_rx,
             prev_notice: None,
@@ -231,12 +228,10 @@ impl<T: TimestampManipulation> Session<T> {
     /// and
     /// > An unnamed portal is destroyed at the end of the transaction
     #[must_use]
-    pub fn clear_transaction(&mut self) -> (Vec<ComputeSinkId>, TransactionStatus<T>) {
+    pub fn clear_transaction(&mut self) -> TransactionStatus<T> {
         self.portals.clear();
         self.pcx = None;
-        let drop_sinks = mem::take(&mut self.drop_sinks);
-        let txn = mem::take(&mut self.transaction);
-        (drop_sinks, txn)
+        mem::take(&mut self.transaction)
     }
 
     /// Marks the current transaction as failed.
@@ -325,12 +320,6 @@ impl<T: TimestampManipulation> Session<T> {
             }
         }
         Ok(())
-    }
-
-    /// Adds a sink that will need to be dropped when the current transaction is
-    /// cleared.
-    pub fn add_drop_sink(&mut self, id: ComputeSinkId) {
-        self.drop_sinks.push(id)
     }
 
     /// Returns a channel on which to send notices to the session.
@@ -564,11 +553,10 @@ impl<T: TimestampManipulation> Session<T> {
 
     /// Resets the session to its initial state. Returns sinks that need to be
     /// dropped.
-    pub fn reset(&mut self) -> Vec<ComputeSinkId> {
-        let (drop_sinks, _) = self.clear_transaction();
+    pub fn reset(&mut self) {
+        let _ = self.clear_transaction();
         self.prepared_statements.clear();
         self.vars = SessionVars::default();
-        drop_sinks
     }
 
     /// Returns the user who owns this session.

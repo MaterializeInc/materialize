@@ -103,7 +103,7 @@ pub enum Command {
     },
 
     Terminate {
-        session: Session,
+        conn_id: ConnectionId,
     },
 }
 
