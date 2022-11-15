@@ -143,7 +143,7 @@ impl<S: Append + 'static> Coordinator<S> {
     pub(crate) async fn clear_transaction(&mut self, conn_id: &ConnectionId) {
         let conn_meta = self
             .active_conns
-            .get_mut(&session.conn_id())
+            .get_mut(conn_id)
             .expect("must exist for active session");
         let drop_sinks = std::mem::take(&mut conn_meta.drop_sinks);
         self.drop_compute_sinks(drop_sinks).await;
