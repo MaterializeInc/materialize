@@ -97,7 +97,7 @@ where
     /// reference to thea underlying stream, so dropping it will never lose a
     /// value.
     ///
-    /// https://docs.rs/tokio-stream/latest/tokio_stream/trait.StreamExt.html#cancel-safety-1
+    /// <https://docs.rs/tokio-stream/latest/tokio_stream/trait.StreamExt.html#cancel-safety-1>
     pub async fn recv(&mut self) -> Result<Option<FrontendMessage>, io::Error> {
         let message = self.inner.try_next().await?;
         match &message {
