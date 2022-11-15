@@ -3312,6 +3312,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "thiserror",
  "timely",
  "tokio",
  "tokio-stream",
