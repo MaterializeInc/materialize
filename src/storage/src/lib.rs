@@ -18,5 +18,7 @@ pub mod sink;
 pub mod source;
 pub mod storage_state;
 
+mod healthcheck;
+
 pub use decode::metrics::DecodeMetrics;
 pub use server::{serve, Config, Server};
