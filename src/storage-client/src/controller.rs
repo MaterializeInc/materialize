@@ -53,7 +53,7 @@ use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_persist_types::{Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
-use mz_stash::{self, StashError, StashFactory, TypedCollection};
+use mz_stash::{self, AppendBatch, StashError, StashFactory, TypedCollection};
 
 use crate::client::{
     CreateSinkCommand, CreateSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
@@ -792,10 +792,59 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
                 .expect("invalid postgres url for storage stash"),
         )
         .expect("could not make storage TLS connection");
-        let stash = factory
+        let mut stash = factory
             .open(postgres_url, None, tls)
             .await
             .expect("could not connect to postgres storage stash");
+
+        // Ensure all collections are initialized, otherwise they panic if
+        // they're read before being written to.
+        async fn maybe_get_init_batch<'tx, K, V>(
+            tx: &'tx mz_stash::Transaction<'tx>,
+            typed: &TypedCollection<K, V>,
+        ) -> Option<AppendBatch>
+        where
+            K: mz_stash::Data,
+            V: mz_stash::Data,
+        {
+            let collection = tx
+                .collection::<K, V>(typed.name())
+                .await
+                .expect("named collection must exist");
+            let upper = tx
+                .upper(collection.id)
+                .await
+                .expect("collection known to exist");
+            if upper.elements() == [mz_stash::Timestamp::MIN] {
+                Some(
+                    collection
+                        .make_batch_lower(upper)
+                        .expect("stash operation must succeed"),
+                )
+            } else {
+                None
+            }
+        }
+
+        stash
+            .with_transaction(move |tx| {
+                Box::pin(async move {
+                    // Query all collections in parallel. Makes for triplicated
+                    // names, but runs quick.
+                    let (metadata_collection, metadata_export) = futures::join!(
+                        maybe_get_init_batch(&tx, &METADATA_COLLECTION),
+                        maybe_get_init_batch(&tx, &METADATA_EXPORT),
+                    );
+                    let batches: Vec<AppendBatch> = [metadata_collection, metadata_export]
+                        .into_iter()
+                        .filter_map(|b| b)
+                        .collect();
+
+                    tx.append(batches).await
+                })
+            })
+            .await
+            .expect("stash operation must succeed");
 
         let persist_write_handles = persist_handles::PersistWriteWorker::new(tx);
         let collection_manager_write_handle = persist_write_handles.clone();
