@@ -1,5 +1,13 @@
 # dbt-materialize Changelog
 
+## 1.3.1 - 2022-11-15
+
+* **Breaking change.** Use `mz_introspection` as the initial active cluster on
+    connection to ensure optimal performance for introspection queries.
+
+  This change requires [Materialize >=0.28.0](https://materialize.com/docs/releases/v0.28/).
+  **Users of older versions should pin `dbt-materialize` to `v1.3.0`.**
+
 ## 1.3.0 - 2022-11-09
 
 * Upgrade to `dbt-postgres` v1.3.0.
@@ -38,7 +46,7 @@
   ```
 
 * Enable configuration of [clusters](https://materialize.com/docs/unstable/sql/create-cluster/#conceptual-framework),
-  which are a feature in a forthcoming version of Materialize Cloud, via:
+  which are a feature in a forthcoming version of Materialize, via:
 
   * A new `cluster` connection parameter, which specifies the default cluster
     for the connection.
@@ -207,10 +215,8 @@
 ## 0.18.1.post3 - 2021-06-17
 
 * Support the `sslcert`, `sslkey`, and `sslrootcert` parameters for specifying a
-  TLS client certificate. Notably, this permits using dbt-materialize with
-  [Materialize Cloud].
-
-[Materialize Cloud]: https://cloud.materialize.com
+  TLS client certificate. Notably, this allows using `dbt-materialize` with the
+  new architecture of [Materialize](https://cloud.materialize.com).
 
 ## 0.18.1.post2 - 2021-04-21
 
