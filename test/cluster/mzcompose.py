@@ -54,7 +54,7 @@ SERVICES = [
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for name in [
-        "test-cluster",
+        "test-smoke",
         "test-github-12251",
         "test-github-15531",
         "test-github-15535",
@@ -72,7 +72,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             c.workflow(name)
 
 
-def workflow_test_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run testdrive in a variety of compute cluster configurations."""
 
     parser.add_argument(
