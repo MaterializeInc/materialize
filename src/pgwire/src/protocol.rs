@@ -342,9 +342,9 @@ where
             message = self.conn.recv() => message?,
         };
 
-        self.adapter_client().reset_canceled();
         self.adapter_client()
             .remove_idle_in_transaction_session_timeout();
+        self.adapter_client().reset_canceled();
 
         // NOTE(guswynn): we could consider adding spans to all message types. Currently
         // only a few message types seem useful.
