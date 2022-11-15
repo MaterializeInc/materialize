@@ -141,10 +141,12 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Handle removing in-progress transaction state regardless of the end action
     /// of the transaction.
     pub(crate) async fn clear_transaction(&mut self, conn_id: &ConnectionId) {
-        if let Some(conn_meta) = self.active_conns.get_mut(conn_id) {
-            let drop_sinks = std::mem::take(&mut conn_meta.drop_sinks);
-            self.drop_compute_sinks(drop_sinks).await;
-        }
+        let conn_meta = self
+            .active_conns
+            .get_mut(&session.conn_id())
+            .expect("must exist for active session");
+        let drop_sinks = std::mem::take(&mut conn_meta.drop_sinks);
+        self.drop_compute_sinks(drop_sinks).await;
 
         // Release this transaction's compaction hold on collections.
         if let Some(txn_reads) = self.txn_reads.remove(conn_id) {
