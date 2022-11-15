@@ -13,8 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
 from dbt.tests.adapter.concurrency.test_concurrency import TestConcurenncy
 
 
+@pytest.mark.skip(reason="temporarily skip")
 class TestConcurrencyMaterialize(TestConcurenncy):
     pass
