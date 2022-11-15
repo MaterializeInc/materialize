@@ -124,7 +124,13 @@ where
     fn rewrite_broker_addr(&self, addr: BrokerAddr) -> BrokerAddr {
         match self.overrides.get(&addr) {
             None => addr,
-            Some(o) => o.clone(),
+            Some(o) => {
+                info!(
+                    "rewriting broker {}:{} to {}:{}",
+                    addr.host, addr.port, o.host, o.port
+                );
+                o.clone()
+            }
         }
     }
 
