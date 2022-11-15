@@ -1,6 +1,6 @@
 ---
 title: "Window functions (OVER clause)"
-description: "Avoid window functions, e.g., use lateral joins as a streaming-efficient stand-in for many window functions."
+description: "How to efficiently handle queries that require window functions in Materialize."
 menu:
   main:
     parent: 'sql-patterns'
