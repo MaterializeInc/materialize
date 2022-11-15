@@ -105,14 +105,12 @@ pub unsafe fn all_build_ids(
                     return -1;
                 }
             }
+        } else if info.dlpi_name.is_null() {
+            None
         } else {
-            if info.dlpi_name.is_null() {
-                None
-            } else {
-                // SAFETY: `dl_iterate_phdr` documents this as being a null-terminated string.
-                let fname = unsafe { CStr::from_ptr(info.dlpi_name) };
-                Some(Path::new(OsStr::from_bytes(fname.to_bytes())).to_path_buf())
-            }
+            // SAFETY: `dl_iterate_phdr` documents this as being a null-terminated string.
+            let fname = unsafe { CStr::from_ptr(info.dlpi_name) };
+            Some(Path::new(OsStr::from_bytes(fname.to_bytes())).to_path_buf())
         };
         state.is_first = false;
         if let Some(fname) = fname {
