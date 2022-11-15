@@ -26,7 +26,7 @@
 {%- endmacro %}
 
 {% macro materialize__create_materialized_view_as(relation, sql) -%}
-  {%- set cluster = config.get('cluster', None) -%}
+  {%- set cluster = config.get('cluster', target.cluster) -%}
 
   create materialized view {{ relation }}
   {% if cluster %}
@@ -70,7 +70,7 @@
 
 {% macro materialize__get_create_index_sql(relation, index_dict) -%}
   {%- set index_config = adapter.parse_index(index_dict) -%}
-  {%- set cluster = index_config.cluster or config.get('cluster', None) -%}
+  {%- set cluster = index_config.cluster or config.get('cluster', target.cluster) -%}
     create
     {% if index_config.default -%}
       default
@@ -91,14 +91,6 @@
 
 -- In the dbt-adapter we extend the Relation class to include sinks and indexes
 {% macro materialize__list_relations_without_caching(schema_relation) %}
-
-  --TODO(morsapaes) Remove logging
-  {{ log("On cluster: " ~ target.cluster) }}
-
-  {%- set cluster = 'mz_introspection' -%}
-
-  {% do log(cluster) %}
-
   {% call statement('list_relations_without_caching', fetch_result=True) -%}
     select
         d.name as database,
@@ -111,15 +103,4 @@
     where type in ('table', 'source', 'view', 'materialized-view', 'index', 'sink')
   {% endcall %}
   {{ return(load_result('list_relations_without_caching').table) }}
-{% endmacro %}
-
-{% macro materialize__list_schemas(database) %}
-  {%- set cluster = 'mz_introspection' -%}
-  {% if database -%}
-    {{ adapter.verify_database(database) }}
-  {%- endif -%}
-  {% call statement('list_schemas', fetch_result=True, auto_begin=False) %}
-    select distinct name as nspname from mz_schemas
-  {% endcall %}
-  {{ return(load_result('list_schemas').table) }}
 {% endmacro %}

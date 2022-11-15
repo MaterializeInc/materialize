@@ -47,6 +47,7 @@ class MaterializeCredentials(PostgresCredentials):
             "retries",
         )
 
+
 class MaterializeConnectionManager(PostgresConnectionManager):
     TYPE = "materialize"
 
@@ -67,9 +68,13 @@ class MaterializeConnectionManager(PostgresConnectionManager):
                 f"  Supported versions: {SUPPORTED_MATERIALIZE_VERSIONS}"
             )
 
-        creds = connection.credentials
-        if creds.cluster:
-            cursor.execute("SET cluster = %s" % creds.cluster)
+        # Upon connection, dbt performs introspection queries that should run in
+        # the mz_introspection cluster for optimal performance. Each materialization
+        # should then handle falling back to the default connection cluster if no
+        # cluster configuration is specified at the model level.
+        mz_introspection_cluster = "mz_introspection"
+
+        cursor.execute("SET cluster = %s" % mz_introspection_cluster)
 
         return connection
 
