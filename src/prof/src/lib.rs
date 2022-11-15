@@ -66,6 +66,7 @@ pub unsafe fn all_build_ids(
     use std::os::unix::ffi::OsStrExt;
     use std::path::{Path, PathBuf};
 
+    use mz_ore::bits::align_up;
     use mz_ore::cast::CastFrom;
 
     use anyhow::Context;
@@ -140,20 +141,25 @@ pub unsafe fn all_build_ids(
                         let mut offset = usize::cast_from(ph.p_vaddr + info.dlpi_addr);
                         let orig_offset = offset;
 
-                        while offset + std::mem::size_of::<NoteHeader>() + 4
+                        const NT_GNU_BUILD_ID: Elf64_Word = 3;
+                        const GNU_NOTE_NAME: &[u8; 4] = b"GNU\0";
+                        const ELF_NOTE_STRING_ALIGN: usize = 4;
+
+                        while offset + std::mem::size_of::<NoteHeader>() + GNU_NOTE_NAME.len()
                             <= orig_offset + usize::cast_from(ph.p_memsz)
                         {
                             let nh = unsafe { (offset as *const NoteHeader).as_ref() }
                                 .expect("the program headers must be well-formed");
                             // from elf.h
-                            const NT_GNU_BUILD_ID: Elf64_Word = 3;
-                            if nh.n_type == NT_GNU_BUILD_ID && nh.n_descsz != 0 && nh.n_namesz == 4
+                            if nh.n_type == NT_GNU_BUILD_ID
+                                && nh.n_descsz != 0
+                                && usize::cast_from(nh.n_namesz) == GNU_NOTE_NAME.len()
                             {
                                 let p_name =
                                     (offset + std::mem::size_of::<NoteHeader>()) as *const [u8; 4];
                                 // SAFETY: since `n_namesz` is 4, the name is a four-byte value.
                                 let name = unsafe { p_name.as_ref() }.expect("this can't be null");
-                                if name == b"GNU\0" {
+                                if name == GNU_NOTE_NAME {
                                     // We found what we're looking for!
                                     let p_desc = (p_name as usize + 4) as *const u8;
                                     // SAFETY: This is the documented meaning of `n_descsz`.
@@ -167,17 +173,10 @@ pub unsafe fn all_build_ids(
                                     break 'outer;
                                 }
                             }
-                            const fn align_up<const N: usize>(p: usize) -> usize {
-                                if p % N == 0 {
-                                    p
-                                } else {
-                                    p + (N - (p % N))
-                                }
-                            }
                             offset = offset
                                 + std::mem::size_of::<NoteHeader>()
-                                + align_up::<4>(usize::cast_from(nh.n_namesz))
-                                + align_up::<4>(usize::cast_from(nh.n_descsz));
+                                + align_up::<ELF_NOTE_STRING_ALIGN>(usize::cast_from(nh.n_namesz))
+                                + align_up::<ELF_NOTE_STRING_ALIGN>(usize::cast_from(nh.n_descsz));
                         }
                     }
                 }
