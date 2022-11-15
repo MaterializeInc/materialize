@@ -19,7 +19,7 @@ h6 {
         border: none !important;
     }
 
-    & + & {
+    &+& {
         margin-top: var(--micro);
     }
 }
@@ -55,7 +55,7 @@ em {
     color: var(--sub);
 }
 
-p + p {
+p+p {
     margin-top: var(--milli);
 }
 
@@ -68,6 +68,7 @@ p + p {
     border-right: 1px solid var(--divider-light);
 
     a.anchorjs-link {
+
         &:hover,
         &:focus {
             text-decoration: none;
@@ -85,12 +86,12 @@ p + p {
     ol {
         list-style-position: inside;
 
-        li > p {
+        li>p {
             display: inline;
         }
     }
 
-    & > *:first-child {
+    &>*:first-child {
         margin-top: var(--small);
     }
 
@@ -116,25 +117,25 @@ p + p {
     }
 
     p,
-    ul > li:first-child > p:first-child {
+    ul>li:first-child>p:first-child {
         margin: 0;
     }
 
-    p + p,
-    p + ul,
-    ul + p,
+    p+p,
+    p+ul,
+    ul+p,
     ul p,
     ol p,
-    p + ol,
-    p + ol.has-p,
-    ol + p,
-    .highlight + p,
-    pre + p,
-    table + p {
+    p+ol,
+    p+ol.has-p,
+    ol+p,
+    .highlight+p,
+    pre+p,
+    table+p {
         margin-top: 1rem;
     }
 
-    p + table {
+    p+table {
         margin-top: 0.5rem;
     }
 
@@ -146,6 +147,7 @@ p + p {
     }
 
     a:not(a[class]) {
+
         &,
         strong {
             color: var(--link);
@@ -154,10 +156,10 @@ p + p {
             transition-delay: 50ms;
         }
 
-        &[href*="https://"]
-        {
+        &[href*="https://"] {
             text-decoration: none;
             border-bottom: 1px solid transparent;
+
             &::after {
                 content: "";
                 background-image: url("../images/icon_external_link.svg");
@@ -174,14 +176,15 @@ p + p {
 
         &:hover,
         &:focus {
+
             &,
             strong {
                 color: var(--important);
             }
 
             border-color: var(--important);
-            &[href*="https://"]
-            {
+
+            &[href*="https://"] {
                 &::after {
                     filter: none;
                 }
@@ -206,7 +209,7 @@ p + p {
             border-radius: inherit;
         }
 
-        div > :first-child {
+        div> :first-child {
             margin-top: 0;
         }
     }
@@ -214,7 +217,7 @@ p + p {
     .multilinkbox {
         margin: var(--small) 0;
 
-        & > div {
+        &>div {
             display: flex;
             justify-content: space-between;
             gap: var(--milli);
@@ -247,12 +250,15 @@ p + p {
         &.book::before {
             background-image: url("../images/icon_book.png");
         }
+
         &.bulb::before {
             background-image: url("../images/icon_bulb.png");
         }
+
         &.doc::before {
             background-image: url("../images/icon_doc.png");
         }
+
         &.touch::before {
             background-image: url("../images/icon_touch.png");
         }
@@ -350,7 +356,7 @@ p + p {
     // Merge a highlighted code block followed by a non-highlighted code block,
     // since this is a common pattern in our docs to indicate a (highlighted)
     // shell or SQL snippet followed by its (unhighlighted) output.
-    .highlight + pre {
+    .highlight+pre {
         border-top: 0;
         margin-top: -16px;
         padding-top: 0;
@@ -510,8 +516,8 @@ p + p {
         font-style: italic;
     }
 
-    .release-date + ul,
-    .release-date + ol {
+    .release-date+ul,
+    .release-date+ol {
         margin-top: 1.6rem;
         padding-left: 3.2rem;
     }
@@ -554,9 +560,11 @@ p + p {
         table-layout: fixed;
         width: 100%;
     }
+
     tr {
         border-style: hidden;
     }
+
     .helpful-vote {
         border: 3px solid $purple;
         color: $purple;
@@ -565,6 +573,7 @@ p + p {
         padding: 1.1rem 0;
         width: 100%;
     }
+
     #got-feedback {
         display: none;
     }
@@ -578,7 +587,6 @@ p + p {
         list-style: none;
         padding: 0;
         border-bottom: 1px solid #9c86e0;
-        background: var(--bg-sub);
 
         li {
             display: inline-block;
@@ -586,6 +594,7 @@ p + p {
             padding: 0;
             position: relative;
             bottom: -1px;
+            background: var(--gray-lightest);
 
             a {
                 color: var(--body);
@@ -678,7 +687,8 @@ p + p {
             background-color: #70f2a3;
         }
     }
-    td > .notify_button {
+
+    td>.notify_button {
         margin-top: 6px;
     }
 
@@ -798,6 +808,7 @@ p + p {
     top: 10px;
     right: 10px;
     line-height: 2;
+
     &.success {
         opacity: 0.8;
         background: #70f2a3;
@@ -838,17 +849,29 @@ body.dark .content {
     }
 
     a {
+
         &:hover,
         &:focus {
             code {
                 color: var(--important);
             }
 
-            &[href*="https://"]
-            {
+            &[href*="https://"] {
                 &::after {
                     filter: invert(100%);
                 }
+            }
+        }
+    }
+}
+
+body.dark {
+    .code-tabs .nav-tabs {
+        li {
+            background: var(--bg-sub);
+
+            &.active {
+                background: var(--bg);
             }
         }
     }
