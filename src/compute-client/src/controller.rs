@@ -29,7 +29,7 @@
 //! from compacting beyond the allowed compaction of each of its outputs, ensuring that we can
 //! recover each dataflow to its current state in case of failure or other reconfiguration.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::str::FromStr;
@@ -41,7 +41,7 @@ use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::BoxStream;
 use futures::{future, FutureExt, StreamExt};
-use mz_ore::soft_assert;
+use mz_ore::{halt, soft_assert};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, Timestamp};
@@ -61,7 +61,8 @@ use crate::service::{ComputeClient, ComputeGrpcClient};
 
 use self::error::{
     CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
-    InstanceExists, InstanceMissing, PeekError, ReplicaCreationError, ReplicaDropError,
+    InstanceExists, InstanceMissing, PeekError, RemoveOrphansError, ReplicaCreationError,
+    ReplicaDropError,
 };
 use self::instance::{ActiveInstance, Instance};
 use self::orchestrator::ComputeOrchestrator;
@@ -335,6 +336,39 @@ impl<T> ComputeController<T> {
             compute: self,
             storage,
         }
+    }
+
+    /// Remove orphaned compute replicas from the orchestrator. These are replicas that the
+    /// orchestrator is aware of, but not the controller.
+    pub async fn remove_orphans(
+        &self,
+        next_replica_id: ReplicaId,
+    ) -> Result<(), RemoveOrphansError> {
+        let keep: HashSet<_> = self
+            .instances
+            .iter()
+            .flat_map(|(_, inst)| inst.replica_ids())
+            .collect();
+
+        let current: HashSet<_> = self.orchestrator.list_replicas().await?.collect();
+
+        for (inst_id, replica_id) in current.into_iter() {
+            if replica_id >= next_replica_id {
+                // Found a replica in kubernetes with a higher replica id than what we are aware
+                // of. This must have been created by an environmentd with higher epoch number.
+                halt!(
+                    "Found replica id ({}) in orchestrator >= next id ({})",
+                    replica_id,
+                    next_replica_id
+                );
+            }
+
+            if !keep.contains(&replica_id) {
+                self.orchestrator.drop_replica(inst_id, replica_id).await?;
+            }
+        }
+
+        Ok(())
     }
 }
 

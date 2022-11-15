@@ -838,6 +838,24 @@ impl<S: Append> Connection<S> {
         Ok(GlobalId::User(id))
     }
 
+    /// Get the next replica id without allocating it.
+    pub async fn get_next_replica_id(&mut self) -> Result<ReplicaId, Error> {
+        self.get_next_id(REPLICA_ID_ALLOC_KEY).await
+    }
+
+    async fn get_next_id(&mut self, id_type: &str) -> Result<u64, Error> {
+        COLLECTION_ID_ALLOC
+            .peek_key_one(
+                &mut self.stash,
+                &IdAllocKey {
+                    name: id_type.to_string(),
+                },
+            )
+            .await
+            .map(|x| x.expect("must exist").next_id)
+            .map_err(Into::into)
+    }
+
     #[tracing::instrument(level = "debug", skip(self))]
     async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, Error> {
         if amount == 0 {
