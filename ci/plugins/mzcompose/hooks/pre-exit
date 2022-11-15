@@ -20,6 +20,9 @@ run() {
 run logs --no-color > services.log
 buildkite-agent artifact upload services.log
 
-run kill
+# docker-compose kill may fail attempting to kill containers
+# that have just exited on their own because of the
+# "shared-fate" mechanism employed by Mz clusters
+run kill || true
 run rm --force -v
 run down --volumes
