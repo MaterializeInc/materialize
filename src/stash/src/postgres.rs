@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::marker::PhantomData;
+use std::num::NonZeroI64;
 use std::sync::{Arc, Mutex};
 use std::{cmp, time::Duration};
 
@@ -45,6 +46,7 @@ CREATE TABLE fence (
     epoch bigint PRIMARY KEY,
     nonce bytea
 );
+-- Epochs are guaranteed to be non-zero, so start counting at 1
 INSERT INTO fence VALUES (1, '');
 
 -- bigserial is not ideal for Cockroach, but we have a stable number of
@@ -361,7 +363,7 @@ pub struct Postgres {
     client: Option<Client>,
     is_cockroach: Option<bool>,
     statements: Option<PreparedStatements>,
-    epoch: Option<i64>,
+    epoch: Option<NonZeroI64>,
     nonce: [u8; 16],
     sinces_tx: mpsc::UnboundedSender<(Id, Antichain<Timestamp>)>,
     metrics: Arc<Metrics>,
@@ -473,17 +475,18 @@ impl Postgres {
             // current epoch has been bumped exactly once, then gets recreated by another
             // connection that also bumps it once).
             let epoch = if matches!(self.txn_mode, TransactionMode::Writeable) {
-                tx.query_one(
-                    "UPDATE fence SET epoch=epoch+1, nonce=$1 RETURNING epoch",
-                    &[&self.nonce.to_vec()],
-                )
-                .await?
-                .get(0)
+                let row = tx
+                    .query_one(
+                        "UPDATE fence SET epoch=epoch+1, nonce=$1 RETURNING epoch",
+                        &[&self.nonce.to_vec()],
+                    )
+                    .await?;
+                NonZeroI64::new(row.get(0)).unwrap()
             } else {
                 let row = tx.query_one("SELECT epoch, nonce FROM fence", &[]).await?;
                 let nonce: &[u8] = row.get(1);
                 self.nonce = nonce.try_into().map_err(|_| "could not read nonce")?;
-                row.get(0)
+                NonZeroI64::new(row.get(0)).unwrap()
             };
 
             let version: String = tx.query_one("SELECT version()", &[]).await?.get(0);
@@ -641,7 +644,7 @@ impl Postgres {
             .map_err(|err| err.into());
         let f_fut = f(&stmts, client);
         let (row, res) = future::try_join(epoch_fut, f_fut).await?;
-        let current_epoch: i64 = row.get(0);
+        let current_epoch = NonZeroI64::new(row.get(0)).unwrap();
         if Some(current_epoch) != self.epoch {
             return Err(InternalStashError::Fence(format!(
                 "unexpected fence epoch {}, expected {:?}",
@@ -1141,7 +1144,7 @@ impl Stash for Postgres {
         self.transact(|_, _| Box::pin(async { Ok(()) })).await
     }
 
-    fn epoch(&self) -> Option<i64> {
+    fn epoch(&self) -> Option<NonZeroI64> {
         self.epoch
     }
 }

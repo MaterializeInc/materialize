@@ -32,7 +32,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroI64, NonZeroUsize};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -332,7 +332,7 @@ pub struct ComputeController<T> {
     /// Times we have last received responses from replicas.
     replica_heartbeats: BTreeMap<ReplicaId, DateTime<Utc>>,
     /// A number that increases on every `environmentd` restart.
-    envd_epoch: i64,
+    envd_epoch: NonZeroI64,
 }
 
 impl<T> ComputeController<T> {
@@ -342,7 +342,7 @@ impl<T> ComputeController<T> {
         orchestrator: Arc<dyn NamespacedOrchestrator>,
         computed_image: String,
         init_container_image: Option<String>,
-        envd_epoch: i64,
+        envd_epoch: NonZeroI64,
     ) -> Self {
         Self {
             instances: BTreeMap::new(),

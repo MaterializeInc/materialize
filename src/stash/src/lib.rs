@@ -16,6 +16,7 @@ use std::fmt::{self, Debug};
 use std::hash::Hash;
 use std::iter;
 use std::marker::PhantomData;
+use std::num::NonZeroI64;
 
 use async_trait::async_trait;
 use mz_ore::soft_assert;
@@ -395,7 +396,7 @@ pub trait Stash: std::fmt::Debug + Send {
 
     /// Returns the stash's epoch number. If `Some`, it is a number that
     /// increases with each start of a stash.
-    fn epoch(&self) -> Option<i64>;
+    fn epoch(&self) -> Option<NonZeroI64>;
 }
 
 /// `StashCollection` is like a differential dataflow [`Collection`], but the

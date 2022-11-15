@@ -10,6 +10,7 @@
 //! Durable metadata storage.
 
 use std::marker::PhantomData;
+use std::num::NonZeroI64;
 use std::path::Path;
 use std::{cmp, collections::BTreeSet};
 
@@ -508,7 +509,7 @@ impl Stash for Sqlite {
         Ok(())
     }
 
-    fn epoch(&self) -> Option<i64> {
+    fn epoch(&self) -> Option<NonZeroI64> {
         None
     }
 }

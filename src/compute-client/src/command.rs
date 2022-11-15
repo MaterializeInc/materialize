@@ -14,6 +14,7 @@
 //! Compute layer commands.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroI64;
 
 use proptest::prelude::{any, Arbitrary, Just};
 use proptest::prop_oneof;
@@ -146,7 +147,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                 } => CreateTimely(ProtoCreateTimely {
                     comm_config: Some(comm_config.into_proto()),
                     epoch: Some(ProtoComputeStartupEpoch {
-                        envd: envd.into_proto(),
+                        envd: envd.get().into_proto(),
                         replica: replica.into_proto(),
                     }),
                 }),
@@ -240,7 +241,7 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
 /// another in-memory and local to the current incarnation of environmentd)
 #[derive(PartialEq, Eq, Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct ComputeStartupEpoch {
-    envd: i64,
+    envd: NonZeroI64,
     replica: u64,
 }
 
@@ -248,19 +249,22 @@ impl RustType<ProtoComputeStartupEpoch> for ComputeStartupEpoch {
     fn into_proto(&self) -> ProtoComputeStartupEpoch {
         let Self { envd, replica } = self;
         ProtoComputeStartupEpoch {
-            envd: *envd,
+            envd: envd.get(),
             replica: *replica,
         }
     }
 
     fn from_proto(proto: ProtoComputeStartupEpoch) -> Result<Self, TryFromProtoError> {
         let ProtoComputeStartupEpoch { envd, replica } = proto;
-        Ok(Self { envd, replica })
+        Ok(Self {
+            envd: envd.try_into().unwrap(),
+            replica,
+        })
     }
 }
 
 impl ComputeStartupEpoch {
-    pub fn new(envd: i64, replica: u64) -> Self {
+    pub fn new(envd: NonZeroI64, replica: u64) -> Self {
         Self { envd, replica }
     }
 
@@ -269,7 +273,7 @@ impl ComputeStartupEpoch {
         let mut ret = [0; 16];
         let mut p = &mut ret[..];
         use std::io::Write;
-        p.write_all(&self.envd.to_be_bytes()[..]).unwrap();
+        p.write_all(&self.envd.get().to_be_bytes()[..]).unwrap();
         p.write_all(&self.replica.to_be_bytes()[..]).unwrap();
         ret
     }
@@ -278,7 +282,10 @@ impl ComputeStartupEpoch {
     pub fn from_bytes(bytes: [u8; 16]) -> Self {
         let envd = i64::from_be_bytes((&bytes[0..8]).try_into().unwrap());
         let replica = u64::from_be_bytes((&bytes[8..16]).try_into().unwrap());
-        Self { envd, replica }
+        Self {
+            envd: envd.try_into().unwrap(),
+            replica,
+        }
     }
 }
 
