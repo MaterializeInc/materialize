@@ -381,10 +381,6 @@ where
             .get_mut(&id)
             .ok_or(ReplicaDropError::ReplicaMissing(id))?;
 
-        if let Err(e) = replica.send(ComputeCommand::DropInstance) {
-            tracing::warn!("Could not send DropInstance to replica {:?}: {}", &id, &e)
-        }
-
         // If the replica is managed we have to remove it from the orchestrator. We spawn
         // a background task that waits until the termination of the message handler task and
         // then removes it from the orchestrator.

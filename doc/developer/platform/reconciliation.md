@@ -49,7 +49,6 @@ The command protocol exposes the following verbs to communicate state updates fr
 For each, we describe the associated action applied by CR.
 * `CreateInstance`: If the instance is unknown, remember it and forward the command.
   Start tracking the frontiers of the logging dataflows if enabled.
-* `DropInstance`: Forget the instance, stop tracking all associated frontiers.
 * `CreateDataflows`: For each dataflow, start tracking the frontiers of all items it exports.
   Lookup existing dataflow by its `GlobalId` (see [Quirks](#quirks)), and remember the dataflow if it is new.
   If the identifier is bound, assert that the existing dataflow is compatible with the new definition.

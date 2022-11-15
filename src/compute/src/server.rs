@@ -94,7 +94,7 @@ pub struct TimelyContainer {
         )>,
     >,
     /// Thread guards that keep worker threads alive
-    worker_guards: WorkerGuards<()>,
+    _worker_guards: WorkerGuards<()>,
 }
 
 /// Threadsafe reference to an optional TimelyContainer
@@ -197,7 +197,7 @@ impl ClusterClient<PartitionedClient> {
         Ok(TimelyContainer {
             comm_config,
             client_txs,
-            worker_guards,
+            _worker_guards: worker_guards,
         })
     }
 
@@ -301,19 +301,6 @@ impl GenericClient<ComputeCommand, ComputeResponse> for ClusterClient<Partitione
         match cmd {
             ComputeCommand::CreateTimely { comm_config, epoch } => {
                 self.build(comm_config, epoch).await
-            }
-            ComputeCommand::DropInstance => {
-                self.inner.as_mut().expect("intialized").send(cmd).await?;
-                self.inner = None;
-                let _ = self
-                    .timely_container
-                    .lock()
-                    .await
-                    .take()
-                    .expect("Running instance") // Maybe better to send an error back in this case?
-                    .worker_guards
-                    .join();
-                Ok(())
             }
             _ => self.inner.as_mut().expect("intialized").send(cmd).await,
         }
@@ -608,7 +595,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
     }
 
     fn handle_command(&mut self, response_tx: &mut ResponseSender, cmd: ComputeCommand) {
-        let mut should_drop_compute = false;
         match &cmd {
             ComputeCommand::CreateInstance(config) => {
                 self.compute_state = Some(ComputeState {
@@ -631,17 +617,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     metrics: self.compute_metrics.clone(),
                 });
             }
-            ComputeCommand::DropInstance => {
-                should_drop_compute = true;
-            }
             _ => (),
         }
         self.activate_compute(response_tx)
             .unwrap()
             .handle_compute_command(cmd);
-        if should_drop_compute {
-            self.compute_state = None;
-        }
     }
 
     fn activate_compute<'a>(
@@ -702,7 +682,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let mut retain_ids = BTreeSet::default();
 
         // We only have a compute history if we are in an initialized state
-        // e.g. before a `CreateInstance` or after a `DropInstance`).
+        // (i.e. after a `CreateInstance`).
         // If this is not the case, just copy `new_commands` into `todo_commands`.
         if let Some(compute_state) = &mut self.compute_state {
             // Reduce the installed commands.
