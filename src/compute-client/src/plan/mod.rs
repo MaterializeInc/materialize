@@ -1127,8 +1127,14 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                         );
                         (JoinPlan::Linear(ljp), missing)
                     }
-                    Differential((start, _start_arr), order) => {
-                        let source_arrangement = input_keys[*start].arbitrary_arrangement();
+                    Differential((start, start_arr), order) => {
+                        let source_arrangement = start_arr.as_ref().and_then(|key| {
+                            input_keys[*start]
+                                .arranged
+                                .iter()
+                                .find(|(k, _, _)| k == key)
+                                .clone()
+                        });
                         let (ljp, missing) = LinearJoinPlan::create_from(
                             *start,
                             source_arrangement,
