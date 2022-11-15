@@ -15,7 +15,7 @@ By "window functions", this page does _not_ refer to temporal windows, but inste
 
 ## Example data
 
-We use the following table as input for later examples queries on this page:
+Let's use the following sample data as input for examples:
 
 ```sql
 CREATE TABLE cities (
