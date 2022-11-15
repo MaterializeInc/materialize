@@ -425,10 +425,9 @@ where
             std::mem::drop(persist_clients);
 
             persist_client
-                .open_leased_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(data_shard)
-                .await
-                .expect("could not open persist shard")
-                .batch_fetcher()
+                .create_batch_fetcher::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(
+                    data_shard,
+                )
                 .await
         };
 
