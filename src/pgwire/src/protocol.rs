@@ -326,6 +326,7 @@ where
         let message = select! {
             biased;
 
+            // `recv_timeout()` is cancel-safe as per it's docs.
             Some(timeout) = self.adapter_client.as_mut().expect(Self::ADAPTER_CLIENT_INVARIANT).recv_timeout() =>
             {
                 let error_response = ErrorResponse::from_adapter_error(Severity::Fatal, timeout.into());
@@ -337,6 +338,7 @@ where
                 let _ = self.conn.recv().await?;
                 return self.error(error_response).await;
             },
+            // `recv()` is cancel-safe as per it's docs.
             message = self.conn.recv() => message?,
         };
 
