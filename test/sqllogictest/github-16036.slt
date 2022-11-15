@@ -1,0 +1,81 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/16036
+mode cockroach
+
+statement ok
+CREATE TABLE t1 (v1 TEXT, k1 INTEGER, k2 INTEGER);
+
+statement ok
+CREATE TABLE t2 (v2 TEXT, k1 INTEGER);
+
+statement ok
+CREATE TABLE t3 (v3 TEXT, k2 INTEGER);
+
+statement ok
+CREATE INDEX i1 ON t1 (k1);
+
+statement ok
+CREATE INDEX i2 ON t2 (k1);
+
+statement ok
+CREATE INDEX i3 ON t3 (k2);
+
+statement ok
+CREATE VIEW test AS SELECT v1, v2, v3 FROM t1, t2, t3 where t1.k1 = t2.k1 and t1.k2 = t3.k2;
+
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR SELECT * FROM test;
+----
+Explained Query:
+  Join::Linear
+    linear_stage[1]
+      closure
+        project=(#1..=#3)
+      lookup={ relation=2, key=[#1] }
+      stream={ key=[#1], thinning=(#0, #2) }
+    linear_stage[0]
+      closure
+        project=(#2, #3, #1)
+        filter=((#0) IS NOT NULL AND (#3) IS NOT NULL)
+      lookup={ relation=0, key=[#1] }
+      stream={ key=[#1], thinning=(#0) }
+    source={ relation=1, key=[#1] }
+    ArrangeBy
+      input_key=[#1]
+      project=(#1, #0, #2)
+      raw=false
+      arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0, #2) }
+      Get::PassArrangements materialize.public.t1
+        raw=false
+        arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0, #2) }
+    ArrangeBy
+      input_key=[#1]
+      project=(#1, #0)
+      raw=false
+      arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+      Get::PassArrangements materialize.public.t2
+        raw=false
+        arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+    ArrangeBy
+      input_key=[#1]
+      project=(#1, #0)
+      raw=false
+      arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+      Get::PassArrangements materialize.public.t3
+        raw=false
+        arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+
+Used Indexes:
+  - materialize.public.i1
+  - materialize.public.i2
+  - materialize.public.i3
+
+EOF
