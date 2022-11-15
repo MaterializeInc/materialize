@@ -3674,6 +3674,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "clap",
+ "fail",
  "futures",
  "k8s-openapi",
  "kube",

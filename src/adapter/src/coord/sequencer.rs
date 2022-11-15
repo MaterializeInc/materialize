@@ -1799,6 +1799,8 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await?;
 
+        fail::fail_point!("after_catalog_drop_replica");
+
         for (compute_id, replica_id) in replicas_to_drop {
             self.drop_replica(compute_id, replica_id).await.unwrap();
         }

@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import pytest
+from pg8000.exceptions import InterfaceError
+
 from materialize.cloudtest.application import MaterializeApplication
 from materialize.cloudtest.exists import exists, not_exists
 from materialize.cloudtest.wait import wait
@@ -38,8 +41,18 @@ def test_computed_sizing(mz: MaterializeApplication) -> None:
     mz.environmentd.sql("DROP CLUSTER sized1 CASCADE")
 
 
-def test_computed_shutdown(mz: MaterializeApplication) -> None:
+@pytest.mark.parametrize("failpoint", [False, True])
+def test_computed_shutdown(mz: MaterializeApplication, failpoint: bool) -> None:
     """Test that dropping a cluster or replica causes the associated computeds to shut down."""
+
+    if failpoint:
+        mz.set_environmentd_failpoints("after_catalog_drop_replica=panic")
+
+    def sql_ignore_crash(sql: str) -> None:
+        try:
+            mz.environmentd.sql(sql)
+        except InterfaceError:
+            pass
 
     mz.environmentd.sql(
         "CREATE CLUSTER shutdown1 REPLICAS (shutdown_replica1 (SIZE '1'), shutdown_replica2 (SIZE '1'))"
@@ -66,10 +79,13 @@ def test_computed_shutdown(mz: MaterializeApplication) -> None:
         compute_svcs[replica_name] = compute_svc
         exists(resource=compute_svc)
 
-    mz.environmentd.sql("DROP CLUSTER REPLICA shutdown1.shutdown_replica1")
+    sql_ignore_crash("DROP CLUSTER REPLICA shutdown1.shutdown_replica1")
     wait(condition="delete", resource=compute_pods["shutdown_replica1"])
     not_exists(resource=compute_svcs["shutdown_replica1"])
 
-    mz.environmentd.sql("DROP CLUSTER shutdown1 CASCADE")
+    sql_ignore_crash("DROP CLUSTER shutdown1 CASCADE")
     wait(condition="delete", resource=compute_pods["shutdown_replica2"])
     not_exists(resource=compute_svcs["shutdown_replica2"])
+
+    if failpoint:
+        mz.set_environmentd_failpoints("")
