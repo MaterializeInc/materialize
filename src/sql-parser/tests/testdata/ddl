@@ -1544,6 +1544,13 @@ CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') 
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("mz_source")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], subsources: Some(All) })
 
 parse-statement
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (TEXT COLUMNS = [foo, foo.bar, foo.bar.qux, foo.bar.qux.qax, foo.bar.qux.qax.baz]) FOR ALL TABLES WITH (SIZE = 'small');
+----
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (TEXT COLUMNS = (foo, foo.bar, foo.bar.qux, foo.bar.qux.qax, foo.bar.qux.qax.baz)) FOR ALL TABLES WITH (SIZE = 'small')
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("mz_source")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pg")])), options: [PgConfigOption { name: TextColumns, value: Some(Sequence([UnresolvedObjectName(UnresolvedObjectName([Ident("foo")])), UnresolvedObjectName(UnresolvedObjectName([Ident("foo"), Ident("bar")])), UnresolvedObjectName(UnresolvedObjectName([Ident("foo"), Ident("bar"), Ident("qux")])), UnresolvedObjectName(UnresolvedObjectName([Ident("foo"), Ident("bar"), Ident("qux"), Ident("qax")])), UnresolvedObjectName(UnresolvedObjectName([Ident("foo"), Ident("bar"), Ident("qux"), Ident("qax"), Ident("baz")]))])) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], subsources: Some(All) })
+
+parse-statement
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES (foo, bar as qux, baz into zop) WITH (SIZE = 'small');
 ----
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR TABLES (foo, bar AS qux, baz AS zop) WITH (SIZE = 'small')

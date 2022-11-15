@@ -11,13 +11,13 @@
 //!
 //! See the [crate-level documentation](crate) for details.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::iter;
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
-use itertools::Itertools;
+use mz_repr::adt::system::Oid;
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
@@ -32,6 +32,7 @@ use mz_ore::str::StrExt;
 use mz_proto::RustType;
 use mz_repr::{strconv, GlobalId};
 use mz_secrets::SecretsReader;
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     ColumnDef, ColumnOption, ColumnOptionDef, CsrConnection, CsrSeedAvro, CsrSeedProtobuf,
     CsrSeedProtobufSchema, DbzMode, DeferredObjectName, Envelope, Ident, KafkaConfigOption,
@@ -40,14 +41,14 @@ use mz_sql_parser::ast::{
 };
 use mz_storage_client::types::connections::aws::AwsConfig;
 use mz_storage_client::types::connections::{Connection, ConnectionContext};
-use mz_storage_client::types::sources::PostgresSourceDetails;
+use mz_storage_client::types::sources::PostgresSourcePublicationDetails;
 
 use crate::ast::{
     AvroSchema, CreateReferencedSubsources, CreateSourceConnection, CreateSourceFormat,
     CreateSourceStatement, CreateSourceSubsource, CreateSubsourceStatement, CsrConnectionAvro,
     CsrConnectionProtobuf, CsvColumns, Format, ProtobufSchema, Value, WithOptionValue,
 };
-use crate::catalog::SessionCatalog;
+use crate::catalog::{ErsatzCatalog, SessionCatalog};
 use crate::kafka_util;
 use crate::kafka_util::KafkaConfigOptionExtracted;
 use crate::names::{Aug, RawDatabaseSpecifier, ResolvedObjectName};
@@ -58,13 +59,11 @@ use crate::plan::StatementContext;
 
 fn subsource_gen<'a, T>(
     selected_subsources: &mut Vec<CreateSourceSubsource<Aug>>,
-    tables_by_name: HashMap<String, HashMap<String, HashMap<String, &'a T>>>,
+    catalog: &ErsatzCatalog<'a, T>,
 ) -> Result<Vec<(UnresolvedObjectName, UnresolvedObjectName, &'a T)>, PlanError> {
     let mut validated_requested_subsources = vec![];
 
     for subsource in selected_subsources {
-        let upstream_name = normalize::unresolved_object_name(subsource.reference.clone())?;
-
         let subsource_name = match &subsource.subsource {
             Some(name) => match name {
                 DeferredObjectName::Deferred(name) => name.clone(),
@@ -76,49 +75,14 @@ fn subsource_gen<'a, T>(
                 // Use the entered name as the upstream reference, and then use
                 // the item as the subsource name to ensure it's created in the
                 // current schema, not mirroring the schema of the reference.
-                UnresolvedObjectName::unqualified(&upstream_name.item)
+                UnresolvedObjectName::unqualified(
+                    &normalize::unresolved_object_name(subsource.reference.clone())?.item,
+                )
             }
         };
 
-        let schemas = match tables_by_name.get(&upstream_name.item) {
-            Some(schemas) => schemas,
-            None => sql_bail!("table {upstream_name} not found in source"),
-        };
+        let (qualified_upstream_name, desc) = catalog.resolve(subsource.reference.clone())?;
 
-        let schema = match &upstream_name.schema {
-            Some(schema) => schema,
-            None => match schemas.keys().exactly_one() {
-                Ok(schema) => schema,
-                Err(_) => {
-                    sql_bail!("table {upstream_name} is ambiguous, consider specifying the schema")
-                }
-            },
-        };
-
-        let databases = match schemas.get(schema) {
-            Some(databases) => databases,
-            None => sql_bail!("schema {schema} not found in source"),
-        };
-
-        let database = match &upstream_name.database {
-            Some(database) => database,
-            None => match databases.keys().exactly_one() {
-                Ok(database) => database,
-                Err(_) => {
-                    sql_bail!(
-                        "table {upstream_name} is ambiguous, consider specifying the database"
-                    )
-                }
-            },
-        };
-
-        let desc = match databases.get(database) {
-            Some(desc) => *desc,
-            None => sql_bail!("database {database} not found source"),
-        };
-
-        let qualified_upstream_name =
-            UnresolvedObjectName::qualified(&[database, schema, &upstream_name.item]);
         validated_requested_subsources.push((qualified_upstream_name, subsource_name, desc));
     }
 
@@ -285,8 +249,11 @@ pub async fn purify_create_source(
                     _ => sql_bail!("{} is not a postgres connection", item.name()),
                 }
             };
-            let crate::plan::statement::PgConfigOptionExtracted { publication, .. } =
-                options.clone().try_into()?;
+            let crate::plan::statement::PgConfigOptionExtracted {
+                publication,
+                mut text_columns,
+                ..
+            } = options.clone().try_into()?;
             let publication = publication
                 .ok_or_else(|| sql_err!("POSTGRES CONNECTION must specify PUBLICATION"))?;
 
@@ -294,18 +261,32 @@ pub async fn purify_create_source(
             let config = connection
                 .config(&*connection_context.secrets_reader)
                 .await?;
-            let tables = mz_postgres_util::publication_info(&config, &publication)
+            let publication_tables = mz_postgres_util::publication_info(&config, &publication)
                 .await
                 .map_err(|cause| PlanError::FetchingPostgresPublicationInfoFailed {
                     cause: Arc::new(cause),
                 })?;
+
+            // An index from table name -> schema name -> database name -> PostgresTableDesc
+            let mut tables_by_name = HashMap::new();
+            for table in &publication_tables {
+                tables_by_name
+                    .entry(table.name.clone())
+                    .or_insert_with(HashMap::new)
+                    .entry(table.namespace.clone())
+                    .or_insert_with(HashMap::new)
+                    .entry(connection.database.clone())
+                    .or_insert(table);
+            }
+
+            let publication_catalog = ErsatzCatalog(tables_by_name);
 
             let mut targeted_subsources = vec![];
 
             let mut validated_requested_subsources = vec![];
             match requested_subsources {
                 Some(CreateReferencedSubsources::All) => {
-                    for table in &tables {
+                    for table in &publication_tables {
                         let upstream_name = UnresolvedObjectName::qualified(&[
                             &connection.database,
                             &table.namespace,
@@ -321,7 +302,7 @@ pub async fn purify_create_source(
 
                     // An index from table name -> schema name -> database name -> PostgresTableDesc
                     let mut tables_by_name = HashMap::new();
-                    for table in &tables {
+                    for table in &publication_tables {
                         tables_by_name
                             .entry(table.name.clone())
                             .or_insert_with(HashMap::new)
@@ -332,10 +313,82 @@ pub async fn purify_create_source(
                     }
 
                     validated_requested_subsources
-                        .extend(subsource_gen(subsources, tables_by_name)?);
+                        .extend(subsource_gen(subsources, &publication_catalog)?);
                 }
                 None => {}
             };
+
+            let mut text_cols_dict: HashMap<u32, HashSet<String>> = HashMap::new();
+
+            for name in text_columns.iter_mut() {
+                let (qual, col) = match name.0.split_last().expect("must have at least one element")
+                {
+                    (col, qual) if qual.is_empty() => {
+                        return Err(PlanError::InvalidOptionValue {
+                            option_name: PgConfigOptionName::TextColumns.to_ast_string(),
+                            err: Box::new(PlanError::UnderqualifiedColumnName(
+                                col.as_str().to_string(),
+                            )),
+                        });
+                    }
+                    (col, qual) => (qual.to_vec(), col.as_str().to_string()),
+                };
+
+                let qual_name = UnresolvedObjectName(qual);
+
+                let (mut fully_qualified_name, desc) = publication_catalog
+                    .resolve(qual_name)
+                    .map_err(|e| PlanError::InvalidOptionValue {
+                        option_name: PgConfigOptionName::TextColumns.to_ast_string(),
+                        err: Box::new(e),
+                    })?;
+
+                if !desc.columns.iter().any(|column| column.name == col) {
+                    return Err(PlanError::InvalidOptionValue {
+                        option_name: PgConfigOptionName::TextColumns.to_ast_string(),
+                        err: Box::new(PlanError::UnknownColumn {
+                            table: Some(
+                                normalize::unresolved_object_name(fully_qualified_name)
+                                    .expect("known to be of valid len"),
+                            ),
+                            column: mz_repr::ColumnName::from(col),
+                        }),
+                    });
+                }
+
+                // Rewrite fully qualified name.
+                fully_qualified_name.0.push(col.as_str().to_string().into());
+                *name = fully_qualified_name;
+
+                let new = text_cols_dict
+                    .entry(desc.oid)
+                    .or_default()
+                    .insert(col.as_str().to_string());
+
+                if !new {
+                    return Err(PlanError::InvalidOptionValue {
+                        option_name: PgConfigOptionName::TextColumns.to_ast_string(),
+                        err: Box::new(PlanError::UnexpectedDuplicateReference {
+                            name: name.clone(),
+                        }),
+                    });
+                }
+            }
+
+            // Normalize options to contain full qualified values.
+            if let Some(text_cols_option) = options
+                .iter_mut()
+                .find(|option| option.name == PgConfigOptionName::TextColumns)
+            {
+                let seq = text_columns
+                    .into_iter()
+                    .map(WithOptionValue::UnresolvedObjectName)
+                    .collect();
+                text_cols_option.value = Some(WithOptionValue::Sequence(seq));
+            }
+
+            // Aggregate all unrecognized types.
+            let mut unsupported_cols = vec![];
 
             // Now that we have an explicit list of validated requested subsources we can create them
             for (i, (upstream_name, subsource_name, table)) in
@@ -345,13 +398,22 @@ pub async fn purify_create_source(
                 let mut columns = vec![];
                 for c in table.columns.iter() {
                     let name = Ident::new(c.name.clone());
-                    let ty = mz_pgrepr::Type::from_oid_and_typmod(c.type_oid, c.type_mod).map_err(
-                        |e| PlanError::UnrecognizedTypeInPostgresSource {
-                            table: subsource_name.to_string(),
-                            column: name.to_string(),
-                            e,
+                    let ty = match text_cols_dict.get(&table.oid) {
+                        Some(names) if names.contains(&c.name) => mz_pgrepr::Type::Text,
+                        _ => match mz_pgrepr::Type::from_oid_and_typmod(c.type_oid, c.type_mod) {
+                            Ok(t) => t,
+                            Err(_) => {
+                                let mut full_name = upstream_name.0.clone();
+                                full_name.push(name);
+                                unsupported_cols.push((
+                                    UnresolvedObjectName(full_name).to_ast_string(),
+                                    Oid(c.type_oid),
+                                ));
+                                continue;
+                            }
                         },
-                    )?;
+                    };
+
                     let data_type = scx.resolve_type(ty)?;
 
                     columns.push(ColumnDef {
@@ -396,12 +458,19 @@ pub async fn purify_create_source(
                 };
                 subsources.push((transient_id, subsource));
             }
+
+            if !unsupported_cols.is_empty() {
+                return Err(PlanError::UnrecognizedTypeInPostgresSource {
+                    cols: unsupported_cols,
+                });
+            }
+
             *requested_subsources = Some(CreateReferencedSubsources::Subset(targeted_subsources));
 
             // Remove any old detail references
             options.retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
-            let details = PostgresSourceDetails {
-                tables,
+            let details = PostgresSourcePublicationDetails {
+                tables: publication_tables,
                 slot: format!(
                     "materialize_{}",
                     Uuid::new_v4().to_string().replace('-', "")
@@ -463,8 +532,10 @@ pub async fn purify_create_source(
                             .or_insert(desc);
                     }
 
-                    validated_requested_subsources
-                        .extend(subsource_gen(selected_subsources, tables_by_name)?);
+                    validated_requested_subsources.extend(subsource_gen(
+                        selected_subsources,
+                        &ErsatzCatalog(tables_by_name),
+                    )?);
                 }
                 None => {
                     if available_subsources.is_some() {

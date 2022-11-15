@@ -10,6 +10,7 @@ publish = false
 anyhow = "1.0.65"
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-ore = { path = "../ore", features = ["task"] }
+mz-pgrepr = { path = "../pgrepr" }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-ssh-util = { path = "../ssh-util" }

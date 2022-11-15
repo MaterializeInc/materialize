@@ -8,17 +8,16 @@
 # by the Apache License, Version 2.0.
 
 #
-# Test the ENUM data type
+# MONEY data type supported only as TEXT
 #
 
-> CREATE SECRET pgpass AS 'password'
+> CREATE SECRET pgpass AS 'postgres'
 > CREATE CONNECTION pg TO POSTGRES (
     HOST postgres,
     DATABASE postgres,
     USER postgres,
     PASSWORD SECRET pgpass
   )
-
 
 # Insert data pre-snapshot
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -28,28 +27,29 @@ DROP PUBLICATION IF EXISTS mz_source;
 
 CREATE SCHEMA public;
 
-CREATE TYPE enum1 AS ENUM ('val1', 'val2');
-CREATE TABLE enum_type ( f1 enum1);
-INSERT INTO enum_type VALUES ('val1'), ('val2');
+CREATE TABLE t1 (f1 MONEY);
+ALTER TABLE t1 REPLICA IDENTITY FULL;
+
+INSERT INTO t1 VALUES (-92233720368547758.08), (+92233720368547758.07);
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres' (PUBLICATION 'mz_source')
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source', TEXT COLUMNS (t1.f1))
   FOR ALL TABLES;
 
-> SELECT COUNT(*) > 0 FROM enum_type;
+> SELECT COUNT(*) > 0 FROM t1;
 true
 
 # Insert the same data post-snapshot
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-INSERT INTO enum_type SELECT * FROM enum_type;
+INSERT INTO t1 SELECT * FROM t1;
 
-> SELECT pg_typeof(f1) FROM enum_type LIMIT 1;
-text
+> SELECT pg_typeof(f1) FROM t1 LIMIT 1;
+"text"
 
-> SELECT * FROM enum_type;
-val1
-val1
-val2
-val2
+> SELECT * FROM t1;
+"$92,233,720,368,547,758.07"
+"$92,233,720,368,547,758.07"
+"-$92,233,720,368,547,758.08"
+"-$92,233,720,368,547,758.08"

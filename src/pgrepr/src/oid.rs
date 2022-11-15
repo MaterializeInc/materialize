@@ -11,6 +11,66 @@
 
 //! PostgreSQL OID constants.
 
+// PostgreSQL builtin type OIDs
+pub const TYPE_ANY_OID: u32 = 2276;
+pub const TYPE_ANYARRAY_OID: u32 = 2277;
+pub const TYPE_ANYCOMPATIBLE_OID: u32 = 5077;
+pub const TYPE_ANYCOMPATIBLEARRAY_OID: u32 = 5078;
+pub const TYPE_ANYCOMPATIBLENONARRAY_OID: u32 = 5079;
+pub const TYPE_ANYELEMENT_OID: u32 = 2283;
+pub const TYPE_ANYNONARRAY_OID: u32 = 2776;
+pub const TYPE_BOOL_ARRAY_OID: u32 = 1000;
+pub const TYPE_BOOL_OID: u32 = 16;
+pub const TYPE_BPCHAR_ARRAY_OID: u32 = 1014;
+pub const TYPE_BPCHAR_OID: u32 = 1042;
+pub const TYPE_BYTEA_ARRAY_OID: u32 = 1001;
+pub const TYPE_BYTEA_OID: u32 = 17;
+pub const TYPE_CHAR_ARRAY_OID: u32 = 1002;
+pub const TYPE_CHAR_OID: u32 = 18;
+pub const TYPE_DATE_ARRAY_OID: u32 = 1182;
+pub const TYPE_DATE_OID: u32 = 1082;
+pub const TYPE_FLOAT4_ARRAY_OID: u32 = 1021;
+pub const TYPE_FLOAT4_OID: u32 = 700;
+pub const TYPE_FLOAT8_ARRAY_OID: u32 = 1022;
+pub const TYPE_FLOAT8_OID: u32 = 701;
+pub const TYPE_INT2_ARRAY_OID: u32 = 1005;
+pub const TYPE_INT2_OID: u32 = 21;
+pub const TYPE_INT2_VECTOR_ARRAY_OID: u32 = 1006;
+pub const TYPE_INT2_VECTOR_OID: u32 = 22;
+pub const TYPE_INT4_ARRAY_OID: u32 = 1007;
+pub const TYPE_INT4_OID: u32 = 23;
+pub const TYPE_INT8_ARRAY_OID: u32 = 1016;
+pub const TYPE_INT8_OID: u32 = 20;
+pub const TYPE_INTERVAL_ARRAY_OID: u32 = 1187;
+pub const TYPE_INTERVAL_OID: u32 = 1186;
+pub const TYPE_JSONB_ARRAY_OID: u32 = 3807;
+pub const TYPE_JSONB_OID: u32 = 3802;
+pub const TYPE_LIST_OID_OID: u32 = 16_384;
+pub const TYPE_NUMERIC_ARRAY_OID: u32 = 1231;
+pub const TYPE_NUMERIC_OID: u32 = 1700;
+pub const TYPE_OID_ARRAY_OID: u32 = 1028;
+pub const TYPE_OID_OID: u32 = 26;
+pub const TYPE_RECORD_ARRAY_OID: u32 = 2287;
+pub const TYPE_RECORD_OID: u32 = 2249;
+pub const TYPE_REGCLASS_ARRAY_OID: u32 = 2210;
+pub const TYPE_REGCLASS_OID: u32 = 2205;
+pub const TYPE_REGPROC_ARRAY_OID: u32 = 1008;
+pub const TYPE_REGPROC_OID: u32 = 24;
+pub const TYPE_REGTYPE_ARRAY_OID: u32 = 2211;
+pub const TYPE_REGTYPE_OID: u32 = 2206;
+pub const TYPE_TEXT_ARRAY_OID: u32 = 1009;
+pub const TYPE_TEXT_OID: u32 = 25;
+pub const TYPE_TIME_ARRAY_OID: u32 = 1183;
+pub const TYPE_TIME_OID: u32 = 1083;
+pub const TYPE_TIMESTAMP_ARRAY_OID: u32 = 1115;
+pub const TYPE_TIMESTAMP_OID: u32 = 1114;
+pub const TYPE_TIMESTAMPTZ_ARRAY_OID: u32 = 1185;
+pub const TYPE_TIMESTAMPTZ_OID: u32 = 1184;
+pub const TYPE_UUID_ARRAY_OID: u32 = 2951;
+pub const TYPE_UUID_OID: u32 = 2950;
+pub const TYPE_VARCHAR_ARRAY_OID: u32 = 1015;
+pub const TYPE_VARCHAR_OID: u32 = 1043;
+
 /// The first OID in PostgreSQL's system catalog that is not pinned during
 /// bootstrapping.
 ///
