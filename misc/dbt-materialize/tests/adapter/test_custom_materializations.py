@@ -35,12 +35,6 @@ class TestCustomMaterializations:
         return {"name": "custom_materializations"}
 
     @pytest.fixture(scope="class")
-    def seeds(self):
-        return {
-            "expected_indexes.csv": expected_indexes[self._profile],
-        }
-
-    @pytest.fixture(scope="class")
     def models(self):
         return {
             "test_materialized_view.sql": test_materialized_view,
@@ -60,7 +54,7 @@ class TestCustomMaterializations:
         # run models
         results = run_dbt(["run"])
         # run result length
-        assert len(results) == 6
+        assert len(results) == 5
         # relations_equal
         check_relations_equal(
             project.adapter, ["test_materialized_view", "test_view_index"]
