@@ -41,7 +41,7 @@ INSERT INTO cities VALUES
 ## Top K using `ROW_NUMBER`
 
 In other databases, a popular way of computing the top _K_ records per key is to use the `ROW_NUMBER` window function. For example, to get the 3 most populous city in each state:
-```
+```sql
 SELECT state, name
 FROM (
   SELECT state, name, ROW_NUMBER() OVER
@@ -51,12 +51,22 @@ FROM (
 WHERE row_num <= 3;
 ```
 
-If there are states that have many cities, a more performant way to express this in Materialize is to use a lateral join (or `DISTINCT ON`, if _K_ = 1) instead of window functions. See [Top K by group](/sql/patterns/top-k) for the alternative implementation.
+If there are states that have many cities, a more performant way to express this in Materialize is to use a lateral join (or `DISTINCT ON`, if _K_ = 1) instead of window functions:
+```sql
+SELECT state, name FROM
+    (SELECT DISTINCT state FROM cities) grp,
+    LATERAL (
+        SELECT name FROM cities
+        WHERE state = grp.state
+        ORDER BY pop DESC LIMIT 3
+    );
+```
+For more details, see [Top K by group](/sql/patterns/top-k).
 
 ## `FIRST_VALUE`/`LAST_VALUE` of an entire partition
 
 Suppose that you want to compute the ratio of each city's population vs. the most populous city in the same state. You can do so using window functions as follows:
-```
+```sql
 SELECT state, name,
        CAST(pop AS float) / FIRST_VALUE(pop)
          OVER (PARTITION BY state ORDER BY pop DESC)
@@ -65,7 +75,7 @@ FROM cities;
 
 For better performance, you can rewrite this query to first compute the largest population of each state using an aggregation, and then join against that:
 
-```
+```sql
 SELECT cities.state, name, CAST(pop as float) / max_pops.max_pop
 FROM cities,
      (SELECT state, MAX(pop) as max_pop
@@ -80,7 +90,7 @@ If the `ROW_NUMBER` would be called with an expression that is different from th
 
 Suppose that you want to compute the ratio of each city's population vs. the total population of the city's state. You can do so using an aggregate window function as follows:
 
-```
+```sql
 SELECT state, name,
        CAST(pop AS float) / SUM(pop)
          OVER (PARTITION BY state)
@@ -89,7 +99,7 @@ FROM cities;
 
 Aggregate window functions are not yet supported in Materialize, but you can rewrite this query to first compute the total population of each state using an aggregation, and then join against that:
 
-```
+```sql
 SELECT cities.state, name, CAST(pop as float) / total_pops.total_pop
 FROM cities,
      (SELECT state, SUM(pop) as total_pop
@@ -102,7 +112,7 @@ WHERE cities.state = total_pops.state;
 
 If the input has a column that advances by regular amounts, then `LAG` and `LEAD` can be replaced by an equi-join. Suppose that you have the following data:
 
-```
+```sql
 CREATE TABLE measurements(time timestamp, value float);
 INSERT INTO measurements VALUES
     (TIMESTAMP '2007-02-01 15:04:01', 8),
@@ -111,14 +121,14 @@ INSERT INTO measurements VALUES
 ```
 
 You can compute the differences between consecutive measurements using `LAG()`:
-```
+```sql
 SELECT time, value - LAG(value) OVER (ORDER BY time)
 FROM measurements;
 ```
 
 For better performance, you can rewrite this query using an equi-join:
 
-```
+```sql
 SELECT m2.time, m2.value - m1.value
 FROM measurements m1, measurements m2
 WHERE m2.time = m1.time + INTERVAL '1' MINUTE;
