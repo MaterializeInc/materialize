@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -182,6 +182,22 @@ impl ComputeOrchestrator {
     ) -> Result<(), anyhow::Error> {
         let service_name = generate_replica_service_name(instance_id, replica_id);
         self.inner.drop_service(&service_name).await
+    }
+
+    /// Returns a list of replicas that are older than the epoch of this orchestrator. Note that
+    /// ensure service will bump the epoch. This method should be used after all in use replicas
+    /// have been inserted with ensure_replica to identify orphans.
+    pub(super) async fn remove_orphans(
+        &self,
+        keep: HashSet<(ComputeInstanceId, ReplicaId)>,
+    ) -> Result<(), anyhow::Error> {
+        self.inner
+            .remove_orphans(
+                keep.into_iter()
+                    .map(|(inst_id, replica_id)| generate_replica_service_name(inst_id, replica_id))
+                    .collect(),
+            )
+            .await
     }
 
     pub(super) fn watch_services(&self) -> BoxStream<'static, ComputeInstanceEvent> {

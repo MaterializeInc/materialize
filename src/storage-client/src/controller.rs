@@ -344,6 +344,9 @@ pub trait StorageController: Debug + Send {
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
     async fn process(&mut self) -> Result<(), anyhow::Error>;
+
+    /// Considers all nodes not currently used as orphans and removes those from the orchestrator.
+    async fn remove_orphans(&mut self) -> Result<(), anyhow::Error>;
 }
 
 /// Compaction policies for collections maintained by `Controller`.
@@ -1446,6 +1449,10 @@ where
                 Ok(())
             }
         }
+    }
+
+    async fn remove_orphans(&mut self) -> Result<(), anyhow::Error> {
+        self.hosts.remove_orphans().await
     }
 }
 

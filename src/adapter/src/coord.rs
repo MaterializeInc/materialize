@@ -1141,8 +1141,15 @@ pub async fn serve<S: Append + 'static>(
                 segment_client,
                 metrics: Metrics::register_with(&inner_metrics_registry),
             };
-            let bootstrap =
-                handle.block_on(coord.bootstrap(builtin_migration_metadata, builtin_table_updates));
+            let bootstrap = handle
+                .block_on(coord.bootstrap(builtin_migration_metadata, builtin_table_updates))
+                .and_then(|_| {
+                    // Controller is fully populated, synchronize with
+                    // orchestrator before reporting ready.
+                    handle
+                        .block_on(coord.controller.remove_orphans())
+                        .map_err(AdapterError::Orchestrator)
+                });
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();
             if ok {

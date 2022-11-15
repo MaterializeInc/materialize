@@ -137,6 +137,13 @@ impl<T> Controller<T> {
     pub fn active_compute(&mut self) -> ActiveComputeController<T> {
         self.compute.activate(&mut *self.storage)
     }
+
+    /// Remove orphaned services from the orchestrator.
+    pub async fn remove_orphans(&mut self) -> Result<(), anyhow::Error> {
+        self.compute.remove_orphans().await?;
+        self.storage.remove_orphans().await?;
+        Ok(())
+    }
 }
 
 impl<T> Controller<T>

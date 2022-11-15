@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::net::IpAddr;
 use std::num::{NonZeroI64, NonZeroUsize};
@@ -67,6 +67,10 @@ pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
 
     /// Lists the identifiers of all known services.
     async fn list_services(&self) -> Result<Vec<(String, NonZeroI64)>, anyhow::Error>;
+
+    /// Remove all services in this namespace not contained in keep and are
+    /// of an older epoch.
+    async fn remove_orphans(&self, keep: HashSet<String>) -> Result<(), anyhow::Error>;
 
     /// Watch for status changes of all known services.
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>>;

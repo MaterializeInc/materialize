@@ -189,6 +189,8 @@ pub enum AdapterError {
     Storage(mz_storage_client::controller::StorageError),
     /// An error occurred in the compute layer
     Compute(anyhow::Error),
+    /// An error in the orchestrator layer
+    Orchestrator(anyhow::Error),
 }
 
 impl AdapterError {
@@ -470,6 +472,7 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::Storage(e) => e.fmt(f),
             AdapterError::Compute(e) => e.fmt(f),
+            AdapterError::Orchestrator(e) => e.fmt(f),
         }
     }
 }

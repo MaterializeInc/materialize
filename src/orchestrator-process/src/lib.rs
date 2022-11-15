@@ -323,6 +323,11 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             .collect())
     }
 
+    async fn remove_orphans(&self, _keep: HashSet<String>) -> Result<(), anyhow::Error> {
+        // NYI for process orchestrator
+        Ok(())
+    }
+
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
         // The process orchestrator currently doesn't provide good support for
         // tracking service status, so we punt and always return an "unknown"

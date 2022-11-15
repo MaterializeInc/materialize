@@ -60,7 +60,8 @@ use crate::service::{ComputeClient, ComputeGrpcClient};
 
 use self::error::{
     CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
-    InstanceExists, InstanceMissing, PeekError, ReplicaCreationError, ReplicaDropError,
+    InstanceExists, InstanceMissing, PeekError, RemoveOrphansError, ReplicaCreationError,
+    ReplicaDropError,
 };
 use self::instance::{ActiveInstance, Instance};
 use self::orchestrator::ComputeOrchestrator;
@@ -327,6 +328,26 @@ impl<T> ComputeController<T> {
             compute: self,
             storage,
         }
+    }
+
+    /// Remove orphaned compute replicas from the orchestrator. These are replicas that the
+    /// orchestrator is aware of, but not the controller.
+    pub async fn remove_orphans(&self) -> Result<(), RemoveOrphansError> {
+        // This method must be called only after we have loaded the catalog state. Assert
+        // that this has happened by checking that we have at least one cluster (there should
+        // always be at least the system cluster)
+        assert!(self.instances.len() > 0);
+        let replicas_to_keep = self
+            .instances
+            .iter()
+            .flat_map(|(inst_id, inst)| {
+                inst.replica_ids().map(|replica_id| (*inst_id, *replica_id))
+            })
+            .collect();
+        self.orchestrator
+            .remove_orphans(replicas_to_keep)
+            .await
+            .map_err(Into::into)
     }
 }
 

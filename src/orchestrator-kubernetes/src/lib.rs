@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 use std::num::{NonZeroI64, NonZeroUsize};
@@ -717,6 +717,21 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 })
             })
             .collect())
+    }
+
+    async fn remove_orphans(&self, keep: HashSet<String>) -> Result<(), anyhow::Error> {
+        for (service, epoch) in self.list_services().await? {
+            if !keep.contains(&service) && epoch < self.epoch() {
+                tracing::warn!(
+                    "Removing orphaned service: {}-{}",
+                    &self.namespace,
+                    &service
+                );
+                self.drop_service(&service).await?;
+            }
+        }
+
+        Ok(())
     }
 
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {

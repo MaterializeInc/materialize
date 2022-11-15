@@ -282,4 +282,9 @@ where
     async fn drop_storage_host(&self, id: GlobalId) -> Result<(), anyhow::Error> {
         self.orchestrator.drop_service(&id.to_string()).await
     }
+
+    pub async fn remove_orphans(&self) -> Result<(), anyhow::Error> {
+        let keep = self.hosts.keys().map(|x| x.to_string()).collect();
+        self.orchestrator.remove_orphans(keep).await
+    }
 }

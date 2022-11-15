@@ -9,13 +9,13 @@
 
 //! Service orchestration for tracing-aware services.
 
-use std::ffi::OsString;
 #[cfg(feature = "tokio-console")]
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 #[cfg(feature = "tokio-console")]
 use std::time::Duration;
+use std::{collections::HashSet, ffi::OsString};
 use std::{fmt, num::NonZeroI64};
 
 use async_trait::async_trait;
@@ -367,6 +367,10 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
 
     async fn list_services(&self) -> Result<Vec<(String, NonZeroI64)>, anyhow::Error> {
         self.inner.list_services().await
+    }
+
+    async fn remove_orphans(&self, keep: HashSet<String>) -> Result<(), anyhow::Error> {
+        self.inner.remove_orphans(keep).await
     }
 
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
