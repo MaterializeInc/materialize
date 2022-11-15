@@ -1471,6 +1471,48 @@ pub static MZ_SINK_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSou
         .with_column("details", ScalarType::Jsonb.nullable(true)),
 });
 
+pub const MZ_SINK_STATUS: BuiltinView = BuiltinView {
+    name: "mz_sink_status",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_sink_status AS
+WITH ordered_events AS (
+    SELECT
+        sink_id,
+        occurred_at,
+        status,
+        error,
+        details,
+        row_number() over (partition by sink_id order by occurred_at desc) as row_number
+    FROM
+        mz_internal.mz_sink_status_history
+),
+latest_events AS (
+    SELECT
+        sink_id,
+        occurred_at,
+        status,
+        error,
+        details
+    FROM
+        ordered_events
+    WHERE
+        row_number = 1
+)
+SELECT
+    mz_sinks.id,
+    name,
+    mz_sinks.type,
+    occurred_at as last_status_change_at,
+    coalesce(status, 'created') as status,
+    error,
+    details
+FROM mz_sinks
+LEFT JOIN latest_events ON mz_sinks.id = latest_events.sink_id
+WHERE
+    -- This is a convenient way to filter out system sinks, like the status_history table itself.
+    mz_sinks.size IS NOT NULL",
+};
+
 pub static MZ_STORAGE_USAGE_BY_SHARD: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_storage_usage_by_shard",
     schema: MZ_INTERNAL_SCHEMA,
@@ -2765,6 +2807,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
         Builtin::Source(&MZ_SINK_STATUS_HISTORY),
+        Builtin::View(&MZ_SINK_STATUS),
         Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),
         Builtin::View(&MZ_SOURCE_STATUS),
         Builtin::Source(&MZ_STORAGE_SHARDS),
