@@ -8,20 +8,14 @@
 // by the Apache License, Version 2.0.
 
 use std::{
-    collections::{hash_map::Entry, BTreeMap},
-    ffi::{c_int, c_void, CStr, OsStr},
-    os::unix::prelude::OsStrExt,
+    collections::BTreeMap,
+    ffi::c_void,
     path::{Path, PathBuf},
     sync::atomic::AtomicBool,
     time::Instant,
 };
-#[cfg(not(target_os = "macos"))]
-use std::collections::HashMap;
 
 use anyhow::Context;
-#[cfg(not(target_os = "macos"))]
-use libc::{dl_iterate_phdr, dl_phdr_info, size_t, Elf64_Word, PT_NOTE};
-use mz_ore::cast::CastFrom;
 
 pub mod http;
 #[cfg(all(not(target_os = "macos"), feature = "jemalloc"))]
@@ -71,7 +65,18 @@ pub struct StackProfile {
 /// is not documented as being thread-safe
 /// (2) The running binary must be in ELF format and running on Linux.
 #[cfg(not(target_os = "macos"))]
-pub unsafe fn all_build_ids() -> Result<HashMap<PathBuf, Vec<u8>>, anyhow::Error> {
+pub unsafe fn all_build_ids() -> Result<std::collections::HashMap<PathBuf, Vec<u8>>, anyhow::Error>
+{
+    // local imports to avoid polluting the namespace for macOS builds
+    use std::collections::hash_map::Entry;
+    use std::collections::HashMap;
+    use std::ffi::{c_int, CStr, OsStr};
+    use std::os::unix::ffi::OsStrExt;
+
+    use mz_ore::cast::CastFrom;
+
+    use libc::{dl_iterate_phdr, dl_phdr_info, size_t, Elf64_Word, PT_NOTE};
+
     struct CallbackState {
         map: HashMap<PathBuf, Vec<u8>>,
         is_first: bool,
