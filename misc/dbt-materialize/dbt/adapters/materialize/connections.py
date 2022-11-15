@@ -22,7 +22,7 @@ from dbt.adapters.postgres import PostgresConnectionManager, PostgresCredentials
 from dbt.semver import versions_compatible
 
 # If you bump this version, bump it in README.md too.
-SUPPORTED_MATERIALIZE_VERSIONS = ">=0.20.0"
+SUPPORTED_MATERIALIZE_VERSIONS = ">=0.28.0"
 
 
 @dataclass
