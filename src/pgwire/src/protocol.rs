@@ -284,7 +284,6 @@ enum State {
     Ready,
     Drain,
     Done,
-    TimedOut(ErrorResponse),
 }
 
 struct StateMachine<'a, A> {
@@ -314,7 +313,6 @@ where
                 state = match state {
                     State::Ready => self.advance_ready().await?,
                     State::Drain => self.advance_drain().await?,
-                    State::TimedOut(err) => self.advance_timed_out(err).await?,
                     State::Done => return Ok(()),
                 };
                 self.adapter_client()
@@ -329,7 +327,16 @@ where
             biased;
 
             Some(timeout) = self.adapter_client.as_mut().expect(Self::ADAPTER_CLIENT_INVARIANT).recv_timeout() =>
-                return Ok(State::TimedOut(ErrorResponse::from_adapter_error(Severity::Fatal, timeout.into()))),
+            {
+                let error_response = ErrorResponse::from_adapter_error(Severity::Fatal, timeout.into());
+                // dropping the adapter client will terminate the session.
+                self.adapter_client = None;
+                // We must wait for the client to send a request before we can send the error response.
+                // Due to the PG wire protocol, we can't send an ErrorResponse unless it is in response
+                // to a client message.
+                let _ = self.conn.recv().await?;
+                return self.error(error_response).await;
+            },
             message = self.conn.recv() => message?,
         };
 
@@ -435,17 +442,6 @@ where
             None => Ok(State::Done),
             _ => Ok(State::Drain),
         }
-    }
-
-    async fn advance_timed_out(&mut self, err: ErrorResponse) -> Result<State, io::Error> {
-        // dropping the adapter client will terminate the session.
-        self.adapter_client = None;
-        // We must wait for the client to send a request before we can send the error response.
-        // Due to the PG wire protocol, we can't send an ErrorResponse unless it is in response
-        // to a client message.
-        let _ = self.conn.recv().await?;
-        self.error(err).await?;
-        Ok(State::Done)
     }
 
     async fn one_query(&mut self, stmt: Statement<Raw>) -> Result<State, io::Error> {
@@ -562,7 +558,6 @@ where
             match self.one_query(stmt).await? {
                 State::Ready => (),
                 State::Drain => break,
-                state @ State::TimedOut(_) => return Ok(state),
                 State::Done => return Ok(State::Done),
             }
         }
@@ -1056,6 +1051,7 @@ where
         let message: BackendMessage = message.into();
         match message {
             BackendMessage::ErrorResponse(ref err) => {
+                // TODO(jkosh44) this is wrong. We may have lost the client at this point.
                 let minimum_client_severity =
                     self.adapter_client().session().vars().client_min_messages();
                 if err
