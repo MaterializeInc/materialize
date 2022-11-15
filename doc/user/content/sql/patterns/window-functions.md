@@ -6,11 +6,12 @@ menu:
     parent: 'sql-patterns'
 ---
 
-Materialize currently does not handle window functions (`OVER` clause) efficiently for large partition sizes: when an input record is added/removed/changed, the system recomputes the results for the entire partition that the changed record belongs to. We are planning to make window functions more efficient in Materialize, but for the time being, this page shows some workarounds for avoiding the use of window functions.
+Some query patterns that are commonly used in batch are tricky to support in streaming due to the unbounded nature of the input data. Window functions, such as `LAG`, `LEAD`, `ROW_NUMBER`, `FIRST_VALUE`, are one of those patterns.
+As is, Materialize doesn't handle window functions efficiently for large partition sizes: when an input record is added, removed or changed, the system recomputes the results for the entire partition that the changed record belongs to. For this reason, we recommend using the alternative approaches described in this page whenever possible, until window function support is refactored to provide better performance.
 
-Note that this page **does _not_ refer to temporal windows**, i.e., when a window belongs to a time interval. Examples of temporal windows are when we select only the last hour of an infinite stream of records, or when we group input records by which hour they occurred in. Such queries are efficiently supported in Materialize by using [temporal filters and temporal groupings](/sql/patterns/temporal-filters).
+It's important to note that **temporal windows** are efficiently supported by using [temporal filters and time bucketing](/sql/patterns/temporal-filters). For example, if you want to window over the last hour of data, or group data based on which hour each record occurred in.
 
-By "window functions", this page means functions such as `LAG`, `LEAD`, `ROW_NUMBER`, `FIRST_VALUE`. You can access these functions with the `OVER` clause, in which you use the `PARTITION BY` clause to group input records into partitions by a key, and use the `ORDER BY` clause to order records inside each partition. Window functions compute results based on the position of records inside these partitions. For example, `x - LAG(x)` computes the differences of attribute `x` between each pair of _consecutive_ rows in each partition.
+By "window functions", this page does _not_ refer to temporal windows, but instead refers to functions such as `LAG`, `LEAD`, `ROW_NUMBER`, `FIRST_VALUE`. You can access these functions with the `OVER` clause, in which you use the `PARTITION BY` clause to group input records into partitions by a key, and use the `ORDER BY` clause to order records inside each partition. Window functions compute results based on the position of records inside these partitions. For example, `x - LAG(x)` computes the differences of attribute `x` between each pair of _consecutive_ rows in each partition.
 
 ## Example data
 
