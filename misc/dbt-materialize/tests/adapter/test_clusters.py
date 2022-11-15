@@ -77,7 +77,7 @@ join mz_clusters c on v.cluster_id = c.id and v.name = 'override_cluster'
 """
 
 
-@pytest.mark.skip_profile("materialize_binary")
+@pytest.mark.skip(reason="temporarily disable")
 class TestModelCluster:
     @pytest.fixture(scope="class")
     def seeds(self):
@@ -109,7 +109,7 @@ class TestModelCluster:
         run_dbt(["run", "--models", "invalid_cluster"], expect_pass=False)
 
 
-@pytest.mark.skip_profile("materialize_binary")
+@pytest.mark.skip(reason="temporarily disable")
 class TestProjectConfigCluster:
     @pytest.fixture(scope="class")
     def models(self):
