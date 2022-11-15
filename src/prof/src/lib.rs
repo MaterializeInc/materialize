@@ -8,15 +8,18 @@
 // by the Apache License, Version 2.0.
 
 use std::{
-    collections::{hash_map::Entry, BTreeMap, HashMap},
+    collections::{hash_map::Entry, BTreeMap},
     ffi::{c_int, c_void, CStr, OsStr},
     os::unix::prelude::OsStrExt,
     path::{Path, PathBuf},
     sync::atomic::AtomicBool,
     time::Instant,
 };
+#[cfg(not(target_os = "macos"))]
+use std::collections::HashMap;
 
 use anyhow::Context;
+#[cfg(not(target_os = "macos"))]
 use libc::{dl_iterate_phdr, dl_phdr_info, size_t, Elf64_Word, PT_NOTE};
 use mz_ore::cast::CastFrom;
 
