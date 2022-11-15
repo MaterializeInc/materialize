@@ -1043,7 +1043,6 @@ where
         let message: BackendMessage = message.into();
         match message {
             BackendMessage::ErrorResponse(ref err) => {
-                // TODO(jkosh44) this is wrong. We may have lost the client at this point.
                 let minimum_client_severity =
                     self.adapter_client.session().vars().client_min_messages();
                 if err

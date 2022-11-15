@@ -533,10 +533,6 @@ impl<S: Append + 'static> Coordinator<S> {
     ///
     /// This cleans up any state in the coordinator associated with the session.
     async fn handle_terminate(&mut self, conn_id: ConnectionId) {
-        if !self.active_conns.contains_key(&conn_id) {
-            return;
-        }
-
         self.clear_transaction(&conn_id).await;
 
         self.drop_temp_items(None, &conn_id).await;
