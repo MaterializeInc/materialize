@@ -740,6 +740,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
     /// Drops the identified service, if it exists.
     async fn drop_service(&self, id: &str) -> Result<(), anyhow::Error> {
+        fail::fail_point!("kubernetes_drop_service", |_| Err(anyhow!("failpoint")));
         self.service_scales
             .lock()
             .expect("poisoned lock")
