@@ -1362,33 +1362,42 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 let arity = input.arity();
                 let (input, mut input_keys) =
                     Self::from_mir_inner(input, arrangements, debug_info)?;
-                let keys = keys.iter().cloned().map(|k| {
-                    let (permutation, thinning) = permutation_for_arrangement(&k, arity);
-                    (k, permutation, thinning)
-                });
-                let (input_key, input_mfp) = if let Some((input_key, permutation, thinning)) =
-                    input_keys.arbitrary_arrangement()
-                {
-                    let mut mfp = MapFilterProject::new(arity);
-                    mfp.permute(permutation.clone(), thinning.len() + input_key.len());
-                    (Some(input_key.clone()), mfp)
+                // Determine keys that are not present in `input_keys`.
+                let new_keys = keys
+                    .iter()
+                    .filter(|k1| !input_keys.arranged.iter().any(|(k2, _, _)| k1 == &k2))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if new_keys.is_empty() {
+                    (input, input_keys)
                 } else {
-                    (None, MapFilterProject::new(arity))
-                };
-                input_keys.arranged.extend(keys);
-                input_keys.arranged.sort_by(|k1, k2| k1.0.cmp(&k2.0));
-                input_keys.arranged.dedup_by(|k1, k2| k1.0 == k2.0);
+                    let new_keys = new_keys.iter().cloned().map(|k| {
+                        let (permutation, thinning) = permutation_for_arrangement(&k, arity);
+                        (k, permutation, thinning)
+                    });
+                    let (input_key, input_mfp) = if let Some((input_key, permutation, thinning)) =
+                        input_keys.arbitrary_arrangement()
+                    {
+                        let mut mfp = MapFilterProject::new(arity);
+                        mfp.permute(permutation.clone(), thinning.len() + input_key.len());
+                        (Some(input_key.clone()), mfp)
+                    } else {
+                        (None, MapFilterProject::new(arity))
+                    };
+                    input_keys.arranged.extend(new_keys);
+                    input_keys.arranged.sort_by(|k1, k2| k1.0.cmp(&k2.0));
 
-                // Return the plan and extended keys.
-                (
-                    Plan::ArrangeBy {
-                        input: Box::new(input),
-                        forms: input_keys.clone(),
-                        input_key,
-                        input_mfp,
-                    },
-                    input_keys,
-                )
+                    // Return the plan and extended keys.
+                    (
+                        Plan::ArrangeBy {
+                            input: Box::new(input),
+                            forms: input_keys.clone(),
+                            input_key,
+                            input_mfp,
+                        },
+                        input_keys,
+                    )
+                }
             }
         };
 
