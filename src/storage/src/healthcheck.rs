@@ -9,27 +9,53 @@
 
 //! Healthcheck common
 
+use chrono::{DateTime, NaiveDateTime, Utc};
 use differential_dataflow::lattice::Lattice;
+use mz_ore::now::NowFn;
 use timely::progress::Antichain;
 
 use mz_persist_client::{PersistClient, ShardId, Upper};
-use mz_repr::{GlobalId, Row, Timestamp};
+use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_storage_client::types::sources::SourceData;
 use tracing::trace;
 
 pub async fn write_to_persist(
-    row: Row,
-    timestamp: Timestamp,
+    collection_id: GlobalId,
+    new_status: &str,
+    new_error: Option<&str>,
+    now: NowFn,
     client: &PersistClient,
     status_shard: ShardId,
-    collection_id: GlobalId,
 ) {
+    let now_ms = now();
+    let row = {
+        let timestamp = NaiveDateTime::from_timestamp(
+            (now_ms / 1000)
+                .try_into()
+                .expect("timestamp seconds does not fit into i64"),
+            (now_ms % 1000 * 1_000_000)
+                .try_into()
+                .expect("timestamp millis does not fit into a u32"),
+        );
+        let timestamp = Datum::TimestampTz(
+            DateTime::from_utc(timestamp, Utc)
+                .try_into()
+                .expect("must fit"),
+        );
+        let collection_id = collection_id.to_string();
+        let collection_id = Datum::String(&collection_id);
+        let status = Datum::String(new_status);
+        let error = new_error.into();
+        let metadata = Datum::Null;
+        Row::pack_slice(&[timestamp, collection_id, status, error, metadata])
+    };
+
     let mut handle = client.open_writer(status_shard).await.expect(
         "Invalid usage of the persist client for collection {collection_id} status history shard",
     );
 
     let mut recent_upper = handle.upper().clone();
-    let mut append_ts = timestamp;
+    let mut append_ts = Timestamp::from(now_ms);
     'retry_loop: loop {
         // We don't actually care so much about the timestamp we append at; it's best-effort.
         // Ensure that the append timestamp is not less than the current upper, and the new upper

@@ -12,7 +12,6 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use anyhow::Context;
-use chrono::{DateTime, NaiveDateTime, Utc};
 use tokio::sync::Mutex;
 use tracing::trace;
 
@@ -20,7 +19,7 @@ use mz_ore::halt;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistClient, PersistLocation, ShardId};
-use mz_repr::{Datum, GlobalId, Row, Timestamp};
+use mz_repr::GlobalId;
 
 use crate::healthcheck::write_to_persist;
 
@@ -93,41 +92,18 @@ impl Healthchecker {
 
         // Only update status if it is a valid transition
         if SinkStatus::can_transition(self.current_status.as_ref(), &status_update) {
-            let ts = (self.now)();
-            let row = self.prepare_row(&status_update, ts);
             write_to_persist(
-                row,
-                Timestamp::from(ts),
+                self.sink_id,
+                status_update.name(),
+                status_update.error(),
+                self.now.clone(),
                 &self.persist_client,
                 self.status_shard,
-                self.sink_id,
             )
             .await;
 
             self.current_status = Some(status_update);
         }
-    }
-
-    fn prepare_row(&self, status_update: &SinkStatus, ts: u64) -> Row {
-        let timestamp = NaiveDateTime::from_timestamp(
-            (ts / 1000)
-                .try_into()
-                .expect("timestamp seconds does not fit into i64"),
-            (ts % 1000 * 1_000_000)
-                .try_into()
-                .expect("timestamp millis does not fit into a u32"),
-        );
-        let timestamp = Datum::TimestampTz(
-            DateTime::from_utc(timestamp, Utc)
-                .try_into()
-                .expect("must fit"),
-        );
-        let sink_id = self.sink_id.to_string();
-        let sink_id = Datum::String(&sink_id);
-        let status = Datum::String(status_update.name());
-        let error = status_update.error().into();
-        let metadata = Datum::Null;
-        Row::pack_slice(&[timestamp, sink_id, status, error, metadata])
     }
 }
 
@@ -206,6 +182,7 @@ mod tests {
     use std::time::Duration;
 
     use itertools::Itertools;
+    use mz_repr::Row;
     use timely::progress::Antichain;
 
     use once_cell::sync::Lazy;

@@ -66,7 +66,6 @@ use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
 use crate::healthcheck::write_to_persist;
 use crate::source::antichain::{MutableOffsetAntichain, OffsetAntichain};
-use crate::source::healthcheck;
 use crate::source::healthcheck::{SourceStatus, SourceStatusUpdate};
 
 use crate::source::metrics::SourceBaseMetrics;
@@ -910,11 +909,9 @@ where
             };
 
             if is_active_worker {
-                let now_ms = now();
-                let row = healthcheck::pack_status_row(source_id, last_reported_status.name(), last_reported_status.error(), now_ms);
                 if let Some(status_shard) = storage_metadata.status_shard {
                     info!("Health for source {source_id} being written to {status_shard}");
-                    write_to_persist(row, Timestamp::from(now_ms), &persist_client, status_shard, source_id).await;
+                    write_to_persist(source_id, last_reported_status.name(), last_reported_status.error(), now.clone(), &persist_client, status_shard).await;
                 } else {
                     info!("Health for source {source_id} not being written to status shard");
                 }
@@ -939,10 +936,8 @@ where
                 let new_status = overall_status(&healths);
                 if &last_reported_status != new_status {
                     info!("Health transition for source {source_id}: {last_reported_status:?} -> {new_status:?}");
-                    let now_ms = now();
-                    let row = healthcheck::pack_status_row(source_id, new_status.name(), new_status.error(), now_ms);
                     if let Some(status_shard) = storage_metadata.status_shard {
-                        write_to_persist(row, Timestamp::from(now_ms), &persist_client, status_shard, source_id).await;
+                        write_to_persist(source_id, new_status.name(), new_status.error(), now.clone(), &persist_client, status_shard).await;
                     }
 
                     last_reported_status = new_status.clone();
