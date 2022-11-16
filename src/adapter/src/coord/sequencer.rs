@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::num::{NonZeroI64, NonZeroUsize};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
@@ -509,7 +510,7 @@ impl<S: Append + 'static> Coordinator<S> {
             sources.push((source_id, source));
         }
         match self
-            .catalog_transact(Some(session), ops, move |_| Ok(()))
+            .catalog_transact(Some(session), ops, move |_| async { Ok(()) })
             .await
         {
             Ok(()) => {
@@ -605,28 +606,14 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         let connection_oid = self.catalog.allocate_oid()?;
         let connection_gid = self.catalog.allocate_user_id().await?;
-        let mut connection = plan.connection.connection.clone();
+        let mut connection = plan.connection.connection;
+        let mut ssh_key_set = None;
 
         match connection {
             mz_storage_client::types::connections::Connection::Ssh(ref mut ssh) => {
                 let key_set = SshKeyPairSet::new()?;
-                self.secrets_controller
-                    .ensure(connection_gid, &key_set.to_bytes())
-                    .await?;
                 ssh.public_keys = Some(key_set.public_keys());
-            }
-            mz_storage_client::types::connections::Connection::AwsPrivatelink(ref privatelink) => {
-                self.cloud_resource_controller
-                    .as_ref()
-                    .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))?
-                    .ensure_vpc_endpoint(
-                        connection_gid,
-                        VpcEndpointConfig {
-                            aws_service_name: privatelink.service_name.to_owned(),
-                            availability_zone_ids: privatelink.availability_zones.to_owned(),
-                        },
-                    )
-                    .await?;
+                ssh_key_set = Some(key_set);
             }
             _ => {}
         }
@@ -637,12 +624,43 @@ impl<S: Append + 'static> Coordinator<S> {
             name: plan.name.clone(),
             item: CatalogItem::Connection(Connection {
                 create_sql: plan.connection.create_sql,
-                connection,
+                connection: connection.clone(),
                 depends_on,
             }),
         }];
 
-        match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
+        let secrets_controller = Arc::clone(&self.secrets_controller);
+        let cloud_resource_controller = self
+            .cloud_resource_controller
+            .as_ref()
+            .map(|controller| Arc::clone(controller));
+        match self
+            .catalog_transact(Some(session), ops, |_| async {
+                match connection {
+                    mz_storage_client::types::connections::Connection::Ssh(_) => {
+                        let key_set = ssh_key_set.expect("created above");
+                        Ok(secrets_controller
+                            .ensure(connection_gid, &key_set.to_bytes())
+                            .await?)
+                    }
+                    mz_storage_client::types::connections::Connection::AwsPrivatelink(
+                        ref privatelink,
+                    ) => Ok(cloud_resource_controller
+                        .as_ref()
+                        .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))?
+                        .ensure_vpc_endpoint(
+                            connection_gid,
+                            VpcEndpointConfig {
+                                aws_service_name: privatelink.service_name.to_owned(),
+                                availability_zone_ids: privatelink.availability_zones.to_owned(),
+                            },
+                        )
+                        .await?),
+                    _ => Ok(()),
+                }
+            })
+            .await
+        {
             Ok(_) => Ok(ExecuteResponse::CreatedConnection),
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
@@ -670,7 +688,10 @@ impl<S: Append + 'static> Coordinator<S> {
             new_public_key_pair: new_key_set.public_keys(),
         }];
 
-        match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
+        match self
+            .catalog_transact(Some(session), ops, |_| async { Ok(()) })
+            .await
+        {
             Ok(_) => Ok(ExecuteResponse::AlteredObject(ObjectType::Connection)),
             Err(err) => Err(err),
         }
@@ -688,7 +709,10 @@ impl<S: Append + 'static> Coordinator<S> {
             oid: db_oid,
             public_schema_oid: schema_oid,
         }];
-        match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
+        match self
+            .catalog_transact(Some(session), ops, |_| async { Ok(()) })
+            .await
+        {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase),
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::DatabaseAlreadyExists(_),
@@ -713,7 +737,7 @@ impl<S: Append + 'static> Coordinator<S> {
             oid,
         };
         match self
-            .catalog_transact(Some(session), vec![op], |_| Ok(()))
+            .catalog_transact(Some(session), vec![op], |_| async { Ok(()) })
             .await
         {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema),
@@ -740,7 +764,7 @@ impl<S: Append + 'static> Coordinator<S> {
             name: plan.name,
             oid,
         };
-        self.catalog_transact(Some(session), vec![op], |_| Ok(()))
+        self.catalog_transact(Some(session), vec![op], |_| async { Ok(()) })
             .await
             .map(|_| ExecuteResponse::CreatedRole)
     }
@@ -879,7 +903,7 @@ impl<S: Append + 'static> Coordinator<S> {
             });
         }
 
-        self.catalog_transact(Some(session), ops, |_| Ok(()))
+        self.catalog_transact(Some(session), ops, |_| async { Ok(()) })
             .await?;
 
         let persisted_introspection_source_ids: Vec<GlobalId> = persisted_introspection_sources
@@ -1045,7 +1069,7 @@ impl<S: Append + 'static> Coordinator<S> {
             on_cluster_name: of_cluster.clone(),
         };
 
-        self.catalog_transact(Some(session), vec![op], |_| Ok(()))
+        self.catalog_transact(Some(session), vec![op], |_| async { Ok(()) })
             .await?;
 
         let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
@@ -1118,7 +1142,10 @@ impl<S: Append + 'static> Coordinator<S> {
             name: name.clone(),
             item: CatalogItem::Table(table.clone()),
         }];
-        match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
+        match self
+            .catalog_transact(Some(session), ops, |_| async { Ok(()) })
+            .await
+        {
             Ok(()) => {
                 // Determine the initial validity for the table.
                 let since_ts = self.peek_local_write_ts();
@@ -1187,7 +1214,10 @@ impl<S: Append + 'static> Coordinator<S> {
             item: CatalogItem::Secret(secret.clone()),
         }];
 
-        match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
+        match self
+            .catalog_transact(Some(session), ops, |_| async { Ok(()) })
+            .await
+        {
             Ok(()) => Ok(ExecuteResponse::CreatedSecret),
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
@@ -1290,7 +1320,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let from_name = from.name().item.clone();
         let from_type = from.item().typ().to_string();
         let result = self
-            .catalog_transact(Some(&session), ops, move |txn| {
+            .catalog_transact(Some(&session), ops, move |txn| async move {
                 // Validate that the from collection is in fact a persist collection we can export.
                 txn.dataflow_client
                     .storage
@@ -1382,7 +1412,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 depends_on,
             )
             .await?;
-        match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
+        match self
+            .catalog_transact(Some(session), ops, |_| async { Ok(()) })
+            .await
+        {
             Ok(()) => Ok(ExecuteResponse::CreatedView),
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
@@ -1510,13 +1543,14 @@ impl<S: Append + 'static> Coordinator<S> {
             }),
         });
 
+        let callback_as_of = as_of.clone();
         match self
-            .catalog_transact(Some(session), ops, |txn| {
+            .catalog_transact(Some(session), ops, |txn| async move {
                 // Create a dataflow that materializes the view query and sinks
                 // it to storage.
                 let df = txn
                     .dataflow_builder(compute_instance)
-                    .build_materialized_view_dataflow(id, as_of.clone(), internal_view_id)?;
+                    .build_materialized_view_dataflow(id, callback_as_of, internal_view_id)?;
                 Ok(df)
             })
             .await
@@ -1594,7 +1628,7 @@ impl<S: Append + 'static> Coordinator<S> {
             item: CatalogItem::Index(index),
         };
         match self
-            .catalog_transact(Some(session), vec![op], |txn| {
+            .catalog_transact(Some(session), vec![op], |txn| async move {
                 let mut builder = txn.dataflow_builder(compute_instance);
                 let df = builder.build_index_dataflow(id)?;
                 Ok(df)
@@ -1645,7 +1679,7 @@ impl<S: Append + 'static> Coordinator<S> {
             item: CatalogItem::Type(typ),
         };
         match self
-            .catalog_transact(Some(session), vec![op], |_| Ok(()))
+            .catalog_transact(Some(session), vec![op], |_| async { Ok(()) })
             .await
         {
             Ok(()) => Ok(ExecuteResponse::CreatedType),
@@ -1659,7 +1693,7 @@ impl<S: Append + 'static> Coordinator<S> {
         plan: DropDatabasePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let ops = self.catalog.drop_database_ops(plan.id);
-        self.catalog_transact(Some(session), ops, |_| Ok(()))
+        self.catalog_transact(Some(session), ops, |_| async { Ok(()) })
             .await?;
         Ok(ExecuteResponse::DroppedDatabase)
     }
@@ -1670,7 +1704,7 @@ impl<S: Append + 'static> Coordinator<S> {
         plan: DropSchemaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let ops = self.catalog.drop_schema_ops(plan.id);
-        self.catalog_transact(Some(session), ops, |_| Ok(()))
+        self.catalog_transact(Some(session), ops, |_| async { Ok(()) })
             .await?;
         Ok(ExecuteResponse::DroppedSchema)
     }
@@ -1685,7 +1719,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .into_iter()
             .map(|name| catalog::Op::DropRole { name })
             .collect();
-        self.catalog_transact(Some(session), ops, |_| Ok(()))
+        self.catalog_transact(Some(session), ops, |_| async { Ok(()) })
             .await?;
         Ok(ExecuteResponse::DroppedRole)
     }
@@ -1738,7 +1772,7 @@ impl<S: Append + 'static> Coordinator<S> {
             ops.push(catalog::Op::DropComputeInstance { name: compute_name });
         }
 
-        self.catalog_transact(Some(session), ops, |_| Ok(()))
+        self.catalog_transact(Some(session), ops, |_| async { Ok(()) })
             .await?;
         for (instance_id, replicas) in instance_replica_drop_sets {
             for replica_id in replicas {
@@ -1801,7 +1835,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
 
-        self.catalog_transact(Some(session), ops, |_| Ok(()))
+        self.catalog_transact(Some(session), ops, |_| async { Ok(()) })
             .await?;
 
         for (compute_id, replica_id) in replicas_to_drop {
@@ -1837,7 +1871,7 @@ impl<S: Append + 'static> Coordinator<S> {
         plan: DropItemsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let ops = self.catalog.drop_items_ops(&plan.items);
-        self.catalog_transact(Some(session), ops, |_| Ok(()))
+        self.catalog_transact(Some(session), ops, |_| async { Ok(()) })
             .await?;
         Ok(match plan.ty {
             ObjectType::Source => ExecuteResponse::DroppedSource,
@@ -3181,7 +3215,7 @@ impl<S: Append + 'static> Coordinator<S> {
             to_name: plan.to_name,
         };
         match self
-            .catalog_transact(Some(session), vec![op], |_| Ok(()))
+            .catalog_transact(Some(session), vec![op], |_| async { Ok(()) })
             .await
         {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(plan.object_type)),
@@ -3262,7 +3296,7 @@ impl<S: Append + 'static> Coordinator<S> {
         AlterSinkPlan { id, size, remote }: AlterSinkPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let op = catalog::Op::AlterSink { id, size, remote };
-        self.catalog_transact(Some(session), vec![op], |_| Ok(()))
+        self.catalog_transact(Some(session), vec![op], |_| async { Ok(()) })
             .await?;
 
         // Re-fetch the updated item from the catalog
@@ -3291,7 +3325,7 @@ impl<S: Append + 'static> Coordinator<S> {
         AlterSourcePlan { id, size, remote }: AlterSourcePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let op = catalog::Op::AlterSource { id, size, remote };
-        self.catalog_transact(Some(session), vec![op], |_| Ok(()))
+        self.catalog_transact(Some(session), vec![op], |_| async { Ok(()) })
             .await?;
 
         // Re-fetch the updated item from the catalog
@@ -3389,7 +3423,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 value: value.to_string(),
             },
         };
-        self.catalog_transact(Some(session), vec![op], |_| Ok(()))
+        self.catalog_transact(Some(session), vec![op], |_| async { Ok(()) })
             .await?;
         if update_max_result_size {
             self.update_max_result_size();
@@ -3405,7 +3439,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.is_user_allowed_to_alter_system(session)?;
         let update_max_result_size = name == session::vars::MAX_RESULT_SIZE.name();
         let op = catalog::Op::ResetSystemConfiguration { name };
-        self.catalog_transact(Some(session), vec![op], |_| Ok(()))
+        self.catalog_transact(Some(session), vec![op], |_| async { Ok(()) })
             .await?;
         if update_max_result_size {
             self.update_max_result_size();
@@ -3420,7 +3454,7 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session)?;
         let op = catalog::Op::ResetAllSystemConfiguration {};
-        self.catalog_transact(Some(session), vec![op], |_| Ok(()))
+        self.catalog_transact(Some(session), vec![op], |_| async { Ok(()) })
             .await?;
         self.update_max_result_size();
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
