@@ -18,6 +18,7 @@
 )]
 
 use std::fmt::Debug;
+use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -80,6 +81,8 @@ pub(crate) mod internal {
 // TODO: Remove this in favor of making it possible for all PersistClients to be
 // created by the PersistCache.
 pub use crate::internal::metrics::Metrics;
+
+use self::fetch::BatchFetcher;
 /// Utilities related to metrics.
 pub mod metrics {
     pub use crate::internal::metrics::encode_ts_metric;
@@ -451,6 +454,45 @@ impl PersistClient {
         .await;
 
         Ok(reader)
+    }
+
+    /// Creates and returns a [BatchFetcher] for the given shard id.
+    #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
+    pub async fn create_batch_fetcher<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+    ) -> BatchFetcher<K, V, T, D>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let state_versions = StateVersions::new(
+            self.cfg.clone(),
+            Arc::clone(&self.consensus),
+            Arc::clone(&self.blob),
+            Arc::clone(&self.metrics),
+        );
+        let shard_metrics = self.metrics.shards.shard(&shard_id);
+
+        // This call ensures that the types match what was used when creating
+        // the shard or puts in place the types that we expect for future
+        // read/write handle creations. It's not technically needed for creating
+        // the `BatchFetcher` but acts as a safety net against accidental
+        // mis-use.
+        let _ = state_versions
+            .maybe_init_shard::<K, V, T, D>(&shard_metrics)
+            .await;
+
+        let fetcher = BatchFetcher {
+            blob: Arc::clone(&self.blob),
+            metrics: Arc::clone(&self.metrics),
+            shard_id,
+            _phantom: PhantomData,
+        };
+
+        fetcher
     }
 
     /// A convenience [CriticalReaderId] for Materialize controllers.

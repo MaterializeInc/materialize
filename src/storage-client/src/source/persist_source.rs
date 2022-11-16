@@ -250,11 +250,10 @@ where
             return;
         }
 
-        let read = persist_clients_stream
-            .lock()
-            .await
-            .open(persist_location_stream)
-            .await;
+        let read = {
+            let mut persist_clients = persist_clients_stream.lock().await;
+            persist_clients.open(persist_location_stream).await
+        };
 
         // This is a moment where we may have dropped our source if our token
         // has been dropped, but if we still hold it we should be good to go.
@@ -414,17 +413,23 @@ where
     let mut row_builder = Row::default();
 
     fetcher_builder.build(move |_capabilities| async move {
-        let fetcher = persist_clients
-            .lock()
-            .await
-            .open(metadata.persist_location.clone())
-            .await
-            .expect("could not open persist client")
-            .open_leased_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(data_shard)
-            .await
-            .expect("could not open persist shard")
-            .batch_fetcher()
-            .await;
+        let fetcher = {
+            let mut persist_clients = persist_clients.lock().await;
+
+            let persist_client = persist_clients
+                .open(metadata.persist_location.clone())
+                .await
+                .expect("could not open persist client");
+
+            // Unlock the client cache before we do any async work.
+            std::mem::drop(persist_clients);
+
+            persist_client
+                .create_batch_fetcher::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(
+                    data_shard,
+                )
+                .await
+        };
 
         let mut buffer = Vec::new();
 
