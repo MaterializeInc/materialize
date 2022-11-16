@@ -131,7 +131,6 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         match cmd {
             CreateTimely { .. } => panic!("CreateTimely must be captured before"),
             CreateInstance(config) => self.handle_create_instance(config),
-            DropInstance => (),
             InitializationComplete => (),
             CreateDataflows(dataflows) => self.handle_create_dataflows(dataflows),
             AllowCompaction(list) => self.handle_allow_compaction(list),

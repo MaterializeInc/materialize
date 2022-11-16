@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use anyhow::bail;
 use differential_dataflow::lattice::Lattice;
+use futures::TryFutureExt;
 use timely::progress::Timestamp;
 use tokio::select;
 use tokio::sync::mpsc::error::SendError;
@@ -142,18 +143,6 @@ where
 {
     /// Asynchronously forwards commands to and responses from a single replica.
     async fn run(self) {
-        let replica_id = self.replica_id;
-        tracing::info!("starting replica task for {replica_id}");
-        match self.run_core().await {
-            Ok(()) => tracing::info!("gracefully stopping replica task for {replica_id}"),
-            Err(e) => tracing::warn!("replica task for {replica_id} failed: {e}"),
-        }
-    }
-
-    /// Instruct orchestrator to ensure replica and run the message loop. In the case of a
-    /// graceful termination after a DropInstance command this method will tell the orchestrator
-    /// to remove the process.
-    async fn run_core(self) -> Result<(), anyhow::Error> {
         let ReplicaTask {
             instance_id,
             replica_id,
@@ -166,31 +155,42 @@ where
             epoch,
         } = self;
 
-        let (addrs, comm_config) = orchestrator
+        tracing::info!("starting replica task for {replica_id}");
+
+        let result = orchestrator
             .ensure_replica_location(instance_id, replica_id, location)
-            .await?;
+            .and_then(|(addrs, comm_config)| {
+                let cmd_spec = CommandSpecialization {
+                    logging_config,
+                    comm_config,
+                    epoch,
+                };
+                run_message_loop(
+                    replica_id,
+                    command_rx,
+                    response_tx,
+                    build_info,
+                    addrs,
+                    cmd_spec,
+                )
+            })
+            .await;
 
-        let cmd_spec = CommandSpecialization {
-            logging_config,
-            comm_config,
-            epoch,
-        };
-
-        run_message_loop(
-            replica_id,
-            command_rx,
-            response_tx,
-            build_info,
-            addrs,
-            cmd_spec,
-        )
-        .await
+        if let Err(error) = result {
+            tracing::warn!("replica task for {replica_id} failed: {error}");
+        } else {
+            panic!("replica message loop should never return successfully");
+        }
     }
 }
 
-/// Connects to replica and runs the message loop. Retries with backoff forever to connects. Once
-/// connected, the task terminates on an error condition (with Err) or on graceful termination
-/// (with Ok, after receiving a DropInstance command)
+/// Connects to the replica and runs the message loop.
+///
+/// The initial replica connection is retried forever (with backoff). Once connected, the task
+/// returns (with an `Err`) if it encounters an error condition (e.g. the replica disconnects).
+///
+/// If no error condition is encountered, the task runs forever. The instance controller should
+/// expected to abort the task when the replica is removed.
 async fn run_message_loop<T>(
     replica_id: ReplicaId,
     mut command_rx: UnboundedReceiver<ComputeCommand<T>>,
@@ -236,21 +236,10 @@ where
         select! {
             // Command from controller to forward to replica.
             command = command_rx.recv() => match command {
-                None => {
-                    // Controller unexpectedly dropped command_tx
-                    bail!("command_rx received None")
-                }
+                None => bail!("controller unexpectedly dropped command_rx"),
                 Some(mut command) => {
-                    let is_drop = command == ComputeCommand::DropInstance;
                     cmd_spec.specialize_command(&mut command);
-                    let res = client.send(command).await;
-
-                    if is_drop {
-                        // Controller is no longer interested in this replica. Shut down.
-                        return Ok(())
-                    };
-
-                    res?
+                    client.send(command).await?;
                 }
             },
             // Response from replica to forward to controller.
@@ -259,7 +248,7 @@ where
                     None => bail!("replica unexpectedly gracefully terminated connection"),
                     Some(response) => response,
                 };
-                response_tx.send(response)?
+                response_tx.send(response)?;
             }
         }
     }

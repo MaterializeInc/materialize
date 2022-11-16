@@ -16,7 +16,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroI64;
 
-use proptest::prelude::{any, Arbitrary, Just};
+use proptest::prelude::{any, Arbitrary};
 use proptest::prop_oneof;
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -64,8 +64,6 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_client.command.rs"));
 /// commands. If a new cluster is created, InitializationComplete will follow immediately after
 /// CreateInstance. If a replica is added to a cluster or environmentd restarts and rehydrates a
 /// computed, a potentially long command sequence will be sent before InitializationComplete.
-///
-/// DropInstance will undo both CreateTimely and CreateInstance.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// Create the timely runtime according to the supplied CommunicationConfig. Must be the first
@@ -79,9 +77,6 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// Setup and logging sources within a running timely instance. Must be the second command
     /// after CreateTimely.
     CreateInstance(InstanceConfig),
-
-    /// Indicates the termination of an instance, and is the last command for its compute instance.
-    DropInstance,
 
     /// Indicates that the controller has sent all commands reflecting its
     /// initial state.
@@ -122,7 +117,6 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
         ProtoComputeCommand {
             kind: Some(match self {
                 ComputeCommand::CreateInstance(config) => CreateInstance(config.into_proto()),
-                ComputeCommand::DropInstance => DropInstance(()),
                 ComputeCommand::InitializationComplete => InitializationComplete(()),
                 ComputeCommand::CreateDataflows(dataflows) => {
                     CreateDataflows(ProtoCreateDataflows {
@@ -160,7 +154,6 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
         use proto_compute_command::*;
         match proto.kind {
             Some(CreateInstance(config)) => Ok(ComputeCommand::CreateInstance(config.into_rust()?)),
-            Some(DropInstance(())) => Ok(ComputeCommand::DropInstance),
             Some(InitializationComplete(())) => Ok(ComputeCommand::InitializationComplete),
             Some(CreateDataflows(ProtoCreateDataflows { dataflows })) => {
                 Ok(ComputeCommand::CreateDataflows(dataflows.into_rust()?))
@@ -200,7 +193,6 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         prop_oneof![
             any::<InstanceConfig>().prop_map(ComputeCommand::CreateInstance),
-            Just(ComputeCommand::DropInstance),
             proptest::collection::vec(
                 any::<DataflowDescription<crate::plan::Plan, CollectionMetadata, mz_repr::Timestamp>>(),
                 1..4
@@ -1117,7 +1109,6 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
 
         let mut create_inst_command = None;
         let mut create_timely_command = None;
-        let mut drop_command = None;
         let mut update_max_result_size_command = None;
 
         let mut initialization_complete = false;
@@ -1132,10 +1123,6 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
                 create_inst @ ComputeCommand::CreateInstance(_) => {
                     assert!(create_inst_command.is_none());
                     create_inst_command = Some(create_inst);
-                }
-                cmd @ ComputeCommand::DropInstance => {
-                    assert!(drop_command.is_none());
-                    drop_command = Some(cmd);
                 }
                 ComputeCommand::InitializationComplete => {
                     initialization_complete = true;
@@ -1208,9 +1195,6 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         command_count += final_frontiers.len();
         command_count += live_peeks.len();
         command_count += live_cancels.len();
-        if drop_command.is_some() {
-            command_count += 1;
-        }
         if update_max_result_size_command.is_some() {
             command_count += 1;
         }
@@ -1242,9 +1226,6 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         }
         if initialization_complete {
             self.commands.push(ComputeCommand::InitializationComplete);
-        }
-        if let Some(drop_command) = drop_command {
-            self.commands.push(drop_command);
         }
         if let Some(update_max_result_size_command) = update_max_result_size_command {
             self.commands.push(update_max_result_size_command)
