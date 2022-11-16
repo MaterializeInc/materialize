@@ -10,6 +10,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeSet, HashMap};
 use std::marker::PhantomData;
+use std::num::NonZeroI64;
 
 use async_trait::async_trait;
 use timely::{progress::Antichain, PartialOrder};
@@ -312,7 +313,7 @@ impl<S: Stash> Stash for Memory<S> {
         self.stash.confirm_leadership().await
     }
 
-    fn epoch(&self) -> Option<i64> {
+    fn epoch(&self) -> Option<NonZeroI64> {
         self.stash.epoch()
     }
 }

@@ -21,6 +21,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{self, Debug};
+use std::num::NonZeroI64;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -45,8 +46,9 @@ use mz_build_info::BuildInfo;
 use mz_orchestrator::NamespacedOrchestrator;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::{PersistLocation, ShardId};
-use mz_persist_types::{Codec, Codec64};
+use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::{PersistClient, PersistLocation, ShardId};
+use mz_persist_types::{Codec, Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_stash::{self, PostgresFactory, StashError, TypedCollection};
@@ -61,7 +63,7 @@ use crate::types::hosts::StorageHostConfig;
 use crate::types::sinks::{
     MetadataUnfilled, ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc,
 };
-use crate::types::sources::{IngestionDescription, SourceExport};
+use crate::types::sources::{IngestionDescription, SourceData, SourceExport};
 
 mod hosts;
 mod rehydration;
@@ -630,6 +632,8 @@ pub struct StorageControllerState<
     pub(super) collection_manager: collection_mgmt::CollectionManager,
     /// Tracks which collection is responsible for which [`IntrospectionType`].
     pub(super) introspection_ids: HashMap<IntrospectionType, GlobalId>,
+    /// The fencing token for this instance of the controller.
+    envd_epoch: NonZeroI64,
 }
 
 /// A storage controller for a storage instance.
@@ -741,6 +745,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
         tx: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
         now: NowFn,
         factory: &PostgresFactory,
+        envd_epoch: NonZeroI64,
     ) -> Self {
         let tls = mz_postgres_util::make_tls(
             &tokio_postgres::config::Config::from_str(&postgres_url)
@@ -769,6 +774,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             stashed_response: None,
             collection_manager,
             introspection_ids: HashMap::new(),
+            envd_epoch,
         }
     }
 }
@@ -889,25 +895,58 @@ where
                 .await
                 .unwrap();
 
-            let (write, mut read) = persist_client
-                .open(metadata.data_shard)
+            let write = persist_client
+                .open_writer(metadata.data_shard)
                 .await
                 .expect("invalid persist usage");
 
-            // Advance the collection's `since` as requested.
-            if let Some(since) = &description.since {
-                read.downgrade_since(since).await;
-            }
+            // Construct the handle in a separate block to ensure all error paths are diverging
+            let since_handle = {
+                let mut handle: SinceHandle<_, _, _, _, PersistEpoch> = persist_client
+                    .open_critical_since(
+                        metadata.data_shard,
+                        PersistClient::CONTROLLER_CRITICAL_SINCE,
+                    )
+                    .await
+                    .expect("invalid persist usage");
+
+                let since = description
+                    .since
+                    .clone()
+                    .unwrap_or_else(|| handle.since().clone());
+
+                // We should only continue if we can fence out any other processes
+                let our_epoch = self.state.envd_epoch;
+                loop {
+                    let their_epoch: PersistEpoch = handle.opaque().clone();
+
+                    let should_exchange = their_epoch.0.map(|e| e < our_epoch).unwrap_or(true);
+                    if should_exchange {
+                        let fenced_others = handle
+                            .compare_and_downgrade_since(
+                                &their_epoch,
+                                (&PersistEpoch::from(our_epoch), &since),
+                            )
+                            .await
+                            .is_ok();
+                        if fenced_others {
+                            break handle;
+                        }
+                    } else {
+                        mz_ore::halt!("fenced by envd @ {their_epoch:?}. ours = {our_epoch}");
+                    }
+                }
+            };
 
             let collection_state = CollectionState::new(
                 description.clone(),
-                read.since().clone(),
+                since_handle.since().clone(),
                 write.upper().clone(),
-                metadata,
+                metadata.clone(),
             );
 
             self.state.persist_write_handles.register(id, write);
-            self.state.persist_read_handles.register(id, read);
+            self.state.persist_read_handles.register(id, since_handle);
 
             self.state.collections.insert(id, collection_state);
             self.register_shard_mapping(id).await;
@@ -1200,19 +1239,50 @@ where
         Ok(self.state.persist_write_handles.append(commands))
     }
 
+    // TODO(petrosagg): This signature is not very useful in the context of partially ordered times
+    // where the as_of frontier might have multiple elements. In the current form the mutually
+    // incomparable updates will be accumulated together to a state of the collection that never
+    // actually existed. We should include the original time in the updates advanced by the as_of
+    // frontier in the result and let the caller decide what to do with the information.
     async fn snapshot(
         &mut self,
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> Result<Vec<(Row, Diff)>, StorageError> {
-        // TODO: replace this with a new tokio task, rather than occupying
-        // the existing read downgrader.
         let as_of = Antichain::from_elem(as_of);
-        self.state
-            .persist_read_handles
-            .snapshot(id, as_of)
+        let metadata = &self.collection(id)?.collection_metadata;
+
+        let mut persist_clients = self.persist.lock().await;
+
+        let persist_client = persist_clients
+            .open(metadata.persist_location.clone())
             .await
-            .unwrap()
+            .unwrap();
+
+        // We create a new read handle every time someone requests a snapshot and then immediately
+        // expire it instead of keeping a read handle permanently in our state to avoid having it
+        // heartbeat continously. The assumption is that calls to snapshot are rare and therefore
+        // worth it to always create a new handle.
+        let mut read_handle = persist_client
+            .open_leased_reader::<SourceData, (), _, _>(metadata.data_shard)
+            .await
+            .expect("invalid persist usage");
+
+        drop(persist_clients);
+
+        match read_handle.snapshot_and_fetch(as_of).await {
+            Ok(contents) => {
+                let mut snapshot = Vec::with_capacity(contents.len());
+                for ((data, _), _, diff) in contents {
+                    // TODO(petrosagg): We should accumulate the errors too and let the user
+                    // interprret the result
+                    let row = data.expect("invalid protobuf data").0?;
+                    snapshot.push((row, diff));
+                }
+                Ok(snapshot)
+            }
+            Err(_) => Err(StorageError::ReadBeforeSince(id)),
+        }
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -1327,6 +1397,7 @@ where
             .downgrade(compaction_commands.clone());
 
         for (id, frontier) in compaction_commands {
+            // TODO(petrosagg): make this a strict check
             if let Some(client) = self.hosts.client(id) {
                 client.send(StorageCommand::AllowCompaction(vec![(
                     id,
@@ -1378,6 +1449,38 @@ where
     }
 }
 
+/// A wrapper struct that presents the adapter token to a format that is understandable by persist
+/// and also allows us to differentiate between a token being present versus being set for the
+/// first time.
+#[derive(PartialEq, Clone, Debug)]
+pub(crate) struct PersistEpoch(Option<NonZeroI64>);
+
+impl Opaque for PersistEpoch {
+    fn initial() -> Self {
+        PersistEpoch(None)
+    }
+}
+
+impl Codec64 for PersistEpoch {
+    fn codec_name() -> String {
+        "PersistEpoch".to_owned()
+    }
+
+    fn encode(&self) -> [u8; 8] {
+        self.0.map(NonZeroI64::get).unwrap_or(0).to_le_bytes()
+    }
+
+    fn decode(buf: [u8; 8]) -> Self {
+        Self(NonZeroI64::new(i64::from_le_bytes(buf)))
+    }
+}
+
+impl From<NonZeroI64> for PersistEpoch {
+    fn from(epoch: NonZeroI64) -> Self {
+        Self(Some(epoch))
+    }
+}
+
 impl<T> Controller<T>
 where
     T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
@@ -1397,11 +1500,13 @@ where
         init_container_image: Option<String>,
         now: NowFn,
         postgres_factory: &PostgresFactory,
+        envd_epoch: NonZeroI64,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         Self {
-            state: StorageControllerState::new(postgres_url, tx, now, postgres_factory).await,
+            state: StorageControllerState::new(postgres_url, tx, now, postgres_factory, envd_epoch)
+                .await,
             hosts: StorageHosts::new(
                 StorageHostsConfig {
                     build_info,
@@ -1717,22 +1822,20 @@ where
 }
 
 mod persist_read_handles {
-
-    use std::collections::{BTreeMap, HashSet};
+    use std::collections::BTreeMap;
 
     use differential_dataflow::lattice::Lattice;
     use futures::stream::FuturesUnordered;
     use futures::StreamExt;
     use timely::progress::{Antichain, Timestamp};
     use tokio::sync::mpsc::UnboundedSender;
-
-    use mz_persist_client::read::ReadHandle;
-    use mz_persist_types::Codec64;
-    use mz_repr::Row;
-    use mz_repr::{Diff, GlobalId};
     use tracing::Instrument;
 
-    use crate::controller::StorageError;
+    use mz_persist_client::critical::SinceHandle;
+    use mz_persist_types::Codec64;
+    use mz_repr::{Diff, GlobalId};
+
+    use crate::controller::PersistEpoch;
     use crate::types::sources::SourceData;
 
     /// A wrapper that holds on to backing persist shards/collections that the
@@ -1749,170 +1852,74 @@ mod persist_read_handles {
         tx: UnboundedSender<(tracing::Span, PersistWorkerCmd<T>)>,
     }
 
-    impl<T> Drop for PersistWorker<T>
-    where
-        T: Timestamp + Lattice + Codec64,
-    {
-        fn drop(&mut self) {
-            self.send(PersistWorkerCmd::Shutdown);
-            // TODO: Can't easily block on shutdown occurring.
-        }
-    }
-
     /// Commands for [PersistWorker].
     #[derive(Debug)]
     enum PersistWorkerCmd<T: Timestamp + Lattice + Codec64> {
-        Register(GlobalId, ReadHandle<SourceData, (), T, Diff>),
+        Register(GlobalId, SinceHandle<SourceData, (), T, Diff, PersistEpoch>),
         Downgrade(BTreeMap<GlobalId, Antichain<T>>),
-        Snapshot(
-            GlobalId,
-            Antichain<T>,
-            tokio::sync::oneshot::Sender<Result<Vec<(Row, Diff)>, StorageError>>,
-        ),
-        Shutdown,
     }
 
     impl<T: Timestamp + Lattice + Codec64> PersistWorker<T> {
         pub(crate) fn new() -> Self {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(tracing::Span, _)>();
 
-            mz_ore::task::spawn(|| "PersistReadHandles", async move {
-                let mut read_handles: BTreeMap<
-                    GlobalId,
-                    Option<ReadHandle<SourceData, (), T, Diff>>,
-                > = BTreeMap::new();
+            mz_ore::task::spawn(|| "PersistWorker", async move {
+                let mut since_handles = BTreeMap::new();
 
-                let antichain_minimum_element = Antichain::from_elem(T::minimum());
-                let mut shutdown = false;
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-                while !shutdown {
-                    tokio::select! {
-                        _ = interval.tick() => {
-                            let futs = FuturesUnordered::new();
-                            for (_id, read) in read_handles.iter_mut() {
-                                if let Some(read) = read.as_mut() {
-                                    // downgrade_since is idempotent, so downgrading to the minimum
-                                    // element is a no-op and can be used as a lease liveness
-                                    // heartbeat.
-                                    //
-                                    // TODO: This behavior might be too subtle. Consider
-                                    // reintroducing a public maybe_heartbeat_reader that internally
-                                    // does this.
-                                    futs.push(read.maybe_downgrade_since(&antichain_minimum_element));
+                while let Some(cmd) = rx.recv().await {
+                    // Peel off all available commands.
+                    // This allows us to catch up if we fall behind on downgrade commands.
+                    let mut commands = vec![cmd];
+                    while let Ok(cmd) = rx.try_recv() {
+                        commands.push(cmd);
+                    }
+                    // Collect all downgrade requests and apply them last.
+                    let mut downgrades = BTreeMap::default();
+
+                    for (span, command) in commands {
+                        match command {
+                            PersistWorkerCmd::Register(id, since_handle) => {
+                                let previous = since_handles.insert(id, since_handle);
+                                if previous.is_some() {
+                                    panic!("already registered a SinceHandle for collection {id}");
                                 }
                             }
-                            futs.collect::<Vec<_>>().await;
-                        },
-                        cmd = rx.recv() => {
-                            if let Some(cmd) = cmd {
-                                // Peel off all available commands.
-                                // This allows us to catch up if we fall behind on downgrade commands.
-                                let mut commands = vec![cmd];
-                                while let Ok(cmd) = rx.try_recv() {
-                                    commands.push(cmd);
+                            PersistWorkerCmd::Downgrade(since_frontiers) => {
+                                for (id, frontier) in since_frontiers {
+                                    downgrades.insert(id, (span.clone(), frontier));
                                 }
-                                // Collect all downgrade requests and apply them last.
-                                let mut downgrades = BTreeMap::default();
-
-                                for (span, command) in commands {
-                                    match command {
-                                        PersistWorkerCmd::Register(id, read_handle) => {
-                                            let previous = read_handles.insert(id, Some(read_handle));
-                                            if previous.is_some() {
-                                                panic!(
-                                                    "already registered a ReadHandle for collection {:?}",
-                                                    id
-                                                );
-                                            }
-                                        }
-                                        PersistWorkerCmd::Downgrade(since_frontiers) => {
-                                            for (id, frontier) in since_frontiers {
-                                                downgrades.insert(id, (span.clone(), frontier));
-                                            }
-                                        }
-                                        PersistWorkerCmd::Snapshot(id, as_of, oneshot) => {
-                                            async fn snapshot<T2: Timestamp + Lattice + Codec64>(
-                                                read_handle: &mut ReadHandle<SourceData, (), T2, Diff>,
-                                                id: GlobalId,
-                                                as_of: Antichain<T2>,
-                                            ) -> Result<Vec<(Row, Diff)>, StorageError>
-                                            {
-                                                let mut contents = Vec::new();
-                                                for ((source_data, _pid), _ts, diff) in read_handle
-                                                    .snapshot_and_fetch(as_of)
-                                                    .await
-                                                    .map_err(|_| StorageError::ReadBeforeSince(id))?
-                                                {
-                                                    let row = source_data.expect("cannot read snapshot").0?;
-                                                    contents.push((row, diff));
-                                                }
-
-                                                Ok(contents)
-                                            }
-
-                                            let result = match read_handles.get_mut(&id) {
-                                                Some(Some(read_handle)) => {
-                                                    snapshot(read_handle, id, as_of)
-                                                    .instrument(span.clone())
-                                                    .await
-                                                },
-                                                Some(None) | None => {
-                                                    // A Some(None) means we downgraded since
-                                                    // to empty antichain (aka we dropped it).
-                                                    Err(StorageError::IdentifierMissing(id))
-                                                }
-                                            };
-                                            oneshot.send(result).expect("Oneshot should not fail");
-                                        }
-                                        PersistWorkerCmd::Shutdown => {
-                                            shutdown = true;
-                                        }
-                                    }
-                                }
-
-                                let mut drops = HashSet::new();
-                                if !downgrades.is_empty() {
-                                    let futs = FuturesUnordered::new();
-
-                                    for (id, read) in read_handles.iter_mut() {
-                                        if let Some((span, since)) = downgrades.remove(id) {
-                                        // A None read handle is one that had a successful
-                                        // downgrade_since to the empty antichain, so we treat it as
-                                        // a no-op for any later downgrade_since calls.
-                                        if let Some(read) = read.as_mut() {
-                                                // If we downgrade_since to the empty antichain,
-                                                // then expire and drop the ReadHandle afterward.
-                                                if since.is_empty() {
-                                                    drops.insert(*id);
-                                                }
-
-                                                let fut = async move {
-                                                    // Use maybe_downgrade_since here so that we opt
-                                                    // into rate-limiting. It's okay for the since to
-                                                    // lag behind a bit and this _greatly_ reduces the
-                                                    // persist traffic.
-                                                    read.maybe_downgrade_since(&since).instrument(span).await;
-                                                };
-
-                                                futs.push(fut);
-                                            }
-                                        }
-                                    }
-
-                                    assert!(downgrades.is_empty());
-                                    futs.collect::<Vec<_>>().await;
-                                }
-
-                                // This should be pretty rare, so don't bother doing them all in a
-                                // FuturesUnordered.
-                                for id in drops {
-                                    let read = read_handles.remove(&id).unwrap().unwrap();
-                                    read.expire().await;
-                                }
-                            } else {
-                                shutdown = true;
                             }
                         }
+                    }
+
+                    let mut futs = FuturesUnordered::new();
+
+                    for (id, (span, since)) in downgrades {
+                        let Some(mut since_handle) = since_handles.remove(&id) else {
+                            panic!("downgrade command for absent collection {id}");
+                        };
+
+                        futs.push(async move {
+                            let epoch = since_handle.opaque().clone();
+                            let result = since_handle
+                                .maybe_compare_and_downgrade_since(&epoch, (&epoch, &since))
+                                .instrument(span)
+                                .await;
+                            if let Some(Err(other_epoch)) = result {
+                                mz_ore::halt!("fenced by envd @ {other_epoch:?}. ours = {epoch:?}");
+                            }
+
+                            // If we're not done we put the handle back
+                            if !since.is_empty() {
+                                Some((id, (since_handle)))
+                            } else {
+                                None
+                            }
+                        });
+                    }
+
+                    while let Some(entry) = futs.next().await {
+                        since_handles.extend(entry);
                     }
                 }
                 tracing::trace!("shutting down persist since downgrade task");
@@ -1924,32 +1931,19 @@ mod persist_read_handles {
         pub(crate) fn register(
             &self,
             id: GlobalId,
-            read_handle: ReadHandle<SourceData, (), T, Diff>,
+            since_handle: SinceHandle<SourceData, (), T, Diff, PersistEpoch>,
         ) {
-            self.send(PersistWorkerCmd::Register(id, read_handle))
+            self.send(PersistWorkerCmd::Register(id, since_handle))
         }
 
         pub(crate) fn downgrade(&self, frontiers: BTreeMap<GlobalId, Antichain<T>>) {
             self.send(PersistWorkerCmd::Downgrade(frontiers))
         }
 
-        pub(crate) fn snapshot(
-            &self,
-            id: GlobalId,
-            since: Antichain<T>,
-        ) -> tokio::sync::oneshot::Receiver<Result<Vec<(Row, Diff)>, StorageError>> {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            self.send(PersistWorkerCmd::Snapshot(id, since, tx));
-            rx
-        }
-
         fn send(&self, cmd: PersistWorkerCmd<T>) {
-            match self.tx.send((tracing::Span::current(), cmd)) {
-                Ok(()) => (), // All good!
-                Err(e) => {
-                    tracing::trace!("could not forward command: {:?}", e);
-                }
-            }
+            self.tx
+                .send((tracing::Span::current(), cmd))
+                .expect("persist worker exited while its handle was alive")
         }
     }
 }
@@ -2050,7 +2044,7 @@ mod persist_write_handles {
                                             let previous = write_handles.insert(id, write_handle);
                                             if previous.is_some() {
                                                 panic!(
-                                                    "already registered a ReadHandle for collection {:?}",
+                                                    "already registered a WriteHandle for collection {:?}",
                                                     id
                                                 );
                                             }

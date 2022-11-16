@@ -10,6 +10,7 @@
 //! A controller for a compute instance.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::num::NonZeroI64;
 
 use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
@@ -131,7 +132,7 @@ pub(super) struct Instance<T> {
     /// Orchestrator for managing replicas
     orchestrator: ComputeOrchestrator,
     /// A number that increases with each restart of `environmentd`.
-    envd_epoch: i64,
+    envd_epoch: NonZeroI64,
     /// Numbers that increase with each restart of a replica.
     replica_epochs: HashMap<ReplicaId, u64>,
 }
@@ -181,7 +182,7 @@ where
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
         max_result_size: u32,
         orchestrator: ComputeOrchestrator,
-        envd_epoch: i64,
+        envd_epoch: NonZeroI64,
     ) -> Self {
         let collections = arranged_logs
             .iter()

@@ -22,6 +22,7 @@
 //! about each of these interfaces.
 
 use std::mem;
+use std::num::NonZeroI64;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -216,7 +217,7 @@ where
     mz_storage_client::controller::Controller<T>: StorageController<Timestamp = T>,
 {
     /// Creates a new controller.
-    pub async fn new(config: ControllerConfig, envd_epoch: i64) -> Self {
+    pub async fn new(config: ControllerConfig, envd_epoch: NonZeroI64) -> Self {
         let storage_controller = mz_storage_client::controller::Controller::new(
             config.build_info,
             config.storage_stash_url,
@@ -227,6 +228,7 @@ where
             config.init_container_image.clone(),
             config.now,
             &config.postgres_factory,
+            envd_epoch,
         )
         .await;
 
