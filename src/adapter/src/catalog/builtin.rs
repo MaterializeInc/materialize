@@ -28,6 +28,7 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
+use mz_pgrepr::oid;
 use mz_repr::{RelationDesc, RelationType, ScalarType};
 use mz_sql::catalog::{
     CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, TypeReference,
@@ -259,7 +260,7 @@ impl Fingerprint for RelationType {
 pub const TYPE_BOOL: BuiltinType<NameReference> = BuiltinType {
     name: "bool",
     schema: PG_CATALOG_SCHEMA,
-    oid: 16,
+    oid: oid::TYPE_BOOL_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Bool,
         array_id: None,
@@ -269,7 +270,7 @@ pub const TYPE_BOOL: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_BYTEA: BuiltinType<NameReference> = BuiltinType {
     name: "bytea",
     schema: PG_CATALOG_SCHEMA,
-    oid: 17,
+    oid: oid::TYPE_BYTEA_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Bytes,
         array_id: None,
@@ -279,7 +280,7 @@ pub const TYPE_BYTEA: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_INT8: BuiltinType<NameReference> = BuiltinType {
     name: "int8",
     schema: PG_CATALOG_SCHEMA,
-    oid: 20,
+    oid: oid::TYPE_INT8_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Int64,
         array_id: None,
@@ -289,7 +290,7 @@ pub const TYPE_INT8: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_INT4: BuiltinType<NameReference> = BuiltinType {
     name: "int4",
     schema: PG_CATALOG_SCHEMA,
-    oid: 23,
+    oid: oid::TYPE_INT4_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Int32,
         array_id: None,
@@ -299,7 +300,7 @@ pub const TYPE_INT4: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_TEXT: BuiltinType<NameReference> = BuiltinType {
     name: "text",
     schema: PG_CATALOG_SCHEMA,
-    oid: 25,
+    oid: oid::TYPE_TEXT_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::String,
         array_id: None,
@@ -309,7 +310,7 @@ pub const TYPE_TEXT: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_OID: BuiltinType<NameReference> = BuiltinType {
     name: "oid",
     schema: PG_CATALOG_SCHEMA,
-    oid: 26,
+    oid: oid::TYPE_OID_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Oid,
         array_id: None,
@@ -319,7 +320,7 @@ pub const TYPE_OID: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_FLOAT4: BuiltinType<NameReference> = BuiltinType {
     name: "float4",
     schema: PG_CATALOG_SCHEMA,
-    oid: 700,
+    oid: oid::TYPE_FLOAT4_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Float32,
         array_id: None,
@@ -329,7 +330,7 @@ pub const TYPE_FLOAT4: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_FLOAT8: BuiltinType<NameReference> = BuiltinType {
     name: "float8",
     schema: PG_CATALOG_SCHEMA,
-    oid: 701,
+    oid: oid::TYPE_FLOAT8_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Float64,
         array_id: None,
@@ -339,7 +340,7 @@ pub const TYPE_FLOAT8: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_BOOL_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_bool",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1000,
+    oid: oid::TYPE_BOOL_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_BOOL.name,
@@ -351,7 +352,7 @@ pub const TYPE_BOOL_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_BYTEA_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_bytea",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1001,
+    oid: oid::TYPE_BYTEA_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_BYTEA.name,
@@ -363,7 +364,7 @@ pub const TYPE_BYTEA_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_INT4_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_int4",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1007,
+    oid: oid::TYPE_INT4_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_INT4.name,
@@ -375,7 +376,7 @@ pub const TYPE_INT4_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_TEXT_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_text",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1009,
+    oid: oid::TYPE_TEXT_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_TEXT.name,
@@ -387,7 +388,7 @@ pub const TYPE_TEXT_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_INT8_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_int8",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1016,
+    oid: oid::TYPE_INT8_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_INT8.name,
@@ -399,7 +400,7 @@ pub const TYPE_INT8_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_FLOAT4_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_float4",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1021,
+    oid: oid::TYPE_FLOAT4_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_FLOAT4.name,
@@ -411,7 +412,7 @@ pub const TYPE_FLOAT4_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_FLOAT8_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_float8",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1022,
+    oid: oid::TYPE_FLOAT8_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_FLOAT8.name,
@@ -423,7 +424,7 @@ pub const TYPE_FLOAT8_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_OID_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_oid",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1028,
+    oid: oid::TYPE_OID_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_OID.name,
@@ -435,7 +436,7 @@ pub const TYPE_OID_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_DATE: BuiltinType<NameReference> = BuiltinType {
     name: "date",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1082,
+    oid: oid::TYPE_DATE_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Date,
         array_id: None,
@@ -445,7 +446,7 @@ pub const TYPE_DATE: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_TIME: BuiltinType<NameReference> = BuiltinType {
     name: "time",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1083,
+    oid: oid::TYPE_TIME_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Time,
         array_id: None,
@@ -455,7 +456,7 @@ pub const TYPE_TIME: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_TIMESTAMP: BuiltinType<NameReference> = BuiltinType {
     name: "timestamp",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1114,
+    oid: oid::TYPE_TIMESTAMP_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Timestamp,
         array_id: None,
@@ -465,7 +466,7 @@ pub const TYPE_TIMESTAMP: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_TIMESTAMP_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_timestamp",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1115,
+    oid: oid::TYPE_TIMESTAMP_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_TIMESTAMP.name,
@@ -477,7 +478,7 @@ pub const TYPE_TIMESTAMP_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_DATE_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_date",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1182,
+    oid: oid::TYPE_DATE_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_DATE.name,
@@ -489,7 +490,7 @@ pub const TYPE_DATE_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_TIME_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_time",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1183,
+    oid: oid::TYPE_TIME_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_TIME.name,
@@ -501,7 +502,7 @@ pub const TYPE_TIME_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_TIMESTAMPTZ: BuiltinType<NameReference> = BuiltinType {
     name: "timestamptz",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1184,
+    oid: oid::TYPE_TIMESTAMPTZ_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::TimestampTz,
         array_id: None,
@@ -511,7 +512,7 @@ pub const TYPE_TIMESTAMPTZ: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_TIMESTAMPTZ_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_timestamptz",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1185,
+    oid: oid::TYPE_TIMESTAMPTZ_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_TIMESTAMPTZ.name,
@@ -523,7 +524,7 @@ pub const TYPE_TIMESTAMPTZ_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_INTERVAL: BuiltinType<NameReference> = BuiltinType {
     name: "interval",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1186,
+    oid: oid::TYPE_INTERVAL_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Interval,
         array_id: None,
@@ -533,7 +534,7 @@ pub const TYPE_INTERVAL: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_INTERVAL_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_interval",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1187,
+    oid: oid::TYPE_INTERVAL_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_INTERVAL.name,
@@ -545,7 +546,7 @@ pub const TYPE_INTERVAL_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_NUMERIC: BuiltinType<NameReference> = BuiltinType {
     name: "numeric",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1700,
+    oid: oid::TYPE_NUMERIC_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Numeric,
         array_id: None,
@@ -555,7 +556,7 @@ pub const TYPE_NUMERIC: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_NUMERIC_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_numeric",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1231,
+    oid: oid::TYPE_NUMERIC_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_NUMERIC.name,
@@ -567,7 +568,7 @@ pub const TYPE_NUMERIC_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_RECORD: BuiltinType<NameReference> = BuiltinType {
     name: "record",
     schema: PG_CATALOG_SCHEMA,
-    oid: 2249,
+    oid: oid::TYPE_RECORD_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
         array_id: None,
@@ -577,7 +578,7 @@ pub const TYPE_RECORD: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_RECORD_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_record",
     schema: PG_CATALOG_SCHEMA,
-    oid: 2287,
+    oid: oid::TYPE_RECORD_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_RECORD.name,
@@ -589,7 +590,7 @@ pub const TYPE_RECORD_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_UUID: BuiltinType<NameReference> = BuiltinType {
     name: "uuid",
     schema: PG_CATALOG_SCHEMA,
-    oid: 2950,
+    oid: oid::TYPE_UUID_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Uuid,
         array_id: None,
@@ -599,7 +600,7 @@ pub const TYPE_UUID: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_UUID_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_uuid",
     schema: PG_CATALOG_SCHEMA,
-    oid: 2951,
+    oid: oid::TYPE_UUID_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_UUID.name,
@@ -611,7 +612,7 @@ pub const TYPE_UUID_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_JSONB: BuiltinType<NameReference> = BuiltinType {
     name: "jsonb",
     schema: PG_CATALOG_SCHEMA,
-    oid: 3802,
+    oid: oid::TYPE_JSONB_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Jsonb,
         array_id: None,
@@ -621,7 +622,7 @@ pub const TYPE_JSONB: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_JSONB_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_jsonb",
     schema: PG_CATALOG_SCHEMA,
-    oid: 3807,
+    oid: oid::TYPE_JSONB_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_JSONB.name,
@@ -633,7 +634,7 @@ pub const TYPE_JSONB_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_ANY: BuiltinType<NameReference> = BuiltinType {
     name: "any",
     schema: PG_CATALOG_SCHEMA,
-    oid: 2276,
+    oid: oid::TYPE_ANY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
         array_id: None,
@@ -643,7 +644,7 @@ pub const TYPE_ANY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_ANYARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "anyarray",
     schema: PG_CATALOG_SCHEMA,
-    oid: 2277,
+    oid: oid::TYPE_ANYARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
         array_id: None,
@@ -653,7 +654,7 @@ pub const TYPE_ANYARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_ANYELEMENT: BuiltinType<NameReference> = BuiltinType {
     name: "anyelement",
     schema: PG_CATALOG_SCHEMA,
-    oid: 2283,
+    oid: oid::TYPE_ANYELEMENT_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
         array_id: None,
@@ -663,7 +664,7 @@ pub const TYPE_ANYELEMENT: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_ANYNONARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "anynonarray",
     schema: PG_CATALOG_SCHEMA,
-    oid: 2776,
+    oid: oid::TYPE_ANYNONARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
         array_id: None,
@@ -673,7 +674,7 @@ pub const TYPE_ANYNONARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_CHAR: BuiltinType<NameReference> = BuiltinType {
     name: "char",
     schema: PG_CATALOG_SCHEMA,
-    oid: 18,
+    oid: oid::TYPE_CHAR_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::PgLegacyChar,
         array_id: None,
@@ -683,7 +684,7 @@ pub const TYPE_CHAR: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_VARCHAR: BuiltinType<NameReference> = BuiltinType {
     name: "varchar",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1043,
+    oid: oid::TYPE_VARCHAR_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::VarChar,
         array_id: None,
@@ -693,7 +694,7 @@ pub const TYPE_VARCHAR: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_INT2: BuiltinType<NameReference> = BuiltinType {
     name: "int2",
     schema: PG_CATALOG_SCHEMA,
-    oid: 21,
+    oid: oid::TYPE_INT2_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Int16,
         array_id: None,
@@ -703,7 +704,7 @@ pub const TYPE_INT2: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_INT2_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_int2",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1005,
+    oid: oid::TYPE_INT2_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_INT2.name,
@@ -715,7 +716,7 @@ pub const TYPE_INT2_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_BPCHAR: BuiltinType<NameReference> = BuiltinType {
     name: "bpchar",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1042,
+    oid: oid::TYPE_BPCHAR_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Char,
         array_id: None,
@@ -725,7 +726,7 @@ pub const TYPE_BPCHAR: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_CHAR_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_char",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1002,
+    oid: oid::TYPE_CHAR_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_CHAR.name,
@@ -737,7 +738,7 @@ pub const TYPE_CHAR_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_VARCHAR_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_varchar",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1015,
+    oid: oid::TYPE_VARCHAR_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_VARCHAR.name,
@@ -749,7 +750,7 @@ pub const TYPE_VARCHAR_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_BPCHAR_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_bpchar",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1014,
+    oid: oid::TYPE_BPCHAR_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_BPCHAR.name,
@@ -761,7 +762,7 @@ pub const TYPE_BPCHAR_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_REGPROC: BuiltinType<NameReference> = BuiltinType {
     name: "regproc",
     schema: PG_CATALOG_SCHEMA,
-    oid: 24,
+    oid: oid::TYPE_REGPROC_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::RegProc,
         array_id: None,
@@ -771,7 +772,7 @@ pub const TYPE_REGPROC: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_REGPROC_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_regproc",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1008,
+    oid: oid::TYPE_REGPROC_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_REGPROC.name,
@@ -783,7 +784,7 @@ pub const TYPE_REGPROC_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_REGTYPE: BuiltinType<NameReference> = BuiltinType {
     name: "regtype",
     schema: PG_CATALOG_SCHEMA,
-    oid: 2206,
+    oid: oid::TYPE_REGTYPE_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::RegType,
         array_id: None,
@@ -793,7 +794,7 @@ pub const TYPE_REGTYPE: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_REGTYPE_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_regtype",
     schema: PG_CATALOG_SCHEMA,
-    oid: 2211,
+    oid: oid::TYPE_REGTYPE_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_REGTYPE.name,
@@ -805,7 +806,7 @@ pub const TYPE_REGTYPE_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_REGCLASS: BuiltinType<NameReference> = BuiltinType {
     name: "regclass",
     schema: PG_CATALOG_SCHEMA,
-    oid: 2205,
+    oid: oid::TYPE_REGCLASS_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::RegClass,
         array_id: None,
@@ -815,7 +816,7 @@ pub const TYPE_REGCLASS: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_REGCLASS_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_regclass",
     schema: PG_CATALOG_SCHEMA,
-    oid: 2210,
+    oid: oid::TYPE_REGCLASS_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_REGCLASS.name,
@@ -827,7 +828,7 @@ pub const TYPE_REGCLASS_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_INT2_VECTOR: BuiltinType<NameReference> = BuiltinType {
     name: "int2vector",
     schema: PG_CATALOG_SCHEMA,
-    oid: 22,
+    oid: oid::TYPE_INT2_VECTOR_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Int2Vector,
         array_id: None,
@@ -837,7 +838,7 @@ pub const TYPE_INT2_VECTOR: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_INT2_VECTOR_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_int2vector",
     schema: PG_CATALOG_SCHEMA,
-    oid: 1006,
+    oid: oid::TYPE_INT2_VECTOR_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_INT2_VECTOR.name,
@@ -849,7 +850,7 @@ pub const TYPE_INT2_VECTOR_ARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_ANYCOMPATIBLE: BuiltinType<NameReference> = BuiltinType {
     name: "anycompatible",
     schema: PG_CATALOG_SCHEMA,
-    oid: 5077,
+    oid: oid::TYPE_ANYCOMPATIBLE_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
         array_id: None,
@@ -859,7 +860,7 @@ pub const TYPE_ANYCOMPATIBLE: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_ANYCOMPATIBLEARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "anycompatiblearray",
     schema: PG_CATALOG_SCHEMA,
-    oid: 5078,
+    oid: oid::TYPE_ANYCOMPATIBLEARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
         array_id: None,
@@ -869,7 +870,7 @@ pub const TYPE_ANYCOMPATIBLEARRAY: BuiltinType<NameReference> = BuiltinType {
 pub const TYPE_ANYCOMPATIBLENONARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "anycompatiblenonarray",
     schema: PG_CATALOG_SCHEMA,
-    oid: 5079,
+    oid: oid::TYPE_ANYCOMPATIBLENONARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
         array_id: None,
@@ -1627,7 +1628,8 @@ s.name AS nspname,
 NULL::pg_catalog.oid AS nspowner,
 NULL::pg_catalog.text[] AS nspacl
 FROM mz_catalog.mz_schemas s
-JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+WHERE s.database_id IS NULL OR d.name = pg_catalog.current_database()",
 };
 
 pub const PG_CLASS: BuiltinView = BuiltinView {
@@ -1683,7 +1685,8 @@ FROM (
         JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id
 ) AS class_objects
 JOIN mz_catalog.mz_schemas ON mz_schemas.id = class_objects.schema_id
-JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
+LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
+WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
 };
 
 pub const PG_DATABASE: BuiltinView = BuiltinView {
@@ -1729,7 +1732,9 @@ pub const PG_INDEX: BuiltinView = BuiltinView {
 FROM mz_catalog.mz_indexes
 JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id
 JOIN mz_catalog.mz_index_columns ON mz_index_columns.index_id = mz_indexes.id
-JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())
+JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_relations.schema_id
+LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
+WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()
 GROUP BY mz_indexes.oid, mz_relations.oid",
 };
 
@@ -1741,8 +1746,7 @@ pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
     NULL::pg_catalog.oid as classoid,
     0::pg_catalog.int4 as objsubid,
     NULL::pg_catalog.text as description
-FROM pg_catalog.pg_class c
-JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
+FROM pg_catalog.pg_class c",
 };
 
 pub const PG_TYPE: BuiltinView = BuiltinView {
@@ -1817,7 +1821,8 @@ FROM
             UNION ALL SELECT id, 'p' FROM mz_catalog.mz_pseudo_types
         )
             AS t ON mz_types.id = t.id
-    JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
+    LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
+    WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
 };
 
 pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
@@ -1848,7 +1853,9 @@ FROM (
 ) AS class_objects
 JOIN mz_catalog.mz_columns ON class_objects.id = mz_columns.id
 JOIN pg_catalog.pg_type ON pg_type.oid = mz_columns.type_oid
-JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
+JOIN mz_catalog.mz_schemas ON mz_schemas.id = class_objects.schema_id
+LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
+WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
     // Since this depends on pg_type, its id must be higher due to initialization
     // ordering.
 };
@@ -1864,7 +1871,8 @@ pub const PG_PROC: BuiltinView = BuiltinView {
     NULL::pg_catalog.text AS proargdefaults
 FROM mz_catalog.mz_functions
 JOIN mz_catalog.mz_schemas ON mz_functions.schema_id = mz_schemas.id
-JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
+LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
+WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
 };
 
 pub const PG_RANGE: BuiltinView = BuiltinView {
@@ -2115,8 +2123,7 @@ SELECT n.nspname AS schemaname,
     pg_catalog.pg_get_userbyid(c.relowner) AS tableowner
 FROM pg_catalog.pg_class c
 LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())
-WHERE c.relkind = ANY (ARRAY['r','p'])",
+WHERE c.relkind IN ('r', 'p')",
 };
 
 pub const PG_ACCESS_METHODS: BuiltinView = BuiltinView {
@@ -2160,7 +2167,7 @@ pub const PG_VIEWS: BuiltinView = BuiltinView {
 FROM mz_catalog.mz_views v
 LEFT JOIN mz_catalog.mz_schemas s ON s.id = v.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
-WHERE d.name = pg_catalog.current_database()",
+WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 
 pub const PG_MATVIEWS: BuiltinView = BuiltinView {
@@ -2174,7 +2181,7 @@ pub const PG_MATVIEWS: BuiltinView = BuiltinView {
 FROM mz_catalog.mz_materialized_views m
 LEFT JOIN mz_catalog.mz_schemas s ON s.id = m.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
-WHERE d.name = pg_catalog.current_database()",
+WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 
 pub const INFORMATION_SCHEMA_COLUMNS: BuiltinView = BuiltinView {
@@ -2182,7 +2189,7 @@ pub const INFORMATION_SCHEMA_COLUMNS: BuiltinView = BuiltinView {
     schema: INFORMATION_SCHEMA,
     sql: "CREATE VIEW information_schema.columns AS
 SELECT
-    d.name as table_catalog,
+    current_database() as table_catalog,
     s.name AS table_schema,
     o.name AS table_name,
     c.name AS column_name,
@@ -2194,14 +2201,15 @@ SELECT
 FROM mz_catalog.mz_columns c
 JOIN mz_catalog.mz_objects o ON o.id = c.id
 JOIN mz_catalog.mz_schemas s ON s.id = o.schema_id
-JOIN mz_catalog.mz_databases d on s.database_id = d.id",
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 
 pub const INFORMATION_SCHEMA_TABLES: BuiltinView = BuiltinView {
     name: "tables",
     schema: INFORMATION_SCHEMA,
     sql: "CREATE VIEW information_schema.tables AS SELECT
-    d.name as table_catalog,
+    current_database() as table_catalog,
     s.name AS table_schema,
     r.name AS table_name,
     CASE r.type
@@ -2211,7 +2219,8 @@ pub const INFORMATION_SCHEMA_TABLES: BuiltinView = BuiltinView {
     END AS table_type
 FROM mz_catalog.mz_relations r
 JOIN mz_catalog.mz_schemas s ON s.id = r.schema_id
-JOIN mz_catalog.mz_databases d on s.database_id = d.id",
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 
 // MZ doesn't support COLLATE so the table is filled with NULLs and made empty. pg_database hard
@@ -2293,8 +2302,7 @@ AS SELECT
     NULL::pg_catalog.text AS rolpassword,
     -- MZ doesn't have role passwords
     NULL::pg_catalog.timestamptz AS rolvaliduntil
-FROM mz_catalog.mz_roles r
-JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
+FROM mz_catalog.mz_roles r",
 };
 
 pub const MZ_SHOW_MATERIALIZED_VIEWS: BuiltinView = BuiltinView {

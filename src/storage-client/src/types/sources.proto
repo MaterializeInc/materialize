@@ -200,11 +200,14 @@ message ProtoPostgresSourceConnection {
     mz_repr.global_id.ProtoGlobalId connection_id = 6;
     mz_storage_client.types.connections.ProtoPostgresConnection connection = 1;
     string publication = 2;
-    ProtoPostgresSourceDetails details = 4;
+    ProtoPostgresSourcePublicationDetails details = 4;
     repeated ProtoPostgresTableCast table_casts = 5;
+    // Describes the position in the source's publication that the table cast
+    // correlates to; meant to be iterated over in tandem with table_casts
+    repeated uint64 table_cast_pos = 7;
 }
 
-message ProtoPostgresSourceDetails {
+message ProtoPostgresSourcePublicationDetails {
     repeated mz_postgres_util.desc.ProtoPostgresTableDesc tables = 1;
     string slot = 2;
 }

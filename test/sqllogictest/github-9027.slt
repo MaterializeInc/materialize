@@ -73,44 +73,36 @@ Explained Query:
       source={ relation=0, key=[] }
       Get::PassArrangements l0
         raw=true
-      ArrangeBy
-        input_key=[#0]
-        raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=() }
-        Reduce::Distinct
-          val_plan
-            project=()
-          key_plan=id
-          Join::Linear
-            linear_stage[1]
-              closure
-                project=(#0)
-                filter=(((#3 = 1997-07-06) OR (date_to_timestamp(#2) = (#1 - 7 days))))
-              lookup={ relation=0, key=[] }
-              stream={ key=[], thinning=(#0, #1) }
-            linear_stage[0]
-              lookup={ relation=1, key=[#0] }
-              stream={ key=[#0], thinning=(#1) }
-            source={ relation=2, key=[] }
-            ArrangeBy
+      Reduce::Distinct
+        val_plan
+          project=()
+        key_plan=id
+        Join::Linear
+          linear_stage[1]
+            closure
+              project=(#0)
+              filter=(((#3 = 1997-07-06) OR (date_to_timestamp(#2) = (#1 - 7 days))))
+            lookup={ relation=0, key=[] }
+            stream={ key=[], thinning=(#0, #1) }
+          linear_stage[0]
+            lookup={ relation=1, key=[#0] }
+            stream={ key=[#0], thinning=(#1) }
+          source={ relation=2, key=[] }
+          ArrangeBy
+            raw=true
+            arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+            Get::Collection materialize.public.lineitem
+              project=(#1, #2)
               raw=true
-              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-              Get::Collection materialize.public.lineitem
-                project=(#1, #2)
-                raw=true
-            ArrangeBy
-              input_key=[#0]
-              raw=false
-              arrangements[0]={ key=[#0], permutation=id, thinning=() }
-              Reduce::Distinct
-                val_plan
-                  project=()
-                key_plan=id
-                Get::PassArrangements l0
-                  raw=true
-            Get::Collection materialize.public.orders
-              filter=((#0) IS NOT NULL)
+          Reduce::Distinct
+            val_plan
+              project=()
+            key_plan=id
+            Get::PassArrangements l0
               raw=true
+          Get::Collection materialize.public.orders
+            filter=((#0) IS NOT NULL)
+            raw=true
   Where
     cte l0 =
       Join::Linear

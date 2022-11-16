@@ -50,22 +50,6 @@ test_cases = [
         dbt_env={},
         profile="materialize_cloud",
     ),
-    TestCase(
-        name="tls-binary",
-        materialized_options=[
-            "--tls-mode=verify-ca",
-            "--tls-cert=/secrets/materialized.crt",
-            "--tls-key=/secrets/materialized.key",
-            "--tls-ca=/secrets/ca.crt",
-        ],
-        materialized_image="materialize/materialized:v0.26.4",
-        dbt_env={
-            "DBT_SSLCERT": "/secrets/postgres.crt",
-            "DBT_SSLKEY": "/secrets/postgres.key",
-            "DBT_SSLROOTCERT": "/secrets/ca.crt",
-        },
-        profile="materialize_binary",
-    ),
 ]
 
 

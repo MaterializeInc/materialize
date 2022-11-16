@@ -3246,7 +3246,7 @@ dependencies = [
 
 [[package]]
 name = "mz-compute"
-version = "0.32.0-dev"
+version = "0.33.0-dev"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3312,6 +3312,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "thiserror",
  "timely",
  "tokio",
  "tokio-stream",
@@ -3346,7 +3347,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.32.0-dev"
+version = "0.33.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -3407,6 +3408,7 @@ dependencies = [
  "postgres-protocol",
  "postgres_array",
  "predicates",
+ "prometheus",
  "rand",
  "rdkafka-sys",
  "regex",
@@ -3960,6 +3962,7 @@ dependencies = [
  "anyhow",
  "mz-cloud-resources",
  "mz-ore",
+ "mz-pgrepr",
  "mz-proto",
  "mz-repr",
  "mz-ssh-util",
@@ -3989,6 +3992,7 @@ dependencies = [
  "headers",
  "http",
  "include_dir",
+ "libc",
  "mime",
  "mz-build-info",
  "mz-http-util",
@@ -4222,6 +4226,7 @@ dependencies = [
  "clap",
  "fallible-iterator",
  "futures",
+ "itertools",
  "junit-report",
  "md-5",
  "mz-build-info",
@@ -4314,7 +4319,7 @@ dependencies = [
 
 [[package]]
 name = "mz-storage"
-version = "0.32.0-dev"
+version = "0.33.0-dev"
 dependencies = [
  "anyhow",
  "async-compression",

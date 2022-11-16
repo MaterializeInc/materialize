@@ -8,9 +8,16 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-INSERT INTO upgrade_pg_cdc_table VALUES (11),(12),(13),(14),(15);
+INSERT INTO cdc_int_table VALUES (11),(12),(13),(14),(15);
+INSERT INTO cdc_enum_table VALUES ('var1'), ('var0');
 
-> SELECT * FROM upgrade_pg_cdc_table_v_0_27_0;
+> SELECT * FROM cdc_enum_table;
+var0
+var0
+var1
+var1
+
+> SELECT * FROM cdc_int_table_for_tables;
 1
 2
 3
@@ -23,4 +30,5 @@ INSERT INTO upgrade_pg_cdc_table VALUES (11),(12),(13),(14),(15);
 15
 
 # Drop source so that the replication slot can be reclaimed.
-> DROP SOURCE upgrade_pg_cdc_source CASCADE
+> DROP SOURCE upgrade_pg_cdc_source_for_all_tables CASCADE
+> DROP SOURCE upgrade_pg_cdc_source_for_tables CASCADE

@@ -8,17 +8,16 @@
 # by the Apache License, Version 2.0.
 
 #
-# Test the HSTORE data type
+# HSTORE supported only as TEXT
 #
 
-> CREATE SECRET pgpass AS 'password'
+> CREATE SECRET pgpass AS 'postgres'
 > CREATE CONNECTION pg TO POSTGRES (
     HOST postgres,
     DATABASE postgres,
     USER postgres,
     PASSWORD SECRET pgpass
   )
-
 
 # Insert data pre-snapshot
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -36,7 +35,7 @@ INSERT INTO t1 VALUES (NULL), ('a=>1'::hstore);
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres' (PUBLICATION 'mz_source')
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source', TEXT COLUMNS (t1.f1))
   FOR ALL TABLES;
 
 > SELECT COUNT(*) > 0 FROM t1;
@@ -47,8 +46,10 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO t1 SELECT * FROM t1;
 
 > SELECT pg_typeof(f1) FROM t1 LIMIT 1;
-"json"
+"text"
 
 > SELECT * FROM t1;
-"{\"a\":\"1\"}"
-"{\"a\":\"1\"}"
+<null>
+<null>
+"\"a\"=>\"1\""
+"\"a\"=>\"1\""

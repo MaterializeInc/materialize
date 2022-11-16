@@ -4473,37 +4473,13 @@ WHERE a = c AND d = e AND b + d > 42
         "Join": {
           "inputs": [
             {
-              "ArrangeBy": {
-                "input": {
-                  "Get": {
-                    "id": {
-                      "Global": {
-                        "User": 1
-                      }
-                    },
-                    "keys": {
-                      "raw": false,
-                      "arranged": [
-                        [
-                          [
-                            {
-                              "Column": 0
-                            }
-                          ],
-                          {
-                            "0": 0,
-                            "1": 1
-                          },
-                          [
-                            1
-                          ]
-                        ]
-                      ]
-                    },
-                    "plan": "PassArrangements"
+              "Get": {
+                "id": {
+                  "Global": {
+                    "User": 1
                   }
                 },
-                "forms": {
+                "keys": {
                   "raw": false,
                   "arranged": [
                     [
@@ -4522,20 +4498,7 @@ WHERE a = c AND d = e AND b + d > 42
                     ]
                   ]
                 },
-                "input_key": [
-                  {
-                    "Column": 0
-                  }
-                ],
-                "input_mfp": {
-                  "expressions": [],
-                  "predicates": [],
-                  "projection": [
-                    0,
-                    1
-                  ],
-                  "input_arity": 2
-                }
+                "plan": "PassArrangements"
               }
             },
             {
@@ -4875,37 +4838,13 @@ WHERE a = c AND d = e AND f = a
         "Join": {
           "inputs": [
             {
-              "ArrangeBy": {
-                "input": {
-                  "Get": {
-                    "id": {
-                      "Global": {
-                        "User": 1
-                      }
-                    },
-                    "keys": {
-                      "raw": false,
-                      "arranged": [
-                        [
-                          [
-                            {
-                              "Column": 0
-                            }
-                          ],
-                          {
-                            "0": 0,
-                            "1": 1
-                          },
-                          [
-                            1
-                          ]
-                        ]
-                      ]
-                    },
-                    "plan": "PassArrangements"
+              "Get": {
+                "id": {
+                  "Global": {
+                    "User": 1
                   }
                 },
-                "forms": {
+                "keys": {
                   "raw": false,
                   "arranged": [
                     [
@@ -4924,20 +4863,7 @@ WHERE a = c AND d = e AND f = a
                     ]
                   ]
                 },
-                "input_key": [
-                  {
-                    "Column": 0
-                  }
-                ],
-                "input_mfp": {
-                  "expressions": [],
-                  "predicates": [],
-                  "projection": [
-                    0,
-                    1
-                  ],
-                  "input_arity": 2
-                }
+                "plan": "PassArrangements"
               }
             },
             {
@@ -5266,37 +5192,13 @@ WHERE a = c and a = e
         "Join": {
           "inputs": [
             {
-              "ArrangeBy": {
-                "input": {
-                  "Get": {
-                    "id": {
-                      "Global": {
-                        "User": 1
-                      }
-                    },
-                    "keys": {
-                      "raw": false,
-                      "arranged": [
-                        [
-                          [
-                            {
-                              "Column": 0
-                            }
-                          ],
-                          {
-                            "0": 0,
-                            "1": 1
-                          },
-                          [
-                            1
-                          ]
-                        ]
-                      ]
-                    },
-                    "plan": "PassArrangements"
+              "Get": {
+                "id": {
+                  "Global": {
+                    "User": 1
                   }
                 },
-                "forms": {
+                "keys": {
                   "raw": false,
                   "arranged": [
                     [
@@ -5315,54 +5217,17 @@ WHERE a = c and a = e
                     ]
                   ]
                 },
-                "input_key": [
-                  {
-                    "Column": 0
-                  }
-                ],
-                "input_mfp": {
-                  "expressions": [],
-                  "predicates": [],
-                  "projection": [
-                    0,
-                    1
-                  ],
-                  "input_arity": 2
-                }
+                "plan": "PassArrangements"
               }
             },
             {
-              "ArrangeBy": {
-                "input": {
-                  "Get": {
-                    "id": {
-                      "Global": {
-                        "User": 2
-                      }
-                    },
-                    "keys": {
-                      "raw": false,
-                      "arranged": [
-                        [
-                          [
-                            {
-                              "Column": 0
-                            }
-                          ],
-                          {
-                            "0": 0,
-                            "1": 1
-                          },
-                          [
-                            1
-                          ]
-                        ]
-                      ]
-                    },
-                    "plan": "PassArrangements"
+              "Get": {
+                "id": {
+                  "Global": {
+                    "User": 2
                   }
                 },
-                "forms": {
+                "keys": {
                   "raw": false,
                   "arranged": [
                     [
@@ -5381,54 +5246,17 @@ WHERE a = c and a = e
                     ]
                   ]
                 },
-                "input_key": [
-                  {
-                    "Column": 0
-                  }
-                ],
-                "input_mfp": {
-                  "expressions": [],
-                  "predicates": [],
-                  "projection": [
-                    0,
-                    1
-                  ],
-                  "input_arity": 2
-                }
+                "plan": "PassArrangements"
               }
             },
             {
-              "ArrangeBy": {
-                "input": {
-                  "Get": {
-                    "id": {
-                      "Global": {
-                        "User": 3
-                      }
-                    },
-                    "keys": {
-                      "raw": false,
-                      "arranged": [
-                        [
-                          [
-                            {
-                              "Column": 0
-                            }
-                          ],
-                          {
-                            "0": 0,
-                            "1": 1
-                          },
-                          [
-                            1
-                          ]
-                        ]
-                      ]
-                    },
-                    "plan": "PassArrangements"
+              "Get": {
+                "id": {
+                  "Global": {
+                    "User": 3
                   }
                 },
-                "forms": {
+                "keys": {
                   "raw": false,
                   "arranged": [
                     [
@@ -5447,20 +5275,7 @@ WHERE a = c and a = e
                     ]
                   ]
                 },
-                "input_key": [
-                  {
-                    "Column": 0
-                  }
-                ],
-                "input_mfp": {
-                  "expressions": [],
-                  "predicates": [],
-                  "projection": [
-                    0,
-                    1
-                  ],
-                  "input_arity": 2
-                }
+                "plan": "PassArrangements"
               }
             }
           ],

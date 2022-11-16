@@ -12,6 +12,15 @@ mode cockroach
 statement ok
 CREATE TABLE a (b int);
 
+statement ok
+CREATE DATABASE other
+
+statement ok
+CREATE TABLE other.public.foo (a int)
+
+statement ok
+CREATE TABLE other.public.bar (a int)
+
 # Normal table
 query TIIIIBTTIBBBBTBB
 SELECT relname, reloftype, relam, reltablespace, reltoastrelid, relhasindex, relpersistence, relkind, relchecks,
@@ -33,44 +42,21 @@ WHERE relname = (SELECT name FROM mz_indexes WHERE on_id = (SELECT id FROM mz_ob
 ----
 0 0 0 0 false p i 0 false false false false d false false
 
-# Tables outside of the current database don't show up
+# Test that pg_class is restricted to the current database, but includes items
+# in ambient schemas (in this case, pg_class itself).
 
-statement ok
-CREATE DATABASE kant;
-
-statement ok
-SET database = kant;
-
-statement ok
-CREATE TABLE c (b int);
-
-query TIIIIBTTIBBBBTBB
-SELECT relname, reloftype, relam, reltablespace, reltoastrelid, relhasindex, relpersistence, relkind, relchecks,
-    relhasrules, relhastriggers, relrowsecurity, relforcerowsecurity, relreplident, relispartition, relhasoids
-FROM pg_catalog.pg_class
-WHERE relname = 'c';
+query T
+SELECT relname FROM pg_catalog.pg_class WHERE relname IN ('a', 'foo', 'bar', 'pg_class') ORDER BY 1
 ----
-c 0 0 0 0 false p r 0 false false false false d false false
-
+a
+pg_class
 
 statement ok
-SET database = test;
+SET database = other
 
-query TIIIIBTTIBBBBTBB
-SELECT relname, reloftype, relam, reltablespace, reltoastrelid, relhasindex, relpersistence, relkind, relchecks,
-    relhasrules, relhastriggers, relrowsecurity, relforcerowsecurity, relreplident, relispartition, relhasoids
-FROM pg_catalog.pg_class
-WHERE relname = 'c';
+query T
+SELECT relname FROM pg_catalog.pg_class WHERE relname IN ('a', 'foo', 'bar', 'pg_class') ORDER BY 1
 ----
-
-
-# statement ok
-# SET database = kant;
-
-# query TIIIIBTTIBBBBTBB
-# SELECT relname, reloftype, relam, reltablespace, reltoastrelid, relhasindex, relpersistence, relkind, relchecks,
-#     relhasrules, relhastriggers, relrowsecurity, relforcerowsecurity, relreplident, relispartition, relhasoids
-# FROM pg_catalog.pg_class
-# WHERE relname = 'c';
-# ----
-# c 0 0 0 0 false p r 0 false false false false d false false
+bar
+foo
+pg_class

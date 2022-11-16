@@ -8,10 +8,10 @@
 # by the Apache License, Version 2.0.
 
 #
-# Test arbitrary-precision NUMERIC
+# Arbitrary-precision NUMERIC supported only as TEXT
 #
 
-> CREATE SECRET pgpass AS 'password'
+> CREATE SECRET pgpass AS 'postgres'
 > CREATE CONNECTION pg TO POSTGRES (
     HOST postgres,
     DATABASE postgres,
@@ -34,8 +34,9 @@ INSERT INTO t1 VALUES (NULL), ('0.000000000000000000000000000001'), ('-111111111
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
+
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres' (PUBLICATION 'mz_source')
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source', TEXT COLUMNS (t1.f1))
   FOR ALL TABLES;
 
 > SELECT COUNT(*) > 0 FROM t1;
@@ -46,9 +47,11 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO t1 SELECT * FROM t1;
 
 > SELECT pg_typeof(f1) FROM t1 LIMIT 1;
-"numeric"
+"text"
 
 > SELECT * FROM t1;
+<null>
+<null>
 -1111111111111111111111111111111
 -1111111111111111111111111111111
 0.000000000000000000000000000001

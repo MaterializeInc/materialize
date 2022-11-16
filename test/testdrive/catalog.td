@@ -555,6 +555,8 @@ mz_show_cluster_replicas
 mz_show_indexes
 mz_show_materialized_views
 
+> SET database = materialize
+
 > CREATE SCHEMA tester
 
 > SHOW TABLES FROM tester

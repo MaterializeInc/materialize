@@ -17,12 +17,14 @@ use std::sync::Arc;
 use mz_expr::EvalError;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
-use mz_pgrepr::TypeFromOidError;
 use mz_repr::adt::char::InvalidCharLengthError;
 use mz_repr::adt::numeric::InvalidNumericMaxScaleError;
+use mz_repr::adt::system::Oid;
 use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
 use mz_repr::strconv;
 use mz_repr::ColumnName;
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::UnresolvedObjectName;
 use mz_sql_parser::parser::ParserError;
 
 use crate::catalog::CatalogError;
@@ -63,6 +65,7 @@ pub enum PlanError {
     MisqualifiedName(String),
     OverqualifiedDatabaseName(String),
     OverqualifiedSchemaName(String),
+    UnderqualifiedColumnName(String),
     SubqueriesDisallowed {
         context: String,
     },
@@ -89,9 +92,7 @@ pub enum PlanError {
     ExplainViewOnMaterializedView(String),
     UnacceptableTimelineName(String),
     UnrecognizedTypeInPostgresSource {
-        table: String,
-        column: String,
-        e: TypeFromOidError,
+        cols: Vec<(String, Oid)>,
     },
     FetchingCsrSchemaFailed {
         schema_lookup: String,
@@ -102,6 +103,15 @@ pub enum PlanError {
     },
     InvalidProtobufSchema {
         cause: protobuf_native::OperationFailedError,
+    },
+    InvalidOptionValue {
+        // Expected to be generated from the `to_ast_string` value on the option
+        // name.
+        option_name: String,
+        err: Box<PlanError>,
+    },
+    UnexpectedDuplicateReference {
+        name: UnresolvedObjectName,
     },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
@@ -117,14 +127,10 @@ impl PlanError {
 
     pub fn detail(&self) -> Option<String> {
         match self {
-            Self::UnrecognizedTypeInPostgresSource {
-                table: _,
-                column: _,
-                e,
-            } => Some(format!("{e}")),
             Self::FetchingCsrSchemaFailed { cause, .. } => Some(cause.to_string()),
             Self::FetchingPostgresPublicationInfoFailed { cause } => Some(cause.to_string()),
             Self::InvalidProtobufSchema { cause } => Some(cause.to_string()),
+            Self::InvalidOptionValue { err, .. } => err.detail(),
             _ => None,
         }
     }
@@ -150,12 +156,10 @@ impl PlanError {
                 Some("The prefix \"mz_\" is reserved for system timelines.".into())
             }
             Self::UnrecognizedTypeInPostgresSource {
-                table: _,
-                column: _,
-                e: _,
+                cols: _,
             } => Some(
-                "You may be using an unsupported type in Materialize, such as an enum. \
-                Try excluding the table from the publication."
+                "Use the TEXT COLUMNS option naming the listed columns, and Materialize can ingest their values\
+                as text."
                     .into(),
             ),
             Self::FetchingPostgresPublicationInfoFailed { cause } => {
@@ -172,6 +176,7 @@ impl PlanError {
                 }
                 None
             }
+            Self::InvalidOptionValue {  err, .. } => err.hint(),
             _ => None,
         }
     }
@@ -240,6 +245,11 @@ impl fmt::Display for PlanError {
                 "schema name '{}' cannot have more than two components",
                 name
             ),
+            Self::UnderqualifiedColumnName(name) => write!(
+                f,
+                "column name '{}' must have at least a table qualification",
+                name
+            ),
             Self::UnacceptableTimelineName(name) => {
                 write!(f, "unacceptable timeline name {}", name.quoted(),)
             }
@@ -266,15 +276,19 @@ impl fmt::Display for PlanError {
             | Self::AlterViewOnMaterializedView(name)
             | Self::ShowCreateViewOnMaterializedView(name)
             | Self::ExplainViewOnMaterializedView(name) => write!(f, "{name} is not a view"),
-            Self::UnrecognizedTypeInPostgresSource {
-                table,
-                column,
-                e: _,
-            } => write!(
-                f,
-                "column {} uses unrecognized type",
-                format!("{}.{}", table, column).quoted()
-            ),
+            Self::UnrecognizedTypeInPostgresSource { cols } => {
+                let mut cols = cols.to_owned();
+                cols.sort();
+
+                write!(
+                    f,
+                    "the following columns contain unsupported types:\n{}",
+                    itertools::join(
+                        cols.into_iter().map(|(col, Oid(oid))| format!("{} (OID {})", col, oid)),
+                        "\n"
+                    )
+                )
+            },
             Self::FetchingCsrSchemaFailed { schema_lookup, .. } => {
                 write!(f, "failed to fetch schema {schema_lookup} from schema registry")
             }
@@ -285,6 +299,8 @@ impl fmt::Display for PlanError {
                 write!(f, "invalid protobuf schema")
             }
             Self::DropSubsource{subsource, source: _} => write!(f, "SOURCE {subsource} is a subsource and cannot be dropped independently of its primary source"),
+            Self::InvalidOptionValue { option_name, err } => write!(f, "invalid {} option value: {}", option_name, err),
+            Self::UnexpectedDuplicateReference { name } => write!(f, "unexpected multiple references to {}", name.to_ast_string()),
         }
     }
 }
