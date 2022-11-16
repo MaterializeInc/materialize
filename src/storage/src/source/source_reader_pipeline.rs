@@ -901,13 +901,6 @@ where
         move |mut _capabilities, _frontiers, scheduler| async move {
             let mut buffer = Vec::new();
 
-            let status_shard = if let Some(status_shard) = storage_metadata.status_shard {
-                status_shard
-            } else {
-                // If there's no status shard, this operator has no work to do.
-                return
-            };
-
             let persist_client = {
                 let mut persist_clients = persist_clients.lock().await;
                 persist_clients
@@ -917,10 +910,15 @@ where
             };
 
             if is_active_worker {
-                info!("Health for source {source_id} initialized to: {last_reported_status:?}");
                 let now_ms = now();
                 let row = healthcheck::pack_status_row(source_id, last_reported_status.name(), last_reported_status.error(), now_ms);
-                write_to_persist(row, Timestamp::from(now_ms), &persist_client, status_shard, source_id).await;
+                if let Some(status_shard) = storage_metadata.status_shard {
+                    info!("Health for source {source_id} being written to {status_shard}");
+                    write_to_persist(row, Timestamp::from(now_ms), &persist_client, status_shard, source_id).await;
+                } else {
+                    info!("Health for source {source_id} not being written to status shard");
+                }
+                info!("Health for source {source_id} initialized to: {last_reported_status:?}");
             }
 
             while scheduler.notified().await {
@@ -943,7 +941,9 @@ where
                     info!("Health transition for source {source_id}: {last_reported_status:?} -> {new_status:?}");
                     let now_ms = now();
                     let row = healthcheck::pack_status_row(source_id, new_status.name(), new_status.error(), now_ms);
-                    write_to_persist(row, Timestamp::from(now_ms), &persist_client, status_shard, source_id).await;
+                    if let Some(status_shard) = storage_metadata.status_shard {
+                        write_to_persist(row, Timestamp::from(now_ms), &persist_client, status_shard, source_id).await;
+                    }
 
                     last_reported_status = new_status.clone();
                 }
