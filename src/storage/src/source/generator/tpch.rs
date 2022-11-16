@@ -10,9 +10,10 @@
 use std::fmt::Display;
 use std::iter;
 use std::ops::RangeInclusive;
+use std::time::Duration;
 
 use chrono::NaiveDate;
-use dec::OrderedDecimal;
+use dec::{Context as DecimalContext, OrderedDecimal};
 use once_cell::sync::Lazy;
 use rand::distributions::{Alphanumeric, DistString};
 use rand::rngs::StdRng;
@@ -32,6 +33,7 @@ pub struct Tpch {
     pub count_customer: i64,
     pub count_orders: i64,
     pub count_clerk: i64,
+    pub tick: Duration,
 }
 
 const SUPPLIER_OUTPUT: usize = 1;
@@ -48,206 +50,320 @@ impl Generator for Tpch {
         &self,
         _: NowFn,
         seed: Option<u64>,
-    ) -> Box<dyn Iterator<Item = (usize, GeneratorMessageType, Row)>> {
-        let Self {
-            count_supplier,
-            count_part,
-            count_customer,
-            count_orders,
-            count_clerk,
-        } = self.clone();
+    ) -> Box<dyn Iterator<Item = (usize, GeneratorMessageType, Row, i64)>> {
+        let mut rng = StdRng::seed_from_u64(seed.unwrap_or_default());
+        let mut ctx = Context {
+            tpch: self.clone(),
+            decimal_one: Numeric::from(1),
+            decimal_neg_one: Numeric::from(-1),
+            cx: numeric::cx_datum(),
+            // TODO: Use a text generator closer to the spec.
+            text_string_source: Alphanumeric.sample_string(&mut rng, 3 << 20),
+        };
+
         let count_nation: i64 = NATIONS.len().try_into().unwrap();
         let count_region: i64 = REGIONS.len().try_into().unwrap();
 
-        let mut rows = (0..count_supplier)
+        let mut rows = (0..ctx.tpch.count_supplier)
             .map(|i| (SUPPLIER_OUTPUT, i))
-            .chain((1..=count_part).map(|i| (PART_OUTPUT, i)))
-            .chain((1..=count_customer).map(|i| (CUSTOMER_OUTPUT, i)))
-            .chain((1..=count_orders).map(|i| (ORDERS_OUTPUT, i)))
+            .chain((1..=ctx.tpch.count_part).map(|i| (PART_OUTPUT, i)))
+            .chain((1..=ctx.tpch.count_customer).map(|i| (CUSTOMER_OUTPUT, i)))
+            .chain((1..=ctx.tpch.count_orders).map(|i| (ORDERS_OUTPUT, i)))
             .chain((0..count_nation).map(|i| (NATION_OUTPUT, i)))
             .chain((0..count_region).map(|i| (REGION_OUTPUT, i)))
             .peekable();
 
-        let mut rng = StdRng::seed_from_u64(seed.unwrap_or_default());
         // Some rows need to generate other rows from their values; hold those
         // here.
         let mut pending = Vec::new();
-        let mut cx = numeric::cx_datum();
-        let decimal_one = Numeric::lossy_from(1);
-        let decimal_neg_one = Numeric::lossy_from(-1);
-        // TODO: Use a text generator closer to the spec.
-        let text_string_source = Alphanumeric.sample_string(&mut rng, 3 << 20);
+
+        // All orders and their lineitems, so they can be retracted during
+        // streaming.
+        let mut active_orders = Vec::new();
 
         Box::new(iter::from_fn(move || {
-            if let Some((output, row)) = pending.pop() {
-                // InProgress is safe to use here because REGIONS is the last
-                // table, and it doesn't use pending.
-                return Some((output, GeneratorMessageType::InProgress, row));
+            if let Some(pending) = pending.pop() {
+                return Some(pending);
             }
-            rows.next().map(|(output, key)| {
-                let row = match output {
-                    SUPPLIER_OUTPUT => {
-                        let nation = rng.gen_range(0..(NATIONS.len() as i64));
-                        Row::pack_slice(&[
-                            Datum::Int64(key),
-                            Datum::String(&pad_nine("Supplier", key)),
-                            Datum::String(&v_string(&mut rng, 10, 40)), // address
-                            Datum::Int64(nation),
-                            Datum::String(&phone(&mut rng, nation)),
-                            Datum::Numeric(decimal(&mut rng, &mut cx, -999_99, 9_999_99, 100)), // acctbal
-                            // TODO: add customer complaints and recommends, see 4.2.3.
-                            Datum::String(text_string(&mut rng, &text_string_source, 25, 100)),
-                        ])
-                    }
-                    PART_OUTPUT => {
-                        let name: String = PARTNAMES
-                            .choose_multiple(&mut rng, 5)
-                            .cloned()
-                            .collect::<Vec<_>>()
-                            .join("  ");
-                        let m = rng.gen_range(1..=5);
-                        let n = rng.gen_range(1..=5);
-                        for _ in 1..=4 {
-                            let suppkey = (key
-                                + (rng.gen_range(0..=3)
-                                    * ((count_supplier / 4) + (key - 1) / count_supplier)))
-                                % count_supplier
-                                + 1;
-                            let row = Row::pack_slice(&[
+            rows.next()
+                .map(|(output, key)| {
+                    let row = match output {
+                        SUPPLIER_OUTPUT => {
+                            let nation = rng.gen_range(0..(NATIONS.len() as i64));
+                            Row::pack_slice(&[
                                 Datum::Int64(key),
-                                Datum::Int64(suppkey),
-                                Datum::Int32(rng.gen_range(1..=9_999)), // availqty
-                                Datum::Numeric(decimal(&mut rng, &mut cx, 1_00, 1_000_00, 100)), // supplycost
-                                Datum::String(text_string(&mut rng, &text_string_source, 49, 198)),
-                            ]);
-                            pending.push((PARTSUPP_OUTPUT, row));
+                                Datum::String(&pad_nine("Supplier", key)),
+                                Datum::String(&v_string(&mut rng, 10, 40)), // address
+                                Datum::Int64(nation),
+                                Datum::String(&phone(&mut rng, nation)),
+                                Datum::Numeric(decimal(
+                                    &mut rng,
+                                    &mut ctx.cx,
+                                    -999_99,
+                                    9_999_99,
+                                    100,
+                                )), // acctbal
+                                // TODO: add customer complaints and recommends, see 4.2.3.
+                                Datum::String(text_string(
+                                    &mut rng,
+                                    &ctx.text_string_source,
+                                    25,
+                                    100,
+                                )),
+                            ])
                         }
-                        Row::pack_slice(&[
-                            Datum::Int64(key),
-                            Datum::String(&name),
-                            Datum::String(&format!("Manufacturer#{m}")),
-                            Datum::String(&format!("Brand#{m}{n}")),
-                            Datum::String(&syllables(&mut rng, TYPES)),
-                            Datum::Int32(rng.gen_range(1..=50)), // size
-                            Datum::String(&syllables(&mut rng, CONTAINERS)),
-                            Datum::Numeric(partkey_retailprice(key)),
-                            Datum::String(text_string(&mut rng, &text_string_source, 49, 198)),
-                        ])
-                    }
-                    CUSTOMER_OUTPUT => {
-                        let nation = rng.gen_range(0..(NATIONS.len() as i64));
-                        Row::pack_slice(&[
-                            Datum::Int64(key),
-                            Datum::String(&pad_nine("Customer", key)),
-                            Datum::String(&v_string(&mut rng, 10, 40)), // address
-                            Datum::Int64(nation),
-                            Datum::String(&phone(&mut rng, nation)),
-                            Datum::Numeric(decimal(&mut rng, &mut cx, -999_99, 9_999_99, 100)), // acctbal
-                            Datum::String(SEGMENTS.choose(&mut rng).unwrap()),
-                            Datum::String(text_string(&mut rng, &text_string_source, 29, 116)),
-                        ])
-                    }
-                    ORDERS_OUTPUT => {
-                        let key = order_key(key);
-                        let custkey = loop {
-                            let custkey = rng.gen_range(1..=count_customer);
-                            if custkey % 3 != 0 {
-                                break custkey;
+                        PART_OUTPUT => {
+                            let name: String = PARTNAMES
+                                .choose_multiple(&mut rng, 5)
+                                .cloned()
+                                .collect::<Vec<_>>()
+                                .join("  ");
+                            let m = rng.gen_range(1..=5);
+                            let n = rng.gen_range(1..=5);
+                            for _ in 1..=4 {
+                                let suppkey = (key
+                                    + (rng.gen_range(0..=3)
+                                        * ((ctx.tpch.count_supplier / 4)
+                                            + (key - 1) / ctx.tpch.count_supplier)))
+                                    % ctx.tpch.count_supplier
+                                    + 1;
+                                let row = Row::pack_slice(&[
+                                    Datum::Int64(key),
+                                    Datum::Int64(suppkey),
+                                    Datum::Int32(rng.gen_range(1..=9_999)), // availqty
+                                    Datum::Numeric(decimal(
+                                        &mut rng,
+                                        &mut ctx.cx,
+                                        1_00,
+                                        1_000_00,
+                                        100,
+                                    )), // supplycost
+                                    Datum::String(text_string(
+                                        &mut rng,
+                                        &ctx.text_string_source,
+                                        49,
+                                        198,
+                                    )),
+                                ]);
+                                pending.push((
+                                    PARTSUPP_OUTPUT,
+                                    GeneratorMessageType::InProgress,
+                                    row,
+                                    1,
+                                ));
                             }
-                        };
-                        let orderdate = date(&mut rng, &*START_DATE, 1..=*ORDER_END_DAYS);
-                        let mut totalprice = Numeric::lossy_from(0);
-                        let mut orderstatus = None;
+                            Row::pack_slice(&[
+                                Datum::Int64(key),
+                                Datum::String(&name),
+                                Datum::String(&format!("Manufacturer#{m}")),
+                                Datum::String(&format!("Brand#{m}{n}")),
+                                Datum::String(&syllables(&mut rng, TYPES)),
+                                Datum::Int32(rng.gen_range(1..=50)), // size
+                                Datum::String(&syllables(&mut rng, CONTAINERS)),
+                                Datum::Numeric(partkey_retailprice(key)),
+                                Datum::String(text_string(
+                                    &mut rng,
+                                    &ctx.text_string_source,
+                                    49,
+                                    198,
+                                )),
+                            ])
+                        }
+                        CUSTOMER_OUTPUT => {
+                            let nation = rng.gen_range(0..(NATIONS.len() as i64));
+                            Row::pack_slice(&[
+                                Datum::Int64(key),
+                                Datum::String(&pad_nine("Customer", key)),
+                                Datum::String(&v_string(&mut rng, 10, 40)), // address
+                                Datum::Int64(nation),
+                                Datum::String(&phone(&mut rng, nation)),
+                                Datum::Numeric(decimal(
+                                    &mut rng,
+                                    &mut ctx.cx,
+                                    -999_99,
+                                    9_999_99,
+                                    100,
+                                )), // acctbal
+                                Datum::String(SEGMENTS.choose(&mut rng).unwrap()),
+                                Datum::String(text_string(
+                                    &mut rng,
+                                    &ctx.text_string_source,
+                                    29,
+                                    116,
+                                )),
+                            ])
+                        }
+                        ORDERS_OUTPUT => {
+                            let seed = rng.gen();
+                            let (order, lineitems) = ctx.order_row(seed, key);
+                            for row in lineitems {
+                                pending.push((
+                                    LINEITEM_OUTPUT,
+                                    GeneratorMessageType::InProgress,
+                                    row,
+                                    1,
+                                ));
+                            }
+                            if !ctx.tpch.tick.is_zero() {
+                                active_orders.push((key, seed));
+                            }
+                            order
+                        }
+                        NATION_OUTPUT => {
+                            let (name, region) = NATIONS[key as usize];
+                            Row::pack_slice(&[
+                                Datum::Int64(key),
+                                Datum::String(name),
+                                Datum::Int64(region),
+                                Datum::String(text_string(
+                                    &mut rng,
+                                    &ctx.text_string_source,
+                                    31,
+                                    114,
+                                )),
+                            ])
+                        }
+                        REGION_OUTPUT => Row::pack_slice(&[
+                            Datum::Int64(key),
+                            Datum::String(REGIONS[key as usize]),
+                            Datum::String(text_string(&mut rng, &ctx.text_string_source, 31, 115)),
+                        ]),
+                        _ => unreachable!("{output}"),
+                    };
+                    let typ = if rows.peek().is_some() {
+                        GeneratorMessageType::InProgress
+                    } else {
+                        GeneratorMessageType::Finalized
+                    };
+                    (output, typ, row, 1)
+                })
+                .or_else(|| {
+                    if ctx.tpch.tick.is_zero() {
+                        return None;
+                    }
+                    let idx = rng.gen_range(0..active_orders.len());
+                    let (key, old_seed) = active_orders.swap_remove(idx);
+                    let (old_order, old_lineitems) = ctx.order_row(old_seed, key);
+                    // Fill pending with old lineitem retractions, new lineitem
+                    // additions, and finally the new order. Return the old
+                    // order to start the batch.
+                    for row in old_lineitems {
+                        pending.push((LINEITEM_OUTPUT, GeneratorMessageType::InProgress, row, -1));
+                    }
+                    let new_seed = rng.gen();
+                    let (new_order, new_lineitems) = ctx.order_row(new_seed, key);
+                    for row in new_lineitems {
+                        pending.push((LINEITEM_OUTPUT, GeneratorMessageType::InProgress, row, 1));
+                    }
+                    pending.push((ORDERS_OUTPUT, GeneratorMessageType::Finalized, new_order, 1));
+                    active_orders.push((key, new_seed));
 
-                        for linenumber in 1..=rng.gen_range(1..=7) {
-                            let partkey = rng.gen_range(1..=count_part);
-                            let suppkey = (partkey
-                                + (rng.gen_range(0..=3)
-                                    * ((count_supplier / 4) + (partkey - 1) / count_supplier)))
-                                % count_supplier
-                                + 1;
-                            let quantity = Numeric::from(rng.gen_range(1..=50));
-                            let mut extendedprice = quantity;
-                            cx.mul(&mut extendedprice, &partkey_retailprice(partkey).0);
-                            let mut discount = decimal(&mut rng, &mut cx, 0, 8, 100);
-                            let mut tax = decimal(&mut rng, &mut cx, 0, 10, 100);
-                            let shipdate = date(&mut rng, &orderdate, 1..=121);
-                            let receiptdate = date(&mut rng, &shipdate, 1..=30);
-                            let linestatus = if shipdate > *CURRENT_DATE { "O" } else { "F" };
-                            let row = Row::pack_slice(&[
-                                Datum::Int64(key),
-                                Datum::Int64(partkey),
-                                Datum::Int64(suppkey),
-                                Datum::Int32(linenumber),
-                                Datum::Numeric(OrderedDecimal(quantity)),
-                                Datum::Numeric(OrderedDecimal(extendedprice)),
-                                Datum::Numeric(discount),
-                                Datum::Numeric(tax),
-                                Datum::String(if receiptdate <= *CURRENT_DATE {
-                                    ["R", "A"].choose(&mut rng).unwrap()
-                                } else {
-                                    "N"
-                                }), // returnflag
-                                Datum::String(linestatus),
-                                Datum::Date(shipdate),
-                                Datum::Date(date(&mut rng, &orderdate, 30..=90)), // commitdate
-                                Datum::Date(receiptdate),
-                                Datum::String(INSTRUCTIONS.choose(&mut rng).unwrap()),
-                                Datum::String(MODES.choose(&mut rng).unwrap()),
-                                Datum::String(text_string(&mut rng, &text_string_source, 10, 43)),
-                            ]);
-                            pending.push((LINEITEM_OUTPUT, row));
-                            // totalprice += extendedprice * (1.0 + tax) * (1.0 - discount)
-                            cx.add(&mut tax.0, &decimal_one);
-                            cx.sub(&mut discount.0, &decimal_neg_one);
-                            cx.abs(&mut discount.0);
-                            cx.mul(&mut extendedprice, &tax.0);
-                            cx.mul(&mut extendedprice, &discount.0);
-                            cx.add(&mut totalprice, &extendedprice);
-                            if let Some(status) = orderstatus {
-                                if status != linestatus {
-                                    orderstatus = Some("P");
-                                }
-                            } else {
-                                orderstatus = Some(linestatus);
-                            }
-                        }
-                        Row::pack_slice(&[
-                            Datum::Int64(key),
-                            Datum::Int64(custkey),
-                            Datum::String(orderstatus.unwrap()),
-                            Datum::Numeric(OrderedDecimal(totalprice)),
-                            Datum::Date(orderdate),
-                            Datum::String(PRIORITIES.choose(&mut rng).unwrap()),
-                            Datum::String(&pad_nine("Clerk", rng.gen_range(1..=count_clerk))),
-                            Datum::Int32(0), // shippriority
-                            Datum::String(text_string(&mut rng, &text_string_source, 19, 78)),
-                        ])
-                    }
-                    NATION_OUTPUT => {
-                        let (name, region) = NATIONS[key as usize];
-                        Row::pack_slice(&[
-                            Datum::Int64(key),
-                            Datum::String(name),
-                            Datum::Int64(region),
-                            Datum::String(text_string(&mut rng, &text_string_source, 31, 114)),
-                        ])
-                    }
-                    REGION_OUTPUT => Row::pack_slice(&[
-                        Datum::Int64(key),
-                        Datum::String(REGIONS[key as usize]),
-                        Datum::String(text_string(&mut rng, &text_string_source, 31, 115)),
-                    ]),
-                    _ => unreachable!("{output}"),
-                };
-                let typ = if rows.peek().is_some() {
-                    GeneratorMessageType::InProgress
-                } else {
-                    GeneratorMessageType::Finalized
-                };
-                (output, typ, row)
-            })
+                    Some((
+                        ORDERS_OUTPUT,
+                        GeneratorMessageType::InProgress,
+                        old_order,
+                        -1,
+                    ))
+                })
         }))
+    }
+}
+
+struct Context {
+    tpch: Tpch,
+    decimal_one: Numeric,
+    decimal_neg_one: Numeric,
+    cx: DecimalContext<Numeric>,
+    text_string_source: String,
+}
+
+impl Context {
+    /// Generate a row based on its key and seed. Used for order retraction
+    /// without having to hold onto the full row for the order and its
+    /// lineitems.
+    fn order_row(&mut self, seed: u64, key: i64) -> (Row, Vec<Row>) {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let key = order_key(key);
+        let custkey = loop {
+            let custkey = rng.gen_range(1..=self.tpch.count_customer);
+            if custkey % 3 != 0 {
+                break custkey;
+            }
+        };
+        let orderdate = date(&mut rng, &*START_DATE, 1..=*ORDER_END_DAYS);
+        let mut totalprice = Numeric::lossy_from(0);
+        let mut orderstatus = None;
+        let lineitem_count = rng.gen_range(1..=7);
+        let mut lineitems = Vec::with_capacity(lineitem_count);
+
+        for linenumber in 1..=lineitem_count {
+            let partkey = rng.gen_range(1..=self.tpch.count_part);
+            let suppkey = (partkey
+                + (rng.gen_range(0..=3)
+                    * ((self.tpch.count_supplier / 4) + (partkey - 1) / self.tpch.count_supplier)))
+                % self.tpch.count_supplier
+                + 1;
+            let quantity = Numeric::from(rng.gen_range(1..=50));
+            let mut extendedprice = quantity;
+            self.cx
+                .mul(&mut extendedprice, &partkey_retailprice(partkey).0);
+            let mut discount = decimal(&mut rng, &mut self.cx, 0, 8, 100);
+            let mut tax = decimal(&mut rng, &mut self.cx, 0, 10, 100);
+            let shipdate = date(&mut rng, &orderdate, 1..=121);
+            let receiptdate = date(&mut rng, &shipdate, 1..=30);
+            let linestatus = if shipdate > *CURRENT_DATE { "O" } else { "F" };
+            let row = Row::pack_slice(&[
+                Datum::Int64(key),
+                Datum::Int64(partkey),
+                Datum::Int64(suppkey),
+                Datum::Int32(linenumber.try_into().expect("must fit")),
+                Datum::Numeric(OrderedDecimal(quantity)),
+                Datum::Numeric(OrderedDecimal(extendedprice)),
+                Datum::Numeric(discount),
+                Datum::Numeric(tax),
+                Datum::String(if receiptdate <= *CURRENT_DATE {
+                    ["R", "A"].choose(&mut rng).unwrap()
+                } else {
+                    "N"
+                }), // returnflag
+                Datum::String(linestatus),
+                Datum::Date(shipdate),
+                Datum::Date(date(&mut rng, &orderdate, 30..=90)), // commitdate
+                Datum::Date(receiptdate),
+                Datum::String(INSTRUCTIONS.choose(&mut rng).unwrap()),
+                Datum::String(MODES.choose(&mut rng).unwrap()),
+                Datum::String(text_string(&mut rng, &self.text_string_source, 10, 43)),
+            ]);
+            // totalprice += extendedprice * (1.0 + tax) * (1.0 - discount)
+            self.cx.add(&mut tax.0, &self.decimal_one);
+            self.cx.sub(&mut discount.0, &self.decimal_neg_one);
+            self.cx.abs(&mut discount.0);
+            self.cx.mul(&mut extendedprice, &tax.0);
+            self.cx.mul(&mut extendedprice, &discount.0);
+            self.cx.add(&mut totalprice, &extendedprice);
+            if let Some(status) = orderstatus {
+                if status != linestatus {
+                    orderstatus = Some("P");
+                }
+            } else {
+                orderstatus = Some(linestatus);
+            }
+            lineitems.push(row);
+        }
+
+        let order = Row::pack_slice(&[
+            Datum::Int64(key),
+            Datum::Int64(custkey),
+            Datum::String(orderstatus.unwrap()),
+            Datum::Numeric(OrderedDecimal(totalprice)),
+            Datum::Date(orderdate),
+            Datum::String(PRIORITIES.choose(&mut rng).unwrap()),
+            Datum::String(&pad_nine("Clerk", rng.gen_range(1..=self.tpch.count_clerk))),
+            Datum::Int32(0), // shippriority
+            Datum::String(text_string(&mut rng, &self.text_string_source, 19, 78)),
+        ]);
+
+        (order, lineitems)
     }
 }
 

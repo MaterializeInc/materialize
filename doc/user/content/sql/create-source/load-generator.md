@@ -111,6 +111,8 @@ is placed in the currently ongoing auction.
 
 The TPCH load generator implements the [TPC-H benchmark specification](https://www.tpc.org/tpch/default5.asp).
 The TPCH source must be used with `FOR ALL TABLES`, which will create the standard TPCH relations.
+If `TICK INTERVAL` is specified, after the initial data load, an order and its lineitems will be changed at this interval.
+If not specified, the dataset will not change over time.
 
 ## Examples
 

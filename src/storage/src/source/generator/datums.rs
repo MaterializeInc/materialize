@@ -20,7 +20,7 @@ impl Generator for Datums {
         &self,
         _: NowFn,
         _seed: Option<u64>,
-    ) -> Box<dyn Iterator<Item = (usize, GeneratorMessageType, Row)>> {
+    ) -> Box<dyn Iterator<Item = (usize, GeneratorMessageType, Row, i64)>> {
         let typs = ScalarType::enumerate();
         let mut datums: Vec<Vec<Datum>> = typs
             .iter()
@@ -57,7 +57,7 @@ impl Generator for Datums {
             } else {
                 GeneratorMessageType::InProgress
             };
-            Some((0, message, row))
+            Some((0, message, row, 1))
         }))
     }
 }

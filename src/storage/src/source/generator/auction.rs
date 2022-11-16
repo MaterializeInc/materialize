@@ -71,7 +71,7 @@ impl Generator for Auction {
         &self,
         now: NowFn,
         seed: Option<u64>,
-    ) -> Box<(dyn Iterator<Item = (usize, GeneratorMessageType, Row)>)> {
+    ) -> Box<(dyn Iterator<Item = (usize, GeneratorMessageType, Row, i64)>)> {
         let mut rng = SmallRng::seed_from_u64(seed.unwrap_or_default());
 
         let organizations = COMPANIES.iter().enumerate().map(|(offset, name)| {
@@ -157,7 +157,7 @@ impl Generator for Auction {
                     } else {
                         GeneratorMessageType::InProgress
                     };
-                    (output, typ, row)
+                    (output, typ, row, 1)
                 })
             }
         }))
