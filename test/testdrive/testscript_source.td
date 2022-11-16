@@ -11,7 +11,7 @@
 # Basic test for `TEST SCRIPT` sources.
 
 # replace timestamps
-$ set-regex match=(\d{13}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
+$ set-regex match=(\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
 
 
 > CREATE CONNECTION c_conn
@@ -35,7 +35,7 @@ fish          value2
 fish2         hmm
 
 > EXPLAIN TIMESTAMP FOR SELECT * FROM unit
-"          query timestamp: <> <>\n                    since:[<> <>]\n                    upper:[<> <>]\n         global timestamp: <> <>\n  can respond immediately: <>\n\nsource materialize.public.unit (<>, storage):\n            read frontier:[<> <>]\n           write frontier:[<> <>]\n"
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.unit (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
 
 > CREATE SOURCE unit_terminated
   FROM TEST SCRIPT
@@ -54,4 +54,4 @@ fish          value
 
 # Terminal sources have empty uppers
 > EXPLAIN TIMESTAMP FOR SELECT * FROM unit_terminated
-"          query timestamp: <> <>\n                    since:[<> <>]\n                    upper:[]\n         global timestamp: <> <>\n  can respond immediately: <>\n\nsource materialize.public.unit_terminated (<>, storage):\n            read frontier:[<> <>]\n           write frontier:[]\n"
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <>\n                          upper:[]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.unit_terminated (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[]\n"
