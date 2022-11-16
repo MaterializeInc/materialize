@@ -262,12 +262,13 @@ Explained Query:
           Get l0
   With
     cte l0 =
-      CrossJoin type=differential
+      CrossJoin type=delta
         ArrangeBy keys=[[]]
           Project (#0)
             Get materialize.public.people
-        Project ()
-          Get materialize.public.bands
+        ArrangeBy keys=[[]]
+          Project ()
+            Get materialize.public.bands
 
 Source materialize.public.bands
   project=(#2, #3)

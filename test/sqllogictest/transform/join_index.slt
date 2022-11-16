@@ -30,14 +30,16 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) select * from foo inner join bar on foo.a = bar.a where foo.a = 1
 ----
 Explained Query:
-  CrossJoin type=differential // { arity: 4 }
+  CrossJoin type=delta // { arity: 4 }
     implementation
+      %0:foo » %1:bar[×]Aef
       %1:bar » %0:foo[×]Aef
     ArrangeBy keys=[[]] // { arity: 2 }
       Filter (#0 = 1) // { arity: 2 }
         Get materialize.public.foo // { arity: 2 }
-    Filter (#0 = 1) // { arity: 2 }
-      Get materialize.public.bar // { arity: 2 }
+    ArrangeBy keys=[[]] // { arity: 2 }
+      Filter (#0 = 1) // { arity: 2 }
+        Get materialize.public.bar // { arity: 2 }
 
 Source materialize.public.foo
   filter=((#0 = 1))
@@ -59,14 +61,16 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) select * from foo inner join bar on foo.a = abs(bar.a) where mod(foo.a, 2) = 1
 ----
 Explained Query:
-  Join on=(#0 = abs(#2)) type=differential // { arity: 4 }
+  Join on=(#0 = abs(#2)) type=delta // { arity: 4 }
     implementation
+      %0:foo » %1:bar[abs(#0)]KAef
       %1:bar » %0:foo[#0]KAef
     ArrangeBy keys=[[#0]] // { arity: 2 }
       Filter (1 = (#0 % 2)) // { arity: 2 }
         Get materialize.public.foo // { arity: 2 }
-    Filter (1 = (abs(#0) % 2)) // { arity: 2 }
-      Get materialize.public.bar // { arity: 2 }
+    ArrangeBy keys=[[abs(#0)]] // { arity: 2 }
+      Filter (1 = (abs(#0) % 2)) // { arity: 2 }
+        Get materialize.public.bar // { arity: 2 }
 
 Source materialize.public.foo
   filter=((1 = (#0 % 2)))
@@ -93,14 +97,16 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) select * from (select * from foo where a = 1) filtered_foo, bar where filtered_foo.a = bar.a
 ----
 Explained Query:
-  CrossJoin type=differential // { arity: 4 }
+  CrossJoin type=delta // { arity: 4 }
     implementation
+      %0:foo » %1:bar[×]Aef
       %1:bar » %0:foo[×]Aef
     ArrangeBy keys=[[]] // { arity: 2 }
       Filter (#0 = 1) // { arity: 2 }
         Get materialize.public.foo // { arity: 2 }
-    Filter (#0 = 1) // { arity: 2 }
-      Get materialize.public.bar // { arity: 2 }
+    ArrangeBy keys=[[]] // { arity: 2 }
+      Filter (#0 = 1) // { arity: 2 }
+        Get materialize.public.bar // { arity: 2 }
 
 Source materialize.public.foo
   filter=((#0 = 1))
@@ -144,8 +150,9 @@ Explained Query:
         %1:bar » %2:baz[#0]UKA » %0:foo[#0]KA
       ArrangeBy keys=[[#0]] // { arity: 2 }
         Get materialize.public.foo // { arity: 2 }
-      Filter (#0) IS NOT NULL AND (#1) IS NOT NULL // { arity: 2 }
-        Get materialize.public.bar // { arity: 2 }
+      ArrangeBy keys=[[#1]] // { arity: 2 }
+        Filter (#0) IS NOT NULL AND (#1) IS NOT NULL // { arity: 2 }
+          Get materialize.public.bar // { arity: 2 }
       ArrangeBy keys=[[#0]] // { arity: 2 }
         Get materialize.public.baz // { arity: 2 }
 
@@ -311,12 +318,14 @@ explain with(arity, join_impls) select foo.b, bar.b from foo, bar, (select 1 as 
 ----
 Explained Query:
   Project (#1, #3) // { arity: 2 }
-    Join on=(1 = (#0 / #2)) type=differential // { arity: 4 }
+    Join on=(1 = (#0 / #2)) type=delta // { arity: 4 }
       implementation
+        %0:foo » %1:bar[×]A
         %1:bar » %0:foo[×]A
       ArrangeBy keys=[[]] // { arity: 2 }
         Get materialize.public.foo // { arity: 2 }
-      Get materialize.public.bar // { arity: 2 }
+      ArrangeBy keys=[[]] // { arity: 2 }
+        Get materialize.public.bar // { arity: 2 }
 
 Used Indexes:
   - materialize.public.foo_idx
@@ -341,12 +350,14 @@ and bar.b - foo.b = foo.a / bar.a
 ----
 Explained Query:
   Project (#1, #3) // { arity: 2 }
-    Join on=(eq(-1, (#3 - #1), (#0 / #2))) type=differential // { arity: 4 }
+    Join on=(eq(-1, (#3 - #1), (#0 / #2))) type=delta // { arity: 4 }
       implementation
+        %0:foo » %1:bar[×]A
         %1:bar » %0:foo[×]A
       ArrangeBy keys=[[]] // { arity: 2 }
         Get materialize.public.foo // { arity: 2 }
-      Get materialize.public.bar // { arity: 2 }
+      ArrangeBy keys=[[]] // { arity: 2 }
+        Get materialize.public.bar // { arity: 2 }
 
 Used Indexes:
   - materialize.public.foo_idx
@@ -387,8 +398,9 @@ Explained Query:
       ArrangeBy keys=[[#0]] // { arity: 2 }
         Filter (#0) IS NOT NULL // { arity: 2 }
           Get materialize.public.bar // { arity: 2 }
-      Filter (#0) IS NOT NULL // { arity: 2 }
-        Get materialize.public.baz // { arity: 2 }
+      ArrangeBy keys=[[#0]] // { arity: 2 }
+        Filter (#0) IS NOT NULL // { arity: 2 }
+          Get materialize.public.baz // { arity: 2 }
 
 Source materialize.public.baz
   filter=((#0) IS NOT NULL)

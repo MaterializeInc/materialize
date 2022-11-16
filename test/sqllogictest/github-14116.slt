@@ -32,21 +32,23 @@ explain with(arity, join_impls) select a, b, ( select c from test3 where a = tes
 ----
 Explained Query:
   Return // { arity: 3 }
-    CrossJoin type=differential // { arity: 3 }
+    CrossJoin type=delta // { arity: 3 }
       implementation
+        %0:test1 » %1[×]A
         %1 » %0:test1[×]A
       ArrangeBy keys=[[]] // { arity: 2 }
         Get materialize.public.test1 // { arity: 2 }
-      Union // { arity: 1 }
-        Get l1 // { arity: 1 }
-        Map (null) // { arity: 1 }
-          Union // { arity: 0 }
-            Negate // { arity: 0 }
-              Distinct // { arity: 0 }
-                Project () // { arity: 0 }
-                  Get l1 // { arity: 1 }
-            Constant // { arity: 0 }
-              - ()
+      ArrangeBy keys=[[]] // { arity: 1 }
+        Union // { arity: 1 }
+          Get l1 // { arity: 1 }
+          Map (null) // { arity: 1 }
+            Union // { arity: 0 }
+              Negate // { arity: 0 }
+                Distinct // { arity: 0 }
+                  Project () // { arity: 0 }
+                    Get l1 // { arity: 1 }
+              Constant // { arity: 0 }
+                - ()
   With
     cte l1 =
       Union // { arity: 1 }

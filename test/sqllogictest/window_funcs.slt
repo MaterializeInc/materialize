@@ -246,10 +246,12 @@ WHERE f1 IN (SELECT ROW_NUMBER() OVER () FROM t2);
 Explained Query:
   Return // { arity: 1 }
     Project (#0) // { arity: 1 }
-      Join on=(#0 = #1) type=differential // { arity: 2 }
+      Join on=(#0 = #1) type=delta // { arity: 2 }
         implementation
           %0:l0 » %1[#0]UKA
-        Get l0 // { arity: 1 }
+          %1 » %0:l0[#0]KA
+        ArrangeBy keys=[[#0]] // { arity: 1 }
+          Get l0 // { arity: 1 }
         ArrangeBy keys=[[#0]] // { arity: 1 }
           Distinct group_by=[record_get[0](record_get[1](#0))] // { arity: 1 }
             Project (#1) // { arity: 1 }
@@ -257,13 +259,15 @@ Explained Query:
                 FlatMap unnest_list(#0) // { arity: 2 }
                   Project (#1) // { arity: 1 }
                     Reduce group_by=[#0] aggregates=[row_number(row(list[row(#0, #1, #2)]))] // { arity: 2 }
-                      CrossJoin type=differential // { arity: 3 }
+                      CrossJoin type=delta // { arity: 3 }
                         implementation
+                          %0 » %1:t2[×]A
                           %1:t2 » %0[×]A
                         ArrangeBy keys=[[]] // { arity: 1 }
                           Distinct group_by=[#0] // { arity: 1 }
                             Get l0 // { arity: 1 }
-                        Get materialize.public.t2 // { arity: 2 }
+                        ArrangeBy keys=[[]] // { arity: 2 }
+                          Get materialize.public.t2 // { arity: 2 }
   With
     cte l0 =
       Project (#0) // { arity: 1 }
