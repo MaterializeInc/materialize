@@ -111,13 +111,25 @@ impl<S: Append + 'static> Coordinator<S> {
             ));
         };
 
-        Ok(TimestampDetermination {
+        let det = TimestampDetermination {
             timestamp,
             since,
             upper,
             largest_not_in_advance_of_upper,
             oracle_read_ts,
-        })
+        };
+        self.metrics
+            .determine_timestamp
+            .with_label_values(&[
+                match det.respond_immediately() {
+                    true => "true",
+                    false => "false",
+                },
+                isolation_level.as_str(),
+                &compute_instance.to_string(),
+            ])
+            .inc();
+        Ok(det)
     }
 
     /// The smallest common valid read frontier among the specified collections.
