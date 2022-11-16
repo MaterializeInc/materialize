@@ -1177,12 +1177,19 @@ pub async fn run_string(
     let mut state = Runner::start(config).await.unwrap();
     let mut parser = crate::parser::Parser::new(source, input);
     writeln!(config.stdout, "==> {}", source);
-    // Some sqllogic tests require more than the default amount of tables, so we increase the
-    // limit for all tests.
+    // Override some system parameter defaults.
     {
         let client = state.get_conn(Some("mz_system"), Some("mz_system")).await;
+
+        // Some sqllogic tests require more than the default amount of tables, so we increase the
+        // limit for all tests.
         client
             .simple_query("ALTER SYSTEM SET max_tables = 100")
+            .await?;
+
+        // Some sqllogic use window functions, so we turn the feature flag on by default.
+        client
+            .simple_query("ALTER SYSTEM SET window_functions = true")
             .await?;
     }
     for record in parser.parse_records()? {

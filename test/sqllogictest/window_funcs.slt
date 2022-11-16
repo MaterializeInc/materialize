@@ -12,6 +12,13 @@
 
 mode cockroach
 
+# Assert that window functions are not supported if the feature flag is off.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET window_functions = false
+----
+COMPLETE 0
+
 statement error window function row_number requires an OVER clause
 WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
 SELECT row_number() FROM t
@@ -19,6 +26,18 @@ SELECT row_number() FROM t
 statement error aggregate window functions not yet supported
 WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
 SELECT array_agg(x) OVER () FROM t
+
+statement error window functions not yet supported
+WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
+SELECT EXISTS(
+  SELECT row_number() OVER (ORDER BY x), x FROM t
+  ORDER BY row_number
+)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET window_functions = true
+----
+COMPLETE 0
 
 query IT
 WITH t (x) AS (VALUES ('a'), ('b'), ('c'))

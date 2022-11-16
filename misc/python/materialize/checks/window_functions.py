@@ -18,6 +18,10 @@ class WindowFunctions(Check):
         return Testdrive(
             dedent(
                 """
+            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            $ postgres-execute connection=mz_system
+            ALTER SYSTEM SET window_functions = 'on'
+
             > CREATE TABLE window_functions_table (f1 INTEGER, f2 INTEGER);
             > INSERT INTO window_functions_table VALUES (1,1), (2, 1), (3, 1);
         """

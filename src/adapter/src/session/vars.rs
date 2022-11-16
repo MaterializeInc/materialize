@@ -280,7 +280,7 @@ static ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<ServerVar<Vec<String>>> = Lazy::new(|
 /// Feature flag indicating whether window functions are enabled.
 static WINDOW_FUNCTIONS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("window_functions"),
-    value: &true,
+    value: &false,
     description: "Feature flag indicating whether window functions are enabled.",
 };
 
