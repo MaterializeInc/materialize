@@ -120,6 +120,7 @@ impl JoinImplementation {
             implementation,
         } = relation
         {
+            let inputs_len = inputs.len();
             if !matches!(implementation, IndexedFilter(..)) {
                 let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
 
@@ -303,9 +304,14 @@ impl JoinImplementation {
                     &filters,
                 );
 
-                *relation = delta_query_plan
+                // Employ delta join plans only for multi-way joins of at least three inputs.
+                *relation = if inputs_len > 2 {
+                    delta_query_plan
                     .or(differential_plan)
-                    .expect("Failed to produce a join plan");
+                } else {
+                    differential_plan
+                }
+                .expect("Failed to produce a join plan");
             }
         }
         Ok(())
