@@ -9,6 +9,7 @@
 
 //! Read capabilities and handles
 
+use std::backtrace::Backtrace;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -492,18 +493,21 @@ where
 
         // Debugging for #15937.
         if let Some(outstanding_seqno) = outstanding_seqno {
-            let seqnos_held = outstanding_seqno.0.saturating_sub(_seqno.0);
+            let seqnos_held = _seqno.0.saturating_sub(outstanding_seqno.0);
             // We get just over 1 seqno-per-second on average for a shard in
             // prod, so this is about an hour.
             const SEQNOS_HELD_THRESHOLD: u64 = 60 * 60;
             if seqnos_held >= SEQNOS_HELD_THRESHOLD {
                 tracing::info!(
-                    "{} reader {} holding an unexpected number of seqnos {} vs {}: {:?}",
+                    "{} reader {} holding an unexpected number of seqnos {} vs {}: {:?}. bt: {:?}",
                     self.machine.shard_id(),
                     self.reader_id,
                     outstanding_seqno,
                     _seqno,
                     self.leased_seqnos,
+                    // The Debug impl of backtrace is less aesthetic, but will put the trace
+                    // on a single line and play more nicely with our Honeycomb quota
+                    Backtrace::capture(),
                 );
             }
         }
