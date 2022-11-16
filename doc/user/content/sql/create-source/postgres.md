@@ -28,14 +28,14 @@ _src_name_  | The name for the source.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists. _Default._
 **CONNECTION** _connection_name_ | The name of the Postgres connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgres) documentation page.
 **FOR ALL TABLES** | Create subsources for all tables in the publication.
-**FOR TABLES** _table_name_ | Create subsources for specific tables in the publication.
+**FOR TABLES(** _table_list_ **)** | Create subsources for specific tables in the publication.
 
 ### `CONNECTION` options
 
 Field                                | Value     | Description
 -------------------------------------|-----------|-------------------------------------
 `PUBLICATION`                        | `text`    | **Required.** The Postgres [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) (the replication data set containing the tables to be streamed to Materialize).
-`TEXT COLUMNS`                       | `text[]`  | Decode data as `text` for specific columns that contain PostgreSQL types that are unsupported in Materialize.
+`TEXT COLUMNS`                       | A list of names | Decode data as `text` for specific columns that contain PostgreSQL types that are unsupported in Materialize.
 
 ### `WITH` options
 
@@ -118,7 +118,7 @@ Materialize does not support changes to schemas for existing publications, and w
 
 ##### Supported types
 
-Replicating tables that contain [data types](/sql/types/) unsupported by Materialize is possible via the `TEXT COLUMNS` option. There are, however, known limitations for the following PostgreSQL types:
+Replicating tables that contain [data types](/sql/types/) unsupported in Materialize is possible via the `TEXT COLUMNS` option. The specified columns will be treated as `text`, and will thus not offer the expected PostgreSQL type features. For example:
 
 * [`enum`]: the implicit ordering of the original PostgreSQL `enum` type is not preserved, as Materialize will sort values as `text`.
 * [`money`]: the resulting `text` value cannot be cast back to e.g. `numeric`, since PostgreSQL adds typical currency formatting to the output.

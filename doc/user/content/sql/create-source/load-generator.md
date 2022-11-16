@@ -31,9 +31,9 @@ _src_name_  | The name for the source.
 **TPCH**    | Use the [tpch](#tpch) load generator.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists.
 **TICK INTERVAL**  | The interval at which the next datum should be emitted. Defaults to one second.
-**SCALE FACTOR**  | The scale factor for the `TPCH` generator. Defaults to `0.01` (~ 10MB).
+**SCALE FACTOR**   | The scale factor for the `TPCH` generator. Defaults to `0.01` (~ 10MB).
 **FOR ALL TABLES** | Creates subsources for all tables in the load generator.
-**FOR TABLES** _table_name_ | Creates subsources for specific tables in the load generator.
+**FOR TABLES (** _table_list_ **)** | Creates subsources for specific tables in the load generator.
 
 ### `WITH` options
 
