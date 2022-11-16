@@ -33,7 +33,6 @@ use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
 use crate::error::AdapterError;
 use crate::session::vars::IsolationLevel;
-use crate::util::ComputeSinkId;
 use crate::AdapterNotice;
 
 pub use self::vars::{
@@ -86,10 +85,10 @@ pub struct Session<T = mz_repr::Timestamp> {
     pcx: Option<PlanContext>,
     user: User,
     vars: SessionVars,
-    drop_sinks: Vec<ComputeSinkId>,
     notices_tx: mpsc::UnboundedSender<AdapterNotice>,
     notices_rx: mpsc::UnboundedReceiver<AdapterNotice>,
     prev_notice: Option<AdapterNotice>,
+    next_transaction_id: TransactionId,
 }
 
 impl<T: TimestampManipulation> Session<T> {
@@ -122,10 +121,10 @@ impl<T: TimestampManipulation> Session<T> {
             portals: HashMap::new(),
             user,
             vars,
-            drop_sinks: vec![],
             notices_tx,
             notices_rx,
             prev_notice: None,
+            next_transaction_id: 0,
         }
     }
 
@@ -167,11 +166,14 @@ impl<T: TimestampManipulation> Session<T> {
 
         match self.transaction {
             TransactionStatus::Default => {
+                let id = self.next_transaction_id;
+                self.next_transaction_id = self.next_transaction_id.wrapping_add(1);
                 self.transaction = TransactionStatus::InTransaction(Transaction {
                     pcx: PlanContext::new(wall_time, self.vars.qgm_optimizations()),
                     ops: TransactionOps::None,
                     write_lock_guard: None,
                     access,
+                    id,
                 });
             }
             TransactionStatus::Started(mut txn)
@@ -198,11 +200,14 @@ impl<T: TimestampManipulation> Session<T> {
     /// number of statements, but only if no transaction has been started already.
     pub fn start_transaction_implicit(mut self, wall_time: DateTime<Utc>, stmts: usize) -> Self {
         if let TransactionStatus::Default = self.transaction {
+            let id = self.next_transaction_id;
+            self.next_transaction_id = self.next_transaction_id.wrapping_add(1);
             let txn = Transaction {
                 pcx: PlanContext::new(wall_time, self.vars.qgm_optimizations()),
                 ops: TransactionOps::None,
                 write_lock_guard: None,
                 access: None,
+                id,
             };
             match stmts {
                 1 => self.transaction = TransactionStatus::Started(txn),
@@ -223,12 +228,10 @@ impl<T: TimestampManipulation> Session<T> {
     /// and
     /// > An unnamed portal is destroyed at the end of the transaction
     #[must_use]
-    pub fn clear_transaction(&mut self) -> (Vec<ComputeSinkId>, TransactionStatus<T>) {
+    pub fn clear_transaction(&mut self) -> TransactionStatus<T> {
         self.portals.clear();
         self.pcx = None;
-        let drop_sinks = mem::take(&mut self.drop_sinks);
-        let txn = mem::take(&mut self.transaction);
-        (drop_sinks, txn)
+        mem::take(&mut self.transaction)
     }
 
     /// Marks the current transaction as failed.
@@ -317,12 +320,6 @@ impl<T: TimestampManipulation> Session<T> {
             }
         }
         Ok(())
-    }
-
-    /// Adds a sink that will need to be dropped when the current transaction is
-    /// cleared.
-    pub fn add_drop_sink(&mut self, id: ComputeSinkId) {
-        self.drop_sinks.push(id)
     }
 
     /// Returns a channel on which to send notices to the session.
@@ -415,6 +412,7 @@ impl<T: TimestampManipulation> Session<T> {
                 ops: TransactionOps::Peeks(ts),
                 write_lock_guard: _,
                 access: _,
+                id: _,
             }) => ts.clone().map(|(ts, _)| ts),
             _ => None,
         }
@@ -555,11 +553,10 @@ impl<T: TimestampManipulation> Session<T> {
 
     /// Resets the session to its initial state. Returns sinks that need to be
     /// dropped.
-    pub fn reset(&mut self) -> Vec<ComputeSinkId> {
-        let (drop_sinks, _) = self.clear_transaction();
+    pub fn reset(&mut self) {
+        let _ = self.clear_transaction();
         self.prepared_statements.clear();
         self.vars = SessionVars::default();
-        drop_sinks
     }
 
     /// Returns the user who owns this session.
@@ -787,6 +784,9 @@ impl<T> TransactionStatus<T> {
     }
 }
 
+/// An abstraction allowing us to identify different transactions.
+pub type TransactionId = u64;
+
 impl<T> Default for TransactionStatus<T> {
     fn default() -> Self {
         TransactionStatus::Default
@@ -800,6 +800,11 @@ pub struct Transaction<T> {
     pub pcx: PlanContext,
     /// Transaction operations.
     pub ops: TransactionOps<T>,
+    /// Uniquely identifies the transaction on a per connection basis.
+    /// Two transactions started from separate connections may share the
+    /// same ID.
+    /// If all IDs have been exhausted, this will wrap around back to 0.
+    pub id: TransactionId,
     /// Holds the coordinator's write lock.
     write_lock_guard: Option<OwnedMutexGuard<()>>,
     /// Access mode (read only, read write).

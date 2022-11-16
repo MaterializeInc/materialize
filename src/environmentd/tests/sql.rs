@@ -1891,3 +1891,77 @@ fn test_introspection_user_permissions() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
+
+#[test]
+fn test_idle_in_transaction_session_timeout() -> Result<(), Box<dyn Error>> {
+    let config = util::Config::default();
+    let server = util::start_server(config)?;
+
+    let mut client = server.connect(postgres::NoTls)?;
+    client.batch_execute("SET idle_in_transaction_session_timeout TO '4ms'")?;
+    client.batch_execute("BEGIN")?;
+    std::thread::sleep(Duration::from_millis(5));
+    // Retry because sleep might be woken up early.
+    Retry::default()
+        .max_duration(Duration::from_secs(1))
+        .retry(|_| {
+            let res = client.query("SELECT 1", &[]);
+            if let Err(error) = res {
+                if error.is_closed() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "error should indicates that the connection is closed: {error:?}"
+                    ))
+                }
+            } else {
+                Err(format!("query should return error: {res:?}"))
+            }
+        })?;
+
+    // session should be timed out even if transaction has failed.
+    let mut client = server.connect(postgres::NoTls)?;
+    client.batch_execute("SET idle_in_transaction_session_timeout TO '4ms'")?;
+    client.batch_execute("BEGIN")?;
+    let error = client.batch_execute("SELECT 1/0").unwrap_err();
+    assert!(
+        !error.is_closed(),
+        "failing a transaction should not close the connection: {error:?}"
+    );
+    std::thread::sleep(Duration::from_millis(5));
+    // Retry because sleep might be woken up early.
+    Retry::default()
+        .max_duration(Duration::from_secs(1))
+        .retry(|_| {
+            let res = client.query("SELECT 1", &[]);
+            if let Err(error) = res {
+                if error.is_closed() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "error should indicates that the connection is closed: {error:?}"
+                    ))
+                }
+            } else {
+                Err(format!("query should return error: {res:?}"))
+            }
+        })?;
+
+    // session should not be timed out if it's not idle.
+    let mut client = server.connect(postgres::NoTls)?;
+    client.batch_execute("SET idle_in_transaction_session_timeout TO '4ms'")?;
+    client.batch_execute("BEGIN")?;
+    client.query("SELECT mz_internal.mz_sleep(0.5)", &[])?;
+    client.query("SELECT 1", &[])?;
+    client.batch_execute("COMMIT")?;
+
+    // 0 timeout indicated no timeout.
+    let mut client = server.connect(postgres::NoTls)?;
+    client.batch_execute("SET idle_in_transaction_session_timeout TO 0")?;
+    client.batch_execute("BEGIN")?;
+    std::thread::sleep(Duration::from_millis(5));
+    client.query("SELECT 1", &[])?;
+    client.batch_execute("COMMIT")?;
+
+    Ok(())
+}

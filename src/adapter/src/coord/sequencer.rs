@@ -349,8 +349,13 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::DiscardAll => {
                 let ret = if let TransactionStatus::Started(_) = session.transaction() {
                     self.drop_temp_items(&session).await;
-                    let drop_sinks = session.reset();
+                    let conn_meta = self
+                        .active_conns
+                        .get_mut(&session.conn_id())
+                        .expect("must exist for active session");
+                    let drop_sinks = std::mem::take(&mut conn_meta.drop_sinks);
                     self.drop_compute_sinks(drop_sinks).await;
+                    session.reset();
                     Ok(ExecuteResponse::DiscardedAll)
                 } else {
                     Err(AdapterError::OperationProhibitsTransaction(
@@ -2362,10 +2367,14 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         let (sink_id, sink_desc) = dataflow.sink_exports.iter().next().unwrap();
-        session.add_drop_sink(ComputeSinkId {
-            compute_instance: compute_instance_id,
-            global_id: *sink_id,
-        });
+        self.active_conns
+            .get_mut(&session.conn_id())
+            .expect("must exist for active sessions")
+            .drop_sinks
+            .push(ComputeSinkId {
+                compute_instance: compute_instance_id,
+                global_id: *sink_id,
+            });
         let arity = sink_desc.from_desc.arity();
         let (tx, rx) = mpsc::unbounded_channel();
         self.metrics.active_subscribes.inc();

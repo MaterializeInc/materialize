@@ -265,7 +265,7 @@ where
 
     let machine = StateMachine {
         conn,
-        adapter_client: &mut adapter_client,
+        adapter_client,
     };
 
     select! {
@@ -288,7 +288,7 @@ enum State {
 
 struct StateMachine<'a, A> {
     conn: &'a mut FramedConn<A>,
-    adapter_client: &'a mut mz_adapter::SessionClient,
+    adapter_client: mz_adapter::SessionClient,
 }
 
 impl<'a, A> StateMachine<'a, A>
@@ -309,14 +309,34 @@ where
                     State::Ready => self.advance_ready().await?,
                     State::Drain => self.advance_drain().await?,
                     State::Done => return Ok(()),
-                }
+                };
+                self.adapter_client
+                    .add_idle_in_transaction_session_timeout();
             }
         }
     }
 
     async fn advance_ready(&mut self) -> Result<State, io::Error> {
-        let message = self.conn.recv().await?;
+        // Handle timeouts first so we don't execute any statements when there's a pending timeout.
+        let message = select! {
+            biased;
 
+            // `recv_timeout()` is cancel-safe as per it's docs.
+            Some(timeout) = self.adapter_client.recv_timeout() => {
+                let error_response = ErrorResponse::from_adapter_error(Severity::Fatal, timeout.into());
+                self.adapter_client.terminate().await;
+                // We must wait for the client to send a request before we can send the error response.
+                // Due to the PG wire protocol, we can't send an ErrorResponse unless it is in response
+                // to a client message.
+                let _ = self.conn.recv().await?;
+                return self.error(error_response).await;
+            },
+            // `recv()` is cancel-safe as per it's docs.
+            message = self.conn.recv() => message?,
+        };
+
+        self.adapter_client
+            .remove_idle_in_transaction_session_timeout();
         self.adapter_client.reset_canceled();
 
         // NOTE(guswynn): we could consider adding spans to all message types. Currently
@@ -407,7 +427,12 @@ where
     }
 
     async fn advance_drain(&mut self) -> Result<State, io::Error> {
-        match self.conn.recv().await? {
+        let message = self.conn.recv().await?;
+        if message.is_some() {
+            self.adapter_client
+                .remove_idle_in_transaction_session_timeout();
+        }
+        match message {
             Some(FrontendMessage::Sync) => self.sync().await,
             None => Ok(State::Done),
             _ => Ok(State::Drain),

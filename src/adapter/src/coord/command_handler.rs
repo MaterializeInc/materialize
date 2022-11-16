@@ -114,8 +114,14 @@ impl<S: Append + 'static> Coordinator<S> {
                 let _ = tx.send(Response { result, session });
             }
 
-            Command::Terminate { mut session } => {
+            Command::Terminate { mut session, tx } => {
                 self.handle_terminate(&mut session).await;
+                if let Some(tx) = tx {
+                    let _ = tx.send(Response {
+                        result: Ok(()),
+                        session,
+                    });
+                }
             }
 
             Command::StartTransaction {
@@ -208,6 +214,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 cancel_tx,
                 secret_key,
                 notice_tx: session.retain_notice_transmitter(),
+                drop_sinks: Vec::new(),
             },
         );
 
@@ -518,7 +525,7 @@ impl<S: Append + 'static> Coordinator<S> {
             for PendingPeek {
                 sender: rows_tx,
                 conn_id: _,
-            } in self.cancel_pending_peeks(conn_id)
+            } in self.cancel_pending_peeks(&conn_id)
             {
                 // Cancel messages can be sent after the connection has hung
                 // up, but before the connection's state has been cleaned up.
@@ -536,10 +543,10 @@ impl<S: Append + 'static> Coordinator<S> {
 
         self.drop_temp_items(session).await;
         self.catalog
-            .drop_temporary_schema(session.conn_id())
+            .drop_temporary_schema(&session.conn_id())
             .unwrap_or_terminate("unable to drop temporary schema");
         self.metrics.active_sessions.dec();
         self.active_conns.remove(&session.conn_id());
-        self.cancel_pending_peeks(session.conn_id());
+        self.cancel_pending_peeks(&session.conn_id());
     }
 }

@@ -129,7 +129,7 @@ use crate::coord::timeline::{TimelineState, WriteTimestamp};
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, Session};
 use crate::subscribe::PendingSubscribe;
-use crate::util::{ClientTransmitter, CompletedClientTransmitter};
+use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId};
 use crate::AdapterNotice;
 
 pub(crate) mod id_bundle;
@@ -275,6 +275,10 @@ struct ConnMeta {
     /// requests are required to authenticate with the secret of the connection
     /// that they are targeting.
     secret_key: u32,
+
+    /// Sinks that will need to be dropped when the current transaction, if
+    /// any, is cleared.
+    drop_sinks: Vec<ComputeSinkId>,
 
     /// Channel on which to send notices to a session.
     notice_tx: mpsc::UnboundedSender<AdapterNotice>,

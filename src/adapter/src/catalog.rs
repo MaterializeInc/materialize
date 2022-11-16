@@ -3295,8 +3295,8 @@ impl<S: Append> Catalog<S> {
             .contains_key(item_name)
     }
 
-    pub fn drop_temp_item_ops(&mut self, conn_id: ConnectionId) -> Vec<Op> {
-        let ids: Vec<GlobalId> = self.state.temporary_schemas[&conn_id]
+    pub fn drop_temp_item_ops(&mut self, conn_id: &ConnectionId) -> Vec<Op> {
+        let ids: Vec<GlobalId> = self.state.temporary_schemas[conn_id]
             .items
             .values()
             .cloned()
@@ -3304,11 +3304,11 @@ impl<S: Append> Catalog<S> {
         self.drop_items_ops(&ids)
     }
 
-    pub fn drop_temporary_schema(&mut self, conn_id: ConnectionId) -> Result<(), Error> {
-        if !self.state.temporary_schemas[&conn_id].items.is_empty() {
+    pub fn drop_temporary_schema(&mut self, conn_id: &ConnectionId) -> Result<(), Error> {
+        if !self.state.temporary_schemas[conn_id].items.is_empty() {
             return Err(Error::new(ErrorKind::SchemaNotEmpty(MZ_TEMP_SCHEMA.into())));
         }
-        self.state.temporary_schemas.remove(&conn_id);
+        self.state.temporary_schemas.remove(conn_id);
         Ok(())
     }
 

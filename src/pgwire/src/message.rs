@@ -373,6 +373,9 @@ impl ErrorResponse {
             AdapterError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
             AdapterError::ReadWriteUnavailable => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::StatementTimeout => SqlState::QUERY_CANCELED,
+            AdapterError::IdleInTransactionSessionTimeout => {
+                SqlState::IDLE_IN_TRANSACTION_SESSION_TIMEOUT
+            }
             AdapterError::RecursionLimit(_) => SqlState::INTERNAL_ERROR,
             AdapterError::RelationOutsideTimeDomain { .. } => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::ResourceExhaustion { .. } => SqlState::INSUFFICIENT_RESOURCES,

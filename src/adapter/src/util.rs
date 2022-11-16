@@ -77,6 +77,7 @@ impl<T: Transmittable> ClientTransmitter<T> {
             self.internal_cmd_tx
                 .send(Message::Command(Command::Terminate {
                     session: res.session,
+                    tx: None,
                 }))
                 .expect("coordinator unexpectedly gone");
         }

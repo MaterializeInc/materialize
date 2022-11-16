@@ -143,13 +143,18 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &mut Session,
     ) -> TransactionStatus<mz_repr::Timestamp> {
-        let (drop_sinks, txn) = session.clear_transaction();
+        let conn_meta = self
+            .active_conns
+            .get_mut(&session.conn_id())
+            .expect("must exist for active session");
+        let drop_sinks = std::mem::take(&mut conn_meta.drop_sinks);
         self.drop_compute_sinks(drop_sinks).await;
 
         // Release this transaction's compaction hold on collections.
         if let Some(txn_reads) = self.txn_reads.remove(&session.conn_id()) {
             self.release_read_hold(&txn_reads.read_holds).await;
         }
-        txn
+
+        session.clear_transaction()
     }
 }
