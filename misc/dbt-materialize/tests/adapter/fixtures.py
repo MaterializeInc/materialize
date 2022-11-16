@@ -37,50 +37,38 @@ test_view_index = """
     SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse'), (NULL, NULL)) _ (a, b)
 """
 
-test_source = {
-    "materialize_cloud": """
-        {{ config(
-            materialized='source',
-            database='materialize',
-            pre_hook="CREATE CONNECTION kafka_connection TO KAFKA (BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}')"
-            )
-        }}
+test_source = """
+{{ config(
+    materialized='source',
+    database='materialize',
+    pre_hook="CREATE CONNECTION kafka_connection TO KAFKA (BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}')"
+    )
+}}
 
-        CREATE SOURCE {{ this }}
-        FROM KAFKA CONNECTION kafka_connection (TOPIC 'test-source')
-        FORMAT BYTES
-        """,
-}
+CREATE SOURCE {{ this }}
+FROM KAFKA CONNECTION kafka_connection (TOPIC 'test-source')
+FORMAT BYTES
+"""
 
-test_source_index = {
-    "materialize_cloud": """
-        {{ config(
-            materialized='source',
-            indexes=[{'columns': ['data']}]
-        ) }}
+test_source_index = """
+{{ config(
+    materialized='source',
+    indexes=[{'columns': ['data']}]
+) }}
 
-        CREATE SOURCE {{ this }}
-        FROM KAFKA CONNECTION kafka_connection (TOPIC 'test-source')
-        FORMAT BYTES
-        """,
-}
-# TODO(ahelium) re-enable SINKS tests when syntax becomes clear
-# test_sink = {
-#     "materialize_cloud": """
-#         {{ config(materialized='sink') }}
-#             CREATE SINK {{ this }}
-#             FROM {{ ref('test_materialized_view') }}
-#             INTO KAFKA CONNECTION kafka_connection TOPIC 'test-sink'
-#             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{{ env_var('SCHEMA_REGISTRY_URL', 'http://localhost:8081') }}'
-#         """,
-#     "materialize_binary": """
-#         {{ config(materialized='sink') }}
-#             CREATE SINK {{ this }}
-#             FROM {{ ref('test_materialized_view') }}
-#             INTO KAFKA BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}' TOPIC 'test-sink'
-#             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{{ env_var('SCHEMA_REGISTRY_URL', 'http://localhost:8081') }}'
-#         """,
-# }
+CREATE SOURCE {{ this }}
+FROM KAFKA CONNECTION kafka_connection (TOPIC 'test-source')
+FORMAT BYTES
+"""
+
+test_sink = """
+{{ config(materialized='sink') }}
+ CREATE SINK {{ this }}
+ FROM {{ ref('test_materialized_view') }}
+ INTO KAFKA CONNECTION kafka_connection (TOPIC 'test-sink')
+ FORMAT JSON
+ ENVELOPE DEBEZIUM
+"""
 
 actual_indexes = """
 SELECT
@@ -95,15 +83,13 @@ JOIN mz_objects o ON i.on_id = o.id
 WHERE i.id LIKE 'u%'
 """
 
-expected_indexes = {
-    "materialize_cloud": """
+expected_indexes = """
 object_name,index_position,on_position,on_expression,index_name
 test_materialized_view_index,1,1,,a_idx
 test_materialized_view_index,2,,pg_catalog.length(a),a_idx
 test_source_index,1,1,,test_source_index_data_idx
 test_view_index,1,1,,test_view_index_primary_idx
-""".lstrip(),
-}
+""".lstrip()
 
 not_null = """
 {{ config(store_failures=true, schema='test', alias='testnull') }}
@@ -126,10 +112,8 @@ unique = """
 """
 
 expected_base_relation_types = {
-    "materialize_cloud": {
-        "base": "materializedview",
-        "view_model": "view",
-        "table_model": "materializedview",
-        "swappable": "materializedview",
-    },
+    "base": "materializedview",
+    "view_model": "view",
+    "table_model": "materializedview",
+    "swappable": "materializedview",
 }

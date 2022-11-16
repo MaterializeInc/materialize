@@ -15,10 +15,12 @@
 
 import pytest
 from dbt.tests.util import check_relations_equal, run_dbt
-from fixtures import (  # test_sink, expected indexes
+from fixtures import (
     actual_indexes,
+    expected_indexes,
     test_materialized_view,
     test_materialized_view_index,
+    test_sink,
     test_source,
     test_source_index,
     test_view_index,
@@ -26,13 +28,15 @@ from fixtures import (  # test_sink, expected indexes
 
 
 class TestCustomMaterializations:
-    @pytest.fixture(autouse=True, scope="class")
-    def _pass_profile_value(self, profile):
-        self._profile = profile
-
     @pytest.fixture(scope="class")
     def project_config_update(self):
         return {"name": "custom_materializations"}
+
+    @pytest.fixture(scope="class")
+    def seeds(self):
+        return {
+            "expected_indexes.csv": expected_indexes,
+        }
 
     @pytest.fixture(scope="class")
     def models(self):
@@ -40,27 +44,27 @@ class TestCustomMaterializations:
             "test_materialized_view.sql": test_materialized_view,
             "test_materialized_view_index.sql": test_materialized_view_index,
             "test_view_index.sql": test_view_index,
-            "test_source.sql": test_source[self._profile],
-            "test_source_index.sql": test_source_index[self._profile],
-            # "test_sink.sql": test_sink[self._profile],
-            # "actual_indexes.sql": actual_indexes,
+            "test_source.sql": test_source,
+            "test_source_index.sql": test_source_index,
+            "test_sink.sql": test_sink,
+            "actual_indexes.sql": actual_indexes,
         }
 
     def test_custom_materializations(self, project):
         # seed seeds
-        # results = run_dbt(["seed"])
+        results = run_dbt(["seed"])
         # seed result length
-        # assert len(results) == 1
+        assert len(results) == 1
         # run models
         results = run_dbt(["run"])
         # run result length
-        assert len(results) == 5
+        assert len(results) == 7
         # relations_equal
         check_relations_equal(
             project.adapter, ["test_materialized_view", "test_view_index"]
         )
 
-        # check_relations_equal(project.adapter, ["actual_indexes", "expected_indexes"])
+        check_relations_equal(project.adapter, ["actual_indexes", "expected_indexes"])
 
         # TODO(morsapaes): add test that ensures that the source/sink emit the
         # correct data once sinks land.
