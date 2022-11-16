@@ -24,7 +24,6 @@ use mz_compute_client::command::{BuildDesc, DataflowDesc, IndexDesc, ReplicaId};
 use mz_compute_client::controller::{
     ComputeInstanceId, ComputeReplicaConfig, ComputeReplicaLogging,
 };
-use mz_compute_client::explain::{TimestampExplanation, TimestampSource};
 use mz_compute_client::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, SubscribeSinkConnection,
 };
@@ -85,6 +84,8 @@ use crate::session::{
 use crate::subscribe::PendingSubscribe;
 use crate::util::{send_immediate_rows, ClientTransmitter, ComputeSinkId};
 use crate::{guard_write_critical_section, session, PeekResponseUnary};
+
+use super::timestamp_selection::{TimestampExplanation, TimestampSource};
 
 impl<S: Append + 'static> Coordinator<S> {
     #[tracing::instrument(level = "debug", skip_all)]
@@ -2108,13 +2109,15 @@ impl<S: Append + 'static> Coordinator<S> {
                         compute_instance,
                         &timeline,
                     )?;
-                    let read_holds = self.acquire_read_holds(timestamp, id_bundle).await;
+                    let read_holds = self
+                        .acquire_read_holds(timestamp.timestamp, id_bundle)
+                        .await;
                     let txn_reads = TxnReads {
                         timestamp_independent,
                         read_holds,
                     };
                     self.txn_reads.insert(conn_id, txn_reads);
-                    timestamp
+                    timestamp.timestamp
                 }
             };
 
@@ -2167,6 +2170,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .index_oracle(compute_instance)
                 .sufficient_collections(&source_ids);
             self.determine_timestamp(session, &id_bundle, &when, compute_instance, &timeline)?
+                .timestamp
         };
 
         // before we have the corrected timestamp ^
@@ -2305,13 +2309,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 .sufficient_collections(uses);
             let timeline = coord.validate_timeline(id_bundle.iter())?;
             // If a timestamp was explicitly requested, use that.
-            let timestamp = coord.determine_timestamp(
-                session,
-                &id_bundle,
-                &when,
-                compute_instance_id,
-                &timeline,
-            )?;
+            let timestamp = coord
+                .determine_timestamp(session, &id_bundle, &when, compute_instance_id, &timeline)?
+                .timestamp;
 
             Ok::<_, AdapterError>(ComputeSinkDesc {
                 from,
@@ -2602,21 +2602,16 @@ impl<S: Append + 'static> Coordinator<S> {
         let id_bundle = self
             .index_oracle(compute_instance)
             .sufficient_collections(&source_ids);
-        // TODO: determine_timestamp takes a mut self to track linearizability,
-        // so explaining a plan involving tables has side effects. Removing those side
-        // effects would be good.
-        // TODO(jkosh44): Would be a nice addition to include the timeline in output.
-        let timestamp = self.determine_timestamp(
+        // TODO: determine_timestamp takes a mut self to modify the oracle
+        // timestamp, so explaining a plan involving tables has side effects.
+        // Removing those side effects would be good.
+        let determination = self.determine_timestamp(
             session,
             &id_bundle,
             &QueryWhen::Immediately,
             compute_instance,
             &timeline,
         )?;
-        let since = self.least_valid_read(&id_bundle).elements().to_vec();
-        let upper = self.least_valid_write(&id_bundle);
-        let respond_immediately = !upper.less_equal(&timestamp);
-        let upper = upper.elements().to_vec();
         let mut sources = Vec::new();
         {
             for id in id_bundle.storage_ids.iter() {
@@ -2665,11 +2660,7 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
         let explanation = TimestampExplanation {
-            timestamp,
-            since,
-            upper,
-            global_timestamp: self.get_local_read_ts(),
-            respond_immediately,
+            determination,
             sources,
             timeline,
         };
