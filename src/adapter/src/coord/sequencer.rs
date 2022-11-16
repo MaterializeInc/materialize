@@ -343,14 +343,12 @@ impl<S: Append + 'static> Coordinator<S> {
                 );
             }
             Plan::DiscardTemp => {
-                self.drop_temp_items(Some(&session), &session.conn_id())
-                    .await;
+                self.drop_temp_items(&session).await;
                 tx.send(Ok(ExecuteResponse::DiscardedTemp), session);
             }
             Plan::DiscardAll => {
                 let ret = if let TransactionStatus::Started(_) = session.transaction() {
-                    self.drop_temp_items(Some(&session), &session.conn_id())
-                        .await;
+                    self.drop_temp_items(&session).await;
                     let conn_meta = self
                         .active_conns
                         .get_mut(&session.conn_id())
@@ -1996,8 +1994,7 @@ impl<S: Append + 'static> Coordinator<S> {
         ),
         AdapterError,
     > {
-        self.clear_transaction(&session.conn_id()).await;
-        let txn = session.clear_transaction();
+        let txn = self.clear_transaction(session).await;
 
         if let EndTransactionAction::Commit = action {
             if let (Some(mut ops), write_lock_guard) = txn.into_ops_and_lock_guard() {

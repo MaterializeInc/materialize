@@ -17,6 +17,7 @@ use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use prometheus::IntCounterVec;
 use tokio::sync::{mpsc, oneshot, watch};
+use tracing::error;
 use uuid::Uuid;
 
 use mz_ore::id_gen::IdAllocator;
@@ -383,10 +384,18 @@ impl SessionClient {
     }
 
     /// Terminates the client session.
-    pub fn terminate(&mut self) {
-        let conn_id = self.session().conn_id();
-        self.inner().inner.send(Command::Terminate { conn_id });
-        self.session().reset();
+    pub async fn terminate(&mut self) {
+        let res = self
+            .send(|tx, session| Command::Terminate {
+                session,
+                tx: Some(tx),
+            })
+            .await;
+        if let Err(e) = res {
+            // Nothing we can do to handle a failed terminate so we just log and ignore it.
+            error!("Unable to terminate session: {e:?}");
+        }
+        // Prevent any communication with Coordinator after session is terminated.
         self.inner = None;
     }
 
@@ -484,10 +493,12 @@ impl Drop for SessionClient {
         // We may not have a session if this client was dropped while awaiting
         // a response. In this case, it is the coordinator's responsibility to
         // terminate the session.
-        // We may not have a connection to the Coordinator if the session was
-        // prematurely terminated, for example due to a timeout.
-        if self.session.is_some() && self.inner.is_some() {
-            self.terminate();
+        if let Some(session) = self.session.take() {
+            // We may not have a connection to the Coordinator if the session was
+            // prematurely terminated, for example due to a timeout.
+            if let Some(inner) = &self.inner {
+                inner.inner.send(Command::Terminate { session, tx: None })
+            }
         }
     }
 }

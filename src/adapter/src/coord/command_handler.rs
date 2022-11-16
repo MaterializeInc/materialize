@@ -114,8 +114,14 @@ impl<S: Append + 'static> Coordinator<S> {
                 let _ = tx.send(Response { result, session });
             }
 
-            Command::Terminate { conn_id } => {
-                self.handle_terminate(conn_id).await;
+            Command::Terminate { mut session, tx } => {
+                self.handle_terminate(&mut session).await;
+                if let Some(tx) = tx {
+                    let _ = tx.send(Response {
+                        result: Ok(()),
+                        session,
+                    });
+                }
             }
 
             Command::StartTransaction {
@@ -532,15 +538,15 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Handle termination of a client session.
     ///
     /// This cleans up any state in the coordinator associated with the session.
-    async fn handle_terminate(&mut self, conn_id: ConnectionId) {
-        self.clear_transaction(&conn_id).await;
+    async fn handle_terminate(&mut self, session: &mut Session) {
+        self.clear_transaction(session).await;
 
-        self.drop_temp_items(None, &conn_id).await;
+        self.drop_temp_items(session).await;
         self.catalog
-            .drop_temporary_schema(&conn_id)
+            .drop_temporary_schema(&session.conn_id())
             .unwrap_or_terminate("unable to drop temporary schema");
         self.metrics.active_sessions.dec();
-        self.active_conns.remove(&conn_id);
-        self.cancel_pending_peeks(&conn_id);
+        self.active_conns.remove(&session.conn_id());
+        self.cancel_pending_peeks(&session.conn_id());
     }
 }

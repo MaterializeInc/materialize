@@ -103,7 +103,8 @@ pub enum Command {
     },
 
     Terminate {
-        conn_id: ConnectionId,
+        session: Session,
+        tx: Option<oneshot::Sender<Response<()>>>,
     },
 }
 
