@@ -44,7 +44,6 @@ use bytes::{Buf, BytesMut};
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
-use itertools::Itertools;
 use md5::{Digest, Md5};
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::adt::date::Date;
@@ -1279,7 +1278,7 @@ pub async fn rewrite_file(config: &RunConfig<'_>, filename: &Path) -> Result<(),
                         if i != 0 {
                             buf.append("\n");
                         }
-                        buf.append(&row.iter().map(|col| col.replace(' ', "␠")).join("  "));
+                        buf.append(&row.join("  "));
                     }
                     // In standard mode, output each value on its own line,
                     // and ignore row boundaries.
