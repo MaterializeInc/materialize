@@ -56,7 +56,7 @@ Explained Query:
                       Union // { arity: 3 }
                         Negate // { arity: 3 }
                           Project (#0..=#2) // { arity: 3 }
-                            Join on=(#0 = #3) type=delta // { arity: 4 }
+                            Join on=(#0 = #3) type=differential // { arity: 4 }
                               ArrangeBy keys=[[#0]] // { arity: 3 }
                                 Get l0 // { arity: 3 }
                               ArrangeBy keys=[[#0]] // { arity: 1 }
@@ -70,7 +70,7 @@ Explained Query:
   With
     cte l1 =
       Project (#0..=#3) // { arity: 4 }
-        Join on=(#0 = #4) type=delta // { arity: 5 }
+        Join on=(#0 = #4) type=differential // { arity: 5 }
           ArrangeBy keys=[[#0]] // { arity: 3 }
             Filter (#0) IS NOT NULL // { arity: 3 }
               Get l0 // { arity: 3 }
@@ -109,7 +109,7 @@ SELECT u.g as g, w.g as h FROM u, u as w WHERE u.g = w.g
 Explained Query:
   Return // { arity: 2 }
     Project (#0, #0) // { arity: 2 }
-      Join on=(#0 = #1) type=delta // { arity: 2 }
+      Join on=(#0 = #1) type=differential // { arity: 2 }
         Get l0 // { arity: 1 }
         Get l0 // { arity: 1 }
   With
@@ -134,7 +134,7 @@ SELECT * FROM u WHERE (SELECT f FROM v WHERE v.e = u.d) = 1
 Explained Query:
   Return // { arity: 2 }
     Project (#0, #1) // { arity: 2 }
-      Join on=(#1 = #2) type=delta // { arity: 3 }
+      Join on=(#1 = #2) type=differential // { arity: 3 }
         ArrangeBy keys=[[#1]] // { arity: 2 }
           Get materialize.public.u // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 1 }
@@ -150,7 +150,7 @@ Explained Query:
   With
     cte l0 =
       Project (#0, #2) // { arity: 2 }
-        Join on=(#0 = #1) type=delta // { arity: 3 }
+        Join on=(#0 = #1) type=differential // { arity: 3 }
           ArrangeBy keys=[[#0]] // { arity: 1 }
             Distinct group_by=[#0] // { arity: 1 }
               Project (#1) // { arity: 1 }

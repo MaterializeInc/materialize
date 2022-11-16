@@ -77,7 +77,7 @@ ON t.b = u.d;
 ----
 Explained Query:
   Project (#1, #0, #2, #0) // { keys: "([1])" }
-    Join on=(#0 = #3) type=delta // { keys: "([0])" }
+    Join on=(#0 = #3) type=differential // { keys: "([0])" }
       ArrangeBy keys=[[#0]] // { keys: "([0])" }
         Reduce group_by=[#1] aggregates=[sum(#0)] // { keys: "([0])" }
           Filter (#1) IS NOT NULL // { keys: "()" }
@@ -115,7 +115,7 @@ Explained Query:
         Map (integer_to_double(#0)) // { keys: "([0], [2])" }
           TopK group_by=[#0] limit=1 monotonic=false // { keys: "([0])" }
             Project (#0, #1) // { keys: "()" }
-              Join on=(#0 = #2) type=delta // { keys: "()" }
+              Join on=(#0 = #2) type=differential // { keys: "()" }
                 ArrangeBy keys=[[#0]] // { keys: "([0])" }
                   Distinct group_by=[#0] // { keys: "([0])" }
                     Project (#0) // { keys: "()" }

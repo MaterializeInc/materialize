@@ -73,9 +73,8 @@ query T multiline
 explain with(arity, join_impls) select * from foo, bar where foo.a = abs(bar.a) and foo.a = 3
 ----
 Explained Query:
-  CrossJoin type=delta // { arity: 6 }
+  CrossJoin type=differential // { arity: 6 }
     implementation
-      %0:foo » %1:bar[×]Aef
       %1:bar » %0:foo[×]Aef
     ArrangeBy keys=[[]] // { arity: 3 }
       Filter (#0 = 3) // { arity: 3 }

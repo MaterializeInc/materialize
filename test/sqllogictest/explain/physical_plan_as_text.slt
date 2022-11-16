@@ -654,8 +654,7 @@ Explained Query:
       lookup={ relation=1, key=[#1] }
       stream={ key=[#0], thinning=() }
     source={ relation=2, key=[#0] }
-    ArrangeBy
-      input_key=[#0]
+    Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
     ArrangeBy
@@ -713,8 +712,7 @@ Explained Query:
       lookup={ relation=1, key=[#0, #1] }
       stream={ key=[#1, #0], thinning=() }
     source={ relation=2, key=[#1, #0] }
-    ArrangeBy
-      input_key=[#0]
+    Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
     ArrangeBy

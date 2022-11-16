@@ -85,7 +85,7 @@ Explained Query:
         Union // { types: "()" }
           Negate // { types: "()" }
             Project () // { types: "()" }
-              Join on=(#0 = #1) type=delta // { types: "(integer?, integer)" }
+              Join on=(#0 = #1) type=differential // { types: "(integer?, integer)" }
                 ArrangeBy keys=[[#0]] // { types: "(integer?)" }
                   Get materialize.public.u // { types: "(integer?)" }
                 ArrangeBy keys=[[#0]] // { types: "(integer)" }
@@ -98,7 +98,7 @@ Explained Query:
   With
     cte l0 =
       Project (#0, #2, #3) // { types: "(integer, text?, date?)" }
-        Join on=(#0 = #1) type=delta // { types: "(integer, integer, text?, date?)" }
+        Join on=(#0 = #1) type=differential // { types: "(integer, integer, text?, date?)" }
           ArrangeBy keys=[[#0]] // { types: "(integer)" }
             Filter (#0) IS NOT NULL // { types: "(integer)" }
               Get materialize.public.u // { types: "(integer?)" }
@@ -123,7 +123,7 @@ Explained Query:
           Project (#1, #2) // { types: "(boolean?, bigint)" }
             Reduce group_by=[#0] aggregates=[min(#1), count(true)] // { types: "(double precision, boolean?, bigint)" }
               Project (#0, #1) // { types: "(double precision, boolean?)" }
-                Join on=(#0 = #2) type=delta // { types: "(double precision, boolean?, double precision)" }
+                Join on=(#0 = #2) type=differential // { types: "(double precision, boolean?, double precision)" }
                   ArrangeBy keys=[[#0]] // { types: "(double precision, boolean?)" }
                     Filter (#0) IS NOT NULL // { types: "(double precision, boolean?)" }
                       Get materialize.public.v // { types: "(double precision?, boolean?)" }

@@ -59,97 +59,80 @@ WHERE
  OR l_commitdate = o_orderdate - ' 7 DAY '
  );
 ----
-Explained␠Query:
-␠␠Return
-␠␠␠␠Join::Delta
-␠␠␠␠␠␠plan_path[0]
-␠␠␠␠␠␠␠␠final_closure
-␠␠␠␠␠␠␠␠␠␠project=(#0)
-␠␠␠␠␠␠␠␠␠␠map=(1)
-␠␠␠␠␠␠␠␠delta_stage[0]
-␠␠␠␠␠␠␠␠␠␠closure
-␠␠␠␠␠␠␠␠␠␠␠␠project=()
-␠␠␠␠␠␠␠␠␠␠lookup={␠relation=1,␠key=[#0]␠}
-␠␠␠␠␠␠␠␠␠␠stream={␠key=[#0],␠thinning=()␠}
-␠␠␠␠␠␠␠␠source={␠relation=0,␠key=[#0]␠}
-␠␠␠␠␠␠plan_path[1]
-␠␠␠␠␠␠␠␠final_closure
-␠␠␠␠␠␠␠␠␠␠project=(#0)
-␠␠␠␠␠␠␠␠␠␠map=(1)
-␠␠␠␠␠␠␠␠delta_stage[0]
-␠␠␠␠␠␠␠␠␠␠closure
-␠␠␠␠␠␠␠␠␠␠␠␠project=()
-␠␠␠␠␠␠␠␠␠␠lookup={␠relation=0,␠key=[#0]␠}
-␠␠␠␠␠␠␠␠␠␠stream={␠key=[#0],␠thinning=()␠}
-␠␠␠␠␠␠␠␠source={␠relation=1,␠key=[#0]␠}
-␠␠␠␠␠␠ArrangeBy
-␠␠␠␠␠␠␠␠raw=true
-␠␠␠␠␠␠␠␠arrangements[0]={␠key=[#0],␠permutation=id,␠thinning=()␠}
-␠␠␠␠␠␠␠␠Get::PassArrangements␠l0
-␠␠␠␠␠␠␠␠␠␠raw=true
-␠␠␠␠␠␠Reduce::Distinct
-␠␠␠␠␠␠␠␠val_plan
-␠␠␠␠␠␠␠␠␠␠project=()
-␠␠␠␠␠␠␠␠key_plan=id
-␠␠␠␠␠␠␠␠Join::Linear
-␠␠␠␠␠␠␠␠␠␠linear_stage[1]
-␠␠␠␠␠␠␠␠␠␠␠␠closure
-␠␠␠␠␠␠␠␠␠␠␠␠␠␠project=(#0)
-␠␠␠␠␠␠␠␠␠␠␠␠␠␠filter=(((#3␠=␠1997-07-06)␠OR␠(date_to_timestamp(#2)␠=␠(#1␠-␠7␠days))))
-␠␠␠␠␠␠␠␠␠␠␠␠lookup={␠relation=0,␠key=[]␠}
-␠␠␠␠␠␠␠␠␠␠␠␠stream={␠key=[],␠thinning=(#0,␠#1)␠}
-␠␠␠␠␠␠␠␠␠␠linear_stage[0]
-␠␠␠␠␠␠␠␠␠␠␠␠lookup={␠relation=1,␠key=[#0]␠}
-␠␠␠␠␠␠␠␠␠␠␠␠stream={␠key=[#0],␠thinning=(#1)␠}
-␠␠␠␠␠␠␠␠␠␠source={␠relation=2,␠key=[#0]␠}
-␠␠␠␠␠␠␠␠␠␠ArrangeBy
-␠␠␠␠␠␠␠␠␠␠␠␠raw=true
-␠␠␠␠␠␠␠␠␠␠␠␠arrangements[0]={␠key=[],␠permutation=id,␠thinning=(#0,␠#1)␠}
-␠␠␠␠␠␠␠␠␠␠␠␠Get::Collection␠materialize.public.lineitem
-␠␠␠␠␠␠␠␠␠␠␠␠␠␠project=(#1,␠#2)
-␠␠␠␠␠␠␠␠␠␠␠␠␠␠raw=true
-␠␠␠␠␠␠␠␠␠␠Reduce::Distinct
-␠␠␠␠␠␠␠␠␠␠␠␠val_plan
-␠␠␠␠␠␠␠␠␠␠␠␠␠␠project=()
-␠␠␠␠␠␠␠␠␠␠␠␠key_plan=id
-␠␠␠␠␠␠␠␠␠␠␠␠Get::PassArrangements␠l0
-␠␠␠␠␠␠␠␠␠␠␠␠␠␠raw=true
-␠␠␠␠␠␠␠␠␠␠ArrangeBy
-␠␠␠␠␠␠␠␠␠␠␠␠raw=true
-␠␠␠␠␠␠␠␠␠␠␠␠arrangements[0]={␠key=[#0],␠permutation=id,␠thinning=(#1)␠}
-␠␠␠␠␠␠␠␠␠␠␠␠Get::Collection␠materialize.public.orders
-␠␠␠␠␠␠␠␠␠␠␠␠␠␠filter=((#0)␠IS␠NOT␠NULL)
-␠␠␠␠␠␠␠␠␠␠␠␠␠␠raw=true
-␠␠Where
-␠␠␠␠cte␠l0␠=
-␠␠␠␠␠␠Join::Delta
-␠␠␠␠␠␠␠␠plan_path[0]
-␠␠␠␠␠␠␠␠␠␠delta_stage[0]
-␠␠␠␠␠␠␠␠␠␠␠␠lookup={␠relation=1,␠key=[]␠}
-␠␠␠␠␠␠␠␠␠␠␠␠stream={␠key=[],␠thinning=(#0)␠}
-␠␠␠␠␠␠␠␠␠␠source={␠relation=0,␠key=[]␠}
-␠␠␠␠␠␠␠␠plan_path[1]
-␠␠␠␠␠␠␠␠␠␠delta_stage[0]
-␠␠␠␠␠␠␠␠␠␠␠␠lookup={␠relation=0,␠key=[]␠}
-␠␠␠␠␠␠␠␠␠␠␠␠stream={␠key=[],␠thinning=()␠}
-␠␠␠␠␠␠␠␠␠␠source={␠relation=1,␠key=[]␠}
-␠␠␠␠␠␠␠␠ArrangeBy
-␠␠␠␠␠␠␠␠␠␠raw=true
-␠␠␠␠␠␠␠␠␠␠arrangements[0]={␠key=[],␠permutation=id,␠thinning=(#0)␠}
-␠␠␠␠␠␠␠␠␠␠Get::Collection␠materialize.public.lineitem
-␠␠␠␠␠␠␠␠␠␠␠␠project=(#0)
-␠␠␠␠␠␠␠␠␠␠␠␠raw=true
-␠␠␠␠␠␠␠␠ArrangeBy
-␠␠␠␠␠␠␠␠␠␠raw=true
-␠␠␠␠␠␠␠␠␠␠arrangements[0]={␠key=[],␠permutation=id,␠thinning=()␠}
-␠␠␠␠␠␠␠␠␠␠Get::Collection␠materialize.public.orders
-␠␠␠␠␠␠␠␠␠␠␠␠project=()
-␠␠␠␠␠␠␠␠␠␠␠␠raw=true
+Explained Query:
+  Return
+    Join::Linear
+      final_closure
+        project=(#0)
+        map=(1)
+      linear_stage[0]
+        closure
+          project=()
+        lookup={ relation=1, key=[#0] }
+        stream={ key=[#0], thinning=() }
+      source={ relation=0, key=[#0] }
+      ArrangeBy
+        raw=true
+        arrangements[0]={ key=[#0], permutation=id, thinning=() }
+        Get::PassArrangements l0
+          raw=true
+      Reduce::Distinct
+        val_plan
+          project=()
+        key_plan=id
+        Join::Linear
+          linear_stage[1]
+            closure
+              project=(#0)
+              filter=(((#3 = 1997-07-06) OR (date_to_timestamp(#2) = (#1 - 7 days))))
+            lookup={ relation=0, key=[] }
+            stream={ key=[], thinning=(#0, #1) }
+          linear_stage[0]
+            lookup={ relation=1, key=[#0] }
+            stream={ key=[#0], thinning=(#1) }
+          source={ relation=2, key=[#0] }
+          ArrangeBy
+            raw=true
+            arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+            Get::Collection materialize.public.lineitem
+              project=(#1, #2)
+              raw=true
+          Reduce::Distinct
+            val_plan
+              project=()
+            key_plan=id
+            Get::PassArrangements l0
+              raw=true
+          ArrangeBy
+            raw=true
+            arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+            Get::Collection materialize.public.orders
+              filter=((#0) IS NOT NULL)
+              raw=true
+  Where
+    cte l0 =
+      Join::Linear
+        linear_stage[0]
+          lookup={ relation=0, key=[] }
+          stream={ key=[], thinning=() }
+        source={ relation=1, key=[] }
+        ArrangeBy
+          raw=true
+          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+          Get::Collection materialize.public.lineitem
+            project=(#0)
+            raw=true
+        ArrangeBy
+          raw=true
+          arrangements[0]={ key=[], permutation=id, thinning=() }
+          Get::Collection materialize.public.orders
+            project=()
+            raw=true
 
-Source␠materialize.public.orders
-␠␠project=(#0,␠#4)
-Source␠materialize.public.lineitem
-␠␠project=(#0,␠#11,␠#12)
+Source materialize.public.orders
+  project=(#0, #4)
+Source materialize.public.lineitem
+  project=(#0, #11, #12)
 
 EOF
 

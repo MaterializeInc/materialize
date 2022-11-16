@@ -306,8 +306,7 @@ impl JoinImplementation {
 
                 // Employ delta join plans only for multi-way joins of at least three inputs.
                 *relation = if inputs_len > 2 {
-                    delta_query_plan
-                    .or(differential_plan)
+                    delta_query_plan.or(differential_plan)
                 } else {
                     differential_plan
                 }

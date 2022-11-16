@@ -616,9 +616,8 @@ WHERE
 Explained Query:
   Project (#0, #1, #5) // { arity: 3 }
     Filter (#0) IS NOT NULL // { arity: 6 }
-      Join on=(#0 = #3) type=delta // { arity: 6 }
+      Join on=(#0 = #3) type=differential // { arity: 6 }
         implementation
-          %0:t1 » %1:t2[#0]KA
           %1:t2 » %0:t1[#0]KAe
         ArrangeBy keys=[[#0]] // { arity: 3 }
           ReadExistingIndex materialize.public.t1 lookup_values=[("l2"); ("l3")]
@@ -652,9 +651,8 @@ WHERE
 Explained Query:
   Project (#0, #1, #5) // { arity: 3 }
     Filter (#0) IS NOT NULL // { arity: 6 }
-      Join on=(#0 = #3) type=delta // { arity: 6 }
+      Join on=(#0 = #3) type=differential // { arity: 6 }
         implementation
-          %0:t1 » %1:t2[#0]KA
           %1:t2 » %0:t1[#0]KAe
         ArrangeBy keys=[[#0]] // { arity: 3 }
           ReadExistingIndex materialize.public.t1 lookup_value=("l2")
@@ -688,9 +686,8 @@ WHERE
     t1.a = 2 AND t1.b = 'l2'
 ----
 Explained Query:
-  CrossJoin type=delta // { arity: 3 }
+  CrossJoin type=differential // { arity: 3 }
     implementation
-      %0:t1 » %1:t2[×]Ae
       %1:t2 » %0:t1[×]Ae
     ArrangeBy keys=[[]] // { arity: 2 }
       Project (#0, #1) // { arity: 2 }
