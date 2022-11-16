@@ -3246,7 +3246,7 @@ dependencies = [
 
 [[package]]
 name = "mz-compute"
-version = "0.32.0"
+version = "0.32.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3347,7 +3347,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.32.0"
+version = "0.32.1"
 dependencies = [
  "anyhow",
  "askama",
@@ -4316,7 +4316,7 @@ dependencies = [
 
 [[package]]
 name = "mz-storage"
-version = "0.32.0"
+version = "0.32.1"
 dependencies = [
  "anyhow",
  "async-compression",
