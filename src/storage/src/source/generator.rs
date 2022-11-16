@@ -157,7 +157,11 @@ impl SourceReader for LoadGeneratorSourceReader {
 
         let (output, typ, value, specific_diff) = match self.rows.next() {
             Some(row) => row,
-            None => return Ok(NextMessage::Finished),
+            // Although the load generator won't ever return more rows, we want
+            // to avoid shutting down any dataflows associated with this source,
+            // so return Pending. In the future we may add syntax to shut down
+            // by returning Finished.
+            None => return Ok(NextMessage::Pending),
         };
 
         let message = SourceMessage {
