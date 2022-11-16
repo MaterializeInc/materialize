@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 use std::num::NonZeroUsize;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
@@ -97,6 +97,7 @@ pub struct KubernetesOrchestrator {
     config: KubernetesOrchestratorConfig,
     secret_api: Api<Secret>,
     vpc_endpoint_api: Api<VpcEndpoint>,
+    namespaces: Mutex<HashMap<String, Arc<dyn NamespacedOrchestrator>>>,
 }
 
 impl fmt::Debug for KubernetesOrchestrator {
@@ -117,22 +118,26 @@ impl KubernetesOrchestrator {
             config,
             secret_api: Api::default_namespaced(client.clone()),
             vpc_endpoint_api: Api::default_namespaced(client),
+            namespaces: Mutex::new(HashMap::new()),
         })
     }
 }
 
 impl Orchestrator for KubernetesOrchestrator {
     fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator> {
-        Arc::new(NamespacedKubernetesOrchestrator {
-            metrics_api: Api::default_namespaced(self.client.clone()),
-            service_api: Api::default_namespaced(self.client.clone()),
-            stateful_set_api: Api::default_namespaced(self.client.clone()),
-            pod_api: Api::default_namespaced(self.client.clone()),
-            kubernetes_namespace: self.kubernetes_namespace.clone(),
-            namespace: namespace.into(),
-            config: self.config.clone(),
-            service_scales: std::sync::Mutex::new(HashMap::new()),
-        })
+        let mut namespaces = self.namespaces.lock().expect("lock poisoned");
+        Arc::clone(namespaces.entry(namespace.into()).or_insert_with(|| {
+            Arc::new(NamespacedKubernetesOrchestrator {
+                metrics_api: Api::default_namespaced(self.client.clone()),
+                service_api: Api::default_namespaced(self.client.clone()),
+                stateful_set_api: Api::default_namespaced(self.client.clone()),
+                pod_api: Api::default_namespaced(self.client.clone()),
+                kubernetes_namespace: self.kubernetes_namespace.clone(),
+                namespace: namespace.into(),
+                config: self.config.clone(),
+                service_scales: std::sync::Mutex::new(HashMap::new()),
+            })
+        }))
     }
 }
 
