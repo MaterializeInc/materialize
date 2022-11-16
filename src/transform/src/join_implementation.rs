@@ -136,10 +136,12 @@ impl JoinImplementation {
                 // The first fundamental question is whether we should employ a delta query or not.
                 //
                 // Here we conservatively use the rule that if sufficient arrangements exist we will
-                // use a delta query. An arrangement is considered available
+                // use a delta query (except for 2-input joins).
+                // An arrangement is considered available for an input
                 // - if it is a global `Get` with columns present in `indexes`,
                 //   - or the same wrapped by an IndexedFilter,
-                // - if it is an `ArrangeBy` with the columns present,
+                // - if it is an `ArrangeBy` with the columns present (note that the ArrangeBy might
+                //   have been inserted by a previous run of JoinImplementation),
                 // - if it is a `Reduce` whose output is arranged the right way,
                 // - if it is a filter wrapped around either of these (see the mfp extraction).
                 //
@@ -549,7 +551,7 @@ mod differential {
             let mut start_keys = None;
             // Determine an appropriate arrangement to use for `start`.
             // It must line up with the arrangement of `order[1]`, or be set to `None` to avoid miscommunicating the validity.
-            // One way to do this is to take each of the keys of `order[1]`, globalize them, the attempt to find an equated
+            // One way to do this is to take each of the keys of `order[1]`, globalize them, then attempt to find an equated
             // expression that can be localized to order[0].0,
             if let Some((next_index, next_keys, _)) = order.get(1) {
                 // To populate with localized expressions equated to elements of `next_keys`.
