@@ -280,9 +280,7 @@ impl SourceReader for KafkaSourceReader {
     ///
     /// If a message has an offset that is smaller than the next expected offset for this consumer
     /// (and this partition) we skip this message, and seek to the appropriate offset
-    fn get_next_message(
-        &mut self,
-    ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
+    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Diff> {
         let partition_info = self.partition_info.lock().unwrap().take();
         if let Some(partitions) = partition_info {
             // NOTE: We're somewhat inefficient with Vec allocations and the
@@ -299,8 +297,8 @@ impl SourceReader for KafkaSourceReader {
                 }
             }
             if !unconsumed_partitions.is_empty() {
-                return Ok(NextMessage::Ready(
-                    SourceMessageType::DropPartitionCapabilities(unconsumed_partitions),
+                return NextMessage::Ready(SourceMessageType::DropPartitionCapabilities(
+                    unconsumed_partitions,
                 ));
             }
         }
@@ -327,9 +325,8 @@ impl SourceReader for KafkaSourceReader {
                         }))
                 }
                 Ok(message) => {
-                    let source_message = construct_source_message(&message, self.include_headers)
-                        .map_err(SourceReaderError::other_definite)?;
-                    next_message = self.handle_message(source_message);
+                    let (message, ts) = construct_source_message(&message, self.include_headers);
+                    next_message = self.handle_message(Ok(message), ts);
                 }
             }
         }
@@ -346,12 +343,12 @@ impl SourceReader for KafkaSourceReader {
                 break;
             }
 
-            let message = self.poll_from_next_queue()?;
+            let message = self.poll_from_next_queue();
             attempts += 1;
 
             match message {
-                Ok(Some(message)) => {
-                    next_message = self.handle_message(message);
+                Ok(Some((message, ts))) => {
+                    next_message = self.handle_message(Ok(message), ts);
                 }
                 Err(error) => {
                     next_message =
@@ -384,7 +381,7 @@ impl SourceReader for KafkaSourceReader {
             }
         }
 
-        Ok(next_message)
+        next_message
     }
 }
 
@@ -586,14 +583,16 @@ impl KafkaSourceReader {
     fn poll_from_next_queue(
         &mut self,
     ) -> Result<
-        Result<Option<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()>>, String>,
-        SourceReaderError,
+        Option<(
+            SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
+            (PartitionId, MzOffset),
+        )>,
+        String,
     > {
         let mut partition_queue = self.partition_consumers.pop_front().unwrap();
 
         let message = partition_queue
             .get_next_message()
-            .map_err(SourceReaderError::other_definite)?
             .map_err(|e| {
                 let pid = partition_queue.pid();
                 let last_offset = self
@@ -612,16 +611,17 @@ impl KafkaSourceReader {
 
         self.partition_consumers.push_back(partition_queue);
 
-        Ok(message)
+        message
     }
 
     /// Checks if the given message is viable for emission. This checks if the message offset is
     /// past the expected offset and seeks the consumer if it is not.
     fn handle_message(
         &mut self,
-        message: SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()>,
+        message: Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, SourceReaderError>,
+        time: (PartitionId, MzOffset),
     ) -> NextMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()> {
-        let partition = match message.partition {
+        let partition = match time.0 {
             PartitionId::Kafka(pid) => pid,
             _ => unreachable!(),
         };
@@ -645,11 +645,7 @@ impl KafkaSourceReader {
             .expect("partition known to be installed");
 
         let last_offset = *last_offset_ref;
-        let offset_as_i64: i64 = message
-            .offset
-            .offset
-            .try_into()
-            .expect("offset to be < i64::MAX");
+        let offset_as_i64: i64 = time.1.offset.try_into().expect("offset to be < i64::MAX");
         if offset_as_i64 <= last_offset {
             info!(
                 "Kafka message before expected offset, skipping: \
@@ -658,7 +654,7 @@ impl KafkaSourceReader {
                 self.source_name,
                 self.topic_name,
                 partition,
-                message.offset.offset,
+                time.1.offset,
                 last_offset + 1,
             );
             // Seek to the *next* offset that we have not yet processed
@@ -669,7 +665,7 @@ impl KafkaSourceReader {
             NextMessage::TransientDelay
         } else {
             *last_offset_ref = offset_as_i64;
-            NextMessage::Ready(SourceMessageType::Finalized(message))
+            NextMessage::Ready(SourceMessageType::Finalized(message, time, ()))
         }
     }
 }
@@ -677,7 +673,10 @@ impl KafkaSourceReader {
 fn construct_source_message(
     msg: &BorrowedMessage<'_>,
     include_headers: bool,
-) -> Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()>, anyhow::Error> {
+) -> (
+    SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
+    (PartitionId, MzOffset),
+) {
     let headers = match msg.headers() {
         Some(headers) if include_headers => Some(
             headers
@@ -687,23 +686,18 @@ fn construct_source_message(
         ),
         _ => None,
     };
-    Ok(SourceMessage {
+    let pid = PartitionId::Kafka(msg.partition());
+    let Ok(offset) = u64::try_from(msg.offset()) else {
+        panic!("got negative offset ({}) from otherwise non-error'd kafka message", msg.offset());
+    };
+    let msg = SourceMessage {
         output: 0,
-        partition: PartitionId::Kafka(msg.partition()),
-        offset: u64::try_from(msg.offset())
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "got negative offset ({}) from otherwise non-error'd kafka message",
-                    msg.offset()
-                )
-            })?
-            .into(),
         upstream_time_millis: msg.timestamp().to_millis(),
         key: msg.key().map(|k| k.to_vec()),
         value: msg.payload().map(|p| p.to_vec()),
         headers,
-        specific_diff: (),
-    })
+    };
+    (msg, (pid, offset.into()))
 }
 
 /// Wrapper around a partition containing the underlying consumer
@@ -739,17 +733,20 @@ impl PartitionConsumer {
     fn get_next_message(
         &mut self,
     ) -> Result<
-        Result<Option<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()>>, KafkaError>,
-        anyhow::Error,
+        Option<(
+            SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
+            (PartitionId, MzOffset),
+        )>,
+        KafkaError,
     > {
         match self.partition_queue.poll(Duration::from_millis(0)) {
             Some(Ok(msg)) => {
-                let result = construct_source_message(&msg, self.include_headers)?;
-                assert_eq!(result.partition, PartitionId::Kafka(self.pid));
-                Ok(Ok(Some(result)))
+                let (msg, ts) = construct_source_message(&msg, self.include_headers);
+                assert_eq!(ts.0, PartitionId::Kafka(self.pid));
+                Ok(Some((msg, ts)))
             }
-            Some(Err(err)) => Ok(Err(err)),
-            _ => Ok(Ok(None)),
+            Some(Err(err)) => Err(err),
+            _ => Ok(None),
         }
     }
 

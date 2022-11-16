@@ -928,34 +928,29 @@ impl SourceReader for S3SourceReader {
     type Value = Option<Vec<u8>>;
     type Diff = ();
 
-    fn get_next_message(
-        &mut self,
-    ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
+    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Diff> {
         if !self.active_read_worker {
             if !self.reported_unconsumed_partitions {
                 self.reported_unconsumed_partitions = true;
-                return Ok(NextMessage::Ready(
-                    SourceMessageType::DropPartitionCapabilities(vec![PartitionId::None]),
-                ));
+                return NextMessage::Ready(SourceMessageType::DropPartitionCapabilities(vec![
+                    PartitionId::None,
+                ]));
             }
-            return Ok(NextMessage::Finished);
+            return NextMessage::Finished;
         }
 
         match self.receiver_stream.recv().now_or_never() {
             Some(Some(Ok(InternalMessage { record }))) => {
                 self.offset += 1;
-                Ok(NextMessage::Ready(SourceMessageType::Finalized(
-                    SourceMessage {
-                        output: 0,
-                        partition: PartitionId::None,
-                        offset: self.offset.into(),
-                        upstream_time_millis: None,
-                        key: (),
-                        value: record,
-                        headers: None,
-                        specific_diff: (),
-                    },
-                )))
+                let msg = SourceMessage {
+                    output: 0,
+                    upstream_time_millis: None,
+                    key: (),
+                    value: record,
+                    headers: None,
+                };
+                let ts = (PartitionId::None, self.offset.into());
+                NextMessage::Ready(SourceMessageType::Finalized(Ok(msg), ts, ()))
             }
             Some(Some(Err(e))) => match e {
                 S3Error::GetObjectError { .. } => {
@@ -963,14 +958,18 @@ impl SourceReader for S3SourceReader {
                         "when reading source '{}' ({}): {}",
                         self.source_name, self.id, e
                     );
-                    Ok(NextMessage::Pending)
+                    NextMessage::Pending
                 }
                 e @ (S3Error::ListObjectsFailed { .. } | S3Error::IoError { .. }) => {
-                    Err(SourceReaderError::other_definite(anyhow::Error::new(e)))
+                    let err = SourceReaderError::other_definite(anyhow::Error::new(e));
+                    // XXX(petrosagg): We are fabricating a timestamp here. Is this error truly
+                    // definite?
+                    let not_definite_ts = (PartitionId::None, self.offset.into());
+                    NextMessage::Ready(SourceMessageType::Finalized(Err(err), not_definite_ts, ()))
                 }
             },
-            None => Ok(NextMessage::Pending),
-            Some(None) => Ok(NextMessage::Finished),
+            None => NextMessage::Pending,
+            Some(None) => NextMessage::Finished,
         }
     }
 }

@@ -98,23 +98,19 @@ pub trait SourceReader {
     async fn next(
         &mut self,
         timestamp_granularity: Duration,
-    ) -> Option<Result<SourceMessageType<Self::Key, Self::Value, Self::Diff>, SourceReaderError>>
-    {
+    ) -> Option<SourceMessageType<Self::Key, Self::Value, Self::Diff>> {
         // Compatiblity implementation that delegates to the deprecated [Self::get_next_method]
         // call. Once all source implementations have been transitioned to implement
         // [SourceReader::next] directly this provided implementation should be removed and the
         // method should become a required method.
         loop {
             match self.get_next_message() {
-                Ok(NextMessage::Ready(msg)) => return Some(Ok(msg)),
-                Err(err) => return Some(Err(err)),
+                NextMessage::Ready(msg) => return Some(msg),
                 // There was a temporary hiccup in getting messages, check again asap.
-                Ok(NextMessage::TransientDelay) => {
-                    tokio::time::sleep(Duration::from_millis(1)).await
-                }
+                NextMessage::TransientDelay => tokio::time::sleep(Duration::from_millis(1)).await,
                 // There were no new messages, check again after a delay
-                Ok(NextMessage::Pending) => tokio::time::sleep(timestamp_granularity).await,
-                Ok(NextMessage::Finished) => return None,
+                NextMessage::Pending => tokio::time::sleep(timestamp_granularity).await,
+                NextMessage::Finished => return None,
             }
         }
     }
@@ -127,10 +123,8 @@ pub trait SourceReader {
     /// # Deprecated
     ///
     /// Source implementation should implement the async [SourceReader::next] method instead.
-    fn get_next_message(
-        &mut self,
-    ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
-        Ok(NextMessage::Pending)
+    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Diff> {
+        NextMessage::Pending
     }
 
     /// Returns an adapter that treats the source as a stream.
@@ -139,10 +133,7 @@ pub trait SourceReader {
     fn into_stream<'a>(
         mut self,
         timestamp_granularity: Duration,
-    ) -> LocalBoxStream<
-        'a,
-        Result<SourceMessageType<Self::Key, Self::Value, Self::Diff>, SourceReaderError>,
-    >
+    ) -> LocalBoxStream<'a, SourceMessageType<Self::Key, Self::Value, Self::Diff>>
     where
         Self: Sized + 'a,
     {
@@ -182,10 +173,18 @@ pub enum NextMessage<Key, Value, Diff> {
 pub enum SourceMessageType<Key, Value, Diff> {
     /// Communicate that this [`SourceMessage`] is the final
     /// message its its offset.
-    Finalized(SourceMessage<Key, Value, Diff>),
+    Finalized(
+        Result<SourceMessage<Key, Value>, SourceReaderError>,
+        (PartitionId, MzOffset),
+        Diff,
+    ),
     /// Communicate that more [`SourceMessage`]'s
     /// will come later at the same offset as this one.
-    InProgress(SourceMessage<Key, Value, Diff>),
+    InProgress(
+        Result<SourceMessage<Key, Value>, SourceReaderError>,
+        (PartitionId, MzOffset),
+        Diff,
+    ),
     /// Information about the source status
     SourceStatus(SourceStatusUpdate),
     /// Signals that this [`SourceReader`] instance will never emit
@@ -200,14 +199,10 @@ pub enum SourceMessageType<Key, Value, Diff> {
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
 #[derive(Debug, Clone)]
-pub struct SourceMessage<Key, Value, Diff> {
+pub struct SourceMessage<Key, Value> {
     /// The output stream this message belongs to. Later in the pipeline the stream is partitioned
     /// based on this value and is fed to the appropriate source exports
     pub output: usize,
-    /// Partition from which this message originates
-    pub partition: PartitionId,
-    /// Materialize offset of the message (1-indexed)
-    pub offset: MzOffset,
     /// The time that an external system first observed the message
     ///
     /// Milliseconds since the unix epoch
@@ -219,12 +214,6 @@ pub struct SourceMessage<Key, Value, Diff> {
     /// Headers, if the source is configured to pass them along. If it is, but there are none, it
     /// passes `Some([])`
     pub headers: Option<Vec<(String, Option<Vec<u8>>)>>,
-
-    /// Allow sources to optionally output a specific differential
-    /// `diff` value. Defaults to `+1`.
-    ///
-    /// Only supported with `SourceEnvelope::None`
-    pub specific_diff: Diff,
 }
 
 /// A record produced by a source
@@ -323,7 +312,7 @@ pub struct DecodeResult {
 }
 
 /// A structured error for `SourceReader::get_next_message` implementors.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SourceReaderError {
     pub inner: SourceErrorDetails,
 }

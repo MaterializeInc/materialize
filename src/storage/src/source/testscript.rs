@@ -20,7 +20,7 @@ use mz_storage_client::types::sources::{MzOffset, TestScriptSourceConnection};
 
 use crate::source::commit::LogCommitter;
 use crate::source::types::SourceConnectionBuilder;
-use crate::source::{SourceMessage, SourceMessageType, SourceReader, SourceReaderError};
+use crate::source::{SourceMessage, SourceMessageType, SourceReader};
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 #[serde(tag = "command")]
@@ -89,8 +89,7 @@ impl SourceReader for TestScriptSourceReader {
     async fn next(
         &mut self,
         timestamp_granularity: Duration,
-    ) -> Option<Result<SourceMessageType<Self::Key, Self::Value, Self::Diff>, SourceReaderError>>
-    {
+    ) -> Option<SourceMessageType<Self::Key, Self::Value, Self::Diff>> {
         if let Some(command) = self.script.commands.next() {
             match command {
                 ScriptCommand::Terminate => {
@@ -98,17 +97,16 @@ impl SourceReader for TestScriptSourceReader {
                 }
                 ScriptCommand::Emit { key, value, offset } => {
                     // For now we only support `Finalized` messages
-                    return Some(Ok(SourceMessageType::Finalized(SourceMessage {
+                    let msg = Ok(SourceMessage {
                         // For now, we only support single-output, single partition
                         output: 0,
-                        partition: PartitionId::None,
-                        offset: MzOffset { offset },
                         upstream_time_millis: None,
                         key: key.map(|k| k.into_bytes()),
                         value: Some(value.into_bytes()),
                         headers: None,
-                        specific_diff: (),
-                    })));
+                    });
+                    let ts = (PartitionId::None, MzOffset::from(offset));
+                    return Some(SourceMessageType::Finalized(msg, ts, ()));
                 }
             }
         } else {
