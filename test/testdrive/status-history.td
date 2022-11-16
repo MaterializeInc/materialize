@@ -34,11 +34,14 @@ SELECT id FROM mz_sources WHERE name = 'kafka_source'
 > select * from mz_internal.mz_source_status_history where source_id = '${source_id}' order by occurred_at;
 "<TIMESTAMP> UTC" ${source_id} starting <null> <null>
 
+> select * from mz_internal.mz_source_status where id = '${source_id}';
+"${source_id}" kafka_source kafka "<TIMESTAMP> UTC" starting <null> <null>
+
 $ set-from-sql var=sink_id
 SELECT id FROM mz_sinks WHERE name = 'kafka_sink'
 
 # Verify we get a starting -- it's possible we move to running by the time this query runs.
-> SELECT * FROM mz_internal.mz_sink_status_history WHERE sink_id = '${sink_id}' AND status = 'starting' ORDER BY occurred_at;
+> SELECT * FROM mz_internal.mz_sink_status_history WHERE sink_id = '${sink_id}' ORDER BY occurred_at LIMIT 1;
 "<TIMESTAMP> UTC" ${sink_id} starting <null> <null>
 
 $ kafka-ingest format=bytes topic=status-history
@@ -63,6 +66,12 @@ $ kafka-verify-data format=avro sink=materialize.public.kafka_sink sort-messages
 "<TIMESTAMP> UTC" ${sink_id} starting <null> <null>
 "<TIMESTAMP> UTC" ${sink_id} running <null> <null>
 
+> select * from mz_internal.mz_sink_status where id = '${sink_id}';
+"${sink_id}" kafka_sink kafka "<TIMESTAMP> UTC" running <null> <null>
+
 > select * from mz_internal.mz_source_status_history where source_id = '${source_id}' order by occurred_at;
 "<TIMESTAMP> UTC" ${source_id} starting <null> <null>
 "<TIMESTAMP> UTC" ${source_id} running <null> <null>
+
+> select * from mz_internal.mz_source_status where id = '${source_id}';
+"${source_id}" kafka_source kafka "<TIMESTAMP> UTC" running <null> <null>
