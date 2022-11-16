@@ -696,7 +696,7 @@ impl PostgresConnection {
             }
         };
 
-        mz_postgres_util::Config::new(config, tunnel)
+        Ok(mz_postgres_util::Config::new(config, tunnel)?)
     }
 }
 

@@ -16,6 +16,7 @@ use std::fmt::{self, Debug};
 use std::hash::Hash;
 use std::iter;
 use std::marker::PhantomData;
+use std::num::NonZeroI64;
 
 use async_trait::async_trait;
 use mz_ore::soft_assert;
@@ -32,7 +33,7 @@ mod postgres;
 mod sqlite;
 
 pub use crate::memory::Memory;
-pub use crate::postgres::Postgres;
+pub use crate::postgres::{Postgres, PostgresFactory};
 pub use crate::sqlite::Sqlite;
 
 pub type Diff = i64;
@@ -393,9 +394,9 @@ pub trait Stash: std::fmt::Debug + Send {
     /// method. Otherwise, returns `Err`.
     async fn confirm_leadership(&mut self) -> Result<(), StashError>;
 
-    /// Returns the stash's epoch number. If `Some`, it is a number that
+    /// Returns the stash's epoch number. If `Some`, it is a positive number that
     /// increases with each start of a stash.
-    fn epoch(&self) -> Option<i64>;
+    fn epoch(&self) -> Option<NonZeroI64>;
 }
 
 /// `StashCollection` is like a differential dataflow [`Collection`], but the

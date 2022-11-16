@@ -41,31 +41,11 @@ def profile(request):
 @pytest.fixture(scope="session")
 def dbt_profile_target(request):
     profile = request.config.getoption("--profile")
-    if profile == "materialize_binary":
-        target = materialize_binary_target()
-    elif profile == "materialize_cloud":
+    if profile == "materialize_cloud":
         target = materialize_cloud_target()
     else:
         raise ValueError(f"Invalid profile type '{profile}'")
     return target
-
-
-# The profile dictionary, used to write out profiles.yml
-# dbt will supply a unique schema per test, so we do not specify 'schema' here
-def materialize_binary_target():
-    return {
-        "type": "materialize",
-        "threads": 1,
-        "host": "{{ env_var('DBT_HOST', 'localhost') }}",
-        "user": "materialize",
-        "pass": "password",
-        "database": "materialize",
-        "port": "{{ env_var('DBT_PORT', 6875) }}",
-        "sslmode": "{{ env_var('DBT_SSLMODE', '') }}",
-        "sslcert": "{{ env_var('DBT_SSLCERT', '') }}",
-        "sslkey": "{{ env_var('DBT_SSLKEY', '') }}",
-        "sslrootcert": "{{ env_var('DBT_SSLROOTCERT', '') }}",
-    }
 
 
 def materialize_cloud_target():

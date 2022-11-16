@@ -11,10 +11,15 @@ use std::iter::{repeat, repeat_with};
 use std::str::FromStr;
 
 use criterion::{criterion_group, criterion_main, Criterion};
+use once_cell::sync::Lazy;
 use timely::progress::Antichain;
 use tokio::runtime::Runtime;
 
-use mz_stash::{Append, Postgres, Stash, StashError};
+use mz_ore::metrics::MetricsRegistry;
+use mz_stash::{Append, Postgres, PostgresFactory, Stash, StashError};
+
+pub static FACTORY: Lazy<PostgresFactory> =
+    Lazy::new(|| PostgresFactory::new(&MetricsRegistry::new()));
 
 fn init_bench() -> (Runtime, Postgres) {
     let runtime = Runtime::new().unwrap();
@@ -27,7 +32,9 @@ fn init_bench() -> (Runtime, Postgres) {
     runtime
         .block_on(Postgres::clear(&connstr, tls.clone()))
         .unwrap();
-    let stash = runtime.block_on(Postgres::new(connstr, None, tls)).unwrap();
+    let stash = runtime
+        .block_on((*FACTORY).open(connstr, None, tls))
+        .unwrap();
     (runtime, stash)
 }
 

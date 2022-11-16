@@ -14,8 +14,9 @@
 //! Compute layer commands.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroI64;
 
-use proptest::prelude::{any, Arbitrary, Just};
+use proptest::prelude::{any, Arbitrary};
 use proptest::prop_oneof;
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -63,8 +64,6 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_client.command.rs"));
 /// commands. If a new cluster is created, InitializationComplete will follow immediately after
 /// CreateInstance. If a replica is added to a cluster or environmentd restarts and rehydrates a
 /// computed, a potentially long command sequence will be sent before InitializationComplete.
-///
-/// DropInstance will undo both CreateTimely and CreateInstance.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// Create the timely runtime according to the supplied CommunicationConfig. Must be the first
@@ -78,9 +77,6 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// Setup and logging sources within a running timely instance. Must be the second command
     /// after CreateTimely.
     CreateInstance(InstanceConfig),
-
-    /// Indicates the termination of an instance, and is the last command for its compute instance.
-    DropInstance,
 
     /// Indicates that the controller has sent all commands reflecting its
     /// initial state.
@@ -121,7 +117,6 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
         ProtoComputeCommand {
             kind: Some(match self {
                 ComputeCommand::CreateInstance(config) => CreateInstance(config.into_proto()),
-                ComputeCommand::DropInstance => DropInstance(()),
                 ComputeCommand::InitializationComplete => InitializationComplete(()),
                 ComputeCommand::CreateDataflows(dataflows) => {
                     CreateDataflows(ProtoCreateDataflows {
@@ -146,7 +141,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                 } => CreateTimely(ProtoCreateTimely {
                     comm_config: Some(comm_config.into_proto()),
                     epoch: Some(ProtoComputeStartupEpoch {
-                        envd: envd.into_proto(),
+                        envd: envd.get().into_proto(),
                         replica: replica.into_proto(),
                     }),
                 }),
@@ -159,7 +154,6 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
         use proto_compute_command::*;
         match proto.kind {
             Some(CreateInstance(config)) => Ok(ComputeCommand::CreateInstance(config.into_rust()?)),
-            Some(DropInstance(())) => Ok(ComputeCommand::DropInstance),
             Some(InitializationComplete(())) => Ok(ComputeCommand::InitializationComplete),
             Some(CreateDataflows(ProtoCreateDataflows { dataflows })) => {
                 Ok(ComputeCommand::CreateDataflows(dataflows.into_rust()?))
@@ -199,7 +193,6 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         prop_oneof![
             any::<InstanceConfig>().prop_map(ComputeCommand::CreateInstance),
-            Just(ComputeCommand::DropInstance),
             proptest::collection::vec(
                 any::<DataflowDescription<crate::plan::Plan, CollectionMetadata, mz_repr::Timestamp>>(),
                 1..4
@@ -240,7 +233,7 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
 /// another in-memory and local to the current incarnation of environmentd)
 #[derive(PartialEq, Eq, Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct ComputeStartupEpoch {
-    envd: i64,
+    envd: NonZeroI64,
     replica: u64,
 }
 
@@ -248,19 +241,22 @@ impl RustType<ProtoComputeStartupEpoch> for ComputeStartupEpoch {
     fn into_proto(&self) -> ProtoComputeStartupEpoch {
         let Self { envd, replica } = self;
         ProtoComputeStartupEpoch {
-            envd: *envd,
+            envd: envd.get(),
             replica: *replica,
         }
     }
 
     fn from_proto(proto: ProtoComputeStartupEpoch) -> Result<Self, TryFromProtoError> {
         let ProtoComputeStartupEpoch { envd, replica } = proto;
-        Ok(Self { envd, replica })
+        Ok(Self {
+            envd: envd.try_into().unwrap(),
+            replica,
+        })
     }
 }
 
 impl ComputeStartupEpoch {
-    pub fn new(envd: i64, replica: u64) -> Self {
+    pub fn new(envd: NonZeroI64, replica: u64) -> Self {
         Self { envd, replica }
     }
 
@@ -269,7 +265,7 @@ impl ComputeStartupEpoch {
         let mut ret = [0; 16];
         let mut p = &mut ret[..];
         use std::io::Write;
-        p.write_all(&self.envd.to_be_bytes()[..]).unwrap();
+        p.write_all(&self.envd.get().to_be_bytes()[..]).unwrap();
         p.write_all(&self.replica.to_be_bytes()[..]).unwrap();
         ret
     }
@@ -278,7 +274,10 @@ impl ComputeStartupEpoch {
     pub fn from_bytes(bytes: [u8; 16]) -> Self {
         let envd = i64::from_be_bytes((&bytes[0..8]).try_into().unwrap());
         let replica = u64::from_be_bytes((&bytes[8..16]).try_into().unwrap());
-        Self { envd, replica }
+        Self {
+            envd: envd.try_into().unwrap(),
+            replica,
+        }
     }
 }
 
@@ -1059,6 +1058,8 @@ pub struct ComputeCommandHistory<T = mz_repr::Timestamp> {
     /// or removed given the context of other commands, for example compaction commands that
     /// can be unified, or dataflows that can be dropped due to allowed compaction.
     commands: Vec<ComputeCommand<T>>,
+    /// The number of dataflows in the compute command history.
+    dataflow_count: usize,
 }
 
 impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
@@ -1071,11 +1072,24 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         command: ComputeCommand<T>,
         peeks: &std::collections::HashMap<uuid::Uuid, V>,
     ) {
+        if let ComputeCommand::CreateDataflows(dataflows) = &command {
+            self.dataflow_count += dataflows.len();
+        }
         self.commands.push(command);
         if self.commands.len() > 2 * self.reduced_count {
             self.retain_peeks(peeks);
             self.reduce();
         }
+    }
+
+    /// Obtains the length of this compute command history in number of commands.
+    pub fn len(&self) -> usize {
+        self.commands.len()
+    }
+
+    /// Obtains the number of dataflows in this compute command history.
+    pub fn dataflow_count(&self) -> usize {
+        self.dataflow_count
     }
 
     /// Reduces `self.history` to a minimal form.
@@ -1095,7 +1109,6 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
 
         let mut create_inst_command = None;
         let mut create_timely_command = None;
-        let mut drop_command = None;
         let mut update_max_result_size_command = None;
 
         let mut initialization_complete = false;
@@ -1110,10 +1123,6 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
                 create_inst @ ComputeCommand::CreateInstance(_) => {
                     assert!(create_inst_command.is_none());
                     create_inst_command = Some(create_inst);
-                }
-                cmd @ ComputeCommand::DropInstance => {
-                    assert!(drop_command.is_none());
-                    drop_command = Some(cmd);
                 }
                 ComputeCommand::InitializationComplete => {
                     initialization_complete = true;
@@ -1186,9 +1195,6 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         command_count += final_frontiers.len();
         command_count += live_peeks.len();
         command_count += live_cancels.len();
-        if drop_command.is_some() {
-            command_count += 1;
-        }
         if update_max_result_size_command.is_some() {
             command_count += 1;
         }
@@ -1200,6 +1206,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         if let Some(create_inst_command) = create_inst_command {
             self.commands.push(create_inst_command);
         }
+        self.dataflow_count = live_dataflows.len();
         if !live_dataflows.is_empty() {
             self.commands
                 .push(ComputeCommand::CreateDataflows(live_dataflows));
@@ -1219,9 +1226,6 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         }
         if initialization_complete {
             self.commands.push(ComputeCommand::InitializationComplete);
-        }
-        if let Some(drop_command) = drop_command {
-            self.commands.push(drop_command);
         }
         if let Some(update_max_result_size_command) = update_max_result_size_command {
             self.commands.push(update_max_result_size_command)
@@ -1255,6 +1259,7 @@ impl<T> Default for ComputeCommandHistory<T> {
         Self {
             reduced_count: 0,
             commands: Vec::new(),
+            dataflow_count: 0,
         }
     }
 }

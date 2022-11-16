@@ -2461,12 +2461,13 @@ dependencies = [
 
 [[package]]
 name = "indicatif"
-version = "0.17.1"
+version = "0.17.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfddc9561e8baf264e0e45e197fd7696320026eb10a8180340debc27b18f535b"
+checksum = "4295cbb7573c16d310e99e713cf9e75101eb190ab31fccd35f2d2691b4352b19"
 dependencies = [
  "console",
  "number_prefix",
+ "portable-atomic",
  "unicode-width",
 ]
 
@@ -3245,7 +3246,7 @@ dependencies = [
 
 [[package]]
 name = "mz-compute"
-version = "0.32.0-dev"
+version = "0.33.0-dev"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3303,6 +3304,7 @@ dependencies = [
  "mz-storage-client",
  "mz-timely-util",
  "once_cell",
+ "prometheus",
  "proptest",
  "proptest-derive",
  "prost",
@@ -3310,6 +3312,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "thiserror",
  "timely",
  "tokio",
  "tokio-stream",
@@ -3334,6 +3337,7 @@ dependencies = [
  "mz-persist-types",
  "mz-proto",
  "mz-repr",
+ "mz-stash",
  "mz-storage-client",
  "serde",
  "timely",
@@ -3343,7 +3347,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.32.0-dev"
+version = "0.33.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -3404,6 +3408,7 @@ dependencies = [
  "postgres-protocol",
  "postgres_array",
  "predicates",
+ "prometheus",
  "rand",
  "rdkafka-sys",
  "regex",
@@ -3565,10 +3570,7 @@ dependencies = [
  "mz-avro",
  "mz-ccsr",
  "mz-ore",
- "mz-proto",
  "num_cpus",
- "proptest",
- "proptest-derive",
  "prost",
  "prost-build",
  "protobuf-src",
@@ -3680,8 +3682,10 @@ dependencies = [
  "mz-orchestrator",
  "mz-repr",
  "mz-secrets",
+ "serde",
  "serde_json",
  "sha2",
+ "tracing",
 ]
 
 [[package]]
@@ -3968,6 +3972,7 @@ dependencies = [
  "prost",
  "protobuf-src",
  "serde",
+ "thiserror",
  "tokio",
  "tokio-postgres",
  "tonic-build",
@@ -3986,6 +3991,7 @@ dependencies = [
  "headers",
  "http",
  "include_dir",
+ "libc",
  "mime",
  "mz-build-info",
  "mz-http-util",
@@ -4181,6 +4187,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "thiserror",
  "tokio",
  "tokio-postgres",
  "tracing",
@@ -4217,6 +4224,7 @@ dependencies = [
  "clap",
  "fallible-iterator",
  "futures",
+ "itertools",
  "junit-report",
  "md-5",
  "mz-build-info",
@@ -4232,6 +4240,7 @@ dependencies = [
  "mz-secrets",
  "mz-sql",
  "mz-sql-parser",
+ "mz-stash",
  "mz-storage-client",
  "once_cell",
  "postgres-protocol",
@@ -4251,7 +4260,6 @@ name = "mz-ssh-util"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "mz-ore",
  "openssh",
  "openssl",
  "rand",
@@ -4274,7 +4282,9 @@ dependencies = [
  "futures",
  "mz-ore",
  "mz-postgres-util",
+ "once_cell",
  "postgres-openssl",
+ "prometheus",
  "rand",
  "rusqlite",
  "serde",
@@ -4307,7 +4317,7 @@ dependencies = [
 
 [[package]]
 name = "mz-storage"
-version = "0.32.0-dev"
+version = "0.33.0-dev"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -4342,6 +4352,7 @@ dependencies = [
  "mz-orchestrator-tracing",
  "mz-ore",
  "mz-persist-client",
+ "mz-persist-types",
  "mz-pgcopy",
  "mz-pid-file",
  "mz-postgres-util",
@@ -4524,6 +4535,7 @@ dependencies = [
  "differential-dataflow",
  "futures-util",
  "mz-ore",
+ "polonius-the-crab",
  "proptest",
  "serde",
  "timely",
@@ -5207,6 +5219,18 @@ checksum = "521fa9638fa597e1dc53e9412a4f9cefb01187ee1f7413076f9e6749e2885ba9"
 dependencies = [
  "plotters-backend",
 ]
+
+[[package]]
+name = "polonius-the-crab"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0119ad75060c93b2017796396280ab9c1870738bf3b66a8cb20deb3c9075426"
+
+[[package]]
+name = "portable-atomic"
+version = "0.3.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15eb2c6e362923af47e13c23ca5afb859e83d54452c55b0b9ac763b8f7c1ac16"
 
 [[package]]
 name = "postgres"

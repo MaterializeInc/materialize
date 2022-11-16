@@ -96,7 +96,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             match &ingestion.desc.connection {
                                 GenericSourceConnection::Postgres(PostgresSourceConnection {
                                     connection,
-                                    details,
+                                    publication_details,
                                     ..
                                 }) => {
                                     let config = connection
@@ -105,7 +105,8 @@ impl<S: Append + 'static> Coordinator<S> {
                                         .unwrap_or_else(|e| {
                                             panic!("Postgres source {id} missing secrets: {e}")
                                         });
-                                    replication_slots_to_drop.push((config, details.slot.clone()));
+                                    replication_slots_to_drop
+                                        .push((config, publication_details.slot.clone()));
                                 }
                                 _ => {}
                             }

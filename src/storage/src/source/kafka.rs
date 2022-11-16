@@ -34,6 +34,7 @@ use mz_storage_client::types::sources::encoding::SourceDataEncoding;
 use mz_storage_client::types::sources::{KafkaSourceConnection, MzOffset};
 
 use crate::source::commit::LogCommitter;
+use crate::source::healthcheck::{SourceStatus, SourceStatusUpdate};
 use crate::source::types::{OffsetCommitter, SourceConnectionBuilder};
 use crate::source::{SourceMessage, SourceMessageType, SourceReader, SourceReaderError};
 
@@ -313,7 +314,8 @@ impl KafkaSourceReader {
                     ),
                     Ok(message) => {
                         let source_message =
-                            construct_source_message(&message, self.include_headers)?;
+                            construct_source_message(&message, self.include_headers)
+                                .map_err(SourceReaderError::other_definite)?;
                         next_message = self.handle_message(source_message);
                     }
                 }
@@ -334,11 +336,22 @@ impl KafkaSourceReader {
                 let message = self.poll_from_next_queue()?;
                 attempts += 1;
 
-                if let Some(message) = message {
-                    next_message = self.handle_message(message);
-                    if next_message.is_none() {
-                        // There was a temporary hiccup in getting messages, check again asap.
-                        sleep_duration = Duration::from_millis(1);
+                match message {
+                    Ok(Some(message)) => {
+                        next_message = self.handle_message(message);
+                    }
+                    Err(error) => {
+                        next_message = Some(SourceMessageType::SourceStatus(SourceStatusUpdate {
+                            status: SourceStatus::Stalled,
+                            error: Some(error),
+                        }));
+                        if next_message.is_none() {
+                            // There was a temporary hiccup in getting messages, check again asap.
+                            sleep_duration = Duration::from_millis(1);
+                        }
+                    }
+                    Ok(None) => {
+                        // no message in this queue; keep looping
                     }
                 }
             }
@@ -570,29 +583,30 @@ impl KafkaSourceReader {
     /// fair manner.
     fn poll_from_next_queue(
         &mut self,
-    ) -> Result<Option<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()>>, anyhow::Error> {
+    ) -> Result<
+        Result<Option<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()>>, String>,
+        SourceReaderError,
+    > {
         let mut partition_queue = self.partition_consumers.pop_front().unwrap();
 
-        let message = match partition_queue.get_next_message()? {
-            Err(e) => {
+        let message = partition_queue
+            .get_next_message()
+            .map_err(SourceReaderError::other_definite)?
+            .map_err(|e| {
                 let pid = partition_queue.pid();
                 let last_offset = self
                     .last_offsets
                     .get(&pid)
                     .expect("partition known to be installed");
-
-                error!(
+                format!(
                     "kafka error consuming from source: {} topic: {}: partition: {} last processed offset: {} : {}",
                     self.source_name,
                     self.topic_name,
                     pid,
                     last_offset,
                     e
-                    );
-                None
-            }
-            Ok(m) => m,
-        };
+                )
+            });
 
         self.partition_consumers.push_back(partition_queue);
 

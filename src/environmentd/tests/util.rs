@@ -38,6 +38,7 @@ use mz_ore::task;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
 use mz_secrets::SecretsController;
+use mz_stash::PostgresFactory;
 use mz_storage_client::types::connections::ConnectionContext;
 
 pub static KAFKA_ADDRS: Lazy<String> =
@@ -198,6 +199,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     persist_cfg.consensus_connection_pool_max_size = 1;
     let persist_clients = PersistClientCache::new(persist_cfg, &metrics_registry);
     let persist_clients = Arc::new(Mutex::new(persist_clients));
+    let postgres_factory = PostgresFactory::new(&metrics_registry);
     let inner = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
         adapter_stash_url,
         controller: ControllerConfig {
@@ -205,6 +207,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             orchestrator: Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
             storaged_image: "storaged".into(),
             computed_image: "computed".into(),
+            init_container_image: None,
             persist_location: PersistLocation {
                 blob_uri: format!("file://{}/persist/blob", data_directory.display()),
                 consensus_uri,
@@ -212,6 +215,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             persist_clients,
             storage_stash_url,
             now: SYSTEM_TIME.clone(),
+            postgres_factory,
         },
         secrets_controller: Arc::clone(&orchestrator) as Arc<dyn SecretsController>,
         cloud_resource_controller: None,
@@ -230,7 +234,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         cluster_replica_sizes: Default::default(),
         bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
         bootstrap_builtin_cluster_replica_size: config.builtin_cluster_replica_size,
-        bootstrap_system_vars: None,
+        bootstrap_system_parameters: Default::default(),
         storage_host_sizes: Default::default(),
         default_storage_host_size: None,
         availability_zones: Default::default(),

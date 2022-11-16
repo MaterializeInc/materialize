@@ -958,6 +958,8 @@ pub enum PgConfigOptionName {
     Details,
     /// The name of the publication to sync
     Publication,
+    /// Columns whose types you want to unconditionally format as text
+    TextColumns,
 }
 
 impl AstDisplay for PgConfigOptionName {
@@ -965,6 +967,7 @@ impl AstDisplay for PgConfigOptionName {
         f.write_str(match self {
             PgConfigOptionName::Details => "DETAILS",
             PgConfigOptionName::Publication => "PUBLICATION",
+            PgConfigOptionName::TextColumns => "TEXT COLUMNS",
         })
     }
 }

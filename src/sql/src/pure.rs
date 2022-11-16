@@ -11,14 +11,13 @@
 //!
 //! See the [crate-level documentation](crate) for details.
 
-use std::collections::HashMap;
-use std::error::Error as StdError;
+use std::collections::{HashMap, HashSet};
 use std::iter;
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context};
-use itertools::Itertools;
+use anyhow::{anyhow, Context};
+use mz_repr::adt::system::Oid;
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
@@ -29,9 +28,11 @@ use mz_ccsr::Schema as CcsrSchema;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError};
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_ore::cast::CastFrom;
+use mz_ore::str::StrExt;
 use mz_proto::RustType;
 use mz_repr::{strconv, GlobalId};
 use mz_secrets::SecretsReader;
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     ColumnDef, ColumnOption, ColumnOptionDef, CsrConnection, CsrSeedAvro, CsrSeedProtobuf,
     CsrSeedProtobufSchema, DbzMode, DeferredObjectName, Envelope, Ident, KafkaConfigOption,
@@ -40,14 +41,14 @@ use mz_sql_parser::ast::{
 };
 use mz_storage_client::types::connections::aws::AwsConfig;
 use mz_storage_client::types::connections::{Connection, ConnectionContext};
-use mz_storage_client::types::sources::PostgresSourceDetails;
+use mz_storage_client::types::sources::PostgresSourcePublicationDetails;
 
 use crate::ast::{
     AvroSchema, CreateReferencedSubsources, CreateSourceConnection, CreateSourceFormat,
     CreateSourceStatement, CreateSourceSubsource, CreateSubsourceStatement, CsrConnectionAvro,
     CsrConnectionProtobuf, CsvColumns, Format, ProtobufSchema, Value, WithOptionValue,
 };
-use crate::catalog::SessionCatalog;
+use crate::catalog::{ErsatzCatalog, SessionCatalog};
 use crate::kafka_util;
 use crate::kafka_util::KafkaConfigOptionExtracted;
 use crate::names::{Aug, RawDatabaseSpecifier, ResolvedObjectName};
@@ -58,63 +59,30 @@ use crate::plan::StatementContext;
 
 fn subsource_gen<'a, T>(
     selected_subsources: &mut Vec<CreateSourceSubsource<Aug>>,
-    tables_by_name: HashMap<String, HashMap<String, HashMap<String, &'a T>>>,
-) -> Result<Vec<(UnresolvedObjectName, UnresolvedObjectName, &'a T)>, anyhow::Error> {
+    catalog: &ErsatzCatalog<'a, T>,
+) -> Result<Vec<(UnresolvedObjectName, UnresolvedObjectName, &'a T)>, PlanError> {
     let mut validated_requested_subsources = vec![];
 
     for subsource in selected_subsources {
-        let upstream_name = normalize::unresolved_object_name(subsource.reference.clone())?;
-
         let subsource_name = match &subsource.subsource {
             Some(name) => match name {
                 DeferredObjectName::Deferred(name) => name.clone(),
-                DeferredObjectName::Named(..) => bail!("Cannot manually ID qualify subsources"),
+                DeferredObjectName::Named(..) => {
+                    sql_bail!("Cannot manually ID qualify subsources")
+                }
             },
             None => {
                 // Use the entered name as the upstream reference, and then use
                 // the item as the subsource name to ensure it's created in the
                 // current schema, not mirroring the schema of the reference.
-                UnresolvedObjectName::unqualified(&upstream_name.item)
+                UnresolvedObjectName::unqualified(
+                    &normalize::unresolved_object_name(subsource.reference.clone())?.item,
+                )
             }
         };
 
-        let schemas = match tables_by_name.get(&upstream_name.item) {
-            Some(schemas) => schemas,
-            None => bail!("table {upstream_name} not found in source"),
-        };
+        let (qualified_upstream_name, desc) = catalog.resolve(subsource.reference.clone())?;
 
-        let schema = match &upstream_name.schema {
-            Some(schema) => schema,
-            None => match schemas.keys().exactly_one() {
-                Ok(schema) => schema,
-                Err(_) => {
-                    bail!("table {upstream_name} is ambiguous, consider specifying the schema")
-                }
-            },
-        };
-
-        let databases = match schemas.get(schema) {
-            Some(databases) => databases,
-            None => bail!("schema {schema} not found in source"),
-        };
-
-        let database = match &upstream_name.database {
-            Some(database) => database,
-            None => match databases.keys().exactly_one() {
-                Ok(database) => database,
-                Err(_) => {
-                    bail!("table {upstream_name} is ambiguous, consider specifying the database")
-                }
-            },
-        };
-
-        let desc = match databases.get(database) {
-            Some(desc) => *desc,
-            None => bail!("database {database} not found source"),
-        };
-
-        let qualified_upstream_name =
-            UnresolvedObjectName::qualified(&[database, schema, &upstream_name.item]);
         validated_requested_subsources.push((qualified_upstream_name, subsource_name, desc));
     }
 
@@ -135,7 +103,7 @@ pub async fn purify_create_source(
         Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
         CreateSourceStatement<Aug>,
     ),
-    anyhow::Error,
+    PlanError,
 > {
     let CreateSourceStatement {
         connection,
@@ -154,7 +122,7 @@ pub async fn purify_create_source(
         } in subsources
         {
             if let Some(DeferredObjectName::Named(_)) = subsource {
-                bail!("Cannot manually ID qualify subsources");
+                sql_bail!("Cannot manually ID qualify subsources");
             }
         }
     }
@@ -176,7 +144,7 @@ pub async fn purify_create_source(
                 // Get Kafka connection
                 match item.connection()? {
                     Connection::Kafka(connection) => connection.clone(),
-                    _ => bail!("{} is not a kafka connection", item.name()),
+                    _ => sql_bail!("{} is not a kafka connection", item.name()),
                 }
             };
 
@@ -243,7 +211,7 @@ pub async fn purify_create_source(
                 let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
                     Connection::Aws(aws) => aws.clone(),
-                    _ => bail!("{} is not an AWS connection", item.name()),
+                    _ => sql_bail!("{} is not an AWS connection", item.name()),
                 }
             };
             validate_aws_credentials(
@@ -259,7 +227,7 @@ pub async fn purify_create_source(
                 let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
                     Connection::Aws(aws) => aws.clone(),
-                    _ => bail!("{} is not an AWS connection", item.name()),
+                    _ => sql_bail!("{} is not an AWS connection", item.name()),
                 }
             };
             validate_aws_credentials(
@@ -278,11 +246,14 @@ pub async fn purify_create_source(
                 let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
                     Connection::Postgres(connection) => connection.clone(),
-                    _ => bail!("{} is not a postgres connection", item.name()),
+                    _ => sql_bail!("{} is not a postgres connection", item.name()),
                 }
             };
-            let crate::plan::statement::PgConfigOptionExtracted { publication, .. } =
-                options.clone().try_into()?;
+            let crate::plan::statement::PgConfigOptionExtracted {
+                publication,
+                mut text_columns,
+                ..
+            } = options.clone().try_into()?;
             let publication = publication
                 .ok_or_else(|| sql_err!("POSTGRES CONNECTION must specify PUBLICATION"))?;
 
@@ -290,14 +261,32 @@ pub async fn purify_create_source(
             let config = connection
                 .config(&*connection_context.secrets_reader)
                 .await?;
-            let tables = mz_postgres_util::publication_info(&config, &publication).await?;
+            let publication_tables = mz_postgres_util::publication_info(&config, &publication)
+                .await
+                .map_err(|cause| PlanError::FetchingPostgresPublicationInfoFailed {
+                    cause: Arc::new(cause),
+                })?;
+
+            // An index from table name -> schema name -> database name -> PostgresTableDesc
+            let mut tables_by_name = HashMap::new();
+            for table in &publication_tables {
+                tables_by_name
+                    .entry(table.name.clone())
+                    .or_insert_with(HashMap::new)
+                    .entry(table.namespace.clone())
+                    .or_insert_with(HashMap::new)
+                    .entry(connection.database.clone())
+                    .or_insert(table);
+            }
+
+            let publication_catalog = ErsatzCatalog(tables_by_name);
 
             let mut targeted_subsources = vec![];
 
             let mut validated_requested_subsources = vec![];
             match requested_subsources {
                 Some(CreateReferencedSubsources::All) => {
-                    for table in &tables {
+                    for table in &publication_tables {
                         let upstream_name = UnresolvedObjectName::qualified(&[
                             &connection.database,
                             &table.namespace,
@@ -313,7 +302,7 @@ pub async fn purify_create_source(
 
                     // An index from table name -> schema name -> database name -> PostgresTableDesc
                     let mut tables_by_name = HashMap::new();
-                    for table in &tables {
+                    for table in &publication_tables {
                         tables_by_name
                             .entry(table.name.clone())
                             .or_insert_with(HashMap::new)
@@ -324,10 +313,82 @@ pub async fn purify_create_source(
                     }
 
                     validated_requested_subsources
-                        .extend(subsource_gen(subsources, tables_by_name)?);
+                        .extend(subsource_gen(subsources, &publication_catalog)?);
                 }
                 None => {}
             };
+
+            let mut text_cols_dict: HashMap<u32, HashSet<String>> = HashMap::new();
+
+            for name in text_columns.iter_mut() {
+                let (qual, col) = match name.0.split_last().expect("must have at least one element")
+                {
+                    (col, qual) if qual.is_empty() => {
+                        return Err(PlanError::InvalidOptionValue {
+                            option_name: PgConfigOptionName::TextColumns.to_ast_string(),
+                            err: Box::new(PlanError::UnderqualifiedColumnName(
+                                col.as_str().to_string(),
+                            )),
+                        });
+                    }
+                    (col, qual) => (qual.to_vec(), col.as_str().to_string()),
+                };
+
+                let qual_name = UnresolvedObjectName(qual);
+
+                let (mut fully_qualified_name, desc) = publication_catalog
+                    .resolve(qual_name)
+                    .map_err(|e| PlanError::InvalidOptionValue {
+                        option_name: PgConfigOptionName::TextColumns.to_ast_string(),
+                        err: Box::new(e),
+                    })?;
+
+                if !desc.columns.iter().any(|column| column.name == col) {
+                    return Err(PlanError::InvalidOptionValue {
+                        option_name: PgConfigOptionName::TextColumns.to_ast_string(),
+                        err: Box::new(PlanError::UnknownColumn {
+                            table: Some(
+                                normalize::unresolved_object_name(fully_qualified_name)
+                                    .expect("known to be of valid len"),
+                            ),
+                            column: mz_repr::ColumnName::from(col),
+                        }),
+                    });
+                }
+
+                // Rewrite fully qualified name.
+                fully_qualified_name.0.push(col.as_str().to_string().into());
+                *name = fully_qualified_name;
+
+                let new = text_cols_dict
+                    .entry(desc.oid)
+                    .or_default()
+                    .insert(col.as_str().to_string());
+
+                if !new {
+                    return Err(PlanError::InvalidOptionValue {
+                        option_name: PgConfigOptionName::TextColumns.to_ast_string(),
+                        err: Box::new(PlanError::UnexpectedDuplicateReference {
+                            name: name.clone(),
+                        }),
+                    });
+                }
+            }
+
+            // Normalize options to contain full qualified values.
+            if let Some(text_cols_option) = options
+                .iter_mut()
+                .find(|option| option.name == PgConfigOptionName::TextColumns)
+            {
+                let seq = text_columns
+                    .into_iter()
+                    .map(WithOptionValue::UnresolvedObjectName)
+                    .collect();
+                text_cols_option.value = Some(WithOptionValue::Sequence(seq));
+            }
+
+            // Aggregate all unrecognized types.
+            let mut unsupported_cols = vec![];
 
             // Now that we have an explicit list of validated requested subsources we can create them
             for (i, (upstream_name, subsource_name, table)) in
@@ -337,13 +398,22 @@ pub async fn purify_create_source(
                 let mut columns = vec![];
                 for c in table.columns.iter() {
                     let name = Ident::new(c.name.clone());
-                    let ty = mz_pgrepr::Type::from_oid_and_typmod(c.type_oid, c.type_mod).map_err(
-                        |e| PlanError::UnrecognizedTypeInPostgresSource {
-                            table: subsource_name.to_string(),
-                            column: name.to_string(),
-                            e,
+                    let ty = match text_cols_dict.get(&table.oid) {
+                        Some(names) if names.contains(&c.name) => mz_pgrepr::Type::Text,
+                        _ => match mz_pgrepr::Type::from_oid_and_typmod(c.type_oid, c.type_mod) {
+                            Ok(t) => t,
+                            Err(_) => {
+                                let mut full_name = upstream_name.0.clone();
+                                full_name.push(name);
+                                unsupported_cols.push((
+                                    UnresolvedObjectName(full_name).to_ast_string(),
+                                    Oid(c.type_oid),
+                                ));
+                                continue;
+                            }
                         },
-                    )?;
+                    };
+
                     let data_type = scx.resolve_type(ty)?;
 
                     columns.push(ColumnDef {
@@ -388,12 +458,19 @@ pub async fn purify_create_source(
                 };
                 subsources.push((transient_id, subsource));
             }
+
+            if !unsupported_cols.is_empty() {
+                return Err(PlanError::UnrecognizedTypeInPostgresSource {
+                    cols: unsupported_cols,
+                });
+            }
+
             *requested_subsources = Some(CreateReferencedSubsources::Subset(targeted_subsources));
 
             // Remove any old detail references
             options.retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
-            let details = PostgresSourceDetails {
-                tables,
+            let details = PostgresSourcePublicationDetails {
+                tables: publication_tables,
                 slot: format!(
                     "materialize_{}",
                     Uuid::new_v4().to_string().replace('-', "")
@@ -419,7 +496,9 @@ pub async fn purify_create_source(
                 Some(CreateReferencedSubsources::All) => {
                     let available_subsources = match &available_subsources {
                         Some(available_subsources) => available_subsources,
-                        None => bail!("FOR ALL TABLES is only valid for multi-output sources"),
+                        None => {
+                            sql_bail!("FOR ALL TABLES is only valid for multi-output sources")
+                        }
                     };
                     for (name, (_, desc)) in available_subsources {
                         let upstream_name = UnresolvedObjectName::from(name.clone());
@@ -430,7 +509,9 @@ pub async fn purify_create_source(
                 Some(CreateReferencedSubsources::Subset(selected_subsources)) => {
                     let available_subsources = match &available_subsources {
                         Some(available_subsources) => available_subsources,
-                        None => bail!("FOR TABLES (..) is only valid for multi-output sources"),
+                        None => {
+                            sql_bail!("FOR TABLES (..) is only valid for multi-output sources")
+                        }
                     };
                     // The user manually selected a subset of upstream tables so we need to
                     // validate that the names actually exist and are not ambiguous
@@ -451,12 +532,14 @@ pub async fn purify_create_source(
                             .or_insert(desc);
                     }
 
-                    validated_requested_subsources
-                        .extend(subsource_gen(selected_subsources, tables_by_name)?);
+                    validated_requested_subsources.extend(subsource_gen(
+                        selected_subsources,
+                        &ErsatzCatalog(tables_by_name),
+                    )?);
                 }
                 None => {
                     if available_subsources.is_some() {
-                        bail!("multi-output sources require a FOR TABLES (..) or FOR ALL TABLES statement");
+                        sql_bail!("multi-output sources require a FOR TABLES (..) or FOR ALL TABLES statement");
                     }
                 }
             };
@@ -551,7 +634,7 @@ async fn purify_source_format(
     connection: &mut CreateSourceConnection<Aug>,
     envelope: &Option<Envelope>,
     connection_context: &ConnectionContext,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), PlanError> {
     if matches!(format, CreateSourceFormat::KeyValue { .. })
         && !matches!(
             connection,
@@ -559,7 +642,7 @@ async fn purify_source_format(
         )
     {
         // We don't mention `TestScript` to users here
-        bail!("Kafka sources are the only source type that can provide KEY/VALUE formats")
+        sql_bail!("Kafka sources are the only source type that can provide KEY/VALUE formats")
     }
 
     match format {
@@ -585,7 +668,7 @@ async fn purify_source_format_single(
     connection: &mut CreateSourceConnection<Aug>,
     envelope: &Option<Envelope>,
     connection_context: &ConnectionContext,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), PlanError> {
     match format {
         Format::Avro(schema) => match schema {
             AvroSchema::Csr { csr_connection } => {
@@ -621,10 +704,10 @@ async fn purify_source_format_single(
                 match connection {
                     CreateSourceConnection::S3 { .. } => {
                         if names.is_empty() {
-                            bail!("CSV WITH HEADER for S3 sources requires specifying the header columns");
+                            sql_bail!("CSV WITH HEADER for S3 sources requires specifying the header columns");
                         }
                     }
-                    _ => bail!("CSV WITH HEADER is only supported for S3 sources"),
+                    _ => sql_bail!("CSV WITH HEADER is only supported for S3 sources"),
                 }
             }
         }
@@ -639,7 +722,7 @@ async fn purify_csr_connection_proto(
     csr_connection: &mut CsrConnectionProtobuf<Aug>,
     envelope: &Option<Envelope>,
     connection_context: &ConnectionContext,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), PlanError> {
     let topic = if let CreateSourceConnection::Kafka(KafkaSourceConnection {
         connection: KafkaConnection { options, .. },
         ..
@@ -651,7 +734,7 @@ async fn purify_csr_connection_proto(
             .expect("already verified options valid provided");
         topic.expect("already validated topic provided")
     } else {
-        bail!("Confluent Schema Registry is only supported with Kafka sources")
+        sql_bail!("Confluent Schema Registry is only supported with Kafka sources")
     };
 
     let CsrConnectionProtobuf {
@@ -667,7 +750,7 @@ async fn purify_csr_connection_proto(
 
             let ccsr_connection = match scx.get_item_by_resolved_name(connection)?.connection()? {
                 Connection::Csr(connection) => connection.clone(),
-                _ => bail!("{} is not a schema registry connection", connection),
+                _ => sql_bail!("{} is not a schema registry connection", connection),
             };
 
             let ccsr_client = ccsr_connection
@@ -680,7 +763,7 @@ async fn purify_csr_connection_proto(
                 .ok();
 
             if matches!(envelope, Some(Envelope::Debezium(DbzMode::Plain))) && key.is_none() {
-                bail!("Key schema is required for ENVELOPE DEBEZIUM");
+                sql_bail!("Key schema is required for ENVELOPE DEBEZIUM");
             }
 
             *seed = Some(CsrSeedProtobuf { value, key });
@@ -697,7 +780,7 @@ async fn purify_csr_connection_avro(
     csr_connection: &mut CsrConnectionAvro<Aug>,
     envelope: &Option<Envelope>,
     connection_context: &ConnectionContext,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), PlanError> {
     let topic = if let CreateSourceConnection::Kafka(KafkaSourceConnection {
         connection: KafkaConnection { options, .. },
         ..
@@ -709,7 +792,7 @@ async fn purify_csr_connection_avro(
             .expect("already verified options valid provided");
         topic.expect("already validated topic provided")
     } else {
-        bail!("Confluent Schema Registry is only supported with Kafka sources")
+        sql_bail!("Confluent Schema Registry is only supported with Kafka sources")
     };
 
     let CsrConnectionAvro {
@@ -722,7 +805,7 @@ async fn purify_csr_connection_avro(
         let scx = StatementContext::new(None, &*catalog);
         let csr_connection = match scx.get_item_by_resolved_name(connection)?.connection()? {
             Connection::Csr(connection) => connection.clone(),
-            _ => bail!("{} is not a schema registry connection", connection),
+            _ => sql_bail!("{} is not a schema registry connection", connection),
         };
         let ccsr_client = csr_connection
             .connect(&*connection_context.secrets_reader)
@@ -739,7 +822,7 @@ async fn purify_csr_connection_avro(
         )
         .await?;
         if matches!(envelope, Some(Envelope::Debezium(DbzMode::Plain))) && key_schema.is_none() {
-            bail!("Key schema is required for ENVELOPE DEBEZIUM");
+            sql_bail!("Key schema is required for ENVELOPE DEBEZIUM");
         }
 
         *seed = Some(CsrSeedAvro {
@@ -757,60 +840,30 @@ pub struct Schema {
     pub value_schema: String,
 }
 
-#[derive(Debug)]
-pub enum GetSchemaError {
-    Subject(GetBySubjectError),
-    Id(GetByIdError),
-}
-
-impl From<GetBySubjectError> for GetSchemaError {
-    fn from(inner: GetBySubjectError) -> Self {
-        Self::Subject(inner)
-    }
-}
-
-impl From<GetByIdError> for GetSchemaError {
-    fn from(inner: GetByIdError) -> Self {
-        Self::Id(inner)
-    }
-}
-
-impl std::fmt::Display for GetSchemaError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            GetSchemaError::Subject(e) => write!(f, "failed to look up schema by subject: {e}"),
-            GetSchemaError::Id(e) => write!(f, "failed to look up schema by id: {e}"),
-        }
-    }
-}
-
-impl StdError for GetSchemaError {
-    fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        match self {
-            GetSchemaError::Subject(e) => Some(e),
-            GetSchemaError::Id(e) => Some(e),
-        }
-    }
-}
-
 async fn get_schema_with_strategy(
     client: &Client,
     strategy: ReaderSchemaSelectionStrategy,
     subject: &str,
-) -> Result<Option<String>, GetSchemaError> {
+) -> Result<Option<String>, PlanError> {
     match strategy {
         ReaderSchemaSelectionStrategy::Latest => {
             match client.get_schema_by_subject(subject).await {
                 Ok(CcsrSchema { raw, .. }) => Ok(Some(raw)),
                 Err(GetBySubjectError::SubjectNotFound) => Ok(None),
-                Err(e) => Err(e.into()),
+                Err(e) => Err(PlanError::FetchingCsrSchemaFailed {
+                    schema_lookup: format!("subject {}", subject.quoted()),
+                    cause: Arc::new(e),
+                }),
             }
         }
         ReaderSchemaSelectionStrategy::Inline(raw) => Ok(Some(raw)),
         ReaderSchemaSelectionStrategy::ById(id) => match client.get_schema_by_id(id).await {
             Ok(CcsrSchema { raw, .. }) => Ok(Some(raw)),
             Err(GetByIdError::SchemaNotFound) => Ok(None),
-            Err(e) => Err(e.into()),
+            Err(e) => Err(PlanError::FetchingCsrSchemaFailed {
+                schema_lookup: format!("ID {}", id),
+                cause: Arc::new(e),
+            }),
         },
     }
 }
@@ -820,16 +873,10 @@ async fn get_remote_csr_schema(
     key_strategy: ReaderSchemaSelectionStrategy,
     value_strategy: ReaderSchemaSelectionStrategy,
     topic: String,
-) -> Result<Schema, anyhow::Error> {
+) -> Result<Schema, PlanError> {
     let value_schema_name = format!("{}-value", topic);
-    let value_schema = get_schema_with_strategy(ccsr_client, value_strategy, &value_schema_name)
-        .await
-        .with_context(|| {
-            format!(
-                "fetching latest schema for subject '{}' from registry",
-                value_schema_name
-            )
-        })?;
+    let value_schema =
+        get_schema_with_strategy(ccsr_client, value_strategy, &value_schema_name).await?;
     let value_schema = value_schema.ok_or_else(|| anyhow!("No value schema found"))?;
     let subject = format!("{}-key", topic);
     let key_schema = get_schema_with_strategy(ccsr_client, key_strategy, &subject).await?;
@@ -843,9 +890,14 @@ async fn get_remote_csr_schema(
 async fn compile_proto(
     subject_name: &String,
     ccsr_client: &Client,
-) -> Result<CsrSeedProtobufSchema, anyhow::Error> {
-    let (primary_subject, dependency_subjects) =
-        ccsr_client.get_subject_and_references(subject_name).await?;
+) -> Result<CsrSeedProtobufSchema, PlanError> {
+    let (primary_subject, dependency_subjects) = ccsr_client
+        .get_subject_and_references(subject_name)
+        .await
+        .map_err(|e| PlanError::FetchingCsrSchemaFailed {
+            schema_lookup: format!("subject {}", subject_name.quoted()),
+            cause: Arc::new(e),
+        })?;
 
     // Compile .proto files into a file descriptor set.
     let mut source_tree = VirtualSourceTree::new();
@@ -858,7 +910,8 @@ async fn compile_proto(
     let mut db = SourceTreeDescriptorDatabase::new(source_tree.as_mut());
     let fds = db
         .as_mut()
-        .build_file_descriptor_set(&[Path::new(&primary_subject.name)])?;
+        .build_file_descriptor_set(&[Path::new(&primary_subject.name)])
+        .map_err(|cause| PlanError::InvalidProtobufSchema { cause })?;
 
     // Ensure there is exactly one message in the file.
     let primary_fd = fds.file(0);
@@ -869,8 +922,11 @@ async fn compile_proto(
     };
 
     // Encode the file descriptor set into a SQL byte string.
+    let bytes = &fds
+        .serialize()
+        .map_err(|cause| PlanError::InvalidProtobufSchema { cause })?;
     let mut schema = String::new();
-    strconv::format_bytes(&mut schema, &fds.serialize()?);
+    strconv::format_bytes(&mut schema, bytes);
 
     Ok(CsrSeedProtobufSchema {
         schema,
@@ -884,7 +940,7 @@ async fn validate_aws_credentials(
     config: &AwsConfig,
     external_id_prefix: Option<&AwsExternalIdPrefix>,
     secrets_reader: &dyn SecretsReader,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), PlanError> {
     let config = config.load(external_id_prefix, None, secrets_reader).await;
     let sts_client = aws_sdk_sts::Client::new(&config);
     let _ = sts_client

@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::{bail, Context};
 use clap::{ArgEnum, Parser};
@@ -30,7 +31,9 @@ use fail::FailScenario;
 use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
+use mz_ore::metric;
 use once_cell::sync::Lazy;
+use prometheus::IntGauge;
 use sysinfo::{CpuExt, SystemExt};
 use tokio::sync::Mutex;
 use tower_http::cors::{self, AllowOrigin};
@@ -57,6 +60,7 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
 use mz_secrets::SecretsController;
+use mz_stash::PostgresFactory;
 use mz_storage_client::types::connections::ConnectionContext;
 
 mod sys;
@@ -304,6 +308,11 @@ pub struct Args {
     )]
     orchestrator_process_data_directory: PathBuf,
 
+    /// The init container to use for computed and storaged when using the
+    /// kubernetes orchestrator.
+    #[clap(long)]
+    k8s_init_container_image: Option<String>,
+
     // === Storage options. ===
     /// Where the persist library should store its blob data.
     #[clap(long, env = "PERSIST_BLOB_URL")]
@@ -374,10 +383,15 @@ pub struct Args {
         default_value = "1"
     )]
     bootstrap_builtin_cluster_replica_size: String,
-    /// An optional semicolon-separated list of $var_name=$var_value pairs for
-    /// bootstraping system variables that are not already modified.
-    #[clap(long, env = "BOOTSTRAP_SYSTEM_VARS")]
-    bootstrap_system_vars: Option<String>,
+    /// An list of NAME=VALUE pairs for bootstrapping system parameters that are
+    /// not already modified.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_SYSTEM_PARAMETER",
+        multiple = true,
+        value_delimiter = ';'
+    )]
+    bootstrap_system_parameter: Vec<KeyValueArg<String, String>>,
     /// A map from size name to resource allocations for storage hosts.
     #[clap(long, env = "STORAGE_HOST_SIZES")]
     storage_host_sizes: Option<String>,
@@ -429,6 +443,7 @@ fn main() {
 
 fn run(mut args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::set_abort_on_panic();
+    let envd_start = Instant::now();
 
     // Configure signal handling as soon as possible. We want signals to be
     // handled to our liking ASAP.
@@ -453,6 +468,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     );
 
     let metrics_registry = MetricsRegistry::new();
+    let metrics = Metrics::register_into(&metrics_registry);
 
     // Configure tracing to log the service name when using the process
     // orchestrator, which intermingles log output from multiple services. Other
@@ -624,7 +640,9 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         storage_stash_url: args.storage_stash_url,
         storaged_image: args.storaged_image.expect("clap enforced"),
         computed_image: args.computed_image.expect("clap enforced"),
+        init_container_image: args.k8s_init_container_image,
         now: SYSTEM_TIME.clone(),
+        postgres_factory: PostgresFactory::new(&metrics_registry),
     };
 
     // When inside a cgroup with a cpu limit,
@@ -733,7 +751,11 @@ max log level: {max_log_level}",
         cluster_replica_sizes,
         bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
         bootstrap_builtin_cluster_replica_size: args.bootstrap_builtin_cluster_replica_size,
-        bootstrap_system_vars: args.bootstrap_system_vars,
+        bootstrap_system_parameters: args
+            .bootstrap_system_parameter
+            .into_iter()
+            .map(|kv| (kv.key, kv.value))
+            .collect(),
         storage_host_sizes,
         default_storage_host_size: args.default_storage_host_size,
         availability_zones: args.availability_zone,
@@ -747,6 +769,14 @@ max log level: {max_log_level}",
         segment_api_key: args.segment_api_key,
         egress_ips: args.announce_egress_ip,
     }))?;
+
+    metrics.start_time_environmentd.set(
+        envd_start
+            .elapsed()
+            .as_millis()
+            .try_into()
+            .expect("must fit"),
+    );
 
     println!(
         "environmentd {} listening...",
@@ -777,4 +807,20 @@ fn build_info() -> Vec<String> {
         openssl_version.to_string_lossy().into_owned(),
         format!("librdkafka v{}", rdkafka_version.to_string_lossy()),
     ]
+}
+
+#[derive(Debug, Clone)]
+struct Metrics {
+    pub start_time_environmentd: IntGauge,
+}
+
+impl Metrics {
+    pub fn register_into(registry: &MetricsRegistry) -> Metrics {
+        Metrics {
+            start_time_environmentd: registry.register(metric!(
+                name: "mz_start_time_environmentd",
+                help: "Time in milliseconds from environmentd start until the adapter is ready.",
+            )),
+        }
+    }
 }

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -47,9 +47,9 @@ pub struct Config<'a, S> {
     pub storage_host_sizes: StorageHostSizeMap,
     /// Default storage host size, should be a key from storage_host_sizes.
     pub default_storage_host_size: Option<String>,
-    /// An optional semicolon-separated list of $var_name=$var_value pairs for
-    /// bootstraping system variables that are not already modified.
-    pub bootstrap_system_vars: Option<String>,
+    /// Values to set for system parameters, if those system parameters have not
+    /// already been set by the system user.
+    pub bootstrap_system_parameters: BTreeMap<String, String>,
     /// Valid availability zones for replicas.
     pub availability_zones: Vec<String>,
     /// A handle to a secrets manager that can only read secrets.

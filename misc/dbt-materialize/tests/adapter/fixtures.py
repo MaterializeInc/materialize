@@ -50,13 +50,6 @@ test_source = {
         FROM KAFKA CONNECTION kafka_connection (TOPIC 'test-source')
         FORMAT BYTES
         """,
-    "materialize_binary": """
-        {{ config(materialized='source', database='materialize') }}
-
-        CREATE SOURCE {{ this }}
-        FROM KAFKA BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}' TOPIC 'test-source'
-        FORMAT BYTES
-        """,
 }
 
 test_source_index = {
@@ -68,15 +61,6 @@ test_source_index = {
 
         CREATE SOURCE {{ this }}
         FROM KAFKA CONNECTION kafka_connection (TOPIC 'test-source')
-        FORMAT BYTES
-        """,
-    "materialize_binary": """
-        {{ config(
-            materialized='source',
-            indexes=[{'columns': ['data']}]
-        ) }}
-        CREATE SOURCE {{ this }}
-        FROM KAFKA BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}' TOPIC 'test-source-index'
         FORMAT BYTES
         """,
 }
@@ -119,20 +103,6 @@ test_materialized_view_index,2,,pg_catalog.length(a),a_idx
 test_source_index,1,1,,test_source_index_data_idx
 test_view_index,1,1,,test_view_index_primary_idx
 """.lstrip(),
-    "materialize_binary": """
-object_name,index_position,on_position,on_expression,index_name
-expected_indexes,1,1,,expected_indexes_primary_idx
-expected_indexes,2,2,,expected_indexes_primary_idx
-expected_indexes,3,3,,expected_indexes_primary_idx
-expected_indexes,4,4,,expected_indexes_primary_idx
-expected_indexes,5,5,,expected_indexes_primary_idx
-test_materialized_view,1,1,,test_materialized_view_primary_idx
-test_materialized_view_index,1,1,,a_idx
-test_materialized_view_index,1,1,,test_materialized_view_index_primary_idx
-test_materialized_view_index,2,,pg_catalog.length(a),a_idx
-test_source_index,1,1,,test_source_index_data_idx
-test_view_index,1,1,,test_view_index_primary_idx
-""".lstrip(),
 }
 
 not_null = """
@@ -161,11 +131,5 @@ expected_base_relation_types = {
         "view_model": "view",
         "table_model": "materializedview",
         "swappable": "materializedview",
-    },
-    "materialize_binary": {
-        "base": "view",
-        "view_model": "view",
-        "table_model": "view",
-        "swappable": "view",
     },
 }

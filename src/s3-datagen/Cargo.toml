@@ -13,7 +13,7 @@ aws-sdk-s3 = { version = "0.19.0", default-features = false, features = ["native
 bytefmt = "0.1.7"
 clap = { version = "3.2.20", features = ["derive"] }
 futures = "0.3.24"
-indicatif = "0.17.1"
+indicatif = "0.17.2"
 mz-ore = { path = "../ore" }
 tokio = { version = "1.20.2", features = ["macros", "net", "rt", "time"] }
 tracing = "0.1.37"

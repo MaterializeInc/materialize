@@ -44,6 +44,7 @@ use bytes::{Buf, BytesMut};
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
+use itertools::Itertools;
 use md5::{Digest, Md5};
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::adt::date::Date;
@@ -78,6 +79,7 @@ use mz_sql_parser::{
     ast::{display::AstDisplay, CreateIndexStatement, RawObjectName, Statement as AstStatement},
     parser,
 };
+use mz_stash::PostgresFactory;
 use mz_storage_client::types::connections::ConnectionContext;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
@@ -658,6 +660,7 @@ impl Runner {
             &metrics_registry,
         );
         let persist_clients = Arc::new(Mutex::new(persist_clients));
+        let postgres_factory = PostgresFactory::new(&metrics_registry);
         let server_config = mz_environmentd::Config {
             adapter_stash_url,
             controller: ControllerConfig {
@@ -665,6 +668,7 @@ impl Runner {
                 orchestrator: Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
                 storaged_image: "storaged".into(),
                 computed_image: "computed".into(),
+                init_container_image: None,
                 persist_location: PersistLocation {
                     blob_uri: format!("file://{}/persist/blob", temp_dir.path().display()),
                     consensus_uri,
@@ -672,6 +676,7 @@ impl Runner {
                 persist_clients,
                 storage_stash_url,
                 now: SYSTEM_TIME.clone(),
+                postgres_factory: postgres_factory.clone(),
             },
             secrets_controller: Arc::clone(&orchestrator) as Arc<dyn SecretsController>,
             cloud_resource_controller: None,
@@ -692,7 +697,7 @@ impl Runner {
             cluster_replica_sizes: Default::default(),
             bootstrap_default_cluster_replica_size: "1".into(),
             bootstrap_builtin_cluster_replica_size: "1".into(),
-            bootstrap_system_vars: None,
+            bootstrap_system_parameters: Default::default(),
             storage_host_sizes: Default::default(),
             default_storage_host_size: None,
             availability_zones: Default::default(),
@@ -1173,6 +1178,14 @@ pub async fn run_string(
     let mut state = Runner::start(config).await.unwrap();
     let mut parser = crate::parser::Parser::new(source, input);
     writeln!(config.stdout, "==> {}", source);
+    // Some sqllogic tests require more than the default amount of tables, so we increase the
+    // limit for all tests.
+    {
+        let client = state.get_conn(Some("mz_system"), Some("mz_system")).await;
+        client
+            .simple_query("ALTER SYSTEM SET max_tables = 100")
+            .await?;
+    }
     for record in parser.parse_records()? {
         // In maximal-verbosity mode, print the query before attempting to run
         // it. Running the query might panic, so it is important to print out
@@ -1266,7 +1279,7 @@ pub async fn rewrite_file(config: &RunConfig<'_>, filename: &Path) -> Result<(),
                         if i != 0 {
                             buf.append("\n");
                         }
-                        buf.append(&row.join("  "));
+                        buf.append(&row.iter().map(|col| col.replace(' ', "␠")).join("  "));
                     }
                     // In standard mode, output each value on its own line,
                     // and ignore row boundaries.

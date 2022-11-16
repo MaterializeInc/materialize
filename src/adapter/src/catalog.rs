@@ -66,7 +66,7 @@ use mz_sql::plan::{
 use mz_sql::{plan, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{CreateSinkOption, CreateSourceOption, Statement, WithOptionValue};
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_stash::{Append, Postgres, Sqlite};
+use mz_stash::{Append, Postgres, PostgresFactory, Sqlite};
 use mz_storage_client::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 use mz_storage_client::types::sinks::{
     SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder,
@@ -1568,30 +1568,32 @@ impl CatalogItem {
 
     pub fn func(
         &self,
-        name: &QualifiedObjectName,
+        entry: &CatalogEntry,
     ) -> Result<&'static mz_sql::func::Func, SqlCatalogError> {
         match &self {
             CatalogItem::Func(func) => Ok(func.inner),
-            _ => Err(SqlCatalogError::UnexpectedType(
-                name.item.to_string(),
-                CatalogItemType::Func,
-            )),
+            _ => Err(SqlCatalogError::UnexpectedType {
+                name: entry.name().item.to_string(),
+                actual_type: entry.item_type(),
+                expected_type: CatalogItemType::Func,
+            }),
         }
     }
 
     pub fn source_desc(
         &self,
-        name: &QualifiedObjectName,
+        entry: &CatalogEntry,
     ) -> Result<Option<&SourceDesc>, SqlCatalogError> {
         match &self {
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion(ingestion) => Ok(Some(&ingestion.desc)),
                 DataSourceDesc::Source | DataSourceDesc::Introspection(_) => Ok(None),
             },
-            _ => Err(SqlCatalogError::UnexpectedType(
-                name.item.clone(),
-                CatalogItemType::Source,
-            )),
+            _ => Err(SqlCatalogError::UnexpectedType {
+                name: entry.name().item.to_string(),
+                actual_type: entry.item_type(),
+                expected_type: CatalogItemType::Source,
+            }),
         }
     }
 
@@ -1749,7 +1751,7 @@ impl CatalogEntry {
 
     /// Returns the [`mz_sql::func::Func`] associated with this `CatalogEntry`.
     pub fn func(&self) -> Result<&'static mz_sql::func::Func, SqlCatalogError> {
-        self.item.func(self.name())
+        self.item.func(self)
     }
 
     /// Returns the inner [`Index`] if this entry is an index, else `None`.
@@ -1794,7 +1796,7 @@ impl CatalogEntry {
     /// Returns the [`mz_storage_client::types::sources::SourceDesc`] associated with
     /// this `CatalogEntry`, if any.
     pub fn source_desc(&self) -> Result<Option<&SourceDesc>, SqlCatalogError> {
-        self.item.source_desc(self.name())
+        self.item.source_desc(self)
     }
 
     /// Reports whether this catalog entry is a connection.
@@ -1975,7 +1977,8 @@ impl Catalog<Postgres> {
         now: NowFn,
     ) -> Result<Catalog<Postgres>, anyhow::Error> {
         let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new()).unwrap();
-        let stash = mz_stash::Postgres::new(url, schema, tls).await?;
+        let factory = PostgresFactory::new(&MetricsRegistry::new());
+        let stash = factory.open(url, schema, tls).await?;
         Catalog::open_debug(stash, now).await
     }
 }
@@ -2358,13 +2361,9 @@ impl<S: Append> Catalog<S> {
             .await?;
 
         let system_config = catalog.storage().await.load_system_configuration().await?;
-        if let Some(bootstrap_system_vars) = config.bootstrap_system_vars {
-            for entry in bootstrap_system_vars.trim().split(';') {
-                if let Some((name, value)) = entry.split_once('=') {
-                    if !system_config.contains_key(name) {
-                        catalog.state.insert_system_configuration(name, value)?;
-                    }
-                }
+        for (name, value) in &config.bootstrap_system_parameters {
+            if !system_config.contains_key(name) {
+                catalog.state.insert_system_configuration(name, value)?;
             }
         }
         for (name, value) in system_config {
@@ -2962,7 +2961,7 @@ impl<S: Append> Catalog<S> {
             cluster_replica_sizes: Default::default(),
             storage_host_sizes: Default::default(),
             default_storage_host_size: None,
-            bootstrap_system_vars: None,
+            bootstrap_system_parameters: Default::default(),
             availability_zones: vec![],
             secrets_reader,
             egress_ips: vec![],
@@ -4085,6 +4084,7 @@ impl<S: Append> Catalog<S> {
                             mz_audit_log::CreateComputeReplicaV1 {
                                 cluster_id: compute_instance_id.to_string(),
                                 cluster_name: on_cluster_name.clone(),
+                                replica_id: Some(replica_id.to_string()),
                                 replica_name: name.clone(),
                                 logical_size: size.clone(),
                             },
@@ -4361,6 +4361,7 @@ impl<S: Append> Catalog<S> {
                         EventDetails::DropComputeReplicaV1(mz_audit_log::DropComputeReplicaV1 {
                             cluster_id: instance.id.to_string(),
                             cluster_name: instance.name.clone(),
+                            replica_id: Some(replica_id.to_string()),
                             replica_name: name.clone(),
                         });
                     state.add_to_audit_log(
@@ -5738,6 +5739,12 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn config(&self) -> &mz_sql::catalog::CatalogConfig {
         self.state.config()
+    }
+
+    fn window_functions(&self) -> bool {
+        // Always enable this feature for system connections in order to protect
+        // the system against breaking when in the Catalog::open re-hydration phase.
+        self.conn_id == SYSTEM_CONN_ID || self.state.system_config().window_functions()
     }
 
     fn now(&self) -> EpochMillis {

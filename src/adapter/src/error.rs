@@ -15,7 +15,7 @@ use dec::TryFromDecimalError;
 use mz_repr::adt::timestamp::TimestampError;
 use tokio::sync::oneshot;
 
-use mz_compute_client::controller::ComputeError;
+use mz_compute_client::controller::error as compute_error;
 use mz_expr::{EvalError, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
@@ -188,7 +188,7 @@ pub enum AdapterError {
     /// An error occurred in the storage layer
     Storage(mz_storage_client::controller::StorageError),
     /// An error occurred in the compute layer
-    Compute(mz_compute_client::controller::ComputeError),
+    Compute(anyhow::Error),
 }
 
 impl AdapterError {
@@ -564,9 +564,9 @@ impl From<StorageError> for AdapterError {
     }
 }
 
-impl From<ComputeError> for AdapterError {
-    fn from(e: ComputeError) -> Self {
-        AdapterError::Compute(e)
+impl From<compute_error::InstanceExists> for AdapterError {
+    fn from(e: compute_error::InstanceExists) -> Self {
+        AdapterError::Compute(e.into())
     }
 }
 

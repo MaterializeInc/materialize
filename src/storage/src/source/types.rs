@@ -322,18 +322,88 @@ pub struct DecodeResult {
     pub metadata: Row,
 }
 
-/// A structured error for `SourceReader::get_next_message`
-/// implementors. Also implements `From<anyhow::Error>`
-/// for convenience.
+/// A structured error for `SourceReader::get_next_message` implementors.
 #[derive(Debug)]
 pub struct SourceReaderError {
     pub inner: SourceErrorDetails,
 }
 
-impl From<anyhow::Error> for SourceReaderError {
-    fn from(e: anyhow::Error) -> Self {
+impl SourceReaderError {
+    /// This is an unclassified but definite error. This is typically only appropriate
+    /// when the error is permanently fatal for the source... some critical invariant
+    /// is violated or data is corrupted, for example.
+    pub fn other_definite(e: anyhow::Error) -> SourceReaderError {
         SourceReaderError {
             inner: SourceErrorDetails::Other(format!("{}", e)),
+        }
+    }
+}
+
+/// Source-specific metrics in the persist sink
+pub struct SourcePersistSinkMetrics {
+    pub(crate) progress: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub(crate) row_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) row_retractions: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) error_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) error_retractions: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) processed_batches: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+}
+
+impl SourcePersistSinkMetrics {
+    /// Initialises source metrics for a given (source_id, worker_id)
+    pub fn new(
+        base: &SourceBaseMetrics,
+        shard_id: &mz_persist_client::ShardId,
+        source_id: GlobalId,
+        output_index: usize,
+    ) -> SourcePersistSinkMetrics {
+        let shard = shard_id.to_string();
+        SourcePersistSinkMetrics {
+            progress: base.source_specific.progress.get_delete_on_drop_gauge(vec![
+                source_id.to_string(),
+                output_index.to_string(),
+                shard.clone(),
+            ]),
+            row_inserts: base
+                .source_specific
+                .row_inserts
+                .get_delete_on_drop_counter(vec![
+                    source_id.to_string(),
+                    output_index.to_string(),
+                    shard.clone(),
+                ]),
+            row_retractions: base
+                .source_specific
+                .row_retractions
+                .get_delete_on_drop_counter(vec![
+                    source_id.to_string(),
+                    output_index.to_string(),
+                    shard.clone(),
+                ]),
+            error_inserts: base
+                .source_specific
+                .error_inserts
+                .get_delete_on_drop_counter(vec![
+                    source_id.to_string(),
+                    output_index.to_string(),
+                    shard.clone(),
+                ]),
+            error_retractions: base
+                .source_specific
+                .error_retractions
+                .get_delete_on_drop_counter(vec![
+                    source_id.to_string(),
+                    output_index.to_string(),
+                    shard.clone(),
+                ]),
+            processed_batches: base
+                .source_specific
+                .persist_sink_processed_batches
+                .get_delete_on_drop_counter(vec![
+                    source_id.to_string(),
+                    output_index.to_string(),
+                    shard,
+                ]),
         }
     }
 }

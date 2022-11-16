@@ -654,13 +654,9 @@ Explained Query:
       lookup={ relation=1, key=[#1] }
       stream={ key=[#0], thinning=() }
     source={ relation=2, key=[] }
-    ArrangeBy
-      input_key=[#0]
+    Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-      Get::PassArrangements materialize.public.t
-        raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
     ArrangeBy
       raw=true
       arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
@@ -713,13 +709,9 @@ Explained Query:
       lookup={ relation=1, key=[#0, #1] }
       stream={ key=[#1, #0], thinning=() }
     source={ relation=2, key=[] }
-    ArrangeBy
-      input_key=[#0]
+    Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-      Get::PassArrangements materialize.public.t
-        raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
     ArrangeBy
       raw=true
       arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
@@ -792,27 +784,15 @@ Explained Query:
         lookup={ relation=0, key=[#0] }
         stream={ key=[#0], thinning=(#1) }
       source={ relation=2, key=[#0] }
-    ArrangeBy
-      input_key=[#0]
+    Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-      Get::PassArrangements materialize.public.t
-        raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-    ArrangeBy
-      input_key=[#0]
+    Get::PassArrangements materialize.public.u
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-      Get::PassArrangements materialize.public.u
-        raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-    ArrangeBy
-      input_key=[#0]
+    Get::PassArrangements materialize.public.v
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-      Get::PassArrangements materialize.public.v
-        raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
   - materialize.public.t_a_idx

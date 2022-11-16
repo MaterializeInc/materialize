@@ -213,7 +213,7 @@ impl SourceReader for KinesisSourceReader {
                 .block_on(self.update_shard_information())
             {
                 error!("{:#?}", e);
-                return Err(e.into());
+                return Err(SourceReaderError::other_definite(e));
             }
             self.last_checked_shards = std::time::Instant::now();
         }

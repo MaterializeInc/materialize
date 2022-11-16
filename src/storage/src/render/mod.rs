@@ -112,6 +112,7 @@ use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_client::types::sources::IngestionDescription;
 
+use crate::source::types::SourcePersistSinkMetrics;
 use crate::storage_state::StorageState;
 
 mod debezium;
@@ -154,12 +155,21 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             for (target, export) in description.source_exports {
                 let (ok, err) = &outputs[export.output_index];
                 let source_data = ok.map(Ok).concat(&err.map(Err));
+
+                let metrics = SourcePersistSinkMetrics::new(
+                    &storage_state.source_metrics,
+                    &export.storage_metadata.data_shard,
+                    id,
+                    export.output_index,
+                );
+
                 crate::render::persist_sink::render(
                     region,
                     target,
                     export.storage_metadata,
                     source_data,
                     storage_state,
+                    metrics,
                     Rc::clone(&token),
                 );
             }

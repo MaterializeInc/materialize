@@ -78,6 +78,7 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::StreamExt;
 use itertools::Itertools;
+use mz_ore::task::spawn;
 use rand::seq::SliceRandom;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
@@ -243,7 +244,7 @@ pub struct Config<S> {
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     pub storage_host_sizes: StorageHostSizeMap,
     pub default_storage_host_size: Option<String>,
-    pub bootstrap_system_vars: Option<String>,
+    pub bootstrap_system_parameters: BTreeMap<String, String>,
     pub connection_context: ConnectionContext,
     pub storage_usage_client: StorageUsageClient,
     pub storage_usage_collection_interval: Duration,
@@ -919,6 +920,21 @@ impl<S: Append + 'static> Coordinator<S> {
             tokio::time::interval(self.catalog.config().timestamp_interval);
         // Watcher that listens for and reports compute service status changes.
         let mut compute_events = self.controller.compute.watch_services();
+        let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
+        let idle_metric = self.metrics.queue_busy_time.with_label_values(&[]);
+        spawn(|| "coord idle metric", async move {
+            // Every 5 seconds, attempt to measure how long it takes for the
+            // coord select loop to be empty, because this message is the last
+            // processed. If it is idle, this will result in some microseconds
+            // of measurement.
+            let mut interval = tokio::time::interval(Duration::from_secs(5));
+            loop {
+                interval.tick().await;
+                // If the buffer is full (or the channel is closed), ignore and
+                // try again later.
+                let _ = idle_tx.try_send(idle_metric.start_timer());
+            }
+        });
 
         self.schedule_storage_usage_collection();
 
@@ -969,6 +985,14 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                     Message::Consolidate(ids.into_iter().collect())
                 }
+
+                // Process the idle metric at the lowest priority to sample queue non-idle time.
+                // `recv()` on `Receiver` is cancellation safe:
+                // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.Receiver.html#cancel-safety
+                timer = idle_rx.recv() => {
+                    timer.expect("does not drop").observe_duration();
+                    continue;
+                }
             };
 
             // All message processing functions trace. Start a parent span for them to make
@@ -1003,7 +1027,7 @@ pub async fn serve<S: Append + 'static>(
         cluster_replica_sizes,
         storage_host_sizes,
         default_storage_host_size,
-        bootstrap_system_vars,
+        bootstrap_system_parameters,
         mut availability_zones,
         connection_context,
         storage_usage_client,
@@ -1048,7 +1072,7 @@ pub async fn serve<S: Append + 'static>(
             cluster_replica_sizes,
             storage_host_sizes,
             default_storage_host_size,
-            bootstrap_system_vars,
+            bootstrap_system_parameters,
             availability_zones,
             secrets_reader: secrets_controller.reader(),
             egress_ips,
@@ -1064,6 +1088,7 @@ pub async fn serve<S: Append + 'static>(
     let handle = TokioHandle::current();
 
     let initial_timestamps = catalog.get_all_persisted_timestamps().await?;
+    let inner_metrics_registry = metrics_registry.clone();
     let thread = thread::Builder::new()
         // The Coordinator thread tends to keep a lot of data on its stack. To
         // prevent a stack overflow we allocate a stack twice as big as the default
@@ -1114,7 +1139,7 @@ pub async fn serve<S: Append + 'static>(
                 storage_usage_client,
                 storage_usage_collection_interval,
                 segment_client,
-                metrics: Metrics::register_with(&metrics_registry),
+                metrics: Metrics::register_with(&inner_metrics_registry),
             };
             let bootstrap =
                 handle.block_on(coord.bootstrap(builtin_migration_metadata, builtin_table_updates));
@@ -1138,7 +1163,7 @@ pub async fn serve<S: Append + 'static>(
                 start_instant,
                 _thread: thread.join_on_drop(),
             };
-            let client = Client::new(cmd_tx.clone());
+            let client = Client::new(cmd_tx.clone(), &metrics_registry);
             Ok((handle, client))
         }
         Err(e) => Err(e),

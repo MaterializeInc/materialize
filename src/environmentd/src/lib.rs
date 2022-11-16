@@ -13,6 +13,7 @@
 //! [differential dataflow]: ../differential_dataflow/index.html
 //! [timely dataflow]: ../timely/index.html
 
+use std::collections::BTreeMap;
 use std::env;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -105,9 +106,9 @@ pub struct Config {
     pub bootstrap_default_cluster_replica_size: String,
     /// The size of the builtin cluster replicas if bootstrapping.
     pub bootstrap_builtin_cluster_replica_size: String,
-    /// An optional semicolon-separated list of $var_name=$var_value pairs for
-    /// bootstraping system variables that are not already modified.
-    pub bootstrap_system_vars: Option<String>,
+    /// Values to set for system parameters, if those system parameters have not
+    /// already been set by the system user.
+    pub bootstrap_system_parameters: BTreeMap<String, String>,
     /// A map from size name to resource allocations for storage hosts.
     pub storage_host_sizes: StorageHostSizeMap,
     /// Default storage host size, should be a key from storage_host_sizes.
@@ -167,7 +168,11 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(
         &config.adapter_stash_url,
     )?)?;
-    let stash = mz_stash::Postgres::new(config.adapter_stash_url.clone(), None, tls).await?;
+    let stash = config
+        .controller
+        .postgres_factory
+        .open(config.adapter_stash_url.clone(), None, tls)
+        .await?;
     let stash = mz_stash::Memory::new(stash);
 
     // Validate TLS configuration, if present.
@@ -294,7 +299,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         storage_host_sizes: config.storage_host_sizes,
         default_storage_host_size: config.default_storage_host_size,
         availability_zones: config.availability_zones,
-        bootstrap_system_vars: config.bootstrap_system_vars,
+        bootstrap_system_parameters: config.bootstrap_system_parameters,
         connection_context: config.connection_context,
         storage_usage_client,
         storage_usage_collection_interval: config.storage_usage_collection_interval,
@@ -310,12 +315,14 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         .send(adapter_client.clone())
         .expect("internal HTTP server should not drop first");
 
+    let metrics = mz_pgwire::MetricsConfig::register_into(&config.metrics_registry);
     // Launch SQL server.
     task::spawn(|| "sql_server", {
         let sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
             tls: pgwire_tls,
             adapter_client: adapter_client.clone(),
             frontegg: config.frontegg.clone(),
+            metrics: metrics.clone(),
             internal: false,
         });
         server::serve(sql_conns, sql_server)
@@ -327,6 +334,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             tls: None,
             adapter_client: adapter_client.clone(),
             frontegg: None,
+            metrics,
             internal: true,
         });
         server::serve(internal_sql_conns, internal_sql_server)

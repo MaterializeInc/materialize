@@ -92,6 +92,25 @@ INSERT INTO conflict_schema.conflict_table VALUES ('234');
 
 CREATE TABLE "space table" ("space column" INTEGER);
 
+CREATE TYPE an_enum AS ENUM ('var0', 'var1');
+CREATE TABLE enum_table (a an_enum);
+INSERT INTO enum_table VALUES ('var1'), ('var0');
+ALTER TABLE enum_table REPLICA IDENTITY FULL;
+
+CREATE TYPE another_enum AS ENUM ('var2', 'var3');
+CREATE TABLE another_enum_table ("колона" another_enum);
+INSERT INTO another_enum_table VALUES ('var2'), ('var3');
+ALTER TABLE another_enum_table REPLICA IDENTITY FULL;
+
+CREATE TABLE conflict_schema.another_enum_table ("колона" another_enum);
+ALTER TABLE conflict_schema.another_enum_table REPLICA IDENTITY FULL;
+INSERT INTO conflict_schema.another_enum_table VALUES ('var2'), ('var3');
+ALTER TABLE conflict_schema.another_enum_table REPLICA IDENTITY FULL;
+
+DROP PUBLICATION IF EXISTS mz_source_narrow;
+
+CREATE PUBLICATION mz_source_narrow FOR TABLE enum_table, public.another_enum_table, pk_table;
+
 #
 # Test that slots created for replication sources are deleted on DROP
 #
@@ -119,7 +138,8 @@ $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=mat
   )
 ! CREATE SOURCE "no_such_host"
   FROM POSTGRES CONNECTION no_such_host (PUBLICATION 'mz_source');
-contains:failed to lookup address information
+# TODO: assert on `detail` here.
+exact:failed to fetch publication information from PostgreSQL database
 
 > CREATE CONNECTION no_such_port TO POSTGRES (
     HOST postgres,
@@ -130,7 +150,8 @@ contains:failed to lookup address information
   )
 ! CREATE SOURCE "no_such_port"
   FROM POSTGRES CONNECTION no_such_port (PUBLICATION 'mz_source');
-contains:error connecting to server: Connection refused (os error 111)
+# TODO: assert on `detail` here.
+exact:failed to fetch publication information from PostgreSQL database
 
 > CREATE CONNECTION no_such_user TO POSTGRES (
     HOST postgres,
@@ -140,7 +161,8 @@ contains:error connecting to server: Connection refused (os error 111)
   )
 ! CREATE SOURCE "no_such_user"
   FROM POSTGRES CONNECTION no_such_user (PUBLICATION 'mz_source');
-contains:db error: FATAL: role "no_such_user" does not exist
+# TODO: assert on `detail` here.
+exact:failed to fetch publication information from PostgreSQL database
 
 > CREATE SECRET badpass AS 'badpass'
 > CREATE CONNECTION no_such_password TO POSTGRES (
@@ -151,7 +173,8 @@ contains:db error: FATAL: role "no_such_user" does not exist
   )
 ! CREATE SOURCE "no_such_password"
   FROM POSTGRES CONNECTION no_such_password (PUBLICATION 'mz_source');
-contains:db error: FATAL: password authentication failed for user "postgres"
+# TODO: assert on `detail` here.
+exact:failed to fetch publication information from PostgreSQL database
 
 > CREATE CONNECTION no_such_dbname TO POSTGRES (
     HOST postgres,
@@ -161,16 +184,35 @@ contains:db error: FATAL: password authentication failed for user "postgres"
   )
 ! CREATE SOURCE "no_such_dbname"
   FROM POSTGRES CONNECTION no_such_dbname (PUBLICATION 'mz_source');
-contains:db error: FATAL: database "no_such_dbname" does not exist
+# TODO: assert on `detail` here.
+exact:failed to fetch publication information from PostgreSQL database
 
 ! CREATE SOURCE "no_such_publication"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'no_such_publication');
-contains:publication "no_such_publication" does not exist
+# TODO: assert on `detail` here.
+exact:failed to fetch publication information from PostgreSQL database
 
+! CREATE SOURCE "mz_source"
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES (
+    "enum_table"
+  );
+regex: the following columns contain unsupported types:\npostgres.public.enum_table.a \(OID \d+\)
+
+! CREATE SOURCE "mz_source"
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES (
+    "enum_table",
+    public.another_enum_table
+  );
+regex: the following columns contain unsupported types:\npostgres\.public\.another_enum_table\."колона" \(OID \d+\)\npostgres\.public\.enum_table\.a \(OID \d+\)
 
 #
 # Establish direct replication
 #
+#
+# Note: This implicitly tests that enum_table being part of the publication does not
+# prevent us from using other tables as subsources.
 #
 # TODO: This should produce an error because we included the `no_replica_identity` table
 > CREATE SOURCE "mz_source"
@@ -456,8 +498,113 @@ DELETE FROM conflict_schema.conflict_table;
 > SELECT COUNT(*) FROM conflict_table;
 0
 
+#
+# Support enum values as strings
+#
+#
+! CREATE SOURCE enum_source
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'mz_source',
+    TEXT COLUMNS [pk_table.col_dne]
+  )
+  FOR TABLES (
+    "enum_table"
+  );
+contains: invalid TEXT COLUMNS option value: column "pk_table.col_dne" does not exist
+
+! CREATE SOURCE enum_source
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'mz_source',
+    TEXT COLUMNS [table_dne.col_dne]
+  )
+  FOR TABLES (
+    "enum_table"
+  );
+contains: invalid TEXT COLUMNS option value: table table_dne not found in source
+
+# Reference exists in two schemas, so is not unambiguous
+! CREATE SOURCE enum_source
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'mz_source',
+    TEXT COLUMNS [another_enum_table."колона"]
+  )
+  FOR ALL TABLES;
+contains: invalid TEXT COLUMNS option value: table another_enum_table is ambiguous, consider specifying the schema
+
+! CREATE SOURCE enum_source
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'mz_source',
+    TEXT COLUMNS [foo]
+  )
+  FOR ALL TABLES;
+contains: invalid TEXT COLUMNS option value: column name 'foo' must have at least a table qualification
+
+! CREATE SOURCE enum_source
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'mz_source',
+    TEXT COLUMNS [foo.bar.qux.qax.foo]
+  )
+  FOR ALL TABLES;
+contains: invalid TEXT COLUMNS option value: qualified name did not have between 1 and 3 components: foo.bar.qux.qax
+
+! CREATE SOURCE enum_source
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'mz_source',
+    TEXT COLUMNS [enum_table.a, enum_table.a]
+  )
+  FOR ALL TABLES;
+contains: invalid TEXT COLUMNS option value: unexpected multiple references to postgres.public.enum_table.a
+
+# utf8_table is not part of mz_source_narrow publication
+! CREATE SOURCE enum_source
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'mz_source_narrow',
+    TEXT COLUMNS [enum_table.a, utf8_table.f1]
+  )
+  FOR ALL TABLES;
+contains: invalid TEXT COLUMNS option value: table utf8_table not found in source
+
+# n.b includes a reference to pk_table, which is not a table that's part of the
+# source, but is part of the publication.
+
+> CREATE SOURCE enum_source
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'mz_source',
+    TEXT COLUMNS [
+      enum_table.a,
+      public.another_enum_table."колона",
+      pk_table.pk
+    ]
+  )
+  FOR TABLES (
+    "enum_table",
+    public.another_enum_table
+  );
+
+$ set-regex match=\d+ replacement=<NUMBER>
+> SELECT * FROM (SHOW SOURCES) WHERE name LIKE '%enum%';
+another_enum_table      subsource <null>
+enum_source             postgres  <NUMBER>
+enum_table              subsource <null>
+
+$ unset-regex
+
+> SELECT * FROM enum_table
+var0
+var1
+
+> SELECT "колона" FROM another_enum_table
+var2
+var3
+
+#
+# Cleanup
+#
+#
+
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP PUBLICATION mz_source;
+DROP PUBLICATION mz_source_narrow;
 INSERT INTO pk_table VALUES (99999);
 
 # todo: we're purifying Postgres view names incorrectly, fix that and this error!

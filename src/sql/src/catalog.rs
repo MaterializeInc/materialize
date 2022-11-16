@@ -12,15 +12,17 @@
 //! Catalog abstraction layer.
 
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
+use itertools::Itertools;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_compute_client::controller::ComputeInstanceId;
@@ -29,16 +31,18 @@ use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use mz_repr::explain_new::{DummyHumanizer, ExprHumanizer};
 use mz_repr::{ColumnName, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::Expr;
+use mz_sql_parser::ast::UnresolvedObjectName;
 use mz_storage_client::types::connections::Connection;
 use mz_storage_client::types::sources::SourceDesc;
-use uuid::Uuid;
 
 use crate::func::Func;
 use crate::names::{
     Aug, DatabaseId, FullObjectName, PartialObjectName, QualifiedObjectName, QualifiedSchemaName,
     ResolvedDatabaseSpecifier, RoleId, SchemaSpecifier,
 };
+use crate::normalize;
 use crate::plan::statement::StatementDesc;
+use crate::plan::PlanError;
 
 /// A catalog keeps track of SQL objects and session state available to the
 /// planner.
@@ -187,6 +191,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
 
     /// Returns the configuration of the catalog.
     fn config(&self) -> &CatalogConfig;
+
+    /// Check if window functions are supported by the current system configuration.
+    fn window_functions(&self) -> bool;
 
     /// Returns the number of milliseconds since the system epoch. For normal use
     /// this means the Unix epoch. This can safely be mocked in tests and start
@@ -564,7 +571,14 @@ pub enum CatalogError {
     /// Unknown connection.
     UnknownConnection(String),
     /// Expected the catalog item to have the given type, but it did not.
-    UnexpectedType(String, CatalogItemType),
+    UnexpectedType {
+        /// The item's name.
+        name: String,
+        /// The actual type of the item.
+        actual_type: CatalogItemType,
+        /// The expected type of the item.
+        expected_type: CatalogItemType,
+    },
     /// Invalid attempt to depend on a non-dependable item.
     InvalidDependency {
         /// The invalid item's name.
@@ -587,8 +601,12 @@ impl fmt::Display for CatalogError {
                 write!(f, "unknown cluster replica '{}'", name)
             }
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
-            Self::UnexpectedType(name, item_type) => {
-                write!(f, "\"{name}\" is not of type {item_type}")
+            Self::UnexpectedType {
+                name,
+                actual_type,
+                expected_type,
+            } => {
+                write!(f, "\"{name}\" is a {actual_type} not a {expected_type}")
             }
             Self::InvalidDependency { name, typ } => write!(
                 f,
@@ -715,6 +733,10 @@ impl SessionCatalog for DummyCatalog {
         &DUMMY_CONFIG
     }
 
+    fn window_functions(&self) -> bool {
+        true
+    }
+
     fn now(&self) -> EpochMillis {
         (self.config().now)()
     }
@@ -756,5 +778,67 @@ impl CatalogDatabase for DummyDatabase {
 
     fn has_schemas(&self) -> bool {
         true
+    }
+}
+
+/// Provides a method of generating a 3-layer catalog on the fly, and then
+/// resolving objects within it.
+pub(crate) struct ErsatzCatalog<'a, T>(
+    pub HashMap<String, HashMap<String, HashMap<String, &'a T>>>,
+);
+
+impl<'a, T> ErsatzCatalog<'a, T> {
+    /// Returns the fully qualified name for `item`, as well as the `T` that it
+    /// describes.
+    ///
+    /// # Errors
+    /// - If `item` cannot be normalized to a [`PartialObjectName`]
+    /// - If the normalized `PartialObjectName` does not resolve to an item in
+    ///   `self.0`.
+    pub fn resolve(
+        &self,
+        item: UnresolvedObjectName,
+    ) -> Result<(UnresolvedObjectName, &'a T), PlanError> {
+        let name = normalize::unresolved_object_name(item)?;
+
+        let schemas = match self.0.get(&name.item) {
+            Some(schemas) => schemas,
+            None => sql_bail!("table {name} not found in source"),
+        };
+
+        let schema = match &name.schema {
+            Some(schema) => schema,
+            None => match schemas.keys().exactly_one() {
+                Ok(schema) => schema,
+                Err(_) => {
+                    sql_bail!("table {name} is ambiguous, consider specifying the schema")
+                }
+            },
+        };
+
+        let databases = match schemas.get(schema) {
+            Some(databases) => databases,
+            None => sql_bail!("schema {schema} not found in source"),
+        };
+
+        let database = match &name.database {
+            Some(database) => database,
+            None => match databases.keys().exactly_one() {
+                Ok(database) => database,
+                Err(_) => {
+                    sql_bail!("table {name} is ambiguous, consider specifying the database")
+                }
+            },
+        };
+
+        let desc = match databases.get(database) {
+            Some(desc) => *desc,
+            None => sql_bail!("database {database} not found source"),
+        };
+
+        Ok((
+            UnresolvedObjectName::qualified(&[database, schema, &name.item]),
+            desc,
+        ))
     }
 }

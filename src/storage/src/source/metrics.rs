@@ -84,6 +84,14 @@ impl KinesisMetrics {
 pub(super) struct SourceSpecificMetrics {
     pub(super) capability: UIntGaugeVec,
     pub(super) resume_upper: IntGaugeVec,
+    /// A timestamp gauge representing forward progress
+    /// in the data shard.
+    pub(super) progress: IntGaugeVec,
+    pub(super) row_inserts: IntCounterVec,
+    pub(super) row_retractions: IntCounterVec,
+    pub(super) error_inserts: IntCounterVec,
+    pub(super) error_retractions: IntCounterVec,
+    pub(super) persist_sink_processed_batches: IntCounterVec,
 }
 
 impl SourceSpecificMetrics {
@@ -99,6 +107,37 @@ impl SourceSpecificMetrics {
                 // TODO(guswynn): should this also track the resumption frontier operator?
                 help: "The timestamp-domain resumption frontier chosen for a source's ingestion",
                 var_labels: ["source_id"],
+            )),
+            progress: registry.register(metric!(
+                name: "mz_source_progress",
+                help: "A timestamp gauge representing forward progess in the data shard",
+                var_labels: ["source_id", "output", "shard"],
+            )),
+            row_inserts: registry.register(metric!(
+                name: "mz_source_row_inserts",
+                help: "A counter representing the actual number of rows being inserted to the data shard",
+                var_labels: ["source_id", "output", "shard"],
+            )),
+            row_retractions: registry.register(metric!(
+                name: "mz_source_row_retractions",
+                help: "A counter representing the actual number of rows being retracted from the data shard",
+                var_labels: ["source_id", "output", "shard"],
+            )),
+            error_inserts: registry.register(metric!(
+                name: "mz_source_error_inserts",
+                help: "A counter representing the actual number of errors being inserted to the data shard",
+                var_labels: ["source_id", "output", "shard"],
+            )),
+            error_retractions: registry.register(metric!(
+                name: "mz_source_error_retractions",
+                help: "A counter representing the actual number of errors being retracted from the data shard",
+                var_labels: ["source_id", "output", "shard"],
+            )),
+            persist_sink_processed_batches: registry.register(metric!(
+                name: "mz_source_processed_batches",
+                help: "A counter representing the number of persist sink batches with actual data \
+                we have successfully processed.",
+                var_labels: ["source_id", "output", "shard"],
             )),
         }
     }

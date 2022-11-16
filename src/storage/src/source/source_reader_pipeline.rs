@@ -52,6 +52,7 @@ use tracing::{info, trace, warn};
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
+use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::Upper;
 use mz_repr::{GlobalId, Row, Timestamp};
@@ -67,6 +68,7 @@ use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
 use crate::source::antichain::{MutableOffsetAntichain, OffsetAntichain};
 use crate::source::healthcheck;
+use crate::source::healthcheck::{SourceStatus, SourceStatusUpdate};
 
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockFollower, ReclockOperator};
@@ -118,6 +120,8 @@ struct SourceMessageBatch<Key, Value, Diff> {
     /// be _definite_: re-running the source will produce the same error. If an error
     /// is added to this collection, the source will be permanently wedged.
     source_errors: Vec<SourceError>,
+    /// The latest status update for the batch, if any.
+    status_update: Option<HealthStatus>,
     /// The current upper of the `SourceReader`, at the time this batch was
     /// emitted. Source uppers emitted via batches must never regress.
     source_upper: OffsetAntichain,
@@ -241,6 +245,8 @@ type MessageAndOffset<S> = (
 struct SourceReaderOperatorOutput<S: SourceReader> {
     /// Messages and their offsets from the source reader.
     messages: HashMap<PartitionId, Vec<MessageAndOffset<S>>>,
+    /// The latest status update for this worker, if any.
+    status_update: Option<HealthStatus>,
     /// See `SourceMessageBatch`.
     source_errors: Vec<SourceReaderError>,
     /// A list of partitions that this source reader instance
@@ -292,6 +298,7 @@ where
         // not advance its downstream frontier.
         yield Some(SourceReaderOperatorOutput {
             messages: HashMap::new(),
+            status_update: None,
             source_errors: Vec::new(),
             unconsumed_partitions: Vec::new(),
             source_upper: initial_source_upper,
@@ -311,6 +318,7 @@ where
         let mut untimestamped_messages = HashMap::<_, Vec<_>>::new();
         let mut unconsumed_partitions = Vec::new();
         let mut source_errors = vec![];
+        let mut status_update = None;
         loop {
             // TODO(guswyn): move lots of this out of the macro so rustfmt works better
             tokio::select! {
@@ -365,7 +373,17 @@ where
                                     }
                                     untimestamped_messages.entry(pid).or_default().push((message, offset));
                                 }
-                                SourceMessageType::SourceStatus(_update) => {
+                                SourceMessageType::SourceStatus(update) => {
+                                    let update = match update {
+                                        SourceStatusUpdate { status: SourceStatus::Starting, ..} => Some(HealthStatus::Starting),
+                                        SourceStatusUpdate { status: SourceStatus::Running, ..} => Some(HealthStatus::Running),
+                                        SourceStatusUpdate { status: SourceStatus::Stalled, error: Some(e)} => Some(HealthStatus::StalledWithError(e)),
+                                        other => {
+                                            warn!("Received currently-unhandled source status update: {other:?}");
+                                            None
+                                        },
+                                    };
+                                    status_update = update.or(status_update);
                                 }
                             }
                         }
@@ -382,6 +400,7 @@ where
                             yield Some(
                                 SourceReaderOperatorOutput {
                                     messages: std::mem::take(&mut untimestamped_messages),
+                                    status_update: status_update.take(),
                                     source_errors: source_errors.drain(..).collect_vec(),
                                     unconsumed_partitions,
                                     source_upper: source_upper.clone(),
@@ -418,6 +437,7 @@ where
                     yield Some(
                         SourceReaderOperatorOutput {
                             messages: std::mem::take(&mut untimestamped_messages),
+                            status_update: status_update.take(),
                             source_errors: source_errors.drain(..).collect_vec(),
                             unconsumed_partitions: unconsumed_partitions.clone(),
                             source_upper: source_upper.clone(),
@@ -664,6 +684,7 @@ where
                     };
                     let SourceReaderOperatorOutput {
                         messages,
+                        status_update,
                         source_errors,
                         unconsumed_partitions,
                         source_upper,
@@ -726,6 +747,7 @@ where
 
                     let message_batch = SourceMessageBatch {
                         messages,
+                        status_update,
                         source_errors,
                         source_upper: extended_source_upper,
                         batch_upper: batch_upper.clone(),
@@ -784,16 +806,21 @@ where
                     let has_errors = batch.source_errors.first();
                     let has_messages = batch.messages.values().any(|vs| !vs.is_empty());
 
-                    let maybe_health = match (has_errors, has_messages) {
-                        (Some(error), _) => {
+                    let maybe_health = match (has_errors, &batch.status_update, has_messages) {
+                        (Some(error), _, _) => {
                             // Arguably this case should be "failed", since generally a source
                             // cannot recover by the time an error reaches this far down the pipe.
                             // However, we don't actually shut down the source on error yet, so
                             // treating this as a possibly-temporary stall for now.
                             Some(HealthStatus::StalledWithError(error.error.to_string()))
                         }
-                        (_, true) => Some(HealthStatus::Running),
-                        (None, false) => None,
+                        (_, Some(status), _) => {
+                            // This is the transient error case, and is correctly represented as
+                            // a (temporary) stall.
+                            Some(status.clone())
+                        }
+                        (None, None, true) => Some(HealthStatus::Running),
+                        (None, None, false) => None,
                     };
 
                     if let Some(health) = maybe_health {
@@ -1343,19 +1370,10 @@ where
             let remap_upper = &frontiers[1].frontier();
             if PartialOrder::less_than(&prev_remap_upper.borrow(), remap_upper) {
                 trace!("reclock({id}) {worker_id}/{worker_count}: remap upper: {remap_upper:?}");
-                let mut updates = Vec::with_capacity(remap_updates_stash.len());
-                // TODO(petrosagg) replace with Vec::drain_filter when it's stable.
-                let mut i = 0;
-                while i < remap_updates_stash.len() {
-                    let (_, ref ts, _) = &remap_updates_stash[i];
-                    if !remap_upper.less_equal(ts) {
-                        updates.push(remap_updates_stash.swap_remove(i));
-                    } else {
-                        i += 1;
-                    }
-                }
                 let remap_trace_batch = ReclockBatch {
-                    updates,
+                    updates: remap_updates_stash
+                        .drain_filter_swapping(|(_, ts, _)| !remap_upper.less_equal(ts))
+                        .collect(),
                     upper: remap_upper.to_owned(),
                 };
                 timestamper.push_trace_batch(remap_trace_batch);
