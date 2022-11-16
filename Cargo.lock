@@ -3962,7 +3962,6 @@ dependencies = [
  "anyhow",
  "mz-cloud-resources",
  "mz-ore",
- "mz-pgrepr",
  "mz-proto",
  "mz-repr",
  "mz-ssh-util",

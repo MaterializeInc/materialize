@@ -158,7 +158,7 @@ impl PlanError {
             Self::UnrecognizedTypeInPostgresSource {
                 cols: _,
             } => Some(
-                "Use the TEXT COLUMNS option naming the listed columns, and Materialize can ingest their values\
+                "Use the TEXT COLUMNS option naming the listed columns, and Materialize can ingest their values \
                 as text."
                     .into(),
             ),
