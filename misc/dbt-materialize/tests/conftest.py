@@ -19,36 +19,10 @@ import pytest
 
 pytest_plugins = ["dbt.tests.fixtures.project"]
 
-
-def pytest_addoption(parser):
-    parser.addoption("--profile", action="store", default="materialize_cloud", type=str)
-
-
-# Using @pytest.mark.skip_profile('materialize_binary') uses the 'skip_by_profile_type'
-# autouse fixture below
-def pytest_configure(config):
-    config.addinivalue_line(
-        "markers",
-        "skip_profile(profile): skip test for the given profile",
-    )
-
-
-@pytest.fixture(scope="session")
-def profile(request):
-    return request.config.getoption("--profile")
-
-
-@pytest.fixture(scope="session")
-def dbt_profile_target(request):
-    profile = request.config.getoption("--profile")
-    if profile == "materialize_cloud":
-        target = materialize_cloud_target()
-    else:
-        raise ValueError(f"Invalid profile type '{profile}'")
-    return target
-
-
-def materialize_cloud_target():
+# The profile dictionary, used to write out profiles.yml
+# dbt will supply a unique schema per test, so we do not specify 'schema' here
+@pytest.fixture(scope="class")
+def dbt_profile_target():
     return {
         "type": "materialize",
         "threads": 1,
@@ -59,12 +33,3 @@ def materialize_cloud_target():
         "cluster": "default",
         "port": "{{ env_var('DBT_PORT', 6875) }}",
     }
-
-
-@pytest.fixture(autouse=True)
-def skip_by_profile_type(request):
-    profile_type = request.config.getoption("--profile")
-    if request.node.get_closest_marker("skip_profile"):
-        for skip_profile_type in request.node.get_closest_marker("skip_profile").args:
-            if skip_profile_type == profile_type:
-                pytest.skip("skipped on '{profile_type}' profile")
