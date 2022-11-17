@@ -91,7 +91,7 @@ async fn datadriven() {
                                         depends_on: vec![],
                                     }),
                                 }],
-                                |_| Ok(()),
+                                |_| std::future::ready(Ok(())),
                             )
                             .await
                             .unwrap();

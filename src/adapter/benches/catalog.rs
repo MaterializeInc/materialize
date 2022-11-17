@@ -57,7 +57,10 @@ fn bench_transact(c: &mut Criterion) {
                     oid: id,
                     public_schema_oid: id,
                 }];
-                catalog.transact(None, ops, |_| Ok(())).await.unwrap();
+                catalog
+                    .transact(None, ops, |_| std::future::ready(Ok(())))
+                    .await
+                    .unwrap();
             })
         })
     });

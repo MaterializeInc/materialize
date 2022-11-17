@@ -6030,7 +6030,7 @@ mod tests {
                     oid: 1,
                     public_schema_oid: 2,
                 }],
-                |_catalog| Ok(()),
+                |_catalog| std::future::ready(Ok(())),
             )
             .await
             .unwrap();
@@ -6274,7 +6274,7 @@ mod tests {
                         },
                         item,
                     }],
-                    |_| Ok(()),
+                    |_| std::future::ready(Ok(())),
                 )
                 .await
                 .unwrap();
