@@ -52,17 +52,6 @@ pub struct CatalogTxn<'a, T> {
 }
 
 impl<S: Append + 'static> Coordinator<S> {
-    /// Perform a catalog transaction.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn catalog_transact(
-        &mut self,
-        session: Option<&Session>,
-        ops: Vec<catalog::Op>,
-    ) -> Result<(), AdapterError> {
-        self.catalog_transact_with(session, ops, |_| std::future::ready(Ok(())))
-            .await
-    }
-
     /// Perform a catalog transaction. The closure is passed a [`CatalogTxn`]
     /// made from the prospective [`CatalogState`] (i.e., the `Catalog` with `ops`
     /// applied but before the transaction is committed). The closure can return
@@ -74,7 +63,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// [`CatalogState`]: crate::catalog::CatalogState
     /// [`DataflowDesc`]: mz_compute_client::command::DataflowDesc
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn catalog_transact_with<Fut, R>(
+    pub(crate) async fn catalog_transact<Fut, R>(
         &mut self,
         session: Option<&Session>,
         mut ops: Vec<catalog::Op>,
@@ -449,7 +438,7 @@ impl<S: Append + 'static> Coordinator<S> {
         if ops.is_empty() {
             return;
         }
-        self.catalog_transact(Some(session), ops)
+        self.catalog_transact(Some(session), ops, |_| async { Ok(()) })
             .await
             .expect("unable to drop temporary items for conn_id");
     }
@@ -556,7 +545,10 @@ impl<S: Append + 'static> Coordinator<S> {
                     name,
                     item: CatalogItem::Sink(sink.clone()),
                 });
-                match self.catalog_transact(session, ops).await {
+                match self
+                    .catalog_transact(session, ops, |_| async { Ok(()) })
+                    .await
+                {
                     Ok(()) => (),
                     catalog_err @ Err(_) => {
                         let () = self.drop_storage_sinks(vec![id]).await;
@@ -564,10 +556,15 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                 }
             }
-            storage_err @ Err(_) => match self.catalog_transact(session, ops).await {
-                Ok(()) => storage_err?,
-                catalog_err @ Err(_) => catalog_err?,
-            },
+            storage_err @ Err(_) => {
+                match self
+                    .catalog_transact(session, ops, |_| async { Ok(()) })
+                    .await
+                {
+                    Ok(()) => storage_err?,
+                    catalog_err @ Err(_) => catalog_err?,
+                }
+            }
         };
         Ok(())
     }
