@@ -118,7 +118,8 @@ Explained Query:
           Project (#2) // { arity: 1 }
             Map ((#0 + 1)) // { arity: 3 }
               Get materialize.public.t // { arity: 2 }
-        Get materialize.public.t // { arity: 2 }
+        ArrangeBy keys=[[]] // { arity: 2 }
+          Get materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -136,7 +137,8 @@ Explained Query:
           Project (#2, #3) // { arity: 2 }
             Map ((#1 + 1), (#0 + 1)) // { arity: 4 }
               Get materialize.public.t // { arity: 2 }
-        Get materialize.public.t // { arity: 2 }
+        ArrangeBy keys=[[]] // { arity: 2 }
+          Get materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -154,7 +156,8 @@ Explained Query:
           Project (#2..=#4) // { arity: 3 }
             Map ((#1 + 1), (#0 + 2), (#0 + 1)) // { arity: 5 }
               Get materialize.public.t // { arity: 2 }
-        Get materialize.public.t // { arity: 2 }
+        ArrangeBy keys=[[]] // { arity: 2 }
+          Get materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -198,11 +201,12 @@ Explained Query:
     Map ((1 + #0), 1) // { arity: 3 }
       CrossJoin type=differential // { arity: 1 }
         implementation
-          %1:t » %0[×]
+          %0 » %1:t[×]A
         Constant // { arity: 0 }
           - (() x 7)
-        Project (#0) // { arity: 1 }
-          Get materialize.public.t // { arity: 2 }
+        ArrangeBy keys=[[]] // { arity: 1 }
+          Project (#0) // { arity: 1 }
+            Get materialize.public.t // { arity: 2 }
 
 Source materialize.public.t
   project=(#0, #2)
@@ -234,8 +238,9 @@ Explained Query:
           - (2)
           - (3)
           - (4)
-        Project () // { types: "()" }
-          Get materialize.public.t // { types: "(integer?, integer?)" }
+        ArrangeBy keys=[[]] // { types: "()" }
+          Project () // { types: "()" }
+            Get materialize.public.t // { types: "(integer?, integer?)" }
 
 Source materialize.public.t
   project=(#2, #3)
@@ -261,8 +266,9 @@ Explained Query:
           - (4, 3)
           - (4, 4)
           - (4, 5)
-        Project () // { types: "()" }
-          Get materialize.public.t // { types: "(integer?, integer?)" }
+        ArrangeBy keys=[[]] // { types: "()" }
+          Project () // { types: "()" }
+            Get materialize.public.t // { types: "(integer?, integer?)" }
 
 Source materialize.public.t
   project=(#2, #3)
@@ -755,15 +761,16 @@ Explained Query:
               Project (#0) // { arity: 1 }
                 Filter (#0 <= 195) AND (#0 >= 38) // { arity: 2 }
                   Get materialize.public.t_pk // { arity: 2 }
-            Union // { arity: 1 }
-              Project (#0) // { arity: 1 }
-                Get l0 // { arity: 2 }
-              Map (error("more than one record produced in subquery")) // { arity: 1 }
-                Project () // { arity: 0 }
-                  Filter (#0 > 1) // { arity: 1 }
-                    Reduce aggregates=[count(true)] // { arity: 1 }
-                      Project () // { arity: 0 }
-                        Get l0 // { arity: 2 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Union // { arity: 1 }
+                Project (#0) // { arity: 1 }
+                  Get l0 // { arity: 2 }
+                Map (error("more than one record produced in subquery")) // { arity: 1 }
+                  Project () // { arity: 0 }
+                    Filter (#0 > 1) // { arity: 1 }
+                      Reduce aggregates=[count(true)] // { arity: 1 }
+                        Project () // { arity: 0 }
+                          Get l0 // { arity: 2 }
     cte l0 =
       Filter (#0 = 1308) // { arity: 2 }
         Get materialize.public.t // { arity: 2 }
@@ -804,15 +811,16 @@ Explained Query:
               Project (#0) // { arity: 1 }
                 Filter (#0 <= 195) AND (#0 >= 38) // { arity: 2 }
                   Get materialize.public.t // { arity: 2 }
-            Union // { arity: 1 }
-              Project (#0) // { arity: 1 }
-                Get l0 // { arity: 2 }
-              Map (error("more than one record produced in subquery")) // { arity: 1 }
-                Project () // { arity: 0 }
-                  Filter (#0 > 1) // { arity: 1 }
-                    Reduce aggregates=[count(true)] // { arity: 1 }
-                      Project () // { arity: 0 }
-                        Get l0 // { arity: 2 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Union // { arity: 1 }
+                Project (#0) // { arity: 1 }
+                  Get l0 // { arity: 2 }
+                Map (error("more than one record produced in subquery")) // { arity: 1 }
+                  Project () // { arity: 0 }
+                    Filter (#0 > 1) // { arity: 1 }
+                      Reduce aggregates=[count(true)] // { arity: 1 }
+                        Project () // { arity: 0 }
+                          Get l0 // { arity: 2 }
     cte l0 =
       Filter (#0 = 1308) // { arity: 2 }
         Get materialize.public.t // { arity: 2 }
@@ -864,13 +872,16 @@ query T multiline
 explain with(arity, join_impls) select * from t1 as a1 join t1 as a2 on (a2.f2 = (select 6 from t1)) where a2.f2 = 9;
 ----
 Explained Query:
-  CrossJoin type=differential // { arity: 4 }
+  CrossJoin type=delta // { arity: 4 }
     implementation
-      %1:t1 » %2[×]UAef » %0:t1[×]Aef
+      %0:t1 » %2[×]UA » %1:t1[×]Aef
+      %1:t1 » %2[×]UA » %0:t1[×]A
+      %2 » %1:t1[×]Aef » %0:t1[×]A
     ArrangeBy keys=[[]] // { arity: 2 }
       Get materialize.public.t1 // { arity: 2 }
-    Filter (#1 = 9) // { arity: 2 }
-      Get materialize.public.t1 // { arity: 2 }
+    ArrangeBy keys=[[]] // { arity: 2 }
+      Filter (#1 = 9) // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
     ArrangeBy keys=[[]] // { arity: 0 }
       Project () // { arity: 0 }
         Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }

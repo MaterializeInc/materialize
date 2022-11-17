@@ -1447,31 +1447,38 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                             }
                                           },
                                           {
-                                            "Project": {
+                                            "ArrangeBy": {
                                               "input": {
-                                                "Get": {
-                                                  "id": {
-                                                    "Global": {
-                                                      "User": 8
+                                                "Project": {
+                                                  "input": {
+                                                    "Get": {
+                                                      "id": {
+                                                        "Global": {
+                                                          "User": 8
+                                                        }
+                                                      },
+                                                      "typ": {
+                                                        "column_types": [
+                                                          {
+                                                            "scalar_type": "Int32",
+                                                            "nullable": false
+                                                          },
+                                                          {
+                                                            "scalar_type": "Int32",
+                                                            "nullable": true
+                                                          }
+                                                        ],
+                                                        "keys": []
+                                                      }
                                                     }
                                                   },
-                                                  "typ": {
-                                                    "column_types": [
-                                                      {
-                                                        "scalar_type": "Int32",
-                                                        "nullable": false
-                                                      },
-                                                      {
-                                                        "scalar_type": "Int32",
-                                                        "nullable": true
-                                                      }
-                                                    ],
-                                                    "keys": []
-                                                  }
+                                                  "outputs": [
+                                                    0
+                                                  ]
                                                 }
                                               },
-                                              "outputs": [
-                                                0
+                                              "keys": [
+                                                []
                                               ]
                                             }
                                           }
@@ -1481,7 +1488,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                           "Differential": [
                                             [
                                               1,
-                                              null
+                                              []
                                             ],
                                             [
                                               [
@@ -1557,7 +1564,15 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                     ]
                   ],
                   "implementation": {
-                    "DeltaQuery": [
+                    "Differential": [
+                      [
+                        0,
+                        [
+                          {
+                            "Column": 0
+                          }
+                        ]
+                      ],
                       [
                         [
                           1,
@@ -1580,29 +1595,6 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                             "input": 1
                           }
                         ]
-                      ],
-                      [
-                        [
-                          0,
-                          [
-                            {
-                              "Column": 0
-                            }
-                          ],
-                          {
-                            "unique_key": false,
-                            "key_length": 1,
-                            "arranged": true,
-                            "filters": {
-                              "literal_equality": false,
-                              "like": false,
-                              "is_null": false,
-                              "literal_inequality": 0,
-                              "any_filter": false
-                            },
-                            "input": 0
-                          }
-                        ]
                       ]
                     ]
                   }
@@ -1620,23 +1612,34 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                 "Join": {
                   "inputs": [
                     {
-                      "Get": {
-                        "id": {
-                          "Local": 0
-                        },
-                        "typ": {
-                          "column_types": [
-                            {
-                              "scalar_type": "Int32",
-                              "nullable": true
+                      "ArrangeBy": {
+                        "input": {
+                          "Get": {
+                            "id": {
+                              "Local": 0
                             },
-                            {
-                              "scalar_type": "Int32",
-                              "nullable": true
+                            "typ": {
+                              "column_types": [
+                                {
+                                  "scalar_type": "Int32",
+                                  "nullable": true
+                                },
+                                {
+                                  "scalar_type": "Int32",
+                                  "nullable": true
+                                }
+                              ],
+                              "keys": []
                             }
-                          ],
-                          "keys": []
-                        }
+                          }
+                        },
+                        "keys": [
+                          [
+                            {
+                              "Column": 1
+                            }
+                          ]
+                        ]
                       }
                     },
                     {
@@ -1697,31 +1700,38 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                             }
                                           },
                                           {
-                                            "Project": {
+                                            "ArrangeBy": {
                                               "input": {
-                                                "Get": {
-                                                  "id": {
-                                                    "Global": {
-                                                      "User": 8
+                                                "Project": {
+                                                  "input": {
+                                                    "Get": {
+                                                      "id": {
+                                                        "Global": {
+                                                          "User": 8
+                                                        }
+                                                      },
+                                                      "typ": {
+                                                        "column_types": [
+                                                          {
+                                                            "scalar_type": "Int32",
+                                                            "nullable": false
+                                                          },
+                                                          {
+                                                            "scalar_type": "Int32",
+                                                            "nullable": true
+                                                          }
+                                                        ],
+                                                        "keys": []
+                                                      }
                                                     }
                                                   },
-                                                  "typ": {
-                                                    "column_types": [
-                                                      {
-                                                        "scalar_type": "Int32",
-                                                        "nullable": false
-                                                      },
-                                                      {
-                                                        "scalar_type": "Int32",
-                                                        "nullable": true
-                                                      }
-                                                    ],
-                                                    "keys": []
-                                                  }
+                                                  "outputs": [
+                                                    1
+                                                  ]
                                                 }
                                               },
-                                              "outputs": [
-                                                1
+                                              "keys": [
+                                                []
                                               ]
                                             }
                                           }
@@ -1731,7 +1741,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                           "Differential": [
                                             [
                                               1,
-                                              null
+                                              []
                                             ],
                                             [
                                               [
@@ -1810,7 +1820,11 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                     "Differential": [
                       [
                         0,
-                        null
+                        [
+                          {
+                            "Column": 1
+                          }
+                        ]
                       ],
                       [
                         [
@@ -2003,47 +2017,58 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                       }
                                     },
                                     {
-                                      "Filter": {
+                                      "ArrangeBy": {
                                         "input": {
-                                          "Get": {
-                                            "id": {
-                                              "Global": {
-                                                "User": 6
+                                          "Filter": {
+                                            "input": {
+                                              "Get": {
+                                                "id": {
+                                                  "Global": {
+                                                    "User": 6
+                                                  }
+                                                },
+                                                "typ": {
+                                                  "column_types": [
+                                                    {
+                                                      "scalar_type": "Int32",
+                                                      "nullable": false
+                                                    },
+                                                    {
+                                                      "scalar_type": "Int32",
+                                                      "nullable": true
+                                                    }
+                                                  ],
+                                                  "keys": []
+                                                }
                                               }
                                             },
-                                            "typ": {
-                                              "column_types": [
-                                                {
-                                                  "scalar_type": "Int32",
-                                                  "nullable": false
-                                                },
-                                                {
-                                                  "scalar_type": "Int32",
-                                                  "nullable": true
-                                                }
-                                              ],
-                                              "keys": []
-                                            }
-                                          }
-                                        },
-                                        "predicates": [
-                                          {
-                                            "CallUnary": {
-                                              "func": {
-                                                "Not": null
-                                              },
-                                              "expr": {
+                                            "predicates": [
+                                              {
                                                 "CallUnary": {
                                                   "func": {
-                                                    "IsNull": null
+                                                    "Not": null
                                                   },
                                                   "expr": {
-                                                    "Column": 1
+                                                    "CallUnary": {
+                                                      "func": {
+                                                        "IsNull": null
+                                                      },
+                                                      "expr": {
+                                                        "Column": 1
+                                                      }
+                                                    }
                                                   }
                                                 }
                                               }
-                                            }
+                                            ]
                                           }
+                                        },
+                                        "keys": [
+                                          [
+                                            {
+                                              "Column": 1
+                                            }
+                                          ]
                                         ]
                                       }
                                     }
@@ -2062,7 +2087,11 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                     "Differential": [
                                       [
                                         1,
-                                        null
+                                        [
+                                          {
+                                            "Column": 1
+                                          }
+                                        ]
                                       ],
                                       [
                                         [
@@ -2137,47 +2166,58 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                           }
                                         },
                                         {
-                                          "Filter": {
+                                          "ArrangeBy": {
                                             "input": {
-                                              "Get": {
-                                                "id": {
-                                                  "Global": {
-                                                    "User": 8
+                                              "Filter": {
+                                                "input": {
+                                                  "Get": {
+                                                    "id": {
+                                                      "Global": {
+                                                        "User": 8
+                                                      }
+                                                    },
+                                                    "typ": {
+                                                      "column_types": [
+                                                        {
+                                                          "scalar_type": "Int32",
+                                                          "nullable": false
+                                                        },
+                                                        {
+                                                          "scalar_type": "Int32",
+                                                          "nullable": true
+                                                        }
+                                                      ],
+                                                      "keys": []
+                                                    }
                                                   }
                                                 },
-                                                "typ": {
-                                                  "column_types": [
-                                                    {
-                                                      "scalar_type": "Int32",
-                                                      "nullable": false
-                                                    },
-                                                    {
-                                                      "scalar_type": "Int32",
-                                                      "nullable": true
-                                                    }
-                                                  ],
-                                                  "keys": []
-                                                }
-                                              }
-                                            },
-                                            "predicates": [
-                                              {
-                                                "CallUnary": {
-                                                  "func": {
-                                                    "Not": null
-                                                  },
-                                                  "expr": {
+                                                "predicates": [
+                                                  {
                                                     "CallUnary": {
                                                       "func": {
-                                                        "IsNull": null
+                                                        "Not": null
                                                       },
                                                       "expr": {
-                                                        "Column": 1
+                                                        "CallUnary": {
+                                                          "func": {
+                                                            "IsNull": null
+                                                          },
+                                                          "expr": {
+                                                            "Column": 1
+                                                          }
+                                                        }
                                                       }
                                                     }
                                                   }
-                                                }
+                                                ]
                                               }
+                                            },
+                                            "keys": [
+                                              [
+                                                {
+                                                  "Column": 1
+                                                }
+                                              ]
                                             ]
                                           }
                                         }
@@ -2196,7 +2236,11 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                         "Differential": [
                                           [
                                             1,
-                                            null
+                                            [
+                                              {
+                                                "Column": 1
+                                              }
+                                            ]
                                           ],
                                           [
                                             [
@@ -2246,19 +2290,30 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                 "Join": {
                                   "inputs": [
                                     {
-                                      "Get": {
-                                        "id": {
-                                          "Local": 0
-                                        },
-                                        "typ": {
-                                          "column_types": [
-                                            {
-                                              "scalar_type": "Int32",
-                                              "nullable": true
+                                      "ArrangeBy": {
+                                        "input": {
+                                          "Get": {
+                                            "id": {
+                                              "Local": 0
+                                            },
+                                            "typ": {
+                                              "column_types": [
+                                                {
+                                                  "scalar_type": "Int32",
+                                                  "nullable": true
+                                                }
+                                              ],
+                                              "keys": []
                                             }
-                                          ],
-                                          "keys": []
-                                        }
+                                          }
+                                        },
+                                        "keys": [
+                                          [
+                                            {
+                                              "Column": 0
+                                            }
+                                          ]
+                                        ]
                                       }
                                     },
                                     {
@@ -2522,11 +2577,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                     ]
                                   ],
                                   "implementation": {
-                                    "Differential": [
-                                      [
-                                        0,
-                                        null
-                                      ],
+                                    "DeltaQuery": [
                                       [
                                         [
                                           1,
@@ -2568,6 +2619,94 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                               "any_filter": false
                                             },
                                             "input": 2
+                                          }
+                                        ]
+                                      ],
+                                      [
+                                        [
+                                          2,
+                                          [
+                                            {
+                                              "Column": 0
+                                            }
+                                          ],
+                                          {
+                                            "unique_key": true,
+                                            "key_length": 1,
+                                            "arranged": true,
+                                            "filters": {
+                                              "literal_equality": false,
+                                              "like": false,
+                                              "is_null": false,
+                                              "literal_inequality": 0,
+                                              "any_filter": false
+                                            },
+                                            "input": 2
+                                          }
+                                        ],
+                                        [
+                                          0,
+                                          [
+                                            {
+                                              "Column": 0
+                                            }
+                                          ],
+                                          {
+                                            "unique_key": false,
+                                            "key_length": 1,
+                                            "arranged": true,
+                                            "filters": {
+                                              "literal_equality": false,
+                                              "like": false,
+                                              "is_null": false,
+                                              "literal_inequality": 0,
+                                              "any_filter": false
+                                            },
+                                            "input": 0
+                                          }
+                                        ]
+                                      ],
+                                      [
+                                        [
+                                          1,
+                                          [
+                                            {
+                                              "Column": 0
+                                            }
+                                          ],
+                                          {
+                                            "unique_key": true,
+                                            "key_length": 1,
+                                            "arranged": true,
+                                            "filters": {
+                                              "literal_equality": false,
+                                              "like": false,
+                                              "is_null": false,
+                                              "literal_inequality": 0,
+                                              "any_filter": false
+                                            },
+                                            "input": 1
+                                          }
+                                        ],
+                                        [
+                                          0,
+                                          [
+                                            {
+                                              "Column": 0
+                                            }
+                                          ],
+                                          {
+                                            "unique_key": false,
+                                            "key_length": 1,
+                                            "arranged": true,
+                                            "filters": {
+                                              "literal_equality": false,
+                                              "like": false,
+                                              "is_null": false,
+                                              "literal_inequality": 0,
+                                              "any_filter": false
+                                            },
+                                            "input": 0
                                           }
                                         ]
                                       ]
@@ -2774,29 +2913,40 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                               }
                             },
                             {
-                              "Project": {
+                              "ArrangeBy": {
                                 "input": {
-                                  "Get": {
-                                    "id": {
-                                      "Local": 0
-                                    },
-                                    "typ": {
-                                      "column_types": [
-                                        {
-                                          "scalar_type": "Int32",
-                                          "nullable": true
+                                  "Project": {
+                                    "input": {
+                                      "Get": {
+                                        "id": {
+                                          "Local": 0
                                         },
-                                        {
-                                          "scalar_type": "Int32",
-                                          "nullable": false
+                                        "typ": {
+                                          "column_types": [
+                                            {
+                                              "scalar_type": "Int32",
+                                              "nullable": true
+                                            },
+                                            {
+                                              "scalar_type": "Int32",
+                                              "nullable": false
+                                            }
+                                          ],
+                                          "keys": []
                                         }
-                                      ],
-                                      "keys": []
-                                    }
+                                      }
+                                    },
+                                    "outputs": [
+                                      1
+                                    ]
                                   }
                                 },
-                                "outputs": [
-                                  1
+                                "keys": [
+                                  [
+                                    {
+                                      "Column": 0
+                                    }
+                                  ]
                                 ]
                               }
                             }
@@ -2815,10 +2965,94 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                             ]
                           ],
                           "implementation": {
-                            "Differential": [
+                            "DeltaQuery": [
                               [
-                                2,
-                                null
+                                [
+                                  1,
+                                  [
+                                    {
+                                      "Column": 1
+                                    }
+                                  ],
+                                  {
+                                    "unique_key": false,
+                                    "key_length": 1,
+                                    "arranged": true,
+                                    "filters": {
+                                      "literal_equality": false,
+                                      "like": false,
+                                      "is_null": false,
+                                      "literal_inequality": 0,
+                                      "any_filter": false
+                                    },
+                                    "input": 1
+                                  }
+                                ],
+                                [
+                                  2,
+                                  [
+                                    {
+                                      "Column": 0
+                                    }
+                                  ],
+                                  {
+                                    "unique_key": false,
+                                    "key_length": 1,
+                                    "arranged": true,
+                                    "filters": {
+                                      "literal_equality": false,
+                                      "like": false,
+                                      "is_null": false,
+                                      "literal_inequality": 0,
+                                      "any_filter": false
+                                    },
+                                    "input": 2
+                                  }
+                                ]
+                              ],
+                              [
+                                [
+                                  0,
+                                  [
+                                    {
+                                      "Column": 1
+                                    }
+                                  ],
+                                  {
+                                    "unique_key": false,
+                                    "key_length": 1,
+                                    "arranged": true,
+                                    "filters": {
+                                      "literal_equality": false,
+                                      "like": false,
+                                      "is_null": false,
+                                      "literal_inequality": 0,
+                                      "any_filter": false
+                                    },
+                                    "input": 0
+                                  }
+                                ],
+                                [
+                                  2,
+                                  [
+                                    {
+                                      "Column": 0
+                                    }
+                                  ],
+                                  {
+                                    "unique_key": false,
+                                    "key_length": 1,
+                                    "arranged": true,
+                                    "filters": {
+                                      "literal_equality": false,
+                                      "like": false,
+                                      "is_null": false,
+                                      "literal_inequality": 0,
+                                      "any_filter": false
+                                    },
+                                    "input": 2
+                                  }
+                                ]
                               ],
                               [
                                 [
@@ -2889,31 +3123,42 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                         "Join": {
                                           "inputs": [
                                             {
-                                              "Project": {
+                                              "ArrangeBy": {
                                                 "input": {
-                                                  "Get": {
-                                                    "id": {
-                                                      "Global": {
-                                                        "User": 1
+                                                  "Project": {
+                                                    "input": {
+                                                      "Get": {
+                                                        "id": {
+                                                          "Global": {
+                                                            "User": 1
+                                                          }
+                                                        },
+                                                        "typ": {
+                                                          "column_types": [
+                                                            {
+                                                              "scalar_type": "Int32",
+                                                              "nullable": true
+                                                            },
+                                                            {
+                                                              "scalar_type": "Int32",
+                                                              "nullable": true
+                                                            }
+                                                          ],
+                                                          "keys": []
+                                                        }
                                                       }
                                                     },
-                                                    "typ": {
-                                                      "column_types": [
-                                                        {
-                                                          "scalar_type": "Int32",
-                                                          "nullable": true
-                                                        },
-                                                        {
-                                                          "scalar_type": "Int32",
-                                                          "nullable": true
-                                                        }
-                                                      ],
-                                                      "keys": []
-                                                    }
+                                                    "outputs": [
+                                                      1
+                                                    ]
                                                   }
                                                 },
-                                                "outputs": [
-                                                  1
+                                                "keys": [
+                                                  [
+                                                    {
+                                                      "Column": 0
+                                                    }
+                                                  ]
                                                 ]
                                               }
                                             },
@@ -2986,7 +3231,11 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                             "Differential": [
                                               [
                                                 0,
-                                                null
+                                                [
+                                                  {
+                                                    "Column": 0
+                                                  }
+                                                ]
                                               ],
                                               [
                                                 [
@@ -3196,530 +3445,558 @@ FROM
             "Let": {
               "id": 1,
               "value": {
-                "Project": {
+                "ArrangeBy": {
                   "input": {
-                    "Filter": {
-                      "input": {
-                        "Join": {
-                          "inputs": [
-                            {
-                              "ArrangeBy": {
-                                "input": {
-                                  "Get": {
-                                    "id": {
-                                      "Global": {
-                                        "User": 1
-                                      }
-                                    },
-                                    "typ": {
-                                      "column_types": [
-                                        {
-                                          "scalar_type": "Int32",
-                                          "nullable": true
-                                        },
-                                        {
-                                          "scalar_type": "Int32",
-                                          "nullable": true
-                                        }
-                                      ],
-                                      "keys": []
-                                    }
-                                  }
-                                },
-                                "keys": [
-                                  [
-                                    {
-                                      "Column": 0
-                                    }
-                                  ]
-                                ]
-                              }
-                            },
-                            {
-                              "ArrangeBy": {
-                                "input": {
-                                  "Reduce": {
-                                    "input": {
-                                      "Join": {
-                                        "inputs": [
-                                          {
-                                            "ArrangeBy": {
-                                              "input": {
-                                                "Reduce": {
-                                                  "input": {
-                                                    "Get": {
-                                                      "id": {
-                                                        "Local": 0
-                                                      },
-                                                      "typ": {
-                                                        "column_types": [
-                                                          {
-                                                            "scalar_type": "Int32",
-                                                            "nullable": true
-                                                          }
-                                                        ],
-                                                        "keys": []
-                                                      }
-                                                    }
-                                                  },
-                                                  "group_key": [
-                                                    {
-                                                      "Column": 0
-                                                    }
-                                                  ],
-                                                  "aggregates": [],
-                                                  "monotonic": false,
-                                                  "expected_group_size": null
-                                                }
-                                              },
-                                              "keys": [
-                                                []
-                                              ]
-                                            }
-                                          },
-                                          {
-                                            "Get": {
-                                              "id": {
-                                                "Local": 0
-                                              },
-                                              "typ": {
-                                                "column_types": [
-                                                  {
-                                                    "scalar_type": "Int32",
-                                                    "nullable": true
-                                                  }
-                                                ],
-                                                "keys": []
-                                              }
-                                            }
-                                          }
-                                        ],
-                                        "equivalences": [],
-                                        "implementation": {
-                                          "Differential": [
-                                            [
-                                              1,
-                                              null
-                                            ],
-                                            [
-                                              [
-                                                0,
-                                                [],
-                                                {
-                                                  "unique_key": false,
-                                                  "key_length": 0,
-                                                  "arranged": true,
-                                                  "filters": {
-                                                    "literal_equality": false,
-                                                    "like": false,
-                                                    "is_null": false,
-                                                    "literal_inequality": 0,
-                                                    "any_filter": false
-                                                  },
-                                                  "input": 0
-                                                }
-                                              ]
-                                            ]
-                                          ]
-                                        }
-                                      }
-                                    },
-                                    "group_key": [
-                                      {
-                                        "Column": 0
-                                      }
-                                    ],
-                                    "aggregates": [
-                                      {
-                                        "func": "MaxInt32",
-                                        "expr": {
-                                          "CallBinary": {
-                                            "func": "MulInt32",
-                                            "expr1": {
-                                              "Column": 0
-                                            },
-                                            "expr2": {
-                                              "Column": 1
-                                            }
-                                          }
-                                        },
-                                        "distinct": false
-                                      }
-                                    ],
-                                    "monotonic": false,
-                                    "expected_group_size": null
-                                  }
-                                },
-                                "keys": [
-                                  [
-                                    {
-                                      "Column": 0
-                                    }
-                                  ]
-                                ]
-                              }
-                            }
-                          ],
-                          "equivalences": [
-                            [
-                              {
-                                "Column": 0
-                              },
-                              {
-                                "Column": 2
-                              }
-                            ]
-                          ],
-                          "implementation": {
-                            "DeltaQuery": [
-                              [
-                                [
-                                  1,
-                                  [
-                                    {
-                                      "Column": 0
-                                    }
-                                  ],
-                                  {
-                                    "unique_key": true,
-                                    "key_length": 1,
-                                    "arranged": true,
-                                    "filters": {
-                                      "literal_equality": false,
-                                      "like": false,
-                                      "is_null": false,
-                                      "literal_inequality": 0,
-                                      "any_filter": true
-                                    },
-                                    "input": 1
-                                  }
-                                ]
-                              ],
-                              [
-                                [
-                                  0,
-                                  [
-                                    {
-                                      "Column": 0
-                                    }
-                                  ],
-                                  {
-                                    "unique_key": false,
-                                    "key_length": 1,
-                                    "arranged": true,
-                                    "filters": {
-                                      "literal_equality": false,
-                                      "like": false,
-                                      "is_null": false,
-                                      "literal_inequality": 0,
-                                      "any_filter": false
-                                    },
-                                    "input": 0
-                                  }
-                                ]
-                              ]
-                            ]
-                          }
-                        }
+                    "Get": {
+                      "id": {
+                        "Local": 0
                       },
-                      "predicates": [
-                        {
-                          "CallBinary": {
-                            "func": "NotEq",
-                            "expr1": {
-                              "Column": 0
-                            },
-                            "expr2": {
-                              "Column": 3
-                            }
+                      "typ": {
+                        "column_types": [
+                          {
+                            "scalar_type": "Int32",
+                            "nullable": true
                           }
-                        }
-                      ]
+                        ],
+                        "keys": []
+                      }
                     }
                   },
-                  "outputs": [
-                    0,
-                    1,
-                    3
+                  "keys": [
+                    []
                   ]
                 }
               },
               "body": {
-                "Project": {
-                  "input": {
-                    "Filter": {
+                "Let": {
+                  "id": 2,
+                  "value": {
+                    "Project": {
                       "input": {
-                        "Join": {
-                          "inputs": [
-                            {
-                              "Get": {
-                                "id": {
-                                  "Local": 1
-                                },
-                                "typ": {
-                                  "column_types": [
-                                    {
-                                      "scalar_type": "Int32",
-                                      "nullable": false
-                                    },
-                                    {
-                                      "scalar_type": "Int32",
-                                      "nullable": true
-                                    },
-                                    {
-                                      "scalar_type": "Int32",
-                                      "nullable": false
-                                    }
-                                  ],
-                                  "keys": []
-                                }
-                              }
-                            },
-                            {
-                              "ArrangeBy": {
-                                "input": {
-                                  "Reduce": {
+                        "Filter": {
+                          "input": {
+                            "Join": {
+                              "inputs": [
+                                {
+                                  "ArrangeBy": {
                                     "input": {
-                                      "Join": {
-                                        "inputs": [
-                                          {
-                                            "ArrangeBy": {
-                                              "input": {
-                                                "Reduce": {
+                                      "Get": {
+                                        "id": {
+                                          "Global": {
+                                            "User": 1
+                                          }
+                                        },
+                                        "typ": {
+                                          "column_types": [
+                                            {
+                                              "scalar_type": "Int32",
+                                              "nullable": true
+                                            },
+                                            {
+                                              "scalar_type": "Int32",
+                                              "nullable": true
+                                            }
+                                          ],
+                                          "keys": []
+                                        }
+                                      }
+                                    },
+                                    "keys": [
+                                      [
+                                        {
+                                          "Column": 0
+                                        }
+                                      ]
+                                    ]
+                                  }
+                                },
+                                {
+                                  "ArrangeBy": {
+                                    "input": {
+                                      "Reduce": {
+                                        "input": {
+                                          "Join": {
+                                            "inputs": [
+                                              {
+                                                "ArrangeBy": {
                                                   "input": {
-                                                    "Project": {
+                                                    "Reduce": {
                                                       "input": {
                                                         "Get": {
                                                           "id": {
-                                                            "Local": 1
+                                                            "Local": 0
                                                           },
                                                           "typ": {
                                                             "column_types": [
                                                               {
                                                                 "scalar_type": "Int32",
-                                                                "nullable": false
-                                                              },
-                                                              {
-                                                                "scalar_type": "Int32",
                                                                 "nullable": true
-                                                              },
-                                                              {
-                                                                "scalar_type": "Int32",
-                                                                "nullable": false
                                                               }
                                                             ],
                                                             "keys": []
                                                           }
                                                         }
                                                       },
-                                                      "outputs": [
-                                                        0
-                                                      ]
+                                                      "group_key": [
+                                                        {
+                                                          "Column": 0
+                                                        }
+                                                      ],
+                                                      "aggregates": [],
+                                                      "monotonic": false,
+                                                      "expected_group_size": null
                                                     }
                                                   },
-                                                  "group_key": [
-                                                    {
-                                                      "Column": 0
-                                                    }
-                                                  ],
-                                                  "aggregates": [],
-                                                  "monotonic": false,
-                                                  "expected_group_size": null
+                                                  "keys": [
+                                                    []
+                                                  ]
                                                 }
                                               },
-                                              "keys": [
-                                                []
-                                              ]
-                                            }
-                                          },
-                                          {
-                                            "Get": {
-                                              "id": {
-                                                "Local": 0
-                                              },
-                                              "typ": {
-                                                "column_types": [
-                                                  {
-                                                    "scalar_type": "Int32",
-                                                    "nullable": true
+                                              {
+                                                "Get": {
+                                                  "id": {
+                                                    "Local": 1
+                                                  },
+                                                  "typ": {
+                                                    "column_types": [
+                                                      {
+                                                        "scalar_type": "Int32",
+                                                        "nullable": true
+                                                      }
+                                                    ],
+                                                    "keys": []
                                                   }
-                                                ],
-                                                "keys": []
-                                              }
-                                            }
-                                          }
-                                        ],
-                                        "equivalences": [],
-                                        "implementation": {
-                                          "Differential": [
-                                            [
-                                              1,
-                                              null
-                                            ],
-                                            [
-                                              [
-                                                0,
-                                                [],
-                                                {
-                                                  "unique_key": false,
-                                                  "key_length": 0,
-                                                  "arranged": true,
-                                                  "filters": {
-                                                    "literal_equality": false,
-                                                    "like": false,
-                                                    "is_null": false,
-                                                    "literal_inequality": 0,
-                                                    "any_filter": false
-                                                  },
-                                                  "input": 0
                                                 }
+                                              }
+                                            ],
+                                            "equivalences": [],
+                                            "implementation": {
+                                              "Differential": [
+                                                [
+                                                  1,
+                                                  []
+                                                ],
+                                                [
+                                                  [
+                                                    0,
+                                                    [],
+                                                    {
+                                                      "unique_key": false,
+                                                      "key_length": 0,
+                                                      "arranged": true,
+                                                      "filters": {
+                                                        "literal_equality": false,
+                                                        "like": false,
+                                                        "is_null": false,
+                                                        "literal_inequality": 0,
+                                                        "any_filter": false
+                                                      },
+                                                      "input": 0
+                                                    }
+                                                  ]
+                                                ]
                                               ]
-                                            ]
-                                          ]
-                                        }
-                                      }
-                                    },
-                                    "group_key": [
-                                      {
-                                        "Column": 0
-                                      }
-                                    ],
-                                    "aggregates": [
-                                      {
-                                        "func": "MaxInt32",
-                                        "expr": {
-                                          "CallBinary": {
-                                            "func": "MulInt32",
-                                            "expr1": {
-                                              "Column": 0
-                                            },
-                                            "expr2": {
-                                              "Column": 1
                                             }
                                           }
                                         },
-                                        "distinct": false
+                                        "group_key": [
+                                          {
+                                            "Column": 0
+                                          }
+                                        ],
+                                        "aggregates": [
+                                          {
+                                            "func": "MaxInt32",
+                                            "expr": {
+                                              "CallBinary": {
+                                                "func": "MulInt32",
+                                                "expr1": {
+                                                  "Column": 0
+                                                },
+                                                "expr2": {
+                                                  "Column": 1
+                                                }
+                                              }
+                                            },
+                                            "distinct": false
+                                          }
+                                        ],
+                                        "monotonic": false,
+                                        "expected_group_size": null
                                       }
-                                    ],
-                                    "monotonic": false,
-                                    "expected_group_size": null
+                                    },
+                                    "keys": [
+                                      [
+                                        {
+                                          "Column": 0
+                                        }
+                                      ]
+                                    ]
                                   }
-                                },
-                                "keys": [
+                                }
+                              ],
+                              "equivalences": [
+                                [
+                                  {
+                                    "Column": 0
+                                  },
+                                  {
+                                    "Column": 2
+                                  }
+                                ]
+                              ],
+                              "implementation": {
+                                "Differential": [
                                   [
-                                    {
-                                      "Column": 0
-                                    }
+                                    0,
+                                    [
+                                      {
+                                        "Column": 0
+                                      }
+                                    ]
+                                  ],
+                                  [
+                                    [
+                                      1,
+                                      [
+                                        {
+                                          "Column": 0
+                                        }
+                                      ],
+                                      {
+                                        "unique_key": true,
+                                        "key_length": 1,
+                                        "arranged": true,
+                                        "filters": {
+                                          "literal_equality": false,
+                                          "like": false,
+                                          "is_null": false,
+                                          "literal_inequality": 0,
+                                          "any_filter": true
+                                        },
+                                        "input": 1
+                                      }
+                                    ]
                                   ]
                                 ]
                               }
                             }
-                          ],
-                          "equivalences": [
-                            [
-                              {
-                                "Column": 0
-                              },
-                              {
-                                "Column": 3
+                          },
+                          "predicates": [
+                            {
+                              "CallBinary": {
+                                "func": "NotEq",
+                                "expr1": {
+                                  "Column": 0
+                                },
+                                "expr2": {
+                                  "Column": 3
+                                }
                               }
-                            ]
-                          ],
-                          "implementation": {
-                            "Differential": [
-                              [
-                                0,
-                                null
-                              ],
-                              [
-                                [
-                                  1,
-                                  [
-                                    {
-                                      "Column": 0
-                                    }
-                                  ],
-                                  {
-                                    "unique_key": true,
-                                    "key_length": 1,
-                                    "arranged": true,
-                                    "filters": {
-                                      "literal_equality": false,
-                                      "like": false,
-                                      "is_null": true,
-                                      "literal_inequality": 0,
-                                      "any_filter": false
-                                    },
-                                    "input": 1
-                                  }
-                                ]
-                              ]
-                            ]
-                          }
+                            }
+                          ]
                         }
                       },
-                      "predicates": [
-                        {
-                          "CallVariadic": {
-                            "func": "Or",
-                            "exprs": [
-                              {
-                                "CallBinary": {
-                                  "func": "NotEq",
-                                  "expr1": {
-                                    "Column": 0
-                                  },
-                                  "expr2": {
-                                    "Column": 4
+                      "outputs": [
+                        0,
+                        1,
+                        3
+                      ]
+                    }
+                  },
+                  "body": {
+                    "Project": {
+                      "input": {
+                        "Filter": {
+                          "input": {
+                            "Join": {
+                              "inputs": [
+                                {
+                                  "ArrangeBy": {
+                                    "input": {
+                                      "Get": {
+                                        "id": {
+                                          "Local": 2
+                                        },
+                                        "typ": {
+                                          "column_types": [
+                                            {
+                                              "scalar_type": "Int32",
+                                              "nullable": false
+                                            },
+                                            {
+                                              "scalar_type": "Int32",
+                                              "nullable": true
+                                            },
+                                            {
+                                              "scalar_type": "Int32",
+                                              "nullable": false
+                                            }
+                                          ],
+                                          "keys": []
+                                        }
+                                      }
+                                    },
+                                    "keys": [
+                                      [
+                                        {
+                                          "Column": 0
+                                        }
+                                      ]
+                                    ]
+                                  }
+                                },
+                                {
+                                  "ArrangeBy": {
+                                    "input": {
+                                      "Reduce": {
+                                        "input": {
+                                          "Join": {
+                                            "inputs": [
+                                              {
+                                                "ArrangeBy": {
+                                                  "input": {
+                                                    "Reduce": {
+                                                      "input": {
+                                                        "Project": {
+                                                          "input": {
+                                                            "Get": {
+                                                              "id": {
+                                                                "Local": 2
+                                                              },
+                                                              "typ": {
+                                                                "column_types": [
+                                                                  {
+                                                                    "scalar_type": "Int32",
+                                                                    "nullable": false
+                                                                  },
+                                                                  {
+                                                                    "scalar_type": "Int32",
+                                                                    "nullable": true
+                                                                  },
+                                                                  {
+                                                                    "scalar_type": "Int32",
+                                                                    "nullable": false
+                                                                  }
+                                                                ],
+                                                                "keys": []
+                                                              }
+                                                            }
+                                                          },
+                                                          "outputs": [
+                                                            0
+                                                          ]
+                                                        }
+                                                      },
+                                                      "group_key": [
+                                                        {
+                                                          "Column": 0
+                                                        }
+                                                      ],
+                                                      "aggregates": [],
+                                                      "monotonic": false,
+                                                      "expected_group_size": null
+                                                    }
+                                                  },
+                                                  "keys": [
+                                                    []
+                                                  ]
+                                                }
+                                              },
+                                              {
+                                                "Get": {
+                                                  "id": {
+                                                    "Local": 1
+                                                  },
+                                                  "typ": {
+                                                    "column_types": [
+                                                      {
+                                                        "scalar_type": "Int32",
+                                                        "nullable": true
+                                                      }
+                                                    ],
+                                                    "keys": []
+                                                  }
+                                                }
+                                              }
+                                            ],
+                                            "equivalences": [],
+                                            "implementation": {
+                                              "Differential": [
+                                                [
+                                                  1,
+                                                  []
+                                                ],
+                                                [
+                                                  [
+                                                    0,
+                                                    [],
+                                                    {
+                                                      "unique_key": false,
+                                                      "key_length": 0,
+                                                      "arranged": true,
+                                                      "filters": {
+                                                        "literal_equality": false,
+                                                        "like": false,
+                                                        "is_null": false,
+                                                        "literal_inequality": 0,
+                                                        "any_filter": false
+                                                      },
+                                                      "input": 0
+                                                    }
+                                                  ]
+                                                ]
+                                              ]
+                                            }
+                                          }
+                                        },
+                                        "group_key": [
+                                          {
+                                            "Column": 0
+                                          }
+                                        ],
+                                        "aggregates": [
+                                          {
+                                            "func": "MaxInt32",
+                                            "expr": {
+                                              "CallBinary": {
+                                                "func": "MulInt32",
+                                                "expr1": {
+                                                  "Column": 0
+                                                },
+                                                "expr2": {
+                                                  "Column": 1
+                                                }
+                                              }
+                                            },
+                                            "distinct": false
+                                          }
+                                        ],
+                                        "monotonic": false,
+                                        "expected_group_size": null
+                                      }
+                                    },
+                                    "keys": [
+                                      [
+                                        {
+                                          "Column": 0
+                                        }
+                                      ]
+                                    ]
                                   }
                                 }
-                              },
-                              {
-                                "CallVariadic": {
-                                  "func": "And",
-                                  "exprs": [
-                                    {
-                                      "CallUnary": {
-                                        "func": {
-                                          "Not": null
+                              ],
+                              "equivalences": [
+                                [
+                                  {
+                                    "Column": 0
+                                  },
+                                  {
+                                    "Column": 3
+                                  }
+                                ]
+                              ],
+                              "implementation": {
+                                "Differential": [
+                                  [
+                                    0,
+                                    [
+                                      {
+                                        "Column": 0
+                                      }
+                                    ]
+                                  ],
+                                  [
+                                    [
+                                      1,
+                                      [
+                                        {
+                                          "Column": 0
+                                        }
+                                      ],
+                                      {
+                                        "unique_key": true,
+                                        "key_length": 1,
+                                        "arranged": true,
+                                        "filters": {
+                                          "literal_equality": false,
+                                          "like": false,
+                                          "is_null": true,
+                                          "literal_inequality": 0,
+                                          "any_filter": false
                                         },
-                                        "expr": {
+                                        "input": 1
+                                      }
+                                    ]
+                                  ]
+                                ]
+                              }
+                            }
+                          },
+                          "predicates": [
+                            {
+                              "CallVariadic": {
+                                "func": "Or",
+                                "exprs": [
+                                  {
+                                    "CallBinary": {
+                                      "func": "NotEq",
+                                      "expr1": {
+                                        "Column": 0
+                                      },
+                                      "expr2": {
+                                        "Column": 4
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "CallVariadic": {
+                                      "func": "And",
+                                      "exprs": [
+                                        {
+                                          "CallUnary": {
+                                            "func": {
+                                              "Not": null
+                                            },
+                                            "expr": {
+                                              "CallUnary": {
+                                                "func": {
+                                                  "IsNull": null
+                                                },
+                                                "expr": {
+                                                  "Column": 4
+                                                }
+                                              }
+                                            }
+                                          }
+                                        },
+                                        {
                                           "CallUnary": {
                                             "func": {
                                               "IsNull": null
                                             },
                                             "expr": {
-                                              "Column": 4
+                                              "Column": 0
                                             }
                                           }
                                         }
-                                      }
-                                    },
-                                    {
-                                      "CallUnary": {
-                                        "func": {
-                                          "IsNull": null
-                                        },
-                                        "expr": {
-                                          "Column": 0
-                                        }
-                                      }
+                                      ]
                                     }
-                                  ]
-                                }
+                                  }
+                                ]
                               }
-                            ]
-                          }
+                            }
+                          ]
                         }
+                      },
+                      "outputs": [
+                        0,
+                        1,
+                        2,
+                        4
                       ]
                     }
-                  },
-                  "outputs": [
-                    0,
-                    1,
-                    2,
-                    4
-                  ]
+                  }
                 }
               }
             }
@@ -3745,31 +4022,38 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
         "Let": {
           "id": 0,
           "value": {
-            "Project": {
+            "ArrangeBy": {
               "input": {
-                "Get": {
-                  "id": {
-                    "Global": {
-                      "User": 1
+                "Project": {
+                  "input": {
+                    "Get": {
+                      "id": {
+                        "Global": {
+                          "User": 1
+                        }
+                      },
+                      "typ": {
+                        "column_types": [
+                          {
+                            "scalar_type": "Int32",
+                            "nullable": true
+                          },
+                          {
+                            "scalar_type": "Int32",
+                            "nullable": true
+                          }
+                        ],
+                        "keys": []
+                      }
                     }
                   },
-                  "typ": {
-                    "column_types": [
-                      {
-                        "scalar_type": "Int32",
-                        "nullable": true
-                      },
-                      {
-                        "scalar_type": "Int32",
-                        "nullable": true
-                      }
-                    ],
-                    "keys": []
-                  }
+                  "outputs": [
+                    0
+                  ]
                 }
               },
-              "outputs": [
-                0
+              "keys": [
+                []
               ]
             }
           },
@@ -3777,26 +4061,19 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
             "Join": {
               "inputs": [
                 {
-                  "ArrangeBy": {
-                    "input": {
-                      "Get": {
-                        "id": {
-                          "Local": 0
-                        },
-                        "typ": {
-                          "column_types": [
-                            {
-                              "scalar_type": "Int32",
-                              "nullable": true
-                            }
-                          ],
-                          "keys": []
-                        }
-                      }
+                  "Get": {
+                    "id": {
+                      "Local": 0
                     },
-                    "keys": [
-                      []
-                    ]
+                    "typ": {
+                      "column_types": [
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": true
+                        }
+                      ],
+                      "keys": []
+                    }
                   }
                 },
                 {
@@ -3821,7 +4098,7 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                 "Differential": [
                   [
                     1,
-                    null
+                    []
                   ],
                   [
                     [
@@ -3996,29 +4273,40 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                           }
                         },
                         {
-                          "Project": {
+                          "ArrangeBy": {
                             "input": {
-                              "Get": {
-                                "id": {
-                                  "Local": 0
-                                },
-                                "typ": {
-                                  "column_types": [
-                                    {
-                                      "scalar_type": "Int32",
-                                      "nullable": true
+                              "Project": {
+                                "input": {
+                                  "Get": {
+                                    "id": {
+                                      "Local": 0
                                     },
-                                    {
-                                      "scalar_type": "Int32",
-                                      "nullable": false
+                                    "typ": {
+                                      "column_types": [
+                                        {
+                                          "scalar_type": "Int32",
+                                          "nullable": true
+                                        },
+                                        {
+                                          "scalar_type": "Int32",
+                                          "nullable": false
+                                        }
+                                      ],
+                                      "keys": []
                                     }
-                                  ],
-                                  "keys": []
-                                }
+                                  }
+                                },
+                                "outputs": [
+                                  1
+                                ]
                               }
                             },
-                            "outputs": [
-                              1
+                            "keys": [
+                              [
+                                {
+                                  "Column": 0
+                                }
+                              ]
                             ]
                           }
                         }
@@ -4037,10 +4325,94 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                         ]
                       ],
                       "implementation": {
-                        "Differential": [
+                        "DeltaQuery": [
                           [
-                            2,
-                            null
+                            [
+                              1,
+                              [
+                                {
+                                  "Column": 1
+                                }
+                              ],
+                              {
+                                "unique_key": false,
+                                "key_length": 1,
+                                "arranged": true,
+                                "filters": {
+                                  "literal_equality": false,
+                                  "like": false,
+                                  "is_null": false,
+                                  "literal_inequality": 0,
+                                  "any_filter": false
+                                },
+                                "input": 1
+                              }
+                            ],
+                            [
+                              2,
+                              [
+                                {
+                                  "Column": 0
+                                }
+                              ],
+                              {
+                                "unique_key": false,
+                                "key_length": 1,
+                                "arranged": true,
+                                "filters": {
+                                  "literal_equality": false,
+                                  "like": false,
+                                  "is_null": false,
+                                  "literal_inequality": 0,
+                                  "any_filter": false
+                                },
+                                "input": 2
+                              }
+                            ]
+                          ],
+                          [
+                            [
+                              0,
+                              [
+                                {
+                                  "Column": 1
+                                }
+                              ],
+                              {
+                                "unique_key": false,
+                                "key_length": 1,
+                                "arranged": true,
+                                "filters": {
+                                  "literal_equality": false,
+                                  "like": false,
+                                  "is_null": false,
+                                  "literal_inequality": 0,
+                                  "any_filter": false
+                                },
+                                "input": 0
+                              }
+                            ],
+                            [
+                              2,
+                              [
+                                {
+                                  "Column": 0
+                                }
+                              ],
+                              {
+                                "unique_key": false,
+                                "key_length": 1,
+                                "arranged": true,
+                                "filters": {
+                                  "literal_equality": false,
+                                  "like": false,
+                                  "is_null": false,
+                                  "literal_inequality": 0,
+                                  "any_filter": false
+                                },
+                                "input": 2
+                              }
+                            ]
                           ],
                           [
                             [

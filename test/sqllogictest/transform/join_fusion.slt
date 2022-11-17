@@ -42,8 +42,9 @@ Explained Query:
         ArrangeBy keys=[[#1]] // { arity: 2 }
           Filter (#1) IS NOT NULL // { arity: 2 }
             Get materialize.public.t2 // { arity: 2 }
-        Filter (#0 > 0) // { arity: 2 }
-          Get materialize.public.t3 // { arity: 2 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Filter (#0 > 0) // { arity: 2 }
+            Get materialize.public.t3 // { arity: 2 }
 
 Source materialize.public.t1
   filter=((#0 > 0) AND (#1) IS NOT NULL)
@@ -121,7 +122,8 @@ Explained Query:
         ArrangeBy keys=[[#0, date_to_timestamp(#3)]] // { arity: 4 }
           Filter (#0) IS NOT NULL // { arity: 4 }
             Get materialize.public.orders // { arity: 4 }
-        Get materialize.public.customer // { arity: 3 }
+        ArrangeBy keys=[[]] // { arity: 3 }
+          Get materialize.public.customer // { arity: 3 }
 
 Used Indexes:
   - materialize.public.pk_customer_custkey
@@ -163,15 +165,16 @@ Explained Query:
                     Get materialize.public.lineitem // { arity: 8 }
               ArrangeBy keys=[[#0]] // { arity: 4 }
                 Get materialize.public.orders // { arity: 4 }
-              Union // { arity: 1 }
-                Project (#0) // { arity: 1 }
-                  Get l0 // { arity: 9 }
-                Map (error("more than one record produced in subquery")) // { arity: 1 }
-                  Project () // { arity: 0 }
-                    Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
-                      Reduce aggregates=[count(true)] // { arity: 1 }
-                        Project () // { arity: 0 }
-                          Get l0 // { arity: 9 }
+              ArrangeBy keys=[[#0]] // { arity: 1 }
+                Union // { arity: 1 }
+                  Project (#0) // { arity: 1 }
+                    Get l0 // { arity: 9 }
+                  Map (error("more than one record produced in subquery")) // { arity: 1 }
+                    Project () // { arity: 0 }
+                      Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
+                        Reduce aggregates=[count(true)] // { arity: 1 }
+                          Project () // { arity: 0 }
+                            Get l0 // { arity: 9 }
     cte l0 =
       ReadExistingIndex materialize.public.lineitem lookup_value=(38)
 
@@ -202,8 +205,9 @@ Explained Query:
         Project (#2, #3) // { arity: 2 }
           Filter (#2 = (#2 % 5)) // { arity: 5 }
             ReadExistingIndex materialize.public.orders lookup_value=(134)
-      Project () // { arity: 0 }
-        ReadExistingIndex materialize.public.customer lookup_value=(134)
+      ArrangeBy keys=[[]] // { arity: 0 }
+        Project () // { arity: 0 }
+          ReadExistingIndex materialize.public.customer lookup_value=(134)
 
 Used Indexes:
   - materialize.public.pk_customer_custkey
@@ -228,8 +232,9 @@ Explained Query:
       ArrangeBy keys=[[#4, #5]] // { arity: 8 }
         Filter (date_to_timestamp(#7) = (#5 + 6 days)) // { arity: 8 }
           Get materialize.public.lineitem // { arity: 8 }
-      Project (#0..=#3) // { arity: 4 }
-        ReadExistingIndex materialize.public.orders lookup_value=(229)
+      ArrangeBy keys=[[#2, #3]] // { arity: 4 }
+        Project (#0..=#3) // { arity: 4 }
+          ReadExistingIndex materialize.public.orders lookup_value=(229)
       ArrangeBy keys=[[]] // { arity: 3 }
         Project (#0..=#2) // { arity: 3 }
           ReadExistingIndex materialize.public.customer lookup_value=(229)

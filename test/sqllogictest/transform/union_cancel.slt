@@ -203,7 +203,8 @@ Explained Query:
           Join on=(#0 = #2) type=differential // { arity: 3 }
             implementation
               %0:t3 » %1[#0]UKA
-            Get materialize.public.t3 // { arity: 2 }
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Get materialize.public.t3 // { arity: 2 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Distinct group_by=[#0] // { arity: 1 }
                 Project (#0) // { arity: 1 }

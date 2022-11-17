@@ -436,19 +436,20 @@ Explained Query:
                     Project (#0) // { types: "(integer?)" }
                       Get l1 // { types: "(integer?, boolean?)" }
                   Get l0 // { types: "(integer?)" }
-          Union // { types: "(integer?, integer, boolean)" }
-            Project (#0, #2, #3) // { types: "(integer?, integer, boolean)" }
-              Filter (#1 = 1) // { types: "(integer?, integer, integer, boolean)" }
-                Map (1, true) // { types: "(integer?, integer, integer, boolean)" }
+          ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer, boolean)" }
+            Union // { types: "(integer?, integer, boolean)" }
+              Project (#0, #2, #3) // { types: "(integer?, integer, boolean)" }
+                Filter (#1 = 1) // { types: "(integer?, integer, integer, boolean)" }
+                  Map (1, true) // { types: "(integer?, integer, integer, boolean)" }
+                    Get l2 // { types: "(integer?, integer)" }
+              Map (false) // { types: "(integer?, integer, boolean)" }
+                Union // { types: "(integer?, integer)" }
+                  Map (1) // { types: "(integer?, integer)" }
+                    Negate // { types: "(integer?)" }
+                      Project (#0) // { types: "(integer?)" }
+                        Filter (#1 = 1) // { types: "(integer?, integer)" }
+                          Get l2 // { types: "(integer?, integer)" }
                   Get l2 // { types: "(integer?, integer)" }
-            Map (false) // { types: "(integer?, integer, boolean)" }
-              Union // { types: "(integer?, integer)" }
-                Map (1) // { types: "(integer?, integer)" }
-                  Negate // { types: "(integer?)" }
-                    Project (#0) // { types: "(integer?)" }
-                      Filter (#1 = 1) // { types: "(integer?, integer)" }
-                        Get l2 // { types: "(integer?, integer)" }
-                Get l2 // { types: "(integer?, integer)" }
           ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer, boolean?)" }
             Union // { types: "(integer?, integer, boolean?)" }
               Get l3 // { types: "(integer?, integer, boolean?)" }
@@ -507,16 +508,17 @@ Explained Query:
                     Project (#0) // { types: "(integer?)" }
                       Get l1 // { types: "(integer?, boolean?)" }
                   Get l0 // { types: "(integer?)" }
-          Union // { types: "(integer?, integer, boolean)" }
-            Filter (1 > #1) // { types: "(integer?, integer, boolean)" }
-              Map (true) // { types: "(integer?, integer, boolean)" }
-                Get l2 // { types: "(integer?, integer)" }
-            Map (false) // { types: "(integer?, integer, boolean)" }
-              Union // { types: "(integer?, integer)" }
-                Negate // { types: "(integer?, integer)" }
-                  Filter (1 > #1) // { types: "(integer?, integer)" }
-                    Get l2 // { types: "(integer?, integer)" }
-                Get l2 // { types: "(integer?, integer)" }
+          ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer, boolean)" }
+            Union // { types: "(integer?, integer, boolean)" }
+              Filter (1 > #1) // { types: "(integer?, integer, boolean)" }
+                Map (true) // { types: "(integer?, integer, boolean)" }
+                  Get l2 // { types: "(integer?, integer)" }
+              Map (false) // { types: "(integer?, integer, boolean)" }
+                Union // { types: "(integer?, integer)" }
+                  Negate // { types: "(integer?, integer)" }
+                    Filter (1 > #1) // { types: "(integer?, integer)" }
+                      Get l2 // { types: "(integer?, integer)" }
+                  Get l2 // { types: "(integer?, integer)" }
           ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer, boolean?)" }
             Union // { types: "(integer?, integer, boolean?)" }
               Get l4 // { types: "(integer?, integer, boolean?)" }
@@ -590,16 +592,17 @@ Explained Query:
                     Project (#0) // { types: "(integer?)" }
                       Get l1 // { types: "(integer?, boolean?)" }
                   Get l0 // { types: "(integer?)" }
-          Union // { types: "(integer?, integer, boolean)" }
-            Filter (1 >= #1) // { types: "(integer?, integer, boolean)" }
-              Map (true) // { types: "(integer?, integer, boolean)" }
-                Get l2 // { types: "(integer?, integer)" }
-            Map (false) // { types: "(integer?, integer, boolean)" }
-              Union // { types: "(integer?, integer)" }
-                Negate // { types: "(integer?, integer)" }
-                  Filter (1 >= #1) // { types: "(integer?, integer)" }
-                    Get l2 // { types: "(integer?, integer)" }
-                Get l2 // { types: "(integer?, integer)" }
+          ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer, boolean)" }
+            Union // { types: "(integer?, integer, boolean)" }
+              Filter (1 >= #1) // { types: "(integer?, integer, boolean)" }
+                Map (true) // { types: "(integer?, integer, boolean)" }
+                  Get l2 // { types: "(integer?, integer)" }
+              Map (false) // { types: "(integer?, integer, boolean)" }
+                Union // { types: "(integer?, integer)" }
+                  Negate // { types: "(integer?, integer)" }
+                    Filter (1 >= #1) // { types: "(integer?, integer)" }
+                      Get l2 // { types: "(integer?, integer)" }
+                  Get l2 // { types: "(integer?, integer)" }
           ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer, boolean?)" }
             Union // { types: "(integer?, integer, boolean?)" }
               Get l4 // { types: "(integer?, integer, boolean?)" }
@@ -678,8 +681,9 @@ EXPLAIN WITH(types, no_fast_path) SELECT 1 = SOME(VALUES(col_not_null), (NULL::i
 Explained Query:
   Return // { types: "(boolean?, boolean?, boolean?)" }
     Project (#2, #4, #2) // { types: "(boolean?, boolean?, boolean?)" }
-      Join on=(eq(#0, #1, #3)) type=differential // { types: "(integer, integer, boolean?, integer, boolean?)" }
-        Get l0 // { types: "(integer)" }
+      Join on=(eq(#0, #1, #3)) type=delta // { types: "(integer, integer, boolean?, integer, boolean?)" }
+        ArrangeBy keys=[[#0]] // { types: "(integer)" }
+          Get l0 // { types: "(integer)" }
         ArrangeBy keys=[[#0]] // { types: "(integer, boolean?)" }
           Union // { types: "(integer, boolean?)" }
             Get l4 // { types: "(integer, boolean?)" }
@@ -751,16 +755,17 @@ Explained Query:
     CrossJoin type=differential // { types: "(integer?)" }
       ArrangeBy keys=[[]] // { types: "()" }
         Get l0 // { types: "()" }
-      Union // { types: "(integer?)" }
-        Get l1 // { types: "(integer)" }
-        Map (null) // { types: "(integer?)" }
-          Union // { types: "()" }
-            Negate // { types: "()" }
-              Distinct // { types: "()" }
-                Project () // { types: "()" }
-                  Get l1 // { types: "(integer)" }
-            Constant // { types: "()" }
-              - ()
+      ArrangeBy keys=[[]] // { types: "(integer?)" }
+        Union // { types: "(integer?)" }
+          Get l1 // { types: "(integer)" }
+          Map (null) // { types: "(integer?)" }
+            Union // { types: "()" }
+              Negate // { types: "()" }
+                Distinct // { types: "()" }
+                  Project () // { types: "()" }
+                    Get l1 // { types: "(integer)" }
+              Constant // { types: "()" }
+                - ()
   With
     cte l1 =
       Union // { types: "(integer)" }
@@ -795,15 +800,16 @@ Explained Query:
         ArrangeBy keys=[[]] // { types: "()" }
           Project () // { types: "()" }
             Get materialize.public.int_table // { types: "(integer?, integer)" }
-        Union // { types: "(boolean)" }
-          Map (true) // { types: "(boolean)" }
-            Get l0 // { types: "()" }
-          Map (false) // { types: "(boolean)" }
-            Union // { types: "()" }
-              Negate // { types: "()" }
-                Get l0 // { types: "()" }
-              Constant // { types: "()" }
-                - ()
+        ArrangeBy keys=[[]] // { types: "(boolean)" }
+          Union // { types: "(boolean)" }
+            Map (true) // { types: "(boolean)" }
+              Get l0 // { types: "()" }
+            Map (false) // { types: "(boolean)" }
+              Union // { types: "()" }
+                Negate // { types: "()" }
+                  Get l0 // { types: "()" }
+                Constant // { types: "()" }
+                  - ()
   With
     cte l0 =
       Distinct // { types: "()" }
@@ -826,15 +832,16 @@ Explained Query:
       CrossJoin type=differential // { types: "(boolean)" }
         ArrangeBy keys=[[]] // { types: "()" }
           Get l0 // { types: "()" }
-        Union // { types: "(boolean)" }
-          Map (true) // { types: "(boolean)" }
-            Get l1 // { types: "()" }
-          Map (false) // { types: "(boolean)" }
-            Union // { types: "()" }
-              Negate // { types: "()" }
-                Get l1 // { types: "()" }
-              Constant // { types: "()" }
-                - ()
+        ArrangeBy keys=[[]] // { types: "(boolean)" }
+          Union // { types: "(boolean)" }
+            Map (true) // { types: "(boolean)" }
+              Get l1 // { types: "()" }
+            Map (false) // { types: "(boolean)" }
+              Union // { types: "()" }
+                Negate // { types: "()" }
+                  Get l1 // { types: "()" }
+                Constant // { types: "()" }
+                  - ()
   With
     cte l1 =
       Distinct // { types: "()" }
@@ -858,15 +865,16 @@ Explained Query:
       Join on=(eq(#0, #3, #6) AND #1 = #4) type=differential // { types: "(integer?, integer, boolean, integer?, integer, boolean, integer?, boolean?)" }
         ArrangeBy keys=[[]] // { types: "(integer?, integer)" }
           Get materialize.public.int_table // { types: "(integer?, integer)" }
-        Union // { types: "(boolean)" }
-          Map (true) // { types: "(boolean)" }
-            Get l0 // { types: "()" }
-          Map (false) // { types: "(boolean)" }
-            Union // { types: "()" }
-              Negate // { types: "()" }
-                Get l0 // { types: "()" }
-              Constant // { types: "()" }
-                - ()
+        ArrangeBy keys=[[]] // { types: "(boolean)" }
+          Union // { types: "(boolean)" }
+            Map (true) // { types: "(boolean)" }
+              Get l0 // { types: "()" }
+            Map (false) // { types: "(boolean)" }
+              Union // { types: "()" }
+                Negate // { types: "()" }
+                  Get l0 // { types: "()" }
+                Constant // { types: "()" }
+                  - ()
         ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer, boolean)" }
           Union // { types: "(integer?, integer, boolean)" }
             Project (#0, #2, #3) // { types: "(integer?, integer, boolean)" }
@@ -905,8 +913,9 @@ Explained Query:
         CrossJoin type=differential // { types: "(integer?, integer)" }
           ArrangeBy keys=[[]] // { types: "(integer?)" }
             Get l2 // { types: "(integer?)" }
-          Project (#1) // { types: "(integer)" }
-            Get materialize.public.int_table // { types: "(integer?, integer)" }
+          ArrangeBy keys=[[]] // { types: "(integer)" }
+            Project (#1) // { types: "(integer)" }
+              Get materialize.public.int_table // { types: "(integer?, integer)" }
     cte l2 =
       Distinct group_by=[#0] // { types: "(integer?)" }
         Project (#0) // { types: "(integer?)" }
@@ -956,13 +965,13 @@ EXPLAIN WITH(types, no_fast_path) SELECT a1.col_not_null, a2.col_not_null FROM i
 Explained Query:
   Return // { types: "(integer, integer)" }
     CrossJoin type=differential // { types: "(integer, integer)" }
-      ArrangeBy keys=[[]] // { types: "(integer)" }
-        Get l0 // { types: "(integer)" }
+      Get l0 // { types: "(integer)" }
       Get l0 // { types: "(integer)" }
   With
     cte l0 =
-      Project (#1) // { types: "(integer)" }
-        Get materialize.public.int_table // { types: "(integer?, integer)" }
+      ArrangeBy keys=[[]] // { types: "(integer)" }
+        Project (#1) // { types: "(integer)" }
+          Get materialize.public.int_table // { types: "(integer?, integer)" }
 
 Source materialize.public.int_table
   project=(#2, #1)
@@ -993,14 +1002,16 @@ Explained Query:
                       Get l0 // { types: "(integer?, integer, integer)" }
                 Distinct group_by=[#0, #1] // { types: "(integer?, integer)" }
                   Get materialize.public.int_table // { types: "(integer?, integer)" }
-            Get materialize.public.int_table // { types: "(integer?, integer)" }
+            ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer)" }
+              Get materialize.public.int_table // { types: "(integer?, integer)" }
   With
     cte l0 =
       CrossJoin type=differential // { types: "(integer?, integer, integer)" }
         ArrangeBy keys=[[]] // { types: "(integer?, integer)" }
           Get materialize.public.int_table // { types: "(integer?, integer)" }
-        Project (#1) // { types: "(integer)" }
-          Get materialize.public.int_table // { types: "(integer?, integer)" }
+        ArrangeBy keys=[[]] // { types: "(integer)" }
+          Project (#1) // { types: "(integer)" }
+            Get materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -1011,7 +1022,7 @@ Explained Query:
   Return // { types: "(integer?, integer?)" }
     Union // { types: "(integer?, integer?)" }
       Project (#1, #3) // { types: "(integer, integer)" }
-        Get l0 // { types: "(integer?, integer, integer?, integer)" }
+        Get l1 // { types: "(integer?, integer, integer?, integer)" }
       Project (#1, #4) // { types: "(integer, integer?)" }
         Map (null) // { types: "(integer?, integer, integer?, integer, integer?)" }
           Join on=(#0 = #2 AND #1 = #3) type=differential // { types: "(integer?, integer, integer?, integer)" }
@@ -1020,9 +1031,9 @@ Explained Query:
                 Negate // { types: "(integer?, integer)" }
                   Distinct group_by=[#0, #1] // { types: "(integer?, integer)" }
                     Project (#0, #1) // { types: "(integer?, integer)" }
-                      Get l0 // { types: "(integer?, integer, integer?, integer)" }
-                Get l1 // { types: "(integer?, integer)" }
-            Get materialize.public.int_table // { types: "(integer?, integer)" }
+                      Get l1 // { types: "(integer?, integer, integer?, integer)" }
+                Get l2 // { types: "(integer?, integer)" }
+            Get l3 // { types: "(integer?, integer)" }
       Project (#4, #1) // { types: "(integer?, integer)" }
         Map (null) // { types: "(integer?, integer, integer?, integer, integer?)" }
           Join on=(#0 = #2 AND #1 = #3) type=differential // { types: "(integer?, integer, integer?, integer)" }
@@ -1031,17 +1042,22 @@ Explained Query:
                 Negate // { types: "(integer?, integer)" }
                   Distinct group_by=[#0, #1] // { types: "(integer?, integer)" }
                     Project (#2, #3) // { types: "(integer?, integer)" }
-                      Get l0 // { types: "(integer?, integer, integer?, integer)" }
-                Get l1 // { types: "(integer?, integer)" }
-            Get materialize.public.int_table // { types: "(integer?, integer)" }
+                      Get l1 // { types: "(integer?, integer, integer?, integer)" }
+                Get l2 // { types: "(integer?, integer)" }
+            Get l3 // { types: "(integer?, integer)" }
   With
-    cte l1 =
+    cte l3 =
+      ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer)" }
+        Get materialize.public.int_table // { types: "(integer?, integer)" }
+    cte l2 =
       Distinct group_by=[#0, #1] // { types: "(integer?, integer)" }
         Get materialize.public.int_table // { types: "(integer?, integer)" }
-    cte l0 =
+    cte l1 =
       CrossJoin type=differential // { types: "(integer?, integer, integer?, integer)" }
-        ArrangeBy keys=[[]] // { types: "(integer?, integer)" }
-          Get materialize.public.int_table // { types: "(integer?, integer)" }
+        Get l0 // { types: "(integer?, integer)" }
+        Get l0 // { types: "(integer?, integer)" }
+    cte l0 =
+      ArrangeBy keys=[[]] // { types: "(integer?, integer)" }
         Get materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF

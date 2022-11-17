@@ -126,7 +126,7 @@ opt format=types
 (join [(get x) (get x)] [[#2 #5]])
 ----
 ----
-%0 =
+%0 = Let l0 =
 | Get x (u0)
 | | types = (Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
@@ -135,13 +135,8 @@ opt format=types
 | | keys = ((#0), (#1))
 
 %1 =
-| Get x (u0)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ((#0), (#1))
-
-%2 =
-| Join %0 %1 (= #2 #5)
-| | implementation = Differential %1 %0.(#2)
+| Join %0 %0 (= #2 #5)
+| | implementation = Differential %0.(#2) %0.(#2)
 | | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
 | | keys = ()
 | Project (#0..=#4, #2)

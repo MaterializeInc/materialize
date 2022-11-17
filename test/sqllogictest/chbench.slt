@@ -312,9 +312,10 @@ Explained Query:
           ArrangeBy keys=[[#0]] // { arity: 6 }
             Project (#0..=#4, #6) // { arity: 6 }
               Get materialize.public.supplier // { arity: 7 }
-          Project (#0, #2, #17) // { arity: 3 }
-            Filter (#2) IS NOT NULL // { arity: 18 }
-              Get materialize.public.stock // { arity: 18 }
+          ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+            Project (#0, #2, #17) // { arity: 3 }
+              Filter (#2) IS NOT NULL // { arity: 18 }
+                Get materialize.public.stock // { arity: 18 }
           ArrangeBy keys=[[#0]] // { arity: 3 }
             Project (#0..=#2) // { arity: 3 }
               Get materialize.public.nation // { arity: 4 }
@@ -395,8 +396,9 @@ Explained Query:
               Project (#0..=#4) // { arity: 5 }
                 Filter (#3) IS NOT NULL AND (date_to_timestamp(#4) > 2007-01-02 00:00:00) // { arity: 8 }
                   Get materialize.public.order // { arity: 8 }
-            Project (#0..=#2, #8) // { arity: 4 }
-              Get materialize.public.orderline // { arity: 10 }
+            ArrangeBy keys=[[#0, #1, #2]] // { arity: 4 }
+              Project (#0..=#2, #8) // { arity: 4 }
+                Get materialize.public.orderline // { arity: 10 }
 
 Used Indexes:
   - materialize.public.fk_customer_district
@@ -430,22 +432,23 @@ Explained Query:
         Project (#4) // { arity: 1 }
           Join on=(#0 = #5 AND #1 = #6 AND #2 = #7 AND #3 = #8) type=differential // { arity: 9 }
             implementation
-              %0:l0 » %1[#0, #1, #2, #3]UKKKKAiif
-            Project (#0..=#2, #4, #6) // { arity: 5 }
-              Get l0 // { arity: 9 }
+              %1 » %0:l0[#0, #1, #2, #3]UKKKKAiif
+            ArrangeBy keys=[[#0, #1, #2, #3]] // { arity: 5 }
+              Project (#0..=#2, #4, #6) // { arity: 5 }
+                Get l0 // { arity: 9 }
             ArrangeBy keys=[[#0, #1, #2, #3]] // { arity: 4 }
               Distinct group_by=[#0, #1, #2, #3] // { arity: 4 }
                 Project (#0..=#3) // { arity: 4 }
-                  Filter (#10 >= #3) // { arity: 14 }
-                    Join on=(#0 = #4 AND #1 = #5 AND #2 = #6) type=delta // { arity: 14 }
+                  Filter (#7 >= #3) // { arity: 8 }
+                    Join on=(#0 = #4 AND #1 = #5 AND #2 = #6) type=differential // { arity: 8 }
                       implementation
-                        %0:l0 » %1:orderline[#2, #1, #0]KKKA
                         %1:orderline » %0:l0[#0, #1, #2]UKKKAiif
                       ArrangeBy keys=[[#0, #1, #2]] // { arity: 4 }
                         Project (#0..=#2, #4) // { arity: 4 }
                           Get l0 // { arity: 9 }
-                      ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
-                        Get materialize.public.orderline // { arity: 10 }
+                      ArrangeBy keys=[[#0, #1, #2]] // { arity: 4 }
+                        Project (#0..=#2, #6) // { arity: 4 }
+                          Get materialize.public.orderline // { arity: 10 }
     With
       cte l0 =
         Filter (#8 < 2012-01-02 00:00:00) AND (#8 >= 2007-01-02 00:00:00) // { arity: 9 }
@@ -497,9 +500,10 @@ Explained Query:
             Project (#0..=#3) // { arity: 4 }
               Filter (#3) IS NOT NULL AND (date_to_timestamp(#4) >= 2007-01-02 00:00:00) // { arity: 8 }
                 Get materialize.public.order // { arity: 8 }
-          Project (#0..=#2, #4, #8) // { arity: 5 }
-            Filter (#4) IS NOT NULL // { arity: 10 }
-              Get materialize.public.orderline // { arity: 10 }
+          ArrangeBy keys=[[#0, #1, #2]] // { arity: 5 }
+            Project (#0..=#2, #4, #8) // { arity: 5 }
+              Filter (#4) IS NOT NULL // { arity: 10 }
+                Get materialize.public.orderline // { arity: 10 }
           ArrangeBy keys=[[#0, #1]] // { arity: 3 }
             Project (#0, #1, #17) // { arity: 3 }
               Get materialize.public.stock // { arity: 18 }
@@ -606,10 +610,11 @@ Explained Query:
               ArrangeBy keys=[[#0, #1]] // { arity: 3 }
                 Project (#0, #1, #17) // { arity: 3 }
                   Get materialize.public.stock // { arity: 18 }
-              Project (#0..=#2, #4, #5, #8) // { arity: 6 }
-                Filter (#10 <= 2012-01-02 00:00:00) AND (#10 >= 2007-01-02 00:00:00) AND (#4) IS NOT NULL AND (#5) IS NOT NULL // { arity: 11 }
-                  Map (date_to_timestamp(#6)) // { arity: 11 }
-                    Get materialize.public.orderline // { arity: 10 }
+              ArrangeBy keys=[[#0, #1, #2]] // { arity: 6 }
+                Project (#0..=#2, #4, #5, #8) // { arity: 6 }
+                  Filter (#10 <= 2012-01-02 00:00:00) AND (#10 >= 2007-01-02 00:00:00) AND (#4) IS NOT NULL AND (#5) IS NOT NULL // { arity: 11 }
+                    Map (date_to_timestamp(#6)) // { arity: 11 }
+                      Get materialize.public.orderline // { arity: 10 }
               ArrangeBy keys=[[#0, #1, #2]] // { arity: 5 }
                 Project (#0..=#4) // { arity: 5 }
                   Filter (#3) IS NOT NULL // { arity: 8 }
@@ -685,9 +690,10 @@ Explained Query:
                 Project (#0, #1, #17) // { arity: 3 }
                   Filter (#0 < 1000) // { arity: 18 }
                     Get materialize.public.stock // { arity: 18 }
-              Project (#0..=#2, #4, #5, #8) // { arity: 6 }
-                Filter (#4 < 1000) AND (#5) IS NOT NULL // { arity: 10 }
-                  Get materialize.public.orderline // { arity: 10 }
+              ArrangeBy keys=[[#0, #1, #2]] // { arity: 6 }
+                Project (#0..=#2, #4, #5, #8) // { arity: 6 }
+                  Filter (#4 < 1000) AND (#5) IS NOT NULL // { arity: 10 }
+                    Get materialize.public.orderline // { arity: 10 }
               ArrangeBy keys=[[#0, #1, #2]] // { arity: 5 }
                 Project (#0..=#4) // { arity: 5 }
                   Filter (#8 <= 2012-01-02 00:00:00) AND (#8 >= 2007-01-02 00:00:00) AND (#3) IS NOT NULL // { arity: 9 }
@@ -763,9 +769,10 @@ Explained Query:
           ArrangeBy keys=[[#0]] // { arity: 2 }
             Project (#0, #3) // { arity: 2 }
               Get materialize.public.supplier // { arity: 7 }
-          Project (#0..=#2, #4, #5, #8) // { arity: 6 }
-            Filter (#4) IS NOT NULL AND (#5) IS NOT NULL // { arity: 10 }
-              Get materialize.public.orderline // { arity: 10 }
+          ArrangeBy keys=[[#0, #1, #2]] // { arity: 6 }
+            Project (#0..=#2, #4, #5, #8) // { arity: 6 }
+              Filter (#4) IS NOT NULL AND (#5) IS NOT NULL // { arity: 10 }
+                Get materialize.public.orderline // { arity: 10 }
           ArrangeBy keys=[[#0, #1, #2]] // { arity: 4 }
             Project (#0..=#2, #4) // { arity: 4 }
               Get materialize.public.order // { arity: 8 }
@@ -822,8 +829,9 @@ Explained Query:
                 Project (#0..=#4) // { arity: 5 }
                   Filter (#3) IS NOT NULL AND (date_to_timestamp(#4) >= 2007-01-02 00:00:00) // { arity: 8 }
                     Get materialize.public.order // { arity: 8 }
-              Project (#0..=#2, #6, #8) // { arity: 5 }
-                Get materialize.public.orderline // { arity: 10 }
+              ArrangeBy keys=[[#0, #1, #2]] // { arity: 5 }
+                Project (#0..=#2, #6, #8) // { arity: 5 }
+                  Get materialize.public.orderline // { arity: 10 }
               ArrangeBy keys=[[#0]] // { arity: 2 }
                 Project (#0, #1) // { arity: 2 }
                   Get materialize.public.nation // { arity: 4 }
@@ -862,8 +870,9 @@ Explained Query:
           CrossJoin type=differential // { arity: 3 }
             implementation
               %0 » %1[×]UA
-            Reduce group_by=[#0] aggregates=[sum(#1)] // { arity: 2 }
-              Get l0 // { arity: 2 }
+            ArrangeBy keys=[[]] // { arity: 2 }
+              Reduce group_by=[#0] aggregates=[sum(#1)] // { arity: 2 }
+                Get l0 // { arity: 2 }
             ArrangeBy keys=[[]] // { arity: 1 }
               Reduce aggregates=[sum(#0)] // { arity: 1 }
                 Project (#1) // { arity: 1 }
@@ -912,16 +921,17 @@ Explained Query:
   Finish order_by=[#0 asc nulls_last] output=[#0..=#2]
     Reduce group_by=[#1] aggregates=[sum(case when ((#0 = 1) OR (#0 = 2)) then 1 else 0 end), sum(case when ((#0 != 1) AND (#0 != 2)) then 1 else 0 end)] // { arity: 3 }
       Project (#4, #5) // { arity: 2 }
-        Filter (date_to_timestamp(#12) < 2020-01-01 00:00:00) AND (#3 <= #12) // { arity: 16 }
-          Join on=(#0 = #6 AND #1 = #7 AND #2 = #8) type=delta // { arity: 16 }
+        Filter (#3 <= #9) // { arity: 10 }
+          Join on=(#0 = #6 AND #1 = #7 AND #2 = #8) type=differential // { arity: 10 }
             implementation
-              %0:order » %1:orderline[#2, #1, #0]KKKAif
-              %1:orderline » %0:order[#0, #1, #2]UKKKA
+              %1:orderline » %0:order[#0, #1, #2]UKKKAif
             ArrangeBy keys=[[#0, #1, #2]] // { arity: 6 }
               Project (#0..=#2, #4..=#6) // { arity: 6 }
                 Get materialize.public.order // { arity: 8 }
-            ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
-              Get materialize.public.orderline // { arity: 10 }
+            ArrangeBy keys=[[#0, #1, #2]] // { arity: 4 }
+              Project (#0..=#2, #6) // { arity: 4 }
+                Filter (date_to_timestamp(#6) < 2020-01-01 00:00:00) // { arity: 10 }
+                  Get materialize.public.orderline // { arity: 10 }
 
 Used Indexes:
   - materialize.public.fk_order_customer
@@ -966,15 +976,15 @@ Explained Query:
     With
       cte l0 =
         Project (#0..=#22) // { arity: 23 }
-          Filter (#27 > 8) // { arity: 30 }
-            Join on=(#0 = #25 AND #1 = #23 AND #2 = #24) type=delta // { arity: 30 }
-              implementation
-                %0:customer » %1:order[#2, #1, #3]KKKAif
-                %1:order » %0:customer[#0, #1, #2]UKKKA
-              ArrangeBy keys=[[#0, #1, #2]] // { arity: 22 }
-                Get materialize.public.customer // { arity: 22 }
-              ArrangeBy keys=[[#2, #1, #3]] // { arity: 8 }
-                Get materialize.public.order // { arity: 8 }
+          Join on=(#0 = #25 AND #1 = #23 AND #2 = #24) type=differential // { arity: 26 }
+            implementation
+              %1:order » %0:customer[#0, #1, #2]UKKKAif
+            ArrangeBy keys=[[#0, #1, #2]] // { arity: 22 }
+              Get materialize.public.customer // { arity: 22 }
+            ArrangeBy keys=[[#3, #1, #2]] // { arity: 4 }
+              Project (#0..=#3) // { arity: 4 }
+                Filter (#5 > 8) AND (#3) IS NOT NULL // { arity: 8 }
+                  Get materialize.public.order // { arity: 8 }
 
 Used Indexes:
   - materialize.public.fk_customer_district
@@ -1011,10 +1021,9 @@ Explained Query:
         Project (#8, #11) // { arity: 2 }
           Filter (#12 < 2020-01-02 00:00:00) AND (#12 >= 2007-01-02 00:00:00) // { arity: 13 }
             Map (date_to_timestamp(#6)) // { arity: 13 }
-              Join on=(#4 = #10) type=delta // { arity: 12 }
+              Join on=(#4 = #10) type=differential // { arity: 12 }
                 implementation
-                  %0:orderline » %1:item[#0]UKA
-                  %1:item » %0:orderline[#4]KAiif
+                  %0:orderline » %1:item[#0]UKAiif
                 ArrangeBy keys=[[#4]] // { arity: 10 }
                   Get materialize.public.orderline // { arity: 10 }
                 ArrangeBy keys=[[#0]] // { arity: 2 }
@@ -1068,9 +1077,10 @@ Explained Query:
       Project (#0..=#3, #5) // { arity: 5 }
         Join on=(#0 = #4 AND #5 = #6) type=differential // { arity: 7 }
           implementation
-            %0:supplier » %1:l0[#0]UKA » %2[#0]UKA
-          Project (#0..=#2, #4) // { arity: 4 }
-            Get materialize.public.supplier // { arity: 7 }
+            %1:l0 » %0:supplier[#0]UKA » %2[#0]UKA
+          ArrangeBy keys=[[#0]] // { arity: 4 }
+            Project (#0..=#2, #4) // { arity: 4 }
+              Get materialize.public.supplier // { arity: 7 }
           ArrangeBy keys=[[#0]] // { arity: 2 }
             Get l0 // { arity: 2 }
           ArrangeBy keys=[[#0]] // { arity: 1 }
@@ -1081,20 +1091,20 @@ Explained Query:
     With
       cte l0 =
         Reduce group_by=[#1] aggregates=[sum(#0)] // { arity: 2 }
-          Project (#8, #12) // { arity: 2 }
-            Filter (date_to_timestamp(#6) >= 2007-01-02 00:00:00) // { arity: 13 }
-              Join on=(#4 = #10 AND #5 = #11) type=delta // { arity: 13 }
-                implementation
-                  %0:orderline » %1:stock[#0, #1]UKKA
-                  %1:stock » %0:orderline[#5, #4]KKAif
-                ArrangeBy keys=[[#5, #4]] // { arity: 10 }
-                  Get materialize.public.orderline // { arity: 10 }
-                ArrangeBy keys=[[#0, #1]] // { arity: 3 }
-                  Project (#0, #1, #17) // { arity: 3 }
-                    Get materialize.public.stock // { arity: 18 }
+          Project (#2, #5) // { arity: 2 }
+            Join on=(#0 = #3 AND #1 = #4) type=differential // { arity: 6 }
+              implementation
+                %0:orderline » %1:stock[#0, #1]UKKAif
+              ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+                Project (#4, #5, #8) // { arity: 3 }
+                  Filter (#4) IS NOT NULL AND (#5) IS NOT NULL AND (date_to_timestamp(#6) >= 2007-01-02 00:00:00) // { arity: 10 }
+                    Get materialize.public.orderline // { arity: 10 }
+              ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+                Project (#0, #1, #17) // { arity: 3 }
+                  Get materialize.public.stock // { arity: 18 }
 
 Used Indexes:
-  - materialize.public.fk_orderline_stock
+  - materialize.public.fk_orderline_order
   - materialize.public.fk_stock_warehouse
   - materialize.public.fk_supplier_nationkey
 
@@ -1127,18 +1137,20 @@ Explained Query:
               %1 » %0:l0[#0]KA
             ArrangeBy keys=[[#0]] // { arity: 4 }
               Get l0 // { arity: 4 }
-            Union // { arity: 1 }
-              Negate // { arity: 1 }
-                Project (#0) // { arity: 1 }
-                  Join on=(#0 = #1) type=differential // { arity: 2 }
-                    implementation
-                      %1:supplier » %0:l1[#0]UKAlf
-                    ArrangeBy keys=[[#0]] // { arity: 1 }
-                      Get l1 // { arity: 1 }
-                    Project (#0) // { arity: 1 }
-                      Filter "%bad%" ~~(padchar(#6)) // { arity: 7 }
-                        Get materialize.public.supplier // { arity: 7 }
-              Get l1 // { arity: 1 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Union // { arity: 1 }
+                Negate // { arity: 1 }
+                  Project (#0) // { arity: 1 }
+                    Join on=(#0 = #1) type=differential // { arity: 2 }
+                      implementation
+                        %1:supplier » %0:l1[#0]UKAlf
+                      ArrangeBy keys=[[#0]] // { arity: 1 }
+                        Get l1 // { arity: 1 }
+                      ArrangeBy keys=[[#0]] // { arity: 1 }
+                        Project (#0) // { arity: 1 }
+                          Filter "%bad%" ~~(padchar(#6)) // { arity: 7 }
+                            Get materialize.public.supplier // { arity: 7 }
+                Get l1 // { arity: 1 }
     With
       cte l1 =
         Distinct group_by=[#0] // { arity: 1 }
@@ -1146,10 +1158,9 @@ Explained Query:
             Get l0 // { arity: 4 }
       cte l0 =
         Project (#17, #19..=#21) // { arity: 4 }
-          Join on=(#0 = #18) type=delta // { arity: 22 }
+          Join on=(#0 = #18) type=differential // { arity: 22 }
             implementation
               %0:stock » %1:item[#0]UKAf
-              %1:item » %0:stock[#0]KA
             ArrangeBy keys=[[#0]] // { arity: 18 }
               Get materialize.public.stock // { arity: 18 }
             ArrangeBy keys=[[#0]] // { arity: 4 }
@@ -1202,17 +1213,15 @@ Explained Query:
       Reduce aggregates=[sum(#0)] // { arity: 1 }
         Project (#8) // { arity: 1 }
           Filter (integer_to_double(#7) < (bigint_to_double(#11) / bigint_to_double(case when (#12 = 0) then null else #12 end))) // { arity: 13 }
-            Join on=(#4 = #10) type=delta // { arity: 13 }
+            Join on=(#4 = #10) type=differential // { arity: 13 }
               implementation
                 %0:l0 » %1[#0]UKA
-                %1 » %0:l0[#4]KA
               Get l0 // { arity: 10 }
               ArrangeBy keys=[[#0]] // { arity: 3 }
                 Reduce group_by=[#0] aggregates=[sum(#1), count(#1)] // { arity: 3 }
                   Project (#0, #8) // { arity: 2 }
-                    Join on=(#0 = #5) type=delta // { arity: 11 }
+                    Join on=(#0 = #5) type=differential // { arity: 11 }
                       implementation
-                        %0:item » %1:l0[#4]KA
                         %1:l0 » %0:item[#0]UKAlf
                       ArrangeBy keys=[[#0]] // { arity: 1 }
                         Project (#0) // { arity: 1 }
@@ -1264,8 +1273,9 @@ Explained Query:
                 Project (#0..=#4, #6) // { arity: 6 }
                   Filter (#3) IS NOT NULL // { arity: 8 }
                     Get materialize.public.order // { arity: 8 }
-              Project (#0..=#2, #8) // { arity: 4 }
-                Get materialize.public.orderline // { arity: 10 }
+              ArrangeBy keys=[[#0, #1, #2]] // { arity: 4 }
+                Project (#0..=#2, #8) // { arity: 4 }
+                  Get materialize.public.orderline // { arity: 10 }
 
 Used Indexes:
   - materialize.public.fk_customer_district
@@ -1319,10 +1329,9 @@ Explained Query:
         Project (#8) // { arity: 1 }
           Filter (#7 <= 10) AND (#7 >= 1) AND (#12 OR #13 OR #14 OR #15 OR #16) AND (("%a" ~~(#17) AND (#12 OR #13 OR #14)) OR ("%b" ~~(#17) AND (#12 OR #13 OR #15)) OR ("%c" ~~(#17) AND (#12 OR #14 OR #16))) // { arity: 18 }
             Map ((#2 = 1), (#2 = 2), (#2 = 3), (#2 = 4), (#2 = 5), padchar(#11)) // { arity: 18 }
-              Join on=(#4 = #10) type=delta // { arity: 12 }
+              Join on=(#4 = #10) type=differential // { arity: 12 }
                 implementation
-                  %0:orderline » %1:item[#0]UKAliif
-                  %1:item » %0:orderline[#4]KAeiif
+                  %0:orderline » %1:item[#0]UKAeliiiif
                 ArrangeBy keys=[[#4]] // { arity: 10 }
                   Get materialize.public.orderline // { arity: 10 }
                 ArrangeBy keys=[[#0]] // { arity: 2 }
@@ -1366,8 +1375,9 @@ Explained Query:
       Project (#1, #2) // { arity: 2 }
         Join on=(#0 = #3) type=differential // { arity: 4 }
           implementation
-            %0:l0 » %1[#0]UKA
-          Get l0 // { arity: 3 }
+            %1 » %0:l0[#0]UKA
+          ArrangeBy keys=[[#0]] // { arity: 3 }
+            Get l0 // { arity: 3 }
           ArrangeBy keys=[[#0]] // { arity: 1 }
             Distinct group_by=[#0] // { arity: 1 }
               Project (#0) // { arity: 1 }
@@ -1392,10 +1402,9 @@ Explained Query:
     With
       cte l0 =
         Project (#0..=#2) // { arity: 3 }
-          Join on=(#3 = #7) type=delta // { arity: 8 }
+          Join on=(#3 = #7) type=differential // { arity: 8 }
             implementation
               %0:supplier » %1:nation[#0]UKAef
-              %1:nation » %0:supplier[#3]KA
             ArrangeBy keys=[[#3]] // { arity: 7 }
               Get materialize.public.supplier // { arity: 7 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
@@ -1453,18 +1462,20 @@ Explained Query:
               %1 » %0:l0[#1, #2, #3, #4]KKKKA
             ArrangeBy keys=[[#1, #2, #3, #4]] // { arity: 5 }
               Get l0 // { arity: 5 }
-            Union // { arity: 4 }
-              Negate // { arity: 4 }
-                Distinct group_by=[#0, #1, #2, #3] // { arity: 4 }
-                  Project (#0..=#3) // { arity: 4 }
-                    Filter (#10 > #3) // { arity: 14 }
-                      Join on=(#0 = #4 AND #1 = #5 AND #2 = #6) type=differential // { arity: 14 }
-                        implementation
-                          %0:l1 » %1:orderline[#2, #1, #0]KKKA
-                        Get l1 // { arity: 4 }
-                        ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
-                          Get materialize.public.orderline // { arity: 10 }
-              Get l1 // { arity: 4 }
+            ArrangeBy keys=[[#0, #1, #2, #3]] // { arity: 4 }
+              Union // { arity: 4 }
+                Negate // { arity: 4 }
+                  Distinct group_by=[#0, #1, #2, #3] // { arity: 4 }
+                    Project (#0..=#3) // { arity: 4 }
+                      Filter (#10 > #3) // { arity: 14 }
+                        Join on=(#0 = #4 AND #1 = #5 AND #2 = #6) type=differential // { arity: 14 }
+                          implementation
+                            %1:orderline » %0:l1[#2, #1, #0]KKKA
+                          ArrangeBy keys=[[#2, #1, #0]] // { arity: 4 }
+                            Get l1 // { arity: 4 }
+                          ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
+                            Get materialize.public.orderline // { arity: 10 }
+                Get l1 // { arity: 4 }
     With
       cte l1 =
         Distinct group_by=[#0, #1, #2, #3] // { arity: 4 }
@@ -1479,9 +1490,10 @@ Explained Query:
               ArrangeBy keys=[[#0]] // { arity: 3 }
                 Project (#0, #1, #3) // { arity: 3 }
                   Get materialize.public.supplier // { arity: 7 }
-              Project (#0..=#2, #4, #6) // { arity: 5 }
-                Filter (#4) IS NOT NULL // { arity: 10 }
-                  Get materialize.public.orderline // { arity: 10 }
+              ArrangeBy keys=[[#0, #1, #2]] // { arity: 5 }
+                Project (#0..=#2, #4, #6) // { arity: 5 }
+                  Filter (#4) IS NOT NULL // { arity: 10 }
+                    Get materialize.public.orderline // { arity: 10 }
               ArrangeBy keys=[[#0, #1, #2]] // { arity: 4 }
                 Project (#0..=#2, #4) // { arity: 4 }
                   Get materialize.public.order // { arity: 8 }
@@ -1535,19 +1547,21 @@ Explained Query:
               %1 » %0:l1[#0, #1, #2]UKKKA
             ArrangeBy keys=[[#0, #1, #2]] // { arity: 5 }
               Get l1 // { arity: 5 }
-            Union // { arity: 3 }
-              Negate // { arity: 3 }
-                Project (#0..=#2) // { arity: 3 }
-                  Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) type=differential // { arity: 6 }
-                    implementation
-                      %0:l2 » %1[#0, #1, #2]UKKKA
-                    Get l2 // { arity: 3 }
-                    ArrangeBy keys=[[#0, #1, #2]] // { arity: 3 }
-                      Distinct group_by=[#2, #0, #1] // { arity: 3 }
-                        Project (#1..=#3) // { arity: 3 }
-                          Filter (#3) IS NOT NULL // { arity: 8 }
-                            Get materialize.public.order // { arity: 8 }
-              Get l2 // { arity: 3 }
+            ArrangeBy keys=[[#0, #1, #2]] // { arity: 3 }
+              Union // { arity: 3 }
+                Negate // { arity: 3 }
+                  Project (#0..=#2) // { arity: 3 }
+                    Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) type=differential // { arity: 6 }
+                      implementation
+                        %1 » %0:l2[#0, #1, #2]UKKKA
+                      ArrangeBy keys=[[#0, #1, #2]] // { arity: 3 }
+                        Get l2 // { arity: 3 }
+                      ArrangeBy keys=[[#0, #1, #2]] // { arity: 3 }
+                        Distinct group_by=[#2, #0, #1] // { arity: 3 }
+                          Project (#1..=#3) // { arity: 3 }
+                            Filter (#3) IS NOT NULL // { arity: 8 }
+                              Get materialize.public.order // { arity: 8 }
+                Get l2 // { arity: 3 }
     With
       cte l2 =
         Project (#0..=#2) // { arity: 3 }
@@ -1558,9 +1572,10 @@ Explained Query:
             CrossJoin type=differential // { arity: 7 }
               implementation
                 %0:l0 » %1[×]UAef
-              Project (#0..=#2, #9, #16) // { arity: 5 }
-                Filter ((#22 = "1") OR (#22 = "2") OR (#22 = "3") OR (#22 = "4") OR (#22 = "5") OR (#22 = "6") OR (#22 = "7")) // { arity: 23 }
-                  Get l0 // { arity: 23 }
+              ArrangeBy keys=[[]] // { arity: 5 }
+                Project (#0..=#2, #9, #16) // { arity: 5 }
+                  Filter ((#22 = "1") OR (#22 = "2") OR (#22 = "3") OR (#22 = "4") OR (#22 = "5") OR (#22 = "6") OR (#22 = "7")) // { arity: 23 }
+                    Get l0 // { arity: 23 }
               ArrangeBy keys=[[]] // { arity: 2 }
                 Reduce aggregates=[sum(#0), count(true)] // { arity: 2 }
                   Project (#16) // { arity: 1 }

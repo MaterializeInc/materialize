@@ -319,10 +319,11 @@ opt
 
 %1 =
 | Get y (u2)
+| ArrangeBy (#0)
 
 %2 =
 | Join %0 %1 (= #0 #1)
-| | implementation = Differential %1 %0.(#0)
+| | implementation = Differential %1.(#0) %0.(#0)
 | Project (#2)
 | Distinct group=(#0)
 | ArrangeBy (#0)
@@ -334,19 +335,18 @@ opt
 %4 =
 | Get w (u0)
 | Project (#0)
+| ArrangeBy (#0)
 
 %5 =
 | Join %3 %4 (= #0 #2)
-| | implementation = Differential %4 %3.(#0)
+| | implementation = Differential %4.(#0) %3.(#0)
 | Project (#1)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
 %6 =
 | Join %2 %5 (= #0 #1)
-| | implementation = DeltaQuery
-| |   delta %2 %5.(#0)
-| |   delta %5 %2.(#0)
+| | implementation = Differential %5.(#0) %2.(#0)
 | Project (#0, #0)
 ----
 ----

@@ -41,14 +41,15 @@ statement ok
 SELECT * FROM mz_internal.mz_compute_exports
 
 # Verify that we see no prior peeks when targeting another replica.
+# FRANK: Commented out as an incorrect test; all replicas see all peeks.
 
 statement ok
 SET cluster_replica = replica_b
 
-query I
-SELECT sum(count) FROM mz_internal.mz_raw_peek_durations
-----
-NULL
+# query I
+# SELECT sum(count) FROM mz_internal.mz_raw_peek_durations
+# ----
+# NULL
 
 # Verify that targeting an unknown replica fails.
 
