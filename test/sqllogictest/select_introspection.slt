@@ -40,17 +40,6 @@ a b
 statement ok
 SELECT * FROM mz_internal.mz_compute_exports
 
-# Verify that we see no prior peeks when targeting another replica.
-# FRANK: Commented out as an incorrect test; all replicas see all peeks.
-
-statement ok
-SET cluster_replica = replica_b
-
-# query I
-# SELECT sum(count) FROM mz_internal.mz_raw_peek_durations
-# ----
-# NULL
-
 # Verify that targeting an unknown replica fails.
 
 statement ok
@@ -59,7 +48,7 @@ SET cluster_replica = unknown
 query error cluster replica 'test.unknown' does not exist
 SELECT * FROM test
 
-# Verify that untargeted introspection queries are disallowd.
+# Verify that untargeted introspection queries are disallowed.
 
 statement ok
 RESET cluster_replica
@@ -70,7 +59,7 @@ SELECT * FROM mz_internal.mz_compute_exports
 # Verify that the logic does not apply to persisted logs
 
 statement ok
-SELECT * FROM mz_internal.mz_active_peeks_1
+SELECT * FROM mz_internal.mz_compute_exports_1
 
 # Verify that untargeted introspection queries on unreplicated clusters are
 # allowed.
@@ -98,14 +87,6 @@ CREATE CLUSTER test
 statement ok
 SET cluster_replica = replica_a
 
-# A query that has introspection views in its time domain but does not
-# specifically reference those introspection views should work even on a replica
-# with introspection disabled. This query would crash in v0.27.0-alpha.24.
-query I
-SELECT 1 FROM mz_sources LIMIT 1
-----
-1
-
 query error cannot read log sources of replica with disabled introspection
 SELECT * FROM mz_internal.mz_compute_exports
 
@@ -117,6 +98,14 @@ SET cluster_replica = replica_b
 
 statement ok
 SELECT * FROM mz_internal.mz_compute_exports
+
+# A query that has introspection views in its time domain but does not
+# specifically reference those introspection views should work even on a replica
+# with introspection disabled. This query would crash in v0.27.0-alpha.24.
+query I
+SELECT 1 FROM mz_sources LIMIT 1
+----
+1
 
 # Clean up.
 
