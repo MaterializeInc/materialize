@@ -25,7 +25,7 @@ pprof = { git = "https://github.com/MaterializeInc/pprof-rs.git" }
 serde = { version = "1.0.147", features = ["derive"] }
 tempfile = "3.2.0"
 tracing = "0.1.37"
-tokio = { version = "1.20.2", features = ["time"] }
+tokio = { version = "1.22.0", features = ["time"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 tikv-jemalloc-ctl = { version = "0.4.1", features = ["use_std"], optional = true }

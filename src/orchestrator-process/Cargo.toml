@@ -21,7 +21,7 @@ mz-secrets = { path = "../secrets" }
 serde_json = "1.0.86"
 scopeguard = "1.1.0"
 sysinfo = "0.26.4"
-tokio = { version = "1.20.2", features = [ "fs", "process", "time" ] }
+tokio = { version = "1.22.0", features = [ "fs", "process", "time" ] }
 tracing = "0.1.37"
 
 [dev-dependencies]

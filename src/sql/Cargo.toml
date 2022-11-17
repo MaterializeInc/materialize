@@ -42,7 +42,7 @@ reqwest = "0.11.12"
 serde = { version = "1.0.147", features = ["derive"] }
 serde_json = "1.0.86"
 thiserror = "1.0.37"
-tokio = { version = "1.20.2", features = ["fs"] }
+tokio = { version = "1.22.0", features = ["fs"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde"] }
 tracing = "0.1.37"
 typemap_rev = "0.1.5"

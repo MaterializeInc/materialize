@@ -24,6 +24,7 @@ use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{Buf, BufMut, BytesMut};
 use futures::{sink, SinkExt, TryStreamExt};
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, Interest, Ready};
+use tokio::time::{self, Duration};
 use tokio_util::codec::{Decoder, Encoder, Framed};
 use tracing::trace;
 
@@ -157,6 +158,36 @@ where
     /// performance.
     pub fn set_encode_state(&mut self, encode_state: Vec<(mz_pgrepr::Type, mz_pgrepr::Format)>) {
         self.inner.get_mut().codec_mut().encode_state = encode_state;
+    }
+
+    /// Waits for the connection to be closed.
+    ///
+    /// Returns a "connection closed" error when the connection is closed. If
+    /// another error occurs before the connection is closed, that error is
+    /// returned instead.
+    ///
+    /// Use this method when you have an unbounded stream of data to forward to
+    /// the connection and the protocol does not require the client to
+    /// periodically acknowledge receipt. If you don't call this method to
+    /// periodically check if the connection has closed, you may not notice that
+    /// the client has gone away for an unboundedly long amount of time; usually
+    /// not until the stream of data produces its next message and you attempt
+    /// to write the data to the connection.
+    pub async fn wait_closed(&self) -> io::Error
+    where
+        A: AsyncReady + Send + Sync,
+    {
+        loop {
+            time::sleep(Duration::from_secs(1)).await;
+
+            match self.ready(Interest::READABLE | Interest::WRITABLE).await {
+                Ok(ready) if ready.is_read_closed() || ready.is_write_closed() => {
+                    return io::Error::new(io::ErrorKind::Other, "connection closed");
+                }
+                Ok(_) => (),
+                Err(err) => return err,
+            }
+        }
     }
 }
 

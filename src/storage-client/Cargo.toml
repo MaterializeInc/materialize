@@ -47,7 +47,7 @@ rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features
 regex = { version = "1.6.0" }
 serde = { version = "1.0.147", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.20.2", features = ["fs", "rt", "sync", "test-util"] }
+tokio = { version = "1.22.0", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde"] }
 tokio-stream = "0.1.11"
 tonic = "0.8.2"
@@ -62,7 +62,7 @@ tonic-build = "0.8.2"
 
 [dev-dependencies]
 itertools = "0.10.5"
-tokio = { version = "1.20.2", features = ["test-util"] }
+tokio = { version = "1.22.0", features = ["test-util"] }
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux

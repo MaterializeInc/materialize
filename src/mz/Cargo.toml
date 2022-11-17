@@ -10,8 +10,8 @@ publish = false
 [dependencies]
 serde = { version = "1.0.147", features = ["derive"] }
 clap = { version = "3.2.20", features = [ "derive" ] }
-tokio = { version = "1.20.2", features = ["full"] }
-open = "3.0.3"
+tokio = { version = "1.22.0", features = ["full"] }
+open = { git = "https://github.com/Byron/open-rs.git" }
 axum = "0.5.16"
 rpassword = "7.0"
 reqwest = { version = "0.11", features = ["blocking", "json"] }
