@@ -418,6 +418,8 @@ impl ErrorResponse {
             AdapterNotice::SchemaAlreadyExists { .. } => SqlState::DUPLICATE_SCHEMA,
             AdapterNotice::TableAlreadyExists { .. } => SqlState::DUPLICATE_TABLE,
             AdapterNotice::ObjectAlreadyExists { .. } => SqlState::DUPLICATE_OBJECT,
+            AdapterNotice::DatabaseDoesNotExist { .. } => SqlState::WARNING,
+            AdapterNotice::ClusterDoesNotExist { .. } => SqlState::WARNING,
             AdapterNotice::ExistingTransactionInProgress => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterNotice::ExplicitTransactionControlInImplicitTransaction => {
                 SqlState::NO_ACTIVE_SQL_TRANSACTION
@@ -561,6 +563,8 @@ impl Severity {
             AdapterNotice::SchemaAlreadyExists { .. } => Severity::Notice,
             AdapterNotice::TableAlreadyExists { .. } => Severity::Notice,
             AdapterNotice::ObjectAlreadyExists { .. } => Severity::Notice,
+            AdapterNotice::DatabaseDoesNotExist { .. } => Severity::Notice,
+            AdapterNotice::ClusterDoesNotExist { .. } => Severity::Notice,
             AdapterNotice::ExistingTransactionInProgress => Severity::Warning,
             AdapterNotice::ExplicitTransactionControlInImplicitTransaction => Severity::Warning,
             AdapterNotice::UserRequested { severity } => match severity {
