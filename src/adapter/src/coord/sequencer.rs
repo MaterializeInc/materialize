@@ -606,28 +606,17 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         let connection_oid = self.catalog.allocate_oid()?;
         let connection_gid = self.catalog.allocate_user_id().await?;
-        let mut connection = plan.connection.connection.clone();
+        let mut connection = plan.connection.connection;
 
         match connection {
+            // TODO(jkosh44) if catalog_transact fails after this or we crash, then we will leak
+            //  the secret.
             mz_storage_client::types::connections::Connection::Ssh(ref mut ssh) => {
                 let key_set = SshKeyPairSet::new()?;
                 self.secrets_controller
                     .ensure(connection_gid, &key_set.to_bytes())
                     .await?;
                 ssh.public_keys = Some(key_set.public_keys());
-            }
-            mz_storage_client::types::connections::Connection::AwsPrivatelink(ref privatelink) => {
-                self.cloud_resource_controller
-                    .as_ref()
-                    .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))?
-                    .ensure_vpc_endpoint(
-                        connection_gid,
-                        VpcEndpointConfig {
-                            aws_service_name: privatelink.service_name.to_owned(),
-                            availability_zone_ids: privatelink.availability_zones.to_owned(),
-                        },
-                    )
-                    .await?;
             }
             _ => {}
         }
@@ -638,13 +627,31 @@ impl<S: Append + 'static> Coordinator<S> {
             name: plan.name.clone(),
             item: CatalogItem::Connection(Connection {
                 create_sql: plan.connection.create_sql,
-                connection,
+                connection: connection.clone(),
                 depends_on,
             }),
         }];
 
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
-            Ok(_) => Ok(ExecuteResponse::CreatedConnection),
+            Ok(_) => {
+                match connection {
+                    mz_storage_client::types::connections::Connection::AwsPrivatelink(
+                        ref privatelink,
+                    ) => {
+                        let spec = VpcEndpointConfig {
+                            aws_service_name: privatelink.service_name.to_owned(),
+                            availability_zone_ids: privatelink.availability_zones.to_owned(),
+                        };
+                        self.cloud_resource_controller
+                            .as_ref()
+                            .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))?
+                            .ensure_vpc_endpoint(connection_gid, spec)
+                            .await?;
+                    }
+                    _ => {}
+                }
+                Ok(ExecuteResponse::CreatedConnection)
+            }
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
                 ..

@@ -39,6 +39,12 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
     ):
         mz.environmentd.sql(create_connection_statement)
 
+    next_gid = mz.environmentd.sql_query(
+        "SELECT MAX(SUBSTR(id, 2, LENGTH(id) - 1)::int) + 1 FROM mz_objects WHERE id LIKE 'u%'"
+    )[0][0]
+
+    not_exists(resource=f"vpcendpoint/connection-u{next_gid}")
+
     mz.environmentd.sql(
         "ALTER SYSTEM SET max_aws_privatelink_connections = 5",
         port="internal",
