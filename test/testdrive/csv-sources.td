@@ -53,25 +53,25 @@ a b c
 ----------------
 Rochester NY 14618
 
-# We test the two errors below on a 1-row source in order
+# We test the two errors below on an empty source
 # to avoid the non-determinism in #16048
 
-$ s3-create-bucket bucket=test-one-record
+$ s3-create-bucket bucket=test-no-records
 
-$ s3-put-object bucket=test-one-record key=static-one-record.csv
+$ s3-put-object bucket=test-no-records key=static-no-records.csv
 city,state,zip
 Rochester,NY,14618
 
 > CREATE SOURCE mismatched_column_names
   FROM S3 CONNECTION s3_conn
-  DISCOVER OBJECTS MATCHING 'static-one-record.csv' USING BUCKET SCAN 'testdrive-test-one-record-${testdrive.seed}'
+  DISCOVER OBJECTS MATCHING 'static-no-records.csv' USING BUCKET SCAN 'testdrive-test-no-records-${testdrive.seed}'
   FORMAT CSV WITH HEADER (cities, country, zip)
 ! SELECT * FROM mismatched_column_names
 contains:first mismatched column at index 1 expected=cities actual="city"
 
 > CREATE SOURCE mismatched_column_names_count
   FROM S3 CONNECTION s3_conn
-  DISCOVER OBJECTS MATCHING 'static-one-record.csv' USING BUCKET SCAN 'testdrive-test-one-record-${testdrive.seed}'
+  DISCOVER OBJECTS MATCHING 'static-no-records.csv' USING BUCKET SCAN 'testdrive-test-no-records-${testdrive.seed}'
   FORMAT CSV WITH HEADER (cities, state)
 ! SELECT * FROM mismatched_column_names_count
 contains:expected 2 columns, got 3
