@@ -213,7 +213,10 @@ impl StackProfile {
         // All the unwraps in this function are justified by the fact that
         // String's fmt::Write impl is infallible.
         use std::fmt::Write;
-        let mut builder = "mz_fg_version: 1\n".to_owned();
+        let mut builder = r#"!!! COMMENT !!!: Open with bin/fgviz /path/to/mzfg
+mz_fg_version: 1
+"#
+        .to_owned();
         for (k, v) in header_extra {
             assert!(!(k.contains(':') || k.contains('\n') || v.contains('\n')));
             writeln!(&mut builder, "{k}: {v}").unwrap();
