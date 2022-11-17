@@ -338,8 +338,6 @@ impl<T: Codec> TryFrom<&VersionedData> for (SeqNo, T) {
 pub trait Consensus: std::fmt::Debug {
     /// Returns a recent version of `data`, and the corresponding sequence number, if
     /// one exists at this location.
-    ///
-    /// TODO: This is no longer used. Remove it?
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError>;
 
     /// Update the [VersionedData] stored at this location to `new`, iff the

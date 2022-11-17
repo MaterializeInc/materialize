@@ -17,6 +17,7 @@ use std::time::SystemTime;
 use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use mz_ore::cast::CastFrom;
 use mz_persist::location::{Atomicity, Blob, Consensus, Indeterminate, SeqNo, VersionedData};
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
@@ -26,7 +27,7 @@ use tracing::{debug, debug_span, trace, warn, Instrument};
 use crate::error::CodecMismatch;
 use crate::internal::machine::{retry_determinate, retry_external};
 use crate::internal::metrics::ShardMetrics;
-use crate::internal::paths::{PartialRollupKey, RollupId};
+use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey, PartialRollupKey, RollupId};
 use crate::internal::state::State;
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::{Metrics, PersistConfig, ShardId};
@@ -119,7 +120,7 @@ impl StateVersions {
         let shard_id = shard_metrics.shard_id;
 
         // The common case is that the shard is initialized, so try that first
-        let live_diffs = self.fetch_live_diffs(&shard_id).await;
+        let live_diffs = self.fetch_recent_live_diffs::<T>(&shard_id).await;
         if !live_diffs.is_empty() {
             return self.fetch_current_state(&shard_id, live_diffs).await;
         }
@@ -294,7 +295,7 @@ impl StateVersions {
                         .first()
                         .expect("initialized shard should have at least one diff")
                         .seqno;
-                    all_live_diffs = self.fetch_live_diffs(shard_id).await;
+                    all_live_diffs = self.fetch_recent_live_diffs::<T>(shard_id).await;
 
                     // We should only hit the race condition that leads to a
                     // refetch if the set of live diffs changed out from under
@@ -338,7 +339,7 @@ impl StateVersions {
         let path = state.shard_id.to_string();
         let diffs_to_current =
             retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
-                self.consensus.scan(&path, state.seqno.next()).await
+                self.consensus.scan_all(&path, state.seqno.next()).await
             })
             .instrument(debug_span!("fetch_state::scan"))
             .await;
@@ -350,7 +351,7 @@ impl StateVersions {
             state.apply_encoded_diffs(&self.cfg, &self.metrics, &diffs_to_current);
             Ok(())
         } else {
-            let all_live_diffs = self.fetch_live_diffs(&state.shard_id).await;
+            let all_live_diffs = self.fetch_all_live_diffs(&state.shard_id).await;
             *state = self
                 .fetch_current_state(&state.shard_id, all_live_diffs)
                 .await?;
@@ -361,7 +362,7 @@ impl StateVersions {
     /// Returns an iterator over all live states for the requested shard.
     ///
     /// Panics if called on an uninitialized shard.
-    pub async fn fetch_live_states<K, V, T, D>(
+    pub async fn fetch_all_live_states<K, V, T, D>(
         &self,
         shard_id: &ShardId,
     ) -> Result<StateVersionsIter<K, V, T, D>, Box<CodecMismatch>>
@@ -376,7 +377,7 @@ impl StateVersions {
             .retries
             .fetch_live_states
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
-        let mut all_live_diffs = self.fetch_live_diffs(shard_id).await;
+        let mut all_live_diffs = self.fetch_all_live_diffs(shard_id).await;
         loop {
             let earliest_live_diff = match all_live_diffs.first() {
                 Some(x) => x,
@@ -396,7 +397,7 @@ impl StateVersions {
                     // Intentionally don't sleep on retry.
                     retry.retries.inc();
                     let earliest_before_refetch = earliest_live_diff.seqno;
-                    all_live_diffs = self.fetch_live_diffs(shard_id).await;
+                    all_live_diffs = self.fetch_all_live_diffs(shard_id).await;
 
                     // We should only hit the race condition that leads to a
                     // refetch if the set of live diffs changed out from under
@@ -427,13 +428,81 @@ impl StateVersions {
     /// Fetches the live_diffs for a shard.
     ///
     /// Returns an empty Vec iff called on an uninitialized shard.
-    pub async fn fetch_live_diffs(&self, shard_id: &ShardId) -> Vec<VersionedData> {
+    pub async fn fetch_all_live_diffs(&self, shard_id: &ShardId) -> Vec<VersionedData> {
         let path = shard_id.to_string();
         retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
-            self.consensus.scan(&path, SeqNo::minimum()).await
+            self.consensus.scan_all(&path, SeqNo::minimum()).await
         })
         .instrument(debug_span!("fetch_state::scan"))
         .await
+    }
+
+    /// WIP: Fetches recent live diffs for a shard, where "recent" diffs means:
+    /// 1. all the diffs
+    /// 2. all the diffs from the most recent rollup known
+    pub async fn fetch_recent_live_diffs<T>(&self, shard_id: &ShardId) -> Vec<VersionedData>
+    where
+        T: Timestamp + Lattice + Codec64,
+    {
+        let path = shard_id.to_string();
+
+        // pick a scan limit that:
+        // * is big enough to hit the fast-path (we fetch all live diffs) in steady-state usage [1]
+        // * is small enough to query Consensus for at high volume
+        //
+        // [1]: seqnos advance by roughly 1 per second, and we should accommodate readers that
+        // require a seqno-hold for a reasonable amount of time to complete, where "reasonable"
+        // is defined with the waving of hands. to start: we'll allow for readers to hold back
+        // seqno/truncation by 10s of minutes.
+        //
+        // NB: we make this a function of `NEED_ROLLUP_THRESHOLD` to approximate when we expect
+        // rollups to be written and therefore when old states are truncated by GC.
+        let scan_limit = 20 * usize::cast_from(PersistConfig::NEED_ROLLUP_THRESHOLD);
+        let oldest_diffs =
+            retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
+                self.consensus
+                    .scan(&path, SeqNo::minimum(), scan_limit)
+                    .await
+            })
+            .instrument(debug_span!("fetch_state::scan"))
+            .await;
+
+        // fast-path: we found all known diffs in a single page of our scan. unless a seqno-hold has
+        // held back gc a fairly long time
+        if oldest_diffs.len() < scan_limit {
+            // WIP: add metrics for fast and slow paths
+            return oldest_diffs;
+        }
+
+        // slow-path: we could be arbitrarily far behind the head of consensus (either intentionally
+        // due to a long seqno-hold from a reader, or unintentionally from a bug that's preventing
+        // a seqno-hold from advancing). rather than scanning a potentially unbounded number of old
+        // states in Consensus, we jump to the latest state, determine the seqno of the most recent
+        // rollup, and then fetch all the diffs from that point onward.
+        let head = retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
+            self.consensus.head(&path).await
+        })
+        .instrument(debug_span!("fetch_state::slow_path::head"))
+        .await
+        .expect("initialized shard should have at least 1 diff");
+
+        let latest_diff = self
+            .metrics
+            .codecs
+            .state_diff
+            .decode(|| StateDiff::<T>::decode(&self.cfg.build_version, &head.data));
+
+        match BlobKey::parse_ids(&latest_diff.latest_rollup_key.0) {
+            Ok((_shard_id, PartialBlobKey::Rollup(seqno, _rollup))) => {
+                return retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
+                    self.consensus.scan_all(&path, seqno).await
+                })
+                .instrument(debug_span!("fetch_state::slow_path::scan"))
+                .await;
+            }
+            Ok(_) => panic!("WIP: we wrote the wrong type of blob key"),
+            Err(_) => panic!("WIP: we wrote an unparseable blob key"),
+        }
     }
 
     /// Truncates any diffs in consensus less than the given seqno.

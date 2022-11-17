@@ -1162,7 +1162,7 @@ pub mod datadriven {
 
         let mut states = datadriven
             .state_versions
-            .fetch_live_states::<String, (), u64, i64>(&datadriven.shard_id)
+            .fetch_all_live_states::<String, (), u64, i64>(&datadriven.shard_id)
             .await
             .expect("shard codecs should not change");
         let mut s = String::new();
@@ -1773,7 +1773,7 @@ pub mod tests {
         let live_diffs = write
             .machine
             .state_versions
-            .fetch_live_diffs(&write.machine.shard_id())
+            .fetch_all_live_diffs(&write.machine.shard_id())
             .await;
         // Make sure we constructed the key correctly.
         assert!(live_diffs.len() > 0);
