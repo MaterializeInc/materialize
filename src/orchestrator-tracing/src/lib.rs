@@ -337,11 +337,11 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                     assigned.listen_host, port,
                 ));
                 args.push(format!(
-                    "--tokio-console-publish-interval={} microseconds",
+                    "--tokio-console-publish-interval={} us",
                     tokio_console_publish_interval.as_micros(),
                 ));
                 args.push(format!(
-                    "--tokio-console-retention={} microseconds",
+                    "--tokio-console-retention={} us",
                     tokio_console_retention.as_micros(),
                 ));
             }

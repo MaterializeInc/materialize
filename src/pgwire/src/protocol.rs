@@ -20,7 +20,7 @@ use itertools::izip;
 use mz_adapter::AdapterNotice;
 use openssl::nid::Nid;
 use postgres::error::SqlState;
-use tokio::io::{self, AsyncRead, AsyncWrite, Interest};
+use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
 use tokio::time::{self, Duration, Instant};
 use tracing::{debug, warn, Instrument};
@@ -1094,32 +1094,10 @@ where
         // will propagate through the PeekResponse. select is safe to use because if
         // close finishes, rows is canceled, which is the intended behavior.
         let span = tracing::debug_span!(parent: parent, "row_future_to_stream");
-        let block = async move {
+        async move {
             loop {
-                let closed = async {
-                    loop {
-                        tokio::time::sleep(Duration::from_secs(1)).await;
-
-                        // We've been waiting for rows for a bit, and the client may have
-                        // disconnected. Check whether the socket is no longer readable and error
-                        // if so.
-                        match self.conn.ready(Interest::READABLE).await {
-                            Ok(ready) => {
-                                if ready.is_read_closed() {
-                                    return io::Error::new(
-                                        io::ErrorKind::Other,
-                                        "connection closed",
-                                    );
-                                }
-                            }
-                            Err(err) => return err,
-                        }
-                    }
-                };
                 tokio::select! {
-                    err = closed => {
-                        return Err(err);
-                    },
+                    err = self.conn.wait_closed() => return Err(err),
                     rows = &mut rows => {
                         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
                         tx.send(rows).expect("send must succeed");
@@ -1133,8 +1111,8 @@ where
                 }
             }
         }
-        .instrument(span);
-        block.await
+        .instrument(span)
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1582,28 +1560,7 @@ where
         let mut count = 0;
         loop {
             tokio::select! {
-                _ = time::sleep_until(Instant::now() + Duration::from_secs(1)) => {
-                    // It's been a while since we've had any data to send, and
-                    // the client may have disconnected. Check whether the
-                    // socket is no longer readable and error if so. Otherwise
-                    // we might block forever waiting for rows, leaking memory
-                    // and a socket.
-                    //
-                    // In theory we should check for writability rather than
-                    // readability—after all, we're writing data to the socket,
-                    // not reading from it—but read-closed events are much more
-                    // reliable on TCP streams than write-closed events.
-                    // See: https://github.com/tokio-rs/mio/pull/1110
-                    let ready = self.conn.ready(Interest::READABLE).await?;
-                    if ready.is_read_closed() {
-                        return self
-                            .error(ErrorResponse::fatal(
-                                SqlState::CONNECTION_FAILURE,
-                                "connection closed",
-                            ))
-                            .await;
-                    }
-                },
+                e = self.conn.wait_closed() => return Err(e),
                 _ = self.adapter_client.canceled() => {
                     return self
                         .error(ErrorResponse::error(

@@ -17,4 +17,4 @@ mz-ore = { path = "../ore", features = ["tracing"] }
 polonius-the-crab = "0.3.1"
 
 [dev-dependencies]
-tokio = { version = "1.20.2", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1.22.0", features = ["macros", "rt-multi-thread", "time"] }
