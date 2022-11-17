@@ -118,7 +118,7 @@ impl Consensus for MaelstromConsensus {
                 Ok(x) => Value::from(&MaelstromVersionedData::from(x)),
                 Err(_) => {
                     let from = expected.next();
-                    return Ok(Err(self.scan(key, from).await?));
+                    return Ok(Err(self.scan_all(key, from).await?));
                 }
             },
             None => Value::Null,
@@ -147,14 +147,19 @@ impl Consensus for MaelstromConsensus {
                 ..
             }) => {
                 let from = expected.map_or_else(SeqNo::minimum, |x| x.next());
-                let current = self.scan(key, from).await?;
+                let current = self.scan_all(key, from).await?;
                 Ok(Err(current))
             }
             Err(err) => Err(ExternalError::from(anyhow::Error::new(err))),
         }
     }
 
-    async fn scan(&self, _key: &str, _from: SeqNo) -> Result<Vec<VersionedData>, ExternalError> {
+    async fn scan(
+        &self,
+        _key: &str,
+        _from: SeqNo,
+        _limit: usize,
+    ) -> Result<Vec<VersionedData>, ExternalError> {
         unimplemented!("TODO")
     }
 

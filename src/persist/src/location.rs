@@ -366,7 +366,12 @@ pub trait Consensus: std::fmt::Debug {
     ///
     /// Returns an empty vec if `from` is greater than the current sequence
     /// number or if there is no data at this key.
-    async fn scan(&self, key: &str, from: SeqNo) -> Result<Vec<VersionedData>, ExternalError>;
+    async fn scan(
+        &self,
+        key: &str,
+        from: SeqNo,
+        limit: usize,
+    ) -> Result<Vec<VersionedData>, ExternalError>;
 
     /// Deletes all historical versions of the data stored at `key` that are <
     /// `seqno`, iff `seqno` <= the current sequence number.
@@ -375,6 +380,12 @@ pub trait Consensus: std::fmt::Debug {
     /// `seqno` is greater than the current sequence number, or if there is no
     /// data at this key.
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError>;
+
+    /// WIP: figure out where to put this given object safety
+    async fn scan_all(&self, key: &str, from: SeqNo) -> Result<Vec<VersionedData>, ExternalError> {
+        // WIP: ugh, figure out the right types to plumb through. maybe limit should be u32 or i64
+        self.scan(key, from, usize::MAX / 2).await
+    }
 }
 
 /// Metadata about a particular blob stored by persist
