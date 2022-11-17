@@ -109,6 +109,15 @@ p+p {
             display: block;
         }
 
+        .highlight:only-child {
+            display: inline-block;
+            margin-bottom: 1rem;
+
+            pre {
+                margin: 0;
+            }
+        }
+
         pre {
             margin-left: 1.8rem;
             margin: 1rem 0;
