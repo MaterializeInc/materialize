@@ -102,7 +102,7 @@ load_generator_option ::=
 create_source_postgres ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   'FROM' 'POSTGRES' 'CONNECTION' connection_name
-  '(' 'PUBLICATION' publication_name ')'
+  '(' 'PUBLICATION' publication_name ( ( ',' 'TEXT COLUMNS' ('(' (column_name) ( ( ',' column_name ) )* ')')? )? ) ')'
   ('FOR ALL TABLES' | 'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')')
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_source_s3 ::=
