@@ -1,5 +1,12 @@
 # dbt-materialize Changelog
 
+## 1.3.2 - 2022-11-17
+
+* Add the `IN CLUSTER` clause to the custom seed materialization to ensure that
+  seeds are created in the target cluster, rather than in the active cluster.
+  This fixes a bug in 1.3.1 where seeds would run against the
+  `mz_introspection` cluster, causing an error.
+
 ## 1.3.1 - 2022-11-15
 
 * **Breaking change.** Use `mz_introspection` as the initial active cluster on
@@ -12,7 +19,10 @@
 
 * Upgrade to `dbt-postgres` v1.3.0.
 
-* Migrate cross-database macros from [`materialize-dbt-utils`](https://github.com/MaterializeInc/materialize-dbt-utils) into the adapter, as a result of [dbt-core #5298](https://github.com/dbt-labs/dbt-core/pull/5298). The `utils` macros will be deprecated in the upcoming release of the package, and removed in a subsequent release.
+* Migrate cross-database macros from [`materialize-dbt-utils`](https://github.com/MaterializeInc/materialize-dbt-utils)
+  into the adapter, as a result of [dbt-core #5298](https://github.com/dbt-labs/dbt-core/pull/5298).
+  The `utils` macros will be deprecated in the upcoming release of the package,
+  and removed in a subsequent release.
 
 ## 1.2.1 - 2022-11-01
 
