@@ -83,6 +83,13 @@ large propagation delays. For example, if SQL-transaction T1 happens before SQL-
 table t, and T2 queries materialized view mv where mv is an expensive materialized view including t, then T2 may not see
 all the rows that were seen by T1 if they are executed close enough together in real time.
 
+If there is not a consistent snapshot available across all objects in a query, then the query will be blocked until a
+consistent snapshot becomes available. If there is a consistent snapshot available then the query will not block and be
+executed immediately. There is guaranteed to always be a consistent snapshot available for queries that only involve a
+single object and therefore these queries will always be executed immediately. Note, queries against a single
+Materialized View that was creating using multiple objects is considered a query involving a single object. Therefore,
+these queries will not block and be executed immediately.
+
 ## Strict serializable
 
 The Strict Serializable isolation level provides all the same guarantees as Serializable, with the addition that
