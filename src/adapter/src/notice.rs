@@ -32,6 +32,12 @@ pub enum AdapterNotice {
         name: String,
         ty: &'static str,
     },
+    DatabaseDoesNotExist {
+        name: String,
+    },
+    ClusterDoesNotExist {
+        name: String,
+    },
     ExistingTransactionInProgress,
     ExplicitTransactionControlInImplicitTransaction,
     UserRequested {
@@ -52,7 +58,11 @@ impl AdapterNotice {
 
     /// Reports a hint for the user about how the notice could be addressed.
     pub fn hint(&self) -> Option<String> {
-        None
+        match self {
+            AdapterNotice::DatabaseDoesNotExist { name: _ } => Some("Create the database with CREATE DATABASE or pick an extant database with SET DATABASE = name. List available databases with SHOW DATABASES.".into()),
+            AdapterNotice::ClusterDoesNotExist { name: _ } => Some("Create the cluster with CREATE CLUSTER or pick an extant cluster with SET CLUSTER = name. List available clusters with SHOW CLUSTERS.".into()),
+            _ => None
+        }
     }
 }
 
@@ -70,6 +80,12 @@ impl fmt::Display for AdapterNotice {
             }
             AdapterNotice::ObjectAlreadyExists { name, ty } => {
                 write!(f, "{} {} already exists, skipping", ty, name.quoted())
+            }
+            AdapterNotice::DatabaseDoesNotExist { name } => {
+                write!(f, "database {} does not exist", name.quoted())
+            }
+            AdapterNotice::ClusterDoesNotExist { name } => {
+                write!(f, "cluster {} does not exist", name.quoted())
             }
             AdapterNotice::ExistingTransactionInProgress => {
                 write!(f, "there is already a transaction in progress")

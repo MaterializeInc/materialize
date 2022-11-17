@@ -76,7 +76,7 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain_new::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
-use crate::session::vars::IsolationLevel;
+use crate::session::vars::{IsolationLevel, CLUSTER_VAR_NAME, DATABASE_VAR_NAME};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, Var,
     WriteOp,
@@ -1890,11 +1890,39 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let vars = session.vars_mut();
         let (name, local) = (plan.name, plan.local);
-        match plan.value {
-            SetVariableValue::Default => vars.reset(&name, local)?,
-            SetVariableValue::Literal(Value::String(s)) => vars.set(&name, &s, local)?, // pass-through unquoted strings
-            SetVariableValue::Ident(ident) => vars.set(&name, &ident.into_string(), local)?, // pass-through unquoted idents
-            value => vars.set(&name, &value.to_string(), local)?, // or else use the AstDisplay for SetVariableValue
+        let value = match plan.value {
+            SetVariableValue::Default => None,
+            SetVariableValue::Literal(Value::String(s)) => Some(s), // unquoted strings
+            SetVariableValue::Ident(ident) => Some(ident.into_string()), // pass-through unquoted idents
+            value => Some(value.to_string()), // or else use the AstDisplay for SetVariableValue
+        };
+
+        match &value {
+            Some(v) => {
+                vars.set(&name, v, local)?;
+
+                // Add notice if database or cluster value does not correspond to a catalog item.
+                if name.as_str() == DATABASE_VAR_NAME
+                    && matches!(
+                        self.catalog.resolve_database(v),
+                        Err(CatalogError::UnknownDatabase(_))
+                    )
+                {
+                    session.add_notice(AdapterNotice::DatabaseDoesNotExist {
+                        name: v.to_string(),
+                    });
+                } else if name.as_str() == CLUSTER_VAR_NAME
+                    && matches!(
+                        self.catalog.resolve_compute_instance(v),
+                        Err(CatalogError::UnknownComputeInstance(_))
+                    )
+                {
+                    session.add_notice(AdapterNotice::ClusterDoesNotExist {
+                        name: v.to_string(),
+                    });
+                }
+            }
+            None => vars.reset(&name, local)?,
         }
 
         Ok(ExecuteResponse::SetVariable { name, reset: false })

@@ -59,9 +59,10 @@ const CLIENT_MIN_MESSAGES: ServerVar<ClientSeverity> = ServerVar {
     value: &ClientSeverity::Notice,
     description: "Sets the message levels that are sent to the client (PostgreSQL).",
 };
+pub const CLUSTER_VAR_NAME: &UncasedStr = UncasedStr::new("cluster");
 
 const CLUSTER: ServerVar<str> = ServerVar {
-    name: UncasedStr::new("cluster"),
+    name: CLUSTER_VAR_NAME,
     value: "default",
     description: "Sets the current cluster (Materialize).",
 };
@@ -72,8 +73,10 @@ const CLUSTER_REPLICA: ServerVar<Option<String>> = ServerVar {
     description: "Sets a target cluster replica for SELECT queries (Materialize).",
 };
 
+pub const DATABASE_VAR_NAME: &UncasedStr = UncasedStr::new("database");
+
 const DATABASE: ServerVar<str> = ServerVar {
-    name: UncasedStr::new("database"),
+    name: DATABASE_VAR_NAME,
     value: DEFAULT_DATABASE_NAME,
     description: "Sets the current database (CockroachDB).",
 };
