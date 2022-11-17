@@ -256,6 +256,100 @@ impl NamespacedKubernetesOrchestrator {
     }
 }
 
+#[derive(Debug)]
+struct ScaledQuantity {
+    integral_part: u64,
+    exponent: i8,
+    base10: bool,
+}
+
+impl ScaledQuantity {
+    pub fn try_to_integer(&self, scale: i8, base10: bool) -> Option<u64> {
+        if base10 != self.base10 {
+            return None;
+        }
+        let exponent = self.exponent - scale;
+        let mut result = self.integral_part;
+        let base = if self.base10 { 10 } else { 2 };
+        if exponent < 0 {
+            for _ in exponent..0 {
+                result /= base;
+            }
+        } else {
+            for _ in 0..exponent {
+                result = result.checked_mul(2)?;
+            }
+        }
+        Some(result)
+    }
+}
+
+// Parse a k8s `Quantity` object
+// into a numeric value.
+//
+// This is intended to support collecting CPU and Memory data.
+// Thus, there are a few that things Kubernetes attempts to do, that we don't,
+// because I've never observed metrics-server specifically sending them:
+// (1) Handle negative numbers (because it's not useful for that use-case)
+// (2) Handle non-integers (because I have never observed them being actually sent)
+// (3) Handle scientific notation (e.g. 1.23e2)
+fn parse_k8s_quantity(s: &str) -> Result<ScaledQuantity, anyhow::Error> {
+    const DEC_SUFFIXES: &[(&str, i8)] = &[
+        ("n", -9),
+        ("u", -6),
+        ("m", -3),
+        ("", 0),
+        ("k", 3), // yep, intentionally lowercase.
+        ("M", 6),
+        ("G", 9),
+        ("T", 12),
+        ("P", 15),
+        ("E", 18),
+    ];
+    const BIN_SUFFIXES: &[(&str, i8)] = &[
+        ("", 0),
+        ("Ki", 10),
+        ("Mi", 20),
+        ("Gi", 30),
+        ("Ti", 40),
+        ("Pi", 50),
+        ("Ei", 60),
+    ];
+
+    let (positive, s) = match s.chars().next() {
+        Some('+') => (true, &s[1..]),
+        Some('-') => (false, &s[1..]),
+        _ => (true, s),
+    };
+
+    if !positive {
+        anyhow::bail!("Negative numbers not supported")
+    }
+
+    fn is_suffix_char(ch: char) -> bool {
+        "numkMGTPEKi".contains(ch)
+    }
+    let (num, suffix) = match s.find(is_suffix_char) {
+        None => (s, ""),
+        Some(idx) => s.split_at(idx),
+    };
+    let num: u64 = num.parse()?;
+    let (exponent, base10) = if let Some((_, exponent)) =
+        DEC_SUFFIXES.iter().find(|(target, _)| suffix == *target)
+    {
+        (exponent, true)
+    } else if let Some((_, exponent)) = BIN_SUFFIXES.iter().find(|(target, _)| suffix == *target) {
+        (exponent, false)
+    } else {
+        anyhow::bail!("Unrecognized suffix: {suffix}");
+    };
+    Ok(ScaledQuantity {
+        integral_part: num,
+        exponent: *exponent,
+        base10,
+    })
+}
+
 #[async_trait]
 impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
     async fn fetch_service_metrics(
@@ -277,7 +371,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             id: &str,
             i: usize,
         ) -> ServiceProcessMetrics {
-            let name = format!("{id}-{i}");
+            let name = format!("{}-{id}-{i}", self_.namespace);
             let metrics = match self_.metrics_api.get(&name).await {
                 Ok(metrics) => metrics,
                 Err(e) => {
@@ -289,42 +383,34 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 warn!("metrics result contained no containers for {name}");
                 return ServiceProcessMetrics::default();
             };
-            // Parsing a k8s Quantity is kind of complicated:
-            // See https://github.com/kubernetes/apimachinery/blob/master/pkg/api/resource/quantity.go
-            // for details. We can rewrite this correct parsing code in Rust if needed in the future, but let's see if we can get away with
-            // just assuming CPU is always a positive integer number of nano-CPUs and memory is always in KiB for now.
-            //
-            // Note that https://github.com/sombralibre/k8s-quantity-parser doesn't support the (undocumented) `n` suffix,
-            // so we can't use it.
-            let cpu = match cpu_str.strip_suffix('n') {
-                Some(rest) => match rest.parse::<u64>() {
-                    Ok(val) => Some(val),
-                    Err(_e) => {
-                        tracing::error!("metrics-server CPU value in unexpected format: {cpu_str}");
+
+            let cpu = match parse_k8s_quantity(cpu_str) {
+                Ok(q) => match q.try_to_integer(-9, true) {
+                    Some(i) => Some(i),
+                    None => {
+                        tracing::error!("CPU value {q:? }out of range");
                         None
                     }
                 },
-                None => {
-                    tracing::error!("metrics-server CPU value in unexpected format: {cpu_str}");
+                Err(e) => {
+                    tracing::error!("Failed to parse CPU value {cpu_str}: {e}");
                     None
                 }
             };
-            let memory = match mem_str.strip_suffix("Ki") {
-                Some(rest) => match rest.parse::<u64>() {
-                    Ok(val) => Some(val),
-                    Err(_e) => {
-                        tracing::error!(
-                            "metrics-server memory value in unexpected format: {mem_str}"
-                        );
+            let memory = match parse_k8s_quantity(mem_str) {
+                Ok(q) => match q.try_to_integer(3, false) {
+                    Some(i) => Some(i),
+                    None => {
+                        tracing::error!("Memory value {q:?} out of range");
                         None
                     }
                 },
-                None => {
-                    tracing::error!("metrics-server memory value in unexpected format: {mem_str}");
+                Err(e) => {
+                    tracing::error!("Failed to parse memory value {mem_str}: {e}");
                     None
                 }
-            }
-            .map(|kib| kib * 1024);
+            };
+
             ServiceProcessMetrics {
                 nano_cpus: cpu,
                 bytes_memory: memory,
