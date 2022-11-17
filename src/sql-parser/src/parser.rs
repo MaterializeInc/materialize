@@ -2143,7 +2143,6 @@ impl<'a> Parser<'a> {
             RETENTION,
             SNAPSHOT,
             START,
-            STATISTICS,
             TOPIC,
             TRANSACTION,
         ])? {
