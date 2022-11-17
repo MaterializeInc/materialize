@@ -694,8 +694,16 @@ mz_show_materialized_views
 VIEW
 materialize
 mz_internal
+mz_sink_status
+VIEW
+materialize
+mz_internal
 mz_sink_status_history
 SOURCE
+materialize
+mz_internal
+mz_source_status
+VIEW
 materialize
 mz_internal
 mz_source_status_history
