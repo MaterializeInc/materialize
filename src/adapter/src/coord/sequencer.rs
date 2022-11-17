@@ -509,10 +509,7 @@ impl<S: Append + 'static> Coordinator<S> {
             });
             sources.push((source_id, source));
         }
-        match self
-            .catalog_transact(Some(session), ops, move |_| async { Ok(()) })
-            .await
-        {
+        match self.catalog_transact(Some(session), ops).await {
             Ok(()) => {
                 for (source_id, source) in sources {
                     let source_status_collection_id = if self.catalog.config().unsafe_mode {
@@ -635,7 +632,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .as_ref()
             .map(|controller| Arc::clone(controller));
         match self
-            .catalog_transact(Some(session), ops, |_| async {
+            .catalog_transact_with(Some(session), ops, |_| async {
                 match connection {
                     mz_storage_client::types::connections::Connection::Ssh(_) => {
                         let key_set = ssh_key_set.expect("created above");
@@ -688,10 +685,7 @@ impl<S: Append + 'static> Coordinator<S> {
             new_public_key_pair: new_key_set.public_keys(),
         }];
 
-        match self
-            .catalog_transact(Some(session), ops, |_| async { Ok(()) })
-            .await
-        {
+        match self.catalog_transact(Some(session), ops).await {
             Ok(_) => Ok(ExecuteResponse::AlteredObject(ObjectType::Connection)),
             Err(err) => Err(err),
         }
@@ -709,10 +703,7 @@ impl<S: Append + 'static> Coordinator<S> {
             oid: db_oid,
             public_schema_oid: schema_oid,
         }];
-        match self
-            .catalog_transact(Some(session), ops, |_| async { Ok(()) })
-            .await
-        {
+        match self.catalog_transact(Some(session), ops).await {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase),
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::DatabaseAlreadyExists(_),
@@ -736,10 +727,7 @@ impl<S: Append + 'static> Coordinator<S> {
             schema_name: plan.schema_name.clone(),
             oid,
         };
-        match self
-            .catalog_transact(Some(session), vec![op], |_| async { Ok(()) })
-            .await
-        {
+        match self.catalog_transact(Some(session), vec![op]).await {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema),
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::SchemaAlreadyExists(_),
@@ -764,7 +752,7 @@ impl<S: Append + 'static> Coordinator<S> {
             name: plan.name,
             oid,
         };
-        self.catalog_transact(Some(session), vec![op], |_| async { Ok(()) })
+        self.catalog_transact(Some(session), vec![op])
             .await
             .map(|_| ExecuteResponse::CreatedRole)
     }
@@ -903,8 +891,7 @@ impl<S: Append + 'static> Coordinator<S> {
             });
         }
 
-        self.catalog_transact(Some(session), ops, |_| async { Ok(()) })
-            .await?;
+        self.catalog_transact(Some(session), ops).await?;
 
         let persisted_introspection_source_ids: Vec<GlobalId> = persisted_introspection_sources
             .iter()
@@ -1069,8 +1056,7 @@ impl<S: Append + 'static> Coordinator<S> {
             on_cluster_name: of_cluster.clone(),
         };
 
-        self.catalog_transact(Some(session), vec![op], |_| async { Ok(()) })
-            .await?;
+        self.catalog_transact(Some(session), vec![op]).await?;
 
         let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
         let replica_id = instance.replica_id_by_name[&name];
@@ -1142,10 +1128,7 @@ impl<S: Append + 'static> Coordinator<S> {
             name: name.clone(),
             item: CatalogItem::Table(table.clone()),
         }];
-        match self
-            .catalog_transact(Some(session), ops, |_| async { Ok(()) })
-            .await
-        {
+        match self.catalog_transact(Some(session), ops).await {
             Ok(()) => {
                 // Determine the initial validity for the table.
                 let since_ts = self.peek_local_write_ts();
@@ -1214,10 +1197,7 @@ impl<S: Append + 'static> Coordinator<S> {
             item: CatalogItem::Secret(secret.clone()),
         }];
 
-        match self
-            .catalog_transact(Some(session), ops, |_| async { Ok(()) })
-            .await
-        {
+        match self.catalog_transact(Some(session), ops).await {
             Ok(()) => Ok(ExecuteResponse::CreatedSecret),
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
@@ -1320,18 +1300,22 @@ impl<S: Append + 'static> Coordinator<S> {
         let from_name = from.name().item.clone();
         let from_type = from.item().typ().to_string();
         let result = self
-            .catalog_transact(Some(&session), ops, move |txn| async move {
+            .catalog_transact_with(Some(&session), ops, move |txn| {
                 // Validate that the from collection is in fact a persist collection we can export.
-                txn.dataflow_client
-                    .storage
-                    .collection(sink.from)
-                    .map_err(|e| match e {
-                        StorageError::IdentifierMissing(_) => AdapterError::Unstructured(anyhow!(
+                std::future::ready(
+                    txn.dataflow_client
+                        .storage
+                        .collection(sink.from)
+                        .map_err(|e| match e {
+                            StorageError::IdentifierMissing(_) => {
+                                AdapterError::Unstructured(anyhow!(
                             "{from_name} is a {from_type}, which cannot be exported as a sink"
-                        )),
-                        e => AdapterError::Storage(e),
-                    })?;
-                Ok(())
+                        ))
+                            }
+                            e => AdapterError::Storage(e),
+                        })
+                        .and(Ok(())),
+                )
             })
             .await;
 
@@ -1412,10 +1396,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 depends_on,
             )
             .await?;
-        match self
-            .catalog_transact(Some(session), ops, |_| async { Ok(()) })
-            .await
-        {
+        match self.catalog_transact(Some(session), ops).await {
             Ok(()) => Ok(ExecuteResponse::CreatedView),
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
@@ -1545,13 +1526,15 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let callback_as_of = as_of.clone();
         match self
-            .catalog_transact(Some(session), ops, |txn| async move {
+            .catalog_transact_with(Some(session), ops, |txn| {
                 // Create a dataflow that materializes the view query and sinks
                 // it to storage.
-                let df = txn
-                    .dataflow_builder(compute_instance)
-                    .build_materialized_view_dataflow(id, callback_as_of, internal_view_id)?;
-                Ok(df)
+                let mut builder = txn.dataflow_builder(compute_instance);
+                std::future::ready(builder.build_materialized_view_dataflow(
+                    id,
+                    callback_as_of,
+                    internal_view_id,
+                ))
             })
             .await
         {
@@ -1628,10 +1611,9 @@ impl<S: Append + 'static> Coordinator<S> {
             item: CatalogItem::Index(index),
         };
         match self
-            .catalog_transact(Some(session), vec![op], |txn| async move {
+            .catalog_transact_with(Some(session), vec![op], |txn| {
                 let mut builder = txn.dataflow_builder(compute_instance);
-                let df = builder.build_index_dataflow(id)?;
-                Ok(df)
+                std::future::ready(builder.build_index_dataflow(id))
             })
             .await
         {
@@ -1678,10 +1660,7 @@ impl<S: Append + 'static> Coordinator<S> {
             name: plan.name,
             item: CatalogItem::Type(typ),
         };
-        match self
-            .catalog_transact(Some(session), vec![op], |_| async { Ok(()) })
-            .await
-        {
+        match self.catalog_transact(Some(session), vec![op]).await {
             Ok(()) => Ok(ExecuteResponse::CreatedType),
             Err(err) => Err(err),
         }
@@ -1693,8 +1672,7 @@ impl<S: Append + 'static> Coordinator<S> {
         plan: DropDatabasePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let ops = self.catalog.drop_database_ops(plan.id);
-        self.catalog_transact(Some(session), ops, |_| async { Ok(()) })
-            .await?;
+        self.catalog_transact(Some(session), ops).await?;
         Ok(ExecuteResponse::DroppedDatabase)
     }
 
@@ -1704,8 +1682,7 @@ impl<S: Append + 'static> Coordinator<S> {
         plan: DropSchemaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let ops = self.catalog.drop_schema_ops(plan.id);
-        self.catalog_transact(Some(session), ops, |_| async { Ok(()) })
-            .await?;
+        self.catalog_transact(Some(session), ops).await?;
         Ok(ExecuteResponse::DroppedSchema)
     }
 
@@ -1719,8 +1696,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .into_iter()
             .map(|name| catalog::Op::DropRole { name })
             .collect();
-        self.catalog_transact(Some(session), ops, |_| async { Ok(()) })
-            .await?;
+        self.catalog_transact(Some(session), ops).await?;
         Ok(ExecuteResponse::DroppedRole)
     }
 
@@ -1772,8 +1748,7 @@ impl<S: Append + 'static> Coordinator<S> {
             ops.push(catalog::Op::DropComputeInstance { name: compute_name });
         }
 
-        self.catalog_transact(Some(session), ops, |_| async { Ok(()) })
-            .await?;
+        self.catalog_transact(Some(session), ops).await?;
         for (instance_id, replicas) in instance_replica_drop_sets {
             for replica_id in replicas {
                 self.drop_replica(instance_id, replica_id).await.unwrap();
@@ -1835,8 +1810,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
 
-        self.catalog_transact(Some(session), ops, |_| async { Ok(()) })
-            .await?;
+        self.catalog_transact(Some(session), ops).await?;
 
         for (compute_id, replica_id) in replicas_to_drop {
             self.drop_replica(compute_id, replica_id).await.unwrap();
@@ -1871,8 +1845,7 @@ impl<S: Append + 'static> Coordinator<S> {
         plan: DropItemsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let ops = self.catalog.drop_items_ops(&plan.items);
-        self.catalog_transact(Some(session), ops, |_| async { Ok(()) })
-            .await?;
+        self.catalog_transact(Some(session), ops).await?;
         Ok(match plan.ty {
             ObjectType::Source => ExecuteResponse::DroppedSource,
             ObjectType::View => ExecuteResponse::DroppedView,
@@ -3214,10 +3187,7 @@ impl<S: Append + 'static> Coordinator<S> {
             current_full_name: plan.current_full_name,
             to_name: plan.to_name,
         };
-        match self
-            .catalog_transact(Some(session), vec![op], |_| async { Ok(()) })
-            .await
-        {
+        match self.catalog_transact(Some(session), vec![op]).await {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(plan.object_type)),
             Err(err) => Err(err),
         }
@@ -3296,8 +3266,7 @@ impl<S: Append + 'static> Coordinator<S> {
         AlterSinkPlan { id, size, remote }: AlterSinkPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let op = catalog::Op::AlterSink { id, size, remote };
-        self.catalog_transact(Some(session), vec![op], |_| async { Ok(()) })
-            .await?;
+        self.catalog_transact(Some(session), vec![op]).await?;
 
         // Re-fetch the updated item from the catalog
         let entry = self.catalog.get_entry(&id);
@@ -3325,8 +3294,7 @@ impl<S: Append + 'static> Coordinator<S> {
         AlterSourcePlan { id, size, remote }: AlterSourcePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let op = catalog::Op::AlterSource { id, size, remote };
-        self.catalog_transact(Some(session), vec![op], |_| async { Ok(()) })
-            .await?;
+        self.catalog_transact(Some(session), vec![op]).await?;
 
         // Re-fetch the updated item from the catalog
         let entry = self.catalog.get_entry(&id);
@@ -3423,8 +3391,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 value: value.to_string(),
             },
         };
-        self.catalog_transact(Some(session), vec![op], |_| async { Ok(()) })
-            .await?;
+        self.catalog_transact(Some(session), vec![op]).await?;
         if update_max_result_size {
             self.update_max_result_size();
         }
@@ -3439,8 +3406,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.is_user_allowed_to_alter_system(session)?;
         let update_max_result_size = name == session::vars::MAX_RESULT_SIZE.name();
         let op = catalog::Op::ResetSystemConfiguration { name };
-        self.catalog_transact(Some(session), vec![op], |_| async { Ok(()) })
-            .await?;
+        self.catalog_transact(Some(session), vec![op]).await?;
         if update_max_result_size {
             self.update_max_result_size();
         }
@@ -3454,8 +3420,7 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session)?;
         let op = catalog::Op::ResetAllSystemConfiguration {};
-        self.catalog_transact(Some(session), vec![op], |_| async { Ok(()) })
-            .await?;
+        self.catalog_transact(Some(session), vec![op]).await?;
         self.update_max_result_size();
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
     }
