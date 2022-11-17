@@ -251,8 +251,8 @@ where
     }
 
     /// Forwards the since capability of this handle to `new_since` iff the opaque value of this
-    /// handle's [CriticalReaderId] is `expected`, and [Self::maybe_compare_and_downgrade_since]
-    /// chooses to perform the downgrade.
+    /// handle's [CriticalReaderId] is `expected`, and `new_since` is beyond the
+    /// current `since`.
     ///
     /// Users are expected to call this function only when a guaranteed downgrade is necessary. All
     /// other downgrades should preferably go through [Self::maybe_compare_and_downgrade_since]
