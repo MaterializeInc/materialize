@@ -39,6 +39,7 @@
 
 #docsearch {
     margin-bottom: 16px;
+
     .DocSearch-Button {
         margin: 0 0 16px 0;
         width: 100%;
@@ -87,7 +88,7 @@
         padding-right: var(--nano);
     }
 
-    & > ul > li:last-child {
+    &>ul>li:last-child {
         padding-bottom: var(--milli);
     }
 
@@ -102,8 +103,10 @@
         &.active {
             color: var(--highlight);
             text-decoration: none;
+
             svg {
                 color: var(--divider-light);
+
                 .darker {
                     color: var(--highlight);
                 }
@@ -116,9 +119,11 @@
             top: 50%;
             margin-top: -18px;
             color: var(--divider-light);
+
             .darker {
                 color: var(--sub);
             }
+
             &:hover {
                 stroke-width: 2;
             }
@@ -129,7 +134,7 @@
         font-family: "Fira Code", Courier, monospace;
     }
 
-    .no-children > a,
+    .no-children>a,
     .level-3 a {
         border-left: 2px solid var(--divider-light);
 
@@ -155,14 +160,14 @@
     }
 
     li.level-1 {
-        & > a {
+        &>a {
             margin: 0 0 4px -2px;
             padding: 4px 0;
             color: var(--highlight);
-            font-weight: 600;
+            font-weight: 500;
         }
 
-        & > ul {
+        &>ul {
             margin-bottom: 1.5rem;
         }
     }
@@ -195,10 +200,15 @@
             .hidden-when-open {
                 visibility: hidden;
             }
+
             ul {
                 display: block;
             }
         }
+    }
+
+    li.level-2.has-children.open {
+        padding-bottom: 4px;
     }
 }
 
@@ -251,7 +261,7 @@
         text-decoration: none;
 
         &.active {
-            font-weight: 600;
+            font-weight: 500;
         }
 
         &.active,
@@ -289,9 +299,9 @@
         font-weight: 300 !important;
         text-decoration: none;
 
-        &[href*="https://"]
-        {
+        &[href*="https://"] {
             border-bottom: none;
+
             &::after {
                 display: none;
             }
@@ -325,6 +335,7 @@ body.light .theme-switcher {
 body.dark {
     li.level-2 {
         ul {
+
             &:before,
             &:after {
                 content: "";
@@ -332,6 +343,7 @@ body.dark {
             }
         }
     }
+
     .theme-switcher {
         .moon {
             fill: var(--gray-light);

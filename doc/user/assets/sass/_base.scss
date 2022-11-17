@@ -24,19 +24,17 @@
     --medium: 5rem;
     --large: 6rem;
 
-    --graidient-primary: linear-gradient(
-        270deg,
-        hsl(270deg 68% 58%) 0%,
-        hsl(287deg 59% 55%) 11%,
-        hsl(303deg 54% 53%) 22%,
-        hsl(315deg 65% 57%) 33%,
-        hsl(325deg 74% 60%) 44%,
-        hsl(333deg 81% 64%) 56%,
-        hsl(340deg 86% 67%) 67%,
-        hsl(348deg 88% 70%) 78%,
-        hsl(355deg 88% 73%) 89%,
-        hsl(3deg 86% 74%) 100%
-    );
+    --graidient-primary: linear-gradient(270deg,
+            hsl(270deg 68% 58%) 0%,
+            hsl(287deg 59% 55%) 11%,
+            hsl(303deg 54% 53%) 22%,
+            hsl(315deg 65% 57%) 33%,
+            hsl(325deg 74% 60%) 44%,
+            hsl(333deg 81% 64%) 56%,
+            hsl(340deg 86% 67%) 67%,
+            hsl(348deg 88% 70%) 78%,
+            hsl(355deg 88% 73%) 89%,
+            hsl(3deg 86% 74%) 100%);
 
     --orchid: #e537c0;
     --orange: #ee8660;

@@ -9,7 +9,7 @@ h4,
 h5,
 h6 {
     color: var(--important);
-    font-weight: 600;
+    font-weight: 500;
     line-height: 1.2;
 
     code {
@@ -51,8 +51,7 @@ h5 {
 
 strong,
 em {
-    font-weight: 400;
-    color: var(--sub);
+    font-weight: 500;
 }
 
 p+p {
@@ -144,7 +143,7 @@ p+p {
     .warning,
     .note {
         font-size: 1.5rem;
-        font-weight: 400;
+        font-weight: 300;
     }
 
     a:not(a[class]) {
@@ -152,7 +151,7 @@ p+p {
         &,
         strong {
             color: var(--link);
-            font-weight: 400;
+            font-weight: 300;
             transition: all 0.2s;
             transition-delay: 50ms;
         }
@@ -266,7 +265,7 @@ p+p {
 
         .title {
             text-transform: uppercase;
-            font-weight: 600;
+            font-weight: 500;
             color: var(--important);
             margin-bottom: var(--nano);
         }
@@ -276,12 +275,8 @@ p+p {
         }
 
         a {
-            font-weight: 400;
+            font-weight: 300;
         }
-    }
-
-    strong {
-        font-weight: 600;
     }
 
     img {
@@ -291,7 +286,7 @@ p+p {
     table {
         border-collapse: collapse;
         font-size: var(--sm);
-        font-weight: 400;
+        font-weight: 300;
         line-height: 2.1rem;
     }
 
@@ -491,7 +486,7 @@ p+p {
         border-radius: 4px;
         color: #fff;
         display: inline-block;
-        font-weight: 600;
+        font-weight: 500;
         margin: 3.2rem 0;
         padding: 2rem 6.4rem;
         opacity: 1;
@@ -609,7 +604,7 @@ p+p {
                 padding: 0.8rem 3.2rem;
                 font-size: 1.6rem;
                 text-decoration: none;
-                font-weight: 600;
+                font-weight: 500;
 
                 &:hover {
                     color: $purple;
