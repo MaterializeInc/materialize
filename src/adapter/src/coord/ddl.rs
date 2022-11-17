@@ -11,7 +11,6 @@
 //! and altering objects.
 
 use std::collections::HashMap;
-use std::future::Future;
 use std::time::Duration;
 
 use itertools::Itertools;
@@ -63,14 +62,14 @@ impl<S: Append + 'static> Coordinator<S> {
     /// [`CatalogState`]: crate::catalog::CatalogState
     /// [`DataflowDesc`]: mz_compute_client::command::DataflowDesc
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn catalog_transact<Fut, R>(
+    pub(crate) async fn catalog_transact<F, R>(
         &mut self,
         session: Option<&Session>,
         mut ops: Vec<catalog::Op>,
-        f: impl FnOnce(CatalogTxn<Timestamp>) -> Fut,
+        f: F,
     ) -> Result<R, AdapterError>
     where
-        Fut: Future<Output = Result<R, AdapterError>>,
+        F: FnOnce(CatalogTxn<Timestamp>) -> Result<R, AdapterError>,
     {
         event!(Level::TRACE, ops = format!("{:?}", ops));
 
@@ -438,7 +437,7 @@ impl<S: Append + 'static> Coordinator<S> {
         if ops.is_empty() {
             return;
         }
-        self.catalog_transact(Some(session), ops, |_| async { Ok(()) })
+        self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await
             .expect("unable to drop temporary items for conn_id");
     }
@@ -545,10 +544,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     name,
                     item: CatalogItem::Sink(sink.clone()),
                 });
-                match self
-                    .catalog_transact(session, ops, |_| async { Ok(()) })
-                    .await
-                {
+                match self.catalog_transact(session, ops, move |_| Ok(())).await {
                     Ok(()) => (),
                     catalog_err @ Err(_) => {
                         let () = self.drop_storage_sinks(vec![id]).await;
@@ -557,10 +553,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
             }
             storage_err @ Err(_) => {
-                match self
-                    .catalog_transact(session, ops, |_| async { Ok(()) })
-                    .await
-                {
+                match self.catalog_transact(session, ops, move |_| Ok(())).await {
                     Ok(()) => storage_err?,
                     catalog_err @ Err(_) => catalog_err?,
                 }

@@ -11,7 +11,6 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
-use std::future::Future;
 use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -3499,14 +3498,14 @@ impl<S: Append> Catalog<S> {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn transact<Fut, R>(
+    pub async fn transact<F, R>(
         &mut self,
         session: Option<&Session>,
         ops: Vec<Op>,
-        f: impl FnOnce(&CatalogState) -> Fut,
+        f: F,
     ) -> Result<TransactionResult<R>, AdapterError>
     where
-        Fut: Future<Output = Result<R, AdapterError>>,
+        F: FnOnce(&CatalogState) -> Result<R, AdapterError>,
     {
         trace!("transact: {:?}", ops);
 
@@ -3545,7 +3544,7 @@ impl<S: Append> Catalog<S> {
             &mut state,
         )?;
 
-        let result = f(&state).await?;
+        let result = f(&state)?;
 
         // The user closure was successful, apply the updates.
         let (_stash, collections) = tx.commit_without_consolidate().await?;
