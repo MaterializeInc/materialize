@@ -627,7 +627,10 @@ impl<S: Append + 'static> Coordinator<S> {
         }];
 
         let secrets_controller = Arc::clone(&self.secrets_controller);
-        let cloud_resource_controller = self.cloud_resource_controller.clone();
+        let cloud_resource_controller = self
+            .cloud_resource_controller
+            .as_ref()
+            .map(|controller| Arc::clone(controller));
         match self
             .catalog_transact_with(Some(session), ops, |_| async {
                 match connection {
