@@ -421,13 +421,24 @@ p+p {
         }
 
         .gutter {
-            color: #e97a52;
+            color: #d33902;
         }
     }
 
     .note {
-        background: var(--bg);
+        background: var(--note);
+        color: var(--black);
         border: 1px solid #d9d6c1;
+
+        a {
+            color: #4f0cff;
+
+            &:hover,
+            &:focus {
+                color: var(--black) !important;
+                border-bottom-color: var(--black) !important;
+            }
+        }
 
         &::after {
             border-color: var(--bg) var(--bg) #d9d6c1 #d9d6c1;
@@ -435,17 +446,18 @@ p+p {
         }
 
         .gutter {
-            color: #807403;
+            color: #5f5602;
         }
     }
 
     .beta {
-        background: #e9f7fb;
-        border: 1px solid #c0d3d8;
+        background: #d8fad9;
+        border: 1px solid #c0d8c5;
+        color: var(--black);
 
         &::after {
-            border-color: var(--bg) var(--bg) #c0d3d8 #c0d3d8;
-            background: #c0d3d8;
+            border-color: var(--bg) var(--bg) #c0d8c5 #c0d8c5;
+            background: #c0d8c5;
         }
 
         .gutter {
@@ -863,8 +875,20 @@ pre {
 }
 
 body.dark .content {
-    .note .gutter {
-        color: #c9b607;
+
+    .note {
+        a {
+            color: #4f0cff;
+        }
+    }
+
+    .warning,
+    .alpha {
+        background: rgba(246, 8, 8, 0.19);
+
+        .gutter {
+            color: #ff8504;
+        }
     }
 
     .table-scrollable {
@@ -879,24 +903,12 @@ body.dark .content {
         color: var(--sub);
     }
 
-    .note,
-    .alpha,
-    .beta {
-        border-color: var(--divider-light);
-    }
-
     a {
 
         &:hover,
         &:focus {
             code {
                 color: var(--important);
-            }
-
-            &[href*="https://"] {
-                &::after {
-                    filter: invert(100%);
-                }
             }
         }
     }
