@@ -31,26 +31,20 @@ $dark-purple-v2: #1b164c;
 $darkest-purple-v2: #140d55;
 $orchid-v2: #e537c0;
 $transparent-gradient-v2: linear-gradient(0deg, #ffffff00 0%, #ffffff00 100%);
-$primary-gradient-v2: linear-gradient(
-    280.8deg,
-    #5c29f1 15.21%,
-    #e37ac2 56.5%,
-    #ff9067 85.53%
-);
-$primary-gradient-dark-v2: linear-gradient(
-        280.8deg,
+$primary-gradient-v2: linear-gradient(280.8deg,
         #5c29f1 15.21%,
         #e37ac2 56.5%,
-        #ff9067 85.53%
-    ),
+        #ff9067 85.53%);
+$primary-gradient-dark-v2: linear-gradient(280.8deg,
+        #5c29f1 15.21%,
+        #e37ac2 56.5%,
+        #ff9067 85.53%),
     linear-gradient(0deg, #111111, #111111);
 
-$secondary-gradient-v2: linear-gradient(
-        277.43deg,
+$secondary-gradient-v2: linear-gradient(277.43deg,
         #4512c7 -97.28%,
         #59c3ff 15.82%,
-        #75ff86 120.75%
-    ),
+        #75ff86 120.75%),
     linear-gradient(281.49deg, #5c29f1 22.32%, #e37ac2 64.57%, #ff9067 94.28%);
 $purple-gradient-v2: linear-gradient(102.5deg, #5a34cb 17.99%, #9b34cb 59.07%);
 $transparent-v2: #ffffff00;
@@ -62,8 +56,8 @@ $progress: #d1fa77;
 $warning: rgb(255, 145, 0);
 $danger: #f85151;
 
-@import "base";
 @import "mixins";
+@import "base";
 @import "content";
 @import "layout";
 @import "nav";

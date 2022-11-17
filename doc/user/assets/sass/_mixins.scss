@@ -5,3 +5,9 @@
 
     box-shadow: var(--shadow-default);
 }
+
+@mixin gradient-border {
+    background: linear-gradient(var(--bg), var(--bg)) padding-box, var(--graidient-primary);
+    background-origin: padding-box, border-box;
+    background-repeat: no-repeat;
+}

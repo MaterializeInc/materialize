@@ -175,8 +175,9 @@ a {
 .btn-ghost {
     position: relative;
     background: var(--bg);
+    border: 1px solid transparent;
+    @include gradient-border;
     color: var(--important);
-    border: 1px solid var(--sub);
 
     &:hover,
     &:focus {
