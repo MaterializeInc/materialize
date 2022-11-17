@@ -3138,6 +3138,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-all-buildids"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "mz-ore",
+]
+
+[[package]]
 name = "mz-audit-log"
 version = "0.0.0"
 dependencies = [
