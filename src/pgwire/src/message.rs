@@ -429,6 +429,8 @@ impl ErrorResponse {
             }
             AdapterNotice::UserRequested { .. } => SqlState::WARNING,
             AdapterNotice::ClusterReplicaStatusChanged { .. } => SqlState::WARNING,
+            AdapterNotice::DroppedActiveDatabase { .. } => SqlState::WARNING,
+            AdapterNotice::DroppedActiveCluster { .. } => SqlState::WARNING,
         };
         ErrorResponse {
             severity: Severity::for_adapter_notice(&notice),
@@ -578,6 +580,8 @@ impl Severity {
                 NoticeSeverity::Warning => Severity::Warning,
             },
             AdapterNotice::ClusterReplicaStatusChanged { .. } => Severity::Notice,
+            AdapterNotice::DroppedActiveDatabase { .. } => Severity::Notice,
+            AdapterNotice::DroppedActiveCluster { .. } => Severity::Notice,
         }
     }
 }
