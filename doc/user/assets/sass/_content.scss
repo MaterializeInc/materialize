@@ -393,7 +393,7 @@ p+p {
                 font-size: 4.5rem;
                 font-weight: 100;
                 position: absolute;
-                top: .5rem;
+                top: 0;
                 left: 1rem;
             }
 
@@ -473,6 +473,10 @@ p+p {
         margin: 1.6rem 0;
         padding: 1.6rem 1.6rem 1.6rem 9.6rem;
         position: relative;
+
+        p:first-of-type {
+            margin-top: 0;
+        }
 
         &::after {
             content: "";
