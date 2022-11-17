@@ -34,8 +34,8 @@ that when the data changes, the materialized view must be recomputed from
 scratch in all but a few simple cases.
 
 Our mission at Materialize is to manage materialized views better than this.
-supports incrementally updating a much broader set of views than is common in
-traditional databases (e.g. views over multi-way joins with complex
+Materialize supports incrementally updating a much broader set of views than is
+common in traditional databases (e.g. views over multi-way joins with complex
 aggregations), and can do incremental updates in the presence of arbitrary
 inserts, updates, and deletes in the input streams while maintaining
 correctness.
