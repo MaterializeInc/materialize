@@ -51,7 +51,7 @@ pub struct CatalogTxn<'a, T> {
 }
 
 impl<S: Append + 'static> Coordinator<S> {
-    /// Same as [`catalog_transact_with`] without a closure passed in.
+    /// Same as [`Self::catalog_transact_with`] without a closure passed in.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn catalog_transact(
         &mut self,
