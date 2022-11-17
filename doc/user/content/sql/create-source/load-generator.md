@@ -31,9 +31,9 @@ _src_name_  | The name for the source.
 **TPCH**    | Use the [tpch](#tpch) load generator.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists.
 **TICK INTERVAL**  | The interval at which the next datum should be emitted. Defaults to one second.
-**SCALE FACTOR**  | The scale factor for the `TPCH` generator. Defaults to `0.01` (~ 10MB).
+**SCALE FACTOR**   | The scale factor for the `TPCH` generator. Defaults to `0.01` (~ 10MB).
 **FOR ALL TABLES** | Creates subsources for all tables in the load generator.
-**FOR TABLES** _table_name_ | Creates subsources for specific tables in the load generator.
+**FOR TABLES (** _table_list_ **)** | Creates subsources for specific tables in the load generator.
 
 ### `WITH` options
 
@@ -111,6 +111,8 @@ is placed in the currently ongoing auction.
 
 The TPCH load generator implements the [TPC-H benchmark specification](https://www.tpc.org/tpch/default5.asp).
 The TPCH source must be used with `FOR ALL TABLES`, which will create the standard TPCH relations.
+If `TICK INTERVAL` is specified, after the initial data load, an order and its lineitems will be changed at this interval.
+If not specified, the dataset will not change over time.
 
 ## Examples
 

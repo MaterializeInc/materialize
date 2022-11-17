@@ -35,7 +35,7 @@ pub use counter::Counter;
 pub use datums::Datums;
 pub use tpch::Tpch;
 
-pub fn as_generator(g: &LoadGenerator) -> Box<dyn Generator> {
+pub fn as_generator(g: &LoadGenerator, tick_micros: Option<u64>) -> Box<dyn Generator> {
     match g {
         LoadGenerator::Auction => Box::new(Auction {}),
         LoadGenerator::Counter => Box::new(Counter {}),
@@ -52,12 +52,15 @@ pub fn as_generator(g: &LoadGenerator) -> Box<dyn Generator> {
             count_customer: *count_customer,
             count_orders: *count_orders,
             count_clerk: *count_clerk,
+            // The default tick behavior 1s. For tpch we want to disable ticking
+            // completely.
+            tick: Duration::from_micros(tick_micros.unwrap_or(0)),
         }),
     }
 }
 
 pub struct LoadGeneratorSourceReader {
-    rows: Box<dyn Iterator<Item = (usize, GeneratorMessageType, Row)>>,
+    rows: Box<dyn Iterator<Item = (usize, GeneratorMessageType, Row, i64)>>,
     last: Instant,
     tick: Duration,
     offset: MzOffset,
@@ -101,8 +104,8 @@ impl SourceConnectionBuilder for LoadGeneratorSourceConnection {
             })
             .unwrap_or_default();
 
-        let mut rows =
-            as_generator(&self.load_generator).by_seed(mz_ore::now::SYSTEM_TIME.clone(), None);
+        let mut rows = as_generator(&self.load_generator, self.tick_micros)
+            .by_seed(mz_ore::now::SYSTEM_TIME.clone(), None);
 
         // Skip forward to the requested offset.
         for _ in 0..offset.offset {
@@ -152,7 +155,7 @@ impl SourceReader for LoadGeneratorSourceReader {
             return Ok(NextMessage::Pending);
         }
 
-        let (output, typ, value) = match self.rows.next() {
+        let (output, typ, value, specific_diff) = match self.rows.next() {
             Some(row) => row,
             None => return Ok(NextMessage::Finished),
         };
@@ -165,7 +168,7 @@ impl SourceReader for LoadGeneratorSourceReader {
             key: (),
             value,
             headers: None,
-            specific_diff: 1,
+            specific_diff,
         };
         let message = match typ {
             GeneratorMessageType::Finalized => {

@@ -53,25 +53,25 @@ a b c
 ----------------
 Rochester NY 14618
 
-# We test the two errors below on a 1-row source in order
+# We test the two errors below on an empty source
 # to avoid the non-determinism in #16048
 
-$ s3-create-bucket bucket=test-one-record
+$ s3-create-bucket bucket=test-no-records
 
-$ s3-put-object bucket=test-one-record key=static-one-record.csv
+$ s3-put-object bucket=test-no-records key=static-no-records.csv
 city,state,zip
 Rochester,NY,14618
 
 > CREATE SOURCE mismatched_column_names
   FROM S3 CONNECTION s3_conn
-  DISCOVER OBJECTS MATCHING 'static-one-record.csv' USING BUCKET SCAN 'testdrive-test-one-record-${testdrive.seed}'
+  DISCOVER OBJECTS MATCHING 'static-no-records.csv' USING BUCKET SCAN 'testdrive-test-no-records-${testdrive.seed}'
   FORMAT CSV WITH HEADER (cities, country, zip)
 ! SELECT * FROM mismatched_column_names
 contains:first mismatched column at index 1 expected=cities actual="city"
 
 > CREATE SOURCE mismatched_column_names_count
   FROM S3 CONNECTION s3_conn
-  DISCOVER OBJECTS MATCHING 'static-one-record.csv' USING BUCKET SCAN 'testdrive-test-one-record-${testdrive.seed}'
+  DISCOVER OBJECTS MATCHING 'static-no-records.csv' USING BUCKET SCAN 'testdrive-test-no-records-${testdrive.seed}'
   FORMAT CSV WITH HEADER (cities, state)
 ! SELECT * FROM mismatched_column_names_count
 contains:expected 2 columns, got 3
@@ -98,9 +98,9 @@ contains:Expected a list of columns in parentheses, found EOF
 
 # The write frontier of a source from  a static CSV should be empty,
 # since the definition of "static" means "will never change again".
-$ set-regex match=(\d{13}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
+$ set-regex match=(\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
 > EXPLAIN TIMESTAMP FOR SELECT * FROM static_csv
-"          query timestamp: <> <>\n                    since:[<> <>]\n                    upper:[]\n         global timestamp: <> <>\n  can respond immediately: <>\n\nsource materialize.public.static_csv (<>, storage):\n            read frontier:[<> <>]\n           write frontier:[]\n"
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <>\n                          upper:[]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.static_csv (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[]\n"
 
 # Static CSV with manual headers.
 > CREATE SOURCE static_csv_manual_header (city_man, state_man, zip_man)

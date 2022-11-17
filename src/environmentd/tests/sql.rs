@@ -1027,41 +1027,39 @@ fn test_temporary_views() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-// Test EXPLAIN TIMESTAMP with tables. Mock time to verify initial table since
-// is now(), not 0.
+// Test EXPLAIN TIMESTAMP with tables.
 #[test]
 fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
-    let timestamp = Arc::new(Mutex::new(1_000));
-    let now = {
-        let timestamp = Arc::clone(&timestamp);
-        NowFn::from(move || *timestamp.lock().unwrap())
-    };
-    let config = util::Config::default().with_now(now);
+    let config = util::Config::default();
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
-    let timestamp_re = Regex::new(r"\s*(\d{4}|0) \(\d+-\d\d-\d\d \d\d:\d\d:\d\d.\d\d\d\)").unwrap();
+    let timestamp_re = Regex::new(r"\s*(\d+) \(\d+-\d\d-\d\d \d\d:\d\d:\d\d.\d\d\d\)").unwrap();
     let bool_re = Regex::new(r"true|false").unwrap();
 
     client.batch_execute("CREATE TABLE t1 (i1 INT)")?;
 
-    let expect = "          query timestamp:<TIMESTAMP>
-                    since:[<TIMESTAMP>]
-                    upper:[<TIMESTAMP>]
-         global timestamp:<TIMESTAMP>
-  can respond immediately: <BOOL>
+    let expect = "                query timestamp:<TIMESTAMP>
+          oracle read timestamp:<TIMESTAMP>
+largest not in advance of upper:<TIMESTAMP>
+                          upper:[<TIMESTAMP>]
+                          since:[<TIMESTAMP>]
+        can respond immediately: <BOOL>
+                       timeline: Some(EpochMilliseconds)
 
 source materialize.public.t1 (u1, storage):
-            read frontier:[<TIMESTAMP>]
-           write frontier:[<TIMESTAMP>]\n";
+                  read frontier:[<TIMESTAMP>]
+                 write frontier:[<TIMESTAMP>]\n";
 
     let row = client
         .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
         .unwrap();
     let explain: String = row.get(0);
     let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
+    // TODO: annoyingly "can respond immediately" does seem to change if you,
+    // say, inject a sleep. Is it supposed to be deterministic? See #16115.
     let explain = bool_re.replace_all(&explain, "<BOOL>");
-    assert_eq!(explain, expect);
+    assert_eq!(explain, expect, "{explain}\n\n{expect}");
 
     Ok(())
 }
@@ -1651,9 +1649,7 @@ fn get_explain_timestamp(table: &str, client: &mut postgres::Client) -> EpochMil
         .query_one(&format!("EXPLAIN TIMESTAMP FOR SELECT * FROM {table}"), &[])
         .unwrap();
     let explain: String = row.get(0);
-    let timestamp_re =
-        Regex::new(r"^\s+query timestamp:\s+(\d+) \(\d+-\d\d-\d\d \d\d:\d\d:\d\d\.\d\d\d\)\n")
-            .unwrap();
+    let timestamp_re = Regex::new(r"^\s+query timestamp:\s*(\d+)").unwrap();
     let timestamp_caps = timestamp_re.captures(&explain).unwrap();
     timestamp_caps.get(1).unwrap().as_str().parse().unwrap()
 }
@@ -1888,6 +1884,80 @@ fn test_introspection_user_permissions() -> Result<(), Box<dyn Error>> {
     assert!(introspection_client
         .query("SELECT * FROM pg_catalog.pg_namespace", &[])
         .is_err());
+
+    Ok(())
+}
+
+#[test]
+fn test_idle_in_transaction_session_timeout() -> Result<(), Box<dyn Error>> {
+    let config = util::Config::default();
+    let server = util::start_server(config)?;
+
+    let mut client = server.connect(postgres::NoTls)?;
+    client.batch_execute("SET idle_in_transaction_session_timeout TO '4ms'")?;
+    client.batch_execute("BEGIN")?;
+    std::thread::sleep(Duration::from_millis(5));
+    // Retry because sleep might be woken up early.
+    Retry::default()
+        .max_duration(Duration::from_secs(1))
+        .retry(|_| {
+            let res = client.query("SELECT 1", &[]);
+            if let Err(error) = res {
+                if error.is_closed() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "error should indicates that the connection is closed: {error:?}"
+                    ))
+                }
+            } else {
+                Err(format!("query should return error: {res:?}"))
+            }
+        })?;
+
+    // session should be timed out even if transaction has failed.
+    let mut client = server.connect(postgres::NoTls)?;
+    client.batch_execute("SET idle_in_transaction_session_timeout TO '4ms'")?;
+    client.batch_execute("BEGIN")?;
+    let error = client.batch_execute("SELECT 1/0").unwrap_err();
+    assert!(
+        !error.is_closed(),
+        "failing a transaction should not close the connection: {error:?}"
+    );
+    std::thread::sleep(Duration::from_millis(5));
+    // Retry because sleep might be woken up early.
+    Retry::default()
+        .max_duration(Duration::from_secs(1))
+        .retry(|_| {
+            let res = client.query("SELECT 1", &[]);
+            if let Err(error) = res {
+                if error.is_closed() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "error should indicates that the connection is closed: {error:?}"
+                    ))
+                }
+            } else {
+                Err(format!("query should return error: {res:?}"))
+            }
+        })?;
+
+    // session should not be timed out if it's not idle.
+    let mut client = server.connect(postgres::NoTls)?;
+    client.batch_execute("SET idle_in_transaction_session_timeout TO '4ms'")?;
+    client.batch_execute("BEGIN")?;
+    client.query("SELECT mz_internal.mz_sleep(0.5)", &[])?;
+    client.query("SELECT 1", &[])?;
+    client.batch_execute("COMMIT")?;
+
+    // 0 timeout indicated no timeout.
+    let mut client = server.connect(postgres::NoTls)?;
+    client.batch_execute("SET idle_in_transaction_session_timeout TO 0")?;
+    client.batch_execute("BEGIN")?;
+    std::thread::sleep(Duration::from_millis(5));
+    client.query("SELECT 1", &[])?;
+    client.batch_execute("COMMIT")?;
 
     Ok(())
 }

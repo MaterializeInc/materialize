@@ -131,6 +131,14 @@ const STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
         "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations.",
 };
 
+const IDLE_IN_TRANSACTION_SESSION_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("idle_in_transaction_session_timeout"),
+    value: &Duration::from_secs(60 * 2),
+    description:
+        "Sets the maximum allowed duration that a session can sit idle in a transaction before \
+         being terminated. A value of zero disables the timeout (PostgreSQL).",
+};
+
 const SERVER_VERSION: ServerVar<str> = ServerVar {
     name: UncasedStr::new("server_version"),
     value: concatcp!(
@@ -321,6 +329,7 @@ pub struct SessionVars {
     sql_safe_updates: SessionVar<bool>,
     standard_conforming_strings: ServerVar<bool>,
     statement_timeout: SessionVar<Duration>,
+    idle_in_transaction_session_timeout: SessionVar<Duration>,
     timezone: SessionVar<TimeZone>,
     transaction_isolation: SessionVar<IsolationLevel>,
 }
@@ -346,6 +355,9 @@ impl Default for SessionVars {
             sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
             standard_conforming_strings: STANDARD_CONFORMING_STRINGS,
             statement_timeout: SessionVar::new(&STATEMENT_TIMEOUT),
+            idle_in_transaction_session_timeout: SessionVar::new(
+                &IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
+            ),
             timezone: SessionVar::new(&TIMEZONE),
             transaction_isolation: SessionVar::new(&TRANSACTION_ISOLATION),
         }
@@ -385,6 +397,7 @@ impl SessionVars {
             &self.sql_safe_updates,
             &self.standard_conforming_strings,
             &self.statement_timeout,
+            &self.idle_in_transaction_session_timeout,
             &self.timezone,
             &self.transaction_isolation,
         ]
@@ -455,6 +468,8 @@ impl SessionVars {
             Ok(&self.standard_conforming_strings)
         } else if name == STATEMENT_TIMEOUT.name {
             Ok(&self.statement_timeout)
+        } else if name == IDLE_IN_TRANSACTION_SESSION_TIMEOUT.name {
+            Ok(&self.idle_in_transaction_session_timeout)
         } else if name == TIMEZONE.name {
             Ok(&self.timezone)
         } else if name == TRANSACTION_ISOLATION.name {
@@ -573,6 +588,8 @@ impl SessionVars {
             }
         } else if name == STATEMENT_TIMEOUT.name {
             self.statement_timeout.set(value, local)
+        } else if name == IDLE_IN_TRANSACTION_SESSION_TIMEOUT.name {
+            self.idle_in_transaction_session_timeout.set(value, local)
         } else if name == TIMEZONE.name {
             if let Ok(_) = TimeZone::parse(value) {
                 self.timezone.set(value, local)
@@ -627,8 +644,14 @@ impl SessionVars {
             self.search_path.reset(local);
         } else if name == SQL_SAFE_UPDATES.name {
             self.sql_safe_updates.reset(local);
+        } else if name == STATEMENT_TIMEOUT.name {
+            self.statement_timeout.reset(local);
+        } else if name == IDLE_IN_TRANSACTION_SESSION_TIMEOUT.name {
+            self.idle_in_transaction_session_timeout.reset(local);
         } else if name == TIMEZONE.name {
             self.timezone.reset(local);
+        } else if name == TRANSACTION_ISOLATION.name {
+            self.transaction_isolation.reset(local);
         } else if name == CLIENT_ENCODING.name
             || name == DATE_STYLE.name
             || name == FAILPOINTS.name
@@ -637,7 +660,6 @@ impl SessionVars {
             || name == SERVER_VERSION.name
             || name == SERVER_VERSION_NUM.name
             || name == STANDARD_CONFORMING_STRINGS.name
-            || name == TRANSACTION_ISOLATION.name
         {
             // fixed value
         } else {
@@ -669,9 +691,10 @@ impl SessionVars {
             server_version_num: _,
             sql_safe_updates,
             standard_conforming_strings: _,
-            statement_timeout: _,
+            statement_timeout,
+            idle_in_transaction_session_timeout,
             timezone,
-            transaction_isolation: _,
+            transaction_isolation,
         } = self;
         application_name.end_transaction(action);
         client_min_messages.end_transaction(action);
@@ -682,7 +705,10 @@ impl SessionVars {
         qgm_optimizations.end_transaction(action);
         search_path.end_transaction(action);
         sql_safe_updates.end_transaction(action);
+        statement_timeout.end_transaction(action);
+        idle_in_transaction_session_timeout.end_transaction(action);
         timezone.end_transaction(action);
+        transaction_isolation.end_transaction(action);
     }
 
     /// Returns the value of the `application_name` configuration parameter.
@@ -773,6 +799,11 @@ impl SessionVars {
     /// Returns the value of the `statement_timeout` configuration parameter.
     pub fn statement_timeout(&self) -> &Duration {
         self.statement_timeout.value()
+    }
+
+    /// Returns the value of the `idle_in_transaction_session_timeout` configuration parameter.
+    pub fn idle_in_transaction_session_timeout(&self) -> &Duration {
+        self.idle_in_transaction_session_timeout.value()
     }
 
     /// Returns the value of the `timezone` configuration parameter.

@@ -200,3 +200,6 @@ simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET max_tables = 100
 ----
 COMPLETE 0
+
+statement error parameter "idle_in_transaction_session_timeout" requires a "duration" value
+SET idle_in_transaction_session_timeout TO '-10ms'

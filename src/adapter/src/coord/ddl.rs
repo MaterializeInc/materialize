@@ -433,7 +433,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Removes all temporary items created by the specified connection, though
     /// not the temporary schema itself.
     pub(crate) async fn drop_temp_items(&mut self, session: &Session) {
-        let ops = self.catalog.drop_temp_item_ops(session.conn_id());
+        let ops = self.catalog.drop_temp_item_ops(&session.conn_id());
         if ops.is_empty() {
             return;
         }

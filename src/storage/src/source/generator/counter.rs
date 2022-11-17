@@ -20,7 +20,7 @@ impl Generator for Counter {
         &self,
         _now: NowFn,
         _seed: Option<u64>,
-    ) -> Box<dyn Iterator<Item = (usize, GeneratorMessageType, Row)>> {
+    ) -> Box<dyn Iterator<Item = (usize, GeneratorMessageType, Row, i64)>> {
         let mut counter = 0;
         Box::new(iter::repeat_with(move || {
             counter += 1;
@@ -28,6 +28,7 @@ impl Generator for Counter {
                 0,
                 GeneratorMessageType::Finalized,
                 Row::pack_slice(&[Datum::Int64(counter)]),
+                1,
             )
         }))
     }

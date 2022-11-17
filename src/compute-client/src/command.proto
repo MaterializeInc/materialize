@@ -47,15 +47,14 @@ message ProtoComputeCommand {
     }
 
     oneof kind {
-        ProtoInstanceConfig create_instance = 1;
-        google.protobuf.Empty drop_instance = 2;
+        ProtoCreateTimely create_timely = 1;
+        ProtoInstanceConfig create_instance = 2;
         ProtoCreateDataflows create_dataflows = 3;
         mz_storage_client.client.ProtoAllowCompaction allow_compaction = 4;
         ProtoPeek peek = 5;
         ProtoCancelPeeks cancel_peeks = 6;
         google.protobuf.Empty initialization_complete = 7;
         ProtoUpdateMaxResultSize update_max_result_size = 8;
-        ProtoCreateTimely create_timely = 9;
     }
 }
 

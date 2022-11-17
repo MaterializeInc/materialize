@@ -353,11 +353,12 @@ mod enabled {
                     .stats()
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 let stats_rendered = render_jemalloc_stats(&stats);
-                let stats_rendered = stats_rendered
+                let mut header = stats_rendered
                     .iter()
                     .map(|(k, v)| (*k, v.as_str()))
                     .collect::<Vec<_>>();
-                let mzfg = stacks.to_mzfg(true, &stats_rendered);
+                header.push(("display_bytes", "1"));
+                let mzfg = stacks.to_mzfg(true, &header);
                 Ok((
                     HeaderMap::from_iter([(
                         CONTENT_DISPOSITION,

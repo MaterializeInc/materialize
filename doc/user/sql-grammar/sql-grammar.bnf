@@ -1,6 +1,8 @@
 aggregate_with_filter ::= aggregate_name '(' expression ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
+alter_connection ::=
+  'ALTER' 'CONNECTION' 'IF EXISTS'? name 'ROTATE' 'KEYS'
 alter_rename ::=
-  'ALTER' ('INDEX' | 'SOURCE' | 'SINK' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'SECRET' ) name 'RENAME TO' new_name
+  'ALTER' ('CONNECTION' | 'INDEX' | 'SOURCE' | 'SINK' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'SECRET' ) name 'RENAME TO' new_name
 alter_index ::=
   'ALTER' 'INDEX' name 'SET' 'ENABLED'
 alter_secret ::=
@@ -22,8 +24,6 @@ col_option ::=
   'DEFAULT' expr
 commit ::=
   'COMMIT'
-connector_spec ::=
-  'KAFKA BROKER' host 'TOPIC' topic?
 copy_to ::=
   'COPY' '(' query ')' 'TO' 'STDOUT'
   ( 'WITH'? '(' field val ( ',' field val )* ')' )?
@@ -40,8 +40,11 @@ create_cluster_replica ::=
   'CREATE' 'CLUSTER' 'REPLICA' cluster_name '.' replica_name (option '=' value ( ',' option '=' value )*)?
 create_connection ::=
   'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO'
-  ( 'KAFKA' | 'CONFLUENT' 'SCHEMA' 'REGISTRY' | 'POSTGRES' | 'SSH' 'TUNNEL' )
+  ( 'AWS' 'PRIVATELINK' | 'CONFLUENT' 'SCHEMA' 'REGISTRY' | 'KAFKA' | 'POSTGRES' | 'SSH' 'TUNNEL' )
   '(' field '='? val ( ',' field '='? val )* ')'
+create_connection_kafka_brokers ::= 'BROKERS' '(' kafka_broker (',' kafka_broker)* ')'
+create_connection_kafka_broker ::=
+  "'host:port'" ('USING' 'AWS' 'PRIVATELINK' connection ('(' 'PORT' number ')')?)?
 create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
 create_index ::=
@@ -102,7 +105,7 @@ load_generator_option ::=
 create_source_postgres ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   'FROM' 'POSTGRES' 'CONNECTION' connection_name
-  '(' 'PUBLICATION' publication_name ')'
+  '(' 'PUBLICATION' publication_name ( ( ',' 'TEXT COLUMNS' ('(' (column_name) ( ( ',' column_name ) )* ')')? )? ) ')'
   ('FOR ALL TABLES' | 'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')')
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_source_s3 ::=

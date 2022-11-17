@@ -90,6 +90,14 @@ where
     /// Blocks until the client sends a complete message. If the client
     /// terminates the stream, returns `None`. Returns an error if the client
     /// sends a malformed message or if the connection underlying is broken.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe. The returned future only holds onto a
+    /// reference to thea underlying stream, so dropping it will never lose a
+    /// value.
+    ///
+    /// <https://docs.rs/tokio-stream/latest/tokio_stream/trait.StreamExt.html#cancel-safety-1>
     pub async fn recv(&mut self) -> Result<Option<FrontendMessage>, io::Error> {
         let message = self.inner.try_next().await?;
         match &message {

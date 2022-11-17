@@ -7,24 +7,28 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 use std::future::Future;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use prometheus::IntCounterVec;
 use tokio::sync::{mpsc, oneshot, watch};
+use tracing::error;
 use uuid::Uuid;
 
 use mz_ore::id_gen::IdAllocator;
+use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_ore::thread::JoinOnDropHandle;
 use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 
 use crate::command::{Canceled, Command, ExecuteResponse, Response, StartupResponse};
 use crate::error::AdapterError;
-use crate::session::{EndTransactionAction, PreparedStatement, Session};
+use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionId};
 
 /// An abstraction allowing us to name different connections.
 pub type ConnectionId = u32;
@@ -158,10 +162,11 @@ impl ConnClient {
         let (cancel_tx, cancel_rx) = watch::channel(Canceled::NotCanceled);
         let cancel_tx = Arc::new(cancel_tx);
         let mut client = SessionClient {
-            inner: self,
+            inner: Some(self),
             session: Some(session),
             cancel_tx: Arc::clone(&cancel_tx),
             cancel_rx,
+            timeouts: Timeout::new(),
         };
         let response = client
             .send(|tx, session| Command::Startup {
@@ -211,12 +216,16 @@ impl Drop for ConnClient {
 ///
 /// See also [`Client`].
 pub struct SessionClient {
-    inner: ConnClient,
+    // Invariant: inner may only be `None` after the session has been terminated.
+    // Once the session is terminated, no communication to the Coordinator
+    // should be attempted.
+    inner: Option<ConnClient>,
     // Invariant: session may only be `None` during a method call. Every public
     // method must ensure that `Session` is `Some` before it returns.
     session: Option<Session>,
     cancel_tx: Arc<watch::Sender<Canceled>>,
     cancel_rx: watch::Receiver<Canceled>,
+    timeouts: Timeout,
 }
 
 impl SessionClient {
@@ -324,7 +333,7 @@ impl SessionClient {
 
     /// Cancels the query currently running on another connection.
     pub fn cancel_request(&mut self, conn_id: ConnectionId, secret_key: u32) {
-        self.inner.cancel_request(conn_id, secret_key)
+        self.inner().cancel_request(conn_id, secret_key)
     }
 
     /// Ends a transaction.
@@ -374,9 +383,30 @@ impl SessionClient {
         .await
     }
 
+    /// Terminates the client session.
+    pub async fn terminate(&mut self) {
+        let res = self
+            .send(|tx, session| Command::Terminate {
+                session,
+                tx: Some(tx),
+            })
+            .await;
+        if let Err(e) = res {
+            // Nothing we can do to handle a failed terminate so we just log and ignore it.
+            error!("Unable to terminate session: {e:?}");
+        }
+        // Prevent any communication with Coordinator after session is terminated.
+        self.inner = None;
+    }
+
     /// Returns a mutable reference to the session bound to this client.
     pub fn session(&mut self) -> &mut Session {
-        self.session.as_mut().unwrap()
+        self.session.as_mut().expect("session invariant violated")
+    }
+
+    /// Returns a mutable reference to the inner client.
+    pub fn inner(&mut self) -> &mut ConnClient {
+        self.inner.as_mut().expect("inner invariant violated")
     }
 
     async fn send<T, F>(&mut self, f: F) -> Result<T, AdapterError>
@@ -386,7 +416,7 @@ impl SessionClient {
         let session = self.session.take().expect("session invariant violated");
         let mut typ = None;
         let res = self
-            .inner
+            .inner()
             .send(|tx| {
                 let cmd = f(tx, session);
                 // Measure the success and error rate of certain commands:
@@ -414,7 +444,7 @@ impl SessionClient {
             "error"
         };
         if let Some(typ) = typ {
-            self.inner
+            self.inner()
                 .inner
                 .metrics
                 .commands
@@ -424,6 +454,38 @@ impl SessionClient {
         self.session = Some(res.session);
         res.result
     }
+
+    pub fn add_idle_in_transaction_session_timeout(&mut self) {
+        let session = self.session();
+        let timeout_dur = session.vars().idle_in_transaction_session_timeout();
+        if !timeout_dur.is_zero() {
+            let timeout_dur = timeout_dur.clone();
+            if let Some(txn) = session.transaction().inner() {
+                let txn_id = txn.id.clone();
+                let timeout = TimeoutType::IdleInTransactionSession(txn_id);
+                self.timeouts.add_timeout(timeout, timeout_dur);
+            }
+        }
+    }
+
+    pub fn remove_idle_in_transaction_session_timeout(&mut self) {
+        let session = self.session();
+        if let Some(txn) = session.transaction().inner() {
+            let txn_id = txn.id.clone();
+            self.timeouts
+                .remove_timeout(&TimeoutType::IdleInTransactionSession(txn_id));
+        }
+    }
+
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe. If `recv` is used as the event in a
+    /// `tokio::select!` statement and some other branch
+    /// completes first, it is guaranteed that no messages were received on this
+    /// channel.
+    pub async fn recv_timeout(&mut self) -> Option<TimeoutType> {
+        self.timeouts.recv().await
+    }
 }
 
 impl Drop for SessionClient {
@@ -432,7 +494,91 @@ impl Drop for SessionClient {
         // a response. In this case, it is the coordinator's responsibility to
         // terminate the session.
         if let Some(session) = self.session.take() {
-            self.inner.inner.send(Command::Terminate { session });
+            // We may not have a connection to the Coordinator if the session was
+            // prematurely terminated, for example due to a timeout.
+            if let Some(inner) = &self.inner {
+                inner.inner.send(Command::Terminate { session, tx: None })
+            }
+        }
+    }
+}
+
+#[derive(Hash, PartialEq, Eq, Clone, Debug)]
+pub enum TimeoutType {
+    IdleInTransactionSession(TransactionId),
+}
+
+impl Display for TimeoutType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TimeoutType::IdleInTransactionSession(txn_id) => {
+                writeln!(f, "Idle in transaction session for transaction '{txn_id}'")
+            }
+        }
+    }
+}
+
+impl From<TimeoutType> for AdapterError {
+    fn from(timeout: TimeoutType) -> Self {
+        match timeout {
+            TimeoutType::IdleInTransactionSession(_) => {
+                AdapterError::IdleInTransactionSessionTimeout
+            }
+        }
+    }
+}
+
+struct Timeout {
+    tx: mpsc::UnboundedSender<TimeoutType>,
+    rx: mpsc::UnboundedReceiver<TimeoutType>,
+    active_timeouts: HashMap<TimeoutType, AbortOnDropHandle<()>>,
+}
+
+impl Timeout {
+    fn new() -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
+        Timeout {
+            tx,
+            rx,
+            active_timeouts: HashMap::new(),
+        }
+    }
+
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe. If `recv` is used as the event in a
+    /// `tokio::select!` statement and some other branch
+    /// completes first, it is guaranteed that no messages were received on this
+    /// channel.
+    ///
+    /// <https://docs.rs/tokio/latest/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety>
+    async fn recv(&mut self) -> Option<TimeoutType> {
+        self.rx.recv().await
+    }
+
+    fn add_timeout(&mut self, timeout: TimeoutType, duration: Duration) {
+        let tx = self.tx.clone();
+        let timeout_key = timeout.clone();
+        let handle = mz_ore::task::spawn(|| format!("{timeout_key}"), async move {
+            tokio::time::sleep(duration).await;
+            let _ = tx.send(timeout);
+        })
+        .abort_on_drop();
+        self.active_timeouts.insert(timeout_key, handle);
+    }
+
+    fn remove_timeout(&mut self, timeout: &TimeoutType) {
+        self.active_timeouts.remove(timeout);
+
+        // Remove the timeout from the rx queue if it exists.
+        let mut timeouts = Vec::new();
+        while let Ok(pending_timeout) = self.rx.try_recv() {
+            if timeout != &pending_timeout {
+                timeouts.push(pending_timeout);
+            }
+        }
+        for pending_timeout in timeouts {
+            self.tx.send(pending_timeout).expect("rx is in this struct");
         }
     }
 }

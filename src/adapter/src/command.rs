@@ -104,6 +104,7 @@ pub enum Command {
 
     Terminate {
         session: Session,
+        tx: Option<oneshot::Sender<Response<()>>>,
     },
 }
 
