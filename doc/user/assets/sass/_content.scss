@@ -666,32 +666,6 @@ p+p {
         }
     }
 
-    .notify_button {
-        padding: 7px 5px 6px 5px;
-        border: none;
-        color: $dark-black-v2;
-        font-size: 0.8rem;
-        background-color: $grey-light;
-        height: 26px;
-        padding: 0 12px;
-        cursor: pointer;
-        border-radius: $border-radius;
-        white-space: nowrap;
-
-        &:hover {
-            background: $grey;
-        }
-
-        &.success {
-            opacity: 0.8;
-            background-color: #70f2a3;
-        }
-    }
-
-    td>.notify_button {
-        margin-top: 6px;
-    }
-
     #subscribe_dialog {
         display: none;
         z-index: 10;
@@ -814,6 +788,65 @@ p+p {
         background: #70f2a3;
     }
 }
+
+#subscribe_dialog {
+    display: none;
+    z-index: 10;
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    padding: 6px;
+    @include card;
+
+    form {
+        display: flex;
+
+        input[type="email"] {
+            font-size: 1.4rem;
+            padding: .5rem;
+            border-radius: $border-radius;
+            border: none;
+            margin-right: .8rem;
+            background: var(--bg);
+            color: var(--important);
+            border: 1px solid var(--divider-light);
+            box-shadow: var(--shadow-default);
+        }
+
+        input[type="submit"] {
+            line-height: 0.5;
+        }
+    }
+
+    .disclaimer {
+        width: 100%;
+        color: var(--important);
+        margin-top: var(--nano);
+        padding: .4rem .8rem;
+        font-size: var(--xsm);
+        border-bottom-left-radius: $border-radius;
+        border-bottom-right-radius: $border-radius;
+    }
+}
+
+.subscribe_dialog_active {
+    position: relative;
+
+    #subscribe_dialog {
+        display: block;
+    }
+}
+
+
+.notify_button {
+    font-size: 1rem;
+    padding: 0.4rem 0.8rem;
+
+    &.success {
+        width: 8rem;
+    }
+}
+
 
 tr .copy_button {
     display: none !important;

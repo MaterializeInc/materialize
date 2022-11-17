@@ -133,15 +133,22 @@ body {
     font-weight: 300;
 }
 
+input,
+textarea,
+select {
+    font-family: inherit;
+}
+
 a,
-button {
+button,
+input[type="submit"] {
     cursor: pointer;
+    transition: all 0.2s;
+    transition-delay: 50ms;
 }
 
 a {
     color: var(--sub);
-    transition: all 0.2s;
-    transition-delay: 50ms;
     text-decoration: none;
 
     &:hover,
