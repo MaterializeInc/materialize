@@ -43,7 +43,7 @@
     --purple-dark: #472f85;
 
     --white: #fff;
-    --white-light: #fafafa;
+    --white-light: #fefefe;
     --code-block-light: #f9f7fd;
 
     --nav-light: #fff;
@@ -60,6 +60,8 @@
     --gray-light: #dddddd;
     --gray-lighter: #dddd;
     --gray-lightest: #eeeeee;
+
+    --shadow-default: 0 0.625rem 1.5rem 0rem rgba(0, 0, 0, 0.08);
 }
 
 body.dark {
@@ -83,6 +85,8 @@ body.dark {
     --sub: var(--gray-light);
     --body: var(--gray);
     --highlight: #e0a5fb;
+
+    --shadow-default: 0 0.625rem 1.5rem 0 rgba(0, 0, 0, 0.4);
 }
 
 body.light {
