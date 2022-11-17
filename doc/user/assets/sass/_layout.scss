@@ -99,6 +99,10 @@
         padding: 3px 0 3px 15px;
         text-decoration: none;
 
+        &.active {
+            font-weight: 500;
+        }
+
         &:hover,
         &.active {
             color: var(--highlight);
