@@ -164,6 +164,12 @@ a {
     padding: 0.6rem 1.2rem;
     border-radius: 8px;
 
+    svg {
+        margin-right: .6rem;
+        width: 18px;
+        height: 18px;
+    }
+
     &:hover,
     &:focus {
         color: var(--white);

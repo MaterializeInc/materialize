@@ -214,10 +214,10 @@
 
 .toc-wrapper {
     flex: 1;
-}
 
-.toc-dummy {
-    flex: 1;
+    .btn-ghost {
+        margin: var(--x-small) var(--milli) var(--milli);
+    }
 }
 
 .toc {
