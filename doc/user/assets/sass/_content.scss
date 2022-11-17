@@ -549,11 +549,11 @@ p+p {
         font-size: 1.4rem;
         letter-spacing: 0.03em;
         text-transform: uppercase;
-        color: var(--gray-dark);
+        color: var(--sub);
         margin-bottom: var(--nano);
 
         a {
-            color: var(--gray-dark) !important;
+            color: var(--sub) !important;
             margin: 0 0.8rem;
 
             &:hover {
