@@ -66,3 +66,6 @@
 5
 6
 7
+
+# Clean up.
+> DROP CLUSTER test
