@@ -7,18 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Drivers for upstream commit
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use timely::progress::frontier::MutableAntichain;
-use timely::progress::Antichain;
-use timely::PartialOrder;
+use timely::order::PartialOrder;
+use timely::progress::frontier::{Antichain, MutableAntichain};
 
 use mz_expr::PartitionId;
 use mz_repr::Diff;
-use mz_storage_client::types::sources::MzOffset;
 use mz_timely_util::order::Partitioned;
+
+use crate::types::sources::MzOffset;
 
 /// OffsetAntichain is similar to a timely `Antichain<(PartitionId, T: TotalOrder)>`,
 /// but additionally:
