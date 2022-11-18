@@ -1,75 +1,125 @@
-{{ $title := delimit (slice (cond (isset .Params "htmltitle") .Params.htmltitle .Page.Title) .Site.Title) " | " }}
-{{ $description := cond (isset .Params "description") .Params.description .Page.Description }}
-<meta name="viewport" content="width=1024">
-<meta charset=utf-8>
-<meta http-equiv=X-UA-Compatible content="IE=edge">
-<meta name=description content="{{ $description }}">
+{{ $title := delimit (slice (cond (isset .Params "htmltitle") .Params.htmltitle
+.Page.Title) .Site.Title) " | " }} {{ $description := cond (isset .Params
+"description") .Params.description .Page.Description }}
+<meta name="viewport" content="width=1024" />
+<meta charset="utf-8" />
+<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+<meta name="description" content="{{ $description }}" />
 <title>{{ $title }}</title>
-<meta name=referrer content=origin>
-<meta name=HandheldFriendly content=True>
-<meta name=msapplication-TileColor content="#7F4EFF">
-<meta name=theme-color content="#ffffff">
-<meta property="og:locale" content=en_US>
-<meta property="og:url" content="{{ .Site.BaseURL }}{{ .Permalink }}">
-<meta property="og:type" content=article>
-<meta property="og:title" content="{{ $title }}">
-<meta property="og:image" content="https://user-images.githubusercontent.com/11527560/159138593-09223308-ce91-4582-a47a-a03166fef26b.gif">
-<meta property="og:description" content="{{ $description }}">
-<meta property="og:site_name" content=Materialize>
-<meta name="twitter:card" content=summary_large_image>
-<meta name="twitter:site" content="@MaterializeInc">
-<meta name="twitter:creator" content="@MaterializeInc">
-<meta name="twitter:title" content="{{ $title }}">
-<meta name="twitter:image" content="https://user-images.githubusercontent.com/11527560/159138593-09223308-ce91-4582-a47a-a03166fef26b.gif">
-<meta name="twitter:description" content="{{ $description }}">
-<link rel="shortcut icon" type="image/x-icon" href="{{ .Site.BaseURL }}/images/materialize_favicon_32.png">
-<link rel=apple-touch-icon sizes=180x180 href="{{ .Site.BaseURL }}/images/materialize_logo_180.png">
-<link rel=icon type="image/png" sizes=32x32 href="{{ .Site.BaseURL }}/images/materialize_favicon_32.png">
-<link rel=mask-icon href="{{ .Site.BaseURL }}/images/materialize_logo.svg" color="#4d7cfe">
-<link rel=canonical href="{{ .Permalink }}">
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="true" />
+<link
+  href="https://fonts.googleapis.com/css2?family=Fira+Code&family=Inter:wght@300;500;600&display=swap"
+  rel="stylesheet"
+/>
+<meta name="referrer" content="origin" />
+<meta name="HandheldFriendly" content="True" />
+<meta name="msapplication-TileColor" content="#7F4EFF" />
+<meta name="theme-color" content="#ffffff" />
+<meta property="og:locale" content="en_US" />
+<meta property="og:url" content="{{ .Site.BaseURL }}{{ .Permalink }}" />
+<meta property="og:type" content="article" />
+<meta property="og:title" content="{{ $title }}" />
+<meta
+  property="og:image"
+  content="https://user-images.githubusercontent.com/11527560/159138593-09223308-ce91-4582-a47a-a03166fef26b.gif"
+/>
+<meta property="og:description" content="{{ $description }}" />
+<meta property="og:site_name" content="Materialize" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:site" content="@MaterializeInc" />
+<meta name="twitter:creator" content="@MaterializeInc" />
+<meta name="twitter:title" content="{{ $title }}" />
+<meta
+  name="twitter:image"
+  content="https://user-images.githubusercontent.com/11527560/159138593-09223308-ce91-4582-a47a-a03166fef26b.gif"
+/>
+<meta name="twitter:description" content="{{ $description }}" />
+<link
+  rel="shortcut icon"
+  type="image/x-icon"
+  href="{{ .Site.BaseURL }}/images/materialize_favicon_32.png"
+/>
+<link
+  rel="apple-touch-icon"
+  sizes="180x180"
+  href="{{ .Site.BaseURL }}/images/materialize_logo_180.png"
+/>
+<link
+  rel="icon"
+  type="image/png"
+  sizes="32x32"
+  href="{{ .Site.BaseURL }}/images/materialize_favicon_32.png"
+/>
+<link
+  rel="mask-icon"
+  href="{{ .Site.BaseURL }}/images/materialize_logo.svg"
+  color="#4d7cfe"
+/>
+<link rel="canonical" href="{{ .Permalink }}" />
 
-{{/*  Include all JavaScript files here  */}}
+{{/* Include all JavaScript files here */}}
 <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/anchor-js/anchor.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/simple-scrollspy@2.0.3/dist/simple-scrollspy.min.js"></script>
 
-{{/*  Sass processing here  */}}
-{{ $style := resources.Get "sass/main.scss" | toCSS | fingerprint }}
-<link rel="stylesheet" href="{{ $style.RelPermalink }}">
+{{/* Sass processing here */}} {{ $style := resources.Get "sass/main.scss" |
+toCSS | fingerprint }}
+<link rel="stylesheet" href="{{ $style.RelPermalink }}" />
 
-{{/* Algolia DocSearch */}}
-{{if (isset .Params "pagerank")}}
-<meta name="docsearch_pagerank" content='{{ .Params.pagerank }}' />
+{{/* Algolia DocSearch */}} {{if (isset .Params "pagerank")}}
+<meta name="docsearch_pagerank" content="{{ .Params.pagerank }}" />
 {{end}}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@docsearch/css@3" />
 <script src="https://cdn.jsdelivr.net/npm/@docsearch/js@3"></script>
 <script defer>
-addEventListener("DOMContentLoaded", () => {
-  docsearch({
-    apiKey: "5fb0a95d60e603d3c83c2506e1de4a64",
-    appId: "9LF5B9GMOF",
-    indexName: "materialize",
-    container: '#docsearch',
+  addEventListener("DOMContentLoaded", () => {
+    docsearch({
+      apiKey: "5fb0a95d60e603d3c83c2506e1de4a64",
+      appId: "9LF5B9GMOF",
+      indexName: "materialize",
+      container: "#docsearch",
+    });
   });
-});
 </script>
 
-{{if hugo.IsProduction}}
-{{/* Google Analytics */}}
-<script async src="https://www.googletagmanager.com/gtag/js?id=UA-138552650-1"></script>
+{{if hugo.IsProduction}} {{/* Google Analytics */}}
+<script
+  async
+  src="https://www.googletagmanager.com/gtag/js?id=UA-138552650-1"
+></script>
 <script>
   window.dataLayer = window.dataLayer || [];
-  function gtag(){dataLayer.push(arguments);}
-  gtag('js', new Date());
+  function gtag() {
+    dataLayer.push(arguments);
+  }
+  gtag("js", new Date());
 
-  gtag('config', 'UA-138552650-1');
+  gtag("config", "UA-138552650-1");
 </script>
 
 {{/* Leadfeeder */}}
-<script> (function(){ window.ldfdr = window.ldfdr || {}; (function(d, s, ss, fs){ fs = d.getElementsByTagName(s)[0]; function ce(src){ var cs = d.createElement(s); cs.src = src; setTimeout(function(){fs.parentNode.insertBefore(cs,fs)}, 1); } ce(ss); })(document, 'script', 'https://sc.lfeeder.com/lftracker_v1_bElvO73R0rE8ZMqj.js'); })(); </script>
-{{end}}
-
-{{/* Segment */}}
+<script>
+  (function () {
+    window.ldfdr = window.ldfdr || {};
+    (function (d, s, ss, fs) {
+      fs = d.getElementsByTagName(s)[0];
+      function ce(src) {
+        var cs = d.createElement(s);
+        cs.src = src;
+        setTimeout(function () {
+          fs.parentNode.insertBefore(cs, fs);
+        }, 1);
+      }
+      ce(ss);
+    })(
+      document,
+      "script",
+      "https://sc.lfeeder.com/lftracker_v1_bElvO73R0rE8ZMqj.js"
+    );
+  })();
+</script>
+{{end}} {{/* Segment */}}
 <script>
   !function(){var analytics=window.analytics=window.analytics||[];if(!analytics.initialize)if(analytics.invoked)window.console&&console.error&&console.error("Segment snippet included twice.");else{analytics.invoked=!0;analytics.methods=["trackSubmit","trackClick","trackLink","trackForm","pageview","identify","reset","group","track","ready","alias","debug","page","once","off","on","addSourceMiddleware","addIntegrationMiddleware","setAnonymousId","addDestinationMiddleware"];analytics.factory=function(e){return function(){var t=Array.prototype.slice.call(arguments);t.unshift(e);analytics.push(t);return analytics}};for(var e=0;e<analytics.methods.length;e++){var key=analytics.methods[e];analytics[key]=analytics.factory(key)}analytics.load=function(key,e){var t=document.createElement("script");t.type="text/javascript";t.async=!0;t.src="https://cdn.segment.materialize.com/analytics.js/v1/" + key + "/analytics.min.js";var n=document.getElementsByTagName("script")[0];n.parentNode.insertBefore(t,n);analytics._loadOptions=e};analytics.SNIPPET_VERSION="4.15.3";
   {{ if hugo.IsProduction }}
@@ -93,31 +143,30 @@ addEventListener("DOMContentLoaded", () => {
 {{/* Tabs */}}
 <script>
   $(document).ready(function () {
-
     // make nav-tab lists from tab-panes
-    $('.tab-content').find('.tab-pane').each(function (idx, item) {
-      var navTabs = $(this).closest('.code-tabs').find('.nav-tabs'),
-        title = $(this).attr('title');
-      navTabs.append('<li><a href="#">' + title + '</a></li');
-    });
+    $(".tab-content")
+      .find(".tab-pane")
+      .each(function (idx, item) {
+        var navTabs = $(this).closest(".code-tabs").find(".nav-tabs"),
+          title = $(this).attr("title");
+        navTabs.append('<li><a href="#">' + title + "</a></li");
+      });
 
     // activate first tab and tab-pane
-    $('.nav-tabs li:first-child').addClass('active').click()
-    $('.tab-content div:first-child').addClass('active').click()
+    $(".nav-tabs li:first-child").addClass("active").click();
+    $(".tab-content div:first-child").addClass("active").click();
 
     // click
-    $('.nav-tabs a').click(function (e) {
-
+    $(".nav-tabs a").click(function (e) {
       e.preventDefault();
 
       var tab = $(this).parent(),
         tabIndex = tab.index(),
-        tabPanel = $(this).closest('.code-tabs'),
-        tabPane = tabPanel.find('.tab-pane').eq(tabIndex);
-      tabPanel.find('.active').removeClass('active');
-      tab.addClass('active');
-      tabPane.addClass('active');
-
+        tabPanel = $(this).closest(".code-tabs"),
+        tabPane = tabPanel.find(".tab-pane").eq(tabIndex);
+      tabPanel.find(".active").removeClass("active");
+      tab.addClass("active");
+      tabPane.addClass("active");
     });
   });
 </script>
