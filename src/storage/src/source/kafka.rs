@@ -310,10 +310,17 @@ impl SourceReader for KafkaSourceReader {
         // directly.
         if let Some(result) = self.consumer.poll(Duration::from_secs(0)) {
             match result {
-                Err(e) => error!(
-                    "kafka error when polling consumer for source: {} topic: {} : {}",
-                    self.source_name, self.topic_name, e
-                ),
+                Err(e) => {
+                    let message = format!(
+                        "kafka error when polling consumer for source: {} topic: {} : {}",
+                        self.source_name, self.topic_name, e
+                    );
+                    next_message =
+                        NextMessage::Ready(SourceMessageType::SourceStatus(SourceStatusUpdate {
+                            status: SourceStatus::Stalled,
+                            error: Some(message),
+                        }))
+                }
                 Ok(message) => {
                     let source_message = construct_source_message(&message, self.include_headers)
                         .map_err(SourceReaderError::other_definite)?;
