@@ -1744,7 +1744,7 @@ pub enum IsolationLevel {
 }
 
 impl IsolationLevel {
-    pub(super) fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::ReadUncommitted => "read uncommitted",
             Self::ReadCommitted => "read committed",
