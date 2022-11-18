@@ -239,10 +239,10 @@ impl StateVersions {
             }
             Err(live_diffs) => {
                 debug!(
-                    "apply_unbatched_cmd {} {} lost the CaS race, retrying: {} vs {:?}",
+                    "apply_unbatched_cmd {} {} lost the CaS race, retrying: {:?} vs {:?}",
                     new_state.shard_id(),
                     cmd_name,
-                    new_state.seqno(),
+                    expected,
                     live_diffs.last().map(|x| x.seqno)
                 );
                 Ok(Err(live_diffs))
