@@ -717,16 +717,6 @@ where
                             );
                         }
                     }
-                    // Consolidate updates within.
-                    consolidate_updates(&mut correction);
-
-                    if sink_id.is_user() {
-                        trace!(
-                            "correction: {:?}, in-flight: {:?}",
-                            correction,
-                            in_flight_batches
-                        );
-                    }
 
                     trace!(
                         "persist_sink {sink_id}/{shard_id}: \
@@ -759,6 +749,14 @@ where
                         ready batches: {:?}",
                         ready_batches,
                     );
+
+                    if !ready_batches.is_empty() {
+                        // Consolidate updates only when they are required by an
+                        // attempt to write out new updates. Otherwise, we might
+                        // spend a lot of time "consolidating" the same updates
+                        // over and over again, with no changes.
+                        consolidate_updates(&mut correction);
+                    }
 
                     for batch_description in ready_batches.into_iter() {
                         let cap = in_flight_batches.remove(&batch_description).unwrap();
