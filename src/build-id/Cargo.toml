@@ -1,0 +1,17 @@
+[package]
+name = "mz-build-id"
+description = "Utility for getting build IDs of all loaded processes."
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = true
+license = "Apache-2.0"
+authors = [
+    "Brennan Vincent <brennan@materialize.com>",
+]
+repository = "https://github.com/MaterializeInc/materialize"
+
+[dependencies]
+anyhow = "1.0.65"
+libc = "0.2.135"
+mz-ore = { path = "../ore", features = ["task"] }

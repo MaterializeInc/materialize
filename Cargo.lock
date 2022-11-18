@@ -3203,6 +3203,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-build-id"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "mz-ore",
+]
+
+[[package]]
 name = "mz-build-info"
 version = "0.0.0"
 dependencies = [
