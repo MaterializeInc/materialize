@@ -196,25 +196,7 @@ WITH t3_with_key AS (select f1 as key, sum(f2) as nokey from t3 group by f1)
 SELECT a1.* FROM t3 AS a1 LEFT JOIN t3_with_key AS a2 ON (a1.f1 = a2.key);
 ----
 Explained Query:
-  Return // { arity: 2 }
-    Union // { arity: 2 }
-      Negate // { arity: 2 }
-        Project (#0, #1) // { arity: 2 }
-          Join on=(#0 = #2) type=differential // { arity: 3 }
-            implementation
-              %0:t3 » %1[#0]UKA
-            ArrangeBy keys=[[#0]] // { arity: 2 }
-              Get materialize.public.t3 // { arity: 2 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Distinct group_by=[#0] // { arity: 1 }
-                Project (#0) // { arity: 1 }
-                  Get l0 // { arity: 2 }
-      Get materialize.public.t3 // { arity: 2 }
-      Get l0 // { arity: 2 }
-  With
-    cte l0 =
-      Filter (#0) IS NOT NULL // { arity: 2 }
-        Get materialize.public.t3 // { arity: 2 }
+  Get materialize.public.t3 // { arity: 2 }
 
 EOF
 

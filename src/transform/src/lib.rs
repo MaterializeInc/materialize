@@ -51,6 +51,7 @@ pub mod reduce_elision;
 pub mod reduction;
 pub mod reduction_pushdown;
 pub mod redundant_join;
+pub mod semijoin_idempotence;
 pub mod threshold_elision;
 pub mod topk_elision;
 pub mod union_cancel;
@@ -351,6 +352,7 @@ impl Optimizer {
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![
+                    Box::new(crate::semijoin_idempotence::SemijoinIdempotence),
                     // Pushes aggregations down
                     Box::new(crate::reduction_pushdown::ReductionPushdown),
                     // Replaces reduces with maps when the group keys are
