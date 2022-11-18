@@ -18,7 +18,7 @@ use regex::Regex;
 
 use mz_orchestrator::{
     LabelSelectionLogic, LabelSelector, NamespacedOrchestrator, Service, ServiceConfig,
-    ServiceEvent, ServicePort,
+    ServiceEvent, ServicePort, ServiceProcessMetrics,
 };
 
 use crate::command::{CommunicationConfig, ReplicaId};
@@ -211,6 +211,15 @@ impl ComputeOrchestrator {
             });
 
         Box::pin(stream)
+    }
+
+    pub(super) async fn fetch_replica_metrics(
+        &self,
+        instance_id: ComputeInstanceId,
+        replica_id: ReplicaId,
+    ) -> Result<Vec<ServiceProcessMetrics>, anyhow::Error> {
+        let name = generate_replica_service_name(instance_id, replica_id);
+        self.inner.fetch_service_metrics(&name).await
     }
 }
 

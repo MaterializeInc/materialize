@@ -109,7 +109,7 @@ pub trait Service: fmt::Debug + Send + Sync {
     fn addresses(&self, port: &str) -> Vec<String>;
 }
 
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, Serialize, Deserialize, Eq, PartialEq)]
 pub struct ServiceProcessMetrics {
     pub nano_cpus: Option<u64>,
     pub bytes_memory: Option<u64>,

@@ -17,6 +17,7 @@ use mz_compute_client::controller::{
     ComputeInstanceId, ComputeInstanceStatus, ComputeReplicaLocation,
 };
 use mz_expr::MirScalarExpr;
+use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
@@ -42,8 +43,8 @@ use crate::catalog::{
     CatalogItem, CatalogState, Connection, Database, Error, ErrorKind, Func, Index,
     MaterializedView, Role, Sink, StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
-use crate::coord::ReplicaMetadata;
 
+use super::builtin::MZ_CLUSTER_REPLICA_METRICS;
 use super::{DataSourceDesc, Ingestion};
 
 /// An update to a built-in table.
@@ -795,10 +796,9 @@ impl CatalogState {
     pub fn pack_replica_heartbeat_update(
         &self,
         id: ReplicaId,
-        md: ReplicaMetadata,
+        last_heartbeat: DateTime<Utc>,
         diff: Diff,
     ) -> BuiltinTableUpdate {
-        let ReplicaMetadata { last_heartbeat } = md;
         let table = self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_HEARTBEATS);
         let row = Row::pack_slice(&[
             Datum::UInt64(id),
@@ -833,5 +833,34 @@ impl CatalogState {
         let id = self.resolve_builtin_table(&MZ_EGRESS_IPS);
         let row = Row::pack_slice(&[Datum::String(&ip.to_string())]);
         Ok(BuiltinTableUpdate { id, row, diff: 1 })
+    }
+
+    pub fn pack_replica_metric_updates(
+        &self,
+        replica_id: ReplicaId,
+        updates: &[ServiceProcessMetrics],
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate> {
+        let id = self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_METRICS);
+        let rows = updates.iter().enumerate().map(
+            |(
+                process_id,
+                ServiceProcessMetrics {
+                    nano_cpus,
+                    bytes_memory,
+                },
+            )| {
+                Row::pack_slice(&[
+                    replica_id.into(),
+                    u64::cast_from(process_id).into(),
+                    (*nano_cpus).into(),
+                    (*bytes_memory).into(),
+                ])
+            },
+        );
+        let updates = rows
+            .map(|row| BuiltinTableUpdate { id, row, diff })
+            .collect();
+        updates
     }
 }

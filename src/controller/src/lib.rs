@@ -41,7 +41,7 @@ use mz_compute_client::controller::{
 };
 use mz_compute_client::response::{PeekResponse, SubscribeResponse};
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
-use mz_orchestrator::Orchestrator;
+use mz_orchestrator::{Orchestrator, ServiceProcessMetrics};
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cache::PersistClientCache;
@@ -95,6 +95,8 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     /// Notification that we have received a message from the given compute replica
     /// at the given time.
     ComputeReplicaHeartbeat(ReplicaId, DateTime<Utc>),
+    /// Notification that new resource usage metrics are available for a given replica.
+    ComputeReplicaMetrics(ReplicaId, Vec<ServiceProcessMetrics>),
 }
 
 impl<T> From<ComputeControllerResponse<T>> for ControllerResponse<T> {
@@ -108,6 +110,9 @@ impl<T> From<ComputeControllerResponse<T>> for ControllerResponse<T> {
             }
             ComputeControllerResponse::ReplicaHeartbeat(id, when) => {
                 ControllerResponse::ComputeReplicaHeartbeat(id, when)
+            }
+            ComputeControllerResponse::ReplicaMetrics(id, metrics) => {
+                ControllerResponse::ComputeReplicaMetrics(id, metrics)
             }
         }
     }
