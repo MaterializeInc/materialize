@@ -20,6 +20,7 @@ use rdkafka::config::FromClientConfigAndContext;
 use rdkafka::ClientContext;
 use serde::{Deserialize, Serialize};
 use tokio::net;
+use tokio::sync::oneshot::channel;
 use tokio_postgres::config::SslMode;
 use url::Url;
 
@@ -419,12 +420,23 @@ impl KafkaConnection {
                     let (session, local_port) =
                         ssh_tunnel_config.connect(broker_host, broker_port).await?;
 
-                    // ...record it in the broker lookup.
-                    context.add_broker_rewrite_with_session(
+                    // ...record it in the broker lookup, with a task that
+                    // will shutdown the session on drop.
+                    let (tx, rx) = channel();
+                    mz_ore::task::spawn(|| "kafka_broker_ssh_session".to_string(), async move {
+                        let _: Result<(), _> = rx.await;
+                        session
+                            .close()
+                            .await
+                            .err()
+                            .map(|e| tracing::error!("failed to close ssh tunnel: {e}"));
+                    });
+
+                    context.add_broker_rewrite_with_token(
                         &broker.address,
                         "localhost",
                         Some(local_port),
-                        session,
+                        tx,
                     );
                 }
             }

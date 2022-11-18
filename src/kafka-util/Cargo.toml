@@ -8,20 +8,19 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.66"
-openssh = "0.9.7"
 chrono = { version = "0.4.23", default-features = false, features = ["clock", "std"] }
 clap = { version = "3.2.20", features = ["derive"] }
 crossbeam = "0.8.2"
 mz-avro = { path = "../avro" }
 mz-ccsr = { path = "../ccsr" }
-mz-ore = { path = "../ore", features = ["network"] }
+mz-ore = { path = "../ore", features = ["network", "task"] }
 num_cpus = "1.14.0"
 prost = { version = "0.11.2", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 serde = { version = "1.0.147", features = ["derive"] }
 serde_json = "1.0.88"
-tokio = { version = "1.22.0", features = ["macros"] }
+tokio = { version = "1.22.0", features = ["macros", "sync"] }
 thiserror = "1.0.37"
 tracing = "0.1.37"
 url = "2.3.1"
