@@ -17,7 +17,6 @@ use std::time::SystemTime;
 use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use mz_ore::cast::CastFrom;
 use mz_persist::location::{Atomicity, Blob, Consensus, Indeterminate, SeqNo, VersionedData};
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
@@ -27,7 +26,7 @@ use tracing::{debug, debug_span, trace, warn, Instrument};
 use crate::error::CodecMismatch;
 use crate::internal::machine::{retry_determinate, retry_external};
 use crate::internal::metrics::ShardMetrics;
-use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey, PartialRollupKey, RollupId};
+use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey, RollupId};
 use crate::internal::state::State;
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::{Metrics, PersistConfig, ShardId};
@@ -425,7 +424,9 @@ impl StateVersions {
         }
     }
 
-    /// Fetches the live_diffs for a shard.
+    /// Fetches all live_diffs for a shard. Intended only for when a caller needs to reconstruct
+    /// _all_ states still referenced by Consensus. Prefer [fetch_recent_live_diffs] when the
+    /// caller simply needs to fetch the latest state.
     ///
     /// Returns an empty Vec iff called on an uninitialized shard.
     pub async fn fetch_all_live_diffs(&self, shard_id: &ShardId) -> Vec<VersionedData> {
@@ -437,15 +438,17 @@ impl StateVersions {
         .await
     }
 
-    /// WIP: Fetches recent live diffs for a shard, where "recent" diffs means:
-    /// 1. all the diffs
-    /// 2. all the diffs from the most recent rollup known
+    /// Fetches recent live_diffs for a shard. Intended for when a caller needs to fetch
+    /// the latest state in Consensus.
+    ///
+    /// "Recent" is defined as either:
+    /// * All of the diffs known in Consensus
+    /// * All of the diffs in Consensus after the latest rollup
     pub async fn fetch_recent_live_diffs<T>(&self, shard_id: &ShardId) -> Vec<VersionedData>
     where
         T: Timestamp + Lattice + Codec64,
     {
         let path = shard_id.to_string();
-
         // pick a scan limit that:
         // * is big enough to hit the fast-path (we fetch all live diffs) in steady-state usage [1]
         // * is small enough to query Consensus for at high volume
@@ -456,8 +459,8 @@ impl StateVersions {
         // seqno/truncation by 10s of minutes.
         //
         // NB: we make this a function of `NEED_ROLLUP_THRESHOLD` to approximate when we expect
-        // rollups to be written and therefore when old states are truncated by GC.
-        let scan_limit = 20 * usize::cast_from(PersistConfig::NEED_ROLLUP_THRESHOLD);
+        // rollups to be written and therefore when old states will be truncated by GC.
+        let scan_limit = 1; //30 * usize::cast_from(PersistConfig::NEED_ROLLUP_THRESHOLD);
         let oldest_diffs =
             retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
                 self.consensus
@@ -467,18 +470,23 @@ impl StateVersions {
             .instrument(debug_span!("fetch_state::scan"))
             .await;
 
-        // fast-path: we found all known diffs in a single page of our scan. unless a seqno-hold has
-        // held back gc a fairly long time
+        // fast-path: we found all known diffs in a single page of our scan. we expect almost all
+        // calls to go down this path, unless a reader has a very long seqno-hold on the shard.
         if oldest_diffs.len() < scan_limit {
-            // WIP: add metrics for fast and slow paths
+            self.metrics.state.fetch_recent_live_diffs_fast_path.inc();
             return oldest_diffs;
         }
 
-        // slow-path: we could be arbitrarily far behind the head of consensus (either intentionally
+        // slow-path: we could be arbitrarily far behind the head of Consensus (either intentionally
         // due to a long seqno-hold from a reader, or unintentionally from a bug that's preventing
         // a seqno-hold from advancing). rather than scanning a potentially unbounded number of old
         // states in Consensus, we jump to the latest state, determine the seqno of the most recent
         // rollup, and then fetch all the diffs from that point onward.
+        //
+        // this approach requires more network calls, but it should smooth out our access pattern
+        // and use only bounded calls to Consensus. additionally, if `limit` is adequately tuned,
+        // this path will only be invoked when there's an excess number of states in Consensus and
+        // it might be slower to do a single long scan over unneeded rows.
         let head = retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
             self.consensus.head(&path).await
         })
@@ -492,16 +500,23 @@ impl StateVersions {
             .state_diff
             .decode(|| StateDiff::<T>::decode(&self.cfg.build_version, &head.data));
 
-        match BlobKey::parse_ids(&latest_diff.latest_rollup_key.0) {
+        match BlobKey::parse_ids(&latest_diff.latest_rollup_key.complete(shard_id)) {
             Ok((_shard_id, PartialBlobKey::Rollup(seqno, _rollup))) => {
-                return retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
+                self.metrics.state.fetch_recent_live_diffs_slow_path.inc();
+                retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
+                    // (pedantry) this call is technically unbounded, but something very strange
+                    // would have had to happen to have accumulated so many states between our
+                    // call to `head` and this invocation for it to become problematic
                     self.consensus.scan_all(&path, seqno).await
                 })
                 .instrument(debug_span!("fetch_state::slow_path::scan"))
-                .await;
+                .await
             }
-            Ok(_) => panic!("WIP: we wrote the wrong type of blob key"),
-            Err(_) => panic!("WIP: we wrote an unparseable blob key"),
+            Ok(_) => panic!(
+                "invalid state diff rollup key: {}",
+                latest_diff.latest_rollup_key
+            ),
+            Err(err) => panic!("unparseable state diff rollup key: {}", err),
         }
     }
 

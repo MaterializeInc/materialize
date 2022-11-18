@@ -457,9 +457,8 @@ impl Consensus for PostgresConsensus {
         let rows = {
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
-            client
-                .query(&statement, &[&key, &from, &i64::cast_from(limit as isize)])
-                .await?
+            let limit = limit.try_into().unwrap_or(i64::MAX);
+            client.query(&statement, &[&key, &from, &limit]).await?
         };
         let mut results = Vec::with_capacity(rows.len());
 

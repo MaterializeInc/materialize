@@ -335,7 +335,7 @@ impl<T: Codec> TryFrom<&VersionedData> for (SeqNo, T) {
 /// storage easier, sequence numbers used with [Consensus] need to be restricted to the
 /// range [0, i64::MAX].
 #[async_trait]
-pub trait Consensus: std::fmt::Debug {
+pub trait Consensus: std::fmt::Debug + Sync {
     /// Returns a recent version of `data`, and the corresponding sequence number, if
     /// one exists at this location.
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError>;
@@ -359,7 +359,7 @@ pub trait Consensus: std::fmt::Debug {
         new: VersionedData,
     ) -> Result<Result<(), Vec<VersionedData>>, ExternalError>;
 
-    /// Return all versions of data stored for this `key` at sequence numbers
+    /// Return `limit` versions of data stored for this `key` at sequence numbers
     /// >= `from`, in ascending order of sequence number.
     ///
     /// Returns an empty vec if `from` is greater than the current sequence
@@ -371,6 +371,19 @@ pub trait Consensus: std::fmt::Debug {
         limit: usize,
     ) -> Result<Vec<VersionedData>, ExternalError>;
 
+    /// Return all versions of data stored for this `key` at sequence numbers
+    /// >= `from`, in ascending order of sequence number.
+    ///
+    /// Returns an empty vec if `from` is greater than the current sequence
+    /// number or if there is no data at this key.
+    async fn scan_all(
+        self: &Self,
+        key: &str,
+        from: SeqNo,
+    ) -> Result<Vec<VersionedData>, ExternalError> {
+        self.scan(key, from, usize::MAX).await
+    }
+
     /// Deletes all historical versions of the data stored at `key` that are <
     /// `seqno`, iff `seqno` <= the current sequence number.
     ///
@@ -378,12 +391,6 @@ pub trait Consensus: std::fmt::Debug {
     /// `seqno` is greater than the current sequence number, or if there is no
     /// data at this key.
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError>;
-
-    /// WIP: figure out where to put this given object safety
-    async fn scan_all(&self, key: &str, from: SeqNo) -> Result<Vec<VersionedData>, ExternalError> {
-        // WIP: ugh, figure out the right types to plumb through. maybe limit should be u32 or i64
-        self.scan(key, from, usize::MAX / 2).await
-    }
 }
 
 /// Metadata about a particular blob stored by persist
@@ -625,7 +632,7 @@ pub mod tests {
         assert_eq!(consensus.head(&key).await, Ok(None));
 
         // Can scan a key that has no data.
-        assert_eq!(consensus.scan(&key, SeqNo(0)).await, Ok(vec![]));
+        assert_eq!(consensus.scan_all(&key, SeqNo(0)).await, Ok(vec![]));
 
         // Cannot truncate data from a key that doesn't have any data
         assert!(consensus.truncate(&key, SeqNo(0)).await.is_err(),);
@@ -654,19 +661,19 @@ pub mod tests {
 
         // Can scan a key that has data with a lower bound sequence number < head.
         assert_eq!(
-            consensus.scan(&key, SeqNo(0)).await,
+            consensus.scan_all(&key, SeqNo(0)).await,
             Ok(vec![state.clone()])
         );
 
         // Can scan a key that has data with a lower bound sequence number == head.
         assert_eq!(
-            consensus.scan(&key, SeqNo(5)).await,
+            consensus.scan_all(&key, SeqNo(5)).await,
             Ok(vec![state.clone()])
         );
 
         // Can scan a key that has data with a lower bound sequence number >
         // head.
-        assert_eq!(consensus.scan(&key, SeqNo(6)).await, Ok(vec![]));
+        assert_eq!(consensus.scan_all(&key, SeqNo(6)).await, Ok(vec![]));
 
         // Can truncate data with an upper bound <= head, even if there is no data in the
         // range [0, upper).
@@ -769,33 +776,55 @@ pub mod tests {
         // We can observe both states in the correct order with scan if pass
         // in a suitable lower bound.
         assert_eq!(
-            consensus.scan(&key, SeqNo(5)).await,
+            consensus.scan_all(&key, SeqNo(5)).await,
             Ok(vec![state.clone(), new_state.clone()])
         );
 
         // We can observe only the most recent state if the lower bound is higher
         // than the previous insertion's sequence number.
         assert_eq!(
-            consensus.scan(&key, SeqNo(6)).await,
+            consensus.scan_all(&key, SeqNo(6)).await,
             Ok(vec![new_state.clone()])
         );
 
         // We can still observe the most recent insert as long as the provided
         // lower bound == most recent 's sequence number.
         assert_eq!(
-            consensus.scan(&key, SeqNo(10)).await,
+            consensus.scan_all(&key, SeqNo(10)).await,
             Ok(vec![new_state.clone()])
         );
 
         // We can scan if the provided lower bound > head's sequence number.
-        assert_eq!(consensus.scan(&key, SeqNo(11)).await, Ok(vec![]));
+        assert_eq!(consensus.scan_all(&key, SeqNo(11)).await, Ok(vec![]));
+
+        // We can scan with limits that don't cover all states
+        assert_eq!(
+            consensus.scan(&key, SeqNo::minimum(), 1).await,
+            Ok(vec![state.clone()])
+        );
+        assert_eq!(
+            consensus.scan(&key, SeqNo(5), 1).await,
+            Ok(vec![state.clone()])
+        );
+
+        // We can scan with limits to cover exactly the number of states
+        assert_eq!(
+            consensus.scan(&key, SeqNo::minimum(), 2).await,
+            Ok(vec![state.clone(), new_state.clone()])
+        );
+
+        // We can scan with a limit larger than the number of states
+        assert_eq!(
+            consensus.scan(&key, SeqNo(4), 100).await,
+            Ok(vec![state.clone(), new_state.clone()])
+        );
 
         // Can remove the previous write with the appropriate truncation.
         assert_eq!(consensus.truncate(&key, SeqNo(6)).await, Ok(1));
 
         // Verify that the old write is indeed deleted.
         assert_eq!(
-            consensus.scan(&key, SeqNo(0)).await,
+            consensus.scan_all(&key, SeqNo(0)).await,
             Ok(vec![new_state.clone()])
         );
 
