@@ -7,11 +7,5 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Materialize's storage layer.
-
-pub mod client;
-pub mod controller;
-pub mod sink;
-pub mod source;
-pub mod types;
-pub mod util;
+pub mod antichain;
+pub mod remap_handle;

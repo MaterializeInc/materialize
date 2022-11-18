@@ -63,12 +63,12 @@ use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::SourceError;
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
 use mz_storage_client::types::sources::{MzOffset, SourceToken};
+use mz_storage_client::util::antichain::{MutableOffsetAntichain, OffsetAntichain};
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::operator::StreamExt as _;
 use mz_timely_util::order::Partitioned;
 
 use crate::healthcheck::write_to_persist;
-use crate::source::antichain::{MutableOffsetAntichain, OffsetAntichain};
 
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, ReclockOperator};

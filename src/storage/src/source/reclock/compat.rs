@@ -31,9 +31,9 @@ use mz_persist_client::Upper;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::sources::{MzOffset, SourceData};
+use mz_storage_client::util::antichain::{MutableOffsetAntichain, OffsetAntichain};
 use mz_timely_util::order::Partitioned;
 
-use crate::source::antichain::{MutableOffsetAntichain, OffsetAntichain};
 use crate::source::reclock::{
     ReclockBatch, ReclockError, ReclockFollower, ReclockOperator, RemapHandle,
 };
