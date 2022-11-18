@@ -18,7 +18,7 @@
 //! Eventually, the source is dropped with either `drop_sources()` or by allowing compaction to the
 //! empty frontier.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fmt::{self, Debug};
 use std::num::NonZeroI64;
@@ -627,6 +627,8 @@ pub struct StorageControllerState<
     /// without blocking the storage controller.
     persist_read_handles: persist_read_handles::PersistWorker<T>,
     stashed_response: Option<StorageResponse<T>>,
+    /// Storage hosts that should be deprovisioned during the next call to `StorageController::process`.
+    pending_host_deprovisions: BTreeSet<GlobalId>,
 
     /// Interface for managed collections
     pub(super) collection_manager: collection_mgmt::CollectionManager,
@@ -772,6 +774,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             persist_write_handles,
             persist_read_handles: persist_read_handles::PersistWorker::new(),
             stashed_response: None,
+            pending_host_deprovisions: BTreeSet::new(),
             collection_manager,
             introspection_ids: HashMap::new(),
             envd_epoch,
@@ -1214,10 +1217,10 @@ where
                 .expect("Dangling exported collection")
                 .retain(|from_export_id| *from_export_id != id);
 
-            // Remove sink by removing its write frontier and then deprovisioning.
+            // Remove sink by removing its write frontier and arranging for deprovisioning.
             self.update_write_frontiers(&[(id, Antichain::new())])
                 .await?;
-            self.hosts.deprovision(id).await?;
+            self.state.pending_host_deprovisions.insert(id);
         }
         Ok(())
     }
@@ -1405,7 +1408,7 @@ where
                 )]));
 
                 if frontier.is_empty() {
-                    self.hosts.deprovision(id).await?;
+                    self.state.pending_host_deprovisions.insert(id);
                 }
             }
         }
@@ -1435,17 +1438,22 @@ where
 
     async fn process(&mut self) -> Result<(), anyhow::Error> {
         match self.state.stashed_response.take() {
-            None => Ok(()),
+            None => (),
             Some(StorageResponse::FrontierUppers(updates)) => {
                 self.update_write_frontiers(&updates).await?;
-                Ok(())
             }
             Some(StorageResponse::DroppedIds(_ids)) => {
                 // TODO(petrosagg): It looks like the storage controller never cleans up GlobalIds
                 // from its state. It should probably be done as a reaction to this response.
-                Ok(())
             }
         }
+
+        let to_deprovision = std::mem::take(&mut self.state.pending_host_deprovisions);
+        for id in to_deprovision {
+            self.hosts.deprovision(id).await?;
+        }
+
+        Ok(())
     }
 }
 
