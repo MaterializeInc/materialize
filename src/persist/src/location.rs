@@ -117,6 +117,15 @@ pub struct Indeterminate {
     pub(crate) inner: anyhow::Error,
 }
 
+impl Indeterminate {
+    /// Return a new Indeterminate wrapping the given error.
+    ///
+    /// Exposed for testing.
+    pub fn new(inner: anyhow::Error) -> Self {
+        Indeterminate { inner }
+    }
+}
+
 impl std::fmt::Display for Indeterminate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "indeterminate: ")?;

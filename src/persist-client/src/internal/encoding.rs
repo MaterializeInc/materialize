@@ -27,11 +27,11 @@ use crate::critical::CriticalReaderId;
 use crate::error::CodecMismatch;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::state::{
-    CriticalReaderState, HollowBatch, HollowBatchPart, LeasedReaderState, OpaqueState,
-    ProtoCriticalReaderState, ProtoHollowBatch, ProtoHollowBatchPart, ProtoLeasedReaderState,
-    ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs,
-    ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoWriterState, State,
-    StateCollections, WriterState,
+    CriticalReaderState, HollowBatch, HollowBatchPart, IdempotencyToken, LeasedReaderState,
+    OpaqueState, ProtoCriticalReaderState, ProtoHollowBatch, ProtoHollowBatchPart,
+    ProtoLeasedReaderState, ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType,
+    ProtoStateFieldDiffs, ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description,
+    ProtoWriterState, State, StateCollections, WriterState,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, StateDiff, StateFieldDiff, StateFieldValDiff,
@@ -93,8 +93,8 @@ impl RustType<String> for ShardId {
     }
 
     fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
-        match parse_id('s', "ShardId", &proto) {
-            Ok(x) => Ok(ShardId(x)),
+        match proto.parse() {
+            Ok(x) => Ok(x),
             Err(_) => Err(TryFromProtoError::InvalidShardId(proto)),
         }
     }
@@ -106,8 +106,8 @@ impl RustType<String> for LeasedReaderId {
     }
 
     fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
-        match parse_id('r', "LeasedReaderId", &proto) {
-            Ok(x) => Ok(LeasedReaderId(x)),
+        match proto.parse() {
+            Ok(x) => Ok(x),
             Err(_) => Err(TryFromProtoError::InvalidShardId(proto)),
         }
     }
@@ -119,8 +119,8 @@ impl RustType<String> for CriticalReaderId {
     }
 
     fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
-        match parse_id('c', "CriticalReaderId", &proto) {
-            Ok(x) => Ok(CriticalReaderId(x)),
+        match proto.parse() {
+            Ok(x) => Ok(x),
             Err(_) => Err(TryFromProtoError::InvalidShardId(proto)),
         }
     }
@@ -132,8 +132,21 @@ impl RustType<String> for WriterId {
     }
 
     fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
-        match parse_id('w', "WriterId", &proto) {
-            Ok(x) => Ok(WriterId(x)),
+        match proto.parse() {
+            Ok(x) => Ok(x),
+            Err(_) => Err(TryFromProtoError::InvalidShardId(proto)),
+        }
+    }
+}
+
+impl RustType<String> for IdempotencyToken {
+    fn into_proto(&self) -> String {
+        self.to_string()
+    }
+
+    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
+        match proto.parse() {
+            Ok(x) => Ok(x),
             Err(_) => Err(TryFromProtoError::InvalidShardId(proto)),
         }
     }
@@ -694,18 +707,36 @@ impl<T: Timestamp + Codec64> RustType<ProtoCriticalReaderState> for CriticalRead
     }
 }
 
-impl RustType<ProtoWriterState> for WriterState {
+impl<T: Timestamp + Codec64> RustType<ProtoWriterState> for WriterState<T> {
     fn into_proto(&self) -> ProtoWriterState {
         ProtoWriterState {
             last_heartbeat_timestamp_ms: self.last_heartbeat_timestamp_ms.into_proto(),
             lease_duration_ms: self.lease_duration_ms.into_proto(),
+            most_recent_write_token: self.most_recent_write_token.into_proto(),
+            most_recent_write_upper: Some(self.most_recent_write_upper.into_proto()),
         }
     }
 
     fn from_proto(proto: ProtoWriterState) -> Result<Self, TryFromProtoError> {
+        // MIGRATION: We didn't originally have most_recent_write_token and
+        // most_recent_write_upper. Pick values that aren't going to
+        // accidentally match ones in incoming writes and confuse things. We
+        // could instead use Option on WriterState but this keeps the backward
+        // compatibility logic confined to one place.
+        let most_recent_write_token = if proto.most_recent_write_token.is_empty() {
+            IdempotencyToken::SENTINEL
+        } else {
+            proto.most_recent_write_token.into_rust()?
+        };
+        let most_recent_write_upper = match proto.most_recent_write_upper {
+            Some(x) => x.into_rust()?,
+            None => Antichain::from_elem(T::minimum()),
+        };
         Ok(WriterState {
             last_heartbeat_timestamp_ms: proto.last_heartbeat_timestamp_ms.into_rust()?,
             lease_duration_ms: proto.lease_duration_ms.into_rust()?,
+            most_recent_write_token,
+            most_recent_write_upper,
         })
     }
 }
@@ -941,5 +972,24 @@ mod tests {
         expected.lease_duration_ms =
             u64::try_from(PersistConfig::DEFAULT_READ_LEASE_DURATION.as_millis()).unwrap();
         assert_eq!(<LeasedReaderState<u64>>::from_proto(old).unwrap(), expected);
+    }
+
+    #[test]
+    fn writer_state_migration_most_recent_write() {
+        let proto = ProtoWriterState {
+            last_heartbeat_timestamp_ms: 1,
+            lease_duration_ms: 2,
+            // Old ProtoWriterState had no most_recent_write_token or
+            // most_recent_write_upper.
+            most_recent_write_token: "".into(),
+            most_recent_write_upper: None,
+        };
+        let expected = WriterState {
+            last_heartbeat_timestamp_ms: proto.last_heartbeat_timestamp_ms,
+            lease_duration_ms: proto.lease_duration_ms,
+            most_recent_write_token: IdempotencyToken::SENTINEL,
+            most_recent_write_upper: Antichain::from_elem(0),
+        };
+        assert_eq!(<WriterState<u64>>::from_proto(proto).unwrap(), expected);
     }
 }

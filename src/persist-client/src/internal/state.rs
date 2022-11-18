@@ -24,9 +24,11 @@ use mz_persist_types::{Codec, Codec64, Opaque};
 use semver::Version;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
 use crate::error::{Determinacy, InvalidUsage};
+use crate::internal::encoding::parse_id;
 use crate::internal::gc::GcReq;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeReq, FueledMergeRes, Trace};
@@ -38,6 +40,38 @@ include!(concat!(
     env!("OUT_DIR"),
     "/mz_persist_client.internal.state.rs"
 ));
+
+/// A token to disambiguate state commands that could not otherwise be
+/// idempotent.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct IdempotencyToken(pub(crate) [u8; 16]);
+
+impl std::fmt::Display for IdempotencyToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "i{}", Uuid::from_bytes(self.0))
+    }
+}
+
+impl std::fmt::Debug for IdempotencyToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "IdempotencyToken({})", Uuid::from_bytes(self.0))
+    }
+}
+
+impl std::str::FromStr for IdempotencyToken {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_id('i', "IdempotencyToken", s).map(IdempotencyToken)
+    }
+}
+
+impl IdempotencyToken {
+    pub(crate) fn new() -> Self {
+        IdempotencyToken(*Uuid::new_v4().as_bytes())
+    }
+    pub(crate) const SENTINEL: IdempotencyToken = IdempotencyToken([17u8; 16]);
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct LeasedReaderState<T> {
@@ -61,12 +95,18 @@ pub struct CriticalReaderState<T> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct WriterState {
+pub struct WriterState<T> {
     /// UNIX_EPOCH timestamp (in millis) of this writer's most recent heartbeat
     pub last_heartbeat_timestamp_ms: u64,
     /// Duration (in millis) allowed after [Self::last_heartbeat_timestamp_ms]
     /// after which this writer may be expired
     pub lease_duration_ms: u64,
+    /// The idempotency token of the most recent successful compare_and_append
+    /// by this writer.
+    pub most_recent_write_token: IdempotencyToken,
+    /// The upper of the most recent successful compare_and_append by this
+    /// writer.
+    pub most_recent_write_upper: Antichain<T>,
 }
 
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
@@ -153,13 +193,24 @@ pub struct StateCollections<T> {
 
     pub(crate) leased_readers: BTreeMap<LeasedReaderId, LeasedReaderState<T>>,
     pub(crate) critical_readers: BTreeMap<CriticalReaderId, CriticalReaderState<T>>,
-    pub(crate) writers: BTreeMap<WriterId, WriterState>,
+    pub(crate) writers: BTreeMap<WriterId, WriterState<T>>,
 
     // - Invariant: `trace.since == meet(all reader.since)`
     // - Invariant: `trace.since` doesn't regress across state versions.
     // - Invariant: `trace.upper` doesn't regress across state versions.
     // - Invariant: `trace` upholds its own invariants.
     pub(crate) trace: Trace<T>,
+}
+
+#[derive(Debug)]
+#[cfg_attr(test, derive(PartialEq))]
+pub enum CompareAndAppendBreak<T> {
+    AlreadyCommitted,
+    Upper {
+        shard_upper: Antichain<T>,
+        writer_upper: Antichain<T>,
+    },
+    InvalidUsage(InvalidUsage<T>),
 }
 
 impl<T> StateCollections<T>
@@ -237,11 +288,13 @@ where
         writer_id: &WriterId,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
-    ) -> ControlFlow<Infallible, (Upper<T>, WriterState)> {
+    ) -> ControlFlow<Infallible, (Upper<T>, WriterState<T>)> {
         let writer_state = WriterState {
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
             lease_duration_ms: u64::try_from(lease_duration.as_millis())
                 .expect("lease duration as millis must fit within u64"),
+            most_recent_write_token: IdempotencyToken::SENTINEL,
+            most_recent_write_upper: Antichain::from_elem(T::minimum()),
         };
         self.writers.insert(writer_id.clone(), writer_state.clone());
         Continue((Upper(self.trace.upper().clone()), writer_state))
@@ -272,31 +325,59 @@ where
         batch: &HollowBatch<T>,
         writer_id: &WriterId,
         heartbeat_timestamp_ms: u64,
-    ) -> ControlFlow<Result<Upper<T>, InvalidUsage<T>>, Vec<FueledMergeReq<T>>> {
-        if !self.writers.contains_key(writer_id) {
-            return Break(Err(InvalidUsage::UnknownWriter(writer_id.clone())));
-        }
+        idempotency_token: &IdempotencyToken,
+    ) -> ControlFlow<CompareAndAppendBreak<T>, Vec<FueledMergeReq<T>>> {
+        let writer_state = match self.writers.get_mut(writer_id) {
+            Some(x) => x,
+            None => {
+                return Break(CompareAndAppendBreak::InvalidUsage(
+                    InvalidUsage::UnknownWriter(writer_id.clone()),
+                ))
+            }
+        };
 
         if PartialOrder::less_than(batch.desc.upper(), batch.desc.lower()) {
-            return Break(Err(InvalidUsage::InvalidBounds {
-                lower: batch.desc.lower().clone(),
-                upper: batch.desc.upper().clone(),
-            }));
+            return Break(CompareAndAppendBreak::InvalidUsage(
+                InvalidUsage::InvalidBounds {
+                    lower: batch.desc.lower().clone(),
+                    upper: batch.desc.upper().clone(),
+                },
+            ));
         }
 
         // If the time interval is empty, the list of updates must also be
         // empty.
         if batch.desc.upper() == batch.desc.lower() && !batch.parts.is_empty() {
-            return Break(Err(InvalidUsage::InvalidEmptyTimeInterval {
-                lower: batch.desc.lower().clone(),
-                upper: batch.desc.upper().clone(),
-                keys: batch.parts.iter().map(|x| x.key.clone()).collect(),
-            }));
+            return Break(CompareAndAppendBreak::InvalidUsage(
+                InvalidUsage::InvalidEmptyTimeInterval {
+                    lower: batch.desc.lower().clone(),
+                    upper: batch.desc.upper().clone(),
+                    keys: batch.parts.iter().map(|x| x.key.clone()).collect(),
+                },
+            ));
+        }
+
+        if idempotency_token == &writer_state.most_recent_write_token {
+            // If the last write had the same idempotency_token, then this must
+            // have already committed. Sanity check that the most recent write
+            // upper matches and that the shard upper is at least the write
+            // upper, if it's not something very suspect is going on.
+            assert_eq!(batch.desc.upper(), &writer_state.most_recent_write_upper);
+            assert!(
+                PartialOrder::less_equal(batch.desc.upper(), self.trace.upper()),
+                "{:?} vs {:?}",
+                batch.desc.upper(),
+                self.trace.upper()
+            );
+            return Break(CompareAndAppendBreak::AlreadyCommitted);
         }
 
         let shard_upper = self.trace.upper();
         if shard_upper != batch.desc.lower() {
-            return Break(Ok(Upper(shard_upper.clone())));
+            return Break(CompareAndAppendBreak::Upper {
+                shard_upper: shard_upper.clone(),
+                writer_upper: writer_state.most_recent_write_upper.clone(),
+            });
         }
 
         let merge_reqs = if batch.desc.upper() != batch.desc.lower() {
@@ -305,9 +386,17 @@ where
             Vec::new()
         };
         debug_assert_eq!(self.trace.upper(), batch.desc.upper());
+        writer_state.most_recent_write_token = idempotency_token.clone();
+        // The writer's most recent upper should only go forward.
+        assert!(
+            PartialOrder::less_equal(&writer_state.most_recent_write_upper, batch.desc.upper()),
+            "{:?} vs {:?}",
+            &writer_state.most_recent_write_upper,
+            batch.desc.upper()
+        );
+        writer_state.most_recent_write_upper = batch.desc.upper().clone();
 
         // Also use this as an opportunity to heartbeat the writer
-        let writer_state = self.writer(writer_id);
         writer_state.last_heartbeat_timestamp_ms = std::cmp::max(
             heartbeat_timestamp_ms,
             writer_state.last_heartbeat_timestamp_ms,
@@ -518,23 +607,6 @@ where
             .unwrap_or_else(|| {
                 panic!(
                     "Unknown CriticalReaderId({}). It was either never registered, or has been manually expired.",
-                    id
-                )
-            })
-    }
-
-    fn writer(&mut self, id: &WriterId) -> &mut WriterState {
-        self.writers
-            .get_mut(id)
-            // The only (tm) ways to hit this are (1) inventing a WriterId
-            // instead of getting it from Register or (2) if a lease expired.
-            // (1) is a gross mis-use and (2) may happen if the writer did
-            // not get to heartbeat for a long time. Writers are expected to
-            // append updates regularly, even empty batches to maintain their
-            // lease.
-            .unwrap_or_else(|| {
-                panic!(
-                    "WriterId({}) was expired due to inactivity. Did the machine go to sleep?",
                     id
                 )
             })
@@ -1074,19 +1146,37 @@ mod tests {
 
         // Cannot insert a batch with a lower != current shard upper.
         assert_eq!(
-            state.compare_and_append(&hollow(1, 2, &["key1"], 1), &writer_id, now()),
-            Break(Ok(Upper(Antichain::from_elem(0))))
+            state.compare_and_append(
+                &hollow(1, 2, &["key1"], 1),
+                &writer_id,
+                now(),
+                &IdempotencyToken::new()
+            ),
+            Break(CompareAndAppendBreak::Upper {
+                shard_upper: Antichain::from_elem(0),
+                writer_upper: Antichain::from_elem(0)
+            })
         );
 
         // Insert an empty batch with an upper > lower..
         assert!(state
-            .compare_and_append(&hollow(0, 5, &[], 0), &writer_id, now())
+            .compare_and_append(
+                &hollow(0, 5, &[], 0),
+                &writer_id,
+                now(),
+                &IdempotencyToken::new()
+            )
             .is_continue());
 
         // Cannot insert a batch with a upper less than the lower.
         assert_eq!(
-            state.compare_and_append(&hollow(5, 4, &["key1"], 1), &writer_id, now()),
-            Break(Err(InvalidBounds {
+            state.compare_and_append(
+                &hollow(5, 4, &["key1"], 1),
+                &writer_id,
+                now(),
+                &IdempotencyToken::new()
+            ),
+            Break(CompareAndAppendBreak::InvalidUsage(InvalidBounds {
                 lower: Antichain::from_elem(5),
                 upper: Antichain::from_elem(4)
             }))
@@ -1094,17 +1184,29 @@ mod tests {
 
         // Cannot insert a nonempty batch with an upper equal to lower.
         assert_eq!(
-            state.compare_and_append(&hollow(5, 5, &["key1"], 1), &writer_id, now()),
-            Break(Err(InvalidEmptyTimeInterval {
-                lower: Antichain::from_elem(5),
-                upper: Antichain::from_elem(5),
-                keys: vec![PartialBatchKey("key1".to_owned())],
-            }))
+            state.compare_and_append(
+                &hollow(5, 5, &["key1"], 1),
+                &writer_id,
+                now(),
+                &IdempotencyToken::new()
+            ),
+            Break(CompareAndAppendBreak::InvalidUsage(
+                InvalidEmptyTimeInterval {
+                    lower: Antichain::from_elem(5),
+                    upper: Antichain::from_elem(5),
+                    keys: vec![PartialBatchKey("key1".to_owned())],
+                }
+            ))
         );
 
         // Can insert an empty batch with an upper equal to lower.
         assert!(state
-            .compare_and_append(&hollow(5, 5, &[], 0), &writer_id, now())
+            .compare_and_append(
+                &hollow(5, 5, &[], 0),
+                &writer_id,
+                now(),
+                &IdempotencyToken::new()
+            )
             .is_continue());
     }
 
@@ -1137,7 +1239,12 @@ mod tests {
         // Advance upper to 5.
         assert!(state
             .collections
-            .compare_and_append(&hollow(0, 5, &["key1"], 1), &writer_id, now())
+            .compare_and_append(
+                &hollow(0, 5, &["key1"], 1),
+                &writer_id,
+                now(),
+                &IdempotencyToken::new()
+            )
             .is_continue());
 
         // Can take a snapshot with as_of < upper.
@@ -1190,7 +1297,12 @@ mod tests {
         // Advance the upper to 10 via an empty batch.
         assert!(state
             .collections
-            .compare_and_append(&hollow(5, 10, &[], 0), &writer_id, now())
+            .compare_and_append(
+                &hollow(5, 10, &[], 0),
+                &writer_id,
+                now(),
+                &IdempotencyToken::new()
+            )
             .is_continue());
 
         // Can still take snapshots at times < upper.
@@ -1208,7 +1320,12 @@ mod tests {
         // Advance upper to 15.
         assert!(state
             .collections
-            .compare_and_append(&hollow(10, 15, &["key2"], 1), &writer_id, now())
+            .compare_and_append(
+                &hollow(10, 15, &["key2"], 1),
+                &writer_id,
+                now(),
+                &IdempotencyToken::new()
+            )
             .is_continue());
 
         // Filter out batches whose lowers are less than the requested as of (the
@@ -1261,11 +1378,21 @@ mod tests {
         // Add two batches of data, one from [0, 5) and then another from [5, 10).
         assert!(state
             .collections
-            .compare_and_append(&hollow(0, 5, &["key1"], 1), &writer_id, now())
+            .compare_and_append(
+                &hollow(0, 5, &["key1"], 1),
+                &writer_id,
+                now(),
+                &IdempotencyToken::new()
+            )
             .is_continue());
         assert!(state
             .collections
-            .compare_and_append(&hollow(5, 10, &["key2"], 1), &writer_id, now())
+            .compare_and_append(
+                &hollow(5, 10, &["key2"], 1),
+                &writer_id,
+                now(),
+                &IdempotencyToken::new()
+            )
             .is_continue());
 
         // All frontiers in [0, 5) return the first batch.
@@ -1309,9 +1436,12 @@ mod tests {
             state.collections.compare_and_append(
                 &hollow(0, 2, &["key1"], 1),
                 &writer_id_one,
-                now()
+                now(),
+                &IdempotencyToken::new()
             ),
-            Break(Err(InvalidUsage::UnknownWriter(writer_id_one.clone())))
+            Break(CompareAndAppendBreak::InvalidUsage(
+                InvalidUsage::UnknownWriter(writer_id_one.clone())
+            ))
         );
 
         assert!(state
@@ -1328,7 +1458,12 @@ mod tests {
         // Writer is registered and is now eligible to write
         assert!(state
             .collections
-            .compare_and_append(&hollow(0, 2, &["key1"], 1), &writer_id_one, now())
+            .compare_and_append(
+                &hollow(0, 2, &["key1"], 1),
+                &writer_id_one,
+                now(),
+                &IdempotencyToken::new()
+            )
             .is_continue());
 
         assert!(state
@@ -1341,15 +1476,23 @@ mod tests {
             state.collections.compare_and_append(
                 &hollow(2, 5, &["key2"], 1),
                 &writer_id_one,
-                now()
+                now(),
+                &IdempotencyToken::new()
             ),
-            Break(Err(InvalidUsage::UnknownWriter(writer_id_one.clone())))
+            Break(CompareAndAppendBreak::InvalidUsage(
+                InvalidUsage::UnknownWriter(writer_id_one.clone())
+            ))
         );
 
         // But other writers should still be able to write
         assert!(state
             .collections
-            .compare_and_append(&hollow(2, 5, &["key2"], 1), &writer_id_two, now())
+            .compare_and_append(
+                &hollow(2, 5, &["key2"], 1),
+                &writer_id_two,
+                now(),
+                &IdempotencyToken::new()
+            )
             .is_continue());
     }
 
@@ -1399,6 +1542,14 @@ mod tests {
                 shard_id: state.shard_id,
                 new_seqno_since: SeqNo(200)
             })
+        );
+    }
+
+    #[test]
+    fn idempotency_token_sentinel() {
+        assert_eq!(
+            IdempotencyToken::SENTINEL.to_string(),
+            "i11111111-1111-1111-1111-111111111111"
         );
     }
 }
