@@ -106,15 +106,17 @@ ReadyForQuery {"status":"I"}
 send
 Query {"query": "create database d1"}
 Query {"query": "create database d2"}
-Query {"query": "create database d3"}
+Query {"query": "create database DB3"}
 Query {"query": "set database = d1"}
 Query {"query": "drop database d2"}
 Query {"query": "drop database d1"}
-Query {"query": "set database = d3"}
-Query {"query": "drop DATABASE D3"}
+Query {"query": "set database = dB3"}
+Query {"query": "show database"}
+Query {"query": "drop DATABASE Db3"}
 ----
 
 until
+ReadyForQuery
 ReadyForQuery
 ReadyForQuery
 ReadyForQuery
@@ -139,7 +141,11 @@ CommandComplete {"tag":"DROP DATABASE"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"SET"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"active database \"d3\" has been dropped"}]}
+RowDescription {"fields":[{"name":"database"}]}
+DataRow {"fields":["db3"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"active database \"db3\" has been dropped"}]}
 CommandComplete {"tag":"DROP DATABASE"}
 ReadyForQuery {"status":"I"}
 
@@ -147,15 +153,17 @@ ReadyForQuery {"status":"I"}
 send
 Query {"query": "create cluster c1 REPLICAS ()"}
 Query {"query": "create cluster c2 REPLICAS ()"}
-Query {"query": "create cluster c3 REPLICAS (r1 (SIZE = '1'))"}
+Query {"query": "create cluster CL3 REPLICAS (r1 (SIZE = '1'))"}
 Query {"query": "set cluster = c1"}
 Query {"query": "drop cluster c2"}
 Query {"query": "drop cluster c1"}
-Query {"query": "set cluster = c3"}
-Query {"query": "drop CLUSTER C3"}
+Query {"query": "set cluster = cL3"}
+Query {"query": "show cluster"}
+Query {"query": "drop CLUSTER Cl3"}
 ----
 
 until
+ReadyForQuery
 ReadyForQuery
 ReadyForQuery
 ReadyForQuery
@@ -180,6 +188,10 @@ CommandComplete {"tag":"DROP CLUSTER"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"SET"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"active cluster \"c3\" has been dropped"}]}
+RowDescription {"fields":[{"name":"cluster"}]}
+DataRow {"fields":["cl3"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"active cluster \"cl3\" has been dropped"}]}
 CommandComplete {"tag":"DROP CLUSTER"}
 ReadyForQuery {"status":"I"}
