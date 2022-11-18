@@ -179,18 +179,28 @@ timestamp `4` implies that there are no more updates for either timestamp
 Many drivers buffer all results until a query is complete, and so will never return.
 Below are the recommended ways to work around this.
 
+### Creating a counter load generator
+
+As an example, we'll create a [counter load generator](https://materialize.com/docs/sql/create-source/load-generator/#creating-a-counter-load-generator) that emits a row every second:
+
+```sql
+CREATE SOURCE counter
+  FROM LOAD GENERATOR COUNTER
+  WITH (SIZE = '3xsmall');
+```
+
 ### Subscribing with `FETCH`
 
 The recommended way to use `SUBSCRIBE` is with [`DECLARE`](/sql/declare) and [`FETCH`](/sql/fetch).
 These must be used within a transaction, with [a single `DECLARE`](/sql/begin/#read-only-transactions) per transaction.
 This allows you to limit the number of rows and the time window of your requests.
-As an example, let's subscribe to the [`mz_scheduling_elapsed`](/sql/system-catalog/mz_internal#mz_scheduling_elapsed) system table, which shows the total amount of time each worker spends in each dataflow.
+Next, let's subscribe to the `counter` load generator source that we've created above.
 
 First, declare a `SUBSCRIBE` cursor:
 
 ```sql
 BEGIN;
-DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM mz_internal.mz_scheduling_elapsed);
+DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM counter);
 ```
 
 Then, use [`FETCH`](/sql/fetch) in a loop to retrieve each batch of results as soon as it's ready:
@@ -224,7 +234,7 @@ FETCH ALL c WITH (timeout='0s');
 If you want to use `SUBSCRIBE` from an interactive SQL session (e.g.`psql`), wrap the query in `COPY`:
 
 ```sql
-COPY (SUBSCRIBE (SELECT * FROM mz_internal.mz_scheduling_elapsed)) TO STDOUT;
+COPY (SUBSCRIBE (SELECT * FROM counter)) TO STDOUT;
 ```
 
 | Additional guides |
@@ -251,3 +261,11 @@ After all the rows from the [`SNAPSHOT`](#snapshot) have been transmitted, the u
 If your row has a unique column key, it is possible to map the update to its corresponding origin row; if the key is unknown, you can use the output of `hash(columns_values)` instead.
 
 In the example above, `Column 1` acts as the column key that uniquely identifies the origin row the update refers to; in case this was unknown, hashing the values from `Column 1` to `Column N` would identify the origin row.
+
+### Dropping the `counter` load generator source
+
+When you're done, you can drop the `counter` load generator source:
+
+```sql
+DROP SOURCE counter;
+```
