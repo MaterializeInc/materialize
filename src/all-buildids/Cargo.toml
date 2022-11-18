@@ -1,5 +1,5 @@
 [package]
-name = "mz-all-buildids"
+name = "mz-build-id"
 description = "Utility for getting build IDs of all loaded processes."
 version = "0.1.0"
 edition.workspace = true
