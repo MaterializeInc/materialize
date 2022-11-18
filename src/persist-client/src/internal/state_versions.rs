@@ -17,6 +17,7 @@ use std::time::SystemTime;
 use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use mz_ore::cast::CastFrom;
 use mz_persist::location::{Atomicity, Blob, Consensus, Indeterminate, SeqNo, VersionedData};
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
@@ -460,7 +461,7 @@ impl StateVersions {
         //
         // NB: we make this a function of `NEED_ROLLUP_THRESHOLD` to approximate when we expect
         // rollups to be written and therefore when old states will be truncated by GC.
-        let scan_limit = 1; //30 * usize::cast_from(PersistConfig::NEED_ROLLUP_THRESHOLD);
+        let scan_limit = 30 * usize::cast_from(PersistConfig::NEED_ROLLUP_THRESHOLD);
         let oldest_diffs =
             retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
                 self.consensus
