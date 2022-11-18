@@ -3654,6 +3654,7 @@ dependencies = [
  "mz-ccsr",
  "mz-ore",
  "num_cpus",
+ "openssh",
  "prost",
  "prost-build",
  "protobuf-src",

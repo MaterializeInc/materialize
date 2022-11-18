@@ -72,6 +72,9 @@ impl ProducerContext for MzClientContext {
 pub struct BrokerRewritingClientContext<C> {
     inner: C,
     overrides: HashMap<BrokerAddr, BrokerAddr>,
+    /// SSH sessions associated with ssh overrides.
+    // TODO(guswynn) and close() as well
+    ssh_sessions: Vec<openssh::Session>,
 }
 
 impl<C> BrokerRewritingClientContext<C> {
@@ -80,6 +83,7 @@ impl<C> BrokerRewritingClientContext<C> {
         BrokerRewritingClientContext {
             inner,
             overrides: HashMap::new(),
+            ssh_sessions: vec![],
         }
     }
 
@@ -94,6 +98,27 @@ impl<C> BrokerRewritingClientContext<C> {
         rewrite_host: &str,
         rewrite_port: Option<u16>,
     ) {
+        self.add_broker_rewrite_(broker, rewrite_host, rewrite_port, None)
+    }
+
+    /// The same as `add_broker_rewrite`, but holds onto an ssh session as well.
+    pub fn add_broker_rewrite_with_session(
+        &mut self,
+        broker: &str,
+        rewrite_host: &str,
+        rewrite_port: Option<u16>,
+        session: openssh::Session,
+    ) {
+        self.add_broker_rewrite_(broker, rewrite_host, rewrite_port, Some(session))
+    }
+
+    fn add_broker_rewrite_(
+        &mut self,
+        broker: &str,
+        rewrite_host: &str,
+        rewrite_port: Option<u16>,
+        session: Option<openssh::Session>,
+    ) {
         let mut parts = broker.splitn(2, ':');
         let broker = BrokerAddr {
             host: parts.next().expect("at least one part").into(),
@@ -107,6 +132,10 @@ impl<C> BrokerRewritingClientContext<C> {
             },
         };
         self.overrides.insert(broker, rewrite);
+
+        if let Some(session) = session {
+            self.ssh_sessions.push(session)
+        }
     }
 
     /// Returns a reference to the wrapped context.
