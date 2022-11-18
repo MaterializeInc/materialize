@@ -45,9 +45,8 @@ use mz_storage_client::types::connections::aws::{
     AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri,
 };
 use mz_storage_client::types::connections::{
-    AwsPrivatelinkConnection, Connection, CsrConnectionHttpAuth, KafkaAwsPrivateLink,
-    KafkaConnection, KafkaSecurity, KafkaTlsConfig, PostgresTunnel, SaslConfig, StringOrSecret,
-    TlsIdentity,
+    AwsPrivatelink, AwsPrivatelinkConnection, Connection, CsrConnectionHttpAuth, KafkaConnection,
+    KafkaSecurity, KafkaTlsConfig, SaslConfig, StringOrSecret, TlsIdentity, Tunnel,
 };
 use mz_storage_client::types::sinks::{
     KafkaConsistencyConfig, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
@@ -82,9 +81,9 @@ use crate::ast::{
     CsrSeedProtobuf, CsvColumns, DbzMode, DropClusterReplicasStatement, DropClustersStatement,
     DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
     Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaBroker,
-    KafkaBrokerAwsPrivatelinkOption, KafkaBrokerAwsPrivatelinkOptionName, KafkaConfigOptionName,
-    KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint, LoadGeneratorOption,
-    LoadGeneratorOptionName, ObjectType, PgConfigOption, PgConfigOptionName,
+    KafkaBrokerAwsPrivatelinkOption, KafkaBrokerAwsPrivatelinkOptionName, KafkaBrokerTunnel,
+    KafkaConfigOptionName, KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint,
+    LoadGeneratorOption, LoadGeneratorOptionName, ObjectType, PgConfigOption, PgConfigOptionName,
     PostgresConnectionOption, PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica,
     ReplicaDefinition, ReplicaOption, ReplicaOptionName, SourceIncludeMetadata,
     SourceIncludeMetadataType, SshConnectionOptionName, Statement, TableConstraint,
@@ -2635,6 +2634,7 @@ generate_extracted_config!(
     (Broker, Vec<KafkaBroker<Aug>>),
     (Brokers, Vec<KafkaBroker<Aug>>),
     (ProgressTopic, String),
+    (SshTunnel, with_options::Object),
     (SslKey, with_options::Secret),
     (SslCertificate, StringOrSecret),
     (SslCertificateAuthority, StringOrSecret),
@@ -2655,6 +2655,9 @@ impl KafkaConnectionOptionExtracted {
             (None, Some(v)) => v.to_vec(),
         };
 
+        // NOTE: we allow broker configurations to be mixed and matched. If/when we support
+        // a top-level `SSH TUNNEL` configuration, we will need additional assertions.
+
         let mut out = vec![];
         for broker in &mut brokers {
             if broker.address.contains(',') {
@@ -2662,9 +2665,9 @@ impl KafkaConnectionOptionExtracted {
 Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'kafka:9093')");
             }
 
-            let aws_privatelink = match &broker.aws_privatelink {
-                None => None,
-                Some(aws_privatelink) => {
+            let tunnel = match &broker.tunnel {
+                KafkaBrokerTunnel::Direct => Tunnel::Direct,
+                KafkaBrokerTunnel::AwsPrivatelink(aws_privatelink) => {
                     let KafkaBrokerAwsPrivatelinkOptionExtracted { port, seen: _ } =
                         KafkaBrokerAwsPrivatelinkOptionExtracted::try_from(
                             aws_privatelink.options.clone(),
@@ -2678,7 +2681,7 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                     };
                     let entry = scx.catalog.get_item(id);
                     match entry.connection()? {
-                        Connection::AwsPrivatelink(_) => Some(KafkaAwsPrivateLink {
+                        Connection::AwsPrivatelink(_) => Tunnel::AwsPrivatelink(AwsPrivatelink {
                             connection_id: *id,
                             port,
                         }),
@@ -2687,11 +2690,29 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                         }
                     }
                 }
+                KafkaBrokerTunnel::SshTunnel(ssh) => {
+                    let id = match &ssh {
+                        ResolvedObjectName::Object { id, .. } => id,
+                        _ => sql_bail!(
+                            "internal error: Kafka SSH tunnel connection was not resolved"
+                        ),
+                    };
+                    let ssh_tunnel = scx.catalog.get_item(id);
+                    match ssh_tunnel.connection()? {
+                        Connection::Ssh(connection) => Tunnel::Ssh {
+                            connection_id: *id,
+                            connection: connection.clone(),
+                        },
+                        _ => {
+                            sql_bail!("{} is not an SSH connection", ssh_tunnel.name().item)
+                        }
+                    }
+                }
             };
 
             out.push(mz_storage_client::types::connections::KafkaBroker {
                 address: broker.address.clone(),
-                aws_privatelink,
+                tunnel,
             });
         }
 
@@ -2884,12 +2905,12 @@ impl PostgresConnectionOptionExtracted {
         };
 
         let tunnel = match (self.ssh_tunnel, self.aws_privatelink) {
-            (None, None) => PostgresTunnel::Direct,
+            (None, None) => Tunnel::Direct,
             (Some(ssh_tunnel), None) => {
                 let id = GlobalId::from(ssh_tunnel);
                 let ssh_tunnel = scx.catalog.get_item(&id);
                 match ssh_tunnel.connection()? {
-                    Connection::Ssh(connection) => PostgresTunnel::Ssh {
+                    Connection::Ssh(connection) => Tunnel::Ssh {
                         connection_id: id,
                         connection: connection.clone(),
                     },
@@ -2900,9 +2921,11 @@ impl PostgresConnectionOptionExtracted {
                 let id = GlobalId::from(aws_privatelink);
                 let entry = scx.catalog.get_item(&id);
                 match entry.connection()? {
-                    Connection::AwsPrivatelink(_) => {
-                        PostgresTunnel::AwsPrivateLink { connection_id: id }
-                    }
+                    Connection::AwsPrivatelink(_) => Tunnel::AwsPrivatelink(AwsPrivatelink {
+                        connection_id: id,
+                        // We always use the port specified in the PostgreSQL connection.
+                        port: None,
+                    }),
                     _ => sql_bail!("{} is not an AWS PRIVATELINK connection", entry.name().item),
                 }
             }

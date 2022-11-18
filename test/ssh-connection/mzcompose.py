@@ -9,14 +9,20 @@
 
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
+    Kafka,
     Materialized,
     Postgres,
+    SchemaRegistry,
     SshBastionHost,
     TestCerts,
     Testdrive,
+    Zookeeper,
 )
 
 SERVICES = [
+    Zookeeper(),
+    Kafka(),
+    SchemaRegistry(),
     Materialized(),
     Testdrive(),
     SshBastionHost(),
@@ -65,6 +71,34 @@ def workflow_pg_via_ssh_tunnel(c: Composition) -> None:
     c.wait_for_postgres()
 
     c.run("testdrive", "--no-reset", "pg-source.td")
+
+
+def workflow_kafka_via_ssh_tunnel(c: Composition) -> None:
+    c.start_and_wait_for_tcp(
+        services=[
+            "zookeeper",
+            "kafka",
+            "schema-registry",
+            "materialized",
+            "ssh-bastion-host",
+        ]
+    )
+    c.wait_for_materialized("materialized")
+
+    c.run("testdrive", "setup.td")
+
+    public_key = c.sql_query("select public_key_1 from mz_ssh_tunnel_connections;")[0][
+        0
+    ]
+
+    c.exec(
+        "ssh-bastion-host",
+        "bash",
+        "-c",
+        f"echo '{public_key}' > /etc/authorized_keys/mz",
+    )
+
+    c.run("testdrive", "--no-reset", "kafka-source.td")
 
 
 # Test that if we restart the bastion AND change its server keys(s), we can
@@ -217,6 +251,7 @@ def workflow_rotated_ssh_key_after_restart(c: Composition) -> None:
 
 def workflow_default(c: Composition) -> None:
     workflow_basic_ssh_features(c)
+    workflow_kafka_via_ssh_tunnel(c)
     workflow_ssh_key_after_restart(c)
     workflow_rotated_ssh_key_after_restart(c)
     workflow_pg_via_ssh_tunnel(c)

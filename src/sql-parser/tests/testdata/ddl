@@ -1209,7 +1209,7 @@ CREATE CONNECTION conn1 FOR KAFKA BROKER 'kafka:1234', SSL KEY = 'foo', SSL CERT
 ----
 CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234', SSL KEY = 'foo', SSL CERTIFICATE = 'qux')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", aws_privatelink: None })) }, KafkaConnectionOption { name: SslKey, value: Some(Value(String("foo"))) }, KafkaConnectionOption { name: SslCertificate, value: Some(Value(String("qux"))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: Direct })) }, KafkaConnectionOption { name: SslKey, value: Some(Value(String("foo"))) }, KafkaConnectionOption { name: SslCertificate, value: Some(Value(String("qux"))) }] }, if_not_exists: false })
 
 parse-statement roundtrip
 CREATE CONNECTION conn1 TO KAFKA (BROKER 'kafka:1234', SSL KEY = 'foo', SSL CERTIFICATE = 'qux');
@@ -1221,21 +1221,21 @@ CREATE CONNECTION conn1 FOR KAFKA BROKER 'kafka:1234', PROGRESS TOPIC 'my-materi
 ----
 CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234', PROGRESS TOPIC = 'my-materialize-progress-topic')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", aws_privatelink: None })) }, KafkaConnectionOption { name: ProgressTopic, value: Some(Value(String("my-materialize-progress-topic"))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: Direct })) }, KafkaConnectionOption { name: ProgressTopic, value: Some(Value(String("my-materialize-progress-topic"))) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CONNECTION conn1 TO KAFKA (BROKER 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1);
 ----
 CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1)
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", aws_privatelink: Some(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CONNECTION conn1 TO KAFKA (BROKER 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093));
 ----
 CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", aws_privatelink: Some(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) })) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) })) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CONNECTION conn1 TO KAFKA (
@@ -1248,7 +1248,7 @@ CREATE CONNECTION conn1 TO KAFKA (
 ----
 CREATE CONNECTION conn1 TO KAFKA (BROKERS = ('kafka:9092' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9092), 'kafka:9093' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093), 'kafka:9094' USING AWS PRIVATELINK aws.privatelink.c1))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", aws_privatelink: Some(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9092"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", aws_privatelink: Some(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9094", aws_privatelink: Some(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })])) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9092"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9094", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })])) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CONNECTION conn1 TO KAFKA (
@@ -1261,7 +1261,7 @@ CREATE CONNECTION conn1 TO KAFKA (
 ----
 CREATE CONNECTION conn1 TO KAFKA (BROKERS = ('kafka:9092' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9092), 'kafka:9093' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093), 'kafka:9094' USING AWS PRIVATELINK aws.privatelink.c1))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", aws_privatelink: Some(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9092"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", aws_privatelink: Some(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9094", aws_privatelink: Some(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })])) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9092"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9094", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })])) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CONNECTION conn1 TO KAFKA (
@@ -1273,6 +1273,18 @@ CREATE CONNECTION conn1 TO KAFKA (
 error: Expected right parenthesis, found left square bracket
         'kafka:9092' USING AWS PRIVATELINK aws.privatelink.c1 [PORT 9092],
                                                               ^
+
+parse-statement
+CREATE CONNECTION conn1 TO KAFKA (
+    BROKERS (
+        'kafka:9092' USING SSH TUNNEL tunn,
+        'kafka:9093' USING SSH TUNNEL tunn
+    )
+);
+----
+CREATE CONNECTION conn1 TO KAFKA (BROKERS = ('kafka:9092'USING SSH TUNNEL tunn, 'kafka:9093'USING SSH TUNNEL tunn))
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", tunnel: SshTunnel(Name(UnresolvedObjectName([Ident("tunn")]))) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", tunnel: SshTunnel(Name(UnresolvedObjectName([Ident("tunn")]))) })])) }] }, if_not_exists: false })
 
 parse-statement
 DROP CONNECTION conn1
