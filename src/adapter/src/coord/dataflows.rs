@@ -103,7 +103,6 @@ impl<S: Append + 'static> Coordinator<S> {
         self.controller
             .active_compute()
             .create_dataflows(instance, dataflow_plans)
-            .await
             .unwrap();
         self.initialize_compute_read_policies(
             output_ids,

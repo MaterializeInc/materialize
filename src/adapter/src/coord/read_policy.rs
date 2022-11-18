@@ -290,14 +290,11 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             self.controller
                 .active_compute()
                 .set_read_policy(compute_instance, compute_policy_updates)
-                .await
                 .unwrap();
         }
         self.controller
             .storage
-            .set_read_policy(storage_policy_updates)
-            .await
-            .unwrap();
+            .set_read_policy(storage_policy_updates);
     }
 
     fn default_read_capability(
@@ -310,7 +307,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         policy.into()
     }
 
-    pub(crate) async fn update_compute_base_read_policy(
+    pub(crate) fn update_compute_base_read_policy(
         &mut self,
         compute_instance: ComputeInstanceId,
         id: GlobalId,
@@ -324,7 +321,6 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         self.controller
             .active_compute()
             .set_read_policy(compute_instance, vec![(id, capability.policy())])
-            .await
             .unwrap();
     }
 
@@ -391,7 +387,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
     ///
     /// If we are unable to acquire a read hold at the provided `time` for a specific id, then we
     /// will acquire a read hold at the lowest possible time for that id.
-    pub(crate) async fn acquire_read_holds(
+    pub(crate) fn acquire_read_holds(
         &mut self,
         time: mz_repr::Timestamp,
         id_bundle: CollectionIdBundle,
@@ -404,11 +400,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             read_needs.holds.update_iter(time.iter().map(|t| (*t, 1)));
             policy_changes.push((*id, read_needs.policy()));
         }
-        self.controller
-            .storage
-            .set_read_policy(policy_changes)
-            .await
-            .unwrap();
+        self.controller.storage.set_read_policy(policy_changes);
         // Update COMPUTE read policies
         for (compute_instance, compute_ids) in read_holds.compute_ids() {
             let mut policy_changes = Vec::new();
@@ -420,7 +412,6 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             }
             compute
                 .set_read_policy(*compute_instance, policy_changes)
-                .await
                 .unwrap();
         }
 
@@ -436,7 +427,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
     /// This method relies on a previous call to `acquire_read_holds` with the same
     /// `read_holds` argument or a previous call to `update_read_hold` that returned
     /// `read_holds`, and its behavior will be erratic if called on anything else.
-    pub(super) async fn update_read_hold(
+    pub(super) fn update_read_hold(
         &mut self,
         read_holds: ReadHolds<mz_repr::Timestamp>,
         new_time: mz_repr::Timestamp,
@@ -510,16 +501,13 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         // Update STORAGE read policies.
         self.controller
             .storage
-            .set_read_policy(storage_policy_changes)
-            .await
-            .unwrap();
+            .set_read_policy(storage_policy_changes);
 
         // Update COMPUTE read policies
         let mut compute = self.controller.active_compute();
         for (compute_instance, compute_policy_changes) in compute_policy_changes {
             compute
                 .set_read_policy(compute_instance, compute_policy_changes)
-                .await
                 .unwrap();
         }
 
@@ -531,7 +519,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
     /// argument, or a previous call to `update_read_hold` that returned
     /// `read_holds`, and its behavior will be erratic if called on anything else,
     /// or if called more than once on the same bundle of read holds.
-    pub(super) async fn release_read_hold(&mut self, read_holds: &ReadHolds<mz_repr::Timestamp>) {
+    pub(super) fn release_read_hold(&mut self, read_holds: &ReadHolds<mz_repr::Timestamp>) {
         // Update STORAGE read policies.
         let mut policy_changes = Vec::new();
         for (time, id) in read_holds.storage_ids() {
@@ -541,11 +529,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 policy_changes.push((*id, read_needs.policy()));
             }
         }
-        self.controller
-            .storage
-            .set_read_policy(policy_changes)
-            .await
-            .unwrap();
+        self.controller.storage.set_read_policy(policy_changes);
         // Update COMPUTE read policies
         let mut compute = self.controller.active_compute();
         for (compute_instance, compute_ids) in read_holds.compute_ids() {
@@ -560,7 +544,6 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             if compute.instance_exists(*compute_instance) {
                 compute
                     .set_read_policy(*compute_instance, policy_changes)
-                    .await
                     .unwrap();
             }
         }

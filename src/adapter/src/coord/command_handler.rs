@@ -143,7 +143,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 tx,
             } => {
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                self.sequence_end_transaction(tx, session, action).await;
+                self.sequence_end_transaction(tx, session, action);
             }
 
             Command::VerifyPreparedStatement {
@@ -539,7 +539,7 @@ impl<S: Append + 'static> Coordinator<S> {
     ///
     /// This cleans up any state in the coordinator associated with the session.
     async fn handle_terminate(&mut self, session: &mut Session) {
-        self.clear_transaction(session).await;
+        self.clear_transaction(session);
 
         self.drop_temp_items(session).await;
         self.catalog

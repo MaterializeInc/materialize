@@ -238,24 +238,22 @@ impl<S: Append + 'static> Coordinator<S> {
                 .await;
 
             if !sources_to_drop.is_empty() {
-                self.drop_sources(sources_to_drop).await;
+                self.drop_sources(sources_to_drop);
             }
             if !log_sources_to_drop.is_empty() {
-                self.drop_sources(log_sources_to_drop.into_iter().map(|(_, id)| id).collect())
-                    .await;
+                self.drop_sources(log_sources_to_drop.into_iter().map(|(_, id)| id).collect());
             }
             if !tables_to_drop.is_empty() {
-                self.drop_sources(tables_to_drop).await;
+                self.drop_sources(tables_to_drop);
             }
             if !storage_sinks_to_drop.is_empty() {
-                self.drop_storage_sinks(storage_sinks_to_drop).await;
+                self.drop_storage_sinks(storage_sinks_to_drop);
             }
             if !indexes_to_drop.is_empty() {
-                self.drop_indexes(indexes_to_drop).await;
+                self.drop_indexes(indexes_to_drop);
             }
             if !materialized_views_to_drop.is_empty() {
-                self.drop_materialized_views(materialized_views_to_drop)
-                    .await;
+                self.drop_materialized_views(materialized_views_to_drop);
             }
             if !secrets_to_drop.is_empty() {
                 self.drop_secrets(secrets_to_drop).await;
@@ -321,14 +319,14 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(result)
     }
 
-    async fn drop_sources(&mut self, sources: Vec<GlobalId>) {
+    fn drop_sources(&mut self, sources: Vec<GlobalId>) {
         for id in &sources {
             self.drop_storage_read_policy(id);
         }
-        self.controller.storage.drop_sources(sources).await.unwrap();
+        self.controller.storage.drop_sources(sources).unwrap();
     }
 
-    pub(crate) async fn drop_compute_sinks(&mut self, sinks: Vec<ComputeSinkId>) {
+    pub(crate) fn drop_compute_sinks(&mut self, sinks: Vec<ComputeSinkId>) {
         let by_compute_instance = sinks
             .into_iter()
             .map(
@@ -342,22 +340,19 @@ impl<S: Append + 'static> Coordinator<S> {
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
             if compute.instance_exists(compute_instance) {
-                compute
-                    .drop_collections(compute_instance, ids)
-                    .await
-                    .unwrap();
+                compute.drop_collections(compute_instance, ids).unwrap();
             }
         }
     }
 
-    pub(crate) async fn drop_storage_sinks(&mut self, sinks: Vec<GlobalId>) {
+    pub(crate) fn drop_storage_sinks(&mut self, sinks: Vec<GlobalId>) {
         for id in &sinks {
             self.drop_storage_read_policy(id);
         }
-        self.controller.storage.drop_sinks(sinks).await.unwrap();
+        self.controller.storage.drop_sinks(sinks).unwrap();
     }
 
-    pub(crate) async fn drop_indexes(&mut self, indexes: Vec<(ComputeInstanceId, GlobalId)>) {
+    pub(crate) fn drop_indexes(&mut self, indexes: Vec<(ComputeInstanceId, GlobalId)>) {
         let mut by_compute_instance: HashMap<_, Vec<_>> = HashMap::new();
         for (compute_instance, id) in indexes {
             if self.drop_compute_read_policy(&id) {
@@ -373,12 +368,11 @@ impl<S: Append + 'static> Coordinator<S> {
             self.controller
                 .active_compute()
                 .drop_collections(compute_instance, ids)
-                .await
                 .unwrap();
         }
     }
 
-    async fn drop_materialized_views(&mut self, mviews: Vec<(ComputeInstanceId, GlobalId)>) {
+    fn drop_materialized_views(&mut self, mviews: Vec<(ComputeInstanceId, GlobalId)>) {
         let mut by_compute_instance: HashMap<_, Vec<_>> = HashMap::new();
         let mut source_ids = Vec::new();
         for (compute_instance, id) in mviews {
@@ -398,10 +392,7 @@ impl<S: Append + 'static> Coordinator<S> {
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
             if compute.instance_exists(compute_instance) {
-                compute
-                    .drop_collections(compute_instance, ids)
-                    .await
-                    .unwrap();
+                compute.drop_collections(compute_instance, ids).unwrap();
             }
         }
 
@@ -409,11 +400,7 @@ impl<S: Append + 'static> Coordinator<S> {
         for id in &source_ids {
             self.drop_storage_read_policy(id);
         }
-        self.controller
-            .storage
-            .drop_sources(source_ids)
-            .await
-            .unwrap();
+        self.controller.storage.drop_sources(source_ids).unwrap();
     }
 
     async fn drop_secrets(&mut self, secrets: Vec<GlobalId>) {
@@ -557,7 +544,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 match self.catalog_transact(session, ops).await {
                     Ok(()) => (),
                     catalog_err @ Err(_) => {
-                        let () = self.drop_storage_sinks(vec![id]).await;
+                        let () = self.drop_storage_sinks(vec![id]);
                         catalog_err?
                     }
                 }
