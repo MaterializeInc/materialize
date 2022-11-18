@@ -9,6 +9,7 @@
 
 //! Helpers for working with Kafka's client API.
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::error::Error;
 use std::time::Duration;
@@ -72,9 +73,8 @@ impl ProducerContext for MzClientContext {
 pub struct BrokerRewritingClientContext<C> {
     inner: C,
     overrides: HashMap<BrokerAddr, BrokerAddr>,
-    /// SSH sessions associated with ssh overrides.
-    // TODO(guswynn) and close() as well
-    ssh_sessions: Vec<openssh::Session>,
+    /// Opaque tokens to cleanup resources associated with overrides.
+    drop_tokens: Vec<Box<dyn Any + Send + Sync>>,
 }
 
 impl<C> BrokerRewritingClientContext<C> {
@@ -83,7 +83,7 @@ impl<C> BrokerRewritingClientContext<C> {
         BrokerRewritingClientContext {
             inner,
             overrides: HashMap::new(),
-            ssh_sessions: vec![],
+            drop_tokens: vec![],
         }
     }
 
@@ -98,26 +98,27 @@ impl<C> BrokerRewritingClientContext<C> {
         rewrite_host: &str,
         rewrite_port: Option<u16>,
     ) {
-        self.add_broker_rewrite_(broker, rewrite_host, rewrite_port, None)
+        self.add_broker_rewrite_inner(broker, rewrite_host, rewrite_port, None)
     }
 
-    /// The same as `add_broker_rewrite`, but holds onto an ssh session as well.
-    pub fn add_broker_rewrite_with_session(
+    /// The same as `add_broker_rewrite`, but holds onto a token that may perform
+    /// some shutdown on drop.
+    pub fn add_broker_rewrite_with_token<T: Any + Send + Sync>(
         &mut self,
         broker: &str,
         rewrite_host: &str,
         rewrite_port: Option<u16>,
-        session: openssh::Session,
+        token: T,
     ) {
-        self.add_broker_rewrite_(broker, rewrite_host, rewrite_port, Some(session))
+        self.add_broker_rewrite_inner(broker, rewrite_host, rewrite_port, Some(Box::new(token)))
     }
 
-    fn add_broker_rewrite_(
+    fn add_broker_rewrite_inner(
         &mut self,
         broker: &str,
         rewrite_host: &str,
         rewrite_port: Option<u16>,
-        session: Option<openssh::Session>,
+        token: Option<Box<dyn Any + Send + Sync>>,
     ) {
         let mut parts = broker.splitn(2, ':');
         let broker = BrokerAddr {
@@ -133,8 +134,8 @@ impl<C> BrokerRewritingClientContext<C> {
         };
         self.overrides.insert(broker, rewrite);
 
-        if let Some(session) = session {
-            self.ssh_sessions.push(session)
+        if let Some(token) = token {
+            self.drop_tokens.push(token)
         }
     }
 
