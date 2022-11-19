@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use maplit::btreemap;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
@@ -35,9 +36,7 @@ use mz_storage_client::types::sources::{KafkaSourceConnection, MzOffset};
 use crate::source::commit::LogCommitter;
 use crate::source::healthcheck::{SourceStatus, SourceStatusUpdate};
 use crate::source::types::{OffsetCommitter, SourceConnectionBuilder};
-use crate::source::{
-    NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
-};
+use crate::source::{SourceMessage, SourceMessageType, SourceReader, SourceReaderError};
 
 use self::metrics::KafkaPartitionMetrics;
 
@@ -264,6 +263,108 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
     }
 }
 
+impl KafkaSourceReader {
+    /// A Kafka source never completes. This is effectively a helper method for `poll` but without
+    /// the option wrapper, which allows for `?` use and a bit more concision.
+    async fn poll(
+        &mut self,
+        timestamp_granularity: Duration,
+    ) -> Result<SourceMessageType<Option<Vec<u8>>, Option<Vec<u8>>, ()>, SourceReaderError> {
+        loop {
+            let partition_info = self.partition_info.lock().unwrap().take();
+            if let Some(partitions) = partition_info {
+                // NOTE: We're somewhat inefficient with Vec allocations and the
+                // like. Shouldn't be a problem though, because we rarely hear about
+                // new partitions.
+                let mut unconsumed_partitions = Vec::new();
+                for pid in partitions {
+                    let pid = PartitionId::Kafka(pid);
+                    if crate::source::responsible_for(
+                        &self.id,
+                        self.worker_id,
+                        self.worker_count,
+                        &pid,
+                    ) {
+                        self.ensure_partition(pid);
+                    } else {
+                        unconsumed_partitions.push(pid);
+                    }
+                }
+                if !unconsumed_partitions.is_empty() {
+                    return Ok(SourceMessageType::DropPartitionCapabilities(
+                        unconsumed_partitions,
+                    ));
+                }
+            }
+            let mut next_message = None;
+            let mut sleep_duration = timestamp_granularity;
+
+            // Poll the consumer once. We split the consumer's partitions out into separate queues and
+            // poll those individually, but it's still necessary to drive logic that consumes from
+            // rdkafka's internal event queue, such as statistics callbacks.
+            //
+            // Additionally, assigning topics and splitting them off into separate queues is not
+            // atomic, so we expect to see at least some messages to show up when polling the consumer
+            // directly.
+            if let Some(result) = self.consumer.poll(Duration::from_secs(0)) {
+                match result {
+                    Err(e) => error!(
+                        "kafka error when polling consumer for source: {} topic: {} : {}",
+                        self.source_name, self.topic_name, e
+                    ),
+                    Ok(message) => {
+                        let source_message =
+                            construct_source_message(&message, self.include_headers)
+                                .map_err(SourceReaderError::other_definite)?;
+                        next_message = self.handle_message(source_message);
+                    }
+                }
+            }
+
+            self.update_stats();
+
+            let consumer_count = self.get_partition_consumers_count();
+            let mut attempts = 0;
+            while attempts < consumer_count {
+                // First, see if we have a message already, either from polling the consumer, above, or
+                // from polling the partition queues below.
+                if next_message.is_some() {
+                    // Found a message, exit the loop and return message
+                    break;
+                }
+
+                let message = self.poll_from_next_queue()?;
+                attempts += 1;
+
+                match message {
+                    Ok(Some(message)) => {
+                        next_message = self.handle_message(message);
+                    }
+                    Err(error) => {
+                        next_message = Some(SourceMessageType::SourceStatus(SourceStatusUpdate {
+                            status: SourceStatus::Stalled,
+                            error: Some(error),
+                        }));
+                        if next_message.is_none() {
+                            // There was a temporary hiccup in getting messages, check again asap.
+                            sleep_duration = Duration::from_millis(1);
+                        }
+                    }
+                    Ok(None) => {
+                        // no message in this queue; keep looping
+                    }
+                }
+            }
+
+            match next_message {
+                Some(msg) => return Ok(msg),
+                None => tokio::time::sleep(sleep_duration).await,
+            }
+        }
+    }
+}
+
+#[async_trait(?Send)]
 impl SourceReader for KafkaSourceReader {
     type Key = Option<Vec<u8>>;
     type Value = Option<Vec<u8>>;
@@ -275,86 +376,13 @@ impl SourceReader for KafkaSourceReader {
     ///
     /// If a message has an offset that is smaller than the next expected offset for this consumer
     /// (and this partition) we skip this message, and seek to the appropriate offset
-    fn get_next_message(
+    async fn next(
         &mut self,
-    ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
-        let partition_info = self.partition_info.lock().unwrap().take();
-        if let Some(partitions) = partition_info {
-            // NOTE: We're somewhat inefficient with Vec allocations and the
-            // like. Shouldn't be a problem though, because we rarely hear about
-            // new partitions.
-            let mut unconsumed_partitions = Vec::new();
-            for pid in partitions {
-                let pid = PartitionId::Kafka(pid);
-                if crate::source::responsible_for(&self.id, self.worker_id, self.worker_count, &pid)
-                {
-                    self.ensure_partition(pid);
-                } else {
-                    unconsumed_partitions.push(pid);
-                }
-            }
-            if !unconsumed_partitions.is_empty() {
-                return Ok(NextMessage::Ready(
-                    SourceMessageType::DropPartitionCapabilities(unconsumed_partitions),
-                ));
-            }
-        }
-        let mut next_message = NextMessage::Pending;
-
-        // Poll the consumer once. We split the consumer's partitions out into separate queues and
-        // poll those individually, but it's still necessary to drive logic that consumes from
-        // rdkafka's internal event queue, such as statistics callbacks.
-        //
-        // Additionally, assigning topics and splitting them off into separate queues is not
-        // atomic, so we expect to see at least some messages to show up when polling the consumer
-        // directly.
-        if let Some(result) = self.consumer.poll(Duration::from_secs(0)) {
-            match result {
-                Err(e) => error!(
-                    "kafka error when polling consumer for source: {} topic: {} : {}",
-                    self.source_name, self.topic_name, e
-                ),
-                Ok(message) => {
-                    let source_message = construct_source_message(&message, self.include_headers)
-                        .map_err(SourceReaderError::other_definite)?;
-                    next_message = self.handle_message(source_message);
-                }
-            }
-        }
-
-        self.update_stats();
-
-        let consumer_count = self.get_partition_consumers_count();
-        let mut attempts = 0;
-        while attempts < consumer_count {
-            // First, see if we have a message already, either from polling the consumer, above, or
-            // from polling the partition queues below.
-            if let NextMessage::Ready(_) = next_message {
-                // Found a message, exit the loop and return message
-                break;
-            }
-
-            let message = self.poll_from_next_queue()?;
-            attempts += 1;
-
-            match message {
-                Ok(Some(message)) => {
-                    next_message = self.handle_message(message);
-                }
-                Err(error) => {
-                    next_message =
-                        NextMessage::Ready(SourceMessageType::SourceStatus(SourceStatusUpdate {
-                            status: SourceStatus::Stalled,
-                            error: Some(error),
-                        }))
-                }
-                Ok(None) => {
-                    // no message in this queue; keep looping
-                }
-            }
-        }
-
-        Ok(next_message)
+        timestamp_granularity: Duration,
+    ) -> Option<Result<SourceMessageType<Self::Key, Self::Value, Self::Diff>, SourceReaderError>>
+    {
+        let result = self.poll(timestamp_granularity).await;
+        Some(result)
     }
 }
 
@@ -590,7 +618,7 @@ impl KafkaSourceReader {
     fn handle_message(
         &mut self,
         message: SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()>,
-    ) -> NextMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()> {
+    ) -> Option<SourceMessageType<Option<Vec<u8>>, Option<Vec<u8>>, ()>> {
         let partition = match message.partition {
             PartitionId::Kafka(pid) => pid,
             _ => unreachable!(),
@@ -636,10 +664,10 @@ impl KafkaSourceReader {
             // We explicitly should not consume the message as we have already processed it
             // However, we make sure to activate the source to make sure that we get a chance
             // to read from this consumer again (even if no new data arrives)
-            NextMessage::TransientDelay
+            None
         } else {
             *last_offset_ref = offset_as_i64;
-            NextMessage::Ready(SourceMessageType::Finalized(message))
+            Some(SourceMessageType::Finalized(message))
         }
     }
 }
