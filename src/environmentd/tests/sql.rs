@@ -1030,12 +1030,10 @@ fn test_temporary_views() -> Result<(), Box<dyn Error>> {
 // Test EXPLAIN TIMESTAMP with tables.
 #[test]
 fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
     let config = util::Config::default();
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
     let timestamp_re = Regex::new(r"\s*(\d+) \(\d+-\d\d-\d\d \d\d:\d\d:\d\d.\d\d\d\)").unwrap();
-    let bool_re = Regex::new(r"true|false").unwrap();
 
     client.batch_execute("CREATE TABLE t1 (i1 INT)")?;
 
@@ -1044,7 +1042,7 @@ fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
 largest not in advance of upper:<TIMESTAMP>
                           upper:[<TIMESTAMP>]
                           since:[<TIMESTAMP>]
-        can respond immediately: <BOOL>
+        can respond immediately: true
                        timeline: Some(EpochMilliseconds)
 
 source materialize.public.t1 (u1, storage):
@@ -1056,9 +1054,6 @@ source materialize.public.t1 (u1, storage):
         .unwrap();
     let explain: String = row.get(0);
     let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
-    // TODO: annoyingly "can respond immediately" does seem to change if you,
-    // say, inject a sleep. Is it supposed to be deterministic? See #16115.
-    let explain = bool_re.replace_all(&explain, "<BOOL>");
     assert_eq!(explain, expect, "{explain}\n\n{expect}");
 
     Ok(())
