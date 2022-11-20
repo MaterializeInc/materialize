@@ -45,7 +45,7 @@ thiserror = "1.0.37"
 tokio = { version = "1.22.0", features = ["fs"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde"] }
 tracing = "0.1.37"
-typemap_rev = "0.1.5"
+typemap_rev = "0.3.0"
 uncased = "0.9.7"
 uuid = { version = "1.2.2", features = ["serde", "v4"] }
 
