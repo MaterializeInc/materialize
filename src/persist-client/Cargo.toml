@@ -67,7 +67,7 @@ futures-task = "0.3.21"
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-ore = { path = "../ore", features = ["tracing_"] }
-num_cpus = "1.13.1"
+num_cpus = "1.14.0"
 num_enum = "0.5.7"
 serde_json = "1.0.86"
 tempfile = "3.2.0"
