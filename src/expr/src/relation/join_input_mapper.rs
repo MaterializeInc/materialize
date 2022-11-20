@@ -400,7 +400,7 @@ impl JoinInputMapper {
         index: usize,
     ) -> Option<MirScalarExpr> {
         if self.is_localized(expr, index) {
-            Some(expr.clone())
+            Some(self.map_expr_to_local(expr.clone()))
         } else {
             match expr {
                 MirScalarExpr::CallVariadic {
@@ -414,10 +414,10 @@ impl JoinInputMapper {
                             mz_ore::stack::maybe_grow(|| self.consequence_for_input(or_arg, index))
                         })
                         .collect::<Option<Vec<_>>>()?; // return None if any of them are None
-                    Some(self.map_expr_to_local(MirScalarExpr::CallVariadic {
+                    Some(MirScalarExpr::CallVariadic {
                         func: VariadicFunc::Or,
                         exprs: consequences_per_arg,
-                    }))
+                    })
                 }
                 MirScalarExpr::CallVariadic {
                     func: VariadicFunc::And,
@@ -435,10 +435,10 @@ impl JoinInputMapper {
                     if consequences_per_arg.is_empty() {
                         None
                     } else {
-                        Some(self.map_expr_to_local(MirScalarExpr::CallVariadic {
+                        Some(MirScalarExpr::CallVariadic {
                             func: VariadicFunc::And,
                             exprs: consequences_per_arg,
-                        }))
+                        })
                     }
                 }
                 _ => None,
