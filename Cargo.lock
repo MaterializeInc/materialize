@@ -2242,8 +2242,9 @@ dependencies = [
 
 [[package]]
 name = "headers"
-version = "0.3.7"
-source = "git+https://github.com/hyperium/headers.git#31fe3e19e5763b95c9b5dfed1569bef555380dc4"
+version = "0.3.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3e372db8e5c0d213e0cd0b9be18be2aca3d44cf2fe30a9d46a65581cd454584"
 dependencies = [
  "base64",
  "bitflags",
@@ -2258,7 +2259,8 @@ dependencies = [
 [[package]]
 name = "headers-core"
 version = "0.2.0"
-source = "git+https://github.com/hyperium/headers.git#31fe3e19e5763b95c9b5dfed1569bef555380dc4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7f66481bfee273957b1f20485a4ff3362987f85b2c236580d81b4eb7a326429"
 dependencies = [
  "http",
 ]
