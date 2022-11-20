@@ -7,15 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-
 from docker.models.containers import ContainerCollection
-
 
 class Client:
     @property
-    def containers(self) -> ContainerCollection:
-        ...
+    def containers(self) -> ContainerCollection: ...
 
-
-def from_env() -> Client:
-    ...
+def from_env() -> Client: ...
