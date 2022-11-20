@@ -25,7 +25,7 @@ regex = "1.7.0"
 serde = { version = "1.0.147", features = ["derive"] }
 serde_json = "1.0.86"
 sha2 = "0.10.6"
-snap = { version = "1.0.5", optional = true }
+snap = { version = "1.1.0", optional = true }
 tracing = "0.1.37"
 uuid = "1.2.2"
 
