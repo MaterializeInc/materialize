@@ -1,11 +1,11 @@
 [package]
 name = "mz-ore"
 description = "Internal utility libraries for Materialize."
-version = "0.0.0"
+version = "0.1.0"
 license = "Apache-2.0"
 edition.workspace = true
 rust-version.workspace = true
-publish = false
+authors = ["Materialize, Inc."]
 
 [dependencies]
 anyhow = { version = "1.0.65", optional = true }
