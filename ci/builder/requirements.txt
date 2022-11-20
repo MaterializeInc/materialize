@@ -17,7 +17,7 @@ python-frontmatter==1.0.0
 humanize==4.4.0
 isort==5.10.1
 junit-xml==1.9
-kubernetes==22.6.0
+kubernetes==25.3.0
 kubernetes-stubs==22.6.0.post1
 mypy==0.991
 numpy==1.22.4
