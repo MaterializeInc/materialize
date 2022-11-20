@@ -23,4 +23,4 @@ mz-storage-client = { path = "../storage-client" }
 serde = { version = "1.0.147", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = "1.20.2"
-uuid = { version = "1.2.1" }
+uuid = { version = "1.2.2" }
