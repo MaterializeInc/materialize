@@ -12,7 +12,7 @@ anyhow = "1.0.65"
 axum = { version = "0.5.16", features = ["headers"] }
 backtrace = "0.3.66"
 cfg-if = "1.0.0"
-headers = "0.3.7"
+headers = "0.3.8"
 http = "0.2.8"
 include_dir = "0.7.3"
 libc = "0.2.135"

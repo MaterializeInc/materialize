@@ -163,10 +163,6 @@ allow-git = [
     # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
     "https://github.com/MaterializeInc/serde-value.git",
 
-    # Waiting on https://github.com/hyperium/headers/pull/117 to make it into
-    # a release.
-    "https://github.com/hyperium/headers.git",
-
     # Waiting on https://github.com/blackbeam/rust_mysql_common/pull/71 to make
     # it into a release.
     "https://github.com/blackbeam/rust_mysql_common.git",
