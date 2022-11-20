@@ -55,7 +55,7 @@ prometheus = { version = "0.13.2", default-features = false }
 prost = { version = "0.11.2", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
-regex = { version = "1.6.0" }
+regex = { version = "1.7.0" }
 serde = { version = "1.0.147", features = ["derive"] }
 serde_json = { version = "1.0.86" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
