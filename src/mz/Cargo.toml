@@ -20,4 +20,4 @@ dirs = "4.0.0"
 mz-ore = { path = "../ore", features = ["task"] }
 anyhow = "1.0.62"
 indicatif = "0.17.2"
-uuid = "1.2.1"
+uuid = "1.2.2"
