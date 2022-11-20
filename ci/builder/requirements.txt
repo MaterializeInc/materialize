@@ -20,7 +20,7 @@ junit-xml==1.9
 kubernetes==25.3.0
 kubernetes-stubs==22.6.0.post1
 mypy==0.991
-numpy==1.22.4
+numpy==1.23.5
 pandas==1.5.1
 parameterized==0.8.1
 paramiko==2.12.0
