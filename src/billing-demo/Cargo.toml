@@ -24,5 +24,5 @@ tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
 uuid = { version = "1.2.2", features = ["v4"] }
 
 [build-dependencies]
-prost-build = "0.11.1"
+prost-build = "0.11.2"
 protobuf-src = "1.1.0"

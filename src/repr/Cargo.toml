@@ -57,7 +57,7 @@ criterion = { version = "0.4.0" }
 rand = "0.8.5"
 
 [build-dependencies]
-prost-build = "0.11.1"
+prost-build = "0.11.2"
 protobuf-src = "1.1.0"
 
 [features]
