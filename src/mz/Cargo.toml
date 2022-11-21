@@ -12,7 +12,7 @@ serde = { version = "1.0.147", features = ["derive"] }
 clap = { version = "3.2.20", features = [ "derive" ] }
 tokio = { version = "1.22.0", features = ["full"] }
 open = { git = "https://github.com/Byron/open-rs.git" }
-axum = "0.5.16"
+axum = "0.5.17"
 rpassword = "7.1"
 reqwest = { version = "0.11", features = ["blocking", "json"] }
 toml = "0.5.9"
