@@ -58,6 +58,7 @@ use crate::client::{
     StorageCommand, StorageResponse, Update,
 };
 use crate::controller::hosts::{StorageHosts, StorageHostsConfig};
+use crate::healthcheck;
 use crate::types::errors::DataflowError;
 use crate::types::hosts::StorageHostConfig;
 use crate::types::sinks::{
@@ -619,12 +620,13 @@ pub struct StorageControllerState<
     persist_read_handles: persist_read_handles::PersistWorker<T>,
     stashed_response: Option<StorageResponse<T>>,
     /// Storage hosts that should be deprovisioned during the next call to `StorageController::process`.
-    pending_host_deprovisions: BTreeSet<GlobalId>,
+    pending_host_deprovisions: BTreeSet<(GlobalId, GlobalId)>,
 
     /// Interface for managed collections
     pub(super) collection_manager: collection_mgmt::CollectionManager,
     /// Tracks which collection is responsible for which [`IntrospectionType`].
     pub(super) introspection_ids: HashMap<IntrospectionType, GlobalId>,
+    now: NowFn,
     /// The fencing token for this instance of the controller.
     envd_epoch: NonZeroI64,
 }
@@ -755,7 +757,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
         let collection_manager_write_handle = persist_write_handles.clone();
 
         let collection_manager =
-            collection_mgmt::CollectionManager::new(collection_manager_write_handle, now);
+            collection_mgmt::CollectionManager::new(collection_manager_write_handle, now.clone());
 
         Self {
             collections: BTreeMap::default(),
@@ -768,6 +770,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             pending_host_deprovisions: BTreeSet::new(),
             collection_manager,
             introspection_ids: HashMap::new(),
+            now,
             envd_epoch,
         }
     }
@@ -1010,7 +1013,7 @@ where
                         }
                         IntrospectionType::SourceStatusHistory
                         | IntrospectionType::SinkStatusHistory => {
-                            // nothing to do: only storaged writes rows to these collections
+                            // nothing to do: these collections are append only
                         }
                     }
                 }
@@ -1199,7 +1202,8 @@ where
 
             // Remove sink by removing its write frontier and arranging for deprovisioning.
             self.update_write_frontiers(&[(id, Antichain::new())]);
-            self.state.pending_host_deprovisions.insert(id);
+            let status_id = self.state.introspection_ids[&IntrospectionType::SinkStatusHistory];
+            self.state.pending_host_deprovisions.insert((id, status_id));
         }
     }
 
@@ -1379,7 +1383,9 @@ where
                 )]));
 
                 if frontier.is_empty() {
-                    self.state.pending_host_deprovisions.insert(id);
+                    let status_id =
+                        self.state.introspection_ids[&IntrospectionType::SourceStatusHistory];
+                    self.state.pending_host_deprovisions.insert((id, status_id));
                 }
             }
         }
@@ -1418,7 +1424,12 @@ where
         }
 
         let to_deprovision = std::mem::take(&mut self.state.pending_host_deprovisions);
-        for id in to_deprovision {
+        for (id, status_id) in to_deprovision {
+            // Record the destruction of the source
+            let status_row = healthcheck::pack_status_row(id, "dropped", None, (self.state.now)());
+            self.append_to_managed_collection(status_id, vec![(status_row, 1)])
+                .await;
+
             self.hosts.deprovision(id).await?;
         }
 
