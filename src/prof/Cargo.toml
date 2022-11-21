@@ -16,7 +16,7 @@ headers = "0.3.8"
 http = "0.2.8"
 include_dir = "0.7.3"
 libc = "0.2.137"
-once_cell = "1.15.0"
+once_cell = "1.16.0"
 mime = "0.3.16"
 mz-build-info = { path = "../build-info" }
 mz-http-util = { path = "../http-util" }
