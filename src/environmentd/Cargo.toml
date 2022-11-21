@@ -13,7 +13,7 @@ anyhow = "1.0.66"
 askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
 async-trait = "0.1.58"
 axum = { version = "0.5.17", features = ["headers"] }
-base64 = "0.13.0"
+base64 = "0.13.1"
 bytes = "1.2.1"
 chrono = { version = "0.4.23", default-features = false, features = ["std"] }
 clap = { version = "3.2.20", features = ["wrap_help", "env", "derive"] }
