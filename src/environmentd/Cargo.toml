@@ -110,7 +110,7 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", feat
 
 [build-dependencies]
 anyhow = "1.0.66"
-cc = "1.0.76"
+cc = "1.0.77"
 mz-npm = { path = "../npm" }
 
 [features]
