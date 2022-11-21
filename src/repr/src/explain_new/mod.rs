@@ -864,20 +864,22 @@ mod tests {
             (Datum::from(-1.23), "-1.23"),
             (
                 Datum::Date(
-                    crate::adt::date::Date::try_from(chrono::NaiveDate::from_ymd(2022, 8, 3))
-                        .unwrap(),
+                    crate::adt::date::Date::try_from(
+                        chrono::NaiveDate::from_ymd_opt(2022, 8, 3).unwrap(),
+                    )
+                    .unwrap(),
                 ),
                 r#""2022-08-03""#,
             ),
             (
-                Datum::Time(chrono::NaiveTime::from_hms(12, 10, 22)),
+                Datum::Time(chrono::NaiveTime::from_hms_opt(12, 10, 22).unwrap()),
                 r#""12:10:22""#,
             ),
             (
                 Datum::Timestamp(
-                    CheckedTimestamp::from_timestamplike(chrono::NaiveDateTime::from_timestamp(
-                        1023123, 234,
-                    ))
+                    CheckedTimestamp::from_timestamplike(
+                        chrono::NaiveDateTime::from_timestamp_opt(1023123, 234).unwrap(),
+                    )
                     .unwrap(),
                 ),
                 r#""1970-01-12T20:12:03.000000234""#,
@@ -885,7 +887,7 @@ mod tests {
             (
                 Datum::TimestampTz(
                     CheckedTimestamp::from_timestamplike(chrono::DateTime::from_utc(
-                        chrono::NaiveDateTime::from_timestamp(90234242, 234),
+                        chrono::NaiveDateTime::from_timestamp_opt(90234242, 234).unwrap(),
                         chrono::Utc,
                     ))
                     .unwrap(),

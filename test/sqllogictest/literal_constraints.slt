@@ -616,9 +616,8 @@ WHERE
 Explained Query:
   Project (#0, #1, #5) // { arity: 3 }
     Filter (#0) IS NOT NULL // { arity: 6 }
-      Join on=(#0 = #3) type=delta // { arity: 6 }
+      Join on=(#0 = #3) type=differential // { arity: 6 }
         implementation
-          %0:t1 » %1:t2[#0]KA
           %1:t2 » %0:t1[#0]KAe
         ArrangeBy keys=[[#0]] // { arity: 3 }
           ReadExistingIndex materialize.public.t1 lookup_values=[("l2"); ("l3")]
@@ -652,9 +651,8 @@ WHERE
 Explained Query:
   Project (#0, #1, #5) // { arity: 3 }
     Filter (#0) IS NOT NULL // { arity: 6 }
-      Join on=(#0 = #3) type=delta // { arity: 6 }
+      Join on=(#0 = #3) type=differential // { arity: 6 }
         implementation
-          %0:t1 » %1:t2[#0]KA
           %1:t2 » %0:t1[#0]KAe
         ArrangeBy keys=[[#0]] // { arity: 3 }
           ReadExistingIndex materialize.public.t1 lookup_value=("l2")
@@ -694,8 +692,9 @@ Explained Query:
     ArrangeBy keys=[[]] // { arity: 2 }
       Project (#0, #1) // { arity: 2 }
         ReadExistingIndex materialize.public.t1 lookup_value=(2, "l2")
-    Project (#2) // { arity: 1 }
-      ReadExistingIndex materialize.public.t2 lookup_value=(2)
+    ArrangeBy keys=[[]] // { arity: 1 }
+      Project (#2) // { arity: 1 }
+        ReadExistingIndex materialize.public.t2 lookup_value=(2)
 
 Used Indexes:
   - materialize.public.idx_t1_a_b

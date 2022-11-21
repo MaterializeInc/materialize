@@ -344,12 +344,12 @@ static VALID_LOGICAL_TYPES: Lazy<Vec<(&'static str, Value)>> = Lazy::new(|| {
         // Timestamp millis logical type
         (
             r#"{"type": "long", "logicalType": "timestamp-millis"}"#,
-            Value::Timestamp(NaiveDateTime::from_timestamp(0, 0)),
+            Value::Timestamp(NaiveDateTime::from_timestamp_opt(0, 0).unwrap()),
         ),
         // Timestamp micros logical type
         (
             r#"{"type": "long", "logicalType": "timestamp-micros"}"#,
-            Value::Timestamp(NaiveDateTime::from_timestamp(0, 0)),
+            Value::Timestamp(NaiveDateTime::from_timestamp_opt(0, 0).unwrap()),
         ),
     ]
 });

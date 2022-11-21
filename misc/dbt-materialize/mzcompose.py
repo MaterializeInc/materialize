@@ -39,7 +39,6 @@ class TestCase:
     name: str
     dbt_env: Dict[str, str]
     materialized_options: List[str]
-    profile: str
     materialized_image: Optional[str] = None
 
 
@@ -48,13 +47,11 @@ test_cases = [
         name="no-tls-cloud",
         materialized_options=[],
         dbt_env={},
-        profile="materialize_cloud",
     ),
 ]
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """Runs the dbt adapter test suite against Materialize in various configurations."""
     parser.add_argument(
         "filter", nargs="?", default="", help="limit to test cases matching filter"
     )
@@ -80,8 +77,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         "dbt-test",
                         "pytest",
                         "dbt-materialize/tests",
-                        "--profile",
-                        test_case.profile,
                         env_extra={
                             "DBT_HOST": "materialized",
                             "KAFKA_ADDR": "redpanda:9092",

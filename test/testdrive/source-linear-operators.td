@@ -135,9 +135,10 @@ Explained Query:
         Project (#0)
           Filter (#0) IS NOT NULL
             Get materialize.public.data
-      Project (#1)
-        Filter (#3 = 4) AND (#1) IS NOT NULL
-          Get materialize.public.data
+      ArrangeBy keys=[[#0]]
+        Project (#1)
+          Filter (#3 = 4) AND (#1) IS NOT NULL
+            Get materialize.public.data
 
 Source materialize.public.data
   project=(#0, #1, #4, #3)
@@ -164,9 +165,10 @@ Explained Query:
         Project (#0)
           Filter (#3 = 4) AND (#0) IS NOT NULL
             Get materialize.public.data
-      Project (#0, #1)
-        Filter (#3 = 4) AND (#1) IS NOT NULL
-          Get materialize.public.data
+      ArrangeBy keys=[[#1]]
+        Project (#0, #1)
+          Filter (#3 = 4) AND (#1) IS NOT NULL
+            Get materialize.public.data
 
 Source materialize.public.data
   project=(#0, #1, #4, #3)
@@ -190,8 +192,9 @@ Explained Query:
         ArrangeBy keys=[[#0]]
           Project (#0)
             Get l0
-        Project (#0, #2)
-          Get l0
+        ArrangeBy keys=[[#0]]
+          Project (#0, #2)
+            Get l0
   With
     cte l0 =
       Filter (#0) IS NOT NULL

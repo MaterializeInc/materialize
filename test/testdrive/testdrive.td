@@ -50,7 +50,8 @@ Explained Query:
     ArrangeBy keys=[[]]
       Filter (#0) IS NOT NULL
         Get materialize.public.t1
-    Get materialize.public.t1
+    ArrangeBy keys=[[]]
+      Get materialize.public.t1
 
 ! SELECT * FROM u1234;
 contains:unknown catalog item 'UID'

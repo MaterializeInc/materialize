@@ -328,12 +328,9 @@ fn add_date_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError>
     let date = a.unwrap_date();
     let time = b.unwrap_time();
 
-    let dt = NaiveDate::from(date).and_hms_nano(
-        time.hour(),
-        time.minute(),
-        time.second(),
-        time.nanosecond(),
-    );
+    let dt = NaiveDate::from(date)
+        .and_hms_nano_opt(time.hour(), time.minute(), time.second(), time.nanosecond())
+        .unwrap();
     Ok(dt.try_into()?)
 }
 
@@ -341,7 +338,7 @@ fn add_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalEr
     let date = a.unwrap_date();
     let interval = b.unwrap_interval();
 
-    let dt = NaiveDate::from(date).and_hms(0, 0, 0);
+    let dt = NaiveDate::from(date).and_hms_opt(0, 0, 0).unwrap();
     let dt = add_timestamp_months(&dt, interval.months)?;
     let dt = dt
         .checked_add_signed(interval.duration_as_chrono())
@@ -517,7 +514,9 @@ pub fn add_timestamp_months<T: TimestampLike>(
     //
     // Both my testing and https://dba.stackexchange.com/a/105829 support the
     // idea that we should ignore leap seconds
-    let new_dt = new_d.and_hms_nano(dt.hour(), dt.minute(), dt.second(), dt.nanosecond());
+    let new_dt = new_d
+        .and_hms_nano_opt(dt.hour(), dt.minute(), dt.second(), dt.nanosecond())
+        .unwrap();
     let new_dt = T::from_date_time(new_dt);
     Ok(CheckedTimestamp::from_timestamplike(new_dt)?)
 }
@@ -799,7 +798,7 @@ fn sub_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalEr
     let date = a.unwrap_date();
     let interval = b.unwrap_interval();
 
-    let dt = NaiveDate::from(date).and_hms(0, 0, 0);
+    let dt = NaiveDate::from(date).and_hms_opt(0, 0, 0).unwrap();
     let dt = interval
         .months
         .checked_neg()
@@ -2027,8 +2026,10 @@ impl BinaryFunc {
                 eager!(|a: Datum, b: Datum| date_bin(
                     a.unwrap_interval(),
                     b.unwrap_timestamp(),
-                    CheckedTimestamp::from_timestamplike(NaiveDateTime::from_timestamp(0, 0))
-                        .expect("must fit")
+                    CheckedTimestamp::from_timestamplike(
+                        NaiveDateTime::from_timestamp_opt(0, 0).unwrap()
+                    )
+                    .expect("must fit")
                 ))
             }
             BinaryFunc::DateBinTimestampTz => {
@@ -2036,7 +2037,7 @@ impl BinaryFunc {
                     a.unwrap_interval(),
                     b.unwrap_timestamptz(),
                     CheckedTimestamp::from_timestamplike(DateTime::<Utc>::from_utc(
-                        NaiveDateTime::from_timestamp(0, 0),
+                        NaiveDateTime::from_timestamp_opt(0, 0).unwrap(),
                         Utc
                     ))
                     .expect("must fit")
@@ -6494,28 +6495,37 @@ mod test {
         // and going over a year boundary by less than a year
         let dt = ym(1999, 12);
         assert_eq!(add_timestamp_months(&*dt, 1).unwrap(), ym(2000, 1));
-        let end_of_month_dt = NaiveDate::from_ymd(1999, 12, 31).and_hms(9, 9, 9);
+        let end_of_month_dt = NaiveDate::from_ymd_opt(1999, 12, 31)
+            .unwrap()
+            .and_hms_opt(9, 9, 9)
+            .unwrap();
         assert_eq!(
             // leap year
             add_timestamp_months(&end_of_month_dt, 2).unwrap(),
-            NaiveDate::from_ymd(2000, 2, 29)
-                .and_hms(9, 9, 9)
+            NaiveDate::from_ymd_opt(2000, 2, 29)
+                .unwrap()
+                .and_hms_opt(9, 9, 9)
+                .unwrap()
                 .try_into()
                 .unwrap(),
         );
         assert_eq!(
             // not leap year
             add_timestamp_months(&end_of_month_dt, 14).unwrap(),
-            NaiveDate::from_ymd(2001, 2, 28)
-                .and_hms(9, 9, 9)
+            NaiveDate::from_ymd_opt(2001, 2, 28)
+                .unwrap()
+                .and_hms_opt(9, 9, 9)
+                .unwrap()
                 .try_into()
                 .unwrap(),
         );
     }
 
     fn ym(year: i32, month: u32) -> CheckedTimestamp<NaiveDateTime> {
-        NaiveDate::from_ymd(year, month, 1)
-            .and_hms(9, 9, 9)
+        NaiveDate::from_ymd_opt(year, month, 1)
+            .unwrap()
+            .and_hms_opt(9, 9, 9)
+            .unwrap()
             .try_into()
             .unwrap()
     }

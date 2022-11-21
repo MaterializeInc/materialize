@@ -7,7 +7,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.65"
+anyhow = "1.0.66"
 clap = { version = "3.2.20", features = ["derive", "env"] }
 mz-adapter = { path = "../adapter" }
 mz-build-info = { path = "../build-info" }
@@ -16,7 +16,7 @@ mz-postgres-util = { path = "../postgres-util" }
 mz-secrets = { path = "../secrets" }
 mz-stash = { path = "../stash" }
 mz-storage-client = { path = "../storage-client" }
-once_cell = "1.15.0"
-serde_json = "1.0.86"
-tokio = "1.20.2"
+once_cell = "1.16.0"
+serde_json = "1.0.88"
+tokio = "1.22.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = [ "with-serde_json-1" ] }

@@ -26,7 +26,9 @@ pub type EpochMillis = u64;
 #[cfg(feature = "chrono")]
 pub fn to_datetime(millis: EpochMillis) -> DateTime<Utc> {
     let dur = std::time::Duration::from_millis(millis);
-    Utc.timestamp(dur.as_secs() as i64, dur.subsec_nanos())
+    Utc.timestamp_opt(dur.as_secs() as i64, dur.subsec_nanos())
+        .single()
+        .expect("ambiguous timestamp")
 }
 
 /// A function that returns system or mocked time.
@@ -95,14 +97,26 @@ mod tests {
     #[test]
     fn test_to_datetime() {
         let test_cases = [
-            (0, NaiveDate::from_ymd(1970, 1, 1).and_hms_nano(0, 0, 0, 0)),
+            (
+                0,
+                NaiveDate::from_ymd_opt(1970, 1, 1)
+                    .unwrap()
+                    .and_hms_nano_opt(0, 0, 0, 0)
+                    .unwrap(),
+            ),
             (
                 1600000000000,
-                NaiveDate::from_ymd(2020, 9, 13).and_hms_nano(12, 26, 40, 0),
+                NaiveDate::from_ymd_opt(2020, 9, 13)
+                    .unwrap()
+                    .and_hms_nano_opt(12, 26, 40, 0)
+                    .unwrap(),
             ),
             (
                 1658323270293,
-                NaiveDate::from_ymd(2022, 7, 20).and_hms_nano(13, 21, 10, 293_000_000),
+                NaiveDate::from_ymd_opt(2022, 7, 20)
+                    .unwrap()
+                    .and_hms_nano_opt(13, 21, 10, 293_000_000)
+                    .unwrap(),
             ),
         ];
         // to_datetime works properly and roundtrips

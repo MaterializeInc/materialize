@@ -1,88 +1,153 @@
-{{/*  Copyright Materialize, Inc. All rights reserved.
-
-Use of this software is governed by the Business Source License
-included in the LICENSE file at the root of this repository.
-
-As of the Change Date specified in that file, in accordance with
-the Business Source License, use of this software will be governed
-by the Apache License, Version 2.0.  */}}
+{{/* Copyright Materialize, Inc. All rights reserved. Use of this software is
+governed by the Business Source License included in the LICENSE file at the root
+of this repository. As of the Change Date specified in that file, in accordance
+with the Business Source License, use of this software will be governed by the
+Apache License, Version 2.0. */}}
 <!DOCTYPE html>
 <html>
-
-<head>
+  <head>
     {{ partial "head.html" . }}
-</head>
+  </head>
 
-<body>
+  <body>
+    <script>
+      const theme = localStorage.getItem("theme");
+      const darkMediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+
+      if (theme === null) {
+        localStorage.setItem("theme", "system");
+        if (darkMediaQuery.matches) {
+          document.body.classList.add("dark");
+        } else {
+          document.body.classList.add("light");
+        }
+      } else if (theme === "dark") {
+        document.body.classList.add("dark");
+      } else if (theme === "light") {
+        document.body.classList.add("light");
+      } else if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+        document.body.classList.add("dark");
+      } else {
+        document.body.classList.add("light");
+      }
+    </script>
+
     <!-- If a page uses supportlevel svg icons, embed them inline
          so they can be referenced via <use> tags. -->
-    {{ if in .Page.RawContent "supportLevel" }}
-      {{ partial "inline-svgs.html"}}
-    {{ end }}
-    {{ partial "header.html" . }}
-    {{ block "body" .}}
-        <div class="content-wrapper">
-            {{ partial "sidebar.html" . }}
+    {{ if in .Page.RawContent "supportLevel" }} {{ partial "inline-svgs.html"}}
+    {{ end }} {{ partial "header.html" . }} {{ block "body" .}}
+    <div class="content-wrapper">
+      {{ partial "sidebar.html" . }}
 
-            <main class="content {{ if .Params.make_table_row_headers_searchable }} docsearch_index_table_headers {{ end }}">
-                {{ partial "breadcrumbs.html" . }}
-                {{ block "main" . }}{{ end }}
-                <!-- Footer goes in main so the border-right of
-                sidebar.html can extend to the bottom of the page. -->
-                {{ partial "footer.html" . }}
-            </main>
-
-            {{ partial "toc.html" . }}
+      <main
+        class="content {{ if .Params.make_table_row_headers_searchable }} docsearch_index_table_headers {{ end }}"
+      >
+        <div>
+          {{ partial "breadcrumbs.html" . }} {{ block "main" . }}{{ end }}
         </div>
+
+        <a href="#top">Back to top &uarr;</a>
+        <!-- Footer goes in main so the border-right of
+                sidebar.html can extend to the bottom of the page. -->
+        {{ partial "footer.html" . }}
+      </main>
+
+      {{ partial "toc.html" . }}
+    </div>
     {{ end }}
 
     <script>
-        anchors.add(".content h2, .content h3, .content h4, .content h5, .content h6");
+      anchors.add(
+        ".content h2, .content h3, .content h4, .content h5, .content h6"
+      );
 
-        $(".content ol:has(p)").addClass("has-p");
+      $(".content ol:has(p)").addClass("has-p");
 
-        /* Make external links open in new tabs */
-        $('a[href*="//"]:not([href*="materialize.com"])').attr({target:"_blank", title:"External Link"});
-
-        /* Add "Click to Copy" button to code blocks */
-        $(document).ready(function() {
-          $('pre.chroma').append('<span class="default_button copy_button" title="Copy code to clipboard">Copy</span>');
-
-          $('pre.chroma span.copy_button').click(function(e) {
-            var _this = $(this),
-                copyHex = document.createElement('textarea');
-            copyHex.value = _this.parent().find('code').text().trim();
-            document.body.appendChild(copyHex);
-            copyHex.select();
-            document.execCommand('copy');
-            document.body.removeChild(copyHex);
-            _this.addClass("success").text('Copied');
-            setTimeout(function() {
-              _this.removeClass("success").text('Copy');
-            }, 1000);
-          });
-        });
-
-        // Add click handlers for all top-level items with children.
-        const menus = $("nav[role=navigation] li.has-children");
-        menus.find("a:not([href]), svg").click(e => {
-            $(e.target).parents('li').toggleClass("open");
-            e.preventDefault();
-            return false;
-        });
-        // When an item is already active, and it's clicked, just collapse it
-        menus.find("a.active").click(e => {
-          $(e.target).parents('li').toggleClass("open");
-          e.preventDefault();
-          return false;
+      /* Make external links open in new tabs */
+      $('a[href*="//"]:not([href*="materialize.com"])').attr({
+        target: "_blank",
+        title: "External Link",
       });
 
-        // Open the submenu containing the current page by default.
-        menus.has(".active").addClass("open");
+      /* Add "Click to Copy" button to code blocks */
+      $(document).ready(function () {
+        $("pre.chroma").append(
+          '<span class="default_button copy_button" title="Copy code to clipboard">Copy</span>'
+        );
 
-        //Scroll the sidebar to the active element
-        $('.sidebar').scrollTop($(".sidebar .active").offset().top - ($(window).height()/2));
+        $("pre.chroma span.copy_button").click(function (e) {
+          var _this = $(this),
+            copyHex = document.createElement("textarea");
+          copyHex.value = _this.parent().find("code").text().trim();
+          document.body.appendChild(copyHex);
+          copyHex.select();
+          document.execCommand("copy");
+          document.body.removeChild(copyHex);
+          _this.addClass("success").text("Copied");
+          setTimeout(function () {
+            _this.removeClass("success").text("Copy");
+          }, 1000);
+        });
+      });
+
+      // Add click handlers for all top-level items with children.
+      const menus = $("nav[role=navigation] li.has-children");
+      menus.find("a:not([href]), svg").click((e) => {
+        $(e.target).parents("li").toggleClass("open");
+        e.preventDefault();
+        return false;
+      });
+      // When an item is already active, and it's clicked, just collapse it
+      menus.find("a.active").click((e) => {
+        $(e.target).parents("li").toggleClass("open");
+        e.preventDefault();
+        return false;
+      });
+
+      // Open the submenu containing the current page by default.
+      menus.has(".active").addClass("open");
+
+      //Scroll the sidebar to the active element
+      $(".sidebar").scrollTop(
+        $(".sidebar .active").offset().top - $(window).height() / 2
+      );
     </script>
-</body>
 
+    <script>
+      darkMediaQuery.addEventListener("change", () => {
+        const storedTheme = localStorage.getItem("theme");
+        if (storedTheme === "system") {
+          console.log("Called.");
+          if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+            document.body.classList.replace("light", "dark");
+          } else {
+            document.body.classList.replace("dark", "light");
+          }
+        }
+      });
+
+      const systemButton = document.querySelector("button.system");
+      const lightButton = document.querySelector("button.light");
+      const darkButton = document.querySelector("button.dark");
+
+      systemButton.addEventListener("click", () => {
+        if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+          document.body.classList.replace("light", "dark");
+        } else {
+          document.body.classList.replace("dark", "light");
+        }
+        localStorage.setItem("theme", "system");
+      });
+
+      lightButton.addEventListener("click", () => {
+        document.body.classList.replace("dark", "light");
+        localStorage.setItem("theme", "light");
+      });
+
+      darkButton.addEventListener("click", () => {
+        document.body.classList.replace("light", "dark");
+        localStorage.setItem("theme", "dark");
+      });
+    </script>
+  </body>
 </html>

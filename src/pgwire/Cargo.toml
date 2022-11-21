@@ -7,11 +7,11 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.65"
-async-trait = "0.1.57"
+anyhow = "1.0.66"
+async-trait = "0.1.58"
 byteorder = "1.4.3"
 bytes = "1.2.1"
-futures = "0.3.24"
+futures = "0.3.25"
 itertools = "0.10.5"
 mz-adapter = { path = "../adapter" }
 mz-expr = { path = "../expr" }
@@ -23,7 +23,7 @@ mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
 openssl = { version = "0.10.42", features = ["vendored"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
-tokio = "1.20.2"
+tokio = "1.22.0"
 tokio-openssl = "0.6.3"
-tokio-util = { version = "0.7.3", features = ["codec"] }
+tokio-util = { version = "0.7.4", features = ["codec"] }
 tracing = "0.1.37"

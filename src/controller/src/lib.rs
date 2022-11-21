@@ -192,7 +192,7 @@ where
                 Ok(None)
             }
             Readiness::Compute => {
-                let response = self.active_compute().process().await?;
+                let response = self.active_compute().process();
                 Ok(response.map(Into::into))
             }
         }

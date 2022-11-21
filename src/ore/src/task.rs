@@ -99,7 +99,10 @@ where
     Fut::Output: Send + 'static,
 {
     #[allow(clippy::disallowed_methods)]
-    task::Builder::new().name(nc().as_ref()).spawn(future)
+    task::Builder::new()
+        .name(nc().as_ref())
+        .spawn(future)
+        .expect("task spawning cannot fail")
 }
 
 /// Runs the provided closure with a name on a thread where blocking is
@@ -144,6 +147,7 @@ where
     task::Builder::new()
         .name(nc().as_ref())
         .spawn_blocking(function)
+        .expect("task spawning cannot fail")
 }
 
 /// Extension methods for [`Runtime`] and [`Handle`].

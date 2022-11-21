@@ -571,7 +571,7 @@ mod tests {
         let writer_schema = Schema::from_str(writer_raw_schema).unwrap();
         let mut writer = Writer::with_codec(writer_schema.clone(), Vec::new(), Codec::Null);
         let mut record = Record::new(writer_schema.top_node()).unwrap();
-        let dt = chrono::NaiveDateTime::from_timestamp(1_000, 995_000_000);
+        let dt = chrono::NaiveDateTime::from_timestamp_opt(1_000, 995_000_000).unwrap();
         record.put("a", types::Value::Timestamp(dt));
         writer.append(record).unwrap();
         writer.flush().unwrap();

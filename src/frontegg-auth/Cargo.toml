@@ -7,14 +7,14 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.65"
-base64 = "0.13.0"
+anyhow = "1.0.66"
+base64 = "0.13.1"
 derivative = "2.2.0"
 jsonwebtoken = "8.1.1"
 mz-ore = { path = "../ore" }
-reqwest = "0.11.12"
+reqwest = "0.11.13"
 serde = { version = "1.0.147", features = ["derive"] }
 thiserror = "1.0.37"
-tokio = "1.20.2"
+tokio = "1.22.0"
 tracing = "0.1.37"
-uuid = "1.2.1"
+uuid = "1.2.2"

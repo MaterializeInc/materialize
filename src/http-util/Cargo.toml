@@ -8,13 +8,13 @@ publish = false
 
 [dependencies]
 askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
-axum = { version = "0.5.16", features = ["headers"] }
-headers = "0.3.7"
+axum = { version = "0.5.17", features = ["headers"] }
+headers = "0.3.8"
 serde = "1.0.147"
 tracing-subscriber = "0.3.16"
 include_dir = "0.7.3"
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "tracing_"] }
-prometheus = { version = "0.13.2", default-features = false, features = ["process"] }
+prometheus = { version = "0.13.3", default-features = false, features = ["process"] }
 
 [package.metadata.cargo-udeps.ignore]
 # Only used in macro generated code

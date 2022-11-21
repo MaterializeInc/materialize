@@ -170,10 +170,19 @@ impl RoutineMaintenance {
 /// routine maintenance common to all handles. It is expected that
 /// writers always perform maintenance.
 #[must_use]
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct WriterMaintenance<T> {
     pub(crate) routine: RoutineMaintenance,
     pub(crate) compaction: Vec<CompactReq<T>>,
+}
+
+impl<T> Default for WriterMaintenance<T> {
+    fn default() -> Self {
+        Self {
+            routine: RoutineMaintenance::default(),
+            compaction: Vec::default(),
+        }
+    }
 }
 
 impl<T> WriterMaintenance<T>

@@ -16,38 +16,50 @@ $lime: #77e04c;
 
 /* New Site Styles */
 /* TODO: Remove V2 once ported over */
-$white-v2: #FFF;
-$grey-v2: #A2A2A2;
-$dark-grey-v2: #CDCDCD;
-$medium-grey-v2: #EDE7FD;
-$light-grey-v2: #F5F5F5;
-$black-v2: #383D49;
+$white-v2: #fff;
+$grey-v2: #a2a2a2;
+$dark-grey-v2: #cdcdcd;
+$medium-grey-v2: #ede7fd;
+$light-grey-v2: #f5f5f5;
+$black-v2: #383d49;
 $dark-black-v2: #111111;
-$faded-purple-v2: #FAF8FD;
-$light-purple-v2: #BAB5EF;
-$purple-v2: #7F4EFF;
-$medium-purple-v2: #472F85;
-$dark-purple-v2: #1B164C;
-$darkest-purple-v2: #140D55;
-$orchid-v2: #E537C0;
-$transparent-gradient-v2: linear-gradient(0deg, #FFFFFF00 0%,#FFFFFF00 100%);
-$primary-gradient-v2: linear-gradient(280.8deg, #5C29F1 15.21%, #E37AC2 56.5%, #FF9067 85.53%);
-$primary-gradient-dark-v2: linear-gradient(280.8deg, #5C29F1 15.21%, #E37AC2 56.5%, #FF9067 85.53%),linear-gradient(0deg, #111111, #111111);
+$faded-purple-v2: #faf8fd;
+$light-purple-v2: #bab5ef;
+$purple-v2: #7f4eff;
+$medium-purple-v2: #472f85;
+$dark-purple-v2: #1b164c;
+$darkest-purple-v2: #140d55;
+$orchid-v2: #e537c0;
+$transparent-gradient-v2: linear-gradient(0deg, #ffffff00 0%, #ffffff00 100%);
+$primary-gradient-v2: linear-gradient(280.8deg,
+        #5c29f1 15.21%,
+        #e37ac2 56.5%,
+        #ff9067 85.53%);
+$primary-gradient-dark-v2: linear-gradient(280.8deg,
+        #5c29f1 15.21%,
+        #e37ac2 56.5%,
+        #ff9067 85.53%),
+    linear-gradient(0deg, #111111, #111111);
 
-$secondary-gradient-v2: linear-gradient(277.43deg, #4512C7 -97.28%, #59C3FF 15.82%, #75FF86 120.75%), linear-gradient(281.49deg, #5C29F1 22.32%, #E37AC2 64.57%, #FF9067 94.28%);
-$purple-gradient-v2: linear-gradient(102.5deg, #5A34CB 17.99%, #9B34CB 59.07%);
-$transparent-v2: #FFFFFF00;
+$secondary-gradient-v2: linear-gradient(277.43deg,
+        #4512c7 -97.28%,
+        #59c3ff 15.82%,
+        #75ff86 120.75%),
+    linear-gradient(281.49deg, #5c29f1 22.32%, #e37ac2 64.57%, #ff9067 94.28%);
+$purple-gradient-v2: linear-gradient(102.5deg, #5a34cb 17.99%, #9b34cb 59.07%);
+$transparent-v2: #ffffff00;
 
 $border-radius: 4px;
 
-$success: #13D461;
-$progress: #D1FA77;
-$warning: #EE8660;
-$danger: #e5375e;
+$success: #13d461;
+$progress: #d1fa77;
+$warning: rgb(255, 145, 0);
+$danger: #f85151;
 
-@import "reset";
+@import "mixins";
+@import "base";
 @import "content";
 @import "layout";
-@import "fonts";
+@import "nav";
 @import "highlight";
 @import "railroad_diagrams";

@@ -653,7 +653,7 @@ Explained Query:
         project=(#1, #0)
       lookup={ relation=1, key=[#1] }
       stream={ key=[#0], thinning=() }
-    source={ relation=2, key=[] }
+    source={ relation=2, key=[#0] }
     Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
@@ -662,8 +662,11 @@ Explained Query:
       arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
       Get::Collection materialize.public.u
         raw=true
-    Get::Collection materialize.public.v
+    ArrangeBy
       raw=true
+      arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      Get::Collection materialize.public.v
+        raw=true
 
 Source materialize.public.u
   filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
@@ -708,7 +711,7 @@ Explained Query:
         project=(#1, #0)
       lookup={ relation=1, key=[#0, #1] }
       stream={ key=[#1, #0], thinning=() }
-    source={ relation=2, key=[] }
+    source={ relation=2, key=[#1, #0] }
     Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
@@ -720,11 +723,14 @@ Explained Query:
         key=#0
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-    Get::Arrangement materialize.public.v
-      filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
-      key=#0
-      raw=false
-      arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+    ArrangeBy
+      raw=true
+      arrangements[0]={ key=[#1, #0], permutation={#0: #1, #1: #0}, thinning=() }
+      Get::Arrangement materialize.public.v
+        filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
+        key=#0
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
   - materialize.public.t_a_idx

@@ -20,7 +20,6 @@
 use thiserror::Error;
 
 use mz_repr::GlobalId;
-use mz_storage_client::controller::StorageError;
 
 use crate::command::ReplicaId;
 
@@ -70,8 +69,8 @@ pub enum ReplicaCreationError {
     InstanceMissing(ComputeInstanceId),
     #[error("replica exists already: {0}")]
     ReplicaExists(ReplicaId),
-    #[error("storage interaction error: {0}")]
-    Storage(#[from] StorageError),
+    #[error("collection does not exist: {0}")]
+    CollectionMissing(GlobalId),
 }
 
 impl From<InstanceMissing> for ReplicaCreationError {
@@ -80,13 +79,15 @@ impl From<InstanceMissing> for ReplicaCreationError {
     }
 }
 
-impl From<instance::ReplicaCreationError> for ReplicaCreationError {
-    fn from(error: instance::ReplicaCreationError) -> Self {
-        use instance::ReplicaCreationError::*;
-        match error {
-            ReplicaExists(id) => Self::ReplicaExists(id),
-            Storage(error) => error.into(),
-        }
+impl From<instance::ReplicaExists> for ReplicaCreationError {
+    fn from(error: instance::ReplicaExists) -> Self {
+        Self::ReplicaExists(error.0)
+    }
+}
+
+impl From<CollectionMissing> for ReplicaCreationError {
+    fn from(error: CollectionMissing) -> Self {
+        Self::CollectionMissing(error.0)
     }
 }
 
@@ -97,8 +98,6 @@ pub enum ReplicaDropError {
     InstanceMissing(ComputeInstanceId),
     #[error("replica does not exist: {0}")]
     ReplicaMissing(ReplicaId),
-    #[error("storage interaction error: {0}")]
-    Storage(#[from] StorageError),
 }
 
 impl From<InstanceMissing> for ReplicaDropError {
@@ -107,13 +106,9 @@ impl From<InstanceMissing> for ReplicaDropError {
     }
 }
 
-impl From<instance::ReplicaDropError> for ReplicaDropError {
-    fn from(error: instance::ReplicaDropError) -> Self {
-        use instance::ReplicaDropError::*;
-        match error {
-            ReplicaMissing(id) => Self::ReplicaMissing(id),
-            Storage(error) => error.into(),
-        }
+impl From<instance::ReplicaMissing> for ReplicaDropError {
+    fn from(error: instance::ReplicaMissing) -> Self {
+        Self::ReplicaMissing(error.0)
     }
 }
 
@@ -128,8 +123,6 @@ pub enum DataflowCreationError {
     MissingAsOf,
     #[error("dataflow has an as_of not beyond the since of collection: {0}")]
     SinceViolation(GlobalId),
-    #[error("storage interaction error: {0}")]
-    Storage(#[from] StorageError),
 }
 
 impl From<InstanceMissing> for DataflowCreationError {
@@ -145,7 +138,6 @@ impl From<instance::DataflowCreationError> for DataflowCreationError {
             CollectionMissing(id) => Self::CollectionMissing(id),
             MissingAsOf => Self::MissingAsOf,
             SinceViolation(id) => Self::SinceViolation(id),
-            Storage(error) => error.into(),
         }
     }
 }
@@ -159,8 +151,6 @@ pub enum PeekError {
     CollectionMissing(GlobalId),
     #[error("peek timestamp is not beyond the since of collection: {0}")]
     SinceViolation(GlobalId),
-    #[error("storage interaction error: {0}")]
-    Storage(#[from] StorageError),
 }
 
 impl From<InstanceMissing> for PeekError {
@@ -175,7 +165,6 @@ impl From<instance::PeekError> for PeekError {
         match error {
             CollectionMissing(id) => Self::CollectionMissing(id),
             SinceViolation(id) => Self::CollectionMissing(id),
-            Storage(error) => error.into(),
         }
     }
 }
@@ -187,8 +176,6 @@ pub enum CollectionUpdateError {
     InstanceMissing(ComputeInstanceId),
     #[error("collection does not exist: {0}")]
     CollectionMissing(GlobalId),
-    #[error("storage interaction error: {0}")]
-    Storage(#[from] StorageError),
 }
 
 impl From<InstanceMissing> for CollectionUpdateError {
@@ -197,12 +184,8 @@ impl From<InstanceMissing> for CollectionUpdateError {
     }
 }
 
-impl From<instance::CollectionUpdateError> for CollectionUpdateError {
-    fn from(error: instance::CollectionUpdateError) -> Self {
-        use instance::CollectionUpdateError::*;
-        match error {
-            CollectionMissing(id) => Self::CollectionMissing(id),
-            Storage(error) => error.into(),
-        }
+impl From<CollectionMissing> for CollectionUpdateError {
+    fn from(error: CollectionMissing) -> Self {
+        Self::CollectionMissing(error.0)
     }
 }

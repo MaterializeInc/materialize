@@ -7,22 +7,22 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.65"
-chrono = { version = "0.4.22", default-features = false, features = ["clock", "std"] }
+anyhow = "1.0.66"
+chrono = { version = "0.4.23", default-features = false, features = ["clock", "std"] }
 clap = { version = "3.2.20", features = ["derive"] }
 hex = "0.4.3"
 mz-ore = { path = "../../src/ore", features = ["task"] }
 mz-test-util = { path = "../../test/test-util" }
 prost = { version = "0.11.2", features = ["no-recursion-limit"] }
-prost-types = "0.11.1"
+prost-types = "0.11.2"
 rand = "0.8.5"
 rand_distr = "0.4.3"
-tokio = "1.20.2"
+tokio = "1.22.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
-uuid = { version = "1.2.1", features = ["v4"] }
+uuid = { version = "1.2.2", features = ["v4"] }
 
 [build-dependencies]
-prost-build = "0.11.1"
+prost-build = "0.11.2"
 protobuf-src = "1.1.0"

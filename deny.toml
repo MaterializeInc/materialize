@@ -55,6 +55,7 @@ wrappers = [
     "tracing-log",
     "tracing",
     "tungstenite",
+    "ureq",
     "want",
     "wasm-bindgen-backend",
 ]
@@ -163,10 +164,6 @@ allow-git = [
     # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
     "https://github.com/MaterializeInc/serde-value.git",
 
-    # Waiting on https://github.com/hyperium/headers/pull/117 to make it into
-    # a release.
-    "https://github.com/hyperium/headers.git",
-
     # Waiting on https://github.com/blackbeam/rust_mysql_common/pull/71 to make
     # it into a release.
     "https://github.com/blackbeam/rust_mysql_common.git",
@@ -177,6 +174,18 @@ allow-git = [
 
     # Waiting on https://github.com/edenhill/librdkafka/pull/4051.
     "https://github.com/MaterializeInc/rust-rdkafka.git",
+
+    # Waiting on https://github.com/jorgecarleitao/arrow2/pull/1297 to make it
+    # into a release.
+    "https://github.com/jorgecarleitao/arrow2.git",
+
+    # Waiting on https://github.com/Byron/open-rs/pull/59.
+    "https://github.com/Byron/open-rs.git",
+
+    # Waiting for hashlink, indexmap, and lru to upgrade to hashbrown v0.13,
+    # which depends on ahash v0.8 instead of v0.7. In the meantime we've
+    # backported the ahash v0.8 bump into hashbrown v0.12.
+    "https://github.com/MaterializeInc/hashbrown.git",
 
     # Dependencies that we control upstream whose official releases we don't
     # care about.

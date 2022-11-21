@@ -133,11 +133,15 @@ impl Args {
                 Some(start_time) => start_time,
                 None => {
                     let now = Utc::now() - chrono::Duration::seconds(60 * 60 * 24 * 7);
-                    Utc.ymd(now.year(), now.month(), now.day()).and_hms(
+                    Utc.with_ymd_and_hms(
+                        now.year(),
+                        now.month(),
+                        now.day(),
                         now.hour(),
                         now.minute(),
                         now.second(),
                     )
+                    .unwrap()
                 }
             },
             create_topic,

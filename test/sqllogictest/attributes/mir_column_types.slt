@@ -86,7 +86,8 @@ Explained Query:
           Negate // { types: "()" }
             Project () // { types: "()" }
               Join on=(#0 = #1) type=differential // { types: "(integer?, integer)" }
-                Get materialize.public.u // { types: "(integer?)" }
+                ArrangeBy keys=[[#0]] // { types: "(integer?)" }
+                  Get materialize.public.u // { types: "(integer?)" }
                 ArrangeBy keys=[[#0]] // { types: "(integer)" }
                   Distinct group_by=[#0] // { types: "(integer)" }
                     Project (#0) // { types: "(integer)" }
@@ -101,8 +102,9 @@ Explained Query:
           ArrangeBy keys=[[#0]] // { types: "(integer)" }
             Filter (#0) IS NOT NULL // { types: "(integer)" }
               Get materialize.public.u // { types: "(integer?)" }
-          Filter (#0) IS NOT NULL // { types: "(integer, text?, date?)" }
-            Get materialize.public.t // { types: "(integer?, text?, date?)" }
+          ArrangeBy keys=[[#0]] // { types: "(integer, text?, date?)" }
+            Filter (#0) IS NOT NULL // { types: "(integer, text?, date?)" }
+              Get materialize.public.t // { types: "(integer?, text?, date?)" }
 
 Source materialize.public.t
   filter=((#0) IS NOT NULL)
@@ -125,17 +127,18 @@ Explained Query:
                   ArrangeBy keys=[[#0]] // { types: "(double precision, boolean?)" }
                     Filter (#0) IS NOT NULL // { types: "(double precision, boolean?)" }
                       Get materialize.public.v // { types: "(double precision?, boolean?)" }
-                  Union // { types: "(double precision)" }
-                    Project (#1) // { types: "(double precision)" }
-                      Filter (#1) IS NOT NULL // { types: "(integer?, double precision)" }
-                        Map (integer_to_double(#0)) // { types: "(integer?, double precision?)" }
-                          Get materialize.public.u // { types: "(integer?)" }
-                    Map (error("more than one record produced in subquery")) // { types: "(double precision)" }
-                      Project () // { types: "()" }
-                        Filter error("more than one record produced in subquery") AND (#0 > 1) // { types: "(bigint)" }
-                          Reduce aggregates=[count(true)] // { types: "(bigint)" }
-                            Project () // { types: "()" }
-                              Get materialize.public.u // { types: "(integer?)" }
+                  ArrangeBy keys=[[#0]] // { types: "(double precision)" }
+                    Union // { types: "(double precision)" }
+                      Project (#1) // { types: "(double precision)" }
+                        Filter (#1) IS NOT NULL // { types: "(integer?, double precision)" }
+                          Map (integer_to_double(#0)) // { types: "(integer?, double precision?)" }
+                            Get materialize.public.u // { types: "(integer?)" }
+                      Map (error("more than one record produced in subquery")) // { types: "(double precision)" }
+                        Project () // { types: "()" }
+                          Filter error("more than one record produced in subquery") AND (#0 > 1) // { types: "(bigint)" }
+                            Reduce aggregates=[count(true)] // { types: "(bigint)" }
+                              Project () // { types: "()" }
+                                Get materialize.public.u // { types: "(integer?)" }
       Constant // { types: "(boolean?, bigint)" }
         - (null, 10)
 

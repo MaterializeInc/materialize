@@ -120,6 +120,7 @@ impl JoinImplementation {
             implementation,
         } = relation
         {
+            let inputs_len = inputs.len();
             if !matches!(implementation, IndexedFilter(..)) {
                 let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
 
@@ -303,9 +304,13 @@ impl JoinImplementation {
                     &filters,
                 );
 
-                *relation = delta_query_plan
-                    .or(differential_plan)
-                    .expect("Failed to produce a join plan");
+                // Employ delta join plans only for multi-way joins of at least three inputs.
+                *relation = if inputs_len > 2 {
+                    delta_query_plan.or(differential_plan)
+                } else {
+                    differential_plan
+                }
+                .expect("Failed to produce a join plan");
             }
         }
         Ok(())
@@ -539,16 +544,41 @@ mod differential {
                     .collect::<Vec<_>>()
             };
 
-            let (start, start_keys, _characteristics) = &order[0];
+            let (start, _start_keys, _characteristics) = &order[0];
             let start = *start;
-            let start_keys = if available[start].contains(start_keys) {
-                Some(start_keys.clone())
-            } else {
-                // if there is not already a pre-existing arrangement
-                // for the start input, do not implement one
+            let mut start_keys = None;
+            // Determine an appropriate arrangement to use for `start`.
+            // It must line up with the arrangement of `order[1]`, or be set to `None` to avoid miscommunicating the validity.
+            // One way to do this is to take each of the keys of `order[1]`, globalize them, the attempt to find an equated
+            // expression that can be localized to order[0].0,
+            if let Some((next_index, next_keys, _)) = order.get(1) {
+                // To populate with localized expressions equated to elements of `next_keys`.
+                let mut found_keys = Vec::with_capacity(next_keys.len());
+                for expr in next_keys.iter() {
+                    let global_expr = input_mapper.map_expr_to_global(expr.clone(), *next_index);
+                    // we should find `global_expr` in some `equivalences`.
+                    let equivalence_class = equivalences
+                        .iter()
+                        .find(|c| c.contains(&global_expr))
+                        .unwrap();
+                    if let Some(expr) = equivalence_class
+                        .iter()
+                        .find(|e| input_mapper.single_input(e) == Some(start))
+                    {
+                        found_keys.push(input_mapper.map_expr_to_local(expr.clone()));
+                    }
+                }
+                // Only if we found matches for each key should we announce the keys.
+                if found_keys.len() == next_keys.len() {
+                    start_keys = Some(found_keys.clone());
+                    order[0].1 = found_keys;
+                }
+            }
+
+            // If we found no keys, avoid implementing the empty keyed arrangement.
+            if start_keys.is_none() {
                 order.remove(0);
-                None
-            };
+            }
 
             // Implement arrangements in each of the inputs.
             let lifted_mfp = super::implement_arrangements(inputs, available, order.iter());

@@ -2143,7 +2143,6 @@ impl<'a> Parser<'a> {
             RETENTION,
             SNAPSHOT,
             START,
-            STATISTICS,
             TOPIC,
             TRANSACTION,
         ])? {
@@ -2181,10 +2180,6 @@ impl<'a> Parser<'a> {
                 MS => KafkaConfigOptionName::RetentionMs,
                 _ => unreachable!(),
             },
-            STATISTICS => {
-                self.expect_keywords(&[INTERVAL, MS])?;
-                KafkaConfigOptionName::StatisticsIntervalMs
-            }
             TOPIC => {
                 if self.parse_keyword(METADATA) {
                     self.expect_keywords(&[REFRESH, INTERVAL, MS])?;

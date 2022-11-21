@@ -119,7 +119,7 @@ impl<S: Append + 'static> Coordinator<S> {
             });
         }
 
-        if let Err(err) = self.catalog_transact(None, ops, |_| Ok(())).await {
+        if let Err(err) = self.catalog_transact(None, ops).await {
             tracing::warn!("Failed to update storage metrics: {:?}", err);
         }
         self.catalog
@@ -345,7 +345,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     self.catalog_transact(
                         session_and_tx.as_ref().map(|(ref session, _tx)| session),
                         vec![catalog::Op::DropItem(id)],
-                        |_| Ok(()),
                     )
                     .await
                     .expect("deleting placeholder sink cannot fail");
@@ -358,8 +357,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let () = self
                     .controller
                     .storage
-                    .cancel_prepare_export(create_export_token)
-                    .await;
+                    .cancel_prepare_export(create_export_token);
                 if let Some((session, tx)) = session_and_tx {
                     tx.send(Err(e), session);
                 }
@@ -455,7 +453,6 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog_transact(
             None,
             vec![catalog::Op::UpdateComputeInstanceStatus { event }],
-            |_| Ok(()),
         )
         .await
         .unwrap_or_terminate("updating compute instance status cannot fail");

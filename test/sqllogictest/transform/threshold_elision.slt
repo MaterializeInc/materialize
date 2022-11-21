@@ -266,8 +266,9 @@ Explained Query:
         ArrangeBy keys=[[]]
           Project (#0)
             Get materialize.public.people
-        Project ()
-          Get materialize.public.bands
+        ArrangeBy keys=[[]]
+          Project ()
+            Get materialize.public.bands
 
 Source materialize.public.bands
   project=(#2, #3)

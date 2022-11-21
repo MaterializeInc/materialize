@@ -509,7 +509,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 self.controller
                     .active_compute()
                     .add_replica_to_instance(instance.id, replica_id, replica.config)
-                    .await
                     .unwrap();
             }
         }
@@ -518,16 +517,13 @@ impl<S: Append + 'static> Coordinator<S> {
         // Migrate builtin objects.
         self.controller
             .storage
-            .drop_sources_unvalidated(builtin_migration_metadata.previous_materialized_view_ids)
-            .await?;
+            .drop_sources_unvalidated(builtin_migration_metadata.previous_materialized_view_ids);
         self.controller
             .storage
-            .drop_sources_unvalidated(builtin_migration_metadata.previous_source_ids)
-            .await?;
+            .drop_sources_unvalidated(builtin_migration_metadata.previous_source_ids);
         self.controller
             .storage
-            .drop_sinks_unvalidated(builtin_migration_metadata.previous_sink_ids)
-            .await?;
+            .drop_sinks_unvalidated(builtin_migration_metadata.previous_sink_ids);
 
         let mut entries: Vec<_> = self.catalog.entries().cloned().collect();
         // Topologically sort entries based on the used_by relationship
@@ -661,7 +657,6 @@ impl<S: Append + 'static> Coordinator<S> {
                         self.controller
                             .active_compute()
                             .create_dataflows(idx.compute_instance, dataflow_plan)
-                            .await
                             .unwrap();
                     }
                 }
@@ -707,7 +702,6 @@ impl<S: Append + 'static> Coordinator<S> {
                         .controller
                         .storage
                         .prepare_export(id, sink.from)
-                        .await
                         .unwrap();
 
                     task::spawn(

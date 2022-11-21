@@ -478,7 +478,7 @@ impl Ord for Timezone {
 
 impl Default for Timezone {
     fn default() -> Self {
-        Self::FixedOffset(FixedOffset::east(0))
+        Self::FixedOffset(FixedOffset::east_opt(0).unwrap())
     }
 }
 
@@ -803,7 +803,7 @@ impl ParsedDateTime {
             }
             None => (0, 0),
         };
-        Ok(NaiveTime::from_hms_nano(hour, minute, second, nano))
+        Ok(NaiveTime::from_hms_nano_opt(hour, minute, second, nano).unwrap())
     }
 
     /// Builds a ParsedDateTime from an interval string (`value`).
@@ -2143,9 +2143,9 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
             }
 
             let offset = if is_positive {
-                FixedOffset::east(tz_offset_second as i32)
+                FixedOffset::east_opt(tz_offset_second as i32).unwrap()
             } else {
-                FixedOffset::west(tz_offset_second as i32)
+                FixedOffset::west_opt(tz_offset_second as i32).unwrap()
             };
 
             return Ok(Timezone::FixedOffset(offset));
@@ -3794,53 +3794,56 @@ mod tests {
     fn test_parse_timezone_offset_second() {
         use Timezone::{FixedOffset as F, Tz as T};
         let test_cases = [
-            ("+0:00", F(FixedOffset::east(0))),
-            ("-0:00", F(FixedOffset::east(0))),
-            ("+0:000000", F(FixedOffset::east(0))),
-            ("+000000:00", F(FixedOffset::east(0))),
-            ("+000000:000000", F(FixedOffset::east(0))),
-            ("+0", F(FixedOffset::east(0))),
-            ("+00", F(FixedOffset::east(0))),
-            ("+000", F(FixedOffset::east(0))),
-            ("+0000", F(FixedOffset::east(0))),
-            ("+00000000", F(FixedOffset::east(0))),
-            ("+0000001:000000", F(FixedOffset::east(3600))),
-            ("+0000000:000001", F(FixedOffset::east(60))),
-            ("+0000001:000001", F(FixedOffset::east(3660))),
-            ("+0000001:000001:000001", F(FixedOffset::east(3661))),
-            ("+4:00", F(FixedOffset::east(14400))),
-            ("-4:00", F(FixedOffset::west(14400))),
-            ("+2:30", F(FixedOffset::east(9000))),
-            ("-5:15", F(FixedOffset::west(18900))),
-            ("+0:20", F(FixedOffset::east(1200))),
-            ("-0:20", F(FixedOffset::west(1200))),
-            ("+0:0:20", F(FixedOffset::east(20))),
-            ("+5", F(FixedOffset::east(18000))),
-            ("-5", F(FixedOffset::west(18000))),
-            ("+05", F(FixedOffset::east(18000))),
-            ("-05", F(FixedOffset::west(18000))),
-            ("+500", F(FixedOffset::east(18000))),
-            ("-500", F(FixedOffset::west(18000))),
-            ("+530", F(FixedOffset::east(19800))),
-            ("-530", F(FixedOffset::west(19800))),
-            ("+050", F(FixedOffset::east(3000))),
-            ("-050", F(FixedOffset::west(3000))),
-            ("+15", F(FixedOffset::east(54000))),
-            ("-15", F(FixedOffset::west(54000))),
-            ("+1515", F(FixedOffset::east(54900))),
-            ("+15:15:15", F(FixedOffset::east(54915))),
-            ("+015", F(FixedOffset::east(900))),
-            ("-015", F(FixedOffset::west(900))),
-            ("+0015", F(FixedOffset::east(900))),
-            ("-0015", F(FixedOffset::west(900))),
-            ("+00015", F(FixedOffset::east(900))),
-            ("-00015", F(FixedOffset::west(900))),
-            ("+005", F(FixedOffset::east(300))),
-            ("-005", F(FixedOffset::west(300))),
-            ("+0000005", F(FixedOffset::east(300))),
-            ("+00000100", F(FixedOffset::east(3600))),
-            ("Z", F(FixedOffset::east(0))),
-            ("z", F(FixedOffset::east(0))),
+            ("+0:00", F(FixedOffset::east_opt(0).unwrap())),
+            ("-0:00", F(FixedOffset::east_opt(0).unwrap())),
+            ("+0:000000", F(FixedOffset::east_opt(0).unwrap())),
+            ("+000000:00", F(FixedOffset::east_opt(0).unwrap())),
+            ("+000000:000000", F(FixedOffset::east_opt(0).unwrap())),
+            ("+0", F(FixedOffset::east_opt(0).unwrap())),
+            ("+00", F(FixedOffset::east_opt(0).unwrap())),
+            ("+000", F(FixedOffset::east_opt(0).unwrap())),
+            ("+0000", F(FixedOffset::east_opt(0).unwrap())),
+            ("+00000000", F(FixedOffset::east_opt(0).unwrap())),
+            ("+0000001:000000", F(FixedOffset::east_opt(3600).unwrap())),
+            ("+0000000:000001", F(FixedOffset::east_opt(60).unwrap())),
+            ("+0000001:000001", F(FixedOffset::east_opt(3660).unwrap())),
+            (
+                "+0000001:000001:000001",
+                F(FixedOffset::east_opt(3661).unwrap()),
+            ),
+            ("+4:00", F(FixedOffset::east_opt(14400).unwrap())),
+            ("-4:00", F(FixedOffset::west_opt(14400).unwrap())),
+            ("+2:30", F(FixedOffset::east_opt(9000).unwrap())),
+            ("-5:15", F(FixedOffset::west_opt(18900).unwrap())),
+            ("+0:20", F(FixedOffset::east_opt(1200).unwrap())),
+            ("-0:20", F(FixedOffset::west_opt(1200).unwrap())),
+            ("+0:0:20", F(FixedOffset::east_opt(20).unwrap())),
+            ("+5", F(FixedOffset::east_opt(18000).unwrap())),
+            ("-5", F(FixedOffset::west_opt(18000).unwrap())),
+            ("+05", F(FixedOffset::east_opt(18000).unwrap())),
+            ("-05", F(FixedOffset::west_opt(18000).unwrap())),
+            ("+500", F(FixedOffset::east_opt(18000).unwrap())),
+            ("-500", F(FixedOffset::west_opt(18000).unwrap())),
+            ("+530", F(FixedOffset::east_opt(19800).unwrap())),
+            ("-530", F(FixedOffset::west_opt(19800).unwrap())),
+            ("+050", F(FixedOffset::east_opt(3000).unwrap())),
+            ("-050", F(FixedOffset::west_opt(3000).unwrap())),
+            ("+15", F(FixedOffset::east_opt(54000).unwrap())),
+            ("-15", F(FixedOffset::west_opt(54000).unwrap())),
+            ("+1515", F(FixedOffset::east_opt(54900).unwrap())),
+            ("+15:15:15", F(FixedOffset::east_opt(54915).unwrap())),
+            ("+015", F(FixedOffset::east_opt(900).unwrap())),
+            ("-015", F(FixedOffset::west_opt(900).unwrap())),
+            ("+0015", F(FixedOffset::east_opt(900).unwrap())),
+            ("-0015", F(FixedOffset::west_opt(900).unwrap())),
+            ("+00015", F(FixedOffset::east_opt(900).unwrap())),
+            ("-00015", F(FixedOffset::west_opt(900).unwrap())),
+            ("+005", F(FixedOffset::east_opt(300).unwrap())),
+            ("-005", F(FixedOffset::west_opt(300).unwrap())),
+            ("+0000005", F(FixedOffset::east_opt(300).unwrap())),
+            ("+00000100", F(FixedOffset::east_opt(3600).unwrap())),
+            ("Z", F(FixedOffset::east_opt(0).unwrap())),
+            ("z", F(FixedOffset::east_opt(0).unwrap())),
             ("UTC", T(Tz::UTC)),
             ("Pacific/Auckland", T(Tz::Pacific__Auckland)),
             ("America/New_York", T(Tz::America__New_York)),

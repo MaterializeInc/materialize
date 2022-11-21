@@ -82,8 +82,9 @@ Explained Query:
         Reduce group_by=[#1] aggregates=[sum(#0)] // { keys: "([0])" }
           Filter (#1) IS NOT NULL // { keys: "()" }
             Get materialize.public.t // { keys: "()" }
-      Filter (#0 = #1) // { keys: "([0], [1])" }
-        Get materialize.public.v // { keys: "([0, 1])" }
+      ArrangeBy keys=[[#1]] // { keys: "([0], [1])" }
+        Filter (#0 = #1) // { keys: "([0], [1])" }
+          Get materialize.public.v // { keys: "([0, 1])" }
 
 Source materialize.public.t
   filter=((#1) IS NOT NULL)
@@ -120,8 +121,9 @@ Explained Query:
                     Project (#0) // { keys: "()" }
                       Filter (#0) IS NOT NULL // { keys: "()" }
                         Get materialize.public.u // { keys: "()" }
-                Filter (#1) IS NOT NULL // { keys: "()" }
-                  Get materialize.public.t // { keys: "()" }
+                ArrangeBy keys=[[#1]] // { keys: "()" }
+                  Filter (#1) IS NOT NULL // { keys: "()" }
+                    Get materialize.public.t // { keys: "()" }
       Negate // { keys: "()" }
         Project (#0, #2) // { keys: "([1])" }
           Filter (#0 = 1) // { keys: "([1], [2])" }

@@ -20,6 +20,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
 use mz_ore::task::spawn;
 use timely::progress::{Antichain, Timestamp};
+use timely::PartialOrder;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
@@ -38,8 +39,8 @@ use crate::internal::metrics::{
 };
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
-    CriticalReaderState, HollowBatch, LeasedReaderState, Since, State, StateCollections, Upper,
-    WriterState,
+    CompareAndAppendBreak, CriticalReaderState, HollowBatch, IdempotencyToken, LeasedReaderState,
+    Since, State, StateCollections, Upper, WriterState,
 };
 use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::StateVersions;
@@ -204,7 +205,7 @@ where
         writer_id: &WriterId,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
-    ) -> (Upper<T>, WriterState) {
+    ) -> (Upper<T>, WriterState<T>) {
         let metrics = Arc::clone(&self.metrics);
         let (_seqno, (shard_upper, writer_state), _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, state| {
@@ -235,20 +236,174 @@ where
         batch: &HollowBatch<T>,
         writer_id: &WriterId,
         heartbeat_timestamp_ms: u64,
-    ) -> Result<
-        Result<Result<(SeqNo, WriterMaintenance<T>), Upper<T>>, InvalidUsage<T>>,
-        Indeterminate,
-    > {
-        let metrics = Arc::clone(&self.metrics);
+    ) -> Result<Result<(SeqNo, WriterMaintenance<T>), InvalidUsage<T>>, Upper<T>> {
+        let idempotency_token = IdempotencyToken::new();
         loop {
-            let (seqno, res, routine) = self
-                .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |_, state| {
-                    state.compare_and_append(batch, writer_id, heartbeat_timestamp_ms)
-                })
-                .await?;
+            let res = self
+                .compare_and_append_idempotent(
+                    batch,
+                    writer_id,
+                    heartbeat_timestamp_ms,
+                    &idempotency_token,
+                    None,
+                )
+                .await;
+            match res {
+                Ok(x) => return Ok(x),
+                Err(_current_upper) => {
+                    // If the state machine thinks that the shard upper is not
+                    // far enough along, it could be because the caller of this
+                    // method has found out that it advanced via some some
+                    // side-channel that didn't update our local cache of the
+                    // machine state. So, fetch the latest state and try again
+                    // if we indeed get something different.
+                    self.fetch_and_update_state().await;
+                    let current_upper = self.upper();
 
+                    // We tried to to a compare_and_append with the wrong
+                    // expected upper, that won't work.
+                    if current_upper != batch.desc.lower() {
+                        return Err(Upper(current_upper.clone()));
+                    } else {
+                        // The upper stored in state was outdated. Retry after
+                        // updating.
+                    }
+                }
+            }
+        }
+    }
+
+    async fn compare_and_append_idempotent(
+        &mut self,
+        batch: &HollowBatch<T>,
+        writer_id: &WriterId,
+        heartbeat_timestamp_ms: u64,
+        idempotency_token: &IdempotencyToken,
+        // Only exposed for testing. In prod, this always starts as None, but
+        // making it a parameter allows us to simulate hitting an indeterminate
+        // error on the first attempt in tests.
+        mut indeterminate: Option<Indeterminate>,
+    ) -> Result<Result<(SeqNo, WriterMaintenance<T>), InvalidUsage<T>>, Upper<T>> {
+        let metrics = Arc::clone(&self.metrics);
+        // SUBTLE: Retries of compare_and_append with Indeterminate errors are
+        // tricky (more discussion of this in #12797):
+        //
+        // - (1) We compare_and_append and get an Indeterminate error back from
+        //   CRDB/Consensus. This means we don't know if it committed or not.
+        // - (2) We retry it.
+        // - (3) We get back an upper mismatch. The tricky bit is deciding if we
+        //   conflicted with some other writer OR if the write in (1) actually
+        //   went through and we're "conflicting" with ourself.
+        //
+        // A number of scenarios can be distinguished with per-writer
+        // idempotency tokens, so I'll jump straight to the hardest one:
+        //
+        // - (1) A compare_and_append is issued for e.g. `[5,7)`, the consensus
+        //   call makes it onto the network before the operation is cancelled
+        //   (by dropping the future).
+        // - (2) A compare_and_append is issued from the same WriteHandle for
+        //   `[3,5)`, it uses a different conn from the consensus pool and gets
+        //   an Indeterminate error.
+        // - (3) The call in (1) is received by consensus and commits.
+        // - (4) The retry of (2) receives an upper mismatch with an upper of 7.
+        //
+        // At this point, how do we determine whether (2) committed or not and
+        // thus whether we should return success or upper mismatch? Getting this
+        // right is very important for correctness (imagine this is a table
+        // write and we either return success or failure to the client).
+        //
+        // - If we use per-writer IdempotencyTokens but only store the latest
+        //   one in state, then the `[5,7)` one will have clobbered whatever our
+        //   `[3,5)` one was.
+        // - We could store every IdempotencyToken that ever committed, but that
+        //   would require unbounded storage in state (non-starter).
+        // - We could require that IdempotencyTokens are comparable and that
+        //   each call issued by a WriteHandle uses one that is strictly greater
+        //   than every call before it. A previous version of this PR tried this
+        //   and it's remarkably subtle. As a result, I (Dan) have developed
+        //   strong feels that our correctness protocol _should not depend on
+        //   WriteHandle, only Machine_.
+        // - We could require a new WriterId if a request is ever cancelled by
+        //   making `compare_and_append` take ownership of `self` and then
+        //   handing it back for any call polled to completion. The ergonomics
+        //   of this are quite awkward and, like the previous idea, it depends
+        //   on the WriteHandle impl for correctness.
+        // - Any ideas that involve reading back the data are foiled by a step
+        //   `(0) set the since to 100` (plus the latency and memory usage would
+        //   be too unpredictable).
+        //
+        // The technique used here derives from the following observations:
+        //
+        // - In practice, we don't use compare_and_append with the sort of
+        //   "regressing frontiers" described above.
+        // - In practice, Indeterminate errors are rare-ish. They happen enough
+        //   that we don't want to always panic on them, but this is still a
+        //   useful property to build on.
+        //
+        // At a high level, we do just enough to be able to distinguish the
+        // cases that we think will happen in practice and then leave the rest
+        // for a panic! that we think we'll never see. Concretely:
+        //
+        // - Run compare_and_append in a loop, retrying on Indeterminate errors
+        //   but noting if we've ever done that.
+        // - If we haven't seen an Indeterminate error (i.e. this is the first
+        //   time though the loop) then the result we got is guaranteed to be
+        //   correct, so pass it up.
+        // - Otherwise, any result other than an expected upper mismatch is
+        //   guaranteed to be correct, so just pass it up.
+        // - Otherwise examine the writer's most recent upper and break it into
+        //   two cases:
+        // - Case 1 `expected_upper.less_than(writer_most_recent_upper)`: it's
+        //   impossible that we committed on a previous iteration because the
+        //   overall upper of the shard is less_than what this call would have
+        //   advanced it to. Pass up the expectation mismatch.
+        // - Case 2 `!Case1`: First note that this means our IdempotencyToken
+        //   didn't match, otherwise we would have gotten `AlreadyCommitted`. It
+        //   also means some previous write from _this writer_ has committed an
+        //   upper that is beyond the one in this call, which is a weird usage
+        //   (NB can't be a future write because that would mean someone is
+        //   still polling us, but `&mut self` prevents that).
+        //
+        // TODO: If this technique works in practice (leads to zero panics),
+        // then commit to it and remove the Indeterminate from
+        // [WriteHandle::compare_and_append_batch].
+        let mut retry = self
+            .metrics
+            .retries
+            .compare_and_append_idempotent
+            .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
+        loop {
+            let cmd_res = self
+                .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |_, state| {
+                    state.compare_and_append(
+                        batch,
+                        writer_id,
+                        heartbeat_timestamp_ms,
+                        idempotency_token,
+                    )
+                })
+                .await;
+            let (seqno, res, routine) = match cmd_res {
+                Ok(x) => x,
+                Err(err) => {
+                    // These are rare and interesting enough that we always log
+                    // them at info!.
+                    info!(
+                        "compare_and_append received an indeterminate error, retrying in {:?}: {}",
+                        retry.next_sleep(),
+                        err
+                    );
+                    if indeterminate.is_none() {
+                        indeterminate = Some(err);
+                    }
+                    retry = retry.sleep().await;
+                    continue;
+                }
+            };
             match res {
                 Ok(merge_reqs) => {
+                    // We got explicit confirmation that we succeeded, so
+                    // anything that happened in a previous retry is irrelevant.
                     let mut compact_reqs = Vec::with_capacity(merge_reqs.len());
                     for req in merge_reqs {
                         let req = CompactReq {
@@ -262,31 +417,68 @@ where
                         routine,
                         compaction: compact_reqs,
                     };
-                    return Ok(Ok(Ok((seqno, writer_maintenance))));
+                    return Ok(Ok((seqno, writer_maintenance)));
                 }
-                Err(Ok(_current_upper)) => {
-                    // If the state machine thinks that the shard upper is not
-                    // far enough along, it could be because the caller of this
-                    // method has found out that it advanced via some some
-                    // side-channel that didn't update our local cache of the
-                    // machine state. So, fetch the latest state and try again
-                    // if we indeed get something different.
-                    self.fetch_and_update_state().await;
-                    let current_upper = self.upper();
-
-                    // We tried to to a compare_and_append with the wrong
-                    // expected upper, that won't work.
-                    if current_upper != batch.desc.lower() {
-                        return Ok(Ok(Err(Upper(current_upper.clone()))));
-                    } else {
-                        // The upper stored in state was outdated. Retry after
-                        // updating.
+                Err(CompareAndAppendBreak::AlreadyCommitted) => {
+                    // A previous iteration through this loop got an
+                    // Indeterminate error but was successful. Sanity check this
+                    // and pass along the good news.
+                    assert!(indeterminate.is_some());
+                    self.metrics.cmds.compare_and_append_noop.inc();
+                    return Ok(Ok((seqno, WriterMaintenance::default())));
+                }
+                Err(CompareAndAppendBreak::InvalidUsage(err)) => {
+                    // InvalidUsage is (or should be) a deterministic function
+                    // of the inputs and independent of anything in persist
+                    // state. It's handed back via a Break, so we never even try
+                    // to commit it. No network, no Indeterminate.
+                    assert!(indeterminate.is_none());
+                    return Ok(Err(err));
+                }
+                Err(CompareAndAppendBreak::Upper {
+                    shard_upper,
+                    writer_upper,
+                }) => {
+                    // NB the below intentionally compares to writer_upper
+                    // (because it gives a tighter bound on the bad case), but
+                    // returns shard_upper (what the persist caller cares
+                    // about).
+                    assert!(
+                        PartialOrder::less_equal(&writer_upper, &shard_upper),
+                        "{:?} vs {:?}",
+                        &writer_upper,
+                        &shard_upper
+                    );
+                    if PartialOrder::less_than(&writer_upper, batch.desc.upper()) {
+                        // No way this could have committed in some previous
+                        // attempt of this loop: the upper of the writer is
+                        // strictly less than the proposed new upper.
+                        return Err(Upper(shard_upper));
                     }
+                    if indeterminate.is_none() {
+                        // No way this could have committed in some previous
+                        // attempt of this loop: we never saw an indeterminate
+                        // error (thus there was no previous iteration of the
+                        // loop).
+                        return Err(Upper(shard_upper));
+                    }
+                    // This is the bad case. We can't distinguish if some
+                    // previous attempt that got an Indeterminate error
+                    // succeeded or not. This should be sufficiently rare in
+                    // practice (hopefully ~never) that we give up and let
+                    // process restart fix things. See the big comment above for
+                    // more context.
+                    //
+                    // NB: This is intentionally not a halt! because it's quite
+                    // unexpected.
+                    panic!(concat!(
+                        "cannot distinguish compare_and_append success or failure ",
+                        "caa_lower={:?} caa_upper={:?} writer_upper={:?} shard_upper={:?} err={:?}"),
+                        batch.desc.lower().elements(), batch.desc.upper().elements(),
+                        writer_upper.elements(), shard_upper.elements(), indeterminate,
+                    );
                 }
-                Err(Err(invalid_usage)) => {
-                    return Ok(Err(invalid_usage));
-                }
-            }
+            };
         }
     }
 
@@ -1476,14 +1668,17 @@ pub mod datadriven {
             .get(input)
             .expect("unknown batch")
             .clone();
+        let token = args.optional("token").unwrap_or_else(IdempotencyToken::new);
+        let indeterminate = args
+            .optional::<String>("prev_indeterminate")
+            .map(|x| Indeterminate::new(anyhow::Error::msg(x)));
         let now = (datadriven.client.cfg.now)();
         let (_, maintenance) = datadriven
             .machine
-            .compare_and_append(&batch, &writer_id, now)
+            .compare_and_append_idempotent(&batch, &writer_id, now, &token, indeterminate)
             .await
-            .expect("indeterminate")
-            .expect("invalid usage")
-            .map_err(|err| anyhow!("{:?}", err))?;
+            .map_err(|err| anyhow!("{:?}", err))?
+            .expect("invalid usage");
         // TODO: Don't throw away writer maintenance. It's slightly tricky
         // because we need a WriterId for Compactor.
         datadriven.routine.push(maintenance.routine);
@@ -1569,7 +1764,6 @@ pub mod tests {
                     (write.cfg.now)(),
                 )
                 .await
-                .expect("external durability failed")
                 .expect("invalid usage")
                 .expect("unexpected upper");
             writer_maintenance

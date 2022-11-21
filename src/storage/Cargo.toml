@@ -7,22 +7,22 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.65"
+anyhow = "1.0.66"
 async-compression = { version = "0.3.15", features = ["tokio", "gzip"] }
 async-stream = "0.3.3"
-async-trait = "0.1.57"
+async-trait = "0.1.58"
 aws-sdk-kinesis = { version = "0.21.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 aws-sdk-s3 = { version = "0.21.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 aws-sdk-sqs = { version = "0.21.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-axum = "0.5.16"
-chrono = { version = "0.4.22", default-features = false, features = ["std"] }
+axum = "0.5.17"
+chrono = { version = "0.4.23", default-features = false, features = ["std"] }
 clap = { version = "3.2.20", features = ["derive", "env"] }
 crossbeam-channel = { version = "0.5.6" }
 csv-core = { version = "0.1.10" }
 dec = "0.4.8"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 fail = { version = "0.5.1", features = ["failpoints"] }
-futures = "0.3.24"
+futures = "0.3.25"
 globset = { version = "0.4.9", features = ["serde1"] }
 http = "0.2.8"
 itertools = { version = "0.10.5" }
@@ -49,25 +49,25 @@ mz-secrets = { path = "../secrets" }
 mz-service = { path = "../service" }
 mz-storage-client = { path = "../storage-client" }
 mz-timely-util = { path = "../timely-util" }
-once_cell = { version = "1.15.0" }
+once_cell = { version = "1.16.0" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
-prometheus = { version = "0.13.2", default-features = false }
+prometheus = { version = "0.13.3", default-features = false }
 prost = { version = "0.11.2", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
-regex = { version = "1.6.0" }
+regex = { version = "1.7.0" }
 serde = { version = "1.0.147", features = ["derive"] }
-serde_json = { version = "1.0.86" }
+serde_json = { version = "1.0.88" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.20.2", features = ["fs", "rt", "sync", "test-util"] }
+tokio = { version = "1.22.0", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde"] }
 tokio-stream = "0.1.11"
-tokio-util = { version = "0.7.3", features = ["io"] }
+tokio-util = { version = "0.7.4", features = ["io"] }
 tracing = "0.1.37"
 tracing-subscriber = "0.3.16"
 thiserror = { version = "1.0.37" }
 url = { version = "2.3.1", features = ["serde"] }
-uuid = { version = "1.2.1", features = ["serde", "v4"] }
+uuid = { version = "1.2.2", features = ["serde", "v4"] }
 
 [build-dependencies]
 protobuf-src = "1.1.0"
@@ -76,7 +76,7 @@ tonic-build = "0.8.2"
 [dev-dependencies]
 datadriven = { version = "0.6.0", features = ["async"] }
 itertools = "0.10.5"
-tokio = { version = "1.20.2", features = ["test-util"] }
+tokio = { version = "1.22.0", features = ["test-util"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 # According to jemalloc developers, `background_threads` should always be

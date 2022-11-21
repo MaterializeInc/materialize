@@ -55,7 +55,7 @@ impl std::str::FromStr for Date {
     }
 }
 
-static PG_EPOCH: Lazy<NaiveDate> = Lazy::new(|| NaiveDate::from_ymd(2000, 1, 1));
+static PG_EPOCH: Lazy<NaiveDate> = Lazy::new(|| NaiveDate::from_ymd_opt(2000, 1, 1).unwrap());
 
 impl Date {
     pub const UNIX_EPOCH_TO_PG_EPOCH: i32 = 10957; // Number of days from 1970-01-01 to 2000-01-01.
@@ -141,7 +141,7 @@ impl From<&Date> for NaiveDate {
             .pg_epoch_days()
             .checked_add(Date::CE_EPOCH_TO_PG_EPOCH)
             .expect("out of range date are prevented");
-        NaiveDate::from_num_days_from_ce(days)
+        NaiveDate::from_num_days_from_ce_opt(days).unwrap()
     }
 }
 
@@ -175,18 +175,21 @@ mod test {
         assert_eq!(pgepoch.unix_epoch_days(), 10957);
         assert_eq!(unixepoch.pg_epoch_days(), -10957);
         assert_eq!(unixepoch.unix_epoch_days(), 0);
-        assert_eq!(NaiveDate::from(pgepoch), NaiveDate::from_ymd(2000, 1, 1));
+        assert_eq!(
+            NaiveDate::from(pgepoch),
+            NaiveDate::from_ymd_opt(2000, 1, 1).unwrap()
+        );
         assert_eq!(
             pgepoch,
-            Date::try_from(NaiveDate::from_ymd(2000, 1, 1)).unwrap()
+            Date::try_from(NaiveDate::from_ymd_opt(2000, 1, 1).unwrap()).unwrap()
         );
         assert_eq!(
             unixepoch,
-            Date::try_from(NaiveDate::from_ymd(1970, 1, 1)).unwrap()
+            Date::try_from(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).unwrap()
         );
         assert_eq!(
             unixepoch,
-            Date::try_from(NaiveDate::from_ymd(1970, 1, 1)).unwrap()
+            Date::try_from(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).unwrap()
         );
         assert!(pgepoch > unixepoch);
     }

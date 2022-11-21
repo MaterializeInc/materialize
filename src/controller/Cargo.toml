@@ -7,8 +7,8 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.65"
-chrono = { version = "0.4.22", default-features = false, features = ["clock", "std"] }
+anyhow = "1.0.66"
+chrono = { version = "0.4.23", default-features = false, features = ["clock", "std"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 mz-build-info = { path = "../build-info" }
 mz-compute-client = { path = "../compute-client" }
@@ -22,5 +22,5 @@ mz-stash = { path = "../stash" }
 mz-storage-client = { path = "../storage-client" }
 serde = { version = "1.0.147", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = "1.20.2"
-uuid = { version = "1.2.1" }
+tokio = "1.22.0"
+uuid = { version = "1.2.2" }

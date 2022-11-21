@@ -2372,22 +2372,29 @@ impl<'a> ScalarType {
         });
         static TIME: Lazy<Row> = Lazy::new(|| {
             Row::pack_slice(&[
-                Datum::Time(NaiveTime::from_hms_micro(0, 0, 0, 0)),
-                Datum::Time(NaiveTime::from_hms_micro(23, 59, 59, 999_999)),
+                Datum::Time(NaiveTime::from_hms_micro_opt(0, 0, 0, 0).unwrap()),
+                Datum::Time(NaiveTime::from_hms_micro_opt(23, 59, 59, 999_999).unwrap()),
             ])
         });
         static TIMESTAMP: Lazy<Row> = Lazy::new(|| {
             Row::pack_slice(&[
-                Datum::Timestamp(NaiveDateTime::from_timestamp(0, 0).try_into().unwrap()),
+                Datum::Timestamp(
+                    NaiveDateTime::from_timestamp_opt(0, 0)
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
+                ),
                 Datum::Timestamp(
                     crate::adt::timestamp::LOW_DATE
-                        .and_hms(0, 0, 0)
+                        .and_hms_opt(0, 0, 0)
+                        .unwrap()
                         .try_into()
                         .unwrap(),
                 ),
                 Datum::Timestamp(
                     crate::adt::timestamp::HIGH_DATE
-                        .and_hms(0, 0, 0)
+                        .and_hms_opt(0, 0, 0)
+                        .unwrap()
                         .try_into()
                         .unwrap(),
                 ),
@@ -2396,19 +2403,29 @@ impl<'a> ScalarType {
         static TIMESTAMPTZ: Lazy<Row> = Lazy::new(|| {
             Row::pack_slice(&[
                 Datum::TimestampTz(
-                    DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc)
+                    DateTime::from_utc(NaiveDateTime::from_timestamp_opt(0, 0).unwrap(), Utc)
                         .try_into()
                         .unwrap(),
                 ),
                 Datum::TimestampTz(
-                    DateTime::from_utc(crate::adt::timestamp::LOW_DATE.and_hms(0, 0, 0), Utc)
-                        .try_into()
-                        .unwrap(),
+                    DateTime::from_utc(
+                        crate::adt::timestamp::LOW_DATE
+                            .and_hms_opt(0, 0, 0)
+                            .unwrap(),
+                        Utc,
+                    )
+                    .try_into()
+                    .unwrap(),
                 ),
                 Datum::TimestampTz(
-                    DateTime::from_utc(crate::adt::timestamp::HIGH_DATE.and_hms(0, 0, 0), Utc)
-                        .try_into()
-                        .unwrap(),
+                    DateTime::from_utc(
+                        crate::adt::timestamp::HIGH_DATE
+                            .and_hms_opt(0, 0, 0)
+                            .unwrap(),
+                        Utc,
+                    )
+                    .try_into()
+                    .unwrap(),
                 ),
             ])
         });
@@ -2730,10 +2747,11 @@ pub fn arb_datum() -> BoxedStrategy<PropDatum> {
         any::<f32>().prop_map(PropDatum::Float32),
         any::<f64>().prop_map(PropDatum::Float64),
         arb_date().prop_map(PropDatum::Date),
-        add_arb_duration(chrono::NaiveTime::from_hms(0, 0, 0)).prop_map(PropDatum::Time),
-        add_arb_duration(chrono::NaiveDateTime::from_timestamp(0, 0))
+        add_arb_duration(chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap())
+            .prop_map(PropDatum::Time),
+        add_arb_duration(chrono::NaiveDateTime::from_timestamp_opt(0, 0).unwrap())
             .prop_map(|t| PropDatum::Timestamp(CheckedTimestamp::from_timestamplike(t).unwrap())),
-        add_arb_duration(chrono::Utc.timestamp(0, 0))
+        add_arb_duration(chrono::Utc.timestamp_opt(0, 0).unwrap())
             .prop_map(|t| PropDatum::TimestampTz(CheckedTimestamp::from_timestamplike(t).unwrap())),
         arb_interval().prop_map(PropDatum::Interval),
         arb_numeric().prop_map(PropDatum::Numeric),

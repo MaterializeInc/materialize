@@ -35,17 +35,18 @@
 
   {% set sql %}
     -- {{ bindings | length }}
-    create materialized view {{ this.render() }} AS (
-      select {{ cols_sql }} from (VALUES
-      {% for chunk in agate_table.rows | batch(1)  -%}
-        ({%- for column in agate_table.column_names -%}
-            %s
-            {%- if not loop.last%},{%- endif %}
-        {%- endfor -%})
-        {%- if not loop.last%},{%- endif %}
-      {%- endfor %}
-      ) AS tbl
-    )
+    create materialized view {{ this.render() }}
+      in cluster {{ target.cluster }} AS (
+        select {{ cols_sql }} from (VALUES
+        {% for chunk in agate_table.rows | batch(1)  -%}
+          ({%- for column in agate_table.column_names -%}
+              %s
+              {%- if not loop.last%},{%- endif %}
+          {%- endfor -%})
+          {%- if not loop.last%},{%- endif %}
+        {%- endfor %}
+        ) AS tbl
+      )
   {% endset %}
 
   {% do adapter.add_query(sql, bindings=bindings, abridge_sql_log=True, auto_begin=False) %}

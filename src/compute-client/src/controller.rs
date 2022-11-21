@@ -51,7 +51,7 @@ use mz_expr::RowSetFinishing;
 use mz_orchestrator::{CpuLimit, MemoryLimit, NamespacedOrchestrator};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
-use mz_storage_client::controller::{ReadPolicy, StorageController, StorageError};
+use mz_storage_client::controller::{ReadPolicy, StorageController};
 
 use crate::command::{DataflowDescription, ProcessId, ReplicaId};
 use crate::logging::{LogVariant, LogView, LoggingConfig};
@@ -476,7 +476,7 @@ where
     ComputeGrpcClient: ComputeClient<T>,
 {
     /// Adds replicas of an instance.
-    pub async fn add_replica_to_instance(
+    pub fn add_replica_to_instance(
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
@@ -489,7 +489,12 @@ where
 
         let mut sink_logs = BTreeMap::new();
         for (variant, id) in config.logging.sources {
-            let storage_meta = self.storage.collection(id)?.collection_metadata.clone();
+            let storage_meta = self
+                .storage
+                .collection(id)
+                .map_err(|_| CollectionMissing(id))?
+                .collection_metadata
+                .clone();
             sink_logs.insert(variant, (id, storage_meta));
         }
 
@@ -502,20 +507,17 @@ where
         };
 
         self.instance(instance_id)?
-            .add_replica(replica_id, config.location, logging_config)
-            .await?;
+            .add_replica(replica_id, config.location, logging_config)?;
         Ok(())
     }
 
     /// Removes a replica from an instance, including its service in the orchestrator.
-    pub async fn drop_replica(
+    pub fn drop_replica(
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
     ) -> Result<(), ReplicaDropError> {
-        self.instance(instance_id)?
-            .remove_replica(replica_id)
-            .await?;
+        self.instance(instance_id)?.remove_replica(replica_id)?;
         Ok(())
     }
 
@@ -526,32 +528,29 @@ where
     /// It installs read dependencies from the outputs to the inputs, so that the input read
     /// capabilities will be held back to the output read capabilities, ensuring that we are
     /// always able to return to a state that can serve the output read capabilities.
-    pub async fn create_dataflows(
+    pub fn create_dataflows(
         &mut self,
         instance_id: ComputeInstanceId,
         dataflows: Vec<DataflowDescription<crate::plan::Plan<T>, (), T>>,
     ) -> Result<(), DataflowCreationError> {
-        self.instance(instance_id)?
-            .create_dataflows(dataflows)
-            .await?;
+        self.instance(instance_id)?.create_dataflows(dataflows)?;
         Ok(())
     }
 
     /// Drop the read capability for the given collections and allow their resources to be
     /// reclaimed.
-    pub async fn drop_collections(
+    pub fn drop_collections(
         &mut self,
         instance_id: ComputeInstanceId,
         collection_ids: Vec<GlobalId>,
     ) -> Result<(), CollectionUpdateError> {
         self.instance(instance_id)?
-            .drop_collections(collection_ids)
-            .await?;
+            .drop_collections(collection_ids)?;
         Ok(())
     }
 
     /// Initiate a peek request for the contents of the given collection at `timestamp`.
-    pub async fn peek(
+    pub fn peek(
         &mut self,
         instance_id: ComputeInstanceId,
         collection_id: GlobalId,
@@ -562,17 +561,15 @@ where
         map_filter_project: mz_expr::SafeMfpPlan,
         target_replica: Option<ReplicaId>,
     ) -> Result<(), PeekError> {
-        self.instance(instance_id)?
-            .peek(
-                collection_id,
-                literal_constraints,
-                uuid,
-                timestamp,
-                finishing,
-                map_filter_project,
-                target_replica,
-            )
-            .await?;
+        self.instance(instance_id)?.peek(
+            collection_id,
+            literal_constraints,
+            uuid,
+            timestamp,
+            finishing,
+            map_filter_project,
+            target_replica,
+        )?;
         Ok(())
     }
 
@@ -604,14 +601,12 @@ where
     /// capability is already ahead of it.
     ///
     /// Identifiers not present in `policies` retain their existing read policies.
-    pub async fn set_read_policy(
+    pub fn set_read_policy(
         &mut self,
         instance_id: ComputeInstanceId,
         policies: Vec<(GlobalId, ReadPolicy<T>)>,
     ) -> Result<(), CollectionUpdateError> {
-        self.instance(instance_id)?
-            .set_read_policy(policies)
-            .await?;
+        self.instance(instance_id)?.set_read_policy(policies)?;
         Ok(())
     }
 
@@ -627,25 +622,16 @@ where
     }
 
     /// Processes the work queued by [`ComputeController::ready`].
-    ///
-    /// This method is guaranteed to return "quickly" unless doing so would
-    /// compromise the correctness of the system.
-    ///
-    /// This method is **not** guaranteed to be cancellation safe. It **must**
-    /// be awaited to completion.
-    pub async fn process(&mut self) -> Result<Option<ComputeControllerResponse<T>>, StorageError> {
+    pub fn process(&mut self) -> Option<ComputeControllerResponse<T>> {
         // Rehydrate any failed replicas.
         for instance in self.compute.instances.values_mut() {
-            instance
-                .activate(self.storage)
-                .rehydrate_failed_replicas()
-                .await?;
+            instance.activate(self.storage).rehydrate_failed_replicas();
         }
 
         // Process pending ready responses.
         for instance in self.compute.instances.values_mut() {
             if let Some(response) = instance.ready_responses.pop_front() {
-                return Ok(Some(response));
+                return Some(response);
             }
         }
 
@@ -653,25 +639,25 @@ where
         // TODO(teskje): Use `BTreeMap::pop_first`, once stable.
         if let Some(replica_id) = self.compute.replica_heartbeats.keys().next().copied() {
             let when = self.compute.replica_heartbeats.remove(&replica_id).unwrap();
-            return Ok(Some(ComputeControllerResponse::ReplicaHeartbeat(
+            return Some(ComputeControllerResponse::ReplicaHeartbeat(
                 replica_id, when,
-            )));
+            ));
         }
 
         // Process pending responses from replicas.
         if let Some((instance_id, replica_id, response)) = self.compute.stashed_response.take() {
             if let Ok(mut instance) = self.instance(instance_id) {
-                instance.handle_response(response, replica_id).await
+                instance.handle_response(response, replica_id)
             } else {
                 tracing::warn!(
                     ?instance_id,
                     ?response,
                     "processed response from unknown instance"
                 );
-                Ok(None)
+                None
             }
         } else {
-            Ok(None)
+            None
         }
     }
 }

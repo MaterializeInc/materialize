@@ -7,24 +7,24 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.65"
-chrono = { version = "0.4.22", default-features = false, features = ["clock", "std"] }
+anyhow = "1.0.66"
+chrono = { version = "0.4.23", default-features = false, features = ["clock", "std"] }
 clap = { version = "3.2.20", features = ["derive"] }
 crossbeam = "0.8.2"
 mz-avro = { path = "../avro" }
 mz-ccsr = { path = "../ccsr" }
 mz-ore = { path = "../ore", features = ["network"] }
-num_cpus = "1.13.1"
+num_cpus = "1.14.0"
 prost = { version = "0.11.2", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 serde = { version = "1.0.147", features = ["derive"] }
-serde_json = "1.0.86"
-tokio = { version = "1.20.2", features = ["macros"] }
+serde_json = "1.0.88"
+tokio = { version = "1.22.0", features = ["macros"] }
 thiserror = "1.0.37"
 tracing = "0.1.37"
 url = "2.3.1"
 
 [build-dependencies]
-prost-build = "0.11.1"
+prost-build = "0.11.2"
 protobuf-src = "1.1.0"

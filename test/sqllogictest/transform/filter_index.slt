@@ -79,8 +79,9 @@ Explained Query:
     ArrangeBy keys=[[]] // { arity: 3 }
       Filter (#0 = 3) // { arity: 3 }
         Get materialize.public.foo // { arity: 3 }
-    Filter (3 = abs(#0)) // { arity: 3 }
-      Get materialize.public.bar // { arity: 3 }
+    ArrangeBy keys=[[]] // { arity: 3 }
+      Filter (3 = abs(#0)) // { arity: 3 }
+        Get materialize.public.bar // { arity: 3 }
 
 Source materialize.public.foo
   filter=((#0 = 3))

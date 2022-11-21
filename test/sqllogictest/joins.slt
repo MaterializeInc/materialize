@@ -115,14 +115,16 @@ Explained Query:
     Project (#0, #2, #4) // { arity: 3 }
       Join on=(#1 = (#0 + 1) AND #3 = (#0 + #1)) type=differential // { arity: 5 }
         implementation
-          %1:l0 » %0:l0[(#0 + 1)]KA » %2:l0[#0]KA
+          %1:l1 » %0:l0[(#0 + 1)]KA » %2:l1[#0]KA
         ArrangeBy keys=[[(#0 + 1)]] // { arity: 1 }
           Project (#0) // { arity: 1 }
             Get l0 // { arity: 2 }
-        Get l0 // { arity: 2 }
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Get l0 // { arity: 2 }
+        Get l1 // { arity: 2 }
+        Get l1 // { arity: 2 }
   With
+    cte l1 =
+      ArrangeBy keys=[[#0]] // { arity: 2 }
+        Get l0 // { arity: 2 }
     cte l0 =
       Filter (#0) IS NOT NULL // { arity: 2 }
         Get materialize.public.l // { arity: 2 }
@@ -157,15 +159,19 @@ Explained Query:
       Join on=(#0 = #2) type=differential // { arity: 3 }
         implementation
           %0:l » %1[#0]UKA
-        Get materialize.public.l // { arity: 2 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Get materialize.public.l // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 1 }
           Distinct group_by=[#0] // { arity: 1 }
             Project (#0) // { arity: 1 }
-              Join on=(eq(#1, #2, #3)) type=differential // { arity: 4 }
+              Join on=(eq(#1, #2, #3)) type=delta // { arity: 4 }
                 implementation
-                  %0:l1 » %1[#0]UKAf » %2[#0]UKAf
-                Filter (#0 = (#1 + 1)) // { arity: 2 }
-                  Get l1 // { arity: 2 }
+                  %0:l1 » %1[#0]UKA » %2[#0]UKA
+                  %1 » %2[#0]UKA » %0:l1[#1]KAf
+                  %2 » %1[#0]UKA » %0:l1[#1]KAf
+                ArrangeBy keys=[[#1]] // { arity: 2 }
+                  Filter (#0 = (#1 + 1)) // { arity: 2 }
+                    Get l1 // { arity: 2 }
                 ArrangeBy keys=[[#0]] // { arity: 1 }
                   Distinct group_by=[#0] // { arity: 1 }
                     Project (#1) // { arity: 1 }
@@ -184,7 +190,8 @@ Explained Query:
         ArrangeBy keys=[[]] // { arity: 1 }
           Distinct group_by=[#0] // { arity: 1 }
             Get l0 // { arity: 1 }
-        Get l0 // { arity: 1 }
+        ArrangeBy keys=[[]] // { arity: 1 }
+          Get l0 // { arity: 1 }
     cte l0 =
       Project (#0) // { arity: 1 }
         Get materialize.public.l // { arity: 2 }
@@ -318,7 +325,8 @@ Explained Query:
               Join on=(#0 = #2) type=differential // { arity: 3 }
                 implementation
                   %0:l » %1[#0]UKA
-                Get materialize.public.l // { arity: 2 }
+                ArrangeBy keys=[[#0]] // { arity: 2 }
+                  Get materialize.public.l // { arity: 2 }
                 ArrangeBy keys=[[#0]] // { arity: 1 }
                   Distinct group_by=[#0] // { arity: 1 }
                     Project (#0) // { arity: 1 }
@@ -335,8 +343,9 @@ Explained Query:
           ArrangeBy keys=[[#0]] // { arity: 2 }
             Filter (#0) IS NOT NULL // { arity: 2 }
               Get materialize.public.l // { arity: 2 }
-          Filter (#0) IS NOT NULL // { arity: 2 }
-            Get materialize.public.r // { arity: 2 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Filter (#0) IS NOT NULL // { arity: 2 }
+              Get materialize.public.r // { arity: 2 }
 
 Source materialize.public.r
   filter=((#0) IS NOT NULL)
@@ -358,7 +367,8 @@ Explained Query:
                 Join on=(#0 = #2) type=differential // { arity: 3 }
                   implementation
                     %0:r » %1[#0]UKA
-                  Get materialize.public.r // { arity: 2 }
+                  ArrangeBy keys=[[#0]] // { arity: 2 }
+                    Get materialize.public.r // { arity: 2 }
                   ArrangeBy keys=[[#0]] // { arity: 1 }
                     Distinct group_by=[#0] // { arity: 1 }
                       Project (#0) // { arity: 1 }
@@ -375,8 +385,9 @@ Explained Query:
           ArrangeBy keys=[[#0]] // { arity: 2 }
             Filter (#0) IS NOT NULL // { arity: 2 }
               Get materialize.public.l // { arity: 2 }
-          Filter (#0) IS NOT NULL // { arity: 2 }
-            Get materialize.public.r // { arity: 2 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Filter (#0) IS NOT NULL // { arity: 2 }
+              Get materialize.public.r // { arity: 2 }
 
 Source materialize.public.l
   filter=((#0) IS NOT NULL)
@@ -398,7 +409,8 @@ Explained Query:
                 Join on=(#0 = #2) type=differential // { arity: 3 }
                   implementation
                     %0:r » %1:l1[#0]UKA
-                  Get materialize.public.r // { arity: 2 }
+                  ArrangeBy keys=[[#0]] // { arity: 2 }
+                    Get materialize.public.r // { arity: 2 }
                   Get l1 // { arity: 1 }
             Get materialize.public.r // { arity: 2 }
       Map (null, null) // { arity: 4 }
@@ -408,7 +420,8 @@ Explained Query:
               Join on=(#0 = #2) type=differential // { arity: 3 }
                 implementation
                   %0:l » %1:l1[#0]UKA
-                Get materialize.public.l // { arity: 2 }
+                ArrangeBy keys=[[#0]] // { arity: 2 }
+                  Get materialize.public.l // { arity: 2 }
                 Get l1 // { arity: 1 }
           Get materialize.public.l // { arity: 2 }
       Project (#0, #1, #0, #2) // { arity: 4 }
@@ -427,8 +440,9 @@ Explained Query:
           ArrangeBy keys=[[#0]] // { arity: 2 }
             Filter (#0) IS NOT NULL // { arity: 2 }
               Get materialize.public.l // { arity: 2 }
-          Filter (#0) IS NOT NULL // { arity: 2 }
-            Get materialize.public.r // { arity: 2 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Filter (#0) IS NOT NULL // { arity: 2 }
+              Get materialize.public.r // { arity: 2 }
 
 EOF
 
@@ -453,8 +467,9 @@ Explained Query:
     ArrangeBy keys=[[(#0 % 2)]] // { arity: 2 }
       Filter (#0) IS NOT NULL // { arity: 2 }
         Get materialize.public.l // { arity: 2 }
-    Filter (#0) IS NOT NULL // { arity: 2 }
-      Get materialize.public.r // { arity: 2 }
+    ArrangeBy keys=[[(#0 % 2)]] // { arity: 2 }
+      Filter (#0) IS NOT NULL // { arity: 2 }
+        Get materialize.public.r // { arity: 2 }
 
 Source materialize.public.l
   filter=((#0) IS NOT NULL)
@@ -509,15 +524,16 @@ Explained Query:
           %1 » %0:t4362[#0]KA
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Get materialize.public.t4362 // { arity: 2 }
-        Union // { arity: 1 }
-          Project (#0) // { arity: 1 }
-            Get l0 // { arity: 2 }
-          Map (error("more than one record produced in subquery")) // { arity: 1 }
-            Project () // { arity: 0 }
-              Filter (#0 > 1) // { arity: 1 }
-                Reduce aggregates=[count(true)] // { arity: 1 }
-                  Project () // { arity: 0 }
-                    Get l0 // { arity: 2 }
+        ArrangeBy keys=[[#0]] // { arity: 1 }
+          Union // { arity: 1 }
+            Project (#0) // { arity: 1 }
+              Get l0 // { arity: 2 }
+            Map (error("more than one record produced in subquery")) // { arity: 1 }
+              Project () // { arity: 0 }
+                Filter (#0 > 1) // { arity: 1 }
+                  Reduce aggregates=[count(true)] // { arity: 1 }
+                    Project () // { arity: 0 }
+                      Get l0 // { arity: 2 }
   With
     cte l0 =
       Filter (#1 = 1) // { arity: 2 }
@@ -580,8 +596,9 @@ Explained Query:
       ArrangeBy keys=[[#0]] // { arity: 2 }
         Filter (#0) IS NOT NULL // { arity: 2 }
           Get materialize.public.l3 // { arity: 2 }
-      Filter (#0) IS NOT NULL // { arity: 2 }
-        Get materialize.public.r3 // { arity: 2 }
+      ArrangeBy keys=[[#0]] // { arity: 2 }
+        Filter (#0) IS NOT NULL // { arity: 2 }
+          Get materialize.public.r3 // { arity: 2 }
 
 Source materialize.public.l3
   filter=((#0) IS NOT NULL)
@@ -606,7 +623,8 @@ Explained Query:
         %1:r3 » %0:l3[#0]KA
       ArrangeBy keys=[[#0]] // { arity: 2 }
         Get materialize.public.l3 // { arity: 2 }
-      Get materialize.public.r3 // { arity: 2 }
+      ArrangeBy keys=[[#0]] // { arity: 2 }
+        Get materialize.public.r3 // { arity: 2 }
 
 EOF
 
@@ -627,7 +645,8 @@ Explained Query:
         %1:r3 » %0:l3[#0]KA
       ArrangeBy keys=[[#0]] // { arity: 2 }
         Get materialize.public.l3 // { arity: 2 }
-      Get materialize.public.r3 // { arity: 2 }
+      ArrangeBy keys=[[#0]] // { arity: 2 }
+        Get materialize.public.r3 // { arity: 2 }
 
 EOF
 
