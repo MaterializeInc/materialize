@@ -51,7 +51,7 @@ pub async fn write_to_persist(
         Row::pack_slice(&[timestamp, collection_id, status, error, metadata])
     };
 
-    let mut handle = client.open_writer(status_shard).await.expect(
+    let mut handle = client.open_writer(status_shard, &format!("healthcheck::write_to_persist {}", collection_id)).await.expect(
         "Invalid usage of the persist client for collection {collection_id} status history shard",
     );
 

@@ -776,12 +776,14 @@ impl RustType<ProtoHandleDebugState> for HandleDebugState {
     fn into_proto(&self) -> ProtoHandleDebugState {
         ProtoHandleDebugState {
             hostname: self.hostname.into_proto(),
+            purpose: self.purpose.into_proto(),
         }
     }
 
     fn from_proto(proto: ProtoHandleDebugState) -> Result<Self, TryFromProtoError> {
         Ok(HandleDebugState {
             hostname: proto.hostname,
+            purpose: proto.purpose,
         })
     }
 }
@@ -1009,6 +1011,7 @@ mod tests {
             last_heartbeat_timestamp_ms: 3,
             debug: HandleDebugState {
                 hostname: "host".to_owned(),
+                purpose: "purpose".to_owned(),
             },
             // Old ProtoReaderState had no lease_duration_ms field
             lease_duration_ms: 0,
@@ -1033,6 +1036,7 @@ mod tests {
             most_recent_write_upper: None,
             debug: Some(ProtoHandleDebugState {
                 hostname: "host".to_owned(),
+                purpose: "purpose".to_owned(),
             }),
         };
         let expected = WriterState {
@@ -1042,6 +1046,7 @@ mod tests {
             most_recent_write_upper: Antichain::from_elem(0),
             debug: HandleDebugState {
                 hostname: "host".to_owned(),
+                purpose: "purpose".to_owned(),
             },
         };
         assert_eq!(<WriterState<u64>>::from_proto(proto).unwrap(), expected);

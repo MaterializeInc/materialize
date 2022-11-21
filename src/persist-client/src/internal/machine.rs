@@ -172,6 +172,7 @@ where
     pub async fn register_leased_reader(
         &mut self,
         reader_id: &LeasedReaderId,
+        purpose: &str,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> (Upper<T>, LeasedReaderState<T>) {
@@ -181,6 +182,7 @@ where
                 state.register_leased_reader(
                     &cfg.hostname,
                     reader_id,
+                    purpose,
                     seqno,
                     lease_duration,
                     heartbeat_timestamp_ms,
@@ -194,11 +196,12 @@ where
     pub async fn register_critical_reader<O: Opaque + Codec64>(
         &mut self,
         reader_id: &CriticalReaderId,
+        purpose: &str,
     ) -> CriticalReaderState<T> {
         let metrics = Arc::clone(&self.metrics);
         let (_seqno, state, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, cfg, state| {
-                state.register_critical_reader::<O>(&cfg.hostname, reader_id)
+                state.register_critical_reader::<O>(&cfg.hostname, reader_id, purpose)
             })
             .await;
         state
@@ -207,6 +210,7 @@ where
     pub async fn register_writer(
         &mut self,
         writer_id: &WriterId,
+        purpose: &str,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> (Upper<T>, WriterState<T>) {
@@ -216,6 +220,7 @@ where
                 state.register_writer(
                     &cfg.hostname,
                     writer_id,
+                    purpose,
                     lease_duration,
                     heartbeat_timestamp_ms,
                 )
@@ -227,6 +232,7 @@ where
     pub async fn clone_reader(
         &mut self,
         new_reader_id: &LeasedReaderId,
+        purpose: &str,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> LeasedReaderState<T> {
@@ -236,6 +242,7 @@ where
                 state.clone_reader(
                     &cfg.hostname,
                     new_reader_id,
+                    purpose,
                     seqno,
                     lease_duration,
                     heartbeat_timestamp_ms,
@@ -1526,7 +1533,7 @@ pub mod datadriven {
         let as_of = args.expect_antichain("as_of");
         let read = datadriven
             .client
-            .open_leased_reader::<String, (), u64, i64>(datadriven.shard_id)
+            .open_leased_reader::<String, (), u64, i64>(datadriven.shard_id, "")
             .await
             .expect("invalid shard types");
         let listen = read
@@ -1572,7 +1579,7 @@ pub mod datadriven {
         let reader_id = args.expect("reader_id");
         let state = datadriven
             .machine
-            .register_critical_reader::<u64>(&reader_id)
+            .register_critical_reader::<u64>(&reader_id, "tests")
             .await;
         Ok(format!(
             "{} {:?}\n",
@@ -1590,6 +1597,7 @@ pub mod datadriven {
             .machine
             .register_leased_reader(
                 &reader_id,
+                "tests",
                 datadriven.client.cfg.reader_lease_duration,
                 (datadriven.client.cfg.now)(),
             )
@@ -1610,6 +1618,7 @@ pub mod datadriven {
             .machine
             .register_writer(
                 &writer_id,
+                "tests",
                 datadriven.client.cfg.writer_lease_duration,
                 (datadriven.client.cfg.now)(),
             )

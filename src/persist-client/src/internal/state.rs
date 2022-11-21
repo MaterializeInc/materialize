@@ -126,6 +126,8 @@ pub struct HandleDebugState {
     /// Hostname of the persist user that registered this writer or reader. For
     /// critical readers, this is the _most recent_ registration.
     pub hostname: String,
+    /// Plaintext description of this writer or reader's intent.
+    pub purpose: String,
 }
 
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
@@ -265,6 +267,7 @@ where
         &mut self,
         hostname: &str,
         reader_id: &LeasedReaderId,
+        purpose: &str,
         seqno: SeqNo,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
@@ -274,6 +277,7 @@ where
         let read_cap = LeasedReaderState {
             debug: HandleDebugState {
                 hostname: hostname.to_owned(),
+                purpose: purpose.to_owned(),
             },
             seqno,
             since: self.trace.since().clone(),
@@ -290,13 +294,22 @@ where
         &mut self,
         hostname: &str,
         reader_id: &CriticalReaderId,
+        purpose: &str,
     ) -> ControlFlow<Infallible, CriticalReaderState<T>> {
         let state = match self.critical_readers.get(reader_id) {
-            Some(state) => state.clone(),
+            Some(state) => {
+                let mut state = state.clone();
+                state.debug = HandleDebugState {
+                    hostname: hostname.to_owned(),
+                    purpose: purpose.to_owned(),
+                };
+                state
+            }
             None => {
                 let state = CriticalReaderState {
                     debug: HandleDebugState {
                         hostname: hostname.to_owned(),
+                        purpose: purpose.to_owned(),
                     },
                     since: self.trace.since().clone(),
                     opaque: OpaqueState(Codec64::encode(&O::initial())),
@@ -314,12 +327,14 @@ where
         &mut self,
         hostname: &str,
         writer_id: &WriterId,
+        purpose: &str,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<Infallible, (Upper<T>, WriterState<T>)> {
         let writer_state = WriterState {
             debug: HandleDebugState {
                 hostname: hostname.to_owned(),
+                purpose: purpose.to_owned(),
             },
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
             lease_duration_ms: u64::try_from(lease_duration.as_millis())
@@ -335,6 +350,7 @@ where
         &mut self,
         hostname: &str,
         new_reader_id: &LeasedReaderId,
+        purpose: &str,
         seqno: SeqNo,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
@@ -343,6 +359,7 @@ where
         let read_cap = LeasedReaderState {
             debug: HandleDebugState {
                 hostname: hostname.to_owned(),
+                purpose: purpose.to_owned(),
             },
             seqno,
             since: self.trace.since().clone(),
@@ -1045,6 +1062,7 @@ mod tests {
         let _ = state.collections.register_leased_reader(
             "",
             &reader,
+            "",
             seqno,
             Duration::from_secs(10),
             now(),
@@ -1095,6 +1113,7 @@ mod tests {
         let _ = state.collections.register_leased_reader(
             "",
             &reader2,
+            "",
             seqno,
             Duration::from_secs(10),
             now(),
@@ -1137,6 +1156,7 @@ mod tests {
         let _ = state.collections.register_leased_reader(
             "",
             &reader3,
+            "",
             seqno,
             Duration::from_secs(10),
             now(),
@@ -1189,7 +1209,7 @@ mod tests {
         .collections;
 
         let writer_id = WriterId::new();
-        let _ = state.register_writer("", &writer_id, Duration::from_secs(10), 0);
+        let _ = state.register_writer("", &writer_id, "", Duration::from_secs(10), 0);
         let now = SYSTEM_TIME.clone();
 
         // State is initially empty.
@@ -1288,7 +1308,7 @@ mod tests {
         let writer_id = WriterId::new();
         let _ = state
             .collections
-            .register_writer("", &writer_id, Duration::from_secs(10), 0);
+            .register_writer("", &writer_id, "", Duration::from_secs(10), 0);
 
         // Advance upper to 5.
         assert!(state
@@ -1328,6 +1348,7 @@ mod tests {
         let _ = state.collections.register_leased_reader(
             "",
             &reader,
+            "",
             SeqNo::minimum(),
             Duration::from_secs(10),
             now(),
@@ -1428,7 +1449,7 @@ mod tests {
         let writer_id = WriterId::new();
         let _ = state
             .collections
-            .register_writer("", &writer_id, Duration::from_secs(10), 0);
+            .register_writer("", &writer_id, "", Duration::from_secs(10), 0);
         let now = SYSTEM_TIME.clone();
 
         // Add two batches of data, one from [0, 5) and then another from [5, 10).
@@ -1503,13 +1524,13 @@ mod tests {
 
         assert!(state
             .collections
-            .register_writer("", &writer_id_one, Duration::from_secs(10), 0)
+            .register_writer("", &writer_id_one, "", Duration::from_secs(10), 0)
             .is_continue());
 
         let writer_id_two = WriterId::new();
         assert!(state
             .collections
-            .register_writer("", &writer_id_two, Duration::from_secs(10), 0)
+            .register_writer("", &writer_id_two, "", Duration::from_secs(10), 0)
             .is_continue());
 
         // Writer is registered and is now eligible to write
@@ -1575,7 +1596,7 @@ mod tests {
         let writer_id = WriterId::new();
         let _ = state
             .collections
-            .register_writer("", &writer_id, Duration::from_secs(10), 0);
+            .register_writer("", &writer_id, "", Duration::from_secs(10), 0);
         assert_eq!(state.maybe_gc(false), None);
 
         // A write will gc though.

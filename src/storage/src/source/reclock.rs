@@ -1326,7 +1326,7 @@ mod tests {
         drop(persist_clients);
 
         let read_handle = persist_client
-            .open_leased_reader::<SourceData, (), Timestamp, Diff>(binding_shard)
+            .open_leased_reader::<SourceData, (), Timestamp, Diff>(binding_shard, "test_since_hold")
             .await
             .expect("error opening persist shard");
 

@@ -65,6 +65,7 @@ message ProtoWriterState {
 
 message ProtoHandleDebugState {
     string hostname = 1;
+    string purpose = 2;
 }
 
 message ProtoStateRollup {

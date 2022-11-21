@@ -132,11 +132,15 @@ impl Transactor {
             .parse::<u64>()
             .expect("maelstrom node_id should be n followed by an integer");
 
-        let (mut write, mut read) = client.open(shard_id).await?;
+        let (mut write, mut read) = client.open(shard_id, "maelstrom long-lived").await?;
         // Use the CONTROLLER_CRITICAL_SINCE id for all nodes so we get coverage
         // of contending traffic.
         let since = client
-            .open_critical_since(shard_id, PersistClient::CONTROLLER_CRITICAL_SINCE)
+            .open_critical_since(
+                shard_id,
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
+                "maelstrom since",
+            )
             .await?;
         let read_ts = Self::maybe_init_shard(&mut write).await?;
 
@@ -267,7 +271,7 @@ impl Transactor {
             // state and exercise some more code paths.
             let mut read = self
                 .client
-                .open_leased_reader(self.shard_id)
+                .open_leased_reader(self.shard_id, "maelstrom short-lived")
                 .await
                 .expect("codecs should match");
 
@@ -298,6 +302,7 @@ impl Transactor {
                         .open_critical_since(
                             self.shard_id,
                             PersistClient::CONTROLLER_CRITICAL_SINCE,
+                            "maelstrom since",
                         )
                         .await?;
                     continue;
@@ -331,6 +336,7 @@ impl Transactor {
                         .open_critical_since(
                             self.shard_id,
                             PersistClient::CONTROLLER_CRITICAL_SINCE,
+                            "maelstrom since",
                         )
                         .await?;
                     continue;

@@ -89,7 +89,7 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
 
     async fn initialize_state(&self, client_cache: &mut PersistClientCache) -> Self::State {
         let mut handles = vec![];
-        for export in self.source_exports.values() {
+        for (id, export) in self.source_exports.iter() {
             // Explicit destructuring to force a compile error when the metadata change
             let CollectionMetadata {
                 persist_location,
@@ -102,7 +102,10 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
                 .open(persist_location.clone())
                 .await
                 .expect("error creating persist client")
-                .open_writer::<SourceData, (), T, Diff>(*data_shard)
+                .open_writer::<SourceData, (), T, Diff>(
+                    *data_shard,
+                    &format!("resumption data {}", id),
+                )
                 .await
                 .unwrap();
             handles.push(handle);
@@ -119,7 +122,8 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
             .open(persist_location.clone())
             .await
             .expect("error creating persist client")
-            .open_writer::<SourceData, (), T, Diff>(*remap_shard)
+            // TODO: Any way to plumb the GlobalId to this?
+            .open_writer::<SourceData, (), T, Diff>(*remap_shard, "resumption remap")
             .await
             .unwrap();
         handles.push(remap_handle);
