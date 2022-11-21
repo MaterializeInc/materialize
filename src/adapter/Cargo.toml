@@ -44,7 +44,7 @@ mz-stash = { path = "../stash" }
 mz-storage-client = { path = "../storage-client" }
 mz-transform = { path = "../transform" }
 mz-cloud-resources = { path = "../cloud-resources" }
-prometheus = { version = "0.13.2", default-features = false }
+prometheus = { version = "0.13.3", default-features = false }
 prost = { version = "0.11.2", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
