@@ -77,6 +77,8 @@ pub struct KafkaSourceReader {
     partition_metrics: KafkaPartitionMetrics,
     /// Whether or not to unpack and allocate headers and pass them through in the `SourceMessage`
     include_headers: bool,
+    /// The latest error reported to the consumer context.
+    recent_error: Arc<Mutex<Option<KafkaError>>>,
 }
 
 pub struct KafkaOffsetCommiter {
@@ -111,12 +113,14 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
             ..
         } = self;
         let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
+        let recent_error = Arc::new(Mutex::new(None));
         let consumer: BaseConsumer<_> =
             TokioHandle::current().block_on(connection.create_with_context(
                 &connection_context,
                 GlueConsumerContext {
                     activator: consumer_activator,
                     stats_tx,
+                    recent_error: Arc::clone(&recent_error),
                 },
                 &btreemap! {
                     // Default to disabling Kafka auto commit. This can be
@@ -249,6 +253,7 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
                     topic.clone(),
                     source_id,
                 ),
+                recent_error,
             },
             KafkaOffsetCommiter {
                 source_id,
@@ -310,10 +315,17 @@ impl SourceReader for KafkaSourceReader {
         // directly.
         if let Some(result) = self.consumer.poll(Duration::from_secs(0)) {
             match result {
-                Err(e) => error!(
-                    "kafka error when polling consumer for source: {} topic: {} : {}",
-                    self.source_name, self.topic_name, e
-                ),
+                Err(e) => {
+                    let message = format!(
+                        "kafka error when polling consumer for source: {} topic: {} : {}",
+                        self.source_name, self.topic_name, e
+                    );
+                    next_message =
+                        NextMessage::Ready(SourceMessageType::SourceStatus(SourceStatusUpdate {
+                            status: SourceStatus::Stalled,
+                            error: Some(message),
+                        }))
+                }
                 Ok(message) => {
                     let source_message = construct_source_message(&message, self.include_headers)
                         .map_err(SourceReaderError::other_definite)?;
@@ -351,6 +363,24 @@ impl SourceReader for KafkaSourceReader {
                 Ok(None) => {
                     // no message in this queue; keep looping
                 }
+            }
+        }
+        if let Some(err) = self
+            .recent_error
+            .lock()
+            .expect("locking error mutex")
+            .take()
+        {
+            // If we're blocking _and_ kafka is reporting an error, pass it on.
+            // Otherwise, discard it. It's possible for us to experience an error while there
+            // are more messages in the queue; in that case, we'll rely on the client reporting that
+            // error again in the future if the error condition persists.
+            if let NextMessage::Pending = next_message {
+                next_message =
+                    NextMessage::Ready(SourceMessageType::SourceStatus(SourceStatusUpdate {
+                        status: SourceStatus::Stalled,
+                        error: Some(err.to_string()),
+                    }))
             }
         }
 
@@ -734,6 +764,7 @@ impl PartitionConsumer {
 struct GlueConsumerContext {
     activator: SyncActivator,
     stats_tx: crossbeam_channel::Sender<Jsonb>,
+    recent_error: Arc<Mutex<Option<KafkaError>>>,
 }
 
 impl ClientContext for GlueConsumerContext {
@@ -755,6 +786,8 @@ impl ClientContext for GlueConsumerContext {
         MzClientContext.log(level, fac, log_message)
     }
     fn error(&self, error: rdkafka::error::KafkaError, reason: &str) {
+        let mut recent_error = self.recent_error.lock().expect("recording error");
+        *recent_error = Some(error.clone());
         MzClientContext.error(error, reason)
     }
 }
