@@ -261,7 +261,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     session
                         .add_notice(AdapterNotice::ExplicitTransactionControlInImplicitTransaction);
                 }
-                self.sequence_end_transaction(tx, session, action).await;
+                self.sequence_end_transaction(tx, session, action);
             }
             Plan::Peek(plan) => {
                 tx.send(self.sequence_peek(&mut session, plan).await, session);
@@ -311,10 +311,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 );
             }
             Plan::AlterIndexSetOptions(plan) => {
-                tx.send(self.sequence_alter_index_set_options(plan).await, session);
+                tx.send(self.sequence_alter_index_set_options(plan), session);
             }
             Plan::AlterIndexResetOptions(plan) => {
-                tx.send(self.sequence_alter_index_reset_options(plan).await, session);
+                tx.send(self.sequence_alter_index_reset_options(plan), session);
             }
             Plan::AlterSecret(plan) => {
                 tx.send(self.sequence_alter_secret(&session, plan).await, session);
@@ -355,7 +355,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         .get_mut(&session.conn_id())
                         .expect("must exist for active session");
                     let drop_sinks = std::mem::take(&mut conn_meta.drop_sinks);
-                    self.drop_compute_sinks(drop_sinks).await;
+                    self.drop_compute_sinks(drop_sinks);
                     session.reset();
                     Ok(ExecuteResponse::DiscardedAll)
                 } else {
@@ -913,7 +913,6 @@ impl<S: Append + 'static> Coordinator<S> {
             self.controller
                 .active_compute()
                 .add_replica_to_instance(instance_id, replica_id, replica.config)
-                .await
                 .unwrap();
         }
 
@@ -1065,7 +1064,6 @@ impl<S: Append + 'static> Coordinator<S> {
         self.controller
             .active_compute()
             .add_replica_to_instance(instance_id, replica_id, replica_concrete_config)
-            .await
             .unwrap();
 
         if !log_source_ids.is_empty() {
@@ -1133,9 +1131,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let policy = ReadPolicy::ValidFrom(Antichain::from_elem(since_ts));
                 self.controller
                     .storage
-                    .set_read_policy(vec![(table_id, policy)])
-                    .await
-                    .unwrap();
+                    .set_read_policy(vec![(table_id, policy)]);
 
                 self.initialize_storage_read_policies(
                     vec![table_id],
@@ -1328,7 +1324,6 @@ impl<S: Append + 'static> Coordinator<S> {
             .controller
             .storage
             .prepare_export(id, catalog_sink.from)
-            .await
         {
             Ok(t) => t,
             Err(e) => {
@@ -1603,9 +1598,7 @@ impl<S: Append + 'static> Coordinator<S> {
         {
             Ok(df) => {
                 self.ship_dataflow(df, compute_instance).await;
-                self.set_index_options(id, options)
-                    .await
-                    .expect("index enabled");
+                self.set_index_options(id, options).expect("index enabled");
                 Ok(ExecuteResponse::CreatedIndex)
             }
             Err(AdapterError::Catalog(catalog::Error {
@@ -1818,8 +1811,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
         self.controller
             .active_compute()
-            .drop_replica(instance_id, replica_id)
-            .await?;
+            .drop_replica(instance_id, replica_id)?;
         Ok(())
     }
 
@@ -1940,7 +1932,7 @@ impl<S: Append + 'static> Coordinator<S> {
         })
     }
 
-    pub(crate) async fn sequence_end_transaction(
+    pub(crate) fn sequence_end_transaction(
         &mut self,
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
@@ -1957,9 +1949,7 @@ impl<S: Append + 'static> Coordinator<S> {
             EndTransactionAction::Rollback => Ok(ExecuteResponse::TransactionRolledBack),
         };
 
-        let result = self
-            .sequence_end_transaction_inner(&mut session, action)
-            .await;
+        let result = self.sequence_end_transaction_inner(&mut session, action);
 
         let (response, action) = match result {
             Ok((Some(TransactionOps::Writes(writes)), _)) if writes.is_empty() => {
@@ -2002,7 +1992,7 @@ impl<S: Append + 'static> Coordinator<S> {
         tx.send(response, session);
     }
 
-    async fn sequence_end_transaction_inner(
+    fn sequence_end_transaction_inner(
         &mut self,
         session: &mut Session,
         action: EndTransactionAction,
@@ -2013,7 +2003,7 @@ impl<S: Append + 'static> Coordinator<S> {
         ),
         AdapterError,
     > {
-        let txn = self.clear_transaction(session).await;
+        let txn = self.clear_transaction(session);
 
         if let EndTransactionAction::Commit = action {
             if let (Some(mut ops), write_lock_guard) = txn.into_ops_and_lock_guard() {
@@ -2127,9 +2117,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         compute_instance,
                         &timeline,
                     )?;
-                    let read_holds = self
-                        .acquire_read_holds(timestamp.timestamp, id_bundle)
-                        .await;
+                    let read_holds = self.acquire_read_holds(timestamp.timestamp, id_bundle);
                     let txn_reads = TxnReads {
                         timestamp_independent,
                         read_holds,
@@ -3195,15 +3183,15 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
-    async fn sequence_alter_index_set_options(
+    fn sequence_alter_index_set_options(
         &mut self,
         plan: AlterIndexSetOptionsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.set_index_options(plan.id, plan.options).await?;
+        self.set_index_options(plan.id, plan.options)?;
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
-    async fn sequence_alter_index_reset_options(
+    fn sequence_alter_index_reset_options(
         &mut self,
         plan: AlterIndexResetOptionsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -3216,12 +3204,12 @@ impl<S: Append + 'static> Coordinator<S> {
             });
         }
 
-        self.set_index_options(plan.id, options).await?;
+        self.set_index_options(plan.id, options)?;
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
-    async fn set_index_options(
+    fn set_index_options(
         &mut self,
         id: GlobalId,
         options: Vec<IndexOption>,
@@ -3240,8 +3228,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         Some(time) => ReadPolicy::lag_writes_by(time.try_into()?),
                         None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
                     };
-                    self.update_compute_base_read_policy(compute_instance, id, policy)
-                        .await;
+                    self.update_compute_base_read_policy(compute_instance, id, policy);
                 }
             }
         }

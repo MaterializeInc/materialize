@@ -358,7 +358,6 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 self.controller
                     .active_compute()
                     .create_dataflows(compute_instance, vec![dataflow])
-                    .await
                     .unwrap();
                 self.initialize_compute_read_policies(
                     output_ids,
@@ -434,7 +433,6 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 map_filter_project,
                 target_replica,
             )
-            .await
             .unwrap();
 
         // Prepare the receiver to return as a response.
@@ -454,7 +452,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         // If it was created, drop the dataflow once the peek command is sent.
         if let Some(index_id) = drop_dataflow {
             self.remove_compute_ids_from_timeline(vec![(compute_instance, index_id)]);
-            self.drop_indexes(vec![(compute_instance, index_id)]).await;
+            self.drop_indexes(vec![(compute_instance, index_id)]);
         }
 
         Ok(crate::ExecuteResponse::SendingRows {

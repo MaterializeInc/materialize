@@ -18,7 +18,7 @@
 //! Eventually, the source is dropped with either `drop_sources()` or by allowing compaction to the
 //! empty frontier.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fmt::{self, Debug};
 use std::num::NonZeroI64;
@@ -215,20 +215,20 @@ pub trait StorageController: Debug + Send {
     ) -> Result<(), StorageError>;
 
     /// Notify the storage controller to prepare for an export to be created
-    async fn prepare_export(
+    fn prepare_export(
         &mut self,
         id: GlobalId,
         from_id: GlobalId,
     ) -> Result<CreateExportToken, StorageError>;
 
     /// Cancel the pending export
-    async fn cancel_prepare_export(&mut self, token: CreateExportToken);
+    fn cancel_prepare_export(&mut self, token: CreateExportToken);
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
-    async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
+    fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
-    async fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
+    fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
     ///
@@ -240,10 +240,7 @@ pub trait StorageController: Debug + Send {
     ///     created, but have been forgotten by the controller due to a restart.
     ///     Once command history becomes durable we can remove this method and use the normal
     ///     `drop_sinks`.
-    async fn drop_sinks_unvalidated(
-        &mut self,
-        identifiers: Vec<GlobalId>,
-    ) -> Result<(), StorageError>;
+    fn drop_sinks_unvalidated(&mut self, identifiers: Vec<GlobalId>);
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
     ///
@@ -255,10 +252,7 @@ pub trait StorageController: Debug + Send {
     ///     created, but have been forgotten by the controller due to a restart.
     ///     Once command history becomes durable we can remove this method and use the normal
     ///     `drop_sources`.
-    async fn drop_sources_unvalidated(
-        &mut self,
-        identifiers: Vec<GlobalId>,
-    ) -> Result<(), StorageError>;
+    fn drop_sources_unvalidated(&mut self, identifiers: Vec<GlobalId>);
 
     /// Append `updates` into the local input named `id` and advance its upper to `upper`.
     ///
@@ -288,10 +282,7 @@ pub trait StorageController: Debug + Send {
     /// The `StorageController` may include its own overrides on these policies.
     ///
     /// Identifiers not present in `policies` retain their existing read policies.
-    async fn set_read_policy(
-        &mut self,
-        policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>,
-    ) -> Result<(), StorageError>;
+    fn set_read_policy(&mut self, policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>);
 
     /// Ingests write frontier updates for collections that this controller
     /// maintains and potentially generates updates to read capabilities, which
@@ -315,16 +306,13 @@ pub trait StorageController: Debug + Send {
     /// [`ReadPolicy`]. Advancing the write frontier might change this implied
     /// capability, which in turn might change the overall `since` (a
     /// combination of all read capabilities) of a collection.
-    async fn update_write_frontiers(
-        &mut self,
-        updates: &[(GlobalId, Antichain<Self::Timestamp>)],
-    ) -> Result<(), StorageError>;
+    fn update_write_frontiers(&mut self, updates: &[(GlobalId, Antichain<Self::Timestamp>)]);
 
     /// Applies `updates` and sends any appropriate compaction command.
-    async fn update_read_capabilities(
+    fn update_read_capabilities(
         &mut self,
         updates: &mut BTreeMap<GlobalId, ChangeBatch<Self::Timestamp>>,
-    ) -> Result<(), StorageError>;
+    );
 
     /// Waits until the controller is ready to process a response.
     ///
@@ -627,6 +615,8 @@ pub struct StorageControllerState<
     /// without blocking the storage controller.
     persist_read_handles: persist_read_handles::PersistWorker<T>,
     stashed_response: Option<StorageResponse<T>>,
+    /// Storage hosts that should be deprovisioned during the next call to `StorageController::process`.
+    pending_host_deprovisions: BTreeSet<GlobalId>,
 
     /// Interface for managed collections
     pub(super) collection_manager: collection_mgmt::CollectionManager,
@@ -772,6 +762,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             persist_write_handles,
             persist_read_handles: persist_read_handles::PersistWorker::new(),
             stashed_response: None,
+            pending_host_deprovisions: BTreeSet::new(),
             collection_manager,
             introspection_ids: HashMap::new(),
             envd_epoch,
@@ -1052,7 +1043,7 @@ where
             .ok_or(StorageError::IdentifierMissing(id))
     }
 
-    async fn prepare_export(
+    fn prepare_export(
         &mut self,
         id: GlobalId,
         from_id: GlobalId,
@@ -1070,10 +1061,7 @@ where
         Ok(CreateExportToken { id, from_id })
     }
 
-    async fn cancel_prepare_export(
-        &mut self,
-        CreateExportToken { id, from_id }: CreateExportToken,
-    ) {
+    fn cancel_prepare_export(&mut self, CreateExportToken { id, from_id }: CreateExportToken) {
         self.state
             .exported_collections
             .get_mut(&from_id)
@@ -1168,38 +1156,28 @@ where
         Ok(())
     }
 
-    async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
+    fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
         self.validate_collection_ids(identifiers.iter().cloned())?;
-        let policies = identifiers
-            .into_iter()
-            .map(|id| (id, ReadPolicy::ValidFrom(Antichain::new())))
-            .collect();
-        self.set_read_policy(policies).await?;
+        self.drop_sources_unvalidated(identifiers);
         Ok(())
     }
 
-    async fn drop_sources_unvalidated(
-        &mut self,
-        identifiers: Vec<GlobalId>,
-    ) -> Result<(), StorageError> {
+    fn drop_sources_unvalidated(&mut self, identifiers: Vec<GlobalId>) {
         let policies = identifiers
             .into_iter()
             .map(|id| (id, ReadPolicy::ValidFrom(Antichain::new())))
             .collect();
-        self.set_read_policy(policies).await?;
-        Ok(())
+        self.set_read_policy(policies);
     }
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
-    async fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
+    fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
         self.validate_export_ids(identifiers.iter().cloned())?;
-        self.drop_sinks_unvalidated(identifiers).await
+        self.drop_sinks_unvalidated(identifiers);
+        Ok(())
     }
 
-    async fn drop_sinks_unvalidated(
-        &mut self,
-        identifiers: Vec<GlobalId>,
-    ) -> Result<(), StorageError> {
+    fn drop_sinks_unvalidated(&mut self, identifiers: Vec<GlobalId>) {
         for id in identifiers {
             let export = match self.export(id) {
                 Ok(export) => export,
@@ -1214,12 +1192,10 @@ where
                 .expect("Dangling exported collection")
                 .retain(|from_export_id| *from_export_id != id);
 
-            // Remove sink by removing its write frontier and then deprovisioning.
-            self.update_write_frontiers(&[(id, Antichain::new())])
-                .await?;
-            self.hosts.deprovision(id).await?;
+            // Remove sink by removing its write frontier and arranging for deprovisioning.
+            self.update_write_frontiers(&[(id, Antichain::new())]);
+            self.state.pending_host_deprovisions.insert(id);
         }
-        Ok(())
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -1286,10 +1262,7 @@ where
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn set_read_policy(
-        &mut self,
-        policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>,
-    ) -> Result<(), StorageError> {
+    fn set_read_policy(&mut self, policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>) {
         let mut read_capability_changes = BTreeMap::default();
         for (id, policy) in policies.into_iter() {
             if let Ok(mut updates) =
@@ -1303,17 +1276,12 @@ where
             }
         }
         if !read_capability_changes.is_empty() {
-            self.update_read_capabilities(&mut read_capability_changes)
-                .await?;
+            self.update_read_capabilities(&mut read_capability_changes);
         }
-        Ok(())
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn update_write_frontiers(
-        &mut self,
-        updates: &[(GlobalId, Antichain<Self::Timestamp>)],
-    ) -> Result<(), StorageError> {
+    fn update_write_frontiers(&mut self, updates: &[(GlobalId, Antichain<Self::Timestamp>)]) {
         let mut read_capability_changes = BTreeMap::default();
         let mut collections = BTreeMap::new();
         let mut exports = vec![];
@@ -1351,17 +1319,15 @@ where
         }
 
         if !read_capability_changes.is_empty() {
-            self.update_read_capabilities(&mut read_capability_changes)
-                .await?;
+            self.update_read_capabilities(&mut read_capability_changes);
         }
-        Ok(())
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn update_read_capabilities(
+    fn update_read_capabilities(
         &mut self,
         updates: &mut BTreeMap<GlobalId, ChangeBatch<Self::Timestamp>>,
-    ) -> Result<(), StorageError> {
+    ) {
         // Location to record consequences that we need to act on.
         let mut storage_net = HashMap::new();
         // Repeatedly extract the maximum id, and updates for it.
@@ -1405,12 +1371,10 @@ where
                 )]));
 
                 if frontier.is_empty() {
-                    self.hosts.deprovision(id).await?;
+                    self.state.pending_host_deprovisions.insert(id);
                 }
             }
         }
-
-        Ok(())
     }
 
     async fn ready(&mut self) {
@@ -1435,17 +1399,22 @@ where
 
     async fn process(&mut self) -> Result<(), anyhow::Error> {
         match self.state.stashed_response.take() {
-            None => Ok(()),
+            None => (),
             Some(StorageResponse::FrontierUppers(updates)) => {
-                self.update_write_frontiers(&updates).await?;
-                Ok(())
+                self.update_write_frontiers(&updates);
             }
             Some(StorageResponse::DroppedIds(_ids)) => {
                 // TODO(petrosagg): It looks like the storage controller never cleans up GlobalIds
                 // from its state. It should probably be done as a reaction to this response.
-                Ok(())
             }
         }
+
+        let to_deprovision = std::mem::take(&mut self.state.pending_host_deprovisions);
+        for id in to_deprovision {
+            self.hosts.deprovision(id).await?;
+        }
+
+        Ok(())
     }
 }
 

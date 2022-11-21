@@ -357,8 +357,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let () = self
                     .controller
                     .storage
-                    .cancel_prepare_export(create_export_token)
-                    .await;
+                    .cancel_prepare_export(create_export_token);
                 if let Some((session, tx)) = session_and_tx {
                     tx.send(Err(e), session);
                 }
