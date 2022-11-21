@@ -48,6 +48,12 @@ pub enum AdapterNotice {
         replica: String,
         status: ComputeInstanceStatus,
     },
+    DroppedActiveDatabase {
+        name: String,
+    },
+    DroppedActiveCluster {
+        name: String,
+    },
 }
 
 impl AdapterNotice {
@@ -61,6 +67,8 @@ impl AdapterNotice {
         match self {
             AdapterNotice::DatabaseDoesNotExist { name: _ } => Some("Create the database with CREATE DATABASE or pick an extant database with SET DATABASE = name. List available databases with SHOW DATABASES.".into()),
             AdapterNotice::ClusterDoesNotExist { name: _ } => Some("Create the cluster with CREATE CLUSTER or pick an extant cluster with SET CLUSTER = name. List available clusters with SHOW CLUSTERS.".into()),
+            AdapterNotice::DroppedActiveDatabase { name: _ } => Some("Choose a new active database by executing SET DATABASE = <name>.".into()),
+            AdapterNotice::DroppedActiveCluster { name: _ } => Some("Choose a new active cluster by executing SET CLUSTER = <name>.".into()),
             _ => None
         }
     }
@@ -106,6 +114,12 @@ impl fmt::Display for AdapterNotice {
                     "cluster replica {}.{} changed status to: {:?}",
                     cluster, replica, status,
                 )
+            }
+            AdapterNotice::DroppedActiveDatabase { name } => {
+                write!(f, "active database {} has been dropped", name.quoted())
+            }
+            AdapterNotice::DroppedActiveCluster { name } => {
+                write!(f, "active cluster {} has been dropped", name.quoted())
             }
         }
     }

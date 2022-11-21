@@ -198,7 +198,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 );
             }
             Plan::DropDatabase(plan) => {
-                tx.send(self.sequence_drop_database(&session, plan).await, session);
+                tx.send(
+                    self.sequence_drop_database(&mut session, plan).await,
+                    session,
+                );
             }
             Plan::DropSchema(plan) => {
                 tx.send(self.sequence_drop_schema(&session, plan).await, session);
@@ -208,7 +211,8 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             Plan::DropComputeInstances(plan) => {
                 tx.send(
-                    self.sequence_drop_compute_instances(&session, plan).await,
+                    self.sequence_drop_compute_instances(&mut session, plan)
+                        .await,
                     session,
                 );
             }
@@ -1645,11 +1649,23 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_drop_database(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         plan: DropDatabasePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        let database_name = plan
+            .id
+            .map(|id| self.catalog.get_database(&id))
+            .map(|db| db.name.clone());
+
         let ops = self.catalog.drop_database_ops(plan.id);
         self.catalog_transact(Some(session), ops).await?;
+
+        if let Some(name) = database_name {
+            if name.as_str() == session.vars().database() {
+                session.add_notice(AdapterNotice::DroppedActiveDatabase { name });
+            }
+        }
+
         Ok(ExecuteResponse::DroppedDatabase)
     }
 
@@ -1679,11 +1695,12 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_drop_compute_instances(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         plan: DropComputeInstancesPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let mut ops = Vec::new();
         let mut instance_replica_drop_sets = Vec::with_capacity(plan.names.len());
+        let mut is_active_instance = false;
         for compute_name in plan.names {
             let instance = self.catalog.resolve_compute_instance(&compute_name)?;
             instance_replica_drop_sets.push((
@@ -1721,6 +1738,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
             }
 
+            if compute_name.as_str() == session.vars().cluster() {
+                is_active_instance = true;
+            }
+
             ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
             ops.push(catalog::Op::DropComputeInstance { name: compute_name });
         }
@@ -1731,6 +1752,12 @@ impl<S: Append + 'static> Coordinator<S> {
                 self.drop_replica(instance_id, replica_id).await.unwrap();
             }
             self.controller.compute.drop_instance(instance_id);
+        }
+
+        if is_active_instance {
+            session.add_notice(AdapterNotice::DroppedActiveCluster {
+                name: session.vars().cluster().to_string(),
+            });
         }
 
         Ok(ExecuteResponse::DroppedComputeInstance)
