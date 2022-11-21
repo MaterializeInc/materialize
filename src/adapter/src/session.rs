@@ -342,29 +342,10 @@ impl<T: TimestampManipulation> Session<T> {
         // This method is cancel safe because recv is cancel safe.
         loop {
             let notice = self.notices_rx.recv().await.unwrap();
-            // Filter out notices for other clusters.
-            if let AdapterNotice::ClusterReplicaStatusChanged { cluster, .. } = &notice {
-                if cluster != self.vars.cluster() {
-                    continue;
-                }
+            match self.notice_filter(notice) {
+                Some(notice) => return notice,
+                None => continue,
             }
-            // Suppress replica NotReady notices until they don't occur on
-            // create/drop replica, as that leads to user confusion.
-            //
-            // TODO: Removing this variant completely, since it's the only call
-            // to broadcast_notice, causes Rust to warn about various unused
-            // functions. If we don't find another usage of notices, consider
-            // removing the entire notice system.
-            if matches!(notice, AdapterNotice::ClusterReplicaStatusChanged { .. }) {
-                continue;
-            }
-            // De-duplicate identical notices. This routinely happens for
-            // ClusterReplicaStatusChanged messages.
-            if Some(&notice) == self.prev_notice.as_ref() {
-                continue;
-            }
-            self.prev_notice = Some(notice.clone());
-            return notice;
         }
     }
 
@@ -372,9 +353,42 @@ impl<T: TimestampManipulation> Session<T> {
     pub fn drain_notices(&mut self) -> Vec<AdapterNotice> {
         let mut notices = Vec::new();
         while let Ok(notice) = self.notices_rx.try_recv() {
-            notices.push(notice);
+            if let Some(notice) = self.notice_filter(notice) {
+                notices.push(notice);
+            }
         }
         notices
+    }
+
+    /// Returns Some if the notice should be reported, otherwise None.
+    fn notice_filter(&mut self, notice: AdapterNotice) -> Option<AdapterNotice> {
+        // Filter out notices for other clusters.
+        if let AdapterNotice::ClusterReplicaStatusChanged { cluster, .. } = &notice {
+            if cluster != self.vars.cluster() {
+                return None;
+            }
+        }
+        // Suppress replica NotReady notices until they don't occur on
+        // create/drop replica, as that leads to user confusion.
+        //
+        // TODO: Removing this variant completely, since it's the only call
+        // to broadcast_notice, causes Rust to warn about various unused
+        // functions. If we don't find another usage of notices, consider
+        // removing the entire notice system.
+        if matches!(notice, AdapterNotice::ClusterReplicaStatusChanged { .. }) {
+            return None;
+        }
+        match self.prev_notice.as_ref() {
+            // De-duplicate ClusterReplicaStatusChanged notices.
+            Some(prev_notice @ AdapterNotice::ClusterReplicaStatusChanged { .. }) => {
+                if prev_notice == &notice {
+                    return None;
+                }
+                self.prev_notice = Some(notice.clone());
+            }
+            _ => self.prev_notice = None,
+        }
+        Some(notice)
     }
 
     /// Sets the transaction ops to `TransactionOps::None`. Must only be used after
