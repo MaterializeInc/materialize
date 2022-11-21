@@ -232,74 +232,18 @@ pub struct KafkaBroker {
 
 impl RustType<ProtoKafkaBroker> for KafkaBroker {
     fn into_proto(&self) -> ProtoKafkaBroker {
-        use proto_kafka_broker::Tunnel as ProtoTunnel;
         ProtoKafkaBroker {
             address: self.address.into_proto(),
-            tunnel: Some(match &self.tunnel {
-                Tunnel::Direct => ProtoTunnel::Direct(()),
-                Tunnel::Ssh {
-                    connection_id,
-                    connection,
-                } => ProtoTunnel::Ssh(ProtoSshTunnel {
-                    connection_id: Some(connection_id.into_proto()),
-                    connection: Some(connection.into_proto()),
-                }),
-                Tunnel::AwsPrivatelink(aws) => ProtoTunnel::AwsPrivatelink(aws.into_proto()),
-            }),
+            tunnel: Some(self.tunnel.into_proto()),
         }
     }
 
     fn from_proto(proto: ProtoKafkaBroker) -> Result<Self, TryFromProtoError> {
-        use proto_kafka_broker::Tunnel as ProtoTunnel;
         Ok(KafkaBroker {
             address: proto.address.into_rust()?,
-            tunnel: match proto.tunnel {
-                None => {
-                    return Err(TryFromProtoError::missing_field(
-                        "ProtoKafkaConnection::tunnel",
-                    ))
-                }
-                Some(ProtoTunnel::Direct(())) => Tunnel::Direct,
-                Some(ProtoTunnel::Ssh(ssh)) => Tunnel::Ssh {
-                    connection_id: ssh
-                        .connection_id
-                        .into_rust_if_some("ProtoKafkaConnection::ssh::connection_id")?,
-                    connection: ssh
-                        .connection
-                        .into_rust_if_some("ProtoKafkaConnection::ssh::connection")?,
-                },
-                Some(ProtoTunnel::AwsPrivatelink(connection_id)) => {
-                    Tunnel::AwsPrivatelink(connection_id.into_rust()?)
-                }
-            },
-        })
-    }
-}
-
-/// Specifies an AWS PrivateLink service for a [`Tunnel`].
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct AwsPrivatelink {
-    /// The ID of the connection to the AWS PrivateLink service.
-    pub connection_id: GlobalId,
-    /// The port to use when connecting to the AWS PrivateLink service, if
-    /// different from the port in [`KafkaBroker::address`].
-    pub port: Option<u16>,
-}
-
-impl RustType<ProtoAwsPrivatelink> for AwsPrivatelink {
-    fn into_proto(&self) -> ProtoAwsPrivatelink {
-        ProtoAwsPrivatelink {
-            connection_id: Some(self.connection_id.into_proto()),
-            port: self.port.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoAwsPrivatelink) -> Result<Self, TryFromProtoError> {
-        Ok(AwsPrivatelink {
-            connection_id: proto
-                .connection_id
-                .into_rust_if_some("ProtoAwsPrivatelink::connection_id")?,
-            port: proto.port.into_rust()?,
+            tunnel: proto
+                .tunnel
+                .into_rust_if_some("ProtoKafkaConnection::tunnel")?,
         })
     }
 }
@@ -786,7 +730,6 @@ impl PostgresConnection {
 
 impl RustType<ProtoPostgresConnection> for PostgresConnection {
     fn into_proto(&self) -> ProtoPostgresConnection {
-        use proto_postgres_connection::Tunnel as ProtoTunnel;
         ProtoPostgresConnection {
             host: self.host.into_proto(),
             port: self.port.into_proto(),
@@ -796,22 +739,11 @@ impl RustType<ProtoPostgresConnection> for PostgresConnection {
             tls_mode: Some(self.tls_mode.into_proto()),
             tls_root_cert: self.tls_root_cert.into_proto(),
             tls_identity: self.tls_identity.into_proto(),
-            tunnel: Some(match &self.tunnel {
-                Tunnel::Direct => ProtoTunnel::Direct(()),
-                Tunnel::Ssh {
-                    connection_id,
-                    connection,
-                } => ProtoTunnel::Ssh(ProtoSshTunnel {
-                    connection_id: Some(connection_id.into_proto()),
-                    connection: Some(connection.into_proto()),
-                }),
-                Tunnel::AwsPrivatelink(aws) => ProtoTunnel::AwsPrivatelink(aws.into_proto()),
-            }),
+            tunnel: Some(self.tunnel.into_proto()),
         }
     }
 
     fn from_proto(proto: ProtoPostgresConnection) -> Result<Self, TryFromProtoError> {
-        use proto_postgres_connection::Tunnel as ProtoTunnel;
         Ok(PostgresConnection {
             host: proto.host,
             port: proto.port.into_rust()?,
@@ -820,25 +752,9 @@ impl RustType<ProtoPostgresConnection> for PostgresConnection {
                 .user
                 .into_rust_if_some("ProtoPostgresConnection::user")?,
             password: proto.password.into_rust()?,
-            tunnel: match proto.tunnel {
-                None => {
-                    return Err(TryFromProtoError::missing_field(
-                        "ProtoPostgresConnection::tunnel",
-                    ))
-                }
-                Some(ProtoTunnel::Direct(())) => Tunnel::Direct,
-                Some(ProtoTunnel::Ssh(ssh)) => Tunnel::Ssh {
-                    connection_id: ssh
-                        .connection_id
-                        .into_rust_if_some("ProtoPostgresConnection::ssh::connection_id")?,
-                    connection: ssh
-                        .connection
-                        .into_rust_if_some("ProtoPostgresConnection::ssh::connection")?,
-                },
-                Some(ProtoTunnel::AwsPrivatelink(connection_id)) => {
-                    Tunnel::AwsPrivatelink(connection_id.into_rust()?)
-                }
-            },
+            tunnel: proto
+                .tunnel
+                .into_rust_if_some("ProtoPostgresConnection::tunnel")?,
             tls_mode: proto
                 .tls_mode
                 .into_rust_if_some("ProtoPostgresConnection::tls_mode")?,
@@ -907,6 +823,44 @@ pub enum Tunnel {
     AwsPrivatelink(AwsPrivatelink),
 }
 
+impl RustType<ProtoTunnel> for Tunnel {
+    fn into_proto(&self) -> ProtoTunnel {
+        use proto_tunnel::Tunnel as ProtoTunnelField;
+        ProtoTunnel {
+            tunnel: Some(match &self {
+                Tunnel::Direct => ProtoTunnelField::Direct(()),
+                Tunnel::Ssh {
+                    connection_id,
+                    connection,
+                } => ProtoTunnelField::Ssh(ProtoSshTunnel {
+                    connection_id: Some(connection_id.into_proto()),
+                    connection: Some(connection.into_proto()),
+                }),
+                Tunnel::AwsPrivatelink(aws) => ProtoTunnelField::AwsPrivatelink(aws.into_proto()),
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoTunnel) -> Result<Self, TryFromProtoError> {
+        use proto_tunnel::Tunnel as ProtoTunnelField;
+        Ok(match proto.tunnel {
+            None => return Err(TryFromProtoError::missing_field("ProtoTunnel::tunnel")),
+            Some(ProtoTunnelField::Direct(())) => Tunnel::Direct,
+            Some(ProtoTunnelField::Ssh(ssh)) => Tunnel::Ssh {
+                connection_id: ssh
+                    .connection_id
+                    .into_rust_if_some("ProtoTunnel::ssh::connection_id")?,
+                connection: ssh
+                    .connection
+                    .into_rust_if_some("ProtoTunnel::ssh::connection")?,
+            },
+            Some(ProtoTunnelField::AwsPrivatelink(connection_id)) => {
+                Tunnel::AwsPrivatelink(connection_id.into_rust()?)
+            }
+        })
+    }
+}
+
 /// A connection to a SSH tunnel.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct SshConnection {
@@ -947,6 +901,34 @@ impl RustType<ProtoSshConnection> for SshConnection {
             port: proto.port.into_rust()?,
             user: proto.user,
             public_keys: proto.public_keys.into_rust()?,
+        })
+    }
+}
+
+/// Specifies an AWS PrivateLink service for a [`Tunnel`].
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct AwsPrivatelink {
+    /// The ID of the connection to the AWS PrivateLink service.
+    pub connection_id: GlobalId,
+    /// The port to use when connecting to the AWS PrivateLink service, if
+    /// different from the port in [`KafkaBroker::address`].
+    pub port: Option<u16>,
+}
+
+impl RustType<ProtoAwsPrivatelink> for AwsPrivatelink {
+    fn into_proto(&self) -> ProtoAwsPrivatelink {
+        ProtoAwsPrivatelink {
+            connection_id: Some(self.connection_id.into_proto()),
+            port: self.port.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoAwsPrivatelink) -> Result<Self, TryFromProtoError> {
+        Ok(AwsPrivatelink {
+            connection_id: proto
+                .connection_id
+                .into_rust_if_some("ProtoAwsPrivatelink::connection_id")?,
+            port: proto.port.into_rust()?,
         })
     }
 }
