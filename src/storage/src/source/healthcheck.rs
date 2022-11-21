@@ -12,7 +12,7 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use anyhow::Context;
-use chrono::{DateTime, NaiveDateTime, Utc};
+
 use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
 use tokio::sync::Mutex;
@@ -22,37 +22,10 @@ use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
-use mz_repr::{Datum, GlobalId, Row, Timestamp};
+use mz_repr::{GlobalId, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::healthcheck::pack_status_row;
 use mz_storage_client::types::sources::SourceData;
-
-pub fn pack_status_row(
-    source_id: GlobalId,
-    status_name: &str,
-    error: Option<&str>,
-    ts: u64,
-) -> Row {
-    let timestamp = NaiveDateTime::from_timestamp_opt(
-        (ts / 1000)
-            .try_into()
-            .expect("timestamp seconds does not fit into i64"),
-        (ts % 1000 * 1_000_000)
-            .try_into()
-            .expect("timestamp millis does not fit into a u32"),
-    )
-    .unwrap();
-    let timestamp = Datum::TimestampTz(
-        DateTime::from_utc(timestamp, Utc)
-            .try_into()
-            .expect("must fit"),
-    );
-    let source_id = source_id.to_string();
-    let source_id = Datum::String(&source_id);
-    let status = Datum::String(status_name);
-    let error = error.as_deref().into();
-    let metadata = Datum::Null;
-    Row::pack_slice(&[timestamp, source_id, status, error, metadata])
-}
 
 /// The Healthchecker is responsible for tracking the current state
 /// of a Timely worker for a source, as well as updating the relevant
@@ -378,6 +351,7 @@ mod tests {
 
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist_client::{PersistConfig, PersistLocation, ShardId};
+    use mz_repr::Row;
 
     // Test suite
     #[tokio::test(start_paused = true)]
