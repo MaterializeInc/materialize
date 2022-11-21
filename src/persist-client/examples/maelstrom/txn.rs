@@ -101,6 +101,7 @@ pub struct MaelstromVal(Vec<u64>);
 /// snapshot and listen along this timestamp.
 #[derive(Debug)]
 pub struct Transactor {
+    cads_token: u64,
     shard_id: ShardId,
     client: PersistClient,
     since: SinceHandle<MaelstromKey, MaelstromVal, u64, i64, u64>,
@@ -120,7 +121,17 @@ pub struct Transactor {
 }
 
 impl Transactor {
-    pub async fn new(client: &PersistClient, shard_id: ShardId) -> Result<Self, MaelstromError> {
+    pub async fn new(
+        client: &PersistClient,
+        node_id: NodeId,
+        shard_id: ShardId,
+    ) -> Result<Self, MaelstromError> {
+        let cads_token = node_id
+            .0
+            .trim_start_matches('n')
+            .parse::<u64>()
+            .expect("maelstrom node_id should be n followed by an integer");
+
         let (mut write, mut read) = client.open(shard_id).await?;
         // Use the CONTROLLER_CRITICAL_SINCE id for all nodes so we get coverage
         // of contending traffic.
@@ -143,6 +154,7 @@ impl Transactor {
 
         Ok(Transactor {
             client: client.clone(),
+            cads_token,
             shard_id,
             since,
             write,
@@ -212,7 +224,7 @@ impl Transactor {
             match cas_res {
                 Ok(()) => {
                     self.read_ts = write_ts;
-                    self.advance_since().await;
+                    self.advance_since().await?;
                     return Ok(res_ops);
                 }
                 // We lost the CaS race, try again.
@@ -228,67 +240,128 @@ impl Transactor {
         }
     }
 
-    async fn read(&mut self) -> Result<HashMap<MaelstromKey, MaelstromVal>, MaelstromError> {
-        // We're reading as of read_ts, but we can split the read between the
-        // snapshot and listen at any ts in `[since_ts, read_ts]`. Intentionally
-        // pick one that uses a combination of both to get coverage.
-        let as_of = Antichain::from_elem(self.read_ts);
-        let since_ts = Self::extract_ts(self.since.since())?;
-        assert!(self.read_ts >= since_ts);
-        let snap_ts = since_ts + (self.read_ts - since_ts) / 2;
-        let snap_as_of = Antichain::from_elem(snap_ts);
+    async fn read_short_lived(
+        &mut self,
+    ) -> Result<
+        (
+            Vec<(
+                (Result<MaelstromKey, String>, Result<MaelstromVal, String>),
+                u64,
+                i64,
+            )>,
+            Antichain<u64>,
+        ),
+        MaelstromError,
+    > {
+        loop {
+            // We're reading as of read_ts, but we can split the read between the
+            // snapshot and listen at any ts in `[since_ts, read_ts]`. Intentionally
+            // pick one that uses a combination of both to get coverage.
+            let as_of = Antichain::from_elem(self.read_ts);
+            let since_ts = Self::extract_ts(self.since.since())?;
+            assert!(self.read_ts >= since_ts, "{} vs {}", self.read_ts, since_ts);
+            let snap_ts = since_ts + (self.read_ts - since_ts) / 2;
+            let snap_as_of = Antichain::from_elem(snap_ts);
 
-        // Intentionally create this from scratch so we get a brand new copy of
-        // state and exercise some more code paths.
-        let mut read = self
-            .client
-            .open_leased_reader(self.shard_id)
-            .await
-            .expect("codecs should match");
+            // Intentionally create this from scratch so we get a brand new copy of
+            // state and exercise some more code paths.
+            let mut read = self
+                .client
+                .open_leased_reader(self.shard_id)
+                .await
+                .expect("codecs should match");
 
-        let mut updates = read
-            .snapshot_and_fetch(snap_as_of.clone())
-            .await
-            .map_err(|since| MaelstromError {
-                code: ErrorCode::Abort,
-                text: format!(
-                    "snapshot cannot serve requested as_of {} since is {:?}",
-                    snap_ts,
-                    since.0.as_option(),
-                ),
-            })?;
+            let updates_res = read.snapshot_and_fetch(snap_as_of.clone()).await;
+            let mut updates = match updates_res {
+                Ok(x) => x,
+                Err(since) => {
+                    let recent_upper = self.write.fetch_recent_upper().await;
+                    // Because we artificially share the same CriticalReaderId
+                    // between nodes, it doesn't quite act like a capability.
+                    // Prod doesn't have this issue, because a new one will
+                    // fence out old ones, but it's done here to stress edge
+                    // cases.
+                    //
+                    // If we did succeed in this read, we'd anyway just find out
+                    // from compare_and_append that our read_ts was out of date,
+                    // so proceed by fetching a new one and trying again. We
+                    // also re-register the since to get an updated since value
+                    // for the snap_ts calculation above.
+                    info!(
+                        "snapshot cannot serve requested as_of {} since is {:?}, fetching a new read_ts and trying again",
+                        snap_ts,
+                        since.0.as_option()
+                    );
+                    self.read_ts = Self::extract_ts(recent_upper)? - 1;
+                    self.since = self
+                        .client
+                        .open_critical_since(
+                            self.shard_id,
+                            PersistClient::CONTROLLER_CRITICAL_SINCE,
+                        )
+                        .await?;
+                    continue;
+                }
+            };
 
-        let listen = read
-            .listen(snap_as_of)
-            .await
-            .map_err(|since| MaelstromError {
-                code: ErrorCode::Abort,
-                text: format!(
-                    "listen cannot serve requested as_of {} since is {:?}",
-                    snap_ts,
-                    since.0.as_option(),
-                ),
-            })?;
+            let listen_res = read.listen(snap_as_of).await;
+            let listen = match listen_res {
+                Ok(x) => x,
+                Err(since) => {
+                    let recent_upper = self.write.fetch_recent_upper().await;
+                    // Because we artificially share the same CriticalReaderId
+                    // between nodes, it doesn't quite act like a capability.
+                    // Prod doesn't have this issue, because a new one will
+                    // fence out old ones, but it's done here to stress edge
+                    // cases.
+                    //
+                    // If we did succeed in this read, we'd anyway just find out
+                    // from compare_and_append that our read_ts was out of date,
+                    // so proceed by fetching a new one and trying again. We
+                    // also re-register the since to get an updated since value
+                    // for the snap_ts calculation above.
+                    info!(
+                        "listen cannot serve requested as_of {} since is {:?}, fetching a new read_ts and trying again",
+                        snap_ts,
+                        since.0.as_option(),
+                    );
+                    self.read_ts = Self::extract_ts(recent_upper)? - 1;
+                    self.since = self
+                        .client
+                        .open_critical_since(
+                            self.shard_id,
+                            PersistClient::CONTROLLER_CRITICAL_SINCE,
+                        )
+                        .await?;
+                    continue;
+                }
+            };
 
-        trace!(
-            "read updates from snapshot as_of {}: {:?}",
-            snap_ts,
-            updates
-        );
-        let listen_updates = Self::listen_through(listen, &as_of).await?;
-        trace!(
-            "read updates from listener as_of {} through {}: {:?}",
-            snap_ts,
-            self.read_ts,
-            listen_updates
-        );
-        updates.extend(listen_updates);
+            trace!(
+                "read updates from snapshot as_of {}: {:?}",
+                snap_ts,
+                updates
+            );
+            let listen_updates = Self::listen_through(listen, &as_of).await?;
+            trace!(
+                "read updates from listener as_of {} through {}: {:?}",
+                snap_ts,
+                self.read_ts,
+                listen_updates
+            );
+            updates.extend(listen_updates);
 
-        // Compute the contents of the collection as of `as_of`.
-        for (_, t, _) in updates.iter_mut() {
-            t.advance_by(as_of.borrow());
+            // Compute the contents of the collection as of `as_of`.
+            for (_, t, _) in updates.iter_mut() {
+                t.advance_by(as_of.borrow());
+            }
+            consolidate_updates(&mut updates);
+            return Ok((updates, as_of));
         }
-        consolidate_updates(&mut updates);
+    }
+
+    async fn read(&mut self) -> Result<HashMap<MaelstromKey, MaelstromVal>, MaelstromError> {
+        let (updates, as_of) = self.read_short_lived().await?;
 
         let long_lived = self.read_long_lived(&as_of).await;
         assert_eq!(&updates, &long_lived);
@@ -447,27 +520,44 @@ impl Transactor {
         (updates, res_ops)
     }
 
-    async fn advance_since(&mut self) {
+    async fn advance_since(&mut self) -> Result<(), MaelstromError> {
         // To keep things interesting, advance the since.
         const SINCE_LAG: u64 = 10;
         let new_since = Antichain::from_elem(self.read_ts.saturating_sub(SINCE_LAG));
 
-        let expected_opaque = self.since.opaque().clone();
-        let res = self
-            .since
-            .maybe_compare_and_downgrade_since(&expected_opaque, (&expected_opaque, &new_since))
-            .await;
-        match res {
-            Some(Ok(_latest_since)) => {
-                // Success!
-            }
-            Some(Err(actual_opaque)) => {
-                // For now, we don't perform any fencing of SinceHandles, and each handle
-                // should share the same opaque value.
-                assert_eq!(actual_opaque, expected_opaque);
-            }
-            None => {
-                panic!("should not no-op `maybe_compare_and_downgrade_since` during testing");
+        let mut expected_token = self.cads_token;
+        loop {
+            let res = self
+                .since
+                .maybe_compare_and_downgrade_since(&expected_token, (&self.cads_token, &new_since))
+                .await;
+            match res {
+                Some(Ok(latest_since)) => {
+                    // Success! If we weren't the last one to update since, but
+                    // only then, it might have advanced past our read_ts, so
+                    // forward read_ts to since_ts.
+                    if expected_token != self.cads_token {
+                        let since_ts = Self::extract_ts(&latest_since.0)?;
+                        if since_ts > self.read_ts {
+                            info!(
+                                "since was last updated by {}, forwarding our read_ts from {} to {}",
+                                expected_token, self.read_ts, since_ts
+                            );
+                            self.read_ts = since_ts;
+                        }
+                    }
+                    return Ok(());
+                }
+                Some(Err(actual_token)) => {
+                    debug!(
+                        "actual downgrade_since token {} didn't match expected {}, retrying",
+                        actual_token, expected_token,
+                    );
+                    expected_token = actual_token;
+                }
+                None => {
+                    panic!("should not no-op `maybe_compare_and_downgrade_since` during testing");
+                }
             }
         }
     }
@@ -552,7 +642,7 @@ impl Service for TransactorService {
         // Wire up the TransactorService.
         let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
         let client = PersistClient::new(config, blob, consensus, metrics, cpu_heavy_runtime)?;
-        let transactor = Transactor::new(&client, shard_id).await?;
+        let transactor = Transactor::new(&client, handle.node_id(), shard_id).await?;
         let service = TransactorService(Arc::new(Mutex::new(transactor)));
         Ok(service)
     }

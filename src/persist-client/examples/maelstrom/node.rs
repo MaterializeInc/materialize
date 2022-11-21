@@ -219,6 +219,11 @@ pub struct Handle {
 }
 
 impl Handle {
+    /// Returns this handle's NodeId.
+    pub fn node_id(&self) -> NodeId {
+        self.node_id.clone()
+    }
+
     /// Send a response to Maelstrom.
     ///
     /// `dest` should be the `src` of the response. To make a service request,
