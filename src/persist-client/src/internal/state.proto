@@ -45,12 +45,14 @@ message ProtoLeasedReaderState {
     uint64 seqno = 2;
     uint64 last_heartbeat_timestamp_ms = 3;
     uint64 lease_duration_ms = 4;
+    ProtoHandleDebugState debug = 5;
 }
 
 message ProtoCriticalReaderState {
     ProtoU64Antichain since = 1;
     int64 opaque = 2;
     string opaque_codec = 3;
+    ProtoHandleDebugState debug = 4;
 }
 
 message ProtoWriterState {
@@ -58,6 +60,11 @@ message ProtoWriterState {
     uint64 lease_duration_ms = 2;
     string most_recent_write_token = 3;
     ProtoU64Antichain most_recent_write_upper = 4;
+    ProtoHandleDebugState debug = 5;
+}
+
+message ProtoHandleDebugState {
+    string hostname = 1;
 }
 
 message ProtoStateRollup {
@@ -69,6 +76,7 @@ message ProtoStateRollup {
     string ts_codec = 4;
     string diff_codec = 5;
     uint64 seqno = 6;
+    string hostname = 14;
     uint64 last_gc_req = 10;
     map<uint64, string> rollups = 12;
 
@@ -80,6 +88,7 @@ message ProtoStateRollup {
 
 enum ProtoStateField {
     ROLLUPS = 0;
+    HOSTNAME = 7;
     LAST_GC_REQ = 1;
     LEASED_READERS = 2;
     CRITICAL_READERS = 6;

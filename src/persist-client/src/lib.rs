@@ -258,6 +258,8 @@ pub struct PersistConfig {
     pub reader_lease_duration: Duration,
     /// Length of time between critical handles' calls to downgrade since
     pub critical_downgrade_interval: Duration,
+    /// Hostname of this persist user. Stored in state and used for debugging.
+    pub hostname: String,
 }
 
 // Tuning inputs:
@@ -326,7 +328,23 @@ impl PersistConfig {
             writer_lease_duration: 60 * Duration::from_secs(60),
             reader_lease_duration: Self::DEFAULT_READ_LEASE_DURATION,
             critical_downgrade_interval: Duration::from_secs(30),
+            // TODO: This doesn't work with the process orchestrator. Instead,
+            // separate --log-prefix into --service-name and --enable-log-prefix
+            // options, where the first is always provided and the second is
+            // conditionally enabled by the process orchestrator.
+            hostname: std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_owned()),
         }
+    }
+
+    /// Returns a new instance of [PersistConfig] for tests.
+    #[cfg(test)]
+    pub fn new_for_tests() -> Self {
+        use mz_build_info::DUMMY_BUILD_INFO;
+        use mz_ore::now::SYSTEM_TIME;
+
+        let mut cfg = Self::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+        cfg.hostname = "tests".into();
+        cfg
     }
 }
 

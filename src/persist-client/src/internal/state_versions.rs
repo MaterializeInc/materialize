@@ -459,11 +459,15 @@ impl StateVersions {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64,
     {
-        let empty_state = State::new(self.cfg.build_version.clone(), shard_metrics.shard_id);
+        let empty_state = State::new(
+            self.cfg.build_version.clone(),
+            self.cfg.hostname.clone(),
+            shard_metrics.shard_id,
+        );
         let rollup_seqno = empty_state.seqno.next();
         let rollup_key = PartialRollupKey::new(rollup_seqno, &RollupId::new());
         let (applied, initial_state) = match empty_state
-            .clone_apply(&self.cfg.build_version, &mut |_, state| {
+            .clone_apply(&self.cfg, &mut |_, _, state| {
                 state.add_and_remove_rollups((rollup_seqno, &rollup_key), &[])
             }) {
             Continue(x) => x,

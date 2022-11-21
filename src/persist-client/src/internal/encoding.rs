@@ -27,11 +27,11 @@ use crate::critical::CriticalReaderId;
 use crate::error::CodecMismatch;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::state::{
-    CriticalReaderState, HollowBatch, HollowBatchPart, IdempotencyToken, LeasedReaderState,
-    OpaqueState, ProtoCriticalReaderState, ProtoHollowBatch, ProtoHollowBatchPart,
-    ProtoLeasedReaderState, ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType,
-    ProtoStateFieldDiffs, ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description,
-    ProtoWriterState, State, StateCollections, WriterState,
+    CriticalReaderState, HandleDebugState, HollowBatch, HollowBatchPart, IdempotencyToken,
+    LeasedReaderState, OpaqueState, ProtoCriticalReaderState, ProtoHandleDebugState,
+    ProtoHollowBatch, ProtoHollowBatchPart, ProtoLeasedReaderState, ProtoStateDiff,
+    ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoStateRollup, ProtoTrace,
+    ProtoU64Antichain, ProtoU64Description, ProtoWriterState, State, StateCollections, WriterState,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, StateDiff, StateFieldDiff, StateFieldValDiff,
@@ -218,6 +218,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
             seqno_to,
             latest_rollup_key,
             rollups,
+            hostname,
             last_gc_req,
             leased_readers,
             critical_readers,
@@ -227,6 +228,13 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
         } = self;
 
         let mut field_diffs = ProtoStateFieldDiffs::default();
+        field_diffs_into_proto(
+            ProtoStateField::Hostname,
+            hostname,
+            &mut field_diffs,
+            |()| Vec::new(),
+            |v| v.into_proto().encode_to_vec(),
+        );
         field_diffs_into_proto(
             ProtoStateField::LastGcReq,
             last_gc_req,
@@ -311,6 +319,12 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
             for field_diff in field_diffs.iter() {
                 let (field, diff) = field_diff?;
                 match field {
+                    ProtoStateField::Hostname => field_diff_into_rust::<(), String, _, _, _, _>(
+                        diff,
+                        &mut state_diff.hostname,
+                        |()| Ok(()),
+                        |v| v.into_rust(),
+                    )?,
                     ProtoStateField::LastGcReq => field_diff_into_rust::<(), u64, _, _, _, _>(
                         diff,
                         &mut state_diff.last_gc_req,
@@ -502,6 +516,7 @@ where
             applier_version: self.applier_version.to_string(),
             shard_id: self.shard_id.into_proto(),
             seqno: self.seqno.into_proto(),
+            hostname: self.hostname.into_proto(),
             key_codec: K::codec_name(),
             val_codec: V::codec_name(),
             ts_codec: T::codec_name(),
@@ -610,6 +625,7 @@ where
             applier_version,
             shard_id: x.shard_id.into_rust()?,
             seqno: x.seqno.into_rust()?,
+            hostname: x.hostname,
             collections,
             _phantom: PhantomData,
         }))
@@ -662,6 +678,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoLeasedReaderState> for LeasedReaderSt
             since: Some(self.since.into_proto()),
             last_heartbeat_timestamp_ms: self.last_heartbeat_timestamp_ms.into_proto(),
             lease_duration_ms: self.lease_duration_ms.into_proto(),
+            debug: Some(self.debug.into_proto()),
         }
     }
 
@@ -676,6 +693,9 @@ impl<T: Timestamp + Codec64> RustType<ProtoLeasedReaderState> for LeasedReaderSt
                 u64::try_from(PersistConfig::DEFAULT_READ_LEASE_DURATION.as_millis())
                     .expect("lease duration as millis should fit within u64");
         }
+        // MIGRATION: If debug is empty, then the proto field was missing and we
+        // need to fill in a default.
+        let debug = proto.debug.unwrap_or_default().into_rust()?;
         Ok(LeasedReaderState {
             seqno: proto.seqno.into_rust()?,
             since: proto
@@ -683,6 +703,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoLeasedReaderState> for LeasedReaderSt
                 .into_rust_if_some("ProtoLeasedReaderState::since")?,
             last_heartbeat_timestamp_ms: proto.last_heartbeat_timestamp_ms.into_rust()?,
             lease_duration_ms,
+            debug,
         })
     }
 }
@@ -693,16 +714,21 @@ impl<T: Timestamp + Codec64> RustType<ProtoCriticalReaderState> for CriticalRead
             since: Some(self.since.into_proto()),
             opaque: i64::from_le_bytes(self.opaque.0),
             opaque_codec: self.opaque_codec.clone(),
+            debug: Some(self.debug.into_proto()),
         }
     }
 
     fn from_proto(proto: ProtoCriticalReaderState) -> Result<Self, TryFromProtoError> {
+        // MIGRATION: If debug is empty, then the proto field was missing and we
+        // need to fill in a default.
+        let debug = proto.debug.unwrap_or_default().into_rust()?;
         Ok(CriticalReaderState {
             since: proto
                 .since
                 .into_rust_if_some("ProtoCriticalReaderState::since")?,
             opaque: OpaqueState(i64::to_le_bytes(proto.opaque)),
             opaque_codec: proto.opaque_codec,
+            debug,
         })
     }
 }
@@ -714,6 +740,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoWriterState> for WriterState<T> {
             lease_duration_ms: self.lease_duration_ms.into_proto(),
             most_recent_write_token: self.most_recent_write_token.into_proto(),
             most_recent_write_upper: Some(self.most_recent_write_upper.into_proto()),
+            debug: Some(self.debug.into_proto()),
         }
     }
 
@@ -732,11 +759,29 @@ impl<T: Timestamp + Codec64> RustType<ProtoWriterState> for WriterState<T> {
             Some(x) => x.into_rust()?,
             None => Antichain::from_elem(T::minimum()),
         };
+        // MIGRATION: If debug is empty, then the proto field was missing and we
+        // need to fill in a default.
+        let debug = proto.debug.unwrap_or_default().into_rust()?;
         Ok(WriterState {
             last_heartbeat_timestamp_ms: proto.last_heartbeat_timestamp_ms.into_rust()?,
             lease_duration_ms: proto.lease_duration_ms.into_rust()?,
             most_recent_write_token,
             most_recent_write_upper,
+            debug,
+        })
+    }
+}
+
+impl RustType<ProtoHandleDebugState> for HandleDebugState {
+    fn into_proto(&self) -> ProtoHandleDebugState {
+        ProtoHandleDebugState {
+            hostname: self.hostname.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoHandleDebugState) -> Result<Self, TryFromProtoError> {
+        Ok(HandleDebugState {
+            hostname: proto.hostname,
         })
     }
 }
@@ -866,7 +911,7 @@ mod tests {
     use mz_persist_types::Codec;
 
     use crate::internal::paths::PartialRollupKey;
-    use crate::internal::state::State;
+    use crate::internal::state::{HandleDebugState, State};
     use crate::internal::state_diff::StateDiff;
     use crate::ShardId;
 
@@ -879,7 +924,7 @@ mod tests {
         let v3 = semver::Version::new(3, 0, 0);
 
         // Code version v2 evaluates and writes out some State.
-        let state = State::<(), (), u64, i64>::new(v2.clone(), ShardId::new());
+        let state = State::<(), (), u64, i64>::new(v2.clone(), "".to_owned(), ShardId::new());
         let mut buf = Vec::new();
         state.encode(&mut buf);
 
@@ -962,6 +1007,9 @@ mod tests {
             seqno: SeqNo(1),
             since: Antichain::from_elem(2u64),
             last_heartbeat_timestamp_ms: 3,
+            debug: HandleDebugState {
+                hostname: "host".to_owned(),
+            },
             // Old ProtoReaderState had no lease_duration_ms field
             lease_duration_ms: 0,
         };
@@ -983,12 +1031,18 @@ mod tests {
             // most_recent_write_upper.
             most_recent_write_token: "".into(),
             most_recent_write_upper: None,
+            debug: Some(ProtoHandleDebugState {
+                hostname: "host".to_owned(),
+            }),
         };
         let expected = WriterState {
             last_heartbeat_timestamp_ms: proto.last_heartbeat_timestamp_ms,
             lease_duration_ms: proto.lease_duration_ms,
             most_recent_write_token: IdempotencyToken::SENTINEL,
             most_recent_write_upper: Antichain::from_elem(0),
+            debug: HandleDebugState {
+                hostname: "host".to_owned(),
+            },
         };
         assert_eq!(<WriterState<u64>>::from_proto(proto).unwrap(), expected);
     }
