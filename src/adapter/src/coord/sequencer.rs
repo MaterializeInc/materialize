@@ -1145,7 +1145,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 // Advance the new table to a timestamp higher than the current read timestamp so
                 // that the table is immediately readable.
-                let upper = self.get_local_read_ts().step_forward();
+                let upper = since_ts.step_forward();
                 let appends = vec![(table_id, Vec::new(), upper)];
                 self.controller
                     .storage
