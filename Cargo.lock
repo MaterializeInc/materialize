@@ -1009,27 +1009,37 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "3.2.20"
+version = "3.2.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23b71c3ce99b7611011217b366d923f1d0a7e07a92bb2dbf1e84508c673ca3bd"
+checksum = "71655c45cb9845d3270c9d6df84ebe72b4dad3c2ba3f7023ad47c144e4e473a5"
 dependencies = [
- "atty",
  "bitflags",
- "clap_derive",
- "clap_lex",
+ "clap_lex 0.2.2",
  "indexmap",
- "once_cell",
- "strsim",
- "termcolor",
- "terminal_size",
  "textwrap",
 ]
 
 [[package]]
-name = "clap_derive"
-version = "3.2.18"
+name = "clap"
+version = "4.0.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea0c8bce528c4be4da13ea6fead8965e95b6073585a2f05204bd8f4119f82a65"
+checksum = "2148adefda54e14492fb9bddcc600b4344c5d1a3123bd666dcb939c6f0e0e57e"
+dependencies = [
+ "atty",
+ "bitflags",
+ "clap_derive",
+ "clap_lex 0.3.0",
+ "once_cell",
+ "strsim",
+ "termcolor",
+ "terminal_size 0.2.2",
+]
+
+[[package]]
+name = "clap_derive"
+version = "4.0.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0177313f9f02afc995627906bbd8967e2be069f5261954222dac78290c2b9014"
 dependencies = [
  "heck",
  "proc-macro-error",
@@ -1043,6 +1053,15 @@ name = "clap_lex"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5538cd660450ebeb4234cfecf8f2284b844ffc4c50531e66d584ad5b91293613"
+dependencies = [
+ "os_str_bytes",
+]
+
+[[package]]
+name = "clap_lex"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d4198f73e42b4936b35b5bb248d81d2b595ecb170da0bac7655c54eedfa8da8"
 dependencies = [
  "os_str_bytes",
 ]
@@ -1103,7 +1122,7 @@ dependencies = [
  "encode_unicode",
  "libc",
  "once_cell",
- "terminal_size",
+ "terminal_size 0.1.17",
  "unicode-width",
  "winapi",
 ]
@@ -1255,7 +1274,7 @@ dependencies = [
  "atty",
  "cast",
  "ciborium",
- "clap",
+ "clap 3.2.23",
  "criterion-plot",
  "futures",
  "itertools",
@@ -3134,7 +3153,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "axum",
- "clap",
+ "clap 4.0.26",
  "dirs",
  "indicatif",
  "mz-ore",
@@ -3258,7 +3277,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "chrono",
- "clap",
+ "clap 4.0.26",
  "hex",
  "mz-ore",
  "mz-test-util",
@@ -3335,7 +3354,7 @@ dependencies = [
  "async-trait",
  "axum",
  "bytesize",
- "clap",
+ "clap 4.0.26",
  "crossbeam-channel",
  "dec",
  "differential-dataflow",
@@ -3441,7 +3460,7 @@ dependencies = [
  "bytes",
  "cc",
  "chrono",
- "clap",
+ "clap 4.0.26",
  "datadriven",
  "fail",
  "fallible-iterator",
@@ -3648,7 +3667,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "chrono",
- "clap",
+ "clap 4.0.26",
  "crossbeam",
  "mz-avro",
  "mz-ccsr",
@@ -3756,7 +3775,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "clap",
+ "clap 4.0.26",
  "futures",
  "k8s-openapi",
  "kube",
@@ -3800,7 +3819,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "clap",
+ "clap 4.0.26",
  "futures-core",
  "http",
  "humantime",
@@ -3821,7 +3840,7 @@ dependencies = [
  "atty",
  "bytes",
  "chrono",
- "clap",
+ "clap 4.0.26",
  "console-subscriber",
  "ctor",
  "either",
@@ -3860,7 +3879,7 @@ dependencies = [
  "aws-sdk-kinesis",
  "aws-types",
  "bytes",
- "clap",
+ "clap 4.0.26",
  "futures",
  "mz-kinesis-util",
  "mz-ore",
@@ -3922,7 +3941,7 @@ dependencies = [
  "async-trait",
  "axum",
  "bytes",
- "clap",
+ "clap 4.0.26",
  "criterion",
  "datadriven",
  "differential-dataflow",
@@ -3993,7 +4012,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "bytes",
- "clap",
+ "clap 4.0.26",
  "datadriven",
  "fallible-iterator",
  "mz-ore",
@@ -4172,7 +4191,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-s3",
  "bytefmt",
- "clap",
+ "clap 4.0.26",
  "futures",
  "indicatif",
  "mz-ore",
@@ -4209,7 +4228,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
- "clap",
+ "clap 4.0.26",
  "crossbeam-channel",
  "futures",
  "http",
@@ -4304,7 +4323,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "chrono",
- "clap",
+ "clap 4.0.26",
  "fallible-iterator",
  "futures",
  "itertools",
@@ -4384,7 +4403,7 @@ name = "mz-stash-debug"
 version = "0.28.0-dev"
 dependencies = [
  "anyhow",
- "clap",
+ "clap 4.0.26",
  "mz-adapter",
  "mz-build-info",
  "mz-ore",
@@ -4411,7 +4430,7 @@ dependencies = [
  "aws-sdk-sqs",
  "axum",
  "chrono",
- "clap",
+ "clap 4.0.26",
  "crossbeam-channel",
  "csv-core",
  "datadriven",
@@ -4558,7 +4577,7 @@ dependencies = [
  "byteorder",
  "bytes",
  "chrono",
- "clap",
+ "clap 4.0.26",
  "flate2",
  "futures",
  "globset",
@@ -6673,13 +6692,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "textwrap"
-version = "0.15.0"
+name = "terminal_size"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1141d4d61095b28419e22cb0bbf02755f5e54e0526f97f1e3d1d160e60885fb"
+checksum = "40ca90c434fd12083d1a6bdcbe9f92a14f96c8a1ba600ba451734ac334521f7a"
 dependencies = [
- "terminal_size",
+ "rustix",
+ "windows-sys",
 ]
+
+[[package]]
+name = "textwrap"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "222a222a5bfe1bba4a77b45ec488a741b3cb8872e5e499451fd7d0129c9c7c3d"
 
 [[package]]
 name = "thiserror"
