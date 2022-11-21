@@ -4877,8 +4877,9 @@ checksum = "ebcec7c9c2a95cacc7cd0ecb89d8a8454eca13906f6deb55258ffff0adeb9405"
 
 [[package]]
 name = "open"
-version = "3.1.0"
-source = "git+https://github.com/Byron/open-rs.git#37bf011b68a5579254341de92e4d9b27ce71803b"
+version = "3.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2078c0039e6a54a0c42c28faa984e115fb4c2d5bf2208f77d1961002df8576f8"
 dependencies = [
  "pathdiff",
  "windows-sys",
