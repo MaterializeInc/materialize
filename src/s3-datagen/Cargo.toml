@@ -12,7 +12,7 @@ aws-config = { version = "0.51.0", default-features = false, features = ["native
 aws-sdk-s3 = { version = "0.21.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 bytefmt = "0.1.7"
 clap = { version = "3.2.20", features = ["derive"] }
-futures = "0.3.24"
+futures = "0.3.25"
 indicatif = "0.17.2"
 mz-ore = { path = "../ore" }
 tokio = { version = "1.22.0", features = ["macros", "net", "rt", "time"] }

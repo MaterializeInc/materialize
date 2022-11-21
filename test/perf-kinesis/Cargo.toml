@@ -13,7 +13,7 @@ aws-sdk-kinesis = { version = "0.21.0", default-features = false, features = ["n
 aws-types = "0.51.0"
 bytes = "1.2.1"
 clap = { version = "3.2.20", features = ["derive"] }
-futures = "0.3.24"
+futures = "0.3.25"
 mz-kinesis-util = { path = "../../src/kinesis-util" }
 mz-ore = { path = "../../src/ore", features = ["task"] }
 mz-test-util = { path = "../test-util" }
