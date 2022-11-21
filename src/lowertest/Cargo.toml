@@ -11,7 +11,7 @@ mz-lowertest-derive = { path = "../lowertest-derive" }
 mz-ore = { path = "../ore" }
 proc-macro2 = "1.0.47"
 serde = { version = "1.0.147", features = ["derive"] }
-serde_json = "1.0.86"
+serde_json = "1.0.88"
 
 [dev-dependencies]
 anyhow = "1.0.65"
