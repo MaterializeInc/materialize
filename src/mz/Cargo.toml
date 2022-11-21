@@ -8,16 +8,16 @@ publish = false
 
 
 [dependencies]
-serde = { version = "1.0.147", features = ["derive"] }
-clap = { version = "3.2.20", features = [ "derive" ] }
-tokio = { version = "1.22.0", features = ["full"] }
-open = { git = "https://github.com/Byron/open-rs.git" }
-axum = "0.5.17"
-rpassword = "7.1"
-reqwest = { version = "0.11", features = ["blocking", "json"] }
-toml = "0.5.9"
-dirs = "4.0.0"
-mz-ore = { path = "../ore", features = ["task"] }
 anyhow = "1.0.66"
+axum = "0.5.17"
+clap = { version = "3.2.20", features = [ "derive" ] }
+dirs = "4.0.0"
 indicatif = "0.17.2"
+mz-ore = { path = "../ore", features = ["task"] }
+open = "3.2.0"
+reqwest = { version = "0.11", features = ["blocking", "json"] }
+rpassword = "7.1.0"
+serde = { version = "1.0.147", features = ["derive"] }
+tokio = { version = "1.22.0", features = ["full"] }
+toml = "0.5.9"
 uuid = "1.2.2"
