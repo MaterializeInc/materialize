@@ -19,7 +19,7 @@ tracing = "0.1.37"
 typemap_rev = "0.3.0"
 
 [dev-dependencies]
-anyhow = "1.0.65"
+anyhow = "1.0.66"
 datadriven = "0.6.0"
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-lowertest = { path = "../lowertest" }

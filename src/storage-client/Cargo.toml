@@ -7,7 +7,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.65"
+anyhow = "1.0.66"
 async-stream = "0.3.3"
 async-trait = "0.1.57"
 aws-config = { version = "0.51.0", default-features = false, features = ["native-tls"] }
