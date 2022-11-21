@@ -316,17 +316,26 @@ mod tests {
             Datum::Int64(3),
             Datum::Float32(4f32.into()),
             Datum::Float64(5f64.into()),
-            Datum::Date(NaiveDate::from_ymd(6, 7, 8).try_into().unwrap()),
-            Datum::Time(NaiveTime::from_hms(9, 10, 11)),
+            Datum::Date(
+                NaiveDate::from_ymd_opt(6, 7, 8)
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
+            ),
+            Datum::Time(NaiveTime::from_hms_opt(9, 10, 11).unwrap()),
             Datum::Timestamp(
                 CheckedTimestamp::from_timestamplike(
-                    NaiveDate::from_ymd(12, 13 % 12, 14).and_time(NaiveTime::from_hms(15, 16, 17)),
+                    NaiveDate::from_ymd_opt(12, 13 % 12, 14)
+                        .unwrap()
+                        .and_time(NaiveTime::from_hms_opt(15, 16, 17).unwrap()),
                 )
                 .unwrap(),
             ),
             Datum::TimestampTz(
                 CheckedTimestamp::from_timestamplike(DateTime::from_utc(
-                    NaiveDate::from_ymd(18, 19 % 12, 20).and_time(NaiveTime::from_hms(21, 22, 23)),
+                    NaiveDate::from_ymd_opt(18, 19 % 12, 20)
+                        .unwrap()
+                        .and_time(NaiveTime::from_hms_opt(21, 22, 23).unwrap()),
                     Utc,
                 ))
                 .unwrap(),

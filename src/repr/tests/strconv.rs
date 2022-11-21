@@ -16,17 +16,20 @@ use mz_repr::strconv;
 
 #[test]
 fn test_parse_date() {
-    run_test_parse_date("000203", NaiveDate::from_ymd(2000, 2, 3));
-    run_test_parse_date("690203", NaiveDate::from_ymd(2069, 2, 3));
-    run_test_parse_date("700203", NaiveDate::from_ymd(1970, 2, 3));
-    run_test_parse_date("010203", NaiveDate::from_ymd(2001, 2, 3));
-    run_test_parse_date("0010203", NaiveDate::from_ymd(1, 2, 3));
-    run_test_parse_date("00010203", NaiveDate::from_ymd(1, 2, 3));
-    run_test_parse_date("20010203", NaiveDate::from_ymd(2001, 2, 3));
-    run_test_parse_date("99990203", NaiveDate::from_ymd(9999, 2, 3));
-    run_test_parse_date("2001-02-03", NaiveDate::from_ymd(2001, 2, 3));
-    run_test_parse_date("2001 02 03", NaiveDate::from_ymd(2001, 2, 3));
-    run_test_parse_date("2001-02-03 04:05:06.789", NaiveDate::from_ymd(2001, 2, 3));
+    run_test_parse_date("000203", NaiveDate::from_ymd_opt(2000, 2, 3).unwrap());
+    run_test_parse_date("690203", NaiveDate::from_ymd_opt(2069, 2, 3).unwrap());
+    run_test_parse_date("700203", NaiveDate::from_ymd_opt(1970, 2, 3).unwrap());
+    run_test_parse_date("010203", NaiveDate::from_ymd_opt(2001, 2, 3).unwrap());
+    run_test_parse_date("0010203", NaiveDate::from_ymd_opt(1, 2, 3).unwrap());
+    run_test_parse_date("00010203", NaiveDate::from_ymd_opt(1, 2, 3).unwrap());
+    run_test_parse_date("20010203", NaiveDate::from_ymd_opt(2001, 2, 3).unwrap());
+    run_test_parse_date("99990203", NaiveDate::from_ymd_opt(9999, 2, 3).unwrap());
+    run_test_parse_date("2001-02-03", NaiveDate::from_ymd_opt(2001, 2, 3).unwrap());
+    run_test_parse_date("2001 02 03", NaiveDate::from_ymd_opt(2001, 2, 3).unwrap());
+    run_test_parse_date(
+        "2001-02-03 04:05:06.789",
+        NaiveDate::from_ymd_opt(2001, 2, 3).unwrap(),
+    );
     fn run_test_parse_date(s: &str, n: NaiveDate) {
         assert_eq!(NaiveDate::from(strconv::parse_date(s).unwrap()), n);
     }
@@ -98,14 +101,20 @@ fn test_parse_date_errors() {
 fn test_parse_time() {
     run_test_parse_time(
         "01:02:03.456",
-        NaiveTime::from_hms_nano(1, 2, 3, 456_000_000),
+        NaiveTime::from_hms_nano_opt(1, 2, 3, 456_000_000).unwrap(),
     );
-    run_test_parse_time("01:02:03", NaiveTime::from_hms(1, 2, 3));
-    run_test_parse_time("02:03.456", NaiveTime::from_hms_nano(0, 2, 3, 456_000_000));
-    run_test_parse_time("01:02", NaiveTime::from_hms(1, 2, 0));
+    run_test_parse_time("01:02:03", NaiveTime::from_hms_opt(1, 2, 3).unwrap());
+    run_test_parse_time(
+        "02:03.456",
+        NaiveTime::from_hms_nano_opt(0, 2, 3, 456_000_000).unwrap(),
+    );
+    run_test_parse_time("01:02", NaiveTime::from_hms_opt(1, 2, 0).unwrap());
 
     // Regression for #6272.
-    run_test_parse_time("9::60", NaiveTime::from_hms_nano(9, 0, 59, 1_000_000_000));
+    run_test_parse_time(
+        "9::60",
+        NaiveTime::from_hms_nano_opt(9, 0, 59, 1_000_000_000).unwrap(),
+    );
 
     fn run_test_parse_time(s: &str, t: NaiveTime) {
         assert_eq!(strconv::parse_time(s).unwrap(), t);
@@ -149,23 +158,38 @@ fn test_parse_timestamp() {
 
     run_test_parse_timestamp(
         "2001-02-03 04:05:06.789",
-        NaiveDate::from_ymd(2001, 2, 3).and_hms_nano(4, 5, 6, 789_000_000),
+        NaiveDate::from_ymd_opt(2001, 2, 3)
+            .unwrap()
+            .and_hms_nano_opt(4, 5, 6, 789_000_000)
+            .unwrap(),
     );
     run_test_parse_timestamp(
         "2001-02-03",
-        NaiveDate::from_ymd(2001, 2, 3).and_hms(0, 0, 0),
+        NaiveDate::from_ymd_opt(2001, 2, 3)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap(),
     );
     run_test_parse_timestamp(
         "2001-02-03 01:02:03",
-        NaiveDate::from_ymd(2001, 2, 3).and_hms(1, 2, 3),
+        NaiveDate::from_ymd_opt(2001, 2, 3)
+            .unwrap()
+            .and_hms_opt(1, 2, 3)
+            .unwrap(),
     );
     run_test_parse_timestamp(
         "2001-02-03 02:03.456",
-        NaiveDate::from_ymd(2001, 2, 3).and_hms_nano(0, 2, 3, 456_000_000),
+        NaiveDate::from_ymd_opt(2001, 2, 3)
+            .unwrap()
+            .and_hms_nano_opt(0, 2, 3, 456_000_000)
+            .unwrap(),
     );
     run_test_parse_timestamp(
         "2001-02-03 01:02",
-        NaiveDate::from_ymd(2001, 2, 3).and_hms(1, 2, 0),
+        NaiveDate::from_ymd_opt(2001, 2, 3)
+            .unwrap()
+            .and_hms_opt(1, 2, 0)
+            .unwrap(),
     );
 
     fn run_test_parse_timestamp(s: &str, ts: NaiveDateTime) {
@@ -253,9 +277,11 @@ fn test_parse_timestamptz() {
     for test in test_cases.iter() {
         let actual = strconv::parse_timestamptz(test.0).unwrap();
 
-        let expected = NaiveDate::from_ymd(test.1, test.2, test.3)
-            .and_hms_nano(test.4, test.5, test.6, test.7);
-        let offset = FixedOffset::east(test.8);
+        let expected = NaiveDate::from_ymd_opt(test.1, test.2, test.3)
+            .unwrap()
+            .and_hms_nano_opt(test.4, test.5, test.6, test.7)
+            .unwrap();
+        let offset = FixedOffset::east_opt(test.8).unwrap();
         let dt_fixed_offset = offset.from_local_datetime(&expected).earliest().unwrap();
         let expected = CheckedTimestamp::from_timestamplike(DateTime::<Utc>::from_utc(
             dt_fixed_offset.naive_utc(),
@@ -508,16 +534,22 @@ fn miri_test_format_list() {
 
 #[test]
 fn test_format_date() {
-    run_test_format_date(NaiveDate::from_ymd(20000, 2, 3), "20000-02-03");
-    run_test_format_date(NaiveDate::from_ymd(2000, 2, 3), "2000-02-03");
-    run_test_format_date(NaiveDate::from_ymd(200, 2, 3), "0200-02-03");
-    run_test_format_date(NaiveDate::from_ymd(20, 2, 3), "0020-02-03");
-    run_test_format_date(NaiveDate::from_ymd(2, 2, 3), "0002-02-03");
-    run_test_format_date(NaiveDate::from_ymd(0, 2, 3), "0001-02-03 BC");
-    run_test_format_date(NaiveDate::from_ymd(-1, 2, 3), "0002-02-03 BC");
-    run_test_format_date(NaiveDate::from_ymd(-19, 2, 3), "0020-02-03 BC");
-    run_test_format_date(NaiveDate::from_ymd(-199, 2, 3), "0200-02-03 BC");
-    run_test_format_date(NaiveDate::from_ymd(-1999, 2, 3), "2000-02-03 BC");
+    run_test_format_date(NaiveDate::from_ymd_opt(20000, 2, 3).unwrap(), "20000-02-03");
+    run_test_format_date(NaiveDate::from_ymd_opt(2000, 2, 3).unwrap(), "2000-02-03");
+    run_test_format_date(NaiveDate::from_ymd_opt(200, 2, 3).unwrap(), "0200-02-03");
+    run_test_format_date(NaiveDate::from_ymd_opt(20, 2, 3).unwrap(), "0020-02-03");
+    run_test_format_date(NaiveDate::from_ymd_opt(2, 2, 3).unwrap(), "0002-02-03");
+    run_test_format_date(NaiveDate::from_ymd_opt(0, 2, 3).unwrap(), "0001-02-03 BC");
+    run_test_format_date(NaiveDate::from_ymd_opt(-1, 2, 3).unwrap(), "0002-02-03 BC");
+    run_test_format_date(NaiveDate::from_ymd_opt(-19, 2, 3).unwrap(), "0020-02-03 BC");
+    run_test_format_date(
+        NaiveDate::from_ymd_opt(-199, 2, 3).unwrap(),
+        "0200-02-03 BC",
+    );
+    run_test_format_date(
+        NaiveDate::from_ymd_opt(-1999, 2, 3).unwrap(),
+        "2000-02-03 BC",
+    );
 
     fn run_test_format_date(n: NaiveDate, e: &str) {
         let mut buf = String::new();
@@ -529,71 +561,122 @@ fn test_format_date() {
 #[test]
 fn test_format_timestamp() {
     run_test_format_timestamp(
-        NaiveDate::from_ymd(20000, 2, 3).and_hms(4, 5, 6),
+        NaiveDate::from_ymd_opt(20000, 2, 3)
+            .unwrap()
+            .and_hms_opt(4, 5, 6)
+            .unwrap(),
         "20000-02-03 04:05:06",
     );
     run_test_format_timestamp(
-        NaiveDate::from_ymd(2000, 2, 3).and_hms(4, 5, 6),
+        NaiveDate::from_ymd_opt(2000, 2, 3)
+            .unwrap()
+            .and_hms_opt(4, 5, 6)
+            .unwrap(),
         "2000-02-03 04:05:06",
     );
     run_test_format_timestamp(
-        NaiveDate::from_ymd(2000, 2, 3).and_hms_nano(4, 5, 6, 789_000_000),
+        NaiveDate::from_ymd_opt(2000, 2, 3)
+            .unwrap()
+            .and_hms_nano_opt(4, 5, 6, 789_000_000)
+            .unwrap(),
         "2000-02-03 04:05:06.789",
     );
     run_test_format_timestamp(
-        NaiveDate::from_ymd(200, 2, 3).and_hms(4, 5, 6),
+        NaiveDate::from_ymd_opt(200, 2, 3)
+            .unwrap()
+            .and_hms_opt(4, 5, 6)
+            .unwrap(),
         "0200-02-03 04:05:06",
     );
     run_test_format_timestamp(
-        NaiveDate::from_ymd(200, 2, 3).and_hms_nano(4, 5, 6, 789_000_000),
+        NaiveDate::from_ymd_opt(200, 2, 3)
+            .unwrap()
+            .and_hms_nano_opt(4, 5, 6, 789_000_000)
+            .unwrap(),
         "0200-02-03 04:05:06.789",
     );
     run_test_format_timestamp(
-        NaiveDate::from_ymd(20, 2, 3).and_hms(4, 5, 6),
+        NaiveDate::from_ymd_opt(20, 2, 3)
+            .unwrap()
+            .and_hms_opt(4, 5, 6)
+            .unwrap(),
         "0020-02-03 04:05:06",
     );
     run_test_format_timestamp(
-        NaiveDate::from_ymd(20, 2, 3).and_hms_nano(4, 5, 6, 789_000_000),
+        NaiveDate::from_ymd_opt(20, 2, 3)
+            .unwrap()
+            .and_hms_nano_opt(4, 5, 6, 789_000_000)
+            .unwrap(),
         "0020-02-03 04:05:06.789",
     );
     run_test_format_timestamp(
-        NaiveDate::from_ymd(2, 2, 3).and_hms(4, 5, 6),
+        NaiveDate::from_ymd_opt(2, 2, 3)
+            .unwrap()
+            .and_hms_opt(4, 5, 6)
+            .unwrap(),
         "0002-02-03 04:05:06",
     );
     run_test_format_timestamp(
-        NaiveDate::from_ymd(2, 2, 3).and_hms_nano(4, 5, 6, 789_000_000),
+        NaiveDate::from_ymd_opt(2, 2, 3)
+            .unwrap()
+            .and_hms_nano_opt(4, 5, 6, 789_000_000)
+            .unwrap(),
         "0002-02-03 04:05:06.789",
     );
     run_test_format_timestamp(
-        NaiveDate::from_ymd(0, 2, 3).and_hms(4, 5, 6),
+        NaiveDate::from_ymd_opt(0, 2, 3)
+            .unwrap()
+            .and_hms_opt(4, 5, 6)
+            .unwrap(),
         "0001-02-03 04:05:06 BC",
     );
     run_test_format_timestamp(
-        NaiveDate::from_ymd(-1, 2, 3).and_hms(4, 5, 6),
+        NaiveDate::from_ymd_opt(-1, 2, 3)
+            .unwrap()
+            .and_hms_opt(4, 5, 6)
+            .unwrap(),
         "0002-02-03 04:05:06 BC",
     );
     run_test_format_timestamp(
-        NaiveDate::from_ymd(-19, 2, 3).and_hms(4, 5, 6),
+        NaiveDate::from_ymd_opt(-19, 2, 3)
+            .unwrap()
+            .and_hms_opt(4, 5, 6)
+            .unwrap(),
         "0020-02-03 04:05:06 BC",
     );
     run_test_format_timestamp(
-        NaiveDate::from_ymd(-19, 2, 3).and_hms_nano(4, 5, 6, 789_000_000),
+        NaiveDate::from_ymd_opt(-19, 2, 3)
+            .unwrap()
+            .and_hms_nano_opt(4, 5, 6, 789_000_000)
+            .unwrap(),
         "0020-02-03 04:05:06.789 BC",
     );
     run_test_format_timestamp(
-        NaiveDate::from_ymd(-199, 2, 3).and_hms(4, 5, 6),
+        NaiveDate::from_ymd_opt(-199, 2, 3)
+            .unwrap()
+            .and_hms_opt(4, 5, 6)
+            .unwrap(),
         "0200-02-03 04:05:06 BC",
     );
     run_test_format_timestamp(
-        NaiveDate::from_ymd(-199, 2, 3).and_hms_nano(4, 5, 6, 789_000_000),
+        NaiveDate::from_ymd_opt(-199, 2, 3)
+            .unwrap()
+            .and_hms_nano_opt(4, 5, 6, 789_000_000)
+            .unwrap(),
         "0200-02-03 04:05:06.789 BC",
     );
     run_test_format_timestamp(
-        NaiveDate::from_ymd(-1999, 2, 3).and_hms(4, 5, 6),
+        NaiveDate::from_ymd_opt(-1999, 2, 3)
+            .unwrap()
+            .and_hms_opt(4, 5, 6)
+            .unwrap(),
         "2000-02-03 04:05:06 BC",
     );
     run_test_format_timestamp(
-        NaiveDate::from_ymd(-1999, 2, 3).and_hms_nano(4, 5, 6, 789_000_000),
+        NaiveDate::from_ymd_opt(-1999, 2, 3)
+            .unwrap()
+            .and_hms_nano_opt(4, 5, 6, 789_000_000)
+            .unwrap(),
         "2000-02-03 04:05:06.789 BC",
     );
 
@@ -679,7 +762,10 @@ fn test_format_timestamptz() {
         nano: u32,
     ) -> DateTime<Utc> {
         DateTime::from_utc(
-            NaiveDate::from_ymd(year, month, day).and_hms_nano(hour, min, sec, nano),
+            NaiveDate::from_ymd_opt(year, month, day)
+                .unwrap()
+                .and_hms_nano_opt(hour, min, sec, nano)
+                .unwrap(),
             Utc,
         )
     }

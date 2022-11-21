@@ -32,14 +32,15 @@ pub fn pack_status_row(
     error: Option<&str>,
     ts: u64,
 ) -> Row {
-    let timestamp = NaiveDateTime::from_timestamp(
+    let timestamp = NaiveDateTime::from_timestamp_opt(
         (ts / 1000)
             .try_into()
             .expect("timestamp seconds does not fit into i64"),
         (ts % 1000 * 1_000_000)
             .try_into()
             .expect("timestamp millis does not fit into a u32"),
-    );
+    )
+    .unwrap();
     let timestamp = Datum::TimestampTz(
         DateTime::from_utc(timestamp, Utc)
             .try_into()

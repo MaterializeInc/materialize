@@ -379,13 +379,13 @@ fn read_date(data: &[u8], offset: &mut usize) -> Date {
 fn read_naive_date(data: &[u8], offset: &mut usize) -> NaiveDate {
     let year = i32::from_le_bytes(read_byte_array(data, offset));
     let ordinal = u32::from_le_bytes(read_byte_array(data, offset));
-    NaiveDate::from_yo(year, ordinal)
+    NaiveDate::from_yo_opt(year, ordinal).unwrap()
 }
 
 fn read_time(data: &[u8], offset: &mut usize) -> NaiveTime {
     let secs = u32::from_le_bytes(read_byte_array(data, offset));
     let nanos = u32::from_le_bytes(read_byte_array(data, offset));
-    NaiveTime::from_num_seconds_from_midnight(secs, nanos)
+    NaiveTime::from_num_seconds_from_midnight_opt(secs, nanos).unwrap()
 }
 
 /// Read a datum starting at byte `offset`.
@@ -1601,13 +1601,16 @@ mod tests {
             Datum::Date(Date::from_pg_epoch(365 * 45 + 21).unwrap()),
             Datum::Timestamp(
                 CheckedTimestamp::from_timestamplike(
-                    NaiveDate::from_isoywd(2019, 30, chrono::Weekday::Wed).and_hms(14, 32, 11),
+                    NaiveDate::from_isoywd_opt(2019, 30, chrono::Weekday::Wed)
+                        .unwrap()
+                        .and_hms_opt(14, 32, 11)
+                        .unwrap(),
                 )
                 .unwrap(),
             ),
             Datum::TimestampTz(
                 CheckedTimestamp::from_timestamplike(DateTime::<Utc>::from_utc(
-                    NaiveDateTime::from_timestamp(61, 0),
+                    NaiveDateTime::from_timestamp_opt(61, 0).unwrap(),
                     Utc,
                 ))
                 .unwrap(),
@@ -1822,13 +1825,21 @@ mod tests {
             Datum::from(numeric::Numeric::from(0)),
             Datum::from(numeric::Numeric::from(1000)),
             Datum::from(numeric::Numeric::from(9999)),
-            Datum::Date(NaiveDate::from_ymd(1, 1, 1).try_into().unwrap()),
+            Datum::Date(
+                NaiveDate::from_ymd_opt(1, 1, 1)
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
+            ),
             Datum::Timestamp(
-                CheckedTimestamp::from_timestamplike(NaiveDateTime::from_timestamp(0, 0)).unwrap(),
+                CheckedTimestamp::from_timestamplike(
+                    NaiveDateTime::from_timestamp_opt(0, 0).unwrap(),
+                )
+                .unwrap(),
             ),
             Datum::TimestampTz(
                 CheckedTimestamp::from_timestamplike(DateTime::from_utc(
-                    NaiveDateTime::from_timestamp(0, 0),
+                    NaiveDateTime::from_timestamp_opt(0, 0).unwrap(),
                     Utc,
                 ))
                 .unwrap(),
