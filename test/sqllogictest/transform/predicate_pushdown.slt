@@ -423,14 +423,13 @@ Explained Query:
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Project (#0, #3) // { arity: 2 }
             Get mz_catalog.mz_schemas // { arity: 4 }
-        ArrangeBy keys=[[#0]] // { arity: 3 }
-          Union // { arity: 3 }
-            Project (#2, #3, #5) // { arity: 3 }
-              Map ("view") // { arity: 6 }
-                Get mz_catalog.mz_views // { arity: 5 }
-            Project (#2, #3, #6) // { arity: 3 }
-              Map ("materialized-view") // { arity: 7 }
-                Get mz_catalog.mz_materialized_views // { arity: 6 }
+        Union // { arity: 3 }
+          Project (#2, #3, #5) // { arity: 3 }
+            Map ("view") // { arity: 6 }
+              Get mz_catalog.mz_views // { arity: 5 }
+          Project (#2, #3, #6) // { arity: 3 }
+            Map ("materialized-view") // { arity: 7 }
+              Get mz_catalog.mz_materialized_views // { arity: 6 }
 
 Source mz_catalog.mz_schemas
   project=(#0, #4, #5, #3)
