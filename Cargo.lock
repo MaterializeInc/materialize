@@ -4886,11 +4886,12 @@ dependencies = [
 
 [[package]]
 name = "openssh"
-version = "0.9.7"
+version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76cbcf081bc4d65a3ba0dd5bccccf89470e61d54142174f6c0b531e459aac8ff"
+checksum = "882ea878a02cb72a04424ff906def2b37007b61cf6572ee31dc0d0a912990763"
 dependencies = [
  "dirs",
+ "libc",
  "once_cell",
  "shell-escape",
  "tempfile",
