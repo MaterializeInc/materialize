@@ -1119,7 +1119,7 @@ pub async fn serve<S: Append + 'static>(
                         );
                         error!(
                             "Coordinator tried to start with initial timestamp of \
-                            {initial_timestamp}, which is more than\
+                            {initial_timestamp}, which is more than \
                             {TIMESTAMP_INTERVAL_UPPER_BOUND} intervals of size {} larger than \
                             now, {now_ts}. Sleeping for {remaining_ms} ms.",
                             *TIMESTAMP_PERSIST_INTERVAL
