@@ -1172,7 +1172,10 @@ pub async fn serve<S: Append + 'static>(
                     .await?;
                 coord
                     .controller
-                    .remove_orphans(coord.catalog.get_next_replica_id().await?)
+                    .remove_orphans(
+                        coord.catalog.get_next_replica_id().await?,
+                        coord.catalog.get_next_user_global_id().await?,
+                    )
                     .await
                     .map_err(AdapterError::Orchestrator)?;
                 Ok(())

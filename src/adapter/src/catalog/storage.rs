@@ -838,6 +838,11 @@ impl<S: Append> Connection<S> {
         Ok(GlobalId::User(id))
     }
 
+    /// Get the next user id without allocating it.
+    pub async fn get_next_user_global_id(&mut self) -> Result<GlobalId, Error> {
+        self.get_next_id("user").await.map(GlobalId::User)
+    }
+
     /// Get the next replica id without allocating it.
     pub async fn get_next_replica_id(&mut self) -> Result<ReplicaId, Error> {
         self.get_next_id(REPLICA_ID_ALLOC_KEY).await

@@ -147,8 +147,10 @@ impl<T> Controller<T> {
     pub async fn remove_orphans(
         &mut self,
         next_replica_id: ReplicaId,
+        next_storage_host_id: GlobalId,
     ) -> Result<(), anyhow::Error> {
         self.compute.remove_orphans(next_replica_id).await?;
+        self.storage.remove_orphans(next_storage_host_id).await?;
         Ok(())
     }
 }
