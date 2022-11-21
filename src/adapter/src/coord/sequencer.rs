@@ -1142,6 +1142,18 @@ impl<S: Append + 'static> Coordinator<S> {
                     DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
                 )
                 .await;
+
+                // Advance the new table to a timestamp higher than the current read timestamp so
+                // that the table is immediately readable.
+                let upper = since_ts.step_forward();
+                let appends = vec![(table_id, Vec::new(), upper)];
+                self.controller
+                    .storage
+                    .append(appends)
+                    .expect("invalid table upper initialization")
+                    .await
+                    .expect("One-shot dropped while waiting synchronously")
+                    .unwrap();
                 Ok(ExecuteResponse::CreatedTable)
             }
             Err(AdapterError::Catalog(catalog::Error {
