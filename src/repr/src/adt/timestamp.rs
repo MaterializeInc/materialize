@@ -69,8 +69,10 @@ impl<T> TimeLike for T where T: chrono::Timelike {}
 /// Common set of methods for date component.
 pub trait DateLike: chrono::Datelike {
     fn extract_epoch(&self) -> i64 {
-        let naive_date =
-            NaiveDate::from_ymd(self.year(), self.month(), self.day()).and_hms(0, 0, 0);
+        let naive_date = NaiveDate::from_ymd_opt(self.year(), self.month(), self.day())
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
         naive_date.timestamp()
     }
 
@@ -152,29 +154,31 @@ pub trait TimestampLike:
     }
 
     fn truncate_microseconds(&self) -> Self {
-        let time = NaiveTime::from_hms_micro(
+        let time = NaiveTime::from_hms_micro_opt(
             self.hour(),
             self.minute(),
             self.second(),
             self.nanosecond() / 1_000,
-        );
+        )
+        .unwrap();
 
         Self::new(self.date(), time)
     }
 
     fn truncate_milliseconds(&self) -> Self {
-        let time = NaiveTime::from_hms_milli(
+        let time = NaiveTime::from_hms_milli_opt(
             self.hour(),
             self.minute(),
             self.second(),
             self.nanosecond() / 1_000_000,
-        );
+        )
+        .unwrap();
 
         Self::new(self.date(), time)
     }
 
     fn truncate_second(&self) -> Self {
-        let time = NaiveTime::from_hms(self.hour(), self.minute(), self.second());
+        let time = NaiveTime::from_hms_opt(self.hour(), self.minute(), self.second()).unwrap();
 
         Self::new(self.date(), time)
     }
@@ -182,30 +186,37 @@ pub trait TimestampLike:
     fn truncate_minute(&self) -> Self {
         Self::new(
             self.date(),
-            NaiveTime::from_hms(self.hour(), self.minute(), 0),
+            NaiveTime::from_hms_opt(self.hour(), self.minute(), 0).unwrap(),
         )
     }
 
     fn truncate_hour(&self) -> Self {
-        Self::new(self.date(), NaiveTime::from_hms(self.hour(), 0, 0))
+        Self::new(
+            self.date(),
+            NaiveTime::from_hms_opt(self.hour(), 0, 0).unwrap(),
+        )
     }
 
     fn truncate_day(&self) -> Self {
-        Self::new(self.date(), NaiveTime::from_hms(0, 0, 0))
+        Self::new(self.date(), NaiveTime::from_hms_opt(0, 0, 0).unwrap())
     }
 
     fn truncate_week(&self) -> Result<Self, TimestampError> {
         let num_days_from_monday = self.date().weekday().num_days_from_monday() as i64;
-        let new_date = NaiveDate::from_ymd(self.year(), self.month(), self.day())
+        let new_date = NaiveDate::from_ymd_opt(self.year(), self.month(), self.day())
+            .unwrap()
             .checked_sub_signed(Duration::days(num_days_from_monday))
             .ok_or(TimestampError::OutOfRange)?;
-        Ok(Self::new(new_date, NaiveTime::from_hms(0, 0, 0)))
+        Ok(Self::new(
+            new_date,
+            NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+        ))
     }
 
     fn truncate_month(&self) -> Self {
         Self::new(
-            NaiveDate::from_ymd(self.year(), self.month(), 1),
-            NaiveTime::from_hms(0, 0, 0),
+            NaiveDate::from_ymd_opt(self.year(), self.month(), 1).unwrap(),
+            NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
         )
     }
 
@@ -222,27 +233,27 @@ pub trait TimestampLike:
         };
 
         Self::new(
-            NaiveDate::from_ymd(self.year(), quarter, 1),
-            NaiveTime::from_hms(0, 0, 0),
+            NaiveDate::from_ymd_opt(self.year(), quarter, 1).unwrap(),
+            NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
         )
     }
 
     fn truncate_year(&self) -> Self {
         Self::new(
-            NaiveDate::from_ymd(self.year(), 1, 1),
-            NaiveTime::from_hms(0, 0, 0),
+            NaiveDate::from_ymd_opt(self.year(), 1, 1).unwrap(),
+            NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
         )
     }
     fn truncate_decade(&self) -> Self {
         Self::new(
-            NaiveDate::from_ymd(self.year() - self.year().rem_euclid(10), 1, 1),
-            NaiveTime::from_hms(0, 0, 0),
+            NaiveDate::from_ymd_opt(self.year() - self.year().rem_euclid(10), 1, 1).unwrap(),
+            NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
         )
     }
     fn truncate_century(&self) -> Self {
         // Expects the first year of the century, meaning 2001 instead of 2000.
         Self::new(
-            NaiveDate::from_ymd(
+            NaiveDate::from_ymd_opt(
                 if self.year() > 0 {
                     self.year() - (self.year() - 1) % 100
                 } else {
@@ -250,14 +261,15 @@ pub trait TimestampLike:
                 },
                 1,
                 1,
-            ),
-            NaiveTime::from_hms(0, 0, 0),
+            )
+            .unwrap(),
+            NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
         )
     }
     fn truncate_millennium(&self) -> Self {
         // Expects the first year of the millennium, meaning 2001 instead of 2000.
         Self::new(
-            NaiveDate::from_ymd(
+            NaiveDate::from_ymd_opt(
                 if self.year() > 0 {
                     self.year() - (self.year() - 1) % 1000
                 } else {
@@ -265,8 +277,9 @@ pub trait TimestampLike:
                 },
                 1,
                 1,
-            ),
-            NaiveTime::from_hms(0, 0, 0),
+            )
+            .unwrap(),
+            NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
         )
     }
 
@@ -459,8 +472,10 @@ impl<T: Serialize> Serialize for CheckedTimestamp<T> {
 // Thus on the low end we have 4713-12-31 BC from Postgres, and on the high end
 // 262143-12-31 from chrono.
 
-pub static LOW_DATE: Lazy<NaiveDate> = Lazy::new(|| NaiveDate::from_ymd(-4713, 12, 31));
-pub static HIGH_DATE: Lazy<NaiveDate> = Lazy::new(|| NaiveDate::from_ymd(262143, 12, 31));
+pub static LOW_DATE: Lazy<NaiveDate> =
+    Lazy::new(|| NaiveDate::from_ymd_opt(-4713, 12, 31).unwrap());
+pub static HIGH_DATE: Lazy<NaiveDate> =
+    Lazy::new(|| NaiveDate::from_ymd_opt(262143, 12, 31).unwrap());
 
 impl<T: TimestampLike> CheckedTimestamp<T> {
     pub fn from_timestamplike(t: T) -> Result<Self, TimestampError> {
@@ -528,7 +543,7 @@ impl CheckedTimestamp<NaiveDateTime> {
 
 impl CheckedTimestamp<DateTime<Utc>> {
     pub fn to_naive(&self) -> NaiveDateTime {
-        self.t.date().naive_utc().and_time(self.t.time())
+        self.t.date_naive().and_time(self.t.time())
     }
 }
 

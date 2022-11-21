@@ -376,8 +376,8 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, datetime::Ti
     // which @quodlibetor is willing to add to the chrono package.
     if s == "epoch" {
         return Ok((
-            NaiveDate::from_ymd(1970, 1, 1),
-            NaiveTime::from_hms(0, 0, 0),
+            NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
+            NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
             Default::default(),
         ));
     }

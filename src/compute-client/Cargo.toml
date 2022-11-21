@@ -10,7 +10,7 @@ publish = false
 anyhow = "1.0.66"
 async-trait = "0.1.58"
 bytesize = "1.1.0"
-chrono = { version = "0.4.22", default-features = false, features = ["clock", "std"] }
+chrono = { version = "0.4.23", default-features = false, features = ["clock", "std"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3.25"
 mz-build-info = { path = "../build-info" }

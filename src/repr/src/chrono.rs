@@ -134,7 +134,7 @@ impl RustType<ProtoTz> for chrono_tz::Tz {
 }
 
 pub fn any_naive_date() -> impl Strategy<Value = NaiveDate> {
-    (0..1000000).prop_map(NaiveDate::from_num_days_from_ce)
+    (0..1000000).prop_map(|d| NaiveDate::from_num_days_from_ce_opt(d).unwrap())
 }
 
 pub fn any_naive_datetime() -> impl Strategy<Value = NaiveDateTime> {
@@ -147,7 +147,7 @@ pub fn any_datetime() -> impl Strategy<Value = DateTime<Utc>> {
 }
 
 pub fn any_fixed_offset() -> impl Strategy<Value = FixedOffset> {
-    (-86_399..86_400).prop_map(FixedOffset::east)
+    (-86_399..86_400).prop_map(|o| FixedOffset::east_opt(o).unwrap())
 }
 
 pub fn any_timezone() -> impl Strategy<Value = Tz> {

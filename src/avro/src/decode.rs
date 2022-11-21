@@ -1512,10 +1512,11 @@ impl<'a> AvroDeserializer for GeneralDeserializer<'a> {
             SchemaPiece::ResolveDateTimestamp => {
                 let days = zag_i32(r)?;
 
-                let date = NaiveDate::from_ymd(1970, 1, 1)
+                let date = NaiveDate::from_ymd_opt(1970, 1, 1)
+                    .expect("naive date known valid")
                     .checked_add_signed(chrono::Duration::days(days.into()))
                     .ok_or(AvroError::Decode(DecodeError::BadDate(days)))?;
-                let dt = date.and_hms(0, 0, 0);
+                let dt = date.and_hms_opt(0, 0, 0).expect("HMS known valid");
                 d.scalar(Scalar::Timestamp(dt))
             }
         }

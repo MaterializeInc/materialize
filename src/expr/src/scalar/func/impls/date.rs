@@ -40,7 +40,7 @@ sqlfunc!(
     #[inverse = to_unary!(super::CastTimestampToDate)]
     fn cast_date_to_timestamp(a: Date) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
         Ok(CheckedTimestamp::from_timestamplike(
-            NaiveDate::from(a).and_hms(0, 0, 0),
+            NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap(),
         )?)
     }
 );
@@ -51,7 +51,7 @@ sqlfunc!(
     #[inverse = to_unary!(super::CastTimestampTzToDate)]
     fn cast_date_to_timestamp_tz(a: Date) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
         Ok(CheckedTimestamp::from_timestamplike(
-            DateTime::<Utc>::from_utc(NaiveDate::from(a).and_hms(0, 0, 0), Utc),
+            DateTime::<Utc>::from_utc(NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap(), Utc),
         )?)
     }
 );

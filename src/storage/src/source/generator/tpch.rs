@@ -377,11 +377,11 @@ fn pad_nine<S: Display>(prefix: &str, s: S) -> String {
 }
 
 pub static START_DATE: Lazy<Date> =
-    Lazy::new(|| Date::try_from(NaiveDate::from_ymd(1992, 1, 1)).unwrap());
+    Lazy::new(|| Date::try_from(NaiveDate::from_ymd_opt(1992, 1, 1).unwrap()).unwrap());
 pub static CURRENT_DATE: Lazy<Date> =
-    Lazy::new(|| Date::try_from(NaiveDate::from_ymd(1995, 6, 17)).unwrap());
+    Lazy::new(|| Date::try_from(NaiveDate::from_ymd_opt(1995, 6, 17).unwrap()).unwrap());
 pub static END_DATE: Lazy<Date> =
-    Lazy::new(|| Date::try_from(NaiveDate::from_ymd(1998, 12, 31)).unwrap());
+    Lazy::new(|| Date::try_from(NaiveDate::from_ymd_opt(1998, 12, 31).unwrap()).unwrap());
 pub static ORDER_END_DAYS: Lazy<i32> = Lazy::new(|| *END_DATE - *START_DATE - 151);
 
 fn text_string<'a, R: Rng + ?Sized>(

@@ -54,17 +54,23 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
         }
         (JsonValue::Number(ref n), SchemaPiece::TimestampMilli) => {
             let ts = n.as_i64().unwrap();
-            Ok(Value::Timestamp(chrono::NaiveDateTime::from_timestamp(
-                ts / 1_000,
-                ((ts % 1_000).abs() * 1_000_000) as u32,
-            )))
+            Ok(Value::Timestamp(
+                chrono::NaiveDateTime::from_timestamp_opt(
+                    ts / 1_000,
+                    ((ts % 1_000).abs() * 1_000_000) as u32,
+                )
+                .unwrap(),
+            ))
         }
         (JsonValue::Number(ref n), SchemaPiece::TimestampMicro) => {
             let ts = n.as_i64().unwrap();
-            Ok(Value::Timestamp(chrono::NaiveDateTime::from_timestamp(
-                ts / 1_000_000,
-                ((ts % 1_000_000).abs() * 1_000) as u32,
-            )))
+            Ok(Value::Timestamp(
+                chrono::NaiveDateTime::from_timestamp_opt(
+                    ts / 1_000_000,
+                    ((ts % 1_000_000).abs() * 1_000) as u32,
+                )
+                .unwrap(),
+            ))
         }
         (JsonValue::Array(items), SchemaPiece::Array(inner)) => Ok(Value::Array(
             items
@@ -276,7 +282,7 @@ impl Debug for DebugValue {
                 f,
                 "Date({:?}, \"{}\")",
                 d,
-                NaiveDate::from_num_days_from_ce(*d)
+                NaiveDate::from_num_days_from_ce_opt(*d).unwrap()
             ),
 
             // Re-wrap types that contain a Value.

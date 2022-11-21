@@ -456,12 +456,12 @@ fn test_datetime_resolutions() {
         ("f1".into(), Value::Int(1000)),
         (
             "f2".into(),
-            Value::Timestamp(NaiveDateTime::from_timestamp(12345, 0)),
+            Value::Timestamp(NaiveDateTime::from_timestamp_opt(12345, 0).unwrap()),
         ),
         ("f3".into(), Value::Long(23456000)),
         (
             "f4".into(),
-            Value::Timestamp(NaiveDateTime::from_timestamp(34567, 0)),
+            Value::Timestamp(NaiveDateTime::from_timestamp_opt(34567, 0).unwrap()),
         ),
         ("f5".into(), Value::Int(365 * 2)),
         ("f6".into(), Value::Date(365 * 3 + 1)),
@@ -470,22 +470,27 @@ fn test_datetime_resolutions() {
     let datum_to_read = Value::Record(vec![
         (
             "f1".into(),
-            Value::Timestamp(NaiveDateTime::from_timestamp(1, 0)),
+            Value::Timestamp(NaiveDateTime::from_timestamp_opt(1, 0).unwrap()),
         ),
         (
             "f2".into(),
-            Value::Timestamp(NaiveDateTime::from_timestamp(12345, 0)),
+            Value::Timestamp(NaiveDateTime::from_timestamp_opt(12345, 0).unwrap()),
         ),
         (
             "f3".into(),
-            Value::Timestamp(NaiveDateTime::from_timestamp(23456, 0)),
+            Value::Timestamp(NaiveDateTime::from_timestamp_opt(23456, 0).unwrap()),
         ),
         ("f4".into(), Value::Long(34567000000)),
         ("f5".into(), Value::Date(365 * 2)),
         ("f6".into(), Value::Int(365 * 3 + 1)), // +1 because 1972 was a leap year
         (
             "f7".into(),
-            Value::Timestamp(NaiveDate::from_ymd(1974, 1, 1).and_hms(0, 0, 0)),
+            Value::Timestamp(
+                NaiveDate::from_ymd_opt(1974, 1, 1)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap(),
+            ),
         ),
     ]);
     let encoded = to_avro_datum(&writer_schema, datum_to_write).unwrap();

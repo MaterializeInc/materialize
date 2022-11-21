@@ -87,8 +87,8 @@ mod tests {
         // Data to be used later in assertions.
         let date = 365 * 50 + 20;
         let date_time = NaiveDateTime::new(
-            NaiveDate::from_ymd(2020, 1, 8),
-            NaiveTime::from_hms(1, 1, 1),
+            NaiveDate::from_ymd_opt(2020, 1, 8).unwrap(),
+            NaiveTime::from_hms_opt(1, 1, 1).unwrap(),
         );
         let bytes: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10];
         let string = String::from("test");

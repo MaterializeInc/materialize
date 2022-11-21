@@ -37,12 +37,13 @@ sqlfunc!(
                 .unwrap();
         }
 
-        NaiveTime::from_hms_nano(
+        NaiveTime::from_hms_nano_opt(
             i.hours() as u32,
             i.minutes() as u32,
             i.seconds::<f64>() as u32,
             i.nanoseconds() as u32,
         )
+        .unwrap()
     }
 );
 
