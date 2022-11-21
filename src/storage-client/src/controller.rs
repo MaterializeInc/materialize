@@ -2252,6 +2252,7 @@ mod collection_mgmt {
     use timely::progress::Timestamp;
     use tokio::sync::mpsc;
     use tokio::sync::Mutex;
+    use tracing::debug;
 
     use mz_persist_types::Codec64;
     use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
@@ -2269,7 +2270,8 @@ mod collection_mgmt {
     /// The `CollectionManager` provides two complementary functions:
     /// - Providing an API to append values to a registered set of collections.
     ///   For this usecase:
-    ///     - The `CollectionManager` expects to be the only writer.
+    ///     - The `CollectionManager` will retry on contention. This could cause reduced throughput
+    ///       on a collection with many writers.
     ///     - Appending to a closed collection panics
     /// - Automatically advancing the timestamp of managed collections every
     ///   second. For this usecase:
@@ -2321,11 +2323,15 @@ mod collection_mgmt {
                                     diff,
                                 }).collect::<Vec<_>>(), T::from(now()))];
 
-                                // TODO? Handle contention among multiple writers
-                                write_handle.monotonic_append(updates)
-                                    .await
-                                    .expect("sender hung up")
-                                    .expect("no write contention on collections");
+                                loop {
+                                    let append_result = write_handle.monotonic_append(updates.clone()).await.expect("sender hung up");
+                                    match append_result {
+                                        Ok(()) => break,
+                                        Err(append_err) => {
+                                            debug!("Retrying error while appending to a managed collection: {append_err}");
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
