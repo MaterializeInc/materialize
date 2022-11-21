@@ -22,8 +22,7 @@
 > CREATE CLUSTER test REPLICAS (
       r1 (SIZE '1'),
       r2 (SIZE '2'),
-      r4 (SIZE '4'),
-      r8 (SIZE '8')
+      r4 (SIZE '4')
   )
 
 > SET cluster = test
@@ -52,20 +51,6 @@
 1
 2
 3
-
-> SET cluster_replica = r8
-
-> SELECT DISTINCT worker_id
-  FROM mz_internal.mz_worker_compute_frontiers
-  ORDER BY worker_id
-0
-1
-2
-3
-4
-5
-6
-7
 
 # Clean up.
 > DROP CLUSTER test
