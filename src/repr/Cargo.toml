@@ -18,7 +18,7 @@ harness = false
 anyhow = "1.0.65"
 bytes = "1.2.1"
 chrono = { version = "0.4.22", default-features = false, features = ["serde", "std"] }
-chrono-tz = { version = "0.6.3", features = ["serde", "case-insensitive"] }
+chrono-tz = { version = "0.8.0", features = ["serde", "case-insensitive"] }
 dec = "0.4.8"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 enum-kinds = "0.5.1"
