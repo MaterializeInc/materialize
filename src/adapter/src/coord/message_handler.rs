@@ -176,7 +176,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let hb = match self
                     .transient_replica_metadata
                     .entry(replica_id)
-                    .or_insert(Some(Default::default()))
+                    .or_insert_with(|| Some(Default::default()))
                 {
                     // `None` is the tombstone for a removed replica
                     None => return,
@@ -207,7 +207,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let m = match self
                     .transient_replica_metadata
                     .entry(replica_id)
-                    .or_insert(Some(Default::default()))
+                    .or_insert_with(|| Some(Default::default()))
                 {
                     // `None` is the tombstone for a removed replica
                     None => return,
