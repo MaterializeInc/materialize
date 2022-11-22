@@ -261,6 +261,10 @@ fn test_drop_connection_race() -> Result<(), anyhow::Error> {
 fn test_time() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
+    if true {
+        Err("SHOW ME THE BACKTRACE ERROR")?;
+    }
+
     let server = util::start_server(util::Config::default())?;
     let mut client = server.connect(postgres::NoTls)?;
 
@@ -299,6 +303,10 @@ fn test_time() -> Result<(), Box<dyn Error>> {
 #[test]
 fn test_subscribe_consolidation() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
+
+    if true {
+        panic!("SHOW ME THE BACKTRACE PANIC");
+    }
 
     let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
