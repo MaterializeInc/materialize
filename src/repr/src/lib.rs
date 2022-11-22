@@ -149,6 +149,12 @@ impl Timestamp {
         }
     }
 
+    pub fn saturating_mul<I: Into<Self>>(self, rhs: I) -> Self {
+        Self {
+            internal: self.internal.saturating_mul(rhs.into().internal),
+        }
+    }
+
     pub fn checked_add<I: Into<Self>>(self, rhs: I) -> Option<Self> {
         self.internal
             .checked_add(rhs.into().internal)

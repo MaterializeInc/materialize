@@ -33,6 +33,11 @@ Materialize:
   distributed systems. You can read Martin Kleppmann's book *Designing
   Data-Intensive Applications*, listed below, instead.
 
+* How NOT to Measure Latency [[web](https://www.youtube.com/watch?v=lJ8ydIuPFeU)]
+
+A youtube talk by Gil Tene about common pitfalls encountered in measuring
+latency and response time behavior.
+
 * [Developer guide: submitting and reviewing changes](guide-changes.md)
 
   Our policies for submitting and reviewing PRs. It applies to our internal

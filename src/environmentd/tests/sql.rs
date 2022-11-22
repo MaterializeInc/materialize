@@ -1030,12 +1030,10 @@ fn test_temporary_views() -> Result<(), Box<dyn Error>> {
 // Test EXPLAIN TIMESTAMP with tables.
 #[test]
 fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
     let config = util::Config::default();
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
     let timestamp_re = Regex::new(r"\s*(\d+) \(\d+-\d\d-\d\d \d\d:\d\d:\d\d.\d\d\d\)").unwrap();
-    let bool_re = Regex::new(r"true|false").unwrap();
 
     client.batch_execute("CREATE TABLE t1 (i1 INT)")?;
 
@@ -1044,7 +1042,7 @@ fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
 largest not in advance of upper:<TIMESTAMP>
                           upper:[<TIMESTAMP>]
                           since:[<TIMESTAMP>]
-        can respond immediately: <BOOL>
+        can respond immediately: true
                        timeline: Some(EpochMilliseconds)
 
 source materialize.public.t1 (u1, storage):
@@ -1056,9 +1054,6 @@ source materialize.public.t1 (u1, storage):
         .unwrap();
     let explain: String = row.get(0);
     let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
-    // TODO: annoyingly "can respond immediately" does seem to change if you,
-    // say, inject a sleep. Is it supposed to be deterministic? See #16115.
-    let explain = bool_re.replace_all(&explain, "<BOOL>");
     assert_eq!(explain, expect, "{explain}\n\n{expect}");
 
     Ok(())
@@ -1266,8 +1261,7 @@ fn test_read_then_write_serializability() {
 
 #[test]
 fn test_timestamp_recovery() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-    let now = Arc::new(Mutex::new(1_000_000_000));
+    let now = Arc::new(Mutex::new(1));
     let now_fn = {
         let timestamp = Arc::clone(&now);
         NowFn::from(move || *timestamp.lock().unwrap())
@@ -1277,13 +1271,12 @@ fn test_timestamp_recovery() -> Result<(), Box<dyn Error>> {
         .with_now(now_fn)
         .data_directory(data_dir.path());
 
-    // Start a server and insert some data to establish the current global timestamp
+    // Start a server and get the current global timestamp
     let global_timestamp = {
         let server = util::start_server(config.clone())?;
         let mut client = server.connect(postgres::NoTls)?;
 
         client.batch_execute("CREATE TABLE t1 (i1 INT)")?;
-        insert_with_deterministic_timestamps("t1", "(42)", &server, Arc::clone(&now))?;
         get_explain_timestamp("t1", &mut client)
     };
 
@@ -1958,6 +1951,61 @@ fn test_idle_in_transaction_session_timeout() -> Result<(), Box<dyn Error>> {
     std::thread::sleep(Duration::from_millis(5));
     client.query("SELECT 1", &[])?;
     client.batch_execute("COMMIT")?;
+
+    Ok(())
+}
+
+#[test]
+fn test_coord_startup_blocking() -> Result<(), Box<dyn Error>> {
+    let initial_time = 0;
+    let now = Arc::new(Mutex::new(initial_time));
+    let now_fn = {
+        let timestamp = Arc::clone(&now);
+        NowFn::from(move || *timestamp.lock().unwrap())
+    };
+    let data_dir = tempfile::tempdir()?;
+    let config = util::Config::default()
+        .with_now(now_fn)
+        .data_directory(data_dir.path());
+
+    // Start 3 servers and reserve the first 3 timestamp ranges.
+    {
+        let server = util::start_server(config.clone())?;
+        let mut client = server.connect(postgres::NoTls)?;
+
+        client.query("SELECT 1", &[])?;
+    };
+    {
+        let server = util::start_server(config.clone())?;
+        let mut client = server.connect(postgres::NoTls)?;
+
+        client.query("SELECT 1", &[])?;
+    };
+    {
+        let server = util::start_server(config.clone())?;
+        let mut client = server.connect(postgres::NoTls)?;
+
+        client.query("SELECT 1", &[])?;
+    };
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let server = util::start_server(config.clone()).unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+
+        client.query("SELECT 1", &[]).unwrap();
+        tx.send(()).unwrap();
+    });
+
+    let server_started = Retry::default()
+        .max_duration(Duration::from_secs(1))
+        .retry(|_| rx.try_recv());
+    assert!(server_started.is_err(), "server should be blocked");
+
+    *now.lock().expect("lock poisoned") = initial_time + 5_000;
+    Retry::default()
+        .max_duration(Duration::from_secs(5))
+        .retry(|_| rx.try_recv())?;
 
     Ok(())
 }

@@ -23,7 +23,7 @@ use super::metrics::SourceBaseMetrics;
 use super::{SourceMessage, SourceMessageType};
 use crate::source::commit::LogCommitter;
 use crate::source::types::SourceConnectionBuilder;
-use crate::source::{NextMessage, SourceReader, SourceReaderError};
+use crate::source::{NextMessage, SourceReader};
 
 mod auction;
 mod counter;
@@ -138,46 +138,44 @@ impl SourceReader for LoadGeneratorSourceReader {
     // LoadGenerator can produce deletes that cause retractions
     type Diff = Diff;
 
-    fn get_next_message(
-        &mut self,
-    ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
+    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Diff> {
         if !self.active_read_worker {
             if !self.reported_unconsumed_partitions {
                 self.reported_unconsumed_partitions = true;
-                return Ok(NextMessage::Ready(
-                    SourceMessageType::DropPartitionCapabilities(vec![PartitionId::None]),
-                ));
+                return NextMessage::Ready(SourceMessageType::DropPartitionCapabilities(vec![
+                    PartitionId::None,
+                ]));
             }
-            return Ok(NextMessage::Finished);
+            return NextMessage::Finished;
         }
 
         if self.last.elapsed() < self.tick {
-            return Ok(NextMessage::Pending);
+            return NextMessage::Pending;
         }
 
         let (output, typ, value, specific_diff) = match self.rows.next() {
             Some(row) => row,
-            None => return Ok(NextMessage::Finished),
+            None => return NextMessage::Finished,
         };
 
         let message = SourceMessage {
             output,
-            partition: PartitionId::None,
-            offset: self.offset,
             upstream_time_millis: None,
             key: (),
             value,
             headers: None,
-            specific_diff,
         };
+        let ts = (PartitionId::None, self.offset);
         let message = match typ {
             GeneratorMessageType::Finalized => {
                 self.last += self.tick;
                 self.offset += 1;
-                SourceMessageType::Finalized(message)
+                SourceMessageType::Finalized(Ok(message), ts, specific_diff)
             }
-            GeneratorMessageType::InProgress => SourceMessageType::InProgress(message),
+            GeneratorMessageType::InProgress => {
+                SourceMessageType::InProgress(Ok(message), ts, specific_diff)
+            }
         };
-        Ok(NextMessage::Ready(message))
+        NextMessage::Ready(message)
     }
 }
