@@ -820,7 +820,17 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
         let stream = watcher(self.pod_api.clone(), self.list_params())
             .touched_objects()
-            .map(|object| object.map_err(Into::into).and_then(into_service_event));
+            .filter_map(|object| async move {
+                match object {
+                    Ok(pod) => Some(into_service_event(pod)),
+                    Err(error) => {
+                        // We assume that errors returned by Kubernetes are usually transient, so we
+                        // just log a warning and ignore them otherwise.
+                        tracing::warn!("service watch error: {error}");
+                        None
+                    }
+                }
+            });
         Box::pin(stream)
     }
 }
