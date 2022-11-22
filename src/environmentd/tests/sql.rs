@@ -1956,6 +1956,7 @@ fn test_idle_in_transaction_session_timeout() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+#[ignore]
 fn test_coord_startup_blocking() -> Result<(), Box<dyn Error>> {
     let initial_time = 0;
     let now = Arc::new(Mutex::new(initial_time));
