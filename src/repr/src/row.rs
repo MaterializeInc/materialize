@@ -37,8 +37,12 @@ use crate::adt::date::Date;
 use crate::adt::interval::Interval;
 use crate::adt::numeric;
 use crate::adt::numeric::Numeric;
+use crate::adt::range::{
+    self, Range, RangeBound, RangeBoundDesc, RangeBoundDescValue, RangeError, RangeInner,
+};
 use crate::adt::timestamp::CheckedTimestamp;
 use crate::scalar::arb_datum;
+use crate::scalar::DatumKind;
 use crate::{Datum, Timestamp};
 
 mod encoding;
@@ -272,6 +276,54 @@ impl<'a> Serialize for DatumMap<'a> {
     }
 }
 
+/// Represents a single `Datum`, appropriate to be nested inside other
+/// `Datum`s.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub struct DatumNested<'a> {
+    val: &'a [u8],
+}
+
+impl<'a> DatumNested<'a> {
+    // Figure out which bytes `read_datum` returns (e.g. including the tag),
+    // and then store a reference to those bytes, so we can "replay" this same
+    // call later on without storing the datum itself.
+    pub fn extract(data: &'a [u8], offset: &mut usize) -> DatumNested<'a> {
+        let start = *offset;
+        let _ = unsafe { read_datum(data, offset) };
+        DatumNested {
+            val: &data[start..*offset],
+        }
+    }
+
+    /// Returns the datum `self` contains.
+    pub fn datum(&self) -> Datum<'a> {
+        unsafe { read_datum(self.val, &mut 0) }
+    }
+}
+
+impl<'a> Ord for DatumNested<'a> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.datum().cmp(&other.datum())
+    }
+}
+
+impl<'a> PartialOrd for DatumNested<'a> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<'a> Serialize for DatumNested<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_seq(None)?;
+        seq.serialize_element(&self.datum())?;
+        seq.end()
+    }
+}
+
 // All new tags MUST be added to the end of the enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive, TryFromPrimitive)]
 #[repr(u8)]
@@ -309,6 +361,7 @@ enum Tag {
     UInt16,
     UInt64,
     MzTimestamp,
+    Range,
 }
 
 // --------------------------------------------------------------------------------
@@ -522,6 +575,46 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::MzTimestamp => {
             let t = Timestamp::decode(read_byte_array(data, offset));
             Datum::MzTimestamp(t)
+        }
+        Tag::Range => {
+            let flag_byte = read_byte(data, offset);
+            let flags =
+                range::Flags::from_bits(flag_byte).expect("range flags must be encoded validly");
+
+            if flags.contains(range::Flags::EMPTY) {
+                assert!(
+                    flags == range::Flags::EMPTY,
+                    "empty ranges contain only RANGE_EMPTY flag"
+                );
+
+                return Datum::Range(Range { inner: None });
+            }
+
+            let lower_bound = if flags.contains(range::Flags::LB_INFINITE) {
+                None
+            } else {
+                Some(DatumNested::extract(data, offset))
+            };
+
+            let lower = RangeBound {
+                inclusive: flags.contains(range::Flags::LB_INCLUSIVE),
+                bound: lower_bound,
+            };
+
+            let upper_bound = if flags.contains(range::Flags::UB_INFINITE) {
+                None
+            } else {
+                Some(DatumNested::extract(data, offset))
+            };
+
+            let upper = RangeBound {
+                inclusive: flags.contains(range::Flags::UB_INCLUSIVE),
+                bound: upper_bound,
+            };
+
+            Datum::Range(Range {
+                inner: Some(RangeInner { lower, upper }),
+            })
         }
     }
 }
@@ -742,6 +835,34 @@ where
                 }
             }
         }
+        Datum::Range(Range { inner }) => {
+            data.push(Tag::Range.into());
+
+            match inner {
+                None => {
+                    data.push(range::Flags::EMPTY.bits());
+                }
+                Some(RangeInner { lower, upper }) => {
+                    let mut flags = range::Flags::empty();
+
+                    flags.set(range::Flags::LB_INFINITE, lower.bound.is_none());
+                    flags.set(range::Flags::UB_INFINITE, upper.bound.is_none());
+                    flags.set(range::Flags::LB_INCLUSIVE, lower.inclusive);
+                    flags.set(range::Flags::UB_INCLUSIVE, upper.inclusive);
+
+                    data.push(flags.bits());
+
+                    for bound in [lower.bound, upper.bound] {
+                        if let Some(bound) = bound {
+                            match bound.datum() {
+                                Datum::Null => panic!("cannot push Datum::Null into range"),
+                                d => push_datum(data, d),
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -827,6 +948,19 @@ pub fn datum_size(datum: &Datum) -> usize {
             numeric::cx_datum().reduce(&mut d);
             // 4 = 1 bit each for tag, digits, exponent, bits
             4 + (d.coefficient_units().len() * 2)
+        }
+        Datum::Range(Range { inner }) => {
+            // Tag + flags
+            2 + match inner {
+                None => 0,
+                Some(RangeInner { lower, upper }) => [lower.bound, upper.bound]
+                    .iter()
+                    .map(|bound| match bound {
+                        None => 0,
+                        Some(bound) => bound.val.len(),
+                    })
+                    .sum(),
+            }
         }
     }
 }
@@ -1193,6 +1327,146 @@ impl RowPacker<'_> {
         })
     }
 
+    /// Pushes a `DatumRange` that is considered empty.
+    ///
+    /// - To construct other ranges, use [`Self::push_range`],
+    ///   [`Self::push_range_with`].
+    pub fn push_empty_range(&mut self) {
+        self.row.data.push(Tag::Range.into());
+        // Untagged bytes only contains the `RANGE_EMPTY` flag value.
+        self.row.data.push(range::Flags::EMPTY.bits());
+    }
+
+    /// Pushes a `DatumRange` built from the specified arguments.
+    ///
+    /// # Panics
+    /// - If lower and upper express finite values and they are datums of
+    ///   different types.
+    /// - If lower or upper express finite values and are equal to
+    ///   `Datum::Null`. To handle `Datum::Null` properly, use
+    ///   `RangeBoundDescValue::From<Datum<'a>>`.
+    pub fn push_range<'a>(
+        &mut self,
+        lower: RangeBoundDesc<Datum<'a>>,
+        upper: RangeBoundDesc<Datum<'a>>,
+    ) -> Result<(), RangeError> {
+        self.push_range_with(
+            RangeBoundDesc {
+                inclusive: lower.inclusive,
+                value: match lower.value {
+                    RangeBoundDescValue::Finite { value } => RangeBoundDescValue::Finite {
+                        value: move |row: &mut RowPacker| Ok(row.push(value)),
+                    },
+                    RangeBoundDescValue::Infinite => RangeBoundDescValue::Infinite,
+                },
+            },
+            RangeBoundDesc {
+                inclusive: upper.inclusive,
+                value: match upper.value {
+                    RangeBoundDescValue::Finite { value } => RangeBoundDescValue::Finite {
+                        value: move |row: &mut RowPacker| Ok(row.push(value)),
+                    },
+                    RangeBoundDescValue::Infinite => RangeBoundDescValue::Infinite,
+                },
+            },
+        )
+    }
+
+    /// Pushes a `DatumRange` built from the specified arguments.
+    ///
+    /// # Panics
+    /// - If lower or upper expresses a finite value and does not push exactly
+    ///   one value into the `RowPacker`.
+    /// - If lower and upper express finite values and they are datums of
+    ///   different types.
+    /// - If lower or upper express finite values and push `Datum::Null`.
+    pub fn push_range_with<L, U, E>(
+        &mut self,
+        lower: RangeBoundDesc<L>,
+        upper: RangeBoundDesc<U>,
+    ) -> Result<(), E>
+    where
+        L: FnOnce(&mut RowPacker) -> Result<(), E>,
+        U: FnOnce(&mut RowPacker) -> Result<(), E>,
+        E: From<RangeError>,
+    {
+        let start = self.row.data.len();
+        self.row.data.push(Tag::Range.into());
+
+        let mut flags = range::Flags::empty();
+
+        flags.set(
+            range::Flags::LB_INFINITE,
+            matches!(lower.value, RangeBoundDescValue::Infinite),
+        );
+        flags.set(
+            range::Flags::UB_INFINITE,
+            matches!(upper.value, RangeBoundDescValue::Infinite),
+        );
+        flags.set(range::Flags::LB_INCLUSIVE, lower.inclusive);
+        flags.set(range::Flags::UB_INCLUSIVE, upper.inclusive);
+
+        let mut expected_datums = 0;
+
+        self.row.data.push(flags.bits());
+
+        let mut datum_check = self.row.data.len();
+
+        if let RangeBoundDescValue::Finite { value } = lower.value {
+            let start = self.row.data.len();
+            value(self)?;
+            assert!(
+                start < self.row.data.len(),
+                "finite values must each push exactly one value; expected 1 but got 0"
+            );
+            expected_datums += 1;
+        }
+
+        if let RangeBoundDescValue::Finite { value } = upper.value {
+            let start = self.row.data.len();
+            value(self)?;
+            assert!(
+                start < self.row.data.len(),
+                "finite values must each push exactly one value; expected 1 but got 0"
+            );
+            expected_datums += 1;
+        }
+
+        // Validate that what was written maintains the correct invariants.
+        let mut actual_datums = 0;
+        let mut seen = None;
+        while datum_check < self.row.data.len() {
+            let d = unsafe { read_datum(&self.row.data, &mut datum_check) };
+            assert!(d != Datum::Null, "cannot push Datum::Null into range");
+
+            match seen {
+                None => seen = Some(d),
+                Some(seen) => {
+                    let seen_kind = DatumKind::from(seen);
+                    let d_kind = DatumKind::from(d);
+                    assert!(seen_kind == d_kind, "range contains inconsistent data; expected {seen_kind:?} but got {d_kind:?}");
+
+                    if seen > d {
+                        self.row.data.truncate(start);
+                        return Err(RangeError::MisorderedRangeBounds.into());
+                    }
+                }
+            }
+            actual_datums += 1;
+        }
+
+        assert!(actual_datums == expected_datums, "finite values must each push exactly one value; expected {expected_datums} but got {actual_datums}");
+
+        // Anything that triggers this check is undefined behavior, so
+        // unnecessary but also trivial to perform the check in our case.
+        assert!(
+            datum_check == self.row.data.len(),
+            "non-Datum data packed into row"
+        );
+
+        Ok(())
+    }
+
     /// Clears the contents of the packer without de-allocating its backing memory.
     pub fn clear(&mut self) {
         self.row.data.clear();
@@ -1533,6 +1807,7 @@ impl Default for RowArena {
 #[cfg(test)]
 mod tests {
     use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+    use itertools::Itertools;
 
     use super::*;
 
@@ -1813,6 +2088,8 @@ mod tests {
 
     #[test]
     fn test_datum_sizes() {
+        let arena = RowArena::new();
+
         // Test the claims about various datum sizes.
         let values_of_interest = vec![
             Datum::Null,
@@ -1848,12 +2125,188 @@ mod tests {
             Datum::Bytes(&[]),
             Datum::String(""),
             Datum::JsonNull,
+            Datum::Range(Range { inner: None }),
+            arena.make_datum(|packer| {
+                packer
+                    .push_range(
+                        RangeBoundDesc::new(Datum::Int32(-1), true),
+                        RangeBoundDesc::new(Datum::Int32(1), true),
+                    )
+                    .unwrap();
+            }),
         ];
         for value in values_of_interest {
             if datum_size(&value) != Row::pack_slice(&[value]).data.len() {
                 panic!("Disparity in claimed size for {:?}", value);
             }
         }
+    }
+
+    #[test]
+    fn test_ranges() {
+        fn test_ranges_inner(row_value: Datum, vec_value: &Datum, string_rep: &&str) {
+            // Validates multiple methods of creating datums are equivalent
+            assert_eq!(&row_value, vec_value, "{row_value} == {vec_value}");
+            // Validates printing
+            assert_eq!(
+                row_value.to_string(),
+                string_rep.to_string(),
+                "{row_value} == {string_rep}"
+            );
+
+            // Emulate the bytes of a row.
+            let mut row_inner = vec![];
+
+            // Validate values can be roundtripped through `push` and `read_datum`.
+            let mut offset = row_inner.len();
+            push_datum(&mut row_inner, row_value);
+            let roundtripped_value = unsafe { read_datum(&row_inner, &mut offset) };
+            assert_eq!(
+                row_value, roundtripped_value,
+                "{row_value} == {roundtripped_value}"
+            );
+        }
+
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        let arena = RowArena::new();
+
+        let mut datum_vec = vec![];
+
+        for (lower, lower_inclusive, upper, upper_inclusive, s) in [
+            // Unbounded lower
+            (Datum::Null, true, Datum::Int32(1), false, "[,1)"),
+            (Datum::Null, true, Datum::Int32(1), true, "[,1]"),
+            (Datum::Null, true, Datum::Null, false, "[,)"),
+            (Datum::Null, true, Datum::Null, true, "[,]"),
+            (Datum::Null, false, Datum::Int32(1), false, "(,1)"),
+            (Datum::Null, false, Datum::Int32(1), true, "(,1]"),
+            // Infinite ranges
+            (Datum::Null, false, Datum::Null, false, "(,)"),
+            (Datum::Null, false, Datum::Null, true, "(,]"),
+            // -1..1
+            (Datum::Int32(-1), true, Datum::Int32(1), false, "[-1,1)"),
+            (Datum::Int32(-1), true, Datum::Int32(1), true, "[-1,1]"),
+            (Datum::Int32(-1), false, Datum::Int32(1), false, "(-1,1)"),
+            (Datum::Int32(-1), false, Datum::Int32(1), true, "(-1,1]"),
+            // Empty + point ranges
+            (Datum::Int32(0), true, Datum::Int32(0), false, "[0,0)"),
+            (Datum::Int32(0), true, Datum::Int32(0), true, "[0,0]"),
+            (Datum::Int32(0), false, Datum::Int32(0), false, "(0,0)"),
+            (Datum::Int32(0), false, Datum::Int32(0), true, "(0,0]"),
+            // Unbounded upper
+            (Datum::Int32(1), true, Datum::Null, false, "[1,)"),
+            (Datum::Int32(1), true, Datum::Null, true, "[1,]"),
+            (Datum::Int32(1), false, Datum::Null, false, "(1,)"),
+            (Datum::Int32(1), false, Datum::Null, true, "(1,]"),
+        ] {
+            packer
+                .push_range(
+                    RangeBoundDesc::new(lower, lower_inclusive),
+                    RangeBoundDesc::new(upper, upper_inclusive),
+                )
+                .unwrap();
+
+            let r = arena.make_datum(|packer| {
+                packer
+                    .push_range_with::<_, _, RangeError>(
+                        RangeBoundDesc {
+                            inclusive: lower_inclusive,
+                            value: match lower {
+                                Datum::Null => RangeBoundDescValue::Infinite,
+                                o => RangeBoundDescValue::Finite {
+                                    value: move |row: &mut RowPacker| Ok(row.push(o)),
+                                },
+                            },
+                        },
+                        RangeBoundDesc {
+                            inclusive: upper_inclusive,
+                            value: match upper {
+                                Datum::Null => RangeBoundDescValue::Infinite,
+                                o => RangeBoundDescValue::Finite {
+                                    value: move |row: &mut RowPacker| Ok(row.push(o)),
+                                },
+                            },
+                        },
+                    )
+                    .unwrap();
+            });
+            datum_vec.push((r, s));
+        }
+
+        let empty_range = arena.make_datum(|packer| {
+            packer.push_empty_range();
+        });
+
+        test_ranges_inner(empty_range, &Datum::Range(Range { inner: None }), &"empty");
+
+        let mut last_seen = empty_range;
+
+        for (row_value, (vec_value, string_rep)) in row.iter().zip_eq(datum_vec.iter()) {
+            // Validates Ord implementation; relies on input being hand-sorted.
+            assert!(last_seen < row_value, "{last_seen} < {row_value}");
+            test_ranges_inner(row_value, vec_value, string_rep);
+            last_seen = row_value;
+        }
+    }
+
+    #[test]
+    fn test_range_errors() {
+        fn test_range_errors_inner<'a>(datums: Vec<Vec<Datum<'a>>>) -> Result<(), RangeError> {
+            println!("datums {:?}", datums);
+            let mut row = Row::default();
+            let row_len = row.byte_len();
+            let mut packer = row.packer();
+            let r = packer.push_range_with(
+                RangeBoundDesc {
+                    inclusive: true,
+                    value: RangeBoundDescValue::Finite {
+                        value: |row: &mut RowPacker| {
+                            for d in &datums[0] {
+                                row.push(d);
+                            }
+                            Ok(())
+                        },
+                    },
+                },
+                RangeBoundDesc {
+                    inclusive: true,
+                    value: RangeBoundDescValue::Finite {
+                        value: |row: &mut RowPacker| {
+                            for d in &datums[1] {
+                                row.push(d);
+                            }
+                            Ok(())
+                        },
+                    },
+                },
+            );
+
+            assert_eq!(row_len, row.byte_len());
+
+            r
+        }
+
+        for panicking_case in [
+            vec![vec![Datum::Int32(1)], vec![]],
+            vec![
+                vec![Datum::Int32(1), Datum::Int32(2)],
+                vec![Datum::Int32(3)],
+            ],
+            vec![
+                vec![Datum::Int32(1)],
+                vec![Datum::Int32(2), Datum::Int32(3)],
+            ],
+            vec![vec![Datum::Int32(1), Datum::Int32(2)], vec![]],
+            vec![vec![Datum::Int32(1)], vec![Datum::UInt16(2)]],
+            vec![vec![Datum::Null], vec![Datum::Int32(2)]],
+            vec![vec![Datum::Int32(1)], vec![Datum::Null]],
+        ] {
+            assert!(std::panic::catch_unwind(|| test_range_errors_inner(panicking_case)).is_err());
+        }
+
+        let e = test_range_errors_inner(vec![vec![Datum::Int32(2)], vec![Datum::Int32(1)]]);
+        assert_eq!(e, Err(RangeError::MisorderedRangeBounds));
     }
 }
 

@@ -62,6 +62,7 @@ message ProtoDatum {
         uint32 uint16 = 28;
         uint64 uint64 = 29;
         uint64 mz_timestamp = 30;
+        ProtoRange range = 31;
     }
 }
 
@@ -126,3 +127,14 @@ message ProtoNumeric {
        // The number of digits that follow the decimal point.
        int32 scale = 2;
    }
+
+message ProtoRangeInner {
+    bool lower_inclusive = 1;
+    ProtoDatum lower = 2;
+    bool upper_inclusive = 3;
+    ProtoDatum upper = 4;
+}
+
+message ProtoRange {
+    ProtoRangeInner inner = 1;
+}

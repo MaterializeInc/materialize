@@ -4113,6 +4113,7 @@ name = "mz-repr"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "bitflags",
  "bytes",
  "chrono",
  "chrono-tz",
