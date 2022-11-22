@@ -337,7 +337,7 @@ struct Metrics {
 
 impl Metrics {
     pub fn register_into(registry: &MetricsRegistry) -> Metrics {
-        Metrics {
+        let metrics = Metrics {
             transactions: registry.register(metric!(
                 name: "mz_stash_transactions",
                 help: "Total number of started transactions.",
@@ -347,7 +347,21 @@ impl Metrics {
                 help: "Total number of transaction errors.",
                 var_labels: ["cause"],
             )),
-        }
+        };
+        // Initialize error codes to 0 so we can observe their increase.
+        metrics
+            .transaction_errors
+            .with_label_values(&["closed"])
+            .inc_by(0);
+        metrics
+            .transaction_errors
+            .with_label_values(&["retry"])
+            .inc_by(0);
+        metrics
+            .transaction_errors
+            .with_label_values(&["other"])
+            .inc_by(0);
+        metrics
     }
 }
 
@@ -591,10 +605,11 @@ impl Postgres {
                                 }
                             }
                             attempt += 1;
-                            let cause = if let Some(code) = pgerr.code() {
-                                code.code()
-                            } else if pgerr.is_closed() {
+                            let cause = if pgerr.is_closed() {
                                 "closed"
+                            } else if let Some(&SqlState::T_R_SERIALIZATION_FAILURE) = pgerr.code()
+                            {
+                                "retry"
                             } else {
                                 "other"
                             };

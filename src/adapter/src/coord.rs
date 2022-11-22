@@ -921,7 +921,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // Watcher that listens for and reports compute service status changes.
         let mut compute_events = self.controller.compute.watch_services();
         let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
-        let idle_metric = self.metrics.queue_busy_time.with_label_values(&[]);
+        let idle_metric = self.metrics.queue_busy_seconds.with_label_values(&[]);
         spawn(|| "coord idle metric", async move {
             // Every 5 seconds, attempt to measure how long it takes for the
             // coord select loop to be empty, because this message is the last
