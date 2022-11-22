@@ -215,19 +215,8 @@ impl KafkaSinkSendRetryManager {
 
 pub struct SinkProducerContext {
     metrics: Arc<SinkMetrics>,
+    healthchecker: Arc<Mutex<Option<Healthchecker>>>,
     retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
-}
-
-impl SinkProducerContext {
-    pub fn new(
-        metrics: Arc<SinkMetrics>,
-        retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
-    ) -> Self {
-        SinkProducerContext {
-            metrics,
-            retry_manager,
-        }
-    }
 }
 
 impl ClientContext for SinkProducerContext {
@@ -236,7 +225,16 @@ impl ClientContext for SinkProducerContext {
     fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
         MzClientContext.log(level, fac, log_message)
     }
-    fn error(&self, error: rdkafka::error::KafkaError, reason: &str) {
+    fn error(&self, error: KafkaError, reason: &str) {
+        let healthchecker = Arc::clone(&self.healthchecker);
+        let healthcheck_err = error.clone();
+        task::spawn(|| "producer-error-report", async move {
+            let mut locked = healthchecker.lock().await;
+            if let Some(hc) = locked.as_mut() {
+                hc.update_status(SinkStatus::Stalled(healthcheck_err.to_string()))
+                    .await;
+            }
+        });
         MzClientContext.error(error, reason)
     }
 }
@@ -437,8 +435,11 @@ impl KafkaSinkState {
 
         let retry_manager = Arc::new(Mutex::new(KafkaSinkSendRetryManager::new()));
 
-        let producer_context =
-            SinkProducerContext::new(Arc::clone(&metrics), Arc::clone(&retry_manager));
+        let producer_context = SinkProducerContext {
+            metrics: Arc::clone(&metrics),
+            healthchecker: Arc::clone(&healthchecker),
+            retry_manager: Arc::clone(&retry_manager),
+        };
         let producer = TokioHandle::current()
             .block_on(connection.connection.create_with_context(
                 connection_context,
@@ -843,6 +844,7 @@ impl KafkaSinkState {
                         .await,
                 )
                 .await;
+                self.update_status(SinkStatus::Running).await;
 
                 progress_emitted = true;
                 self.latest_progress_ts = min_frontier;
@@ -1216,6 +1218,7 @@ where
                                         .retry_on_txn_error(|p| p.commit_transaction())
                                         .await
                                 ).await;
+                                s.update_status(SinkStatus::Running).await;
 
                                 s.flush().await;
 
