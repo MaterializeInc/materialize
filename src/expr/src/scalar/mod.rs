@@ -2427,6 +2427,12 @@ impl EvalError {
             EvalError::LikeEscapeTooLong => {
                 Some("Escape string must be empty or one character.".into())
             }
+            EvalError::MzTimestampOutOfRange => Some(
+                "Integer, numeric, and text casts to mz_timestamp must be in the form of whole \
+                milliseconds since the Unix epoch. Values with fractional parts cannot be \
+                converted to mz_timestamp."
+                    .into(),
+            ),
             _ => None,
         }
     }
