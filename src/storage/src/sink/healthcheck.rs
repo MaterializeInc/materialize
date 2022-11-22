@@ -15,7 +15,6 @@ use anyhow::Context;
 use tokio::sync::Mutex;
 use tracing::trace;
 
-use mz_ore::halt;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistClient, PersistLocation, ShardId};
@@ -67,20 +66,6 @@ impl Healthchecker {
             status_shard,
             now,
         })
-    }
-
-    /// Report a SinkStatus::Stalled and then halt with the same message.
-    pub async fn report_stall_and_halt<S>(hc: Option<&mut Self>, msg: S) -> !
-    where
-        S: ToString + std::fmt::Debug,
-    {
-        if let Some(healthchecker) = hc {
-            healthchecker
-                .update_status(SinkStatus::Stalled(msg.to_string()))
-                .await;
-        }
-
-        halt!("{msg:?}")
     }
 
     /// Process a [`SinkStatus`] emitted by a sink

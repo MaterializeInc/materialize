@@ -11,6 +11,7 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::cmp;
 use std::collections::{HashMap, VecDeque};
+use std::fmt::Debug;
 use std::future::Future;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -50,7 +51,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_ore::retry::Retry;
-use mz_ore::task;
+use mz_ore::{halt, task};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::DataflowError;
@@ -432,6 +433,8 @@ impl KafkaSinkState {
             &worker_id,
         ));
 
+        let healthchecker = Arc::new(Mutex::new(None));
+
         let retry_manager = Arc::new(Mutex::new(KafkaSinkSendRetryManager::new()));
 
         let producer_context =
@@ -500,7 +503,7 @@ impl KafkaSinkState {
             progress_topic: connection.progress.topic,
             progress_key: format!("mz-sink-{sink_id}"),
             progress_client: Arc::new(progress_client),
-            healthchecker: Arc::new(Mutex::new(None)),
+            healthchecker,
             gate_ts,
             latest_progress_ts: Timestamp::minimum(),
             write_frontier,
@@ -537,11 +540,11 @@ impl KafkaSinkState {
                         continue;
                     } else {
                         // We've received an error that is not transient
-                        Healthchecker::report_stall_and_halt(
-                            self.healthchecker.lock().await.as_mut(),
-                            format!("fatal error while producing message in {}: {e}", self.name),
-                        )
-                        .await;
+                        self.halt_on_err(Err(format!(
+                            "fatal error while producing message in {}: {e}",
+                            self.name
+                        )))
+                        .await
                     }
                 }
             }
@@ -821,20 +824,12 @@ impl KafkaSinkState {
 
             if min_frontier > self.latest_progress_ts {
                 // record the write frontier in the progress topic.
-                let () = match self
-                    .producer
-                    .retry_on_txn_error(|p| p.begin_transaction())
-                    .await
-                {
-                    Ok(()) => (),
-                    Err(err) => {
-                        Healthchecker::report_stall_and_halt(
-                            self.healthchecker.lock().await.as_mut(),
-                            err,
-                        )
-                        .await
-                    }
-                };
+                self.halt_on_err(
+                    self.producer
+                        .retry_on_txn_error(|p| p.begin_transaction())
+                        .await,
+                )
+                .await;
 
                 info!(
                     "{}: sending progress for gate ts: {:?}",
@@ -842,20 +837,13 @@ impl KafkaSinkState {
                 );
                 self.send_progress_record(min_frontier).await;
 
-                let () = match self
-                    .producer
-                    .retry_on_txn_error(|p| p.commit_transaction())
-                    .await
-                {
-                    Ok(()) => (),
-                    Err(err) => {
-                        Healthchecker::report_stall_and_halt(
-                            self.healthchecker.lock().await.as_mut(),
-                            err,
-                        )
-                        .await
-                    }
-                };
+                self.halt_on_err(
+                    self.producer
+                        .retry_on_txn_error(|p| p.commit_transaction())
+                        .await,
+                )
+                .await;
+
                 progress_emitted = true;
                 self.latest_progress_ts = min_frontier;
             }
@@ -878,6 +866,28 @@ impl KafkaSinkState {
         }
 
         progress_emitted
+    }
+
+    async fn update_status(&self, status: SinkStatus) {
+        let mut locked = self.healthchecker.lock().await;
+        if let Some(hc) = &mut *locked {
+            hc.update_status(status).await;
+        }
+    }
+
+    /// Report a SinkStatus::Stalled and then halt with the same message.
+    pub async fn halt_on_err<T>(&self, result: Result<T, impl ToString + Debug>) -> T {
+        match result {
+            Ok(t) => t,
+            Err(msg) => {
+                let mut locked = self.healthchecker.lock().await;
+                if let Some(hc) = &mut *locked {
+                    hc.update_status(SinkStatus::Stalled(msg.to_string())).await;
+                }
+
+                halt!("{msg:?}")
+            }
+        }
     }
 }
 
@@ -1029,44 +1039,32 @@ where
             return;
         }
 
-        let mut healthchecker =
-            if let Some(status_shard_id) = healthchecker_args.status_shard_id {
-                let mut hc = Healthchecker::new(
-                    id,
-                    &healthchecker_args.persist_clients,
-                    healthchecker_args.persist_location.clone(),
-                    status_shard_id,
-                    healthchecker_args.now_fn.clone(),
-                )
-                .await
-                .expect("error initializing healthchecker");
-                hc.update_status(SinkStatus::Starting).await;
-                Some(hc)
-            } else {
-                None
-            };
-
-        let () = match s
-            .producer
-            .retry_on_txn_error(|p| p.init_transactions())
+        if let Some(status_shard_id) = healthchecker_args.status_shard_id {
+            let hc = Healthchecker::new(
+                id,
+                &healthchecker_args.persist_clients,
+                healthchecker_args.persist_location.clone(),
+                status_shard_id,
+                healthchecker_args.now_fn.clone(),
+            )
             .await
-        {
-            Ok(()) => (),
-            Err(err) => {
-                Healthchecker::report_stall_and_halt(healthchecker.as_mut(), err).await
-            }
+            .expect("error initializing healthchecker");
+            let mut locked = s.healthchecker.lock().await;
+            *locked = Some(hc);
         };
 
-        let latest_ts = match s.determine_latest_progress_record().await {
-            Ok(latest_ts) => latest_ts,
-            Err(e) => {
-                Healthchecker::report_stall_and_halt(
-                    healthchecker.as_mut(),
-                    format!("determining latest progress record {e:?}"),
-                )
-                .await
-            }
-        };
+        s.update_status(SinkStatus::Starting).await;
+
+        s.halt_on_err(
+            s.producer
+                .retry_on_txn_error(|p| p.init_transactions())
+                .await,
+        )
+        .await;
+
+        let latest_ts = s
+            .halt_on_err(s.determine_latest_progress_record().await)
+            .await;
         info!(
             "{}: initial as_of: {:?}, latest progress record: {:?}",
             s.name, as_of.frontier, latest_ts
@@ -1086,10 +1084,7 @@ where
             s.maybe_update_progress(&gate);
         }
 
-        if let Some(ref mut healthchecker) = healthchecker.as_mut() {
-            healthchecker.update_status(SinkStatus::Running).await;
-        }
-        *s.healthchecker.lock().await = healthchecker;
+        s.update_status(SinkStatus::Running).await;
 
         tokio::pin!(shutdown_rx);
         loop {
@@ -1173,12 +1168,11 @@ where
                                     ts,
                                     rows.len()
                                 );
-                                let () = match s.producer
+                                s.halt_on_err(
+                                    s.producer
                                     .retry_on_txn_error(|p| p.begin_transaction())
-                                    .await {
-                                        Ok(()) => (),
-                                        Err(err) => Healthchecker::report_stall_and_halt(s.healthchecker.lock().await.as_mut(), err).await,
-                                    };
+                                    .await
+                                ).await;
 
                                 let mut repeat_counter = 0;
                                 for encoded_row in rows {
@@ -1217,12 +1211,11 @@ where
                                 s.send_progress_record(*ts).await;
 
                                 info!("Committing transaction for {:?}", ts,);
-                                let () = match s.producer
-                                    .retry_on_txn_error(|p| p.commit_transaction())
-                                    .await {
-                                        Ok(()) => (),
-                                        Err(err) => Healthchecker::report_stall_and_halt(s.healthchecker.lock().await.as_mut(), err).await,
-                                    };
+                                s.halt_on_err(
+                                    s.producer
+                                        .retry_on_txn_error(|p| p.commit_transaction())
+                                        .await
+                                ).await;
 
                                 s.flush().await;
 
