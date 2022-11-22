@@ -82,6 +82,8 @@ impl PersistClientCache {
                 let consensus = ConsensusConfig::try_from(
                     x.key(),
                     self.cfg.consensus_connection_pool_max_size,
+                    self.cfg.consensus_connection_pool_ttl,
+                    self.cfg.consensus_connection_pool_ttl_stagger,
                     self.metrics.postgres_consensus.clone(),
                 )?;
                 let consensus =

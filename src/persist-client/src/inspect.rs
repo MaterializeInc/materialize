@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::anyhow;
 use bytes::BufMut;
@@ -45,8 +46,13 @@ pub async fn fetch_latest_state(
 ) -> Result<impl serde::Serialize, anyhow::Error> {
     let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
-    let consensus =
-        ConsensusConfig::try_from(consensus_uri, 1, metrics.postgres_consensus.clone())?;
+    let consensus = ConsensusConfig::try_from(
+        consensus_uri,
+        1,
+        Duration::MAX,
+        Duration::MAX,
+        metrics.postgres_consensus.clone(),
+    )?;
     let consensus = consensus.clone().open().await?;
     let blob = BlobConfig::try_from(blob_uri).await?;
     let blob = blob.clone().open().await?;
@@ -83,8 +89,13 @@ pub async fn fetch_latest_state_rollup(
 ) -> Result<impl serde::Serialize, anyhow::Error> {
     let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
-    let consensus =
-        ConsensusConfig::try_from(consensus_uri, 1, metrics.postgres_consensus.clone())?;
+    let consensus = ConsensusConfig::try_from(
+        consensus_uri,
+        1,
+        Duration::MAX,
+        Duration::MAX,
+        metrics.postgres_consensus.clone(),
+    )?;
     let consensus = consensus.clone().open().await?;
     let blob = BlobConfig::try_from(blob_uri).await?;
     let blob = blob.clone().open().await?;
@@ -112,8 +123,13 @@ pub async fn fetch_state_rollups(
 ) -> Result<impl serde::Serialize, anyhow::Error> {
     let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
-    let consensus =
-        ConsensusConfig::try_from(consensus_uri, 1, metrics.postgres_consensus.clone())?;
+    let consensus = ConsensusConfig::try_from(
+        consensus_uri,
+        1,
+        Duration::MAX,
+        Duration::MAX,
+        metrics.postgres_consensus.clone(),
+    )?;
     let consensus = consensus.clone().open().await?;
     let blob = BlobConfig::try_from(blob_uri).await?;
     let blob = blob.clone().open().await?;
@@ -169,8 +185,13 @@ pub async fn fetch_state_diffs(
 ) -> Result<Vec<impl serde::Serialize>, anyhow::Error> {
     let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
-    let consensus =
-        ConsensusConfig::try_from(consensus_uri, 1, metrics.postgres_consensus.clone())?;
+    let consensus = ConsensusConfig::try_from(
+        consensus_uri,
+        1,
+        Duration::MAX,
+        Duration::MAX,
+        metrics.postgres_consensus.clone(),
+    )?;
     let consensus = consensus.clone().open().await?;
     let blob = BlobConfig::try_from(blob_uri).await?;
     let blob = blob.clone().open().await?;
@@ -252,8 +273,13 @@ pub async fn unreferenced_blobs(
 ) -> Result<impl serde::Serialize, anyhow::Error> {
     let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
-    let consensus =
-        ConsensusConfig::try_from(consensus_uri, 1, metrics.postgres_consensus.clone())?;
+    let consensus = ConsensusConfig::try_from(
+        consensus_uri,
+        1,
+        Duration::MAX,
+        Duration::MAX,
+        metrics.postgres_consensus.clone(),
+    )?;
     let consensus = consensus.clone().open().await?;
     let blob = BlobConfig::try_from(blob_uri).await?;
     let blob = blob.clone().open().await?;

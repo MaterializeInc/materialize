@@ -125,6 +125,8 @@ impl PersistLocation {
         let consensus = ConsensusConfig::try_from(
             &self.consensus_uri,
             config.consensus_connection_pool_max_size,
+            config.consensus_connection_pool_ttl,
+            config.consensus_connection_pool_ttl_stagger,
             metrics.postgres_consensus.clone(),
         )?;
         let consensus = retry_external(&metrics.retries.external.consensus_open, || {
@@ -238,6 +240,18 @@ pub struct PersistConfig {
     /// The maximum size of the connection pool to Postgres/CRDB when performing
     /// consensus reads and writes.
     pub consensus_connection_pool_max_size: usize,
+    /// The minimum TTL of a connection to Postgres/CRDB before it is proactively
+    /// terminated. Connections are routinely culled to balance load against the
+    /// downstream database.
+    pub consensus_connection_pool_ttl: Duration,
+    /// The minimum time between TTLing connections to Postgres/CRDB. This delay is
+    /// used to stagger reconnections to avoid stampedes and high tail latencies.
+    /// This value should be much less than `consensus_connection_pool_ttl` so that
+    /// reconnections are biased towards terminating the oldest connections first.
+    /// A value of `consensus_connection_pool_ttl / consensus_connection_pool_max_size`
+    /// is likely a good place to start so that all connections are rotated when the
+    /// pool is fully used.
+    pub consensus_connection_pool_ttl_stagger: Duration,
     /// Length of time after a writer's last operation after which the writer
     /// may be expired.
     pub writer_lease_duration: Duration,
@@ -309,6 +323,8 @@ impl PersistConfig {
             compaction_queue_size: 20,
             compaction_minimum_timeout: Duration::from_secs(90),
             consensus_connection_pool_max_size: 50,
+            consensus_connection_pool_ttl: Duration::from_secs(300),
+            consensus_connection_pool_ttl_stagger: Duration::from_secs(6),
             writer_lease_duration: 60 * Duration::from_secs(60),
             reader_lease_duration: Self::DEFAULT_READ_LEASE_DURATION,
             critical_downgrade_interval: Duration::from_secs(30),

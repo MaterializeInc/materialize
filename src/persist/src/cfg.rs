@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::anyhow;
 use tracing::warn;
@@ -144,6 +145,8 @@ impl ConsensusConfig {
     pub fn try_from(
         value: &str,
         connection_pool_max_size: usize,
+        connection_pool_ttl: Duration,
+        connection_pool_ttl_stagger: Duration,
         metrics: PostgresConsensusMetrics,
     ) -> Result<Self, ExternalError> {
         let url = Url::parse(value).map_err(|err| {
@@ -155,9 +158,15 @@ impl ConsensusConfig {
         })?;
 
         let config = match url.scheme() {
-            "postgres" | "postgresql" => Ok(ConsensusConfig::Postgres(
-                PostgresConsensusConfig::new(value, connection_pool_max_size, metrics)?,
-            )),
+            "postgres" | "postgresql" => {
+                Ok(ConsensusConfig::Postgres(PostgresConsensusConfig::new(
+                    value,
+                    connection_pool_max_size,
+                    connection_pool_ttl,
+                    connection_pool_ttl_stagger,
+                    metrics,
+                )?))
+            }
             "mem" => {
                 if !cfg!(debug_assertions) {
                     warn!("persist unexpectedly using in-mem consensus in a release binary");
