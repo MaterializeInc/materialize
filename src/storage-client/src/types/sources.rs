@@ -25,7 +25,8 @@ use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
-use timely::progress::Antichain;
+use timely::order::PartialOrder;
+use timely::progress::{Antichain, PathSummary, Timestamp};
 use timely::scheduling::ActivateOnDrop;
 use uuid::Uuid;
 
@@ -79,7 +80,7 @@ pub struct SourceExport<S = ()> {
 }
 
 #[async_trait]
-impl<T: timely::progress::Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
+impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
     for IngestionDescription<CollectionMetadata>
 {
     // A `WriteHandle` per used shard. Once we have source envelopes that keep additional shards we
@@ -385,6 +386,36 @@ impl AddAssign<Self> for MzOffset {
 impl From<tokio_postgres::types::PgLsn> for MzOffset {
     fn from(lsn: tokio_postgres::types::PgLsn) -> Self {
         MzOffset { offset: lsn.into() }
+    }
+}
+
+impl Timestamp for MzOffset {
+    type Summary = MzOffset;
+
+    fn minimum() -> Self {
+        MzOffset {
+            offset: Timestamp::minimum(),
+        }
+    }
+}
+
+impl PathSummary<MzOffset> for MzOffset {
+    fn results_in(&self, src: &MzOffset) -> Option<MzOffset> {
+        Some(MzOffset {
+            offset: self.offset.results_in(&src.offset)?,
+        })
+    }
+
+    fn followed_by(&self, other: &Self) -> Option<Self> {
+        Some(MzOffset {
+            offset: PathSummary::<u64>::followed_by(&self.offset, &other.offset)?,
+        })
+    }
+}
+
+impl PartialOrder for MzOffset {
+    fn less_equal(&self, other: &Self) -> bool {
+        self.offset.less_equal(&other.offset)
     }
 }
 

@@ -12,10 +12,13 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use timely::progress::frontier::MutableAntichain;
+use timely::progress::Antichain;
 use timely::PartialOrder;
 
 use mz_expr::PartitionId;
+use mz_repr::Diff;
 use mz_storage_client::types::sources::MzOffset;
+use mz_timely_util::order::Partitioned;
 
 /// OffsetAntichain is similar to a timely `Antichain<(PartitionId, T: TotalOrder)>`,
 /// but additionally:
@@ -183,6 +186,11 @@ impl OffsetAntichain {
         self.inner.iter()
     }
 
+    /// Iterate over the entire frontier.
+    pub fn into_iter(self) -> impl Iterator<Item = (PartitionId, MzOffset)> {
+        self.inner.into_iter()
+    }
+
     /// Convert the frontier into a vector. Useful for certain
     /// old apis in the storage crate.
     pub fn as_vec(&self) -> Vec<(PartitionId, Option<MzOffset>)> {
@@ -210,6 +218,89 @@ impl OffsetAntichain {
         Self {
             inner: HashMap::from_iter(iter),
         }
+    }
+}
+
+/// Implementation that converts from an Antichain to an OffsetAntichain. This translation code is
+/// here for compatibility and will be removed once the pipeline is switched to native timestamps
+/// throughout.
+///
+/// Native antichains can express a superset of frontiers that the OffsetAntichain can, therefore
+/// the conversion here can fail. While it's non-standard to panic in From implementations this is
+/// fine here because it's just an interim step that will be removed shortly and all uses would
+/// have to panic on error anyway.
+impl From<Antichain<Partitioned<PartitionId, MzOffset>>> for OffsetAntichain {
+    fn from(frontier: Antichain<Partitioned<PartitionId, MzOffset>>) -> Self {
+        use mz_timely_util::order::{Interval, RangeBound};
+
+        // Extract the timestamps of this antichain and order them by partition
+        let mut elements = frontier.iter().collect::<Vec<_>>();
+        elements.sort_unstable_by(|a, b| match (a.interval(), b.interval()) {
+            (Interval::Range(a_lower, _), Interval::Range(b_lower, _)) => a_lower.cmp(b_lower),
+            (Interval::Point(pid), Interval::Range(lower, _)) => RangeBound::Elem(pid.clone())
+                .cmp(lower)
+                .then(Ordering::Less),
+            (Interval::Range(lower, _), Interval::Point(pid)) => lower
+                .cmp(&RangeBound::Elem(pid.clone()))
+                .then(Ordering::Greater),
+            (Interval::Point(a_pid), Interval::Point(b_pid)) => a_pid.cmp(b_pid),
+        });
+
+        // We now sweep over the partition space and construct an offset antichain, asserting that
+        // there are no gaps in the original Antichain which are unrepresentable in OffsetAntichain
+        let mut prev_upper = &RangeBound::Bottom;
+        let mut antichain = OffsetAntichain::new();
+        for element in elements.iter() {
+            match element.interval() {
+                Interval::Range(lower, upper) => {
+                    assert_eq!(prev_upper, lower, "invalid frontier: {frontier:?}");
+                    assert_eq!(element.timestamp().offset, 0, "Non-zero range element");
+                    prev_upper = upper;
+                }
+                Interval::Point(pid) => {
+                    let lower = RangeBound::Elem(pid.clone());
+                    assert_eq!(prev_upper, &lower, "invalid frontier: {frontier:?}");
+                    antichain.insert(pid.clone(), *element.timestamp());
+                }
+            }
+        }
+        assert_eq!(
+            prev_upper,
+            &RangeBound::Top,
+            "invalid frontier: {frontier:?}"
+        );
+        antichain
+    }
+}
+
+/// Implementation that converts from an OffsetAntichain to an Antichain. This translation code is
+/// here for compatibility and will be removed once the pipeline is switched to native timestamps
+/// throughout.
+impl From<OffsetAntichain> for Antichain<Partitioned<PartitionId, MzOffset>> {
+    fn from(frontier: OffsetAntichain) -> Self {
+        // Extract the timestamps of this frontier and order them by partition
+        let mut elements = frontier
+            .inner
+            .into_iter()
+            .filter(|(_pid, offset)| offset.offset != 0)
+            .collect::<Vec<_>>();
+        elements.sort_unstable();
+
+        // We now sweep over the partition space and construct an antichain, creating range
+        // elements for the gaps between the non-zero partitions.
+        let mut prev_pid = None;
+        let mut antichain = Antichain::new();
+        for (pid, offset) in elements {
+            antichain.insert(Partitioned::with_range(
+                prev_pid,
+                Some(pid.clone()),
+                MzOffset::from(0),
+            ));
+            prev_pid = Some(pid.clone());
+            antichain.insert(Partitioned::with_partition(pid, offset));
+        }
+        antichain.insert(Partitioned::with_range(prev_pid, None, MzOffset::from(0)));
+        antichain
     }
 }
 
@@ -254,6 +345,17 @@ impl MutableOffsetAntichain {
             .iter()
             .map(|(pid, offset)| (PartitionOffset::new(pid.clone(), *offset), -1));
         self.inner.update_iter(iter);
+    }
+
+    pub fn update_iter<I>(&mut self, updates: I)
+    where
+        I: IntoIterator<Item = ((PartitionId, MzOffset), Diff)>,
+    {
+        self.inner.update_iter(
+            updates
+                .into_iter()
+                .map(|((pid, offset), diff)| (PartitionOffset::new(pid, offset), diff)),
+        );
     }
 
     /// Reveals the minimal elements with positive count.
