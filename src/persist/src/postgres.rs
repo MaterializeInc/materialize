@@ -169,10 +169,12 @@ impl PostgresConsensus {
         );
 
         let last_ttl_connection = AtomicU64::new(0);
+        let connections_created = config.metrics.connpool_connections_created.clone();
         let ttl_reconnections = config.metrics.connpool_ttl_reconnections.clone();
         let pool = Pool::builder(manager)
             .max_size(config.connection_pool_max_size)
-            .post_create(Hook::async_fn(|client, _| {
+            .post_create(Hook::async_fn(move |client, _| {
+                connections_created.inc();
                 Box::pin(async move {
                     debug!("opened new consensus postgres connection");
                     client.batch_execute(
