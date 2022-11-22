@@ -18,9 +18,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use std::{env, thread};
 
-use anyhow::anyhow;
 use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::{routing, Json, Router};
@@ -29,15 +27,12 @@ use http::StatusCode;
 use postgres::Row;
 use regex::Regex;
 use serde_json::json;
-use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, oneshot};
-use tokio_postgres::config::Host;
-use tokio_postgres::Client;
 use tracing::info;
 
 use mz_adapter::catalog::{INTERNAL_USER_NAMES, INTROSPECTION_USER, SYSTEM_USER};
 use mz_ore::assert_contains;
-use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO, SYSTEM_TIME};
+use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
 use mz_ore::retry::Retry;
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 
@@ -98,8 +93,6 @@ impl MockHttpServer {
 
 #[test]
 fn test_no_block() -> Result<(), anyhow::Error> {
-    mz_ore::test::init_logging();
-
     // This is better than relying on CI to time out, because an actual failure
     // (as opposed to a CI timeout) causes `services.log` to be uploaded.
     mz_ore::test::timeout(Duration::from_secs(60), || {
@@ -179,8 +172,6 @@ fn test_no_block() -> Result<(), anyhow::Error> {
 /// does not crash the server.
 #[test]
 fn test_drop_connection_race() -> Result<(), anyhow::Error> {
-    mz_ore::test::init_logging();
-
     info!("test_drop_connection_race: starting server");
     let server = util::start_server(util::Config::default().unsafe_mode())?;
 
@@ -259,8 +250,6 @@ fn test_drop_connection_race() -> Result<(), anyhow::Error> {
 
 #[test]
 fn test_time() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let server = util::start_server(util::Config::default())?;
     let mut client = server.connect(postgres::NoTls)?;
 
@@ -298,8 +287,6 @@ fn test_time() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_subscribe_consolidation() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
     let mut client_writes = server.connect(postgres::NoTls)?;
@@ -326,8 +313,6 @@ fn test_subscribe_consolidation() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_subscribe_negative_diffs() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
     let mut client_writes = server.connect(postgres::NoTls)?;
@@ -374,8 +359,6 @@ fn test_subscribe_negative_diffs() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_subscribe_basic() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     // Set the timestamp to zero for deterministic initial timestamps.
     let nowfn = Arc::new(Mutex::new(NOW_ZERO.clone()));
     let now = {
@@ -501,8 +484,6 @@ fn test_subscribe_basic() -> Result<(), Box<dyn Error>> {
 /// data row we will also see one progressed message.
 #[test]
 fn test_subscribe_progress() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
     let mut client_writes = server.connect(postgres::NoTls)?;
@@ -583,8 +564,6 @@ fn test_subscribe_progress() -> Result<(), Box<dyn Error>> {
 // turns them into nullable columns. See #6304.
 #[test]
 fn test_subscribe_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
     let mut client_writes = server.connect(postgres::NoTls)?;
@@ -632,8 +611,6 @@ fn test_subscribe_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> 
 /// receive data or not.
 #[test]
 fn test_subcribe_continuous_progress() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
     let mut client_writes = server.connect(postgres::NoTls)?;
@@ -715,8 +692,6 @@ fn test_subcribe_continuous_progress() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_subscribe_fetch_timeout() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
@@ -804,8 +779,6 @@ fn test_subscribe_fetch_timeout() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_subscribe_fetch_wait() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
@@ -863,8 +836,6 @@ fn test_subscribe_fetch_wait() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_subscribe_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let config = util::Config::default();
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
@@ -884,8 +855,6 @@ fn test_subscribe_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
 // does not keep the server alive forever.
 #[test]
 fn test_subscribe_shutdown() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let server = util::start_server(util::Config::default())?;
 
     // We have to use the async PostgreSQL client so that we can ungracefully
@@ -922,8 +891,6 @@ fn test_subscribe_shutdown() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_subscribe_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let config = util::Config::default().workers(3);
     let server = util::start_server(config)?;
     let mut client_interactive = server.connect(postgres::NoTls)?;
@@ -999,8 +966,6 @@ fn test_subscribe_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
 // by another connection.
 #[test]
 fn test_temporary_views() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let server = util::start_server(util::Config::default())?;
     let mut client_a = server.connect(postgres::NoTls)?;
     let mut client_b = server.connect(postgres::NoTls)?;
@@ -1065,7 +1030,6 @@ source materialize.public.t1 (u1, storage):
 // of cancelled (sends a pgwire cancel request on a new connection).
 #[test]
 fn test_github_12546() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
     let config = util::Config::default();
     let server = util::start_server(config)?;
 
@@ -1112,7 +1076,6 @@ fn test_github_12546() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_github_12951() {
-    mz_ore::test::init_logging();
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
 
@@ -1173,7 +1136,6 @@ fn test_github_12951() {
 #[test]
 // Tests github issue #13100
 fn test_subscribe_outlive_cluster() {
-    mz_ore::test::init_logging();
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
 
@@ -1209,7 +1171,6 @@ fn test_subscribe_outlive_cluster() {
 
 #[test]
 fn test_read_then_write_serializability() {
-    mz_ore::test::init_logging();
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
 
@@ -1277,7 +1238,7 @@ fn test_timestamp_recovery() -> Result<(), Box<dyn Error>> {
         let mut client = server.connect(postgres::NoTls)?;
 
         client.batch_execute("CREATE TABLE t1 (i1 INT)")?;
-        get_explain_timestamp("t1", &mut client)
+        util::get_explain_timestamp("t1", &mut client)
     };
 
     // Rollback the current time and ensure that a value larger than the old global timestamp is
@@ -1286,7 +1247,7 @@ fn test_timestamp_recovery() -> Result<(), Box<dyn Error>> {
         *now.lock().expect("lock poisoned") = 0;
         let server = util::start_server(config)?;
         let mut client = server.connect(postgres::NoTls)?;
-        let recovered_timestamp = get_explain_timestamp("t1", &mut client);
+        let recovered_timestamp = util::get_explain_timestamp("t1", &mut client);
         assert!(recovered_timestamp > global_timestamp);
     }
 
@@ -1295,7 +1256,6 @@ fn test_timestamp_recovery() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_timeline_read_holds() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
     // Set the timestamp to zero for deterministic initial timestamps.
     let now = Arc::new(Mutex::new(0));
     let now_fn = {
@@ -1308,7 +1268,7 @@ fn test_timeline_read_holds() -> Result<(), Box<dyn Error>> {
 
     let view_name = "v_hold";
     let source_name = "source_hold";
-    let (mut pg_client, cleanup_fn) = create_postgres_source_with_table(
+    let (mut pg_client, cleanup_fn) = util::create_postgres_source_with_table(
         &server.runtime,
         &mut mz_client,
         view_name,
@@ -1319,7 +1279,7 @@ fn test_timeline_read_holds() -> Result<(), Box<dyn Error>> {
     // Create user table in Materialize.
     mz_client.batch_execute("DROP TABLE IF EXISTS t;")?;
     mz_client.batch_execute("CREATE TABLE t (a INT);")?;
-    insert_with_deterministic_timestamps("t", "(42)", &server, Arc::clone(&now))?;
+    util::insert_with_deterministic_timestamps("t", "(42)", &server, Arc::clone(&now))?;
 
     // Insert data into source.
     let source_rows: i64 = 10;
@@ -1329,7 +1289,7 @@ fn test_timeline_read_holds() -> Result<(), Box<dyn Error>> {
             .block_on(pg_client.execute(&format!("INSERT INTO {view_name} VALUES (42);"), &[]))?;
     }
 
-    wait_for_view_population(&mut mz_client, view_name, source_rows)?;
+    util::wait_for_view_population(&mut mz_client, view_name, source_rows)?;
 
     // Make sure that the table and view are joinable immediately at some timestamp.
     let mut mz_join_client = server.connect(postgres::NoTls)?;
@@ -1346,7 +1306,6 @@ fn test_timeline_read_holds() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_linearizability() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
     // Set the timestamp to zero for deterministic initial timestamps.
     let now = Arc::new(Mutex::new(0));
     let now_fn = {
@@ -1359,7 +1318,7 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
 
     let view_name = "v_lin";
     let source_name = "source_lin";
-    let (mut pg_client, cleanup_fn) = create_postgres_source_with_table(
+    let (mut pg_client, cleanup_fn) = util::create_postgres_source_with_table(
         &server.runtime,
         &mut mz_client,
         view_name,
@@ -1371,7 +1330,7 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
         .runtime
         .block_on(pg_client.execute(&format!("INSERT INTO {view_name} VALUES (42);"), &[]))?;
 
-    wait_for_view_population(&mut mz_client, view_name, 1)?;
+    util::wait_for_view_population(&mut mz_client, view_name, 1)?;
 
     // The user table's write frontier will be close to zero because we use a deterministic
     // now function in this test. It may be slightly higher than zero because bootstrapping
@@ -1383,24 +1342,24 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
     // serializable mode.
 
     mz_client.batch_execute("SET transaction_isolation = serializable")?;
-    let view_ts = get_explain_timestamp(view_name, &mut mz_client);
+    let view_ts = util::get_explain_timestamp(view_name, &mut mz_client);
     // Create user table in Materialize.
     mz_client.batch_execute("DROP TABLE IF EXISTS t;")?;
     mz_client.batch_execute("CREATE TABLE t (a INT);")?;
-    let join_ts = get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
+    let join_ts = util::get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
     // In serializable transaction isolation, read timestamps can go backwards.
     assert!(join_ts < view_ts);
 
     mz_client.batch_execute("SET transaction_isolation = 'strict serializable'")?;
-    let view_ts = get_explain_timestamp(view_name, &mut mz_client);
-    let join_ts = get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
+    let view_ts = util::get_explain_timestamp(view_name, &mut mz_client);
+    let join_ts = util::get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
     // Since the query on the join was done after the query on the view, it should have a higher or
     // equal timestamp in strict serializable mode.
     assert!(join_ts >= view_ts);
 
     mz_client.batch_execute("SET transaction_isolation = serializable")?;
-    let view_ts = get_explain_timestamp(view_name, &mut mz_client);
-    let join_ts = get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
+    let view_ts = util::get_explain_timestamp(view_name, &mut mz_client);
+    let join_ts = util::get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
     // If we go back to serializable, then timestamps can revert again.
     assert!(join_ts < view_ts);
 
@@ -1411,8 +1370,6 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_internal_users() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let config = util::Config::default();
     let server = util::start_server(config)?;
 
@@ -1442,8 +1399,6 @@ fn test_internal_users() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_internal_users_cluster() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let config = util::Config::default();
     let server = util::start_server(config)?;
 
@@ -1466,8 +1421,6 @@ fn test_internal_users_cluster() -> Result<(), Box<dyn Error>> {
 // crashing
 #[test]
 fn test_internal_ports() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let config = util::Config::default();
     let server = util::start_server(config)?;
 
@@ -1522,8 +1475,6 @@ fn test_internal_ports() -> Result<(), Box<dyn Error>> {
 // needed for this test.
 #[test]
 fn test_alter_system_invalid_param() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let config = util::Config::default();
     let server = util::start_server(config)?;
 
@@ -1551,8 +1502,6 @@ fn test_alter_system_invalid_param() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_concurrent_writes() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let config = util::Config::default();
     let server = util::start_server(config)?;
 
@@ -1608,181 +1557,8 @@ fn test_concurrent_writes() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Group commit will block writes until the current time has advanced. This can make
-/// performing inserts while using deterministic time difficult. This is a helper
-/// method to perform writes and advance the current time.
-fn insert_with_deterministic_timestamps(
-    table: &'static str,
-    values: &'static str,
-    server: &util::Server,
-    now: Arc<Mutex<EpochMillis>>,
-) -> Result<(), Box<dyn Error>> {
-    let mut client_write = server.connect(postgres::NoTls)?;
-    let mut client_read = server.connect(postgres::NoTls)?;
-
-    let mut current_ts = get_explain_timestamp(table, &mut client_read);
-    let write_thread = thread::spawn(move || {
-        client_write
-            .execute(&format!("INSERT INTO {table} VALUES {values}"), &[])
-            .unwrap();
-    });
-    while !write_thread.is_finished() {
-        // Keep increasing `now` until the write has executed succeed. Table advancements may
-        // have increased the global timestamp by an unknown amount.
-        current_ts += 1;
-        *now.lock().expect("lock poisoned") = current_ts;
-        thread::sleep(Duration::from_millis(1));
-    }
-    write_thread.join().unwrap();
-    Ok(())
-}
-
-fn get_explain_timestamp(table: &str, client: &mut postgres::Client) -> EpochMillis {
-    let row = client
-        .query_one(&format!("EXPLAIN TIMESTAMP FOR SELECT * FROM {table}"), &[])
-        .unwrap();
-    let explain: String = row.get(0);
-    let timestamp_re = Regex::new(r"^\s+query timestamp:\s*(\d+)").unwrap();
-    let timestamp_caps = timestamp_re.captures(&explain).unwrap();
-    timestamp_caps.get(1).unwrap().as_str().parse().unwrap()
-}
-
-/// Helper function to create a Postgres source.
-///
-/// IMPORTANT: Make sure to call closure that is returned at
-/// the end of the test to clean up Postgres state.
-///
-/// WARNING: If multiple tests use this, and the tests are run
-/// in parallel, then make sure the test use different postgres
-/// tables.
-fn create_postgres_source_with_table(
-    runtime: &Arc<Runtime>,
-    mz_client: &mut postgres::Client,
-    table_name: &str,
-    table_schema: &str,
-    source_name: &str,
-) -> Result<
-    (
-        Client,
-        impl FnOnce(&mut postgres::Client, &mut Client, &Arc<Runtime>) -> Result<(), Box<dyn Error>>,
-    ),
-    Box<dyn Error>,
-> {
-    let postgres_url = env::var("POSTGRES_URL")
-        .map_err(|_| anyhow!("POSTGRES_URL environment variable is not set"))?;
-
-    let (pg_client, connection) =
-        runtime.block_on(tokio_postgres::connect(&postgres_url, postgres::NoTls))?;
-
-    let pg_config: tokio_postgres::Config = postgres_url.parse().unwrap();
-    let user = pg_config.get_user().unwrap_or("postgres");
-    let db_name = pg_config.get_dbname().unwrap_or(user);
-    let ports = pg_config.get_ports();
-    let port = if ports.is_empty() { 5432 } else { ports[0] };
-    let hosts = pg_config.get_hosts();
-    let host = if hosts.is_empty() {
-        "localhost".to_string()
-    } else {
-        match &hosts[0] {
-            Host::Tcp(host) => host.to_string(),
-            Host::Unix(host) => host.to_str().unwrap().to_string(),
-        }
-    };
-    let password = pg_config.get_password();
-
-    let pg_runtime = Arc::<tokio::runtime::Runtime>::clone(runtime);
-    thread::spawn(move || {
-        if let Err(e) = pg_runtime.block_on(connection) {
-            panic!("connection error: {}", e);
-        }
-    });
-
-    // Create table in Postgres with publication.
-    let _ =
-        runtime.block_on(pg_client.execute(&format!("DROP TABLE IF EXISTS {table_name};"), &[]))?;
-    let _ = runtime
-        .block_on(pg_client.execute(&format!("DROP PUBLICATION IF EXISTS {source_name};"), &[]))?;
-    let _ = runtime
-        .block_on(pg_client.execute(&format!("CREATE TABLE {table_name} {table_schema};"), &[]))?;
-    let _ = runtime.block_on(pg_client.execute(
-        &format!("ALTER TABLE {table_name} REPLICA IDENTITY FULL;"),
-        &[],
-    ))?;
-    let _ = runtime.block_on(pg_client.execute(
-        &format!("CREATE PUBLICATION {source_name} FOR TABLE {table_name};"),
-        &[],
-    ))?;
-
-    // Create postgres source in Materialize.
-    let mut connection_str = format!("HOST '{host}', PORT {port}, USER {user}, DATABASE {db_name}");
-    if let Some(password) = password {
-        let password = std::str::from_utf8(password).unwrap();
-        mz_client.batch_execute(&format!("CREATE SECRET s AS '{password}'"))?;
-        connection_str = format!("{connection_str}, PASSWORD SECRET s");
-    }
-    mz_client.batch_execute(&format!(
-        "CREATE CONNECTION pgconn TO POSTGRES ({connection_str})"
-    ))?;
-    mz_client.batch_execute(&format!(
-        "CREATE SOURCE {source_name}
-            FROM POSTGRES
-            CONNECTION pgconn
-            (PUBLICATION '{source_name}')
-            FOR TABLES ({table_name});"
-    ))?;
-
-    let table_name = table_name.to_string();
-    let source_name = source_name.to_string();
-    Ok((
-        pg_client,
-        move |mz_client: &mut postgres::Client, pg_client: &mut Client, runtime: &Arc<Runtime>| {
-            mz_client.batch_execute(&format!("DROP SOURCE {source_name};"))?;
-            mz_client.batch_execute("DROP CONNECTION pgconn;")?;
-
-            let _ = runtime
-                .block_on(pg_client.execute(&format!("DROP PUBLICATION {source_name};"), &[]))?;
-            let _ =
-                runtime.block_on(pg_client.execute(&format!("DROP TABLE {table_name};"), &[]))?;
-            Ok(())
-        },
-    ))
-}
-
-fn wait_for_view_population(
-    mz_client: &mut postgres::Client,
-    view_name: &str,
-    source_rows: i64,
-) -> Result<(), Box<dyn Error>> {
-    let current_isolation = mz_client
-        .query_one("SHOW transaction_isolation", &[])?
-        .get::<_, String>(0);
-    mz_client.batch_execute("SET transaction_isolation = SERIALIZABLE")?;
-    Retry::default()
-        .max_duration(Duration::from_secs(10))
-        .retry(|_| {
-            let rows = mz_client
-                .query_one(&format!("SELECT COUNT(*) FROM {view_name};"), &[])
-                .unwrap()
-                .get::<_, i64>(0);
-            if rows == source_rows {
-                Ok(())
-            } else {
-                Err(format!(
-                    "Waiting for {source_rows} row to be ingested. Currently at {rows}."
-                ))
-            }
-        })
-        .unwrap();
-    mz_client.batch_execute(&format!(
-        "SET transaction_isolation = '{current_isolation}'"
-    ))?;
-    Ok(())
-}
-
 #[test]
 fn test_load_generator() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -1821,8 +1597,6 @@ fn test_load_generator() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_introspection_user_permissions() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let config = util::Config::default();
     let server = util::start_server(config)?;
 

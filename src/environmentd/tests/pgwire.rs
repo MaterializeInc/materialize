@@ -37,8 +37,6 @@ pub mod util;
 
 #[test]
 fn test_bind_params() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
@@ -100,8 +98,6 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_partial_read() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let server = util::start_server(util::Config::default())?;
     let mut client = server.connect(postgres::NoTls)?;
     let query = "VALUES ('1'), ('2'), ('3'), ('4'), ('5'), ('6'), ('7')";
@@ -130,8 +126,6 @@ fn test_partial_read() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_read_many_rows() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let server = util::start_server(util::Config::default())?;
     let mut client = server.connect(postgres::NoTls)?;
     let query = "VALUES (1), (2), (3)";
@@ -148,8 +142,6 @@ fn test_read_many_rows() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_conn_startup() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let server = util::start_server(util::Config::default())?;
     let mut client = server.connect(postgres::NoTls)?;
 
@@ -279,8 +271,6 @@ fn test_conn_startup() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_conn_user() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let server = util::start_server(util::Config::default())?;
     let mut client = server.connect(postgres::NoTls)?;
 
@@ -309,8 +299,6 @@ fn test_conn_user() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_simple_query_no_hang() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let server = util::start_server(util::Config::default())?;
     let mut client = server.connect(postgres::NoTls)?;
     assert!(client.simple_query("asdfjkl;").is_err());
@@ -322,8 +310,6 @@ fn test_simple_query_no_hang() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_copy() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let server = util::start_server(util::Config::default())?;
     let mut client = server.connect(postgres::NoTls)?;
 
@@ -365,8 +351,6 @@ fn test_copy() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_arrays() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let server = util::start_server(util::Config::default().unsafe_mode())?;
     let mut client = server.connect(postgres::NoTls)?;
 
@@ -412,8 +396,6 @@ fn test_arrays() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_record_types() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let server = util::start_server(util::Config::default())?;
     let mut client = server.connect(postgres::NoTls)?;
 
@@ -476,8 +458,6 @@ fn pg_test_inner(dir: PathBuf) -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_pgtest() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let dir: PathBuf = ["..", "..", "test", "pgtest"].iter().collect();
     pg_test_inner(dir)
 }
@@ -485,8 +465,6 @@ fn test_pgtest() -> Result<(), Box<dyn Error>> {
 #[test]
 // Materialize's differences from Postgres' responses.
 fn test_pgtest_mz() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let dir: PathBuf = ["..", "..", "test", "pgtest-mz"].iter().collect();
     pg_test_inner(dir)
 }

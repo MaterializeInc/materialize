@@ -7,12 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::env;
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{env, thread};
 
 use anyhow::anyhow;
 use once_cell::sync::Lazy;
@@ -20,9 +20,12 @@ use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};
 use postgres::types::{FromSql, Type};
 use postgres::{NoTls, Socket};
+use regex::Regex;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 use tokio::sync::Mutex;
+use tokio_postgres::config::Host;
+use tokio_postgres::Client;
 use tower_http::cors::AllowOrigin;
 use uuid::Uuid;
 
@@ -33,7 +36,8 @@ use mz_orchestrator::Orchestrator;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::{NowFn, SYSTEM_TIME};
+use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
+use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
@@ -360,4 +364,175 @@ where
             Err(e) => e.unwrap_db_error(),
         }
     }
+}
+
+/// Group commit will block writes until the current time has advanced. This can make
+/// performing inserts while using deterministic time difficult. This is a helper
+/// method to perform writes and advance the current time.
+pub fn insert_with_deterministic_timestamps(
+    table: &'static str,
+    values: &'static str,
+    server: &Server,
+    now: Arc<std::sync::Mutex<EpochMillis>>,
+) -> Result<(), Box<dyn Error>> {
+    let mut client_write = server.connect(postgres::NoTls)?;
+    let mut client_read = server.connect(postgres::NoTls)?;
+
+    let mut current_ts = get_explain_timestamp(table, &mut client_read);
+    let write_thread = thread::spawn(move || {
+        client_write
+            .execute(&format!("INSERT INTO {table} VALUES {values}"), &[])
+            .unwrap();
+    });
+    while !write_thread.is_finished() {
+        // Keep increasing `now` until the write has executed succeed. Table advancements may
+        // have increased the global timestamp by an unknown amount.
+        current_ts += 1;
+        *now.lock().expect("lock poisoned") = current_ts;
+        thread::sleep(Duration::from_millis(1));
+    }
+    write_thread.join().unwrap();
+    Ok(())
+}
+
+pub fn get_explain_timestamp(table: &str, client: &mut postgres::Client) -> EpochMillis {
+    let row = client
+        .query_one(&format!("EXPLAIN TIMESTAMP FOR SELECT * FROM {table}"), &[])
+        .unwrap();
+    let explain: String = row.get(0);
+    let timestamp_re = Regex::new(r"^\s+query timestamp:\s*(\d+)").unwrap();
+    let timestamp_caps = timestamp_re.captures(&explain).unwrap();
+    timestamp_caps.get(1).unwrap().as_str().parse().unwrap()
+}
+
+/// Helper function to create a Postgres source.
+///
+/// IMPORTANT: Make sure to call closure that is returned at
+/// the end of the test to clean up Postgres state.
+///
+/// WARNING: If multiple tests use this, and the tests are run
+/// in parallel, then make sure the test use different postgres
+/// tables.
+pub fn create_postgres_source_with_table(
+    runtime: &Arc<Runtime>,
+    mz_client: &mut postgres::Client,
+    table_name: &str,
+    table_schema: &str,
+    source_name: &str,
+) -> Result<
+    (
+        Client,
+        impl FnOnce(&mut postgres::Client, &mut Client, &Arc<Runtime>) -> Result<(), Box<dyn Error>>,
+    ),
+    Box<dyn Error>,
+> {
+    let postgres_url = env::var("POSTGRES_URL")
+        .map_err(|_| anyhow!("POSTGRES_URL environment variable is not set"))?;
+
+    let (pg_client, connection) =
+        runtime.block_on(tokio_postgres::connect(&postgres_url, postgres::NoTls))?;
+
+    let pg_config: tokio_postgres::Config = postgres_url.parse().unwrap();
+    let user = pg_config.get_user().unwrap_or("postgres");
+    let db_name = pg_config.get_dbname().unwrap_or(user);
+    let ports = pg_config.get_ports();
+    let port = if ports.is_empty() { 5432 } else { ports[0] };
+    let hosts = pg_config.get_hosts();
+    let host = if hosts.is_empty() {
+        "localhost".to_string()
+    } else {
+        match &hosts[0] {
+            Host::Tcp(host) => host.to_string(),
+            Host::Unix(host) => host.to_str().unwrap().to_string(),
+        }
+    };
+    let password = pg_config.get_password();
+
+    let pg_runtime = Arc::<tokio::runtime::Runtime>::clone(runtime);
+    thread::spawn(move || {
+        if let Err(e) = pg_runtime.block_on(connection) {
+            panic!("connection error: {}", e);
+        }
+    });
+
+    // Create table in Postgres with publication.
+    let _ =
+        runtime.block_on(pg_client.execute(&format!("DROP TABLE IF EXISTS {table_name};"), &[]))?;
+    let _ = runtime
+        .block_on(pg_client.execute(&format!("DROP PUBLICATION IF EXISTS {source_name};"), &[]))?;
+    let _ = runtime
+        .block_on(pg_client.execute(&format!("CREATE TABLE {table_name} {table_schema};"), &[]))?;
+    let _ = runtime.block_on(pg_client.execute(
+        &format!("ALTER TABLE {table_name} REPLICA IDENTITY FULL;"),
+        &[],
+    ))?;
+    let _ = runtime.block_on(pg_client.execute(
+        &format!("CREATE PUBLICATION {source_name} FOR TABLE {table_name};"),
+        &[],
+    ))?;
+
+    // Create postgres source in Materialize.
+    let mut connection_str = format!("HOST '{host}', PORT {port}, USER {user}, DATABASE {db_name}");
+    if let Some(password) = password {
+        let password = std::str::from_utf8(password).unwrap();
+        mz_client.batch_execute(&format!("CREATE SECRET s AS '{password}'"))?;
+        connection_str = format!("{connection_str}, PASSWORD SECRET s");
+    }
+    mz_client.batch_execute(&format!(
+        "CREATE CONNECTION pgconn TO POSTGRES ({connection_str})"
+    ))?;
+    mz_client.batch_execute(&format!(
+        "CREATE SOURCE {source_name}
+            FROM POSTGRES
+            CONNECTION pgconn
+            (PUBLICATION '{source_name}')
+            FOR TABLES ({table_name});"
+    ))?;
+
+    let table_name = table_name.to_string();
+    let source_name = source_name.to_string();
+    Ok((
+        pg_client,
+        move |mz_client: &mut postgres::Client, pg_client: &mut Client, runtime: &Arc<Runtime>| {
+            mz_client.batch_execute(&format!("DROP SOURCE {source_name};"))?;
+            mz_client.batch_execute("DROP CONNECTION pgconn;")?;
+
+            let _ = runtime
+                .block_on(pg_client.execute(&format!("DROP PUBLICATION {source_name};"), &[]))?;
+            let _ =
+                runtime.block_on(pg_client.execute(&format!("DROP TABLE {table_name};"), &[]))?;
+            Ok(())
+        },
+    ))
+}
+
+pub fn wait_for_view_population(
+    mz_client: &mut postgres::Client,
+    view_name: &str,
+    source_rows: i64,
+) -> Result<(), Box<dyn Error>> {
+    let current_isolation = mz_client
+        .query_one("SHOW transaction_isolation", &[])?
+        .get::<_, String>(0);
+    mz_client.batch_execute("SET transaction_isolation = SERIALIZABLE")?;
+    Retry::default()
+        .max_duration(Duration::from_secs(10))
+        .retry(|_| {
+            let rows = mz_client
+                .query_one(&format!("SELECT COUNT(*) FROM {view_name};"), &[])
+                .unwrap()
+                .get::<_, i64>(0);
+            if rows == source_rows {
+                Ok(())
+            } else {
+                Err(format!(
+                    "Waiting for {source_rows} row to be ingested. Currently at {rows}."
+                ))
+            }
+        })
+        .unwrap();
+    mz_client.batch_execute(&format!(
+        "SET transaction_isolation = '{current_isolation}'"
+    ))?;
+    Ok(())
 }

@@ -497,8 +497,6 @@ fn test_auth_expiry() -> Result<(), Box<dyn Error>> {
     // is done by starting a web server that awaits the refresh request, which the
     // test waits for.
 
-    mz_ore::test::init_logging();
-
     let ca = Ca::new_root("test ca")?;
     let (server_cert, server_key) =
         ca.request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])?;
@@ -600,8 +598,6 @@ fn test_auth_expiry() -> Result<(), Box<dyn Error>> {
 #[allow(clippy::unit_arg)]
 #[test]
 fn test_auth() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let ca = Ca::new_root("test ca")?;
     let (server_cert, server_key) =
         ca.request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])?;

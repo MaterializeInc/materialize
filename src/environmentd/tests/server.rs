@@ -42,8 +42,6 @@ impl<'a> FromSql<'a> for UInt8 {
 
 #[test]
 fn test_persistence() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let data_dir = tempfile::tempdir()?;
     let config = util::Config::default()
         .data_directory(data_dir.path())
@@ -114,8 +112,6 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
 // unsafe mode.
 #[test]
 fn test_source_sink_size_required() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let server = util::start_server(util::Config::default())?;
     let mut client = server.connect(postgres::NoTls)?;
 
@@ -164,7 +160,6 @@ fn test_source_sink_size_required() -> Result<(), Box<dyn Error>> {
 // Test the /sql POST endpoint of the HTTP server.
 #[test]
 fn test_http_sql() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
     let server = util::start_server(util::Config::default())?;
     let url = Url::parse(&format!(
         "http://{}/api/sql",
@@ -645,8 +640,6 @@ fn test_cancel_long_running_query() -> Result<(), Box<dyn Error>> {
 // Test that dataflow uninstalls cancelled peeks.
 #[test]
 fn test_cancel_dataflow_removal() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config)?;
 
@@ -715,8 +708,6 @@ fn test_cancel_dataflow_removal() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_storage_usage_collection_interval() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let config =
         util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(1));
     let server = util::start_server(config)?;
@@ -757,8 +748,6 @@ fn test_storage_usage_collection_interval() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_storage_usage_updates_between_restarts() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let data_dir = tempfile::tempdir()?;
     let storage_usage_collection_interval = Duration::from_secs(3);
     let config = util::Config::default()
@@ -810,8 +799,6 @@ fn test_storage_usage_updates_between_restarts() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_storage_usage_doesnt_update_between_restarts() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let data_dir = tempfile::tempdir()?;
     let storage_usage_collection_interval = Duration::from_secs(60);
     let config = util::Config::default()
@@ -856,8 +843,6 @@ fn test_storage_usage_doesnt_update_between_restarts() -> Result<(), Box<dyn Err
 
 #[test]
 fn test_storage_usage_collection_interval_timestamps() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let config =
         util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(30));
     let server = util::start_server(config)?;
@@ -883,8 +868,6 @@ fn test_storage_usage_collection_interval_timestamps() -> Result<(), Box<dyn Err
 
 #[test]
 fn test_default_cluster_sizes() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
     let config = util::Config::default()
         .with_builtin_cluster_replica_size("1".to_string())
         .with_default_cluster_replica_size("2".to_string());
