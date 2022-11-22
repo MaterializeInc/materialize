@@ -32,6 +32,10 @@ class Envelope(Enum):
 class TopicExists(Capability):
     """A Topic exists on the Kafka instance."""
 
+    @classmethod
+    def format_str(cls) -> str:
+        return "topic-{}"
+
     def __init__(self, name: str, partitions: int, envelope: Envelope) -> None:
         self.name = name
         self.partitions = partitions

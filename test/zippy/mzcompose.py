@@ -29,13 +29,9 @@ SERVICES = [
     SchemaRegistry(),
     Debezium(),
     Postgres(),
+    # Those two are overriden below
     Materialized(),
-    Testdrive(
-        no_reset=True,
-        seed=1,
-        default_timeout="600s",
-        materialize_params={"statement_timeout": "'900s'"},
-    ),
+    Testdrive(),
 ]
 
 
@@ -73,12 +69,21 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         default=TransactionIsolation.STRICT_SERIALIZABLE,
     )
 
+    parser.add_argument(
+        "--size",
+        type=int,
+        default=None,
+        help="SIZE to use for sources, sinks, materialized views and clusters",
+    )
+
     args = parser.parse_args()
     scenario_class = globals()[args.scenario]
 
     c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
 
     random.seed(args.seed)
+
+    environment_extra = ["MZ_LOG_FILTER=warn"]
 
     with c.override(
         Testdrive(
@@ -89,7 +94,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "statement_timeout": "'900s'",
                 "transaction_isolation": f"'{args.transaction_isolation}'",
             },
-        )
+        ),
+        Materialized(environment_extra=environment_extra)
+        if args.size is None
+        else Materialized(default_size=args.size, environment_extra=environment_extra),
     ):
         c.up("testdrive", persistent=True)
 

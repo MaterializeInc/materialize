@@ -7,8 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Optional
-
 from materialize.zippy.framework import Capability
 from materialize.zippy.kafka_capabilities import TopicExists
 from materialize.zippy.watermarks import Watermarks
@@ -17,10 +15,13 @@ from materialize.zippy.watermarks import Watermarks
 class SourceExists(Capability):
     """A Kafka source exists in Materialize."""
 
-    def __init__(self, name: str, topic: Optional[TopicExists] = None) -> None:
+    @classmethod
+    def format_str(cls) -> str:
+        return "source_{}"
+
+    def __init__(self, name: str, topic: TopicExists) -> None:
         self.name = name
         self.topic = topic
 
     def get_watermarks(self) -> Watermarks:
-        assert self.topic is not None
         return self.topic.watermarks

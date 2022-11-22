@@ -17,7 +17,7 @@ steps:
       - select: Tests
         key: tests
         options:
-          - { value: zippy-kafka-sources }
+          - { value: zippy-kafka-sources-large }
         multiple: true
         required: false
     if: build.source == "ui"
@@ -38,12 +38,12 @@ steps:
 
   - wait: ~
 
-  - id: zippy-kafka-sources
-    label: "Zippy Kafka Sources"
-    timeout_in_minutes: 120
+  - id: zippy-kafka-sources-large
+    label: "Large Zippy Kafka Sources"
+    timeout_in_minutes: 1440
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=KafkaSources, --actions=1000]
+          args: [--scenario=KafkaSourcesLarge, --actions=50000]
