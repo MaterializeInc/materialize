@@ -1794,7 +1794,7 @@ pub(crate) fn derive_equijoin_cols(
 fn attempt_outer_join(
     left: mz_expr::MirRelationExpr,
     right: mz_expr::MirRelationExpr,
-    on: mz_expr::MirScalarExpr,
+    mut on: mz_expr::MirScalarExpr,
     kind: JoinKind,
     oa: usize,
     id_gen: &mut mz_ore::id_gen::IdGen,
@@ -1804,10 +1804,24 @@ fn attempt_outer_join(
     // for each prefix. In the case that `on` is just some equality tests between
     // columns of `left` and `right`, we can employ a relatively simple plan.
 
-    let lt = left.typ().column_types.into_iter().skip(oa).collect_vec();
-    let la = lt.len();
-    let rt = right.typ().column_types.into_iter().skip(oa).collect_vec();
-    let ra = rt.len();
+    let l_type = left.typ();
+    let r_type = right.typ();
+    let la = l_type.column_types.len() - oa;
+    let ra = r_type.column_types.len() - oa;
+
+    // The output type contains [outer, left, right] attributes.
+    let mut output_type = Vec::with_capacity(oa + la + ra);
+    output_type.extend(l_type.column_types);
+    output_type.extend(r_type.column_types.into_iter().skip(oa));
+
+    // Generally healthy to do,  but specifically `USING` conditions put an `AND true` here.
+    on.reduce(&output_type);
+
+    // Form the left and right types without the outer attributes.
+    output_type.drain(0..oa);
+    let lt = output_type.drain(0..la).collect_vec();
+    let rt = output_type.drain(0..ra).collect_vec();
+    assert!(output_type.is_empty());
 
     let equijoin_keys = derive_equijoin_cols(oa, la, ra, vec![on.clone()]);
     if equijoin_keys.is_none() {

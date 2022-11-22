@@ -663,27 +663,25 @@ SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)
 Explained Query:
   Return // { arity: 3 }
     Union // { arity: 3 }
-      Get l1 // { arity: 3 }
       Get l2 // { arity: 3 }
       Get l1 // { arity: 3 }
       Get l2 // { arity: 3 }
+      Get l1 // { arity: 3 }
   With
     cte l2 =
-      Project (#0, #1, #4) // { arity: 3 }
-        Map (null) // { arity: 5 }
-          Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
-            implementation
-              %1:t1 » %0[#0, #1]KKA
-            ArrangeBy keys=[[#0, #1]] // { arity: 2 }
-              Union // { arity: 2 }
-                Negate // { arity: 2 }
-                  Distinct group_by=[#0, #1] // { arity: 2 }
-                    Project (#0, #1) // { arity: 2 }
+      Map (null) // { arity: 3 }
+        Union // { arity: 2 }
+          Negate // { arity: 2 }
+            Project (#0, #1) // { arity: 2 }
+              Join on=(#0 = #2) type=differential // { arity: 3 }
+                implementation
+                  %0:l0 » %1[#0]UKA
+                Get l0 // { arity: 2 }
+                ArrangeBy keys=[[#0]] // { arity: 1 }
+                  Distinct group_by=[#0] // { arity: 1 }
+                    Project (#0) // { arity: 1 }
                       Get l1 // { arity: 3 }
-                Distinct group_by=[#0, #1] // { arity: 2 }
-                  Get materialize.public.t1 // { arity: 2 }
-            ArrangeBy keys=[[#0, #1]] // { arity: 2 }
-              Get materialize.public.t1 // { arity: 2 }
+          Get materialize.public.t1 // { arity: 2 }
     cte l1 =
       Project (#0, #1, #3) // { arity: 3 }
         Filter (#0) IS NOT NULL // { arity: 4 }
