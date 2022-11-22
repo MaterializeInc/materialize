@@ -17,6 +17,7 @@ use once_cell::sync::Lazy;
 use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
 };
+use timely::progress::Timestamp;
 use timely::scheduling::SyncActivator;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -137,21 +138,9 @@ macro_rules! try_indefinite {
     };
 }
 
-// Message used to communicate between `get_next_message` and the tokio task
-enum InternalMessage {
-    Err(SourceReaderError),
-    Value {
-        output: usize,
-        value: Row,
-        lsn: PgLsn,
-        diff: Diff,
-        end: bool,
-    },
-}
-
 /// Information required to sync data from Postgres
 pub struct PostgresSourceReader {
-    receiver_stream: Receiver<InternalMessage>,
+    receiver_stream: Receiver<SourceMessageType<(), Row, Diff>>,
 
     // Postgres sources support single-threaded ingestion only, so only one of
     // the `PostgresSourceReader`s will actually produce data.
@@ -162,10 +151,6 @@ pub struct PostgresSourceReader {
     // Before it can return a [`NextMessage::Finished`]. This is keeping track
     // of that.
     reported_unconsumed_partitions: bool,
-
-    /// The lsn we last emitted data at. Used to fabricate timestamps for errors. This should
-    /// ideally go away and only emit errors that we can associate with source timestamps
-    last_lsn: PgLsn,
 }
 
 /// An OffsetCommitter for postgres, that sends
@@ -199,7 +184,7 @@ struct PostgresTaskInfo {
     /// A map of the table oid to its information
     source_tables: HashMap<u32, SourceTable>,
     row_sender: RowSender,
-    sender: Sender<InternalMessage>,
+    sender: Sender<SourceMessageType<(), Row, Diff>>,
     /// Channel to receive lsn's from the PgOffsetCommitter
     /// that are safe to send status updates for.
     offset_rx: Receiver<HashMap<PartitionId, MzOffset>>,
@@ -297,7 +282,6 @@ impl SourceConnectionBuilder for PostgresSourceConnection {
                 receiver_stream: dataflow_rx,
                 active_read_worker,
                 reported_unconsumed_partitions: false,
-                last_lsn: start_offset.offset.into(),
             },
             PgOffsetCommitter {
                 logger: LogCommitter {
@@ -331,41 +315,7 @@ impl SourceReader for PostgresSourceReader {
 
         // TODO(guswynn): consider if `try_recv` is better or the same as `now_or_never`
         let ret = match self.receiver_stream.recv().now_or_never() {
-            Some(Some(InternalMessage::Value {
-                output,
-                value,
-                diff,
-                lsn,
-                end,
-            })) => {
-                self.last_lsn = lsn;
-                if end {
-                    let msg = SourceMessage {
-                        output,
-                        upstream_time_millis: None,
-                        key: (),
-                        value,
-                        headers: None,
-                    };
-                    let ts = (PartitionId::None, lsn.into());
-                    NextMessage::Ready(SourceMessageType::Finalized(Ok(msg), ts, diff))
-                } else {
-                    let msg = SourceMessage {
-                        output,
-                        upstream_time_millis: None,
-                        key: (),
-                        value,
-                        headers: None,
-                    };
-                    let ts = (PartitionId::None, lsn.into());
-                    NextMessage::Ready(SourceMessageType::InProgress(Ok(msg), ts, diff))
-                }
-            }
-            Some(Some(InternalMessage::Err(err))) => {
-                // XXX(petrosagg): we are fabricating a timestamp here!!
-                let non_definite_ts = (PartitionId::None, MzOffset::from(self.last_lsn) + 1);
-                NextMessage::Ready(SourceMessageType::Finalized(Err(err), non_definite_ts, 1))
-            }
+            Some(Some(message)) => NextMessage::Ready(message),
             None => NextMessage::Pending,
             Some(None) => NextMessage::Finished,
         };
@@ -397,7 +347,11 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
             let _ = task_info
                 .row_sender
                 .sender
-                .send(InternalMessage::Err(e))
+                .send({
+                    //     // XXX(petrosagg): we are fabricating a timestamp here!!
+                    let non_definite_ts = (PartitionId::None, MzOffset::minimum());
+                    SourceMessageType::Finalized(Err(e), non_definite_ts, 1)
+                })
                 .await;
             task_info
                 .row_sender
@@ -482,14 +436,14 @@ struct RowMessage {
 /// before dropping the `RowSender` or moving onto a new lsn.
 /// Internally, this type uses asserts to uphold the first requirement.
 struct RowSender {
-    sender: Sender<InternalMessage>,
+    sender: Sender<SourceMessageType<(), Row, Diff>>,
     activator: SyncActivator,
     buffered_message: Option<RowMessage>,
 }
 
 impl RowSender {
     /// Create a new `RowSender`.
-    pub fn new(sender: Sender<InternalMessage>, activator: SyncActivator) -> Self {
+    pub fn new(sender: Sender<SourceMessageType<(), Row, Diff>>, activator: SyncActivator) -> Self {
         Self {
             sender,
             activator,
@@ -563,12 +517,28 @@ impl RowSender {
         // without activation
         if let Ok(_) = self
             .sender
-            .send(InternalMessage::Value {
-                output,
-                value: row,
-                lsn,
-                diff,
-                end,
+            .send({
+                if end {
+                    let msg = SourceMessage {
+                        output,
+                        upstream_time_millis: None,
+                        key: (),
+                        value: row,
+                        headers: None,
+                    };
+                    let ts = (PartitionId::None, lsn.into());
+                    SourceMessageType::Finalized(Ok(msg), ts, diff)
+                } else {
+                    let msg = SourceMessage {
+                        output,
+                        upstream_time_millis: None,
+                        key: (),
+                        value: row,
+                        headers: None,
+                    };
+                    let ts = (PartitionId::None, lsn.into());
+                    SourceMessageType::InProgress(Ok(msg), ts, diff)
+                }
             })
             .await
         {
