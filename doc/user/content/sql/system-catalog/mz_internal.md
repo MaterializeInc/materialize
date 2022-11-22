@@ -357,6 +357,20 @@ Field       | Type       | Meaning
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
 `time`      | [`mz_timestamp`] | The next timestamp at which the dataflow may change.
 
+### `mz_cluster_replica_metrics`
+
+The `mz_cluster_replica_metrics` table gives the last known CPU and RAM utilization statistics
+for all processes of all extant cluster replicas.
+
+At this time, we do not make any guarantees about the exactness or freshness of these numbers.
+
+Field         | Type       | Meaning
+--------------|------------|--------
+`replica_id`  | [`bigint`] | The ID of a cluster replica.
+`process_id`  | [`bigint`] | An identifier of a compute process within a replica.
+`nano_cpus`   | [`bigint`] | Approximate CPU usage, in billionths of a vCPU core.
+`bytes_memory`| [`bigint`] | Approximate RAM usage, in bytes.
+
 [`bigint`]: /sql/types/bigint
 [`bigint list`]: /sql/types/list
 [`mz_timestamp`]: /sql/types/mz_timestamp
