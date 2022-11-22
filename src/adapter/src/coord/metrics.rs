@@ -17,7 +17,7 @@ pub struct Metrics {
     pub query_total: IntCounterVec,
     pub active_sessions: IntGauge,
     pub active_subscribes: IntGauge,
-    pub queue_busy_time: HistogramVec,
+    pub queue_busy_seconds: HistogramVec,
     pub determine_timestamp: IntCounterVec,
 }
 
@@ -37,8 +37,8 @@ impl Metrics {
                 name: "mz_active_subscribes",
                 help: "The number of active SUBSCRIBE queries.",
             )),
-            queue_busy_time: registry.register(metric!(
-                name: "mz_coord_queue_busy_time",
+            queue_busy_seconds: registry.register(metric!(
+                name: "mz_coord_queue_busy_seconds",
                 help: "The number of seconds the coord queue was processing before it was empty. This is a sampled metric and does not measure the full coord queue wait/idle times.",
             )),
             determine_timestamp: registry.register(metric!(
