@@ -25,7 +25,7 @@ steps:
       - "*"
     timeout_in_minutes: 60
     agents:
-      queue: builder
+      queue: builder-linux-x86_64
 
   - id: build-aarch64
     label: Build aarch64
@@ -34,7 +34,7 @@ steps:
       - "*"
     timeout_in_minutes: 60
     agents:
-      queue: builder-aarch64
+      queue: builder-linux-aarch64
 
   - id: lint-fast
     label: Lint and rustfmt
@@ -52,7 +52,7 @@ steps:
       - "**/*.rs"
     timeout_in_minutes: 30
     agents:
-      queue: builder
+      queue: builder-linux-x86_64
 
   - id: lint-macos
     label: macOS Clippy
@@ -107,7 +107,7 @@ steps:
     inputs: [src/repr]
     timeout_in_minutes: 30
     agents:
-      queue: builder
+      queue: builder-linux-x86_64
 
   - id: testdrive
     label: Testdrive %n
