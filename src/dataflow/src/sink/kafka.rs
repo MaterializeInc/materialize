@@ -39,7 +39,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp as _};
 use timely::scheduling::Activator;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use mz_avro::types::Value;
 use mz_dataflow_types::sinks::{
@@ -616,6 +616,7 @@ impl KafkaSinkState {
                         info!("Retriable error in kafka sink: {:?}", e);
                         continue;
                     } else {
+                        warn!("Error requiring shutdown in kafka sink: {:?}", e);
                         shutdown.set(true);
                     }
                     break;
