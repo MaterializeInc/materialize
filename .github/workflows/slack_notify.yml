@@ -40,11 +40,11 @@ jobs:
           color: red
           verbose: false
       - uses: actions-ecosystem/action-slack-notifier@v1
-        if: ${{ github.event.label.name == 'C-triage' }}
+        if: ${{ github.event.label.name == 'C-bug' }}
         with:
           slack_token: ${{ secrets.SLACK_TOKEN }}
           message: |
             `${{ github.event.label.name }}` label has been added to "${{ github.event.issue.title }}" (${{ github.event.issue.html_url }}) (assigned to: ${{ github.event.issue.assignee.login || 'unassigned' }}).
-          channel: github-triage
+          channel: github-bugs
           color: red
           verbose: false
