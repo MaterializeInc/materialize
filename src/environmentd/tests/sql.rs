@@ -2004,13 +2004,13 @@ fn test_coord_startup_blocking() -> Result<(), Box<dyn Error>> {
     });
 
     let server_started = Retry::default()
-        .max_duration(Duration::from_secs(1))
+        .max_duration(Duration::from_secs(3))
         .retry(|_| rx.try_recv());
     assert!(server_started.is_err(), "server should be blocked");
 
     *now.lock().expect("lock poisoned") = initial_time + 5_000;
     Retry::default()
-        .max_duration(Duration::from_secs(5))
+        .max_duration(Duration::from_secs(30))
         .retry(|_| rx.try_recv())?;
 
     Ok(())
