@@ -44,7 +44,7 @@ create_connection ::=
   '(' field '='? val ( ',' field '='? val )* ')'
 create_connection_kafka_brokers ::= 'BROKERS' '(' kafka_broker (',' kafka_broker)* ')'
 create_connection_kafka_broker ::=
-  "'host:port'" ('USING' 'AWS' 'PRIVATELINK' connection ('(' 'PORT' number ')')?)?
+  "'host:port'" ('USING' ('AWS' 'PRIVATELINK' connection ('(' 'PORT' number ')')? | 'SSH' 'TUNNEL' ssh_connection))?
 create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
 create_index ::=

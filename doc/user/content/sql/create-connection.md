@@ -209,7 +209,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 );
 ```
 
-### AWS PrivateLink {#kafka-aws-privatelink}
+### Tunnels (SSH and AWS PrivateLink) {#kafka-tunnels}
 
 #### Syntax
 
@@ -227,12 +227,18 @@ Field                                   | Value            | Required | Descript
 ----------------------------------------|------------------|:--------:|-------------------------------
 `connection`                            | object name      | ✓        | The name of an [AWS PrivateLink connection](#aws-privatelink) through which network traffic for this broker should be routed.
 `PORT`                                  | `integer`        |          | The port of the AWS PrivateLink service to connect to. Defaults to the broker's port.
+`ssh_connection`                        | object name      | ✓        | The name of an [SSH tunnel connection](#ssh-tunnel) through which network traffic for this broker should be routed.
 
-The `USING PRIVATELINK` clause specifies that Materialize should connect to the
-designated broker in a Kafka cluster via an AWS PrivateLink service.
+The `USING` clause specifies that Materialize should connect to the
+designated broker in a Kafka cluster via an SSH bastion or
+an AWS PrivateLink service. Brokers need not be configured the same way.
 
+{{< warning >}}
 You must attach the clause individually to each broker that you want to connect
-to via AWS PrivateLink.
+to via the tunnel. If there are other broker hosts discovered that are not
+specified, materialize will attempt to connect to them directly.
+{{< /warning >}}
+
 
 #### Examples
 
