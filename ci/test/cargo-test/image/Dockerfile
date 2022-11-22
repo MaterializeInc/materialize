@@ -22,5 +22,7 @@ COPY run-tests /usr/local/bin
 COPY protobuf-install /usr/local/
 ENV PROTOC /usr/local/bin/protoc
 
+# Ensure any Rust binaries that crash print a backtrace.
+ENV RUST_BACKTRACE=1
 
 WORKDIR /workdir

@@ -1736,7 +1736,7 @@ fn test_coord_startup_blocking() -> Result<(), Box<dyn Error>> {
     let now = Arc::new(Mutex::new(initial_time));
     let now_fn = {
         let timestamp = Arc::clone(&now);
-        NowFn::from(move || *timestamp.lock().unwrap())
+        NowFn::from(move || *timestamp.lock().expect("lock poisoned"))
     };
     let data_dir = tempfile::tempdir()?;
     let config = util::Config::default()
@@ -1765,21 +1765,27 @@ fn test_coord_startup_blocking() -> Result<(), Box<dyn Error>> {
 
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let server = util::start_server(config.clone()).unwrap();
-        let mut client = server.connect(postgres::NoTls).unwrap();
+        let server =
+            util::start_server(config.clone()).expect("unable to start server asynchronously");
+        let mut client = server
+            .connect(postgres::NoTls)
+            .expect("unable to start client asynchronously");
 
-        client.query("SELECT 1", &[]).unwrap();
-        tx.send(()).unwrap();
+        client
+            .query("SELECT 1", &[])
+            .expect("unable to query server asynchronously");
+        tx.send(())
+            .expect("receiver waiting for server startup has hung up");
     });
 
     let server_started = Retry::default()
-        .max_duration(Duration::from_secs(1))
+        .max_duration(Duration::from_secs(3))
         .retry(|_| rx.try_recv());
     assert!(server_started.is_err(), "server should be blocked");
 
     *now.lock().expect("lock poisoned") = initial_time + 5_000;
     Retry::default()
-        .max_duration(Duration::from_secs(5))
+        .max_duration(Duration::from_secs(30))
         .retry(|_| rx.try_recv())?;
 
     Ok(())
