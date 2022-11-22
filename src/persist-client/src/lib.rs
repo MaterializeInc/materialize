@@ -47,6 +47,7 @@ use crate::internal::state_versions::StateVersions;
 use crate::read::{LeasedReaderId, ReadHandle};
 use crate::write::{WriteHandle, WriterId};
 
+pub mod admin;
 pub mod async_runtime;
 pub mod batch;
 pub mod cache;

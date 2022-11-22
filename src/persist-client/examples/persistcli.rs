@@ -16,7 +16,7 @@
 
 //! Persist command-line utilities
 
-use mz_build_info::DUMMY_BUILD_INFO;
+use mz_build_info::{build_info, BuildInfo};
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::task::RuntimeExt;
@@ -24,10 +24,13 @@ use mz_ore::tracing::TracingConfig;
 use tokio::runtime::Handle;
 use tracing::{info_span, Instrument};
 
+pub mod admin;
 pub mod inspect;
 pub mod maelstrom;
 pub mod open_loop;
 pub mod source_example;
+
+const BUILD_INFO: BuildInfo = build_info!();
 
 #[derive(Debug, clap::Parser)]
 #[clap(about = "Persist command-line utilities", long_about = None)]
@@ -45,6 +48,7 @@ enum Command {
     OpenLoop(crate::open_loop::Args),
     SourceExample(crate::source_example::Args),
     Inspect(crate::inspect::InspectArgs),
+    Admin(crate::admin::AdminArgs),
 }
 
 fn main() {
@@ -63,11 +67,7 @@ fn main() {
             "persist-open-loop",
             TracingConfig::from(&args.tracing),
             sentry_tracing::default_event_filter,
-            (
-                DUMMY_BUILD_INFO.version,
-                DUMMY_BUILD_INFO.sha,
-                DUMMY_BUILD_INFO.time,
-            ),
+            (BUILD_INFO.version, BUILD_INFO.sha, BUILD_INFO.time),
         ))
         .expect("failed to init tracing");
 
@@ -100,6 +100,9 @@ fn main() {
         }
         Command::Inspect(command) => {
             runtime.block_on(crate::inspect::run(command).instrument(root_span))
+        }
+        Command::Admin(command) => {
+            runtime.block_on(crate::admin::run(command).instrument(root_span))
         }
     };
 
