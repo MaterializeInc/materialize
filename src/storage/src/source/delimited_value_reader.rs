@@ -20,7 +20,6 @@ use mz_storage_client::types::sources::{MzOffset, SourceConnection};
 
 use crate::source::types::{
     NextMessage, SourceConnectionBuilder, SourceMessage, SourceMessageType, SourceReader,
-    SourceReaderError,
 };
 
 /// A wrapper that converts a delimited source connection that only provides
@@ -81,61 +80,65 @@ where
     type Value = Option<Vec<u8>>;
     type Diff = D;
 
-    fn get_next_message(
-        &mut self,
-    ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
-        match self.0.get_next_message()? {
-            NextMessage::Ready(SourceMessageType::Finalized(SourceMessage {
-                output,
-                key: _,
-                value,
-                partition,
-                offset,
-                upstream_time_millis,
-                headers,
-                specific_diff,
-            })) => Ok(NextMessage::Ready(SourceMessageType::Finalized(
-                SourceMessage {
+    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Diff> {
+        match self.0.get_next_message() {
+            NextMessage::Ready(SourceMessageType::Finalized(
+                Ok(SourceMessage {
+                    output,
+                    key: _,
+                    value,
+                    upstream_time_millis,
+                    headers,
+                }),
+                ts,
+                diff,
+            )) => NextMessage::Ready(SourceMessageType::Finalized(
+                Ok(SourceMessage {
                     output,
                     key: None,
                     value,
-                    partition,
-                    offset,
                     upstream_time_millis,
                     headers,
-                    specific_diff,
-                },
-            ))),
-            NextMessage::Ready(SourceMessageType::InProgress(SourceMessage {
-                output,
-                key: _,
-                value,
-                partition,
-                offset,
-                upstream_time_millis,
-                headers,
-                specific_diff,
-            })) => Ok(NextMessage::Ready(SourceMessageType::InProgress(
-                SourceMessage {
+                }),
+                ts,
+                diff,
+            )),
+            NextMessage::Ready(SourceMessageType::InProgress(
+                Ok(SourceMessage {
+                    output,
+                    key: _,
+                    value,
+                    upstream_time_millis,
+                    headers,
+                }),
+                ts,
+                diff,
+            )) => NextMessage::Ready(SourceMessageType::InProgress(
+                Ok(SourceMessage {
                     output,
                     key: None,
                     value,
-                    partition,
-                    offset,
                     upstream_time_millis,
                     headers,
-                    specific_diff,
-                },
-            ))),
-            NextMessage::Ready(SourceMessageType::DropPartitionCapabilities(pids)) => Ok(
-                NextMessage::Ready(SourceMessageType::DropPartitionCapabilities(pids)),
-            ),
-            NextMessage::Ready(SourceMessageType::SourceStatus(update)) => {
-                Ok(NextMessage::Ready(SourceMessageType::SourceStatus(update)))
+                }),
+                ts,
+                diff,
+            )),
+            NextMessage::Ready(SourceMessageType::Finalized(Err(err), ts, diff)) => {
+                NextMessage::Ready(SourceMessageType::Finalized(Err(err), ts, diff))
             }
-            NextMessage::Pending => Ok(NextMessage::Pending),
-            NextMessage::TransientDelay => Ok(NextMessage::TransientDelay),
-            NextMessage::Finished => Ok(NextMessage::Finished),
+            NextMessage::Ready(SourceMessageType::InProgress(Err(err), ts, diff)) => {
+                NextMessage::Ready(SourceMessageType::InProgress(Err(err), ts, diff))
+            }
+            NextMessage::Ready(SourceMessageType::DropPartitionCapabilities(pids)) => {
+                NextMessage::Ready(SourceMessageType::DropPartitionCapabilities(pids))
+            }
+            NextMessage::Ready(SourceMessageType::SourceStatus(update)) => {
+                NextMessage::Ready(SourceMessageType::SourceStatus(update))
+            }
+            NextMessage::Pending => NextMessage::Pending,
+            NextMessage::TransientDelay => NextMessage::TransientDelay,
+            NextMessage::Finished => NextMessage::Finished,
         }
     }
 }

@@ -162,6 +162,10 @@ pub struct PostgresSourceReader {
     // Before it can return a [`NextMessage::Finished`]. This is keeping track
     // of that.
     reported_unconsumed_partitions: bool,
+
+    /// The lsn we last emitted data at. Used to fabricate timestamps for errors. This should
+    /// ideally go away and only emit errors that we can associate with source timestamps
+    last_lsn: PgLsn,
 }
 
 /// An OffsetCommitter for postgres, that sends
@@ -293,6 +297,7 @@ impl SourceConnectionBuilder for PostgresSourceConnection {
                 receiver_stream: dataflow_rx,
                 active_read_worker,
                 reported_unconsumed_partitions: false,
+                last_lsn: start_offset.offset.into(),
             },
             PgOffsetCommitter {
                 logger: LogCommitter {
@@ -313,17 +318,15 @@ impl SourceReader for PostgresSourceReader {
     type Diff = Diff;
 
     // TODO(guswynn): use `next` instead of using a channel
-    fn get_next_message(
-        &mut self,
-    ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
+    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Diff> {
         if !self.active_read_worker {
             if !self.reported_unconsumed_partitions {
                 self.reported_unconsumed_partitions = true;
-                return Ok(NextMessage::Ready(
-                    SourceMessageType::DropPartitionCapabilities(vec![PartitionId::None]),
-                ));
+                return NextMessage::Ready(SourceMessageType::DropPartitionCapabilities(vec![
+                    PartitionId::None,
+                ]));
             }
-            return Ok(NextMessage::Finished);
+            return NextMessage::Finished;
         }
 
         // TODO(guswynn): consider if `try_recv` is better or the same as `now_or_never`
@@ -335,37 +338,36 @@ impl SourceReader for PostgresSourceReader {
                 lsn,
                 end,
             })) => {
+                self.last_lsn = lsn;
                 if end {
-                    Ok(NextMessage::Ready(SourceMessageType::Finalized(
-                        SourceMessage {
-                            output,
-                            partition: PartitionId::None,
-                            offset: lsn.into(),
-                            upstream_time_millis: None,
-                            key: (),
-                            value,
-                            headers: None,
-                            specific_diff: diff,
-                        },
-                    )))
+                    let msg = SourceMessage {
+                        output,
+                        upstream_time_millis: None,
+                        key: (),
+                        value,
+                        headers: None,
+                    };
+                    let ts = (PartitionId::None, lsn.into());
+                    NextMessage::Ready(SourceMessageType::Finalized(Ok(msg), ts, diff))
                 } else {
-                    Ok(NextMessage::Ready(SourceMessageType::InProgress(
-                        SourceMessage {
-                            output,
-                            partition: PartitionId::None,
-                            offset: lsn.into(),
-                            upstream_time_millis: None,
-                            key: (),
-                            value,
-                            headers: None,
-                            specific_diff: diff,
-                        },
-                    )))
+                    let msg = SourceMessage {
+                        output,
+                        upstream_time_millis: None,
+                        key: (),
+                        value,
+                        headers: None,
+                    };
+                    let ts = (PartitionId::None, lsn.into());
+                    NextMessage::Ready(SourceMessageType::InProgress(Ok(msg), ts, diff))
                 }
             }
-            Some(Some(InternalMessage::Err(e))) => Err(e),
-            None => Ok(NextMessage::Pending),
-            Some(None) => Ok(NextMessage::Finished),
+            Some(Some(InternalMessage::Err(err))) => {
+                // XXX(petrosagg): we are fabricating a timestamp here!!
+                let non_definite_ts = (PartitionId::None, MzOffset::from(self.last_lsn) + 1);
+                NextMessage::Ready(SourceMessageType::Finalized(Err(err), non_definite_ts, 1))
+            }
+            None => NextMessage::Pending,
+            Some(None) => NextMessage::Finished,
         };
 
         ret

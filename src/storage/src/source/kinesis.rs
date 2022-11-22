@@ -61,7 +61,7 @@ pub struct KinesisSourceReader {
     /// TODO(natacha): this should be moved to timestamper
     last_checked_shards: Instant,
     /// Storage for messages that have not yet been timestamped
-    buffered_messages: VecDeque<SourceMessage<(), Option<Vec<u8>>, ()>>,
+    buffered_messages: VecDeque<(SourceMessage<(), Option<Vec<u8>>>, (PartitionId, MzOffset))>,
     /// Count of processed message
     processed_message_count: u64,
     /// Metrics from which per-shard metrics get created.
@@ -190,17 +190,15 @@ impl SourceReader for KinesisSourceReader {
     type Value = Option<Vec<u8>>;
     type Diff = ();
 
-    fn get_next_message(
-        &mut self,
-    ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
+    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Diff> {
         if !self.active_read_worker {
             if !self.reported_unconsumed_partitions {
                 self.reported_unconsumed_partitions = true;
-                return Ok(NextMessage::Ready(
-                    SourceMessageType::DropPartitionCapabilities(vec![PartitionId::None]),
-                ));
+                return NextMessage::Ready(SourceMessageType::DropPartitionCapabilities(vec![
+                    PartitionId::None,
+                ]));
             }
-            return Ok(NextMessage::Finished);
+            return NextMessage::Finished;
         }
 
         assert_eq!(self.shard_queue.len(), self.shard_set.len());
@@ -213,72 +211,95 @@ impl SourceReader for KinesisSourceReader {
                 .block_on(self.update_shard_information())
             {
                 error!("{:#?}", e);
-                return Err(SourceReaderError::other_definite(e));
+                // XXX(petrosagg): We are fabricating a timestamp here. Is the error truly
+                // definite?
+                let ts = (
+                    PartitionId::None,
+                    MzOffset::from(self.processed_message_count),
+                );
+                let msg = Err(SourceReaderError::other_definite(e));
+                return NextMessage::Ready(SourceMessageType::InProgress(msg, ts, ()));
             }
             self.last_checked_shards = std::time::Instant::now();
         }
 
-        if let Some(message) = self.buffered_messages.pop_front() {
-            Ok(NextMessage::Ready(SourceMessageType::Finalized(message)))
+        if let Some((message, ts)) = self.buffered_messages.pop_front() {
+            NextMessage::Ready(SourceMessageType::Finalized(Ok(message), ts, ()))
         } else {
             // Rotate through all of a stream's shards, start with a new shard on each activation.
             if let Some((shard_id, mut shard_iterator)) = self.shard_queue.pop_front() {
                 if let Some(iterator) = &shard_iterator {
-                    let get_records_output =
-                        match self.tokio_handle.block_on(self.get_records(iterator)) {
-                            Ok(output) => {
-                                shard_iterator = output.next_shard_iterator.clone();
-                                if let Some(millis) = output.millis_behind_latest {
-                                    self.shard_set
-                                        .get(&shard_id)
-                                        .unwrap()
-                                        .millis_behind_latest
-                                        .set(millis);
-                                }
-                                output
+                    let get_records_output = match self
+                        .tokio_handle
+                        .block_on(self.get_records(iterator))
+                    {
+                        Ok(output) => {
+                            shard_iterator = output.next_shard_iterator.clone();
+                            if let Some(millis) = output.millis_behind_latest {
+                                self.shard_set
+                                    .get(&shard_id)
+                                    .unwrap()
+                                    .millis_behind_latest
+                                    .set(millis);
                             }
-                            Err(SdkError::DispatchFailure(e)) => {
-                                // todo@jldlaughlin: Parse this to determine fatal/retriable?
-                                error!("{}", e);
-                                self.shard_queue.push_back((shard_id, shard_iterator));
-                                // Do not send error message as this would cause source to terminate
-                                return Ok(NextMessage::TransientDelay);
-                            }
-                            Err(SdkError::ServiceError { err, .. })
-                                if err.is_expired_iterator_exception() =>
-                            {
-                                // todo@jldlaughlin: Will need track source offsets to grab a new iterator.
-                                error!("{}", err);
-                                return Err(SourceReaderError {
-                                    inner: SourceErrorDetails::Other(err.to_string()),
-                                });
-                            }
-                            Err(SdkError::ServiceError { err, .. })
-                                if err.is_provisioned_throughput_exceeded_exception() =>
-                            {
-                                self.shard_queue.push_back((shard_id, shard_iterator));
-                                // Do not send error message as this would cause source to terminate
-                                return Ok(NextMessage::Pending);
-                            }
-                            Err(e) => {
-                                // Fatal service errors:
-                                //  - InvalidArgument
-                                //  - KMSAccessDenied, KMSDisabled, KMSInvalidState, KMSNotFound,
-                                //    KMSOptInRequired, KMSThrottling
-                                //  - ResourceNotFound
-                                //
-                                // Other fatal Rusoto errors:
-                                // - Credentials
-                                // - Validation
-                                // - ParseError
-                                // - Unknown (raw HTTP provided)
-                                // - Blocking
-                                error!("{}", e);
-                                return Err(SourceReaderError {
-                                    inner: SourceErrorDetails::Other(e.to_string()),
-                                });
-                            }
-                        };
+                            output
+                        }
+                        Err(SdkError::DispatchFailure(e)) => {
+                            // todo@jldlaughlin: Parse this to determine fatal/retriable?
+                            error!("{}", e);
+                            self.shard_queue.push_back((shard_id, shard_iterator));
+                            // Do not send error message as this would cause source to terminate
+                            return NextMessage::TransientDelay;
+                        }
+                        Err(SdkError::ServiceError { err, .. })
+                            if err.is_expired_iterator_exception() =>
+                        {
+                            // todo@jldlaughlin: Will need track source offsets to grab a new iterator.
+                            error!("{}", err);
+                            // XXX(petrosagg): We are fabricating a timestamp here. Is the
+                            // error truly definite?
+                            let ts = (
+                                PartitionId::None,
+                                MzOffset::from(self.processed_message_count),
+                            );
+                            let msg = Err(SourceReaderError {
+                                inner: SourceErrorDetails::Other(err.to_string()),
+                            });
+                            return NextMessage::Ready(SourceMessageType::InProgress(msg, ts, ()));
+                        }
+                        Err(SdkError::ServiceError { err, .. })
+                            if err.is_provisioned_throughput_exceeded_exception() =>
+                        {
+                            self.shard_queue.push_back((shard_id, shard_iterator));
+                            // Do not send error message as this would cause source to terminate
+                            return NextMessage::Pending;
+                        }
+                        Err(e) => {
+                            // Fatal service errors:
+                            //  - InvalidArgument
+                            //  - KMSAccessDenied, KMSDisabled, KMSInvalidState, KMSNotFound,
+                            //    KMSOptInRequired, KMSThrottling
+                            //  - ResourceNotFound
+                            //
+                            // Other fatal Rusoto errors:
+                            // - Credentials
+                            // - Validation
+                            // - ParseError
+                            // - Unknown (raw HTTP provided)
+                            // - Blocking
+                            error!("{}", e);
+                            // XXX(petrosagg): We are fabricating a timestamp here. Is the
+                            // error truly definite?
+                            let ts = (
+                                PartitionId::None,
+                                MzOffset::from(self.processed_message_count),
+                            );
+                            let msg = Err(SourceReaderError {
+                                inner: SourceErrorDetails::Other(e.to_string()),
+                            });
+                            return NextMessage::Ready(SourceMessageType::InProgress(msg, ts, ()));
+                        }
+                    };
 
                     for record in get_records_output.records.unwrap_or_default() {
                         let data = record
@@ -286,28 +307,30 @@ impl SourceReader for KinesisSourceReader {
                             .map(|blob| blob.into_inner())
                             .unwrap_or_else(Vec::new);
                         self.processed_message_count += 1;
+
+                        //TODO: should MzOffset be modified to be a string?
+                        let ts = (
+                            PartitionId::None,
+                            MzOffset::from(self.processed_message_count),
+                        );
                         let source_message = SourceMessage {
                             output: 0,
-                            partition: PartitionId::None,
-                            offset: MzOffset {
-                                //TODO: should MzOffset be modified to be a string?
-                                offset: self.processed_message_count,
-                            },
                             upstream_time_millis: None,
                             key: (),
                             value: Some(data),
                             headers: None,
-                            specific_diff: (),
                         };
-                        self.buffered_messages.push_back(source_message);
+                        self.buffered_messages.push_back((source_message, ts));
                     }
                     self.shard_queue.push_back((shard_id, shard_iterator));
                 }
             }
-            Ok(match self.buffered_messages.pop_front() {
-                Some(message) => NextMessage::Ready(SourceMessageType::Finalized(message)),
+            match self.buffered_messages.pop_front() {
+                Some((msg, ts)) => {
+                    NextMessage::Ready(SourceMessageType::Finalized(Ok(msg), ts, ()))
+                }
                 None => NextMessage::Pending,
-            })
+            }
         }
     }
 }

@@ -116,11 +116,17 @@ pub struct RawSourceCreationConfig {
 /// current source upper, and any errors that occurred while reading that batch.
 #[derive(Clone)]
 struct SourceMessageBatch<Key, Value, Diff> {
-    messages: HashMap<PartitionId, Vec<(SourceMessage<Key, Value, Diff>, MzOffset)>>,
-    /// Any errors that occurred while obtaining this batch. These errors should
-    /// be _definite_: re-running the source will produce the same error. If an error
-    /// is added to this collection, the source will be permanently wedged.
-    source_errors: Vec<SourceError>,
+    messages: HashMap<
+        PartitionId,
+        Vec<(
+            (
+                Result<SourceMessage<Key, Value>, SourceReaderError>,
+                (PartitionId, MzOffset),
+                Diff,
+            ),
+            MzOffset,
+        )>,
+    >,
     /// The latest status update for the batch, if any.
     status_update: Option<HealthStatus>,
     /// The current upper of the `SourceReader`, at the time this batch was
@@ -233,21 +239,23 @@ where
     ((reclocked_stream, reclocked_err_stream), Some(token))
 }
 
-/// A type-alias that represents actual data coming out of the source reader.
-type MessageAndOffset<S> = (
-    SourceMessage<<S as SourceReader>::Key, <S as SourceReader>::Value, <S as SourceReader>::Diff>,
-    MzOffset,
-);
-
 /// A type that represents data coming out of the source reader, in addition
 /// to other information it needs to communicate to various operators.
-struct SourceReaderOperatorOutput<S: SourceReader> {
+struct SourceReaderOperatorOutput<K, V, D> {
     /// Messages and their offsets from the source reader.
-    messages: HashMap<PartitionId, Vec<MessageAndOffset<S>>>,
+    messages: HashMap<
+        PartitionId,
+        Vec<(
+            (
+                Result<SourceMessage<K, V>, SourceReaderError>,
+                (PartitionId, MzOffset),
+                D,
+            ),
+            MzOffset,
+        )>,
+    >,
     /// The latest status update for this worker, if any.
     status_update: Option<HealthStatus>,
-    /// See `SourceMessageBatch`.
-    source_errors: Vec<SourceReaderError>,
     /// A list of partitions that this source reader instance
     /// is sure it doesn't care about. Required so the
     /// remap operator can eventually determine whether
@@ -266,7 +274,9 @@ fn build_source_reader_stream<S>(
     mut source_upper: OffsetAntichain,
 ) -> Pin<
     // TODO(guswynn): determine if this boxing is necessary
-    Box<impl tokio_stream::Stream<Item = Option<SourceReaderOperatorOutput<S>>>>,
+    Box<
+        impl tokio_stream::Stream<Item = Option<SourceReaderOperatorOutput<S::Key, S::Value, S::Diff>>>,
+    >,
 >
 where
     S: SourceReader + 'static,
@@ -298,7 +308,6 @@ where
         yield Some(SourceReaderOperatorOutput {
             messages: HashMap::new(),
             status_update: None,
-            source_errors: Vec::new(),
             unconsumed_partitions: Vec::new(),
             source_upper: initial_source_upper,
             batch_upper: batch_upper.clone(),
@@ -316,7 +325,6 @@ where
 
         let mut untimestamped_messages = HashMap::<_, Vec<_>>::new();
         let mut unconsumed_partitions = Vec::new();
-        let mut source_errors = vec![];
         let mut status_update = None;
         loop {
             // TODO(guswyn): move lots of this out of the macro so rustfmt works better
@@ -324,7 +332,7 @@ where
                 // N.B. This branch is cancel-safe because `next` only borrows the underlying stream.
                 item = source_stream.next() => {
                     match item {
-                        Some(Ok(message)) => {
+                        Some(message) => {
 
                             // Note that this
                             // 1. Requires that sources that produce
@@ -334,7 +342,7 @@ where
                             //    `InProgress` messages NEVER produces
                             //    messages at offsets below the most recent
                             //    `Finalized` message.
-                            let is_final = matches!(message, SourceMessageType::Finalized(_));
+                            let is_final = matches!(message, SourceMessageType::Finalized(_, _, _));
 
                             match message {
                                 SourceMessageType::DropPartitionCapabilities(mut pids) => {
@@ -344,9 +352,9 @@ where
                                           pids);
                                     unconsumed_partitions.append(&mut pids);
                                 }
-                                SourceMessageType::Finalized(message) | SourceMessageType::InProgress(message) => {
-                                    let pid = message.partition.clone();
-                                    let offset = message.offset;
+                                SourceMessageType::Finalized(message, ts, diff) | SourceMessageType::InProgress(message, ts, diff) => {
+                                    let pid = ts.0.clone();
+                                    let offset = ts.1;
                                     // Advance the _overall_ frontier of the
                                     // source if this the final message for that
                                     // offset. We know that we won't see more
@@ -370,7 +378,7 @@ where
                                     if let Some(prev_offset) = prev_offset {
                                         assert!(offset_frontier >= prev_offset, "offset regressed");
                                     }
-                                    untimestamped_messages.entry(pid).or_default().push((message, offset));
+                                    untimestamped_messages.entry(pid).or_default().push(((message, ts, diff), offset));
                                 }
                                 SourceMessageType::SourceStatus(update) => {
                                     let update = match update {
@@ -386,13 +394,6 @@ where
                                 }
                             }
                         }
-                        Some(Err(e)) => {
-                            // TODO(bkirwi): right now we can unconditionally do this, since all
-                            // non-durable errors cause a retry (or a panic) in the source. Soon we'll
-                            // need to figure out the right way to report non-durable errors down so
-                            // the healthcheck can access them.
-                            source_errors.push(e);
-                        }
                         None => {
                             // This source reader is done. Yield one final
                             // update of the source_upper.
@@ -400,7 +401,6 @@ where
                                 SourceReaderOperatorOutput {
                                     messages: std::mem::take(&mut untimestamped_messages),
                                     status_update: status_update.take(),
-                                    source_errors: source_errors.drain(..).collect_vec(),
                                     unconsumed_partitions,
                                     source_upper: source_upper.clone(),
                                     batch_upper: batch_upper.clone(),
@@ -437,7 +437,6 @@ where
                         SourceReaderOperatorOutput {
                             messages: std::mem::take(&mut untimestamped_messages),
                             status_update: status_update.take(),
-                            source_errors: source_errors.drain(..).collect_vec(),
                             unconsumed_partitions: unconsumed_partitions.clone(),
                             source_upper: source_upper.clone(),
                             batch_upper: batch_upper.clone(),
@@ -686,7 +685,6 @@ where
                     let SourceReaderOperatorOutput {
                         messages,
                         status_update,
-                        source_errors,
                         unconsumed_partitions,
                         source_upper,
                         batch_upper,
@@ -730,14 +728,6 @@ where
                             .map(|pid| (pid, MzOffset { offset: u64::MAX })),
                     );
 
-                    let source_errors = source_errors
-                        .into_iter()
-                        .map(|e| SourceError {
-                            source_id: id,
-                            error: e.inner,
-                        })
-                        .collect_vec();
-
                     let mut batch_lower = OffsetAntichain::new();
 
                     for (pid, messages) in &messages {
@@ -749,7 +739,6 @@ where
                     let message_batch = SourceMessageBatch {
                         messages,
                         status_update,
-                        source_errors,
                         source_upper: extended_source_upper,
                         batch_upper: batch_upper.clone(),
                         batch_lower,
@@ -804,8 +793,14 @@ where
                 let mut health_output = health_output.activate();
 
                 for (batch, source_upper) in buffer.drain(..) {
-                    let has_errors = batch.source_errors.first();
-                    let has_messages = batch.messages.values().any(|vs| !vs.is_empty());
+                    let has_errors = batch.messages.values().find_map(|vs| {
+                        vs.iter()
+                            .find_map(|((msg, _ts, _diff), _off)| msg.as_ref().err())
+                    });
+                    let has_messages = batch
+                        .messages
+                        .values()
+                        .any(|vs| vs.iter().any(|((msg, _ts, _diff), _off)| msg.is_ok()));
 
                     let maybe_health = match (has_errors, &batch.status_update, has_messages) {
                         (Some(error), _, _) => {
@@ -813,7 +808,7 @@ where
                             // cannot recover by the time an error reaches this far down the pipe.
                             // However, we don't actually shut down the source on error yet, so
                             // treating this as a possibly-temporary stall for now.
-                            Some(HealthStatus::StalledWithError(error.error.to_string()))
+                            Some(HealthStatus::StalledWithError(error.inner.to_string()))
                         }
                         (_, Some(status), _) => {
                             // This is the transient error case, and is correctly represented as
@@ -1428,41 +1423,25 @@ where
 
                     let mut output = reclocked_output.activate();
 
-                    for (message, ts) in reclocked {
+                    for ((message, src_ts, diff), ts) in reclocked {
                         trace!(
                             "reclock({id}) {worker_id}/{worker_count}: \
                                 handling reclocked message: {:?}:{:?} -> {}",
-                            message.partition,
-                            message.offset,
+                            src_ts.0,
+                            src_ts.1,
                             ts
                         );
                         handle_message(
                             message,
+                            src_ts,
+                            diff,
                             &mut bytes_read,
                             &cap_set,
                             &mut output,
                             &mut metric_updates,
                             ts,
+                            id,
                         )
-                    }
-
-                    // TODO: These errors are still not definite. Change the error type to carry a
-                    // source timestamp that gets reclocked so that they become definite.
-                    if !untimestamped_batch.source_errors.is_empty() {
-                        // If there are errors, it means that someone must also have
-                        // given us a capability because a batch/batch-summary was
-                        // emitted to the remap operator.
-                        let err_cap = cap_set.delayed(
-                            cap_set
-                                .first()
-                                .expect("missing a capability for emitting errors"),
-                        );
-                        let mut session = output.session(&err_cap);
-                        let errors = untimestamped_batch
-                            .source_errors
-                            .iter()
-                            .map(|e| (0, Err(e.clone())));
-                        session.give_iterator(errors);
                     }
                 }
 
@@ -1586,50 +1565,63 @@ where
 /// TODO: This function is a bit of a mess rn but hopefully this function makes
 /// the existing mess more obvious and points towards ways to improve it.
 fn handle_message<K, V, D>(
-    message: SourceMessage<K, V, D>,
+    message: Result<SourceMessage<K, V>, SourceReaderError>,
+    time: (PartitionId, MzOffset),
+    diff: D,
     bytes_read: &mut usize,
     cap_set: &CapabilitySet<Timestamp>,
-    output: &mut OutputHandle<
+    output_handle: &mut OutputHandle<
         Timestamp,
         (usize, Result<SourceOutput<K, V, D>, SourceError>),
         Tee<Timestamp, (usize, Result<SourceOutput<K, V, D>, SourceError>)>,
     >,
     metric_updates: &mut HashMap<PartitionId, (MzOffset, Timestamp, Diff)>,
     ts: Timestamp,
+    source_id: GlobalId,
 ) where
     K: timely::Data + MaybeLength,
     V: timely::Data + MaybeLength,
     D: timely::Data,
 {
-    let partition = message.partition.clone();
-    let offset = message.offset;
+    let partition = time.0.clone();
+    let offset = time.1;
 
-    // Note: empty and null payload/keys are currently treated as the same
-    // thing.
-    let key = message.key;
-    let out = message.value;
-    // Entry for partition_metadata is guaranteed to exist as messages are only
-    // processed after we have updated the partition_metadata for a partition
-    // and created a partition queue for it.
-    if let Some(len) = key.len() {
-        *bytes_read += len;
-    }
-    if let Some(len) = out.len() {
-        *bytes_read += len;
-    }
+    let output = match message {
+        Ok(message) => {
+            // Note: empty and null payload/keys are currently treated as the same thing.
+            if let Some(len) = message.key.len() {
+                *bytes_read += len;
+            }
+            if let Some(len) = message.value.len() {
+                *bytes_read += len;
+            }
+
+            (
+                message.output,
+                Ok(SourceOutput::new(
+                    message.key,
+                    message.value,
+                    offset,
+                    message.upstream_time_millis,
+                    time.0,
+                    message.headers,
+                    diff,
+                )),
+            )
+        }
+        Err(err) => {
+            let err = SourceError {
+                source_id,
+                error: err.inner,
+            };
+            // XXX(petrosagg): errors should be attributed to a specific output by the source impl
+            // instead of hardcoding it to output zero
+            (0, Err(err))
+        }
+    };
+
     let ts_cap = cap_set.delayed(&ts);
-    output.session(&ts_cap).give((
-        message.output,
-        Ok(SourceOutput::new(
-            key,
-            out,
-            offset,
-            message.upstream_time_millis,
-            message.partition,
-            message.headers,
-            message.specific_diff,
-        )),
-    ));
+    output_handle.session(&ts_cap).give(output);
     match metric_updates.entry(partition) {
         Entry::Occupied(mut entry) => {
             entry.insert((offset, ts, entry.get().2 + 1));
