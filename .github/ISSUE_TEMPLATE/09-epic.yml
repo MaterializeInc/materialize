@@ -17,7 +17,7 @@ body:
     attributes:
       value: |
         Please label your Epic with High or Low depending on if it is a "must have" or "nice-to-have"
-	Plase make sure your Epic is assigned a Milestone and a Project board
+        Plase make sure your Epic is assigned a Milestone and a Project board
   - type: textarea
     id: outcome
     attributes:
