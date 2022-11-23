@@ -711,6 +711,7 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(id_bundle)
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn advance_timelines(&mut self) {
         let global_timelines = std::mem::take(&mut self.global_timelines);
         for (
