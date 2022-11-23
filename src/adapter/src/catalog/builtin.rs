@@ -2459,36 +2459,26 @@ FROM
 pub const MZ_SHOW_CLUSTER_REPLICAS: BuiltinView = BuiltinView {
     name: "mz_show_cluster_replicas",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: r#"CREATE VIEW
-    mz_internal.mz_show_cluster_replicas
-    AS
-        SELECT
-            mz_catalog.mz_clusters.name AS cluster,
-            mz_catalog.mz_cluster_replicas.name AS replica,
-            mz_catalog.mz_cluster_replicas.size AS size,
-            coalesce(statuses.ready, false) AS ready
-        FROM
-            mz_catalog.mz_cluster_replicas
-                JOIN
-                    mz_catalog.mz_clusters
-                    ON mz_catalog.mz_cluster_replicas.cluster_id = mz_catalog.mz_clusters.id
-                -- TODO[btv] This has to be a left join, because `mz_cluster_replica_statuses`
-                -- is not filled in immediately on replica creation.
-                LEFT JOIN
-                    (
-                            SELECT
-                                replica_id,
-                                mz_internal.mz_all(
-                                        mz_internal.mz_cluster_replica_statuses.status
-                                        = 'ready'
-                                    )
-                                    AS ready
-                            FROM mz_internal.mz_cluster_replica_statuses
-                            GROUP BY replica_id
-                        )
-                        AS statuses
-                    ON mz_catalog.mz_cluster_replicas.id = statuses.replica_id
-        ORDER BY 1, 2"#,
+    sql: r#"CREATE VIEW mz_internal.mz_show_cluster_replicas
+AS SELECT
+    mz_catalog.mz_clusters.name AS cluster,
+    mz_catalog.mz_cluster_replicas.name AS replica,
+    mz_catalog.mz_cluster_replicas.size AS size,
+    statuses.ready AS ready
+FROM
+    mz_catalog.mz_cluster_replicas
+        JOIN mz_catalog.mz_clusters
+            ON mz_catalog.mz_cluster_replicas.cluster_id = mz_catalog.mz_clusters.id
+        JOIN
+            (
+                SELECT
+                    replica_id,
+                    mz_internal.mz_all(status = 'ready') AS ready
+                FROM mz_internal.mz_cluster_replica_statuses
+                GROUP BY replica_id
+            ) AS statuses
+            ON mz_catalog.mz_cluster_replicas.id = statuses.replica_id
+ORDER BY 1, 2"#,
 };
 
 pub const MZ_SHOW_DATABASES_IND: BuiltinIndex = BuiltinIndex {
