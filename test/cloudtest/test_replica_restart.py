@@ -98,8 +98,14 @@ def test_crash_computed(mz: MaterializeApplication) -> None:
     podcount = 0
     for pod in pods.splitlines():
         if "compute-cluster" in pod:
-            mz.kubectl("delete", "pod", pod)
-            podcount += 1
+            try:
+                mz.kubectl("delete", "pod", pod)
+                podcount += 1
+            except:
+                # It's OK if the pod delete fails --
+                # it probably means we raced with a previous test that
+                # dropped resources.
+                pass
     assert podcount > 0
 
     # Wait for expected notices on all connections.
