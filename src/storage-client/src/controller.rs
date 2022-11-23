@@ -2269,6 +2269,7 @@ mod collection_mgmt {
     use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 
     use crate::client::TimestamplessUpdate;
+    use crate::controller::StorageError;
 
     use super::persist_write_handles;
 
@@ -2338,8 +2339,14 @@ mod collection_mgmt {
                                     let append_result = write_handle.monotonic_append(updates.clone()).await.expect("sender hung up");
                                     match append_result {
                                         Ok(()) => break,
-                                        Err(append_err) => {
-                                            debug!("Retrying error while appending to a managed collection: {append_err}");
+                                        Err(StorageError::InvalidUppers(ids)) => {
+                                            // It's fine to retry invalid-uppers errors here, since monotonic appends
+                                            // do not specify a particular upper or timestamp.
+                                            assert_eq!(&ids, &[id], "expect to receive errors for only the relevant collection");
+                                            debug!("Retrying invalid-uppers error while appending to managed collection {id}");
+                                        }
+                                        Err(other) => {
+                                            panic!("Unhandled error while appending to managed collection {id}: {other:?}")
                                         }
                                     }
                                 }
