@@ -356,7 +356,7 @@ Used Indexes:
 
 EOF
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/16128
+# Regression tests for https://github.com/MaterializeInc/materialize/issues/16128
 
 statement ok
 CREATE TABLE tt1 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
@@ -380,8 +380,6 @@ Explained Query (fast path):
   Constant <empty>
 
 EOF
-
-# Another test for https://github.com/MaterializeInc/materialize/issues/16128
 
 query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT
@@ -423,3 +421,25 @@ Source mz_catalog.mz_materialized_views
   map=(dummy, dummy, dummy, dummy)
 
 EOF
+
+DROP SCHEMA public CASCADE ;
+ CREATE SCHEMA public ;
+ CREATE TABLE table_f2_f3 ( f2 INTEGER , f3 INTEGER  ) ;
+ CREATE TABLE table_f3_f4_f5 ( f3 INTEGER , f4 INTEGER , f5 INTEGER  ) ;
+ CREATE TABLE table_f4_f5_f6 ( f4 INTEGER , f5 INTEGER , f6 INTEGER  ) ;
+ INSERT INTO table_f2_f3 VALUES ( 0 , 0 ) ;
+ INSERT INTO table_f2_f3 VALUES ( 0 , 1 ) ;
+ INSERT INTO table_f2_f3 VALUES ( NULL , 0 ) ;
+ INSERT INTO table_f3_f4_f5 VALUES ( 0 , 1 , NULL ) ;
+ INSERT INTO table_f3_f4_f5 VALUES ( 1 , 1 , 0 ) ;
+ INSERT INTO table_f3_f4_f5 VALUES ( 1 , NULL , 0 ) ;
+ INSERT INTO table_f4_f5_f6 VALUES ( 0 , 0 , 1 ) ;
+ INSERT INTO table_f4_f5_f6 VALUES ( 1 , 0 , 0 ) ;
+ INSERT INTO table_f4_f5_f6 VALUES ( NULL , 0 , 1 ) ;
+ INSERT INTO table_f4_f5_f6 VALUES ( NULL , 1 , 0 ) ;
+ INSERT INTO table_f4_f5_f6 VALUES ( NULL , 1 , 0 ) ;
+
+query IIIIII
+SELECT * FROM table_f2_f3  JOIN ( table_f3_f4_f5  JOIN table_f4_f5_f6  USING ( f5  )  )  USING ( f3  )
+ WHERE f6  IS  NULL  OR f3  >= f6  AND f6  <=  10000   ;
+----
