@@ -169,7 +169,7 @@ impl CatalogState {
             .expect("status not known");
         let status = match event.status {
             ComputeInstanceStatus::Ready => "ready",
-            ComputeInstanceStatus::NotReady => "not_ready",
+            ComputeInstanceStatus::NotReady => "not-ready",
             ComputeInstanceStatus::Unknown => "unknown",
         };
 
