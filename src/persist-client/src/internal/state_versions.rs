@@ -614,8 +614,8 @@ impl StateVersions {
 
     /// Fetches a rollup for the given SeqNo, if it exists.
     ///
-    /// Uses the provided hint, which is a possibly outdated copy of all live
-    /// diffs, to avoid fetches where possible.
+    /// Uses the provided hint, which is a possibly outdated copy of all
+    /// or recent live diffs, to avoid fetches where possible.
     ///
     /// Panics if called on an uninitialized shard.
     async fn fetch_rollup_at_seqno<K, V, T, D>(
