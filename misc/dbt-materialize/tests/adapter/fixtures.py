@@ -117,3 +117,9 @@ expected_base_relation_types = {
     "table_model": "materializedview",
     "swappable": "materializedview",
 }
+
+test_relation_name_length = """
+{{ config(materialized='materializedview') }}
+
+    SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse'), (NULL, NULL)) _ (a, b)
+"""
