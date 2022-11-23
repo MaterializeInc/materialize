@@ -53,7 +53,7 @@ of each process in each cluster replica in the system.
 Field               | Type                          | Meaning
 --------------------|-------------------------------|--------
 `replica_id`        | [`uint8`]                     | Materialize's unique ID for the cluster replica.
-`process_id`        | [`bigint`]                    | The ID of the process within the cluster replica.
+`process_id`        | [`uint8`]                     | The ID of the process within the cluster replica.
 `status`            | [`text`]                      | The status of the cluster replica: `ready` or `not-ready`. <!-- `unknown` intentionally undocumented because it is only used when running locally. -->
 `last_update`       | [`timestamp with time zone`]  | The time at which the status was last updated.
 
