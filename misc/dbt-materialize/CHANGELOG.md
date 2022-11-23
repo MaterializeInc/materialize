@@ -1,5 +1,10 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+* Remove the 63-character limitation on relation names. Materialize does not
+  have this limitation, unlike PostgreSQL (see [dbt-core #2727](https://github.com/dbt-labs/dbt-core/pull/2727)).
+
 ## 1.3.2 - 2022-11-17
 
 * Add the `IN CLUSTER` clause to the custom seed materialization to ensure that
