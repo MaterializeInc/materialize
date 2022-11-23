@@ -1674,9 +1674,11 @@ fn apply_existential_subquery(
     outer: mz_expr::MirRelationExpr,
     col_map: &ColumnMap,
     cte_map: &mut CteMap,
-    subquery_expr: HirRelationExpr,
+    mut subquery_expr: HirRelationExpr,
     apply_requires_distinct_outer: bool,
 ) -> mz_expr::MirRelationExpr {
+    // Discard output columns, as they should not influence "existence".
+    subquery_expr = subquery_expr.project(Vec::new());
     branch(
         id_gen,
         outer,
