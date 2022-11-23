@@ -474,7 +474,7 @@ where
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
     ) {
-        const METRICS_INTERVAL: Duration = Duration::from_secs(60);
+        const METRICS_INTERVAL: Duration = Duration::from_secs(10);
 
         let orchestrator = self.orchestrator.clone();
         let s = async_stream::stream! {

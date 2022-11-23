@@ -9,6 +9,7 @@
 
 import os
 import subprocess
+import time
 from typing import List, Optional
 
 from materialize import ROOT, mzbuild
@@ -67,6 +68,9 @@ class Application:
         return "kind-kind"
 
 
+MAX_PATCH_RETRIES: int = 60
+
+
 class MaterializeApplication(Application):
     def __init__(
         self,
@@ -89,6 +93,35 @@ class MaterializeApplication(Application):
                 "src/cloud-resources/src/crd/gen/vpcendpoints.json",
             ),
         )
+
+        # Start metrics-server
+        self.kubectl(
+            "apply",
+            "-f",
+            "https://github.com/kubernetes-sigs/metrics-server/releases/download/metrics-server-helm-chart-3.8.2/components.yaml",
+        )
+
+        succeeded = False
+        for i in range(MAX_PATCH_RETRIES):
+            try:
+                self.kubectl(
+                    "patch",
+                    "deployment",
+                    "metrics-server",
+                    "--namespace",
+                    "kube-system",
+                    "--type",
+                    "json",
+                    "-p",
+                    '[{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--kubelet-insecure-tls" }]',
+                )
+                succeeded = True
+            except:
+                time.sleep(1)
+        if not succeeded:
+            raise Exception(
+                f"failed to patch metrics-server deployment after {MAX_PATCH_RETRIES} seconds"
+            )
 
         self.resources = [
             *POSTGRES_RESOURCES,
