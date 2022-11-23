@@ -26,7 +26,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_build_info::BuildInfo;
 use mz_ore::now::NowFn;
-use mz_persist::cfg::{BlobConfig, ConsensusConfig};
+use mz_persist::cfg::{BlobConfig, ConsensusConfig, ConsensusKnobs};
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::{Codec, Codec64, Opaque};
 use proptest_derive::Arbitrary;
@@ -124,9 +124,7 @@ impl PersistLocation {
             retry_external(&metrics.retries.external.blob_open, || blob.clone().open()).await;
         let consensus = ConsensusConfig::try_from(
             &self.consensus_uri,
-            config.consensus_connection_pool_max_size,
-            config.consensus_connection_pool_ttl,
-            config.consensus_connection_pool_ttl_stagger,
+            Box::new(config.clone()),
             metrics.postgres_consensus.clone(),
         )?;
         let consensus = retry_external(&metrics.retries.external.consensus_open, || {
@@ -341,6 +339,20 @@ impl PersistConfig {
 
     // Tuning notes: Picked arbitrarily.
     pub(crate) const NEED_ROLLUP_THRESHOLD: u64 = 128;
+}
+
+impl ConsensusKnobs for PersistConfig {
+    fn connection_pool_max_size(&self) -> usize {
+        self.consensus_connection_pool_max_size
+    }
+
+    fn connection_pool_ttl(&self) -> Duration {
+        self.consensus_connection_pool_ttl
+    }
+
+    fn connection_pool_ttl_stagger(&self) -> Duration {
+        self.consensus_connection_pool_ttl_stagger
+    }
 }
 
 /// A handle for interacting with the set of persist shard made durable at a

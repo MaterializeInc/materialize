@@ -11,7 +11,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use anyhow::anyhow;
 use bytes::BufMut;
@@ -48,9 +47,7 @@ pub async fn fetch_latest_state(
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let consensus = ConsensusConfig::try_from(
         consensus_uri,
-        1,
-        Duration::MAX,
-        Duration::MAX,
+        Box::new(cfg.clone()),
         metrics.postgres_consensus.clone(),
     )?;
     let consensus = consensus.clone().open().await?;
@@ -91,9 +88,7 @@ pub async fn fetch_latest_state_rollup(
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let consensus = ConsensusConfig::try_from(
         consensus_uri,
-        1,
-        Duration::MAX,
-        Duration::MAX,
+        Box::new(cfg.clone()),
         metrics.postgres_consensus.clone(),
     )?;
     let consensus = consensus.clone().open().await?;
@@ -125,9 +120,7 @@ pub async fn fetch_state_rollups(
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let consensus = ConsensusConfig::try_from(
         consensus_uri,
-        1,
-        Duration::MAX,
-        Duration::MAX,
+        Box::new(cfg.clone()),
         metrics.postgres_consensus.clone(),
     )?;
     let consensus = consensus.clone().open().await?;
@@ -187,9 +180,7 @@ pub async fn fetch_state_diffs(
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let consensus = ConsensusConfig::try_from(
         consensus_uri,
-        1,
-        Duration::MAX,
-        Duration::MAX,
+        Box::new(cfg.clone()),
         metrics.postgres_consensus.clone(),
     )?;
     let consensus = consensus.clone().open().await?;
@@ -275,9 +266,7 @@ pub async fn unreferenced_blobs(
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let consensus = ConsensusConfig::try_from(
         consensus_uri,
-        1,
-        Duration::MAX,
-        Duration::MAX,
+        Box::new(cfg.clone()),
         metrics.postgres_consensus.clone(),
     )?;
     let consensus = consensus.clone().open().await?;
