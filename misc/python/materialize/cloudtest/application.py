@@ -67,9 +67,6 @@ class Application:
         return "kind-kind"
 
 
-MAX_PATCH_RETRIES: int = 60
-
-
 class MaterializeApplication(Application):
     def __init__(
         self,
