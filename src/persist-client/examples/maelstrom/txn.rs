@@ -628,9 +628,7 @@ impl Service for TransactorService {
             Some(consensus_uri) => {
                 ConsensusConfig::try_from(
                     consensus_uri,
-                    config.consensus_connection_pool_max_size,
-                    config.consensus_connection_pool_ttl,
-                    config.consensus_connection_pool_ttl_stagger,
+                    Box::new(config.clone()),
                     metrics.postgres_consensus.clone(),
                 )?
                 .open()
