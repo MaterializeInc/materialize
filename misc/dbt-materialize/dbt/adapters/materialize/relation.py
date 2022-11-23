@@ -42,8 +42,8 @@ class MaterializeRelation(PostgresRelation):
 
     # Materialize does not have a 63-character limit for relation
     # names, unlike PostgreSQL (see dbt-core #2727)
-    def __post_init__(self):
-        pass
+    def relation_max_name_length(self):
+        return 16384
 
     @classproperty
     def get_relation_type(cls) -> Type[MaterializeRelationType]:
