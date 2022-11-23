@@ -233,13 +233,13 @@ pub enum Plan<T = mz_repr::Timestamp> {
     /// stages, but for practical reasons cannot. For example: reduce, threshold,
     /// and topk stages are not able to absorb this operator.
     Mfp {
-        /// The input collection.
-        input: Box<Plan<T>>,
         /// Linear operator to apply to each record.
         mfp: MapFilterProject,
         /// Whether the input is from an arrangement, and if so,
         /// whether we can seek to a specific value therein
         input_key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        /// The input collection.
+        input: Box<Plan<T>>,
     },
     /// A variable number of output records for each input record.
     ///
@@ -254,8 +254,6 @@ pub enum Plan<T = mz_repr::Timestamp> {
     /// are being unpacked, producing quadratic output in those cases. Instead,
     /// in these cases use a `mfp` member that projects away these large fields.
     FlatMap {
-        /// The input collection.
-        input: Box<Plan<T>>,
         /// The variable-record emitting function.
         func: TableFunc,
         /// Expressions that for each row prepare the arguments to `func`.
@@ -265,6 +263,8 @@ pub enum Plan<T = mz_repr::Timestamp> {
         /// The particular arrangement of the input we expect to use,
         /// if any
         input_key: Option<Vec<MirScalarExpr>>,
+        /// The input collection.
+        input: Box<Plan<T>>,
     },
     /// A multiway relational equijoin, with fused map, filter, and projection.
     ///
@@ -272,19 +272,17 @@ pub enum Plan<T = mz_repr::Timestamp> {
     /// constraints expressed in `plan`. The plan also describes the implementation
     /// strategy we will use, and any pushed down per-record work.
     Join {
-        /// An ordered list of inputs that will be joined.
-        inputs: Vec<Plan<T>>,
         /// Detailed information about the implementation of the join.
         ///
         /// This includes information about the implementation strategy, but also
         /// any map, filter, project work that we might follow the join with, but
         /// potentially pushed down into the implementation of the join.
         plan: JoinPlan,
+        /// An ordered list of inputs that will be joined.
+        inputs: Vec<Plan<T>>,
     },
     /// Aggregation by key.
     Reduce {
-        /// The input collection.
-        input: Box<Plan<T>>,
         /// A plan for changing input records into key, value pairs.
         key_val_plan: KeyValPlan,
         /// A plan for performing the reduce.
@@ -296,17 +294,19 @@ pub enum Plan<T = mz_repr::Timestamp> {
         /// The particular arrangement of the input we expect to use,
         /// if any
         input_key: Option<Vec<MirScalarExpr>>,
+        /// The input collection.
+        input: Box<Plan<T>>,
     },
     /// Key-based "Top K" operator, retaining the first K records in each group.
     TopK {
-        /// The input collection.
-        input: Box<Plan<T>>,
         /// A plan for performing the Top-K.
         ///
         /// The implementation of reduction has several different strategies based
         /// on the properties of the reduction, and the input itself. Please check
         /// out the documentation for this type for more detail.
         top_k_plan: TopKPlan,
+        /// The input collection.
+        input: Box<Plan<T>>,
     },
     /// Inverts the sign of each update.
     Negate {
@@ -318,14 +318,14 @@ pub enum Plan<T = mz_repr::Timestamp> {
     /// Although the operator suppresses updates, it is a stateful operator taking
     /// resources proportional to the number of records with non-zero accumulation.
     Threshold {
-        /// The input collection.
-        input: Box<Plan<T>>,
         /// A plan for performing the threshold.
         ///
         /// The implementation of reduction has several different strategies based
         /// on the properties of the reduction, and the input itself. Please check
         /// out the documentation for this type for more detail.
         threshold_plan: ThresholdPlan,
+        /// The input collection.
+        input: Box<Plan<T>>,
     },
     /// Adds the contents of the input collections.
     ///
@@ -344,8 +344,6 @@ pub enum Plan<T = mz_repr::Timestamp> {
     /// be important for e.g. the `Join` stage which benefits from multiple arrangements
     /// or to cap a `Plan` so that indexes can be exported.
     ArrangeBy {
-        /// The input collection.
-        input: Box<Plan<T>>,
         /// A list of arrangement keys, and possibly a raw collection,
         /// that will be added to those of the input.
         ///
@@ -355,6 +353,8 @@ pub enum Plan<T = mz_repr::Timestamp> {
         input_key: Option<Vec<MirScalarExpr>>,
         /// The MFP that must be applied to the input.
         input_mfp: MapFilterProject,
+        /// The input collection.
+        input: Box<Plan<T>>,
     },
 }
 

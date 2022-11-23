@@ -122,45 +122,43 @@ pub enum HirRelationExpr {
         body: Box<HirRelationExpr>,
     },
     Project {
-        input: Box<HirRelationExpr>,
         outputs: Vec<usize>,
+        input: Box<HirRelationExpr>,
     },
     Map {
-        input: Box<HirRelationExpr>,
         scalars: Vec<HirScalarExpr>,
+        input: Box<HirRelationExpr>,
     },
     CallTable {
         func: TableFunc,
         exprs: Vec<HirScalarExpr>,
     },
     Filter {
-        input: Box<HirRelationExpr>,
         predicates: Vec<HirScalarExpr>,
+        input: Box<HirRelationExpr>,
     },
     /// Unlike MirRelationExpr, we haven't yet compiled LeftOuter/RightOuter/FullOuter
     /// joins away into more primitive exprs
     Join {
-        left: Box<HirRelationExpr>,
-        right: Box<HirRelationExpr>,
         on: HirScalarExpr,
         kind: JoinKind,
+        left: Box<HirRelationExpr>,
+        right: Box<HirRelationExpr>,
     },
     /// Unlike MirRelationExpr, when `key` is empty AND `input` is empty this returns
     /// a single row with the aggregates evaluated over empty groups, rather than returning zero
     /// rows
     Reduce {
-        input: Box<HirRelationExpr>,
         group_key: Vec<usize>,
         aggregates: Vec<AggregateExpr>,
         expected_group_size: Option<usize>,
+        input: Box<HirRelationExpr>,
     },
     Distinct {
         input: Box<HirRelationExpr>,
     },
     /// Groups and orders within each group, limiting output.
     TopK {
-        /// The source collection.
-        input: Box<HirRelationExpr>,
         /// Column indices used to form groups.
         group_key: Vec<usize>,
         /// Column indices used to order rows within groups.
@@ -169,6 +167,8 @@ pub enum HirRelationExpr {
         limit: Option<usize>,
         /// Number of records to skip
         offset: usize,
+        /// The source collection.
+        input: Box<HirRelationExpr>,
     },
     Negate {
         input: Box<HirRelationExpr>,

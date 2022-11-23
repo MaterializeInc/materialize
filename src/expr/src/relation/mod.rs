@@ -142,41 +142,41 @@ pub enum MirRelationExpr {
     ///
     /// The runtime memory footprint of this operator is zero.
     Project {
-        /// The source collection.
-        input: Box<MirRelationExpr>,
         /// Indices of columns to retain.
         outputs: Vec<usize>,
+        /// The source collection.
+        input: Box<MirRelationExpr>,
     },
     /// Append new columns to a dataflow
     ///
     /// The runtime memory footprint of this operator is zero.
     Map {
-        /// The source collection.
-        input: Box<MirRelationExpr>,
         /// Expressions which determine values to append to each row.
         /// An expression may refer to columns in `input` or
         /// expressions defined earlier in the vector
         scalars: Vec<MirScalarExpr>,
+        /// The source collection.
+        input: Box<MirRelationExpr>,
     },
     /// Like Map, but yields zero-or-more output rows per input row
     ///
     /// The runtime memory footprint of this operator is zero.
     FlatMap {
-        /// The source collection
-        input: Box<MirRelationExpr>,
         /// The table func to apply
         func: TableFunc,
         /// The argument to the table func
         exprs: Vec<MirScalarExpr>,
+        /// The source collection
+        input: Box<MirRelationExpr>,
     },
     /// Keep rows from a dataflow where all the predicates are true
     ///
     /// The runtime memory footprint of this operator is zero.
     Filter {
-        /// The source collection.
-        input: Box<MirRelationExpr>,
         /// Predicates, each of which must be true.
         predicates: Vec<MirScalarExpr>,
+        /// The source collection.
+        input: Box<MirRelationExpr>,
     },
     /// Join several collections, where some columns must be equal.
     ///
@@ -186,8 +186,6 @@ pub enum MirRelationExpr {
     /// the sizes of all inputs and the size of all joins of prefixes.
     /// This may be reduced due to arrangements available at rendering time.
     Join {
-        /// A sequence of input relations.
-        inputs: Vec<MirRelationExpr>,
         /// A sequence of equivalence classes of expressions on the cross product of inputs.
         ///
         /// Each equivalence class is a list of scalar expressions, where for each class the
@@ -201,6 +199,8 @@ pub enum MirRelationExpr {
         /// Join implementation information.
         #[serde(default)]
         implementation: JoinImplementation,
+        /// A sequence of input relations.
+        inputs: Vec<MirRelationExpr>,
     },
     /// Group a dataflow by some columns and aggregate over each group
     ///
@@ -210,8 +210,6 @@ pub enum MirRelationExpr {
     /// each aggregate, plus the output size. For more details consult the code that
     /// builds the associated dataflow.
     Reduce {
-        /// The source collection.
-        input: Box<MirRelationExpr>,
         /// Column indices used to form groups.
         group_key: Vec<MirScalarExpr>,
         /// Expressions which determine values to append to each row, after the group keys.
@@ -222,13 +220,13 @@ pub enum MirRelationExpr {
         /// User hint: expected number of values per group key. Used to optimize physical rendering.
         #[serde(default)]
         expected_group_size: Option<usize>,
+        /// The source collection.
+        input: Box<MirRelationExpr>,
     },
     /// Groups and orders within each group, limiting output.
     ///
     /// The runtime memory footprint of this operator is proportional to its input and output.
     TopK {
-        /// The source collection.
-        input: Box<MirRelationExpr>,
         /// Column indices used to form groups.
         group_key: Vec<usize>,
         /// Column indices used to order rows within groups.
@@ -242,6 +240,8 @@ pub enum MirRelationExpr {
         /// True iff the input is known to monotonically increase (only addition of records).
         #[serde(default)]
         monotonic: bool,
+        /// The source collection.
+        input: Box<MirRelationExpr>,
     },
     /// Return a dataflow where the row counts are negated
     ///
@@ -272,10 +272,10 @@ pub enum MirRelationExpr {
     ///
     /// The runtime memory footprint of this operator is proportional to its input.
     ArrangeBy {
-        /// The source collection
-        input: Box<MirRelationExpr>,
         /// Columns to arrange `input` by, in order of decreasing primacy
         keys: Vec<Vec<MirScalarExpr>>,
+        /// The source collection
+        input: Box<MirRelationExpr>,
     },
 }
 
