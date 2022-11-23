@@ -484,7 +484,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         self.catalog_transact(
             None,
-            vec![catalog::Op::UpdateComputeInstanceStatus { event }],
+            vec![catalog::Op::UpdateComputeReplicaStatus { event }],
         )
         .await
         .unwrap_or_terminate("updating compute instance status cannot fail");

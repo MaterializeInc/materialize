@@ -181,6 +181,13 @@ pub enum ComputeReplicaLocation {
 }
 
 impl ComputeReplicaLocation {
+    pub fn num_processes(&self) -> usize {
+        match self {
+            ComputeReplicaLocation::Remote { addrs, .. } => addrs.len(),
+            ComputeReplicaLocation::Managed { allocation, .. } => allocation.scale.get(),
+        }
+    }
+
     pub fn get_az(&self) -> Option<&str> {
         match self {
             ComputeReplicaLocation::Remote { .. } => None,
