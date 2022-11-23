@@ -16,7 +16,7 @@ use std::time::Duration;
 use chrono::DurationRound;
 use tracing::{event, warn, Level};
 
-use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceStatus};
+use mz_compute_client::controller::ComputeInstanceEvent;
 use mz_controller::ControllerResponse;
 use mz_ore::task;
 use mz_persist_client::ShardId;
@@ -458,36 +458,43 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn message_compute_instance_status(&mut self, event: ComputeInstanceEvent) {
         event!(Level::TRACE, event = format!("{:?}", event));
 
-        let (instance_name, replica_name) = self
-            .catalog
-            .compute_instances()
-            .find(|i| i.id == event.instance_id)
-            .map(|i| {
-                let mut replica = event.replica_id.to_string();
-                for (name, id) in &i.replica_id_by_name {
-                    if *id == event.replica_id {
-                        replica = name.clone();
-                        break;
-                    }
-                }
-                (i.name.clone(), replica)
-            })
-            .unwrap_or_else(|| (event.instance_id.to_string(), event.replica_id.to_string()));
+        // It is possible that we receive a status update for a replica that has
+        // already been dropped from the catalog. Just ignore these events.
+        let Some(instance) = self.catalog.try_get_compute_instance(event.instance_id) else {
+            return;
+        };
+        let Some(replica) = instance.replicas_by_id.get(&event.replica_id) else {
+            return;
+        };
 
-        if matches!(event.status, ComputeInstanceStatus::NotReady) {
-            self.broadcast_notice(AdapterNotice::ClusterReplicaStatusChanged {
-                cluster: instance_name,
-                replica: replica_name,
-                status: event.status,
-            });
+        if event.status != replica.process_status[&event.process_id].status {
+            let old_status = replica.status();
+
+            self.catalog_transact(
+                None,
+                vec![catalog::Op::UpdateComputeReplicaStatus {
+                    event: event.clone(),
+                }],
+            )
+            .await
+            .unwrap_or_terminate("updating compute instance status cannot fail");
+
+            let instance = self
+                .catalog
+                .try_get_compute_instance(event.instance_id)
+                .expect("instance known to exist");
+            let replica = &instance.replicas_by_id[&event.replica_id];
+            let new_status = replica.status();
+
+            if old_status != new_status {
+                self.broadcast_notice(AdapterNotice::ClusterReplicaStatusChanged {
+                    cluster: instance.name.clone(),
+                    replica: replica.name.clone(),
+                    status: new_status,
+                    time: event.time,
+                });
+            }
         }
-
-        self.catalog_transact(
-            None,
-            vec![catalog::Op::UpdateComputeReplicaStatus { event }],
-        )
-        .await
-        .unwrap_or_terminate("updating compute instance status cannot fail");
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
