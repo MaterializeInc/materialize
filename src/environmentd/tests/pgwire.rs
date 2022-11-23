@@ -36,10 +36,10 @@ use crate::util::PostgresErrorExt;
 pub mod util;
 
 #[test]
-fn test_bind_params() -> Result<(), Box<dyn Error>> {
+fn test_bind_params() {
     let config = util::Config::default().unsafe_mode();
-    let server = util::start_server(config)?;
-    let mut client = server.connect(postgres::NoTls)?;
+    let server = util::start_server(config).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
 
     match client.query("SELECT ROW(1, 2) = $1", &[&"(1,2)"]) {
         Ok(_) => panic!("query with invalid parameters executed successfully"),
@@ -47,23 +47,28 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
     }
 
     assert!(client
-        .query_one("SELECT ROW(1, 2) = ROW(1, $1)", &[&2_i32])?
+        .query_one("SELECT ROW(1, 2) = ROW(1, $1)", &[&2_i32])
+        .unwrap()
         .get::<_, bool>(0));
 
     // Just ensure it does not panic (see #2498).
-    client.query("EXPLAIN PLAN FOR SELECT $1::int", &[&42_i32])?;
+    client
+        .query("EXPLAIN PLAN FOR SELECT $1::int", &[&42_i32])
+        .unwrap();
 
     // Ensure that a type hint provided by the client is respected.
     {
-        let stmt = client.prepare_typed("SELECT $1", &[Type::INT4])?;
-        let val: i32 = client.query_one(&stmt, &[&42_i32])?.get(0);
+        let stmt = client.prepare_typed("SELECT $1", &[Type::INT4]).unwrap();
+        let val: i32 = client.query_one(&stmt, &[&42_i32]).unwrap().get(0);
         assert_eq!(val, 42);
     }
 
     // Ensure that unspecified type hints are inferred.
     {
-        let stmt = client.prepare_typed("SELECT $1 + $2", &[Type::INT4])?;
-        let val: i32 = client.query_one(&stmt, &[&1, &2])?.get(0);
+        let stmt = client
+            .prepare_typed("SELECT $1 + $2", &[Type::INT4])
+            .unwrap();
+        let val: i32 = client.query_one(&stmt, &[&1, &2]).unwrap().get(0);
         assert_eq!(val, 3);
     }
 
@@ -71,8 +76,10 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
     {
         let mut num = Numeric::from(mz_repr::adt::numeric::Numeric::from(123));
         num.0 .0.set_exponent(-2);
-        let stmt = client.prepare_typed("SELECT $1 + 2.34", &[Type::NUMERIC])?;
-        let val: Numeric = client.query_one(&stmt, &[&num])?.get(0);
+        let stmt = client
+            .prepare_typed("SELECT $1 + 2.34", &[Type::NUMERIC])
+            .unwrap();
+        let val: Numeric = client.query_one(&stmt, &[&num]).unwrap().get(0);
         assert_eq!(val.to_string(), "3.57");
     }
 
@@ -87,30 +94,30 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
 
     // Test that `INSERT` statements support prepared statements.
     {
-        client.batch_execute("CREATE TABLE t (a int)")?;
-        client.query("INSERT INTO t VALUES ($1)", &[&42_i32])?;
-        let val: i32 = client.query_one("SELECT * FROM t", &[])?.get(0);
+        client.batch_execute("CREATE TABLE t (a int)").unwrap();
+        client
+            .query("INSERT INTO t VALUES ($1)", &[&42_i32])
+            .unwrap();
+        let val: i32 = client.query_one("SELECT * FROM t", &[]).unwrap().get(0);
         assert_eq!(val, 42);
     }
-
-    Ok(())
 }
 
 #[test]
-fn test_partial_read() -> Result<(), Box<dyn Error>> {
-    let server = util::start_server(util::Config::default())?;
-    let mut client = server.connect(postgres::NoTls)?;
+fn test_partial_read() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
     let query = "VALUES ('1'), ('2'), ('3'), ('4'), ('5'), ('6'), ('7')";
 
-    let simpler = client.query(query, &[])?;
+    let simpler = client.query(query, &[]).unwrap();
 
     let mut simpler_iter = simpler.iter();
 
     let max_rows = 1;
-    let mut trans = client.transaction()?;
-    let portal = trans.bind(query, &[])?;
+    let mut trans = client.transaction().unwrap();
+    let portal = trans.bind(query, &[]).unwrap();
     for _ in 0..7 {
-        let rows = trans.query_portal(&portal, max_rows)?;
+        let rows = trans.query_portal(&portal, max_rows).unwrap();
         assert_eq!(
             rows.len(),
             max_rows as usize,
@@ -120,34 +127,33 @@ fn test_partial_read() -> Result<(), Box<dyn Error>> {
         let prepared: &str = rows.get(0).unwrap().get(0);
         assert_eq!(prepared, eagerly);
     }
-
-    Ok(())
 }
 
 #[test]
-fn test_read_many_rows() -> Result<(), Box<dyn Error>> {
-    let server = util::start_server(util::Config::default())?;
-    let mut client = server.connect(postgres::NoTls)?;
+fn test_read_many_rows() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
     let query = "VALUES (1), (2), (3)";
 
     let max_rows = 10_000;
-    let mut trans = client.transaction()?;
-    let portal = trans.bind(query, &[])?;
-    let rows = trans.query_portal(&portal, max_rows)?;
+    let mut trans = client.transaction().unwrap();
+    let portal = trans.bind(query, &[]).unwrap();
+    let rows = trans.query_portal(&portal, max_rows).unwrap();
 
     assert_eq!(rows.len(), 3, "row len should be all values");
-
-    Ok(())
 }
 
 #[test]
-fn test_conn_startup() -> Result<(), Box<dyn Error>> {
-    let server = util::start_server(util::Config::default())?;
-    let mut client = server.connect(postgres::NoTls)?;
+fn test_conn_startup() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
 
     // The default database should be `materialize`.
     assert_eq!(
-        client.query_one("SHOW database", &[])?.get::<_, String>(0),
+        client
+            .query_one("SHOW database", &[])
+            .unwrap()
+            .get::<_, String>(0),
         DEFAULT_DATABASE_NAME,
     );
 
@@ -156,55 +162,70 @@ fn test_conn_startup() -> Result<(), Box<dyn Error>> {
     //
     // TODO(benesch): we can use the sync client when this issue is fixed:
     // https://github.com/sfackler/rust-postgres/issues/404.
-    Runtime::new()?.block_on(async {
-        let (client, mut conn) = server
-            .pg_config_async()
-            .dbname("newdb")
-            .connect(postgres::NoTls)
-            .await?;
-        let (notice_tx, mut notice_rx) = mpsc::unbounded_channel();
-        task::spawn(|| "test_conn_startup", async move {
-            while let Some(msg) = future::poll_fn(|cx| conn.poll_message(cx)).await {
-                match msg {
-                    Ok(msg) => notice_tx.send(msg).unwrap(),
-                    Err(e) => panic!("{}", e),
+    Runtime::new()
+        .unwrap()
+        .block_on(async {
+            let (client, mut conn) = server
+                .pg_config_async()
+                .dbname("newdb")
+                .connect(postgres::NoTls)
+                .await
+                .unwrap();
+            let (notice_tx, mut notice_rx) = mpsc::unbounded_channel();
+            task::spawn(|| "test_conn_startup", async move {
+                while let Some(msg) = future::poll_fn(|cx| conn.poll_message(cx)).await {
+                    match msg {
+                        Ok(msg) => notice_tx.send(msg).unwrap(),
+                        Err(e) => panic!("{}", e),
+                    }
                 }
-            }
-        });
+            });
 
-        assert_eq!(
+            assert_eq!(
+                client
+                    .query_one("SHOW database", &[])
+                    .await
+                    .unwrap()
+                    .get::<_, String>(0),
+                "newdb",
+            );
+            client.batch_execute("CREATE DATABASE newdb").await.unwrap();
             client
-                .query_one("SHOW database", &[])
-                .await?
-                .get::<_, String>(0),
-            "newdb",
-        );
-        client.batch_execute("CREATE DATABASE newdb").await?;
-        client.batch_execute("CREATE TABLE v (i INT)").await?;
-        client.batch_execute("INSERT INTO v VALUES (1)").await?;
+                .batch_execute("CREATE TABLE v (i INT)")
+                .await
+                .unwrap();
+            client
+                .batch_execute("INSERT INTO v VALUES (1)")
+                .await
+                .unwrap();
 
-        match notice_rx.recv().await {
-            Some(tokio_postgres::AsyncMessage::Notice(n)) => {
-                assert_eq!(*n.code(), SqlState::SUCCESSFUL_COMPLETION);
-                assert_eq!(n.message(), "session database \"newdb\" does not exist");
+            match notice_rx.recv().await {
+                Some(tokio_postgres::AsyncMessage::Notice(n)) => {
+                    assert_eq!(*n.code(), SqlState::SUCCESSFUL_COMPLETION);
+                    assert_eq!(n.message(), "session database \"newdb\" does not exist");
+                }
+                _ => panic!("missing database notice not generated"),
             }
-            _ => panic!("missing database notice not generated"),
-        }
 
-        Ok::<_, Box<dyn Error>>(())
-    })?;
+            Ok::<_, Box<dyn Error>>(())
+        })
+        .unwrap();
 
     // Connecting to an existing database should work.
     {
         let mut client = server
             .pg_config()
             .dbname("newdb")
-            .connect(postgres::NoTls)?;
+            .connect(postgres::NoTls)
+            .unwrap();
 
         assert_eq!(
             // `v` here should refer to the `v` in `newdb.public` that we
             // created above.
-            client.query_one("SELECT * FROM v", &[])?.get::<_, i32>(0),
+            client
+                .query_one("SELECT * FROM v", &[])
+                .unwrap()
+                .get::<_, i32>(0),
             1,
         );
     }
@@ -214,10 +235,12 @@ fn test_conn_startup() -> Result<(), Box<dyn Error>> {
         let mut client = server
             .pg_config()
             .application_name("hello")
-            .connect(postgres::NoTls)?;
+            .connect(postgres::NoTls)
+            .unwrap();
         assert_eq!(
             client
-                .query_one("SHOW application_name", &[])?
+                .query_one("SHOW application_name", &[])
+                .unwrap()
                 .get::<_, String>(0),
             "hello",
         );
@@ -228,7 +251,7 @@ fn test_conn_startup() -> Result<(), Box<dyn Error>> {
     {
         use postgres_protocol::message::backend::Message;
 
-        let mut stream = TcpStream::connect(server.inner.sql_local_addr())?;
+        let mut stream = TcpStream::connect(server.inner.sql_local_addr()).unwrap();
 
         // Send a startup packet for protocol version two, which Materialize
         // does not support.
@@ -236,14 +259,14 @@ fn test_conn_startup() -> Result<(), Box<dyn Error>> {
         buf.extend(0_i32.to_be_bytes()); // frame length, corrected below
         buf.extend(0x20000_i32.to_be_bytes()); // protocol version two
         buf.extend(b"user\0ignored\0\0"); // dummy user parameter
-        let len: i32 = buf.len().try_into()?;
+        let len: i32 = buf.len().try_into().unwrap();
         buf[0..4].copy_from_slice(&len.to_be_bytes());
-        stream.write_all(&buf)?;
+        stream.write_all(&buf).unwrap();
 
         // Verify the server sends back an error and closes the connection.
         buf.clear();
-        stream.read_to_end(&mut buf)?;
-        let message = Message::parse(&mut BytesMut::from(&*buf))?;
+        stream.read_to_end(&mut buf).unwrap();
+        let message = Message::parse(&mut BytesMut::from(&*buf)).unwrap();
         let error = match message {
             Some(Message::ErrorResponse(error)) => error,
             _ => panic!("did not receive expected error response"),
@@ -251,7 +274,8 @@ fn test_conn_startup() -> Result<(), Box<dyn Error>> {
         let mut fields: Vec<_> = error
             .fields()
             .map(|f| Ok((f.type_(), f.value().to_owned())))
-            .collect()?;
+            .collect()
+            .unwrap();
         fields.sort_by_key(|(ty, _value)| *ty);
         assert_eq!(
             fields,
@@ -265,14 +289,12 @@ fn test_conn_startup() -> Result<(), Box<dyn Error>> {
             ]
         );
     }
-
-    Ok(())
 }
 
 #[test]
-fn test_conn_user() -> Result<(), Box<dyn Error>> {
-    let server = util::start_server(util::Config::default())?;
-    let mut client = server.connect(postgres::NoTls)?;
+fn test_conn_user() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Attempting to connect as a nonexistent user should fail.
     let err = server
@@ -289,72 +311,84 @@ fn test_conn_user() -> Result<(), Box<dyn Error>> {
     );
 
     // But should succeed after that user comes into existence.
-    client.batch_execute("CREATE ROLE rj LOGIN SUPERUSER")?;
-    let mut client = server.pg_config().user("rj").connect(postgres::NoTls)?;
-    let row = client.query_one("SELECT current_user", &[])?;
+    client
+        .batch_execute("CREATE ROLE rj LOGIN SUPERUSER")
+        .unwrap();
+    let mut client = server
+        .pg_config()
+        .user("rj")
+        .connect(postgres::NoTls)
+        .unwrap();
+    let row = client.query_one("SELECT current_user", &[]).unwrap();
     assert_eq!(row.get::<_, String>(0), "rj");
-
-    Ok(())
 }
 
 #[test]
-fn test_simple_query_no_hang() -> Result<(), Box<dyn Error>> {
-    let server = util::start_server(util::Config::default())?;
-    let mut client = server.connect(postgres::NoTls)?;
+fn test_simple_query_no_hang() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
     assert!(client.simple_query("asdfjkl;").is_err());
     // This will hang if #2880 is not fixed.
     assert!(client.simple_query("SELECT 1").is_ok());
-
-    Ok(())
 }
 
 #[test]
-fn test_copy() -> Result<(), Box<dyn Error>> {
-    let server = util::start_server(util::Config::default())?;
-    let mut client = server.connect(postgres::NoTls)?;
+fn test_copy() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Ensure empty COPY result sets work. We used to mishandle this with binary
     // COPY.
     {
         let tail = BinaryCopyOutIter::new(
-            client.copy_out("COPY (SELECT 1 WHERE FALSE) TO STDOUT (FORMAT BINARY)")?,
+            client
+                .copy_out("COPY (SELECT 1 WHERE FALSE) TO STDOUT (FORMAT BINARY)")
+                .unwrap(),
             &[Type::INT4],
         );
-        assert_eq!(tail.count()?, 0);
+        assert_eq!(tail.count().unwrap(), 0);
 
         let mut buf = String::new();
         client
-            .copy_out("COPY (SELECT 1 WHERE FALSE) TO STDOUT")?
-            .read_to_string(&mut buf)?;
+            .copy_out("COPY (SELECT 1 WHERE FALSE) TO STDOUT")
+            .unwrap()
+            .read_to_string(&mut buf)
+            .unwrap();
         assert_eq!(buf, "");
     }
 
     // Test basic, non-empty COPY.
     {
         let tail = BinaryCopyOutIter::new(
-            client.copy_out("COPY (VALUES (NULL, 2), (E'\t', 4)) TO STDOUT (FORMAT BINARY)")?,
+            client
+                .copy_out("COPY (VALUES (NULL, 2), (E'\t', 4)) TO STDOUT (FORMAT BINARY)")
+                .unwrap(),
             &[Type::TEXT, Type::INT4],
         );
-        let rows: Vec<(Option<String>, Option<i32>)> =
-            tail.map(|row| Ok((row.get(0), row.get(1)))).collect()?;
+        let rows: Vec<(Option<String>, Option<i32>)> = tail
+            .map(|row| Ok((row.get(0), row.get(1))))
+            .collect()
+            .unwrap();
         assert_eq!(rows, &[(None, Some(2)), (Some("\t".into()), Some(4))]);
 
         let mut buf = String::new();
         client
-            .copy_out("COPY (VALUES (NULL, 2), (E'\t', 4)) TO STDOUT")?
-            .read_to_string(&mut buf)?;
+            .copy_out("COPY (VALUES (NULL, 2), (E'\t', 4)) TO STDOUT")
+            .unwrap()
+            .read_to_string(&mut buf)
+            .unwrap();
         assert_eq!(buf, "\\N\t2\n\\t\t4\n");
     }
-
-    Ok(())
 }
 
 #[test]
-fn test_arrays() -> Result<(), Box<dyn Error>> {
-    let server = util::start_server(util::Config::default().unsafe_mode())?;
-    let mut client = server.connect(postgres::NoTls)?;
+fn test_arrays() {
+    let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
 
-    let row = client.query_one("SELECT ARRAY[ARRAY[1], ARRAY[NULL::int], ARRAY[2]]", &[])?;
+    let row = client
+        .query_one("SELECT ARRAY[ARRAY[1], ARRAY[NULL::int], ARRAY[2]]", &[])
+        .unwrap();
     let array: Array<Option<i32>> = row.get(0);
     assert_eq!(
         array.dimensions(),
@@ -372,7 +406,8 @@ fn test_arrays() -> Result<(), Box<dyn Error>> {
     assert_eq!(array.into_inner(), &[Some(1), None, Some(2)]);
 
     let message = client
-        .simple_query("SELECT ARRAY[ARRAY[1], ARRAY[NULL::int], ARRAY[2]]")?
+        .simple_query("SELECT ARRAY[ARRAY[1], ARRAY[NULL::int], ARRAY[2]]")
+        .unwrap()
         .into_first();
     match message {
         SimpleQueryMessage::Row(row) => {
@@ -382,7 +417,8 @@ fn test_arrays() -> Result<(), Box<dyn Error>> {
     }
 
     let message = client
-        .simple_query("SELECT ARRAY[ROW(1,2), ROW(3,4), ROW(5,6)]")?
+        .simple_query("SELECT ARRAY[ROW(1,2), ROW(3,4), ROW(5,6)]")
+        .unwrap()
         .into_first();
     match message {
         SimpleQueryMessage::Row(row) => {
@@ -390,53 +426,57 @@ fn test_arrays() -> Result<(), Box<dyn Error>> {
         }
         _ => panic!("unexpected simple query message"),
     }
-
-    Ok(())
 }
 
 #[test]
-fn test_record_types() -> Result<(), Box<dyn Error>> {
-    let server = util::start_server(util::Config::default())?;
-    let mut client = server.connect(postgres::NoTls)?;
+fn test_record_types() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
 
-    let row = client.query_one("SELECT ROW()", &[])?;
+    let row = client.query_one("SELECT ROW()", &[]).unwrap();
     let _: Record<()> = row.get(0);
 
-    let row = client.query_one("SELECT ROW(1)", &[])?;
+    let row = client.query_one("SELECT ROW(1)", &[]).unwrap();
     let record: Record<(i32,)> = row.get(0);
     assert_eq!(record, Record((1,)));
 
-    let row = client.query_one("SELECT (1, (2, 3))", &[])?;
+    let row = client.query_one("SELECT (1, (2, 3))", &[]).unwrap();
     let record: Record<(i32, Record<(i32, i32)>)> = row.get(0);
     assert_eq!(record, Record((1, Record((2, 3)))));
 
-    let row = client.query_one("SELECT (1, 'a')", &[])?;
+    let row = client.query_one("SELECT (1, 'a')", &[]).unwrap();
     let record: Record<(i32, String)> = row.get(0);
     assert_eq!(record, Record((1, "a".into())));
 
-    client.batch_execute("CREATE TYPE named_composite AS (a int, b text)")?;
-    let row = client.query_one("SELECT ROW(321, '123')::named_composite", &[])?;
+    client
+        .batch_execute("CREATE TYPE named_composite AS (a int, b text)")
+        .unwrap();
+    let row = client
+        .query_one("SELECT ROW(321, '123')::named_composite", &[])
+        .unwrap();
     let record: Record<(i32, String)> = row.get(0);
     assert_eq!(record, Record((321, "123".into())));
 
-    client.batch_execute("CREATE TABLE has_named_composites (f named_composite)")?;
+    client
+        .batch_execute("CREATE TABLE has_named_composites (f named_composite)")
+        .unwrap();
     client.batch_execute(
         "INSERT INTO has_named_composites (f) VALUES ((10, '10')), ((20, '20')::named_composite)",
-    )?;
-    let rows = client.query(
-        "SELECT f FROM has_named_composites ORDER BY (f).a DESC",
-        &[],
-    )?;
+    ).unwrap();
+    let rows = client
+        .query(
+            "SELECT f FROM has_named_composites ORDER BY (f).a DESC",
+            &[],
+        )
+        .unwrap();
     let record: Record<(i32, String)> = rows[0].get(0);
     assert_eq!(record, Record((20, "20".into())));
     let record: Record<(i32, String)> = rows[1].get(0);
     assert_eq!(record, Record((10, "10".into())));
     assert_eq!(rows.len(), 2);
-
-    Ok(())
 }
 
-fn pg_test_inner(dir: PathBuf) -> Result<(), Box<dyn Error>> {
+fn pg_test_inner(dir: PathBuf) {
     // We want a new server per file, so we can't use pgtest::walk.
     datadriven::walk(dir.to_str().unwrap(), |tf| {
         let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
@@ -452,19 +492,17 @@ fn pg_test_inner(dir: PathBuf) -> Result<(), Box<dyn Error>> {
 
         mz_pgtest::run_test(tf, addr, user.to_string(), timeout);
     });
-
-    Ok(())
 }
 
 #[test]
-fn test_pgtest() -> Result<(), Box<dyn Error>> {
+fn test_pgtest() {
     let dir: PathBuf = ["..", "..", "test", "pgtest"].iter().collect();
-    pg_test_inner(dir)
+    pg_test_inner(dir);
 }
 
 #[test]
 // Materialize's differences from Postgres' responses.
-fn test_pgtest_mz() -> Result<(), Box<dyn Error>> {
+fn test_pgtest_mz() {
     let dir: PathBuf = ["..", "..", "test", "pgtest-mz"].iter().collect();
-    pg_test_inner(dir)
+    pg_test_inner(dir);
 }
