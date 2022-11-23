@@ -1835,7 +1835,6 @@ fn test_idle_in_transaction_session_timeout() {
 }
 
 #[test]
-#[ignore]
 fn test_coord_startup_blocking() {
     let initial_time = 0;
     let now = Arc::new(Mutex::new(initial_time));
