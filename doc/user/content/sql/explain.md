@@ -31,7 +31,7 @@ The following three objects can be explained.
 
 Explained object | Description
 ------|-----
-**select_stmt** | Display the plan for an ad-hoc select statement.
+**select_stmt** | Display the plan for an ad hoc `SELECT` statement.
 **VIEW view_name** | Display the plan for an existing view.
 **MATERIALIZED VIEW view_name** | Display the plan for an existing materialized view.
 
