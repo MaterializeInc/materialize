@@ -35,7 +35,9 @@ use mz_orchestrator::{
 use mz_ore::cli::{DefaultTrue, KeyValueArg};
 #[cfg(feature = "tokio-console")]
 use mz_ore::tracing::TokioConsoleConfig;
-use mz_ore::tracing::{OpenTelemetryConfig, SentryConfig, StderrLogConfig, TracingConfig};
+use mz_ore::tracing::{
+    OpenTelemetryConfig, SentryConfig, StderrLogConfig, StderrLogFormat, TracingConfig,
+};
 
 /// Command line arguments for application tracing.
 ///
@@ -80,8 +82,13 @@ pub struct TracingCliArgs {
         default_value = "info"
     )]
     pub log_filter: SerializableTargets,
+    /// The format to use for stderr log messages.
+    #[clap(long, env = "LOG_FORMAT", default_value_t, value_enum)]
+    pub log_format: LogFormat,
     /// An optional prefix for each stderr log line.
-    #[clap(long, env = "LOG_INCLUDE_SERVICE_NAME")]
+    ///
+    /// Only respected when `--log-format` is `text`.
+    #[clap(long, env = "LOG_PREFIX")]
     pub log_prefix: Option<String>,
     /// Whether OpenTelemetry tracing is enabled by default.
     ///
@@ -192,7 +199,12 @@ impl From<&TracingCliArgs> for TracingConfig {
     fn from(args: &TracingCliArgs) -> TracingConfig {
         TracingConfig {
             stderr_log: StderrLogConfig {
-                prefix: args.log_prefix.clone(),
+                format: match args.log_format {
+                    LogFormat::Text => StderrLogFormat::Text {
+                        prefix: args.log_prefix.clone(),
+                    },
+                    LogFormat::Json => StderrLogFormat::Json,
+                },
                 filter: args.log_filter.inner.clone(),
             },
             opentelemetry: args.opentelemetry_endpoint.clone().map(|endpoint| {
@@ -296,6 +308,7 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
             let TracingCliArgs {
                 log_filter,
                 log_prefix,
+                log_format,
                 opentelemetry_endpoint,
                 opentelemetry_header,
                 opentelemetry_filter,
@@ -310,6 +323,7 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 sentry_dsn,
             } = &self.tracing_args;
             args.push(format!("--log-filter={log_filter}"));
+            args.push(format!("--log-format={log_format}"));
             if log_prefix.is_some() {
                 args.push(format!("--log-prefix={}-{}", self.namespace, id));
             }
@@ -397,5 +411,28 @@ impl FromStr for SerializableTargets {
 impl fmt::Display for SerializableTargets {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(&self.raw)
+    }
+}
+
+/// Specifies the format of a stderr log message.
+#[derive(Debug, Clone, Default, clap::ValueEnum)]
+pub enum LogFormat {
+    /// Format as human readable, optionally colored text.
+    ///
+    /// Best suited for direct human consumption in a terminal.
+    #[default]
+    Text,
+    /// Format as JSON (in reality, JSONL).
+    ///
+    /// Best suited for ingestion in structured logging aggregators.
+    Json,
+}
+
+impl fmt::Display for LogFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LogFormat::Text => f.write_str("text"),
+            LogFormat::Json => f.write_str("json"),
+        }
     }
 }

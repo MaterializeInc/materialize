@@ -83,11 +83,26 @@ pub struct SentryConfig {
 /// Configures the stderr log.
 #[derive(Debug, Clone)]
 pub struct StderrLogConfig {
-    /// Whether to prefix each log line with the service name.
-    /// An optional prefix for each stderr log line.
-    pub prefix: Option<String>,
+    /// The format in which to emit messages.
+    pub format: StderrLogFormat,
     /// A filter which determines which events are emitted to the log.
     pub filter: Targets,
+}
+
+/// Specifies the format of a stderr log message.
+#[derive(Debug, Clone)]
+pub enum StderrLogFormat {
+    /// Format as human readable, optionally colored text.
+    ///
+    /// Best suited for direct human consumption in a terminal.
+    Text {
+        /// An optional prefix for each log message.
+        prefix: Option<String>,
+    },
+    /// Format as JSON (in reality, JSONL).
+    ///
+    /// Best suited for ingestion in structured logging aggregators.
+    Json,
 }
 
 /// Callbacks used to dynamically modify tracing-related filters
@@ -181,6 +196,28 @@ pub struct TokioConsoleConfig {
     pub retention: Duration,
 }
 
+fn stderr_log_layer<S>(stderr_config: StderrLogConfig) -> Box<dyn Layer<S> + Send + Sync>
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+{
+    match stderr_config.format {
+        StderrLogFormat::Text { prefix } => {
+            // See: https://no-color.org/
+            let no_color = std::env::var_os("NO_COLOR").unwrap_or_else(|| "".into()) != "";
+            Box::new(
+                fmt::layer()
+                    .with_writer(io::stderr)
+                    .event_format(PrefixFormat {
+                        inner: format(),
+                        prefix,
+                    })
+                    .with_ansi(!no_color && atty::is(atty::Stream::Stderr)),
+            )
+        }
+        StderrLogFormat::Json => Box::new(fmt::layer().with_writer(io::stderr).json()),
+    }
+}
+
 /// Enables application tracing via the [`tracing`] and [`opentelemetry`]
 /// libraries.
 ///
@@ -218,24 +255,14 @@ where
     let service_name = service_name.to_string();
 
     let config = config.into();
-    // See: https://no-color.org/
-    let no_color = std::env::var_os("NO_COLOR").unwrap_or_else(|| "".into()) != "";
-    let stderr_log_layer = fmt::layer()
-        .event_format(PrefixFormat {
-            inner: format(),
-            prefix: config.stderr_log.prefix,
-        })
-        .with_writer(io::stderr)
-        .with_ansi(!no_color && atty::is(atty::Stream::Stderr))
-        .with_filter(config.stderr_log.filter);
-
-    let (stderr_log_layer, stderr_reloader) = reload::Layer::new(stderr_log_layer);
+    let (stderr_log_filter, stderr_reloader) = reload::Layer::new(config.stderr_log.filter.clone());
     let stderr_callback = DynamicTargetsCallback {
         callback: Arc::new(move |targets| {
-            stderr_reloader.modify(|layer| *layer.filter_mut() = targets)?;
+            stderr_reloader.reload(targets)?;
             Ok(())
         }),
     };
+    let stderr_log_layer = stderr_log_layer(config.stderr_log).with_filter(stderr_log_filter);
 
     let (otel_layer, otel_reloader) = if let Some(otel_config) = config.opentelemetry {
         // TODO(guswynn): figure out where/how to call
@@ -292,10 +319,7 @@ where
             .with_filter(filter);
         let reloader = DynamicTargetsCallback {
             callback: Arc::new(move |targets| {
-                // This code should be kept panic-free to
-                // avoid weird poisoning issues in our subscriber
-                // stack.
-                filter_handle.modify(|filter| *filter = targets)?;
+                filter_handle.reload(targets)?;
                 Ok(())
             }),
         };
