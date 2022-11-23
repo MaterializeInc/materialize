@@ -1,0 +1,76 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+name: "Internal: Epic"
+description: >
+  An entry point for a single initiative with pointers to engineering design and product specifications, and links to all related issues
+title: "[Epic] <epic name>"
+labels: Epic
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please label your Epic with High or Low depending on if it is a "must have" or "nice-to-have"
+	Plase make sure your Epic is assigned a Milestone and a Project board
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Product Outcome
+      description: |
+        Please describe what Materialize will do as a result of this work
+      validations:
+        required: true
+  - type: textarea
+    id: spec
+    attributes:
+      label: Specification
+      description: |
+        Link to all external product specifications
+      validations:
+        required: true
+  - type: textarea
+    id: design
+    attributes:
+      label: Design
+      description: >
+        Link to any external design specification including interface and syntax designs.
+	For simple designs, you can inline the design in the epic.
+	Writing a test plan is non-negotiable. Link to all external product specifications
+      validations:
+        required: true
+  - type: textarea
+    id: docs
+    attributes:
+      label: Documentation
+      description: |
+       If this work requires any new documentation or changes to existing documentation, please link appropriate doc issues here
+  - type: textarea
+    id: requiredissues
+    attributes:
+      label: Required Issues (Must Haves)
+      description: |
+        Please list all issues required to fulfill this product outcome by priority
+      validations:
+        required: true
+  - type: textarea
+    id: discretionaryissues
+    attributes:
+      label: Discretionary Issues (Nice To Haves)
+      description: >
+        Please list all non-mandatory issues that complement, extend or enhance the product experience.
+	When all required issues are complete we’ll either continue with the discretionary issues or
+	move them back into the icebox or a follow on epic and mark this current epic as complete.
+      validations:
+        required: true
+  - type: textarea
+    id: blockers
+    attributes:
+      label: Blockers
+      description: |
+        Please list all known epics that block this product outcome
