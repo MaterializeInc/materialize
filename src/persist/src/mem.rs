@@ -165,8 +165,9 @@ impl MemConsensus {
     ) -> Result<Vec<VersionedData>, ExternalError> {
         let results = if let Some(values) = store.get(key) {
             let from_idx = values.partition_point(|x| x.seqno < from);
-            let to_idx = usize::min(values.len(), from_idx.saturating_add(limit));
-            values[from_idx..to_idx].to_vec()
+            let from_values = &values[from_idx..];
+            let from_values = &from_values[..usize::min(limit, from_values.len())];
+            from_values.to_vec()
         } else {
             Vec::new()
         };

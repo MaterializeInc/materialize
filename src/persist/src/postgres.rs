@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 use tracing::debug;
 
 use crate::error::Error;
-use crate::location::{Consensus, ExternalError, SeqNo, VersionedData};
+use crate::location::{Consensus, ExternalError, SeqNo, VersionedData, SCAN_ALL};
 use crate::metrics::PostgresConsensusMetrics;
 
 const SCHEMA: &str = "
@@ -440,7 +440,7 @@ impl Consensus for PostgresConsensus {
             // 2. All operations that modify the (seqno, data) can only increase
             //    the sequence number.
             let from = expected.map_or_else(SeqNo::minimum, |x| x.next());
-            let current = self.scan_all(key, from).await?;
+            let current = self.scan(key, from, SCAN_ALL).await?;
             Ok(Err(current))
         }
     }

@@ -18,7 +18,9 @@ use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
-use mz_persist::location::{Atomicity, Blob, Consensus, Indeterminate, SeqNo, VersionedData};
+use mz_persist::location::{
+    Atomicity, Blob, Consensus, Indeterminate, SeqNo, VersionedData, SCAN_ALL,
+};
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
@@ -347,7 +349,9 @@ impl StateVersions {
         let path = state.shard_id.to_string();
         let diffs_to_current =
             retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
-                self.consensus.scan_all(&path, state.seqno.next()).await
+                self.consensus
+                    .scan(&path, state.seqno.next(), SCAN_ALL)
+                    .await
             })
             .instrument(debug_span!("fetch_state::scan"))
             .await;
@@ -442,7 +446,7 @@ impl StateVersions {
     pub async fn fetch_all_live_diffs(&self, shard_id: &ShardId) -> AllLiveDiffs {
         let path = shard_id.to_string();
         let diffs = retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
-            self.consensus.scan_all(&path, SeqNo::minimum()).await
+            self.consensus.scan(&path, SeqNo::minimum(), SCAN_ALL).await
         })
         .instrument(debug_span!("fetch_state::scan"))
         .await;
@@ -519,7 +523,7 @@ impl StateVersions {
                         // (pedantry) this call is technically unbounded, but something very strange
                         // would have had to happen to have accumulated so many states between our
                         // call to `head` and this invocation for it to become problematic
-                        self.consensus.scan_all(&path, seqno).await
+                        self.consensus.scan(&path, seqno, SCAN_ALL).await
                     })
                     .instrument(debug_span!("fetch_state::slow_path::scan"))
                     .await;
