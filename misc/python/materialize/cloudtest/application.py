@@ -101,27 +101,17 @@ class MaterializeApplication(Application):
             "https://github.com/kubernetes-sigs/metrics-server/releases/download/metrics-server-helm-chart-3.8.2/components.yaml",
         )
 
-        succeeded = False
-        for i in range(MAX_PATCH_RETRIES):
-            try:
-                self.kubectl(
-                    "patch",
-                    "deployment",
-                    "metrics-server",
-                    "--namespace",
-                    "kube-system",
-                    "--type",
-                    "json",
-                    "-p",
-                    '[{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--kubelet-insecure-tls" }]',
-                )
-                succeeded = True
-            except:
-                time.sleep(1)
-        if not succeeded:
-            raise Exception(
-                f"failed to patch metrics-server deployment after {MAX_PATCH_RETRIES} seconds"
-            )
+        self.kubectl(
+            "patch",
+            "deployment",
+            "metrics-server",
+            "--namespace",
+            "kube-system",
+            "--type",
+            "json",
+            "-p",
+            '[{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--kubelet-insecure-tls" }]',
+        )
 
         self.resources = [
             *POSTGRES_RESOURCES,
