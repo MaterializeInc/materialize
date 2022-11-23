@@ -95,26 +95,26 @@ impl MockHttpServer {
 fn test_no_block() {
     // This is better than relying on CI to time out, because an actual failure
     // (as opposed to a CI timeout) causes `services.log` to be uploaded.
-    mz_ore::test::timeout(Duration::from_secs(60), || {
-        info!("test_no_block: starting server");
+    mz_ore::test::timeout(Duration::from_secs(120), || {
+        println!("test_no_block: starting server");
         let server = util::start_server(util::Config::default()).unwrap();
 
         server.runtime.block_on(async {
-            info!("test_no_block: starting mock HTTP server");
+            println!("test_no_block: starting mock HTTP server");
             let mut schema_registry_server = MockHttpServer::new();
 
-            info!("test_no_block: connecting to server");
+            println!("test_no_block: connecting to server");
             let (client, _conn) = server.connect_async(postgres::NoTls).await.unwrap();
 
             let slow_task = task::spawn(|| "slow_client", async move {
-                info!("test_no_block: in thread; executing create source");
+                println!("test_no_block: in thread; executing create source");
                 let result = client
                 .batch_execute(&format!(
                     "CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL 'http://{}');",
                     schema_registry_server.addr,
                 ))
                 .await;
-                info!("test_no_block: in thread; create CSR conn done");
+                println!("test_no_block: in thread; create CSR conn done");
                 let _ = result.unwrap();
 
                 let result = client
@@ -123,7 +123,7 @@ fn test_no_block() {
                         &*KAFKA_ADDRS,
                     ))
                     .await;
-                info!("test_no_block: in thread; create Kafka conn done");
+                println!("test_no_block: in thread; create Kafka conn done");
                 let _ = result.unwrap();
 
                 let result = client
@@ -133,47 +133,47 @@ fn test_no_block() {
                         FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn",
                     )
                     .await;
-                info!("test_no_block: in thread; create source done");
-                result
+                println!("test_no_block: in thread; create source done");
+                // Verify that the schema registry error was returned to the client, for
+                // good measure.
+                assert_contains!(result.unwrap_err().to_string(), "server error 503");
             });
 
             // Wait for Materialize to contact the schema registry, which
             // indicates the adapter is processing the CREATE SOURCE command. It
             // will be unable to complete the query until we respond.
-            info!("test_no_block: accepting fake schema registry connection");
+            println!("test_no_block: accepting fake schema registry connection");
             let response_tx = schema_registry_server.accept().await;
 
             // Verify that the adapter can still process other requests from
             // other sessions.
-            info!("test_no_block: connecting to server again");
+            println!("test_no_block: connecting to server again");
             let (client, _conn) = server.connect_async(postgres::NoTls).await.unwrap();
-            info!("test_no_block: executing query");
+            println!("test_no_block: executing query");
             let answer: i32 = client.query_one("SELECT 1 + 1", &[]).await.unwrap().get(0);
             assert_eq!(answer, 2);
 
             // Return an error to the adapter, so that we can shutdown cleanly.
-            info!("test_no_block: writing fake schema registry error");
+            println!("test_no_block: writing fake schema registry error");
             response_tx
                 .send(StatusCode::SERVICE_UNAVAILABLE.into_response())
                 .expect("server unexpectedly closed channel");
 
-            // Verify that the schema registry error was returned to the client, for
-            // good measure.
-            info!("test_no_block: joining task");
-            let slow_res = slow_task.await.unwrap();
-            assert_contains!(slow_res.unwrap_err().to_string(), "server error 503");
+            println!("test_no_block: joining task");
+            slow_task.await.unwrap();
 
             Ok(())
         })
-    }).unwrap();
+    }).expect("Test timed out");
 }
 
 /// Test that dropping a connection while a source is undergoing purification
 /// does not crash the server.
 #[test]
 fn test_drop_connection_race() {
-    info!("test_drop_connection_race: starting server");
     let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
+    mz_ore::test::init_logging();
+    info!("test_drop_connection_race: server started");
 
     server.runtime.block_on(async {
         info!("test_drop_connection_race: starting mock HTTP server");
