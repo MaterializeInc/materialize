@@ -40,7 +40,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
 use tokio::runtime::Handle as TokioHandle;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, warn};
 
 use mz_interchange::avro::{AvroEncoder, AvroSchemaGenerator};
@@ -215,7 +215,7 @@ impl KafkaSinkSendRetryManager {
 
 pub struct SinkProducerContext {
     metrics: Arc<SinkMetrics>,
-    healthchecker: Arc<Mutex<Option<Healthchecker>>>,
+    healthchecker: mpsc::Sender<SinkStatus>,
     retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
 }
 
@@ -226,15 +226,8 @@ impl ClientContext for SinkProducerContext {
         MzClientContext.log(level, fac, log_message)
     }
     fn error(&self, error: KafkaError, reason: &str) {
-        let healthchecker = Arc::clone(&self.healthchecker);
-        let healthcheck_err = error.clone();
-        task::spawn(|| "producer-error-report", async move {
-            let mut locked = healthchecker.lock().await;
-            if let Some(hc) = locked.as_mut() {
-                hc.update_status(SinkStatus::Stalled(healthcheck_err.to_string()))
-                    .await;
-            }
-        });
+        let status = SinkStatus::Stalled(error.to_string());
+        let _ = self.healthchecker.try_send(status);
         MzClientContext.error(error, reason)
     }
 }
@@ -431,15 +424,29 @@ impl KafkaSinkState {
             &worker_id,
         ));
 
-        let healthchecker = Arc::new(Mutex::new(None));
+        let healthchecker: Arc<Mutex<Option<Healthchecker>>> = Arc::new(Mutex::new(None));
 
         let retry_manager = Arc::new(Mutex::new(KafkaSinkSendRetryManager::new()));
 
+        let (status_tx, mut status_rx) = mpsc::channel(16);
+
         let producer_context = SinkProducerContext {
             metrics: Arc::clone(&metrics),
-            healthchecker: Arc::clone(&healthchecker),
+            healthchecker: status_tx,
             retry_manager: Arc::clone(&retry_manager),
         };
+
+        {
+            let healthchecker = Arc::clone(&healthchecker);
+            task::spawn(|| "producer-error-report", async move {
+                while let Some(status) = status_rx.recv().await {
+                    if let Some(hc) = healthchecker.lock().await.as_mut() {
+                        hc.update_status(status).await;
+                    }
+                }
+            });
+        }
+
         let producer = TokioHandle::current()
             .block_on(connection.connection.create_with_context(
                 connection_context,
