@@ -78,6 +78,7 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::StreamExt;
 use itertools::Itertools;
+use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::task::spawn;
 use rand::seq::SliceRandom;
 use tokio::runtime::Handle as TokioHandle;
@@ -257,10 +258,12 @@ pub struct Config<S> {
 }
 
 /// Soft-state metadata about a compute replica
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Default, Debug, Eq, PartialEq)]
 pub struct ReplicaMetadata {
     /// The last time we heard from this replica (possibly rounded)
-    pub last_heartbeat: DateTime<Utc>,
+    pub last_heartbeat: Option<DateTime<Utc>>,
+    /// The last known CPU and memory metrics
+    pub metrics: Option<Vec<ServiceProcessMetrics>>,
 }
 
 /// Metadata about an active connection.

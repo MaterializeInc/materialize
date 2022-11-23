@@ -86,6 +86,7 @@ use crate::util::{send_immediate_rows, ClientTransmitter, ComputeSinkId};
 use crate::{guard_write_critical_section, session, PeekResponseUnary};
 
 use super::timestamp_selection::{TimestampExplanation, TimestampSource};
+use super::ReplicaMetadata;
 
 impl<S: Append + 'static> Coordinator<S> {
     #[tracing::instrument(level = "debug", skip_all)]
@@ -1840,12 +1841,28 @@ impl<S: Append + 'static> Coordinator<S> {
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
     ) -> Result<(), anyhow::Error> {
-        if let Some(Some(metadata)) = self.transient_replica_metadata.insert(replica_id, None) {
-            let retraction = self
-                .catalog
-                .state()
-                .pack_replica_heartbeat_update(replica_id, metadata, -1);
-            self.send_builtin_table_updates(vec![retraction], BuiltinTableUpdateSource::Background)
+        if let Some(Some(ReplicaMetadata {
+            last_heartbeat,
+            metrics,
+        })) = self.transient_replica_metadata.insert(replica_id, None)
+        {
+            let mut updates = vec![];
+            if let Some(last_heartbeat) = last_heartbeat {
+                let retraction = self.catalog.state().pack_replica_heartbeat_update(
+                    replica_id,
+                    last_heartbeat,
+                    -1,
+                );
+                updates.push(retraction);
+            }
+            if let Some(metrics) = metrics {
+                let retraction = self
+                    .catalog
+                    .state()
+                    .pack_replica_metric_updates(replica_id, &metrics, -1);
+                updates.extend(retraction.into_iter());
+            }
+            self.send_builtin_table_updates(updates, BuiltinTableUpdateSource::Background)
                 .await;
         }
         self.controller

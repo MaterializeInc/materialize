@@ -67,6 +67,9 @@ class Application:
         return "kind-kind"
 
 
+MAX_PATCH_RETRIES: int = 60
+
+
 class MaterializeApplication(Application):
     def __init__(
         self,
@@ -88,6 +91,25 @@ class MaterializeApplication(Application):
                 os.path.abspath(ROOT),
                 "src/cloud-resources/src/crd/gen/vpcendpoints.json",
             ),
+        )
+
+        # Start metrics-server
+        self.kubectl(
+            "apply",
+            "-f",
+            "https://github.com/kubernetes-sigs/metrics-server/releases/download/metrics-server-helm-chart-3.8.2/components.yaml",
+        )
+
+        self.kubectl(
+            "patch",
+            "deployment",
+            "metrics-server",
+            "--namespace",
+            "kube-system",
+            "--type",
+            "json",
+            "-p",
+            '[{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--kubelet-insecure-tls" }]',
         )
 
         self.resources = [
