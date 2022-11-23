@@ -1,6 +1,6 @@
 ---
 title: "SSH tunnel connections"
-description: "How to connect Materialize to a Kafka broker, or a PostgreSQL database using an SSH tunnel connection to a SSH bastion server"
+description: "How to connect Materialize to a PostgreSQL database using an SSH tunnel connection to a SSH bastion server"
 menu:
   main:
     parent: "network-security"
@@ -9,24 +9,33 @@ aliases:
   - /integrations/postgres-bastion/
 ---
 
-Materialize can connect to a Kafka broker, or a PostgreSQL database through a
-secure SSH bastion server. In this guide, we'll cover how to create `SSH
-TUNNEL` connections and retrieve the Materialize public keys needed to
-configure the bastion server.
+Materialize can connect to a PostgreSQL database through a secure SSH bastion
+server. In this guide, we'll cover how to:
 
-### Create an SSH tunnel connection
+* Create `SSH TUNNEL` and `POSTGRES` connections
+* Create a PostgreSQL source that uses an SSH tunnel connection
+* Configure Materialize public keys on the SSH bastion server
 
-In Materialize, create an [SSH tunnel connection](/sql/create-connection/#ssh-tunnel) to the bastion server:
+### Prerequisites
 
-```sql
-CREATE CONNECTION ssh_connection TO SSH TUNNEL (
-    HOST '<SSH_BASTION_HOST>',
-    USER '<SSH_BASTION_USER>',
-    PORT <SSH_BASTION_PORT>
-);
-```
+Before moving on, double check that you have:
 
-### Configure the SSH bastion server
+* A running PostgreSQL database
+* An SSH bastion server that has access to your PostgreSQL database, and can be
+  accessed from Materialize
+* A region enabled Materialize
+
+### Steps
+
+1. In Materialize, create an [SSH tunnel connection](/sql/create-connection/#ssh-tunnel) to the bastion server:
+
+    ```sql
+    CREATE CONNECTION ssh_connection TO SSH TUNNEL (
+        HOST '<SSH_BASTION_HOST>',
+        USER '<SSH_BASTION_USER>',
+        PORT <SSH_BASTION_PORT>
+    );
+    ```
 
 1. Retrieve the **public keys** for the SSH tunnel connection you just created:
 
@@ -40,10 +49,6 @@ CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     | u75   | ssh-ed25519 AAAA...76RH materialize   | ssh-ed25519 AAAA...hLYV materialize   |
     ```
 
-    You should configure your SSH bastion server to accept **both** key pairs,
-    so you can routinely rotate them without downtime using
-    [`ALTER CONNECTION`](/sql/alter-connection).
-
 1. Log in to your SSH bastion server and add the keys from the previous step:
 
     ```bash
@@ -51,61 +56,34 @@ CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     echo "ssh-ed25519 AAAA...76RH materialize" >> ~/.ssh/authorized_keys
     ```
 
-### Create a source connection
+1. In Materialize, create a [PostgreSQL connection](/sql/create-connection/#postgres) that uses `ssh_connection`:
 
-In Materialize, create a source connection that uses the SSH tunnel connection you just configured:
+    ```sql
+    CREATE SECRET pgpass AS '<POSTGRES_PASSWORD>';
 
-{{< tabs tabID="1" >}}
-{{< tab "Kafka">}}
-```sql
-CREATE CONNECTION kafka_connection TO KAFKA (
-BROKERS (
-    'broker1:9092' USING SSH TUNNEL ssh_connection,
-    'broker2:9092' USING SSH TUNNEL ssh_connection
-    )
-);
-```
+    CREATE CONNECTION pg_connection TO POSTGRES (
+      HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
+      PORT 5432,
+      USER 'postgres',
+      PASSWORD SECRET pgpass,
+      SSL MODE 'require',
+      DATABASE 'postgres'
+      SSH TUNNEL ssh_connection
+    );
+    ```
 
-This Kafka connection can then be reused across multiple [`CREATE SOURCE`](/sql/create-source/kafka/)
-statements:
+1. Create a [PostgreSQL source](/sql/create-source/postgres/#create-source-example):
 
-```sql
-CREATE SOURCE json_source
-  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  FORMAT BYTES
-  WITH (SIZE = '3xsmall');
-```
-
-{{< /tab >}}
-{{< tab "PostgreSQL">}}
-```sql
-CREATE SECRET pgpass AS '<POSTGRES_PASSWORD>';
-
-CREATE CONNECTION pg_connection TO POSTGRES (
-  HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
-  PORT 5432,
-  USER 'postgres',
-  PASSWORD SECRET pgpass,
-  SSL MODE 'require',
-  DATABASE 'postgres'
-  SSH TUNNEL ssh_connection
-);
-```
-
-This PostgreSQL connection can then be reused across multiple [`CREATE SOURCE`](/sql/create-source/postgres/)
-statements:
-
-```sql
-CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
-  FOR ALL TABLES
-  WITH (SIZE = '3xsmall');
-```
-{{< /tab >}} {{< /tabs >}}
+    ```sql
+    CREATE SOURCE mz_source
+      FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
+      FOR ALL TABLES
+      WITH (SIZE = '3xsmall');
+    ```
 
 ## Related pages
 
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
-- [`CREATE SOURCE`: Kafka](/sql/create-source/kafka/)
 - [`CREATE SOURCE`: PostgreSQL](/sql/create-source/postgres/)
+- [PostgreSQL CDC guide](/integrations/cdc-postgres/#direct-postgres-source)
