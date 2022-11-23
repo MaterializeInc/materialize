@@ -146,9 +146,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         _id: &str,
     ) -> Result<Vec<ServiceProcessMetrics>, anyhow::Error> {
         // Metrics are not currently supported on the process orchestrator
-        loop {
-            tokio::time::sleep(Duration::MAX).await;
-        }
+        futures::future::pending().await
     }
 
     async fn ensure_service(
