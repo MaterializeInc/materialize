@@ -9,7 +9,6 @@
 
 import os
 import subprocess
-import time
 from typing import List, Optional
 
 from materialize import ROOT, mzbuild
