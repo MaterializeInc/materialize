@@ -209,7 +209,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 );
 ```
 
-### Tunnels (AWS PrivateLink, SSH tunnel) {#kafka-tunnels}
+### Tunnels (SSH and AWS PrivateLink) {#kafka-tunnels}
 
 #### Syntax
 
@@ -229,20 +229,18 @@ Field                                   | Value            | Required | Descript
 `PORT`                                  | `integer`        |          | The port of the AWS PrivateLink service to connect to. Defaults to the broker's port.
 `ssh_connection`                        | object name      | ✓        | The name of an [SSH tunnel connection](#ssh-tunnel) through which network traffic for this broker should be routed.
 
-The `USING` clause specifies that Materialize should connect to the designated
-broker in a Kafka cluster via an AWS PrivateLink service or an SSH bastion.
-
-Brokers need not be configured the same way, but the clause must be individually
-attached to each broker that you want to connect to via the tunnel.
+The `USING` clause specifies that Materialize should connect to the
+designated broker in a Kafka cluster via an SSH bastion or
+an AWS PrivateLink service. Brokers need not be configured the same way.
 
 {{< warning >}}
-If your Kafka cluster advertises brokers that are not specified
-in the `BROKERS` clause, Materialize will attempt to connect to
-those brokers without any tunneling.
+You must attach the clause individually to each broker that you want to connect
+to via the tunnel. If there are other broker hosts discovered that are not
+specified, materialize will attempt to connect to them directly.
 {{< /warning >}}
 
 
-#### Example: AWS PrivateLink
+#### Examples
 
 Suppose you have the following infrastructure:
 
@@ -266,23 +264,6 @@ CREATE CONNECTION kafka_connection TO KAFKA (
     BROKERS (
         'broker1:9092' USING AWS PRIVATELINK privatelink_svc,
         'broker2:9092' USING AWS PRIVATELINK privatelink_svc (PORT 9093)
-    )
-);
-```
-
-#### Example: SSH tunnel
-
-```sql
-CREATE CONNECTION ssh_connection TO SSH TUNNEL (
-    HOST '<SSH_BASTION_HOST>',
-    USER '<SSH_BASTION_USER>',
-    PORT <SSH_BASTION_PORT>
-);
-
-CREATE CONNECTION kafka_connection TO KAFKA (
-BROKERS (
-    'broker1:9092' USING SSH TUNNEL ssh_connection,
-    'broker2:9092' USING SSH TUNNEL ssh_connection
     )
 );
 ```
@@ -326,8 +307,6 @@ CREATE CONNECTION pg_connection TO POSTGRES (
 );
 ```
 
-#### SSH tunnel
-
 If your PostgreSQL server is not exposed to the public internet, you can
 tunnel the connection through an SSH bastion host:
 
@@ -350,8 +329,7 @@ CREATE CONNECTION pg_connection TO POSTGRES (
 
 An SSH tunnel connection establishes a link to an SSH bastion server.
 
-You can use SSH tunnel connections in [Kafka connections](#kafka), and
-[Postgres connections](#postgres).
+You can use SSH tunnel connections in [Postgres connections](#postgres).
 
 Field                       | Value            | Required | Description
 ----------------------------|------------------|:--------:|------------------------------
