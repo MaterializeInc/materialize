@@ -45,6 +45,18 @@ Field         | Type       | Meaning
 `records`     | [`bigint`] | The number of records in the arrangement.
 `batches`     | [`bigint`] | The number of batches in the arrangement.
 
+### `mz_cluster_replica_statuses`
+
+The `mz_cluster_replica_statuses` table contains a row describing the status
+of each process in each cluster replica in the system.
+
+Field               | Type                          | Meaning
+--------------------|-------------------------------|--------
+`replica_id`        | [`uint8`]                     | Materialize's unique ID for the cluster replica.
+`process_id`        | [`bigint`]                    | The ID of the process within the cluster replica.
+`status`            | [`text`]                      | The status of the cluster replica: `ready` or `not-ready`. <!-- `unknown` intentionally undocumented because it is only used when running locally. -->
+`last_update`       | [`timestamp with time zone`]  | The time at which the status was last updated.
+
 ### `mz_dataflows`
 
 The `mz_dataflows` view describes the [dataflows][dataflow] in the system.
@@ -377,5 +389,7 @@ Field         | Type       | Meaning
 [`numeric`]: /sql/types/numeric
 [`text`]: /sql/types/text
 [`uuid`]: /sql/types/uuid
+[`uint8`]: /sql/types/uint8
+[`timestamp with time zone`]: /sql/types/timestamp
 [arrangement]: /overview/arrangements/#arrangements
 [dataflow]: /overview/arrangements/#dataflows
