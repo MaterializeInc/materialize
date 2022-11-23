@@ -90,6 +90,12 @@ pub struct StateVersions {
     metrics: Arc<Metrics>,
 }
 
+#[derive(Debug, Clone)]
+pub struct RecentLiveDiffs(pub Vec<VersionedData>);
+
+#[derive(Debug, Clone)]
+pub struct AllLiveDiffs(pub Vec<VersionedData>);
+
 impl StateVersions {
     pub fn new(
         cfg: PersistConfig,
@@ -120,9 +126,11 @@ impl StateVersions {
         let shard_id = shard_metrics.shard_id;
 
         // The common case is that the shard is initialized, so try that first
-        let live_diffs = self.fetch_recent_live_diffs::<T>(&shard_id).await;
-        if !live_diffs.is_empty() {
-            return self.fetch_current_state(&shard_id, live_diffs).await;
+        let recent_live_diffs = self.fetch_recent_live_diffs::<T>(&shard_id).await;
+        if !recent_live_diffs.0.is_empty() {
+            return self
+                .fetch_current_state(&shard_id, recent_live_diffs.0)
+                .await;
         }
 
         // Shard is not initialized, try initializing it.
@@ -253,14 +261,14 @@ impl StateVersions {
 
     /// Fetches the `current` state of the requested shard.
     ///
-    /// Uses the provided hint (all_live_diffs), which is a possibly outdated
-    /// copy of all live diffs, to avoid fetches where possible.
+    /// Uses the provided hint (live_diffs), which is a possibly outdated
+    /// copy of all or recent live diffs, to avoid fetches where possible.
     ///
     /// Panics if called on an uninitialized shard.
     pub async fn fetch_current_state<K, V, T, D>(
         &self,
         shard_id: &ShardId,
-        mut all_live_diffs: Vec<VersionedData>,
+        mut live_diffs: Vec<VersionedData>,
     ) -> Result<State<K, V, T, D>, Box<CodecMismatch>>
     where
         K: Debug + Codec,
@@ -274,7 +282,7 @@ impl StateVersions {
             .fetch_latest_state
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         loop {
-            let latest_diff = all_live_diffs
+            let latest_diff = live_diffs
                 .last()
                 .expect("initialized shard should have at least one diff");
             let latest_diff = self
@@ -291,11 +299,11 @@ impl StateVersions {
                     // The rollup that this diff referenced is gone, so the diff
                     // must be out of date. Try again. Intentionally don't sleep on retry.
                     retry.retries.inc();
-                    let earliest_before_refetch = all_live_diffs
+                    let earliest_before_refetch = live_diffs
                         .first()
                         .expect("initialized shard should have at least one diff")
                         .seqno;
-                    all_live_diffs = self.fetch_recent_live_diffs::<T>(shard_id).await;
+                    live_diffs = self.fetch_recent_live_diffs::<T>(shard_id).await.0;
 
                     // We should only hit the race condition that leads to a
                     // refetch if the set of live diffs changed out from under
@@ -303,7 +311,7 @@ impl StateVersions {
                     //
                     // TODO: Make this an assert once we're 100% sure the above
                     // is always true.
-                    let earliest_after_refetch = all_live_diffs
+                    let earliest_after_refetch = live_diffs
                         .first()
                         .expect("initialized shard should have at least one diff")
                         .seqno;
@@ -315,7 +323,7 @@ impl StateVersions {
             };
 
             let rollup_seqno = state.seqno;
-            let diffs = all_live_diffs.iter().filter(|x| x.seqno > rollup_seqno);
+            let diffs = live_diffs.iter().filter(|x| x.seqno > rollup_seqno);
             state.apply_encoded_diffs(&self.cfg, &self.metrics, diffs);
             return Ok(state);
         }
@@ -351,9 +359,9 @@ impl StateVersions {
             state.apply_encoded_diffs(&self.cfg, &self.metrics, &diffs_to_current);
             Ok(())
         } else {
-            let all_live_diffs = self.fetch_all_live_diffs(&state.shard_id).await;
+            let recent_live_diffs = self.fetch_recent_live_diffs::<T>(&state.shard_id).await;
             *state = self
-                .fetch_current_state(&state.shard_id, all_live_diffs)
+                .fetch_current_state(&state.shard_id, recent_live_diffs.0)
                 .await?;
             Ok(())
         }
@@ -379,12 +387,12 @@ impl StateVersions {
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         let mut all_live_diffs = self.fetch_all_live_diffs(shard_id).await;
         loop {
-            let earliest_live_diff = match all_live_diffs.first() {
+            let earliest_live_diff = match all_live_diffs.0.first() {
                 Some(x) => x,
                 None => panic!("fetch_live_states should only be called on an initialized shard"),
             };
             let state = match self
-                .fetch_rollup_at_seqno(shard_id, all_live_diffs.clone(), earliest_live_diff.seqno)
+                .fetch_rollup_at_seqno(shard_id, all_live_diffs.0.clone(), earliest_live_diff.seqno)
                 .await
             {
                 Some(x) => x?,
@@ -406,6 +414,7 @@ impl StateVersions {
                     // TODO: Make this an assert once we're 100% sure the above
                     // is always true.
                     let earliest_after_refetch = all_live_diffs
+                        .0
                         .first()
                         .expect("initialized shard should have at least one diff")
                         .seqno;
@@ -420,7 +429,7 @@ impl StateVersions {
                 self.cfg.clone(),
                 Arc::clone(&self.metrics),
                 state,
-                all_live_diffs,
+                all_live_diffs.0,
             ));
         }
     }
@@ -430,13 +439,14 @@ impl StateVersions {
     /// caller simply needs to fetch the latest state.
     ///
     /// Returns an empty Vec iff called on an uninitialized shard.
-    pub async fn fetch_all_live_diffs(&self, shard_id: &ShardId) -> Vec<VersionedData> {
+    pub async fn fetch_all_live_diffs(&self, shard_id: &ShardId) -> AllLiveDiffs {
         let path = shard_id.to_string();
-        retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
+        let diffs = retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
             self.consensus.scan_all(&path, SeqNo::minimum()).await
         })
         .instrument(debug_span!("fetch_state::scan"))
-        .await
+        .await;
+        AllLiveDiffs(diffs)
     }
 
     /// Fetches recent live_diffs for a shard. Intended for when a caller needs to fetch
@@ -445,7 +455,7 @@ impl StateVersions {
     /// "Recent" is defined as either:
     /// * All of the diffs known in Consensus
     /// * All of the diffs in Consensus after the latest rollup
-    pub async fn fetch_recent_live_diffs<T>(&self, shard_id: &ShardId) -> Vec<VersionedData>
+    pub async fn fetch_recent_live_diffs<T>(&self, shard_id: &ShardId) -> RecentLiveDiffs
     where
         T: Timestamp + Lattice + Codec64,
     {
@@ -475,7 +485,7 @@ impl StateVersions {
         // calls to go down this path, unless a reader has a very long seqno-hold on the shard.
         if oldest_diffs.len() < scan_limit {
             self.metrics.state.fetch_recent_live_diffs_fast_path.inc();
-            return oldest_diffs;
+            return RecentLiveDiffs(oldest_diffs);
         }
 
         // slow-path: we could be arbitrarily far behind the head of Consensus (either intentionally
@@ -504,14 +514,16 @@ impl StateVersions {
         match BlobKey::parse_ids(&latest_diff.latest_rollup_key.complete(shard_id)) {
             Ok((_shard_id, PartialBlobKey::Rollup(seqno, _rollup))) => {
                 self.metrics.state.fetch_recent_live_diffs_slow_path.inc();
-                retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
-                    // (pedantry) this call is technically unbounded, but something very strange
-                    // would have had to happen to have accumulated so many states between our
-                    // call to `head` and this invocation for it to become problematic
-                    self.consensus.scan_all(&path, seqno).await
-                })
-                .instrument(debug_span!("fetch_state::slow_path::scan"))
-                .await
+                let diffs =
+                    retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
+                        // (pedantry) this call is technically unbounded, but something very strange
+                        // would have had to happen to have accumulated so many states between our
+                        // call to `head` and this invocation for it to become problematic
+                        self.consensus.scan_all(&path, seqno).await
+                    })
+                    .instrument(debug_span!("fetch_state::slow_path::scan"))
+                    .await;
+                RecentLiveDiffs(diffs)
             }
             Ok(_) => panic!(
                 "invalid state diff rollup key: {}",
@@ -609,7 +621,7 @@ impl StateVersions {
     async fn fetch_rollup_at_seqno<K, V, T, D>(
         &self,
         shard_id: &ShardId,
-        all_live_diffs: Vec<VersionedData>,
+        live_diffs: Vec<VersionedData>,
         seqno: SeqNo,
     ) -> Option<Result<State<K, V, T, D>, Box<CodecMismatch>>>
     where
@@ -618,7 +630,7 @@ impl StateVersions {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64,
     {
-        let rollup_key_for_migration = all_live_diffs.iter().find_map(|x| {
+        let rollup_key_for_migration = live_diffs.iter().find_map(|x| {
             let diff = self
                 .metrics
                 .codecs
@@ -635,7 +647,7 @@ impl StateVersions {
         });
 
         let state = match self
-            .fetch_current_state::<K, V, T, D>(shard_id, all_live_diffs)
+            .fetch_current_state::<K, V, T, D>(shard_id, live_diffs)
             .await
         {
             Ok(x) => x,

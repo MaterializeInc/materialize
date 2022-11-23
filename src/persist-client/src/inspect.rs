@@ -60,7 +60,7 @@ pub async fn fetch_latest_state(
         .await;
 
     let state = match state_versions
-        .fetch_current_state::<K, V, u64, D>(&shard_id, versions.clone())
+        .fetch_current_state::<K, V, u64, D>(&shard_id, versions.0.clone())
         .await
     {
         Ok(s) => s.into_proto(),
@@ -70,7 +70,7 @@ pub async fn fetch_latest_state(
                 *kvtd = codec.actual;
             }
             state_versions
-                .fetch_current_state::<K, V, u64, D>(&shard_id, versions)
+                .fetch_current_state::<K, V, u64, D>(&shard_id, versions.0)
                 .await
                 .expect("codecs match")
                 .into_proto()
