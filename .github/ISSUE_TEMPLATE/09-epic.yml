@@ -32,8 +32,8 @@ body:
       label: Specification
       description: |
         Link to all external product specifications
-      validations:
-        required: true
+    validations:
+      required: true
   - type: textarea
     id: design
     attributes:
