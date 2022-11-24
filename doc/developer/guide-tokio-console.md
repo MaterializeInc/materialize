@@ -10,13 +10,13 @@ First, install `tokio-console`:
 cargo install tokio-console
 ```
 
-Then run `materialized` with the `console-subscriber` on:
+Then run `environmentd`:
 
 ```
-RUSTFLAGS="--cfg tokio_unstable" cargo run --features tokio-console -- --dev --tokio-console
+./bin/environmentd --tokio-console
 ```
 
-(note that this may slow down `materialized` a lot, as it increases the amount of tracing by a lot,
+(note that this may slow down `environmentd` a lot, as it increases the amount of tracing by a lot,
 and may inadvertently turn on debug logging for `rdkafka`)
 
 Then, in a different tmux pane/terminal, run:
