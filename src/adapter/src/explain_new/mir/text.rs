@@ -81,7 +81,7 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                             )
                         })?;
                     } else {
-                        write!(f, "{}Constant <empty>", ctx.indent)?;
+                        writeln!(f, "{}Constant <empty>", ctx.indent)?;
                     }
                 }
                 Err(err) => {
