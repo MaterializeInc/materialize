@@ -3839,6 +3839,7 @@ dependencies = [
  "paste",
  "pin-project",
  "prometheus",
+ "scopeguard",
  "sentry",
  "sentry-tracing",
  "serde",

@@ -18,14 +18,20 @@
 //! This module provides future and stream combinators that are missing from
 //! the [`futures`](futures) crate.
 
+use std::any::Any;
 use std::fmt::{self, Debug};
 use std::future::Future;
 use std::marker::PhantomData;
+use std::panic::UnwindSafe;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use futures::future::{CatchUnwind, FutureExt};
 use futures::sink::Sink;
+use pin_project::pin_project;
+use tokio::task::futures::TaskLocalFuture;
 
+use crate::panic::CATCHING_UNWIND_ASYNC;
 use crate::task;
 
 /// Extension methods for futures.
@@ -41,6 +47,14 @@ pub trait OreFutureExt {
         NameClosure: FnOnce() -> Name + Unpin,
         Self: Future + Send + 'static,
         Self::Output: Send + 'static;
+
+    /// Like [`FutureExt::catch_unwind`], but can unwind panics even if
+    /// [`set_abort_on_panic`] has been called.
+    ///
+    /// [`set_abort_on_panic`]: crate::panic::set_abort_on_panic
+    fn ore_catch_unwind(self) -> OreCatchUnwind<Self>
+    where
+        Self: Sized + UnwindSafe;
 }
 
 impl<T> OreFutureExt for T
@@ -60,6 +74,16 @@ where
         SpawnIfCanceled {
             inner: Some(Box::pin(self)),
             nc: Some(nc),
+        }
+    }
+
+    fn ore_catch_unwind(self) -> OreCatchUnwind<Self>
+    where
+        Self: UnwindSafe,
+    {
+        OreCatchUnwind {
+            #[allow(clippy::disallowed_methods)]
+            inner: CATCHING_UNWIND_ASYNC.scope(true, FutureExt::catch_unwind(self)),
         }
     }
 }
@@ -129,6 +153,25 @@ where
                 },
             )
             .finish()
+    }
+}
+
+/// The future returned by [`OreFutureExt::ore_catch_unwind`].
+#[derive(Debug)]
+#[pin_project]
+pub struct OreCatchUnwind<Fut> {
+    #[pin]
+    inner: TaskLocalFuture<bool, CatchUnwind<Fut>>,
+}
+
+impl<Fut> Future for OreCatchUnwind<Fut>
+where
+    Fut: Future + UnwindSafe,
+{
+    type Output = Result<Fut::Output, Box<dyn Any + Send>>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.project().inner.poll(cx)
     }
 }
 
@@ -217,5 +260,35 @@ impl<T, E> Sink<T> for DevNull<T, E> {
 
     fn poll_close(self: Pin<&mut Self>, _: &mut Context) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::panic;
+
+    use scopeguard::defer;
+
+    use super::OreFutureExt;
+
+    #[tokio::test]
+    async fn catch_panic_async() {
+        let old_hook = panic::take_hook();
+        defer! {
+            panic::set_hook(old_hook);
+        }
+
+        crate::panic::set_abort_on_panic();
+
+        let result = async {
+            panic!("panicked");
+        }
+        .ore_catch_unwind()
+        .await
+        .unwrap_err()
+        .downcast::<&str>()
+        .unwrap();
+
+        assert_eq!(*result, "panicked");
     }
 }

@@ -1,4 +1,7 @@
 disallowed-methods = [
+    { path = "std::panic::catch_unwind", reason = "use mz_ore::panic::catch_unwind instead" },
+    { path = "futures::FutureExt::catch_unwind", reason = "use mz_ore::future::FutureExt::catch_unwind instead" },
+
     { path = "futures_executor::block_on", reason = "tokio::runtime::Handle::block_on instead" },
     { path = "futures::executor::block_on", reason = "tokio::runtime::Handle::block_on instead" },
 
