@@ -56,7 +56,7 @@ use mz_ssh_util::keys::SshKeyPairSet;
 use mz_stash::Append;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
-use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
+use mz_storage_client::types::sources::{IngestionDescription, SourceExport, Timeline};
 
 use crate::catalog::builtin::{
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_INTROSPECTION_COMPUTE_INSTANCE,
@@ -87,6 +87,8 @@ use crate::{guard_write_critical_section, session, PeekResponseUnary};
 
 use super::timestamp_selection::{TimestampExplanation, TimestampSource};
 use super::ReplicaMetadata;
+
+use super::peek::PlannedPeek;
 
 impl<S: Append + 'static> Coordinator<S> {
     #[tracing::instrument(level = "debug", skip_all)]
@@ -2102,8 +2104,12 @@ impl<S: Append + 'static> Coordinator<S> {
             copy_to,
         } = plan;
 
-        let compute_instance = self.catalog.active_compute_instance(session)?;
+        // Two transient allocations. We could reclaim these if we don't use them, potentially.
+        // TODO: reclaim transient identifiers in fast path cases.
+        let view_id = self.allocate_transient_id()?;
+        let index_id = self.allocate_transient_id()?;
 
+        let compute_instance = self.catalog.active_compute_instance(session)?;
         let target_replica_name = session.vars().cluster_replica();
         let mut target_replica = target_replica_name
             .map(|name| {
@@ -2125,75 +2131,61 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         let source_ids = source.depends_on();
-        check_no_invalid_log_reads(
-            &self.catalog,
-            compute_instance,
-            &source_ids,
-            LogReadStyle::Peek(&mut target_replica),
-        )?;
-
-        let compute_instance = compute_instance.id;
-
         let timeline = self.validate_timeline(source_ids.clone())?;
-        let conn_id = session.conn_id();
         // Queries are independent of the logical timestamp iff there are no referenced
         // sources or indexes and there is no reference to `mz_now()`.
         let timestamp_independent = source_ids.is_empty() && !source.contains_temporal();
-        // For transactions that do not use AS OF, get the
-        // timestamp of the in-progress transaction or create one. If this is an AS OF
-        // query, we don't care about any possible transaction timestamp. If this is a
-        // single-statement transaction (TransactionStatus::Started), we don't need to
-        // worry about preventing compaction or choosing a valid timestamp for future
-        // queries.
-        let timestamp = if session.transaction().is_in_multi_statement_transaction()
-            && when == QueryWhen::Immediately
-        {
+        let in_immediate_multi_stmt_txn = session.transaction().is_in_multi_statement_transaction()
+            && when == QueryWhen::Immediately;
+
+        if in_immediate_multi_stmt_txn {
             // If all previous statements were timestamp-independent and the current one is
             // not, clear the transaction ops so it can get a new timestamp and timedomain.
-            if let Some(read_txn) = self.txn_reads.get(&conn_id) {
+            if let Some(read_txn) = self.txn_reads.get(&session.conn_id()) {
                 if read_txn.timestamp_independent && !timestamp_independent {
                     session.clear_transaction_ops();
                 }
             }
+        }
 
-            let timestamp = match session.get_transaction_timestamp() {
-                Some(ts) => ts,
-                _ => {
-                    // Determine a timestamp that will be valid for anything in any schema
-                    // referenced by the first query.
-                    let id_bundle =
-                        self.timedomain_for(&source_ids, &timeline, conn_id, compute_instance)?;
+        let mut peek_plan = self.plan_peek(
+            source,
+            session,
+            &when,
+            compute_instance,
+            &mut target_replica,
+            view_id,
+            index_id,
+            &timeline,
+            &source_ids,
+            in_immediate_multi_stmt_txn,
+        )?;
 
-                    // We want to prevent compaction of the indexes consulted by
-                    // determine_timestamp, not the ones listed in the query.
-                    let timestamp = self.determine_timestamp(
-                        session,
-                        &id_bundle,
-                        &QueryWhen::Immediately,
-                        compute_instance,
-                        &timeline,
-                    )?;
-                    let read_holds = self.acquire_read_holds(timestamp.timestamp, id_bundle);
-                    let txn_reads = TxnReads {
-                        timestamp_independent,
-                        read_holds,
-                    };
-                    self.txn_reads.insert(conn_id, txn_reads);
-                    timestamp.timestamp
-                }
+        let compute_instance = compute_instance.id;
+
+        if let Some(id_bundle) = peek_plan.read_holds.take() {
+            let read_holds = self.acquire_read_holds(peek_plan.timestamp, &id_bundle);
+            let txn_reads = TxnReads {
+                timestamp_independent,
+                read_holds,
             };
+            self.txn_reads.insert(session.conn_id(), txn_reads);
+        }
 
+        if in_immediate_multi_stmt_txn {
             // Verify that the references and indexes for this query are in the
             // current read transaction.
-            let id_bundle = self
-                .index_oracle(compute_instance)
-                .sufficient_collections(&source_ids);
-            let allowed_id_bundle = &self.txn_reads.get(&conn_id).unwrap().read_holds.id_bundle();
+            let allowed_id_bundle = &self
+                .txn_reads
+                .get(&session.conn_id())
+                .unwrap()
+                .read_holds
+                .id_bundle();
             // Find the first reference or index (if any) that is not in the transaction. A
             // reference could be caused by a user specifying an object in a different
             // schema than the first query. An index could be caused by a CREATE INDEX
             // after the transaction started.
-            let outside = id_bundle.difference(allowed_id_bundle);
+            let outside = peek_plan.id_bundle.difference(allowed_id_bundle);
             if !outside.is_empty() {
                 let mut names: Vec<_> = allowed_id_bundle
                     .iter()
@@ -2224,14 +2216,100 @@ impl<S: Append + 'static> Coordinator<S> {
                     names,
                 });
             }
+        }
 
-            timestamp
+        // We only track the peeks in the session if the query doesn't use AS
+        // OF or we're inside an explicit transaction. The latter case is
+        // necessary to support PG's `BEGIN` semantics, whose behavior can
+        // depend on whether or not reads have occurred in the txn.
+        if matches!(session.transaction(), &TransactionStatus::InTransaction(_))
+            || when == QueryWhen::Immediately
+        {
+            let peek_ts = if matches!(
+                &peek_plan.plan,
+                peek::PeekPlan::FastPath(peek::FastPathPlan::Constant(_, _))
+            ) && timestamp_independent
+            {
+                None
+            } else {
+                Some((peek_plan.timestamp, timeline))
+            };
+
+            session.add_transaction_ops(TransactionOps::Peeks(peek_ts))?;
+        }
+
+        // Implement the peek, and capture the response.
+        let resp = self
+            .implement_peek_plan(peek_plan, finishing, compute_instance, target_replica)
+            .await?;
+
+        match copy_to {
+            None => Ok(resp),
+            Some(format) => Ok(ExecuteResponse::CopyTo {
+                format,
+                resp: Box::new(resp),
+            }),
+        }
+    }
+
+    fn plan_peek(
+        &self,
+        source: MirRelationExpr,
+        session: &Session,
+        when: &QueryWhen,
+        compute_instance: &ComputeInstance,
+        target_replica: &mut Option<u64>,
+        view_id: GlobalId,
+        index_id: GlobalId,
+        timeline: &Option<Timeline>,
+        source_ids: &BTreeSet<GlobalId>,
+        in_immediate_multi_stmt_txn: bool,
+    ) -> Result<PlannedPeek, AdapterError> {
+        check_no_invalid_log_reads(
+            &self.catalog,
+            compute_instance,
+            source_ids,
+            LogReadStyle::Peek(target_replica),
+        )?;
+
+        let compute_instance = compute_instance.id;
+        let mut read_holds = None;
+        let id_bundle = self
+            .index_oracle(compute_instance)
+            .sufficient_collections(source_ids);
+
+        let conn_id = session.conn_id();
+        // For transactions that do not use AS OF, get the timestamp of the
+        // in-progress transaction or create one. If this is an AS OF query, we
+        // don't care about any possible transaction timestamp. If this is a
+        // single-statement transaction (TransactionStatus::Started), we don't
+        // need to worry about preventing compaction or choosing a valid
+        // timestamp for future queries.
+        let timestamp = if in_immediate_multi_stmt_txn {
+            match session.get_transaction_timestamp() {
+                Some(ts) => ts,
+                _ => {
+                    // Determine a timestamp that will be valid for anything in any schema
+                    // referenced by the first query.
+                    let id_bundle =
+                        self.timedomain_for(source_ids, timeline, conn_id, compute_instance)?;
+
+                    // We want to prevent compaction of the indexes consulted by
+                    // determine_timestamp, not the ones listed in the query.
+                    let timestamp = self.determine_timestamp(
+                        session,
+                        &id_bundle,
+                        &QueryWhen::Immediately,
+                        compute_instance,
+                        timeline,
+                    )?;
+                    read_holds = Some(id_bundle);
+                    timestamp.timestamp
+                }
+            }
         } else {
             // TODO(guswynn): acquire_read_holds for linearized reads
-            let id_bundle = self
-                .index_oracle(compute_instance)
-                .sufficient_collections(&source_ids);
-            self.determine_timestamp(session, &id_bundle, &when, compute_instance, &timeline)?
+            self.determine_timestamp(session, &id_bundle, when, compute_instance, timeline)?
                 .timestamp
         };
 
@@ -2253,10 +2331,6 @@ impl<S: Append + 'static> Coordinator<S> {
             .map(|k| MirScalarExpr::Column(*k))
             .collect();
         let (permutation, thinning) = permutation_for_arrangement(&key, typ.arity());
-        // Two transient allocations. We could reclaim these if we don't use them, potentially.
-        // TODO: reclaim transient identifiers in fast path cases.
-        let view_id = self.allocate_transient_id()?;
-        let index_id = self.allocate_transient_id()?;
         // The assembled dataflow contains a view and an index of that view.
         let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
         dataflow.set_as_of(Antichain::from_elem(timestamp));
@@ -2296,46 +2370,14 @@ impl<S: Append + 'static> Coordinator<S> {
             thinning.len(),
         )?;
 
-        // We only track the peeks in the session if the query doesn't use AS
-        // OF or we're inside an explicit transaction. The latter case is
-        // necessary to support PG's `BEGIN` semantics, whose behavior can
-        // depend on whether or not reads have occurred in the txn.
-        if matches!(session.transaction(), &TransactionStatus::InTransaction(_))
-            || when == QueryWhen::Immediately
-        {
-            let peek_ts = if matches!(
-                peek_plan,
-                peek::PeekPlan::FastPath(peek::FastPathPlan::Constant(_, _))
-            ) && timestamp_independent
-            {
-                None
-            } else {
-                Some((timestamp, timeline))
-            };
-
-            session.add_transaction_ops(TransactionOps::Peeks(peek_ts))?;
-        }
-
-        // Implement the peek, and capture the response.
-        let resp = self
-            .implement_peek_plan(
-                peek_plan,
-                timestamp,
-                finishing,
-                conn_id,
-                source.arity(),
-                compute_instance,
-                target_replica,
-            )
-            .await?;
-
-        match copy_to {
-            None => Ok(resp),
-            Some(format) => Ok(ExecuteResponse::CopyTo {
-                format,
-                resp: Box::new(resp),
-            }),
-        }
+        Ok(PlannedPeek {
+            plan: peek_plan,
+            read_holds,
+            timestamp,
+            conn_id,
+            source_arity: source.arity(),
+            id_bundle,
+        })
     }
 
     async fn sequence_subscribe(

@@ -25,7 +25,7 @@ use mz_compute_client::command::{DataflowDescription, ReplicaId};
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_compute_client::response::PeekResponse;
 use mz_expr::explain::Indices;
-use mz_expr::{EvalError, Id, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_expr::{EvalError, Id, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::str::Indent;
 use mz_ore::str::StrExt;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -37,6 +37,8 @@ use crate::client::ConnectionId;
 use crate::explain_new::Displayable;
 use crate::util::send_immediate_rows;
 use crate::{AdapterError, AdapterNotice};
+
+use super::id_bundle::CollectionIdBundle;
 
 pub(crate) struct PendingPeek {
     pub(crate) sender: oneshot::Sender<PeekResponse>,
@@ -125,6 +127,16 @@ where
         }?;
         Ok(())
     }
+}
+
+#[derive(Debug)]
+pub struct PlannedPeek {
+    pub plan: PeekPlan,
+    pub read_holds: Option<CollectionIdBundle>,
+    pub timestamp: mz_repr::Timestamp,
+    pub conn_id: ConnectionId,
+    pub source_arity: usize,
+    pub id_bundle: CollectionIdBundle,
 }
 
 /// Possible ways in which the coordinator could produce the result for a goal view.
@@ -237,7 +249,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
     /// call succeeds, or a [`PeekPlan::SlowPath`] plan wrapping a [`PeekDataflowPlan`]
     /// otherwise.
     pub(crate) fn create_peek_plan(
-        &mut self,
+        &self,
         mut dataflow: DataflowDescription<OptimizedMirRelationExpr>,
         view_id: GlobalId,
         compute_instance: ComputeInstanceId,
@@ -280,14 +292,20 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn implement_peek_plan(
         &mut self,
-        fast_path: PeekPlan,
-        timestamp: mz_repr::Timestamp,
-        finishing: mz_expr::RowSetFinishing,
-        conn_id: ConnectionId,
-        source_arity: usize,
+        plan: PlannedPeek,
+        finishing: RowSetFinishing,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
+        let PlannedPeek {
+            plan: fast_path,
+            read_holds: _,
+            timestamp,
+            conn_id,
+            source_arity,
+            id_bundle: _,
+        } = plan;
+
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
         if let PeekPlan::FastPath(FastPathPlan::Constant(rows, _)) = fast_path {
             let mut rows = match rows {
