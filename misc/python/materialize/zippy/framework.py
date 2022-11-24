@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import random
-from typing import Dict, List, Set, Type, TypeVar, Union
+from typing import Dict, List, Optional, Set, Type, TypeVar, Union
 
 from materialize.mzcompose import Composition
 
@@ -20,10 +20,15 @@ class Capability:
     like "a table with name 'foo' exists".
     """
 
-    pass
+    name: str
+
+    @classmethod
+    def format_str(cls) -> str:
+        assert False
 
 
 T = TypeVar("T", bound="Capability")
+ActionOrFactory = Union[Type["Action"], "ActionFactory"]
 
 
 class Capabilities:
@@ -58,6 +63,20 @@ class Capabilities:
         """Get all capabilities of the specified type."""
         return [cap for cap in self._capabilities if type(cap) == capability]
 
+    def get_free_capability_name(
+        self, capability: Type[T], max_objects: int
+    ) -> Optional[str]:
+        all_object_names = [
+            capability.format_str().format(i) for i in range(0, max_objects)
+        ]
+        existing_object_names = [t.name for t in self.get(capability)]
+        remaining_object_names = set(all_object_names) - set(existing_object_names)
+        return (
+            random.choice(list(remaining_object_names))
+            if len(remaining_object_names) > 0
+            else None
+        )
+
 
 class Action:
     """Base class for an action that a Zippy test can take."""
@@ -90,11 +109,23 @@ class Action:
         return False
 
 
+class ActionFactory:
+    """Base class for Action Factories that return parameterized Actions to execute."""
+
+    def new(self, capabilities: Capabilities) -> List[Action]:
+        assert False
+
+    @classmethod
+    def requires(self) -> Union[Set[Type[Capability]], List[Set[Type[Capability]]]]:
+        """Compute the capability classes that this Action Factory requires."""
+        return set()
+
+
 class Scenario:
-    def bootstrap(self) -> List[Type[Action]]:
+    def bootstrap(self) -> List[ActionOrFactory]:
         return []
 
-    def config(self) -> Dict[Type[Action], float]:
+    def config(self) -> Dict[ActionOrFactory, float]:
         assert False
 
 
@@ -111,16 +142,24 @@ class Test:
         self._scenario = scenario
         self._actions: List[Action] = []
         self._capabilities = Capabilities()
+        self._config = self._scenario.config()
 
-        for action_class in self._scenario.bootstrap():
-            action = action_class(capabilities=self._capabilities)
-            self._actions.append(action)
-            self._capabilities._extend(action.provides())
-            self._capabilities._remove(action.withholds())
+        for action_or_factory in self._scenario.bootstrap():
+            self.append_actions(action_or_factory)
 
         for i in range(0, actions):
-            action_class = self._pick_action_class()
-            action = action_class(capabilities=self._capabilities)
+            action_or_factory = self._pick_action_or_factory()
+            self.append_actions(action_or_factory)
+
+    def append_actions(self, action_def: ActionOrFactory) -> None:
+        if isinstance(action_def, ActionFactory):
+            actions = action_def.new(capabilities=self._capabilities)
+        elif issubclass(action_def, Action):
+            actions = [action_def(capabilities=self._capabilities)]
+        else:
+            assert False
+
+        for action in actions:
             self._actions.append(action)
             self._capabilities._extend(action.provides())
             self._capabilities._remove(action.withholds())
@@ -131,31 +170,40 @@ class Test:
             print(action)
             action.run(c)
 
-    def _pick_action_class(self) -> Type[Action]:
+    def _pick_action_or_factory(self) -> ActionOrFactory:
         """Select the next Action to run in the Test"""
-        action_classes = []
+        actions_or_factories: List[ActionOrFactory] = []
         class_weights = []
 
-        for action_class in self._scenario.config().keys():
+        for action_or_factory in self._config.keys():
             alternatives = []
-            for subclass in self._all_subclasses(action_class):
+
+            # We do not drill down if it is an ActionFactory
+            # If it is an Action, drill down for any children
+            subclasses: List[ActionOrFactory] = (
+                [action_or_factory]
+                if isinstance(action_or_factory, ActionFactory)
+                else self._all_subclasses(action_or_factory)
+            )
+
+            for subclass in subclasses:
                 # Do not pick an Action whose requirements can not be satisfied
                 if self._can_run(subclass):
                     alternatives.append(subclass)
 
             for alternative in alternatives:
-                action_classes.append(alternative)
+                actions_or_factories.append(alternative)
                 class_weights.append(
-                    self._scenario.config()[action_class] / len(alternatives)
+                    self._config[action_or_factory] / len(alternatives)
                 )
 
         assert (
-            len(action_classes) > 0
+            len(actions_or_factories) > 0
         ), "No actions available to take. You may be stopping or deleting items without starting them again."
 
-        return random.choices(action_classes, weights=class_weights, k=1)[0]
+        return random.choices(actions_or_factories, weights=class_weights, k=1)[0]
 
-    def _can_run(self, action: Type[Action]) -> bool:
+    def _can_run(self, action: ActionOrFactory) -> bool:
         requires = action.requires()
 
         if isinstance(requires, Set):
@@ -166,7 +214,7 @@ class Test:
                     return True
             return False
 
-    def _all_subclasses(self, cls: Type[Action]) -> List[Type[Action]]:
+    def _all_subclasses(self, cls: Type[Action]) -> List[ActionOrFactory]:
         """Return all Actions that are a subclass of the given cls."""
         children = [c for c in cls.__subclasses__() if not c.require_explicit_mention()]
         if len(children) == 0:

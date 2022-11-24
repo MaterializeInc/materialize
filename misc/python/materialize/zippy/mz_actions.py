@@ -23,6 +23,19 @@ class MzStart(Action):
         # Loaded Mz environments take a while to start up
         c.wait_for_materialized(timeout_secs=300)
 
+        for config_param in [
+            "max_tables",
+            "max_sources",
+            "max_objects_per_schema",
+            "max_materialized_views",
+            "max_sinks",
+        ]:
+            c.sql(
+                f"ALTER SYSTEM SET {config_param} TO 1000",
+                user="mz_system",
+                port=6877,
+            )
+
     def provides(self) -> List[Capability]:
         return [MzIsRunning()]
 

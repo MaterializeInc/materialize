@@ -17,6 +17,7 @@ use mz_compute_client::controller::{
     ComputeInstanceId, ComputeInstanceStatus, ComputeReplicaLocation,
 };
 use mz_expr::MirScalarExpr;
+use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
@@ -32,17 +33,16 @@ use mz_storage_client::types::sinks::{KafkaSinkConnection, StorageSinkConnection
 
 use crate::catalog::builtin::{
     MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS,
-    MZ_CLUSTER_REPLICA_HEARTBEATS, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS,
-    MZ_DATABASES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS,
-    MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_PSEUDO_TYPES, MZ_ROLES,
-    MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS,
-    MZ_STORAGE_USAGE_BY_SHARD, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_CLUSTER_REPLICA_HEARTBEATS, MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_STATUSES,
+    MZ_COLUMNS, MZ_CONNECTIONS, MZ_DATABASES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES,
+    MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES,
+    MZ_MATERIALIZED_VIEWS, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES,
+    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connection, Database, Error, ErrorKind, Func, Index,
     MaterializedView, Role, Sink, StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
-use crate::coord::ReplicaMetadata;
 
 use super::{DataSourceDesc, Ingestion};
 
@@ -795,10 +795,9 @@ impl CatalogState {
     pub fn pack_replica_heartbeat_update(
         &self,
         id: ReplicaId,
-        md: ReplicaMetadata,
+        last_heartbeat: DateTime<Utc>,
         diff: Diff,
     ) -> BuiltinTableUpdate {
-        let ReplicaMetadata { last_heartbeat } = md;
         let table = self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_HEARTBEATS);
         let row = Row::pack_slice(&[
             Datum::UInt64(id),
@@ -833,5 +832,34 @@ impl CatalogState {
         let id = self.resolve_builtin_table(&MZ_EGRESS_IPS);
         let row = Row::pack_slice(&[Datum::String(&ip.to_string())]);
         Ok(BuiltinTableUpdate { id, row, diff: 1 })
+    }
+
+    pub fn pack_replica_metric_updates(
+        &self,
+        replica_id: ReplicaId,
+        updates: &[ServiceProcessMetrics],
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate> {
+        let id = self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_METRICS);
+        let rows = updates.iter().enumerate().map(
+            |(
+                process_id,
+                ServiceProcessMetrics {
+                    nano_cpus,
+                    bytes_memory,
+                },
+            )| {
+                Row::pack_slice(&[
+                    replica_id.into(),
+                    u64::cast_from(process_id).into(),
+                    (*nano_cpus).into(),
+                    (*bytes_memory).into(),
+                ])
+            },
+        );
+        let updates = rows
+            .map(|row| BuiltinTableUpdate { id, row, diff })
+            .collect();
+        updates
     }
 }

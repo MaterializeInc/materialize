@@ -433,7 +433,7 @@ impl_display!(CreateSchemaStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KafkaBroker<T: AstInfo> {
     pub address: String,
-    pub aws_privatelink: Option<KafkaBrokerAwsPrivatelink<T>>,
+    pub tunnel: KafkaBrokerTunnel<T>,
 }
 
 impl<T: AstInfo> AstDisplay for KafkaBroker<T> {
@@ -441,14 +441,37 @@ impl<T: AstInfo> AstDisplay for KafkaBroker<T> {
         f.write_str("'");
         f.write_node(&display::escape_single_quote_string(&self.address));
         f.write_str("'");
-        if let Some(aws_privatelink) = &self.aws_privatelink {
-            f.write_str(" ");
-            f.write_node(aws_privatelink);
-        }
+        f.write_node(&self.tunnel);
     }
 }
 
 impl_display_t!(KafkaBroker);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum KafkaBrokerTunnel<T: AstInfo> {
+    Direct,
+    AwsPrivatelink(KafkaBrokerAwsPrivatelink<T>),
+    SshTunnel(T::ObjectName),
+}
+
+impl<T: AstInfo> AstDisplay for KafkaBrokerTunnel<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        use KafkaBrokerTunnel::*;
+        match self {
+            Direct => {}
+            AwsPrivatelink(aws) => {
+                f.write_str(" ");
+                f.write_node(aws);
+            }
+            Self::SshTunnel(connection) => {
+                f.write_str("USING SSH TUNNEL ");
+                f.write_node(connection);
+            }
+        }
+    }
+}
+
+impl_display_t!(KafkaBrokerTunnel);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum KafkaBrokerAwsPrivatelinkOptionName {

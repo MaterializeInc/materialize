@@ -9,6 +9,7 @@
 
 //! Implementation of [Consensus] backed by Postgres.
 
+use crate::cfg::ConsensusKnobs;
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -21,11 +22,15 @@ use deadpool_postgres::{
 use deadpool_postgres::{Manager, Pool};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::SYSTEM_TIME;
 use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
 use postgres_openssl::MakeTlsConnector;
-use std::time::Instant;
+use std::fmt::Formatter;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tracing::debug;
 
 use crate::error::Error;
@@ -81,7 +86,7 @@ impl<'a> FromSql<'a> for SeqNo {
 #[derive(Clone, Debug)]
 pub struct PostgresConsensusConfig {
     url: String,
-    connection_pool_max_size: usize,
+    knobs: Arc<dyn ConsensusKnobs>,
     metrics: PostgresConsensusMetrics,
 }
 
@@ -92,12 +97,12 @@ impl PostgresConsensusConfig {
     /// Returns a new [PostgresConsensusConfig] for use in production.
     pub fn new(
         url: &str,
-        connection_pool_max_size: usize,
+        knobs: Box<dyn ConsensusKnobs>,
         metrics: PostgresConsensusMetrics,
     ) -> Result<Self, Error> {
         Ok(PostgresConsensusConfig {
             url: url.to_string(),
-            connection_pool_max_size,
+            knobs: Arc::from(knobs),
             metrics,
         })
     }
@@ -122,9 +127,27 @@ impl PostgresConsensusConfig {
             }
         };
 
+        struct TestConsensusKnobs;
+        impl std::fmt::Debug for TestConsensusKnobs {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                f.debug_struct("TestConsensusKnobs").finish_non_exhaustive()
+            }
+        }
+        impl ConsensusKnobs for TestConsensusKnobs {
+            fn connection_pool_max_size(&self) -> usize {
+                2
+            }
+            fn connection_pool_ttl(&self) -> Duration {
+                Duration::MAX
+            }
+            fn connection_pool_ttl_stagger(&self) -> Duration {
+                Duration::MAX
+            }
+        }
+
         let config = PostgresConsensusConfig::new(
             &url,
-            2,
+            Box::new(TestConsensusKnobs),
             PostgresConsensusMetrics::new(&MetricsRegistry::new()),
         )?;
         Ok(Some(config))
@@ -158,15 +181,48 @@ impl PostgresConsensus {
             },
         );
 
+        let last_ttl_connection = AtomicU64::new(0);
+        let connections_created = config.metrics.connpool_connections_created.clone();
+        let ttl_reconnections = config.metrics.connpool_ttl_reconnections.clone();
         let pool = Pool::builder(manager)
-            .max_size(config.connection_pool_max_size)
-            .post_create(Hook::async_fn(|client, _| {
+            .max_size(config.knobs.connection_pool_max_size())
+            .post_create(Hook::async_fn(move |client, _| {
+                connections_created.inc();
                 Box::pin(async move {
                     debug!("opened new consensus postgres connection");
                     client.batch_execute(
                         "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE",
                     ).await.map_err(|e| HookError::Abort(HookErrorCause::Backend(e)))
                 })
+            }))
+            .pre_recycle(Hook::sync_fn(move |_client, conn_metrics| {
+                // proactively TTL connections to rebalance load to Postgres/CRDB. this helps
+                // fix skew when downstream DB operations (e.g. CRDB rolling restart) result
+                // in uneven load to each node, and works to reduce the # of connections
+                // maintained by the pool after bursty workloads.
+
+                // add a bias towards TTLing older connections first
+                if conn_metrics.age() < config.knobs.connection_pool_ttl() {
+                    return Ok(());
+                }
+
+                let last_ttl = last_ttl_connection.load(Ordering::SeqCst);
+                let now = (SYSTEM_TIME)();
+                let elapsed_since_last_ttl = Duration::from_millis(now.saturating_sub(last_ttl));
+
+                // stagger out reconnections to avoid stampeding the DB
+                if elapsed_since_last_ttl > config.knobs.connection_pool_ttl_stagger()
+                    && last_ttl_connection
+                        .compare_exchange_weak(last_ttl, now, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_ok()
+                {
+                    ttl_reconnections.inc();
+                    return Err(HookError::Continue(Some(HookErrorCause::Message(
+                        "connection has been TTLed".to_string(),
+                    ))));
+                }
+
+                Ok(())
             }))
             .build()
             .expect("postgres connection pool built with incorrect parameters");

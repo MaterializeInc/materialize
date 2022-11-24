@@ -30,22 +30,26 @@ WatermarkedObjects = List[
 class ViewExists(Capability):
     """A view exists in Materialize."""
 
+    @classmethod
+    def format_str(cls) -> str:
+        return "view_{}"
+
     def __init__(
         self,
         name: str,
-        froms: Optional[WatermarkedObjects] = None,
+        inputs: WatermarkedObjects,
         expensive_aggregates: Optional[bool] = None,
+        has_index: bool = False,
     ) -> None:
         self.name = name
-        self.froms = froms if froms is not None else []
+        self.inputs = inputs
         self.expensive_aggregates = expensive_aggregates
+        self.has_index = has_index
 
     def get_watermarks(self) -> Watermarks:
         """Calculate the intersection of the mins/maxs of the inputs. The result from the view should match the calculation."""
 
-        assert self.froms is not None
-
         return Watermarks(
-            min_watermark=max([f.get_watermarks().min for f in self.froms]),
-            max_watermark=min([f.get_watermarks().max for f in self.froms]),
+            min_watermark=max([f.get_watermarks().min for f in self.inputs]),
+            max_watermark=min([f.get_watermarks().max for f in self.inputs]),
         )

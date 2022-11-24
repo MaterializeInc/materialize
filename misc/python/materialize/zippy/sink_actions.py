@@ -12,45 +12,80 @@ from textwrap import dedent
 from typing import List, Set, Type
 
 from materialize.mzcompose import Composition
-from materialize.zippy.framework import Action, Capabilities, Capability
+from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.sink_capabilities import SinkExists
 from materialize.zippy.view_capabilities import ViewExists
 
 
-class CreateSink(Action):
+class CreateSinkParameterized(ActionFactory):
     """Creates a sink over an existing view. Then creates a source over that sink and a view over that source."""
 
     @classmethod
     def requires(self) -> List[Set[Type[Capability]]]:
         return [{MzIsRunning, ViewExists}]
 
-    def __init__(self, capabilities: Capabilities) -> None:
-        sink_name = "sink" + str(random.randint(1, 10))
+    def __init__(self, max_sinks: int = 10) -> None:
+        self.max_sinks = max_sinks
 
-        this_sink = SinkExists(name=sink_name)
-        self.sink = this_sink
-        existing_sinks = [
-            s for s in capabilities.get(SinkExists) if s.name == this_sink.name
-        ]
+    def new(self, capabilities: Capabilities) -> List[Action]:
+        new_sink_name = capabilities.get_free_capability_name(
+            SinkExists, self.max_sinks
+        )
 
-        if len(existing_sinks) == 0:
-            self.new_sink = True
-            self.source_view = random.choice(capabilities.get(ViewExists))
-            self.dest_view = ViewExists(
-                name=f"{sink_name}_view",
-                froms=[self.source_view],
-                expensive_aggregates=True,
+        if new_sink_name:
+            source_view = random.choice(capabilities.get(ViewExists))
+            dest_view = ViewExists(
+                name=f"{new_sink_name}_view",
+                inputs=[source_view],
+                expensive_aggregates=source_view.expensive_aggregates,
             )
-        elif len(existing_sinks) == 1:
-            self.new_sink = False
-            self.sink = existing_sinks[0]
+
+            return [
+                CreateSink(
+                    sink=SinkExists(
+                        name=new_sink_name,
+                        source_view=source_view,
+                        dest_view=dest_view,
+                    ),
+                    capabilities=capabilities,
+                ),
+            ]
         else:
-            assert False
+            return []
+
+
+class CreateSink(Action):
+    def __init__(
+        self,
+        sink: SinkExists,
+        capabilities: Capabilities,
+    ) -> None:
+        assert (
+            sink is not None
+        ), "CreateSink Action can not be referenced directly, it is produced by CreateSinkParameterized factory"
+        self.sink = sink
 
     def run(self, c: Composition) -> None:
-        if not self.new_sink:
-            return
+        dest_view_sql = dedent(
+            f"""
+            > CREATE MATERIALIZED VIEW {self.sink.dest_view.name} AS
+              SELECT SUM(c1)::int AS c1, SUM(c2)::int AS c2, SUM(min)::int AS min, SUM(max)::int AS max FROM (
+                SELECT (after).c1, (after).c2, (after).min, (after).max FROM {self.sink.name}_source
+                UNION ALL
+                SELECT -(before).c1, -(before).c2, -(before).min, -(before).max FROM {self.sink.name}_source
+              );
+            """
+            if self.sink.dest_view.expensive_aggregates
+            else f"""
+            > CREATE MATERIALIZED VIEW {self.sink.dest_view.name} AS
+              SELECT SUM(c1)::int AS c1 FROM (
+                SELECT (after).c1 FROM {self.sink.name}_source
+                UNION ALL
+                SELECT -(before).c1 FROM {self.sink.name}_source
+              );
+            """
+        )
 
         c.testdrive(
             dedent(
@@ -58,7 +93,7 @@ class CreateSink(Action):
                 > CREATE CONNECTION IF NOT EXISTS {self.sink.name}_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', PROGRESS TOPIC 'zippy-{self.sink.name}-${{testdrive.seed}}');
                 > CREATE CONNECTION IF NOT EXISTS {self.sink.name}_csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
 
-                > CREATE SINK {self.sink.name} FROM {self.source_view.name}
+                > CREATE SINK {self.sink.name} FROM {self.sink.source_view.name}
                   INTO KAFKA CONNECTION {self.sink.name}_kafka_conn (TOPIC 'sink-{self.sink.name}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.sink.name}_csr_conn
                   ENVELOPE DEBEZIUM;
@@ -72,16 +107,10 @@ class CreateSink(Action):
 
                 # The sink-dervied source has upsert semantics, so produce a "normal" ViewExists output
                 # from the 'before' and the 'after'
-
-                > CREATE MATERIALIZED VIEW {self.dest_view.name} AS
-                    SELECT SUM(c1)::int AS c1, SUM(c2)::int AS c2, SUM(min)::int AS min, SUM(max)::int AS max FROM (
-                      SELECT (after).c1, (after).c2, (after).min, (after).max FROM {self.sink.name}_source
-                      UNION ALL
-                      SELECT -(before).c1, -(before).c2, -(before).min, -(before).max FROM {self.sink.name}_source
-                    );
             """
             )
+            + dest_view_sql
         )
 
     def provides(self) -> List[Capability]:
-        return [self.sink, self.dest_view] if self.new_sink else []
+        return [self.sink, self.sink.dest_view]

@@ -36,6 +36,10 @@ An Action is an mzcompose or testdrive operation that is performed during the te
 
 The complete list of actions is available here:
 
+## ActionFactores
+
+An ActionFactory is a way to pass parameters to Actions, so that e.g. a different number of database objects will be created.
+
 [materialize.zippy.framework API documentation](https://dev.materialize.com/api/python/materialize/zippy/framework.html#materialize.zippy.framework.Action)
 
 ## Capabilities
@@ -87,7 +91,12 @@ JOIN source10 USING (f1);
 
 The expected results from such a view is the intersection of all the records that are present in all of the inputs. The min/max of the expected result is also the intersection of the min/max of all the inputs.
 
-In addition to the `MIN` and the `MAX`, we also validate the `COUNT` and the `COUNT(DISTINCT` . As we never insert duplicate data, we expect that `COUNT = MAX - MIN` and `COUNT(DISTINCT = COUNT`
+In addition to the `MIN` and the `MAX`, we also validate the `COUNT` and the `COUNT(DISTINCT` . As we never insert duplicate data, we expect that `COUNT = MAX - MIN` and `COUNT(DISTINCT = COUNT`.
+
+Most aggregate functions are expensive if used over sources that allow retractions (that is, all UPSERT, Debezium and Postgres CDC sources),
+as they require that all the input data is kept in memory in case the current MIN or MAX value needs to be retracted and
+replaced with the new MIN or MAX. To avoid OOM situations in long-running tests, the `CreateViewParameterized()` factory
+can be instantiated with `expensive_aggregates=False`.
 
 # Extending the Framework
 
@@ -106,6 +115,6 @@ class CreateView(Action):
         return [{MzIsRunning, SourceExists}, {MzIsRunning, TableExists}]
 ```
 
-`CreateView` can be scheduled if one of the two sets is satisfied, that is, if a table OR a source already exists in the system.
+In this example, `CreateView` can be scheduled if one of the two sets is satisfied, that is, if a table OR a source already exists in the system.
 
 The `provides()` method returns a list of `Capabilites` that executing a given action provides to the system. For example, if the `CreateView` action will be creating a new view, it will return a `ViewExists` capability as a result of its `provides()` method. This will allow an action such as `ValidateView` , that has a `ViewExists` requirement, to be scheduled subsequently.

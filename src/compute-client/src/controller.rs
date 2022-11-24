@@ -40,7 +40,8 @@ use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::BoxStream;
-use futures::{future, FutureExt};
+use futures::{future, FutureExt, StreamExt};
+use mz_ore::soft_assert;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, Timestamp};
@@ -48,7 +49,7 @@ use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
 use mz_expr::RowSetFinishing;
-use mz_orchestrator::{CpuLimit, MemoryLimit, NamespacedOrchestrator};
+use mz_orchestrator::{CpuLimit, MemoryLimit, NamespacedOrchestrator, ServiceProcessMetrics};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
@@ -141,6 +142,8 @@ pub enum ComputeControllerResponse<T> {
     /// A notification that we heard a response from the given replica at the
     /// given time.
     ReplicaHeartbeat(ReplicaId, DateTime<Utc>),
+    /// A notification that new resource usage metrics are available for a given replica.
+    ReplicaMetrics(ReplicaId, Vec<ServiceProcessMetrics>),
 }
 
 /// Replica configuration
@@ -255,8 +258,11 @@ pub struct ComputeController<T> {
     stashed_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
     /// Times we have last received responses from replicas.
     replica_heartbeats: BTreeMap<ReplicaId, DateTime<Utc>>,
+    replica_metrics: BTreeMap<ReplicaId, Vec<ServiceProcessMetrics>>,
     /// A number that increases on every `environmentd` restart.
     envd_epoch: NonZeroI64,
+    replica_metrics_streams:
+        BTreeMap<ReplicaId, BoxStream<'static, Result<Vec<ServiceProcessMetrics>, anyhow::Error>>>,
 }
 
 impl<T> ComputeController<T> {
@@ -279,6 +285,8 @@ impl<T> ComputeController<T> {
             initialized: false,
             stashed_response: None,
             replica_heartbeats: BTreeMap::new(),
+            replica_metrics_streams: BTreeMap::new(),
+            replica_metrics: BTreeMap::new(),
             envd_epoch,
         }
     }
@@ -424,21 +432,65 @@ where
             .instances
             .iter_mut()
             .map(|(id, instance)| Box::pin(instance.recv().map(|result| (*id, result))));
-        let ((instance_id, result), _index, _remaining) = future::select_all(receives).await;
-
-        if let Ok((replica_id, resp)) = result {
-            self.replica_heartbeats.insert(replica_id, Utc::now());
-            self.stashed_response = Some((instance_id, replica_id, resp));
-        } else {
-            // There is nothing to do here. `recv` has already added the failed replica to
-            // `instance.failed_replicas`, so it will be rehydrated in the next call to
-            // `ActiveComputeController::process`.
+        let metrics = self
+            .replica_metrics_streams
+            .iter_mut()
+            .map(|(id, s)| s.next().map(|result| (*id, result)));
+        tokio::select! {
+            ((instance_id, result), _index, _remaining) = future::select_all(receives) => {
+                if let Ok((replica_id, resp)) = result {
+                    self.replica_heartbeats.insert(replica_id, Utc::now());
+                    self.stashed_response = Some((instance_id, replica_id, resp));
+                } else {
+                    // There is nothing to do here. `recv` has already added the failed replica to
+                    // `instance.failed_replicas`, so it will be rehydrated in the next call to
+                    // `ActiveComputeController::process`.
+                }
+            }
+            ((replica_id, result), _index, _remaining) = future::select_all(metrics) => {
+                let Some(result) = result else {
+                    // Nothing to do here, the stream is closed
+                    return;
+                };
+                let metrics = match result {
+                    Ok(metrics) => metrics,
+                    Err(e) => {
+                        tracing::log::warn!("Failed to get metrics for replica {replica_id}: {e}");
+                        return;
+                    }
+                };
+                self.replica_metrics.insert(replica_id, metrics);
+            }
         }
     }
 
     /// Listen for changes to compute services reported by the orchestrator.
     pub fn watch_services(&self) -> BoxStream<'static, ComputeInstanceEvent> {
         self.orchestrator.watch_services()
+    }
+
+    pub fn start_metrics_collection(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        replica_id: ReplicaId,
+    ) {
+        const METRICS_INTERVAL: Duration = Duration::from_secs(10);
+
+        let orchestrator = self.orchestrator.clone();
+        let s = async_stream::stream! {
+            let mut interval = tokio::time::interval(METRICS_INTERVAL);
+            loop {
+                interval.tick().await;
+                yield orchestrator.fetch_replica_metrics(instance_id, replica_id).await;
+            }
+        };
+
+        self.replica_metrics_streams.insert(replica_id, s.boxed());
+    }
+
+    pub fn stop_metrics_collection(&mut self, replica_id: ReplicaId) {
+        let old = self.replica_metrics_streams.remove(&replica_id);
+        soft_assert!(old.is_some());
     }
 }
 
@@ -506,6 +558,9 @@ where
             sink_logs,
         };
 
+        self.compute
+            .start_metrics_collection(instance_id, replica_id);
+
         self.instance(instance_id)?
             .add_replica(replica_id, config.location, logging_config)?;
         Ok(())
@@ -517,6 +572,7 @@ where
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
     ) -> Result<(), ReplicaDropError> {
+        self.compute.stop_metrics_collection(replica_id);
         self.instance(instance_id)?.remove_replica(replica_id)?;
         Ok(())
     }
@@ -641,6 +697,14 @@ where
             let when = self.compute.replica_heartbeats.remove(&replica_id).unwrap();
             return Some(ComputeControllerResponse::ReplicaHeartbeat(
                 replica_id, when,
+            ));
+        }
+
+        // Process pending replica metrics responses
+        if let Some(replica_id) = self.compute.replica_metrics.keys().next().copied() {
+            let metrics = self.compute.replica_metrics.remove(&replica_id).unwrap();
+            return Some(ComputeControllerResponse::ReplicaMetrics(
+                replica_id, metrics,
             ));
         }
 

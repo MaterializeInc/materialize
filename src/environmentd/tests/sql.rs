@@ -18,9 +18,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use std::{env, thread};
 
-use anyhow::anyhow;
 use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::{routing, Json, Router};
@@ -29,15 +27,12 @@ use http::StatusCode;
 use postgres::Row;
 use regex::Regex;
 use serde_json::json;
-use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, oneshot};
-use tokio_postgres::config::Host;
-use tokio_postgres::Client;
 use tracing::info;
 
 use mz_adapter::catalog::{INTERNAL_USER_NAMES, INTROSPECTION_USER, SYSTEM_USER};
 use mz_ore::assert_contains;
-use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO, SYSTEM_TIME};
+use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
 use mz_ore::retry::Retry;
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 
@@ -97,32 +92,30 @@ impl MockHttpServer {
 }
 
 #[test]
-fn test_no_block() -> Result<(), anyhow::Error> {
-    mz_ore::test::init_logging();
-
+fn test_no_block() {
     // This is better than relying on CI to time out, because an actual failure
     // (as opposed to a CI timeout) causes `services.log` to be uploaded.
-    mz_ore::test::timeout(Duration::from_secs(60), || {
-        info!("test_no_block: starting server");
-        let server = util::start_server(util::Config::default())?;
+    mz_ore::test::timeout(Duration::from_secs(120), || {
+        println!("test_no_block: starting server");
+        let server = util::start_server(util::Config::default()).unwrap();
 
         server.runtime.block_on(async {
-            info!("test_no_block: starting mock HTTP server");
+            println!("test_no_block: starting mock HTTP server");
             let mut schema_registry_server = MockHttpServer::new();
 
-            info!("test_no_block: connecting to server");
-            let (client, _conn) = server.connect_async(postgres::NoTls).await?;
+            println!("test_no_block: connecting to server");
+            let (client, _conn) = server.connect_async(postgres::NoTls).await.unwrap();
 
             let slow_task = task::spawn(|| "slow_client", async move {
-                info!("test_no_block: in thread; executing create source");
+                println!("test_no_block: in thread; executing create source");
                 let result = client
                 .batch_execute(&format!(
                     "CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL 'http://{}');",
                     schema_registry_server.addr,
                 ))
                 .await;
-                info!("test_no_block: in thread; create CSR conn done");
-                let _ = result?;
+                println!("test_no_block: in thread; create CSR conn done");
+                let _ = result.unwrap();
 
                 let result = client
                     .batch_execute(&format!(
@@ -130,8 +123,8 @@ fn test_no_block() -> Result<(), anyhow::Error> {
                         &*KAFKA_ADDRS,
                     ))
                     .await;
-                info!("test_no_block: in thread; create Kafka conn done");
-                let _ = result?;
+                println!("test_no_block: in thread; create Kafka conn done");
+                let _ = result.unwrap();
 
                 let result = client
                     .batch_execute(
@@ -140,68 +133,68 @@ fn test_no_block() -> Result<(), anyhow::Error> {
                         FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn",
                     )
                     .await;
-                info!("test_no_block: in thread; create source done");
-                result
+                println!("test_no_block: in thread; create source done");
+                // Verify that the schema registry error was returned to the client, for
+                // good measure.
+                assert_contains!(result.unwrap_err().to_string(), "server error 503");
             });
 
             // Wait for Materialize to contact the schema registry, which
             // indicates the adapter is processing the CREATE SOURCE command. It
             // will be unable to complete the query until we respond.
-            info!("test_no_block: accepting fake schema registry connection");
+            println!("test_no_block: accepting fake schema registry connection");
             let response_tx = schema_registry_server.accept().await;
 
             // Verify that the adapter can still process other requests from
             // other sessions.
-            info!("test_no_block: connecting to server again");
-            let (client, _conn) = server.connect_async(postgres::NoTls).await?;
-            info!("test_no_block: executing query");
-            let answer: i32 = client.query_one("SELECT 1 + 1", &[]).await?.get(0);
+            println!("test_no_block: connecting to server again");
+            let (client, _conn) = server.connect_async(postgres::NoTls).await.unwrap();
+            println!("test_no_block: executing query");
+            let answer: i32 = client.query_one("SELECT 1 + 1", &[]).await.unwrap().get(0);
             assert_eq!(answer, 2);
 
             // Return an error to the adapter, so that we can shutdown cleanly.
-            info!("test_no_block: writing fake schema registry error");
+            println!("test_no_block: writing fake schema registry error");
             response_tx
                 .send(StatusCode::SERVICE_UNAVAILABLE.into_response())
                 .expect("server unexpectedly closed channel");
 
-            // Verify that the schema registry error was returned to the client, for
-            // good measure.
-            info!("test_no_block: joining task");
-            let slow_res = slow_task.await.unwrap();
-            assert_contains!(slow_res.unwrap_err().to_string(), "server error 503");
+            println!("test_no_block: joining task");
+            slow_task.await.unwrap();
 
             Ok(())
         })
-    })
+    }).expect("Test timed out");
 }
 
 /// Test that dropping a connection while a source is undergoing purification
 /// does not crash the server.
 #[test]
-fn test_drop_connection_race() -> Result<(), anyhow::Error> {
+fn test_drop_connection_race() {
+    let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
     mz_ore::test::init_logging();
-
-    info!("test_drop_connection_race: starting server");
-    let server = util::start_server(util::Config::default().unsafe_mode())?;
+    info!("test_drop_connection_race: server started");
 
     server.runtime.block_on(async {
         info!("test_drop_connection_race: starting mock HTTP server");
         let mut schema_registry_server = MockHttpServer::new();
 
         // Construct a source that depends on a schema registry connection.
-        let (client, _conn) = server.connect_async(postgres::NoTls).await?;
+        let (client, _conn) = server.connect_async(postgres::NoTls).await.unwrap();
         client
             .batch_execute(&format!(
                 "CREATE CONNECTION conn TO CONFLUENT SCHEMA REGISTRY (URL 'http://{}')",
                 schema_registry_server.addr,
             ))
-            .await?;
+            .await
+            .unwrap();
         client
             .batch_execute(&format!(
                 "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}')",
                 &*KAFKA_ADDRS,
             ))
-            .await?;
+            .await
+            .unwrap();
         let source_task = task::spawn(|| "source_client", async move {
             info!("test_drop_connection_race: in task; creating connection and source");
             let result = client
@@ -226,8 +219,8 @@ fn test_drop_connection_race() -> Result<(), anyhow::Error> {
 
         // Drop the connection on which the source depends.
         info!("test_drop_connection_race: dropping connection");
-        let (client, _conn) = server.connect_async(postgres::NoTls).await?;
-        client.batch_execute("DROP CONNECTION conn").await?;
+        let (client, _conn) = server.connect_async(postgres::NoTls).await.unwrap();
+        client.batch_execute("DROP CONNECTION conn").await.unwrap();
 
         let schema = Json(json!({
             "id": 1_i64,
@@ -252,27 +245,27 @@ fn test_drop_connection_race() -> Result<(), anyhow::Error> {
             source_res.unwrap_err().to_string(),
             "unknown catalog item 'conn'"
         );
-
-        Ok(())
-    })
+    });
 }
 
 #[test]
-fn test_time() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
-    let server = util::start_server(util::Config::default())?;
-    let mut client = server.connect(postgres::NoTls)?;
+fn test_time() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Confirm that `now()` and `current_timestamp()` both return a
     // DateTime<Utc>, but don't assert specific times.
-    let row = client.query_one("SELECT now(), current_timestamp()", &[])?;
+    let row = client
+        .query_one("SELECT now(), current_timestamp()", &[])
+        .unwrap();
     let _ = row.get::<_, DateTime<Utc>>(0);
     let _ = row.get::<_, DateTime<Utc>>(1);
 
     // Confirm calls to now() return the same DateTime<Utc> both inside and
     // outside of subqueries.
-    let row = client.query_one("SELECT now(), (SELECT now())", &[])?;
+    let row = client
+        .query_one("SELECT now(), (SELECT now())", &[])
+        .unwrap();
     assert_eq!(
         row.get::<_, DateTime<Utc>>(0),
         row.get::<_, DateTime<Utc>>(1)
@@ -280,71 +273,79 @@ fn test_time() -> Result<(), Box<dyn Error>> {
 
     // Ensure that EXPLAIN selects a timestamp for `now()` and
     // `current_timestamp()`, though we don't care what the timestamp is.
-    let rows = client.query("EXPLAIN PLAN FOR SELECT now(), current_timestamp()", &[])?;
+    let rows = client
+        .query("EXPLAIN PLAN FOR SELECT now(), current_timestamp()", &[])
+        .unwrap();
     assert_eq!(1, rows.len());
 
     // Test that `mz_sleep` causes a delay of at least the appropriate time.
     let start = Instant::now();
-    client.batch_execute("SELECT mz_internal.mz_sleep(0.3)")?;
+    client
+        .batch_execute("SELECT mz_internal.mz_sleep(0.3)")
+        .unwrap();
     let elapsed = start.elapsed();
     assert!(
         elapsed >= Duration::from_millis(300),
         "start.elapsed() = {:?}",
         elapsed
     );
-
-    Ok(())
 }
 
 #[test]
-fn test_subscribe_consolidation() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
+fn test_subscribe_consolidation() {
     let config = util::Config::default().workers(2);
-    let server = util::start_server(config)?;
-    let mut client_writes = server.connect(postgres::NoTls)?;
-    let mut client_reads = server.connect(postgres::NoTls)?;
+    let server = util::start_server(config).unwrap();
+    let mut client_writes = server.connect(postgres::NoTls).unwrap();
+    let mut client_reads = server.connect(postgres::NoTls).unwrap();
 
-    client_writes.batch_execute("CREATE TABLE t (data text)")?;
-    client_reads.batch_execute(
-        "BEGIN;
+    client_writes
+        .batch_execute("CREATE TABLE t (data text)")
+        .unwrap();
+    client_reads
+        .batch_execute(
+            "BEGIN;
          DECLARE c CURSOR FOR SUBSCRIBE t;",
-    )?;
+        )
+        .unwrap();
 
     let data = format!("line {}", 42);
-    client_writes.execute(
-        "INSERT INTO t VALUES ($1), ($2), ($3)",
-        &[&data, &data, &data],
-    )?;
-    let row = client_reads.query_one("FETCH ALL c", &[])?;
+    client_writes
+        .execute(
+            "INSERT INTO t VALUES ($1), ($2), ($3)",
+            &[&data, &data, &data],
+        )
+        .unwrap();
+    let row = client_reads.query_one("FETCH ALL c", &[]).unwrap();
 
     assert_eq!(row.get::<_, i64>("mz_diff"), 3);
     assert_eq!(row.get::<_, String>("data"), data);
-
-    Ok(())
 }
 
 #[test]
-fn test_subscribe_negative_diffs() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
+fn test_subscribe_negative_diffs() {
     let config = util::Config::default().workers(2);
-    let server = util::start_server(config)?;
-    let mut client_writes = server.connect(postgres::NoTls)?;
-    let mut client_reads = server.connect(postgres::NoTls)?;
+    let server = util::start_server(config).unwrap();
+    let mut client_writes = server.connect(postgres::NoTls).unwrap();
+    let mut client_reads = server.connect(postgres::NoTls).unwrap();
 
-    client_writes.batch_execute("CREATE TABLE t (data text)")?;
+    client_writes
+        .batch_execute("CREATE TABLE t (data text)")
+        .unwrap();
     client_writes.batch_execute(
         "CREATE MATERIALIZED VIEW counts AS SELECT data AS key, COUNT(data) AS count FROM t GROUP BY data",
-    )?;
-    client_reads.batch_execute(
-        "BEGIN;
+    ).unwrap();
+    client_reads
+        .batch_execute(
+            "BEGIN;
          DECLARE c CURSOR FOR SUBSCRIBE counts;",
-    )?;
+        )
+        .unwrap();
 
     let data = format!("line {}", 42);
-    client_writes.execute("INSERT INTO t VALUES ($1)", &[&data])?;
-    let row = client_reads.query_one("FETCH ALL c", &[])?;
+    client_writes
+        .execute("INSERT INTO t VALUES ($1)", &[&data])
+        .unwrap();
+    let row = client_reads.query_one("FETCH ALL c", &[]).unwrap();
 
     assert_eq!(row.get::<_, i64>("mz_diff"), 1);
     assert_eq!(row.get::<_, String>("key"), data);
@@ -354,9 +355,11 @@ fn test_subscribe_negative_diffs() -> Result<(), Box<dyn Error>> {
     // count and emit an updated count
 
     let data = format!("line {}", 42);
-    client_writes.execute("INSERT INTO t VALUES ($1)", &[&data])?;
+    client_writes
+        .execute("INSERT INTO t VALUES ($1)", &[&data])
+        .unwrap();
 
-    let rows = client_reads.query("FETCH ALL c", &[])?;
+    let rows = client_reads.query("FETCH ALL c", &[]).unwrap();
     let mut rows = rows.iter();
 
     let row = rows.next().expect("missing result");
@@ -368,14 +371,10 @@ fn test_subscribe_negative_diffs() -> Result<(), Box<dyn Error>> {
     assert_eq!(row.get::<_, i64>("mz_diff"), 1);
     assert_eq!(row.get::<_, String>("key"), data);
     assert_eq!(row.get::<_, i64>("count"), 2);
-
-    Ok(())
 }
 
 #[test]
-fn test_subscribe_basic() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
+fn test_subscribe_basic() {
     // Set the timestamp to zero for deterministic initial timestamps.
     let nowfn = Arc::new(Mutex::new(NOW_ZERO.clone()));
     let now = {
@@ -386,23 +385,27 @@ fn test_subscribe_basic() -> Result<(), Box<dyn Error>> {
         .workers(2)
         .with_now(now)
         .unsafe_mode();
-    let server = util::start_server(config)?;
-    let mut client_writes = server.connect(postgres::NoTls)?;
-    let mut client_reads = server.connect(postgres::NoTls)?;
+    let server = util::start_server(config).unwrap();
+    let mut client_writes = server.connect(postgres::NoTls).unwrap();
+    let mut client_reads = server.connect(postgres::NoTls).unwrap();
 
-    client_writes.batch_execute("CREATE TABLE t (data text)")?;
-    client_writes.batch_execute(
-        "CREATE DEFAULT INDEX t_primary_idx ON t WITH (LOGICAL COMPACTION WINDOW 0)",
-    )?;
+    client_writes
+        .batch_execute("CREATE TABLE t (data text)")
+        .unwrap();
+    client_writes
+        .batch_execute("CREATE DEFAULT INDEX t_primary_idx ON t WITH (LOGICAL COMPACTION WINDOW 0)")
+        .unwrap();
     // Now that the index (and its since) are initialized to 0, we can resume using
     // system time. Do a read to bump the oracle's state so it will read from the
     // system clock during inserts below.
     *nowfn.lock().unwrap() = SYSTEM_TIME.clone();
-    client_writes.batch_execute("SELECT * FROM t")?;
-    client_reads.batch_execute(
-        "BEGIN;
+    client_writes.batch_execute("SELECT * FROM t").unwrap();
+    client_reads
+        .batch_execute(
+            "BEGIN;
          DECLARE c CURSOR FOR SUBSCRIBE t;",
-    )?;
+        )
+        .unwrap();
     // Locks the timestamp of the SUBSCRIBE to before any of the following INSERTs, which is required
     // for mz_timestamp column to be accurate
     let _ = client_reads.query_one("FETCH 0 c", &[]);
@@ -411,8 +414,10 @@ fn test_subscribe_basic() -> Result<(), Box<dyn Error>> {
 
     for i in 1..=3 {
         let data = format!("line {}", i);
-        client_writes.execute("INSERT INTO t VALUES ($1)", &[&data])?;
-        let row = client_reads.query_one("FETCH ALL c", &[])?;
+        client_writes
+            .execute("INSERT INTO t VALUES ($1)", &[&data])
+            .unwrap();
+        let row = client_reads.query_one("FETCH ALL c", &[]).unwrap();
         assert_eq!(row.get::<_, i64>("mz_diff"), 1);
         assert_eq!(row.get::<_, String>("data"), data);
         events.push((row.get::<_, MzTimestamp>("mz_timestamp").0, data));
@@ -426,15 +431,17 @@ fn test_subscribe_basic() -> Result<(), Box<dyn Error>> {
     // Now subscribe without a snapshot as of each timestamp, verifying that when we do
     // so we only see events that occur as of or later than that timestamp.
     for (ts, _) in &events {
-        client_reads.batch_execute(&*format!(
-            "COMMIT; BEGIN;
+        client_reads
+            .batch_execute(&*format!(
+                "COMMIT; BEGIN;
             DECLARE c CURSOR FOR SUBSCRIBE t WITH (SNAPSHOT = false) AS OF {}",
-            ts - 1
-        ))?;
+                ts - 1
+            ))
+            .unwrap();
 
         // Skip by the things we won't be able to see.
         for (_, expected) in events.iter().skip_while(|(inner_ts, _)| inner_ts < ts) {
-            let actual = client_reads.query_one("FETCH c", &[])?;
+            let actual = client_reads.query_one("FETCH c", &[]).unwrap();
             assert_eq!(actual.get::<_, String>("data"), *expected);
         }
     }
@@ -442,11 +449,13 @@ fn test_subscribe_basic() -> Result<(), Box<dyn Error>> {
     // Now subscribe with a snapshot as of each timestamp. We should see a batch of
     // updates all at the subscribed timestamp, and then updates afterward.
     for (ts, _) in &events {
-        client_reads.batch_execute(&*format!(
-            "COMMIT; BEGIN;
+        client_reads
+            .batch_execute(&*format!(
+                "COMMIT; BEGIN;
             DECLARE c CURSOR FOR SUBSCRIBE t AS OF {}",
-            ts - 1
-        ))?;
+                ts - 1
+            ))
+            .unwrap();
 
         for (mut expected_ts, expected_data) in events.iter() {
             if expected_ts < ts - 1 {
@@ -455,7 +464,7 @@ fn test_subscribe_basic() -> Result<(), Box<dyn Error>> {
                 expected_ts = ts - 1;
             }
 
-            let actual = client_reads.query_one("FETCH c", &[])?;
+            let actual = client_reads.query_one("FETCH c", &[]).unwrap();
             assert_eq!(actual.get::<_, String>("data"), *expected_data);
             assert_eq!(actual.get::<_, MzTimestamp>("mz_timestamp").0, expected_ts);
         }
@@ -465,13 +474,18 @@ fn test_subscribe_basic() -> Result<(), Box<dyn Error>> {
     // view derived from the index. This previously selected an invalid
     // `AS OF` timestamp (#5391).
     client_writes
-        .batch_execute("ALTER INDEX t_primary_idx SET (LOGICAL COMPACTION WINDOW = '1ms')")?;
-    client_writes.batch_execute("CREATE VIEW v AS SELECT * FROM t")?;
-    client_reads.batch_execute(
-        "COMMIT; BEGIN;
+        .batch_execute("ALTER INDEX t_primary_idx SET (LOGICAL COMPACTION WINDOW = '1ms')")
+        .unwrap();
+    client_writes
+        .batch_execute("CREATE VIEW v AS SELECT * FROM t")
+        .unwrap();
+    client_reads
+        .batch_execute(
+            "COMMIT; BEGIN;
          DECLARE c CURSOR FOR SUBSCRIBE v;",
-    )?;
-    let rows = client_reads.query("FETCH ALL c", &[])?;
+        )
+        .unwrap();
+    let rows = client_reads.query("FETCH ALL c", &[]).unwrap();
     assert_eq!(rows.len(), 3);
     for i in 0..3 {
         assert_eq!(rows[i].get::<_, i64>("mz_diff"), 1);
@@ -480,7 +494,9 @@ fn test_subscribe_basic() -> Result<(), Box<dyn Error>> {
 
     // Wait until compaction kicks in and we get an error on trying to read from the cursor.
     let err = loop {
-        client_reads.batch_execute("COMMIT; BEGIN; DECLARE c CURSOR FOR SUBSCRIBE v AS OF 1")?;
+        client_reads
+            .batch_execute("COMMIT; BEGIN; DECLARE c CURSOR FOR SUBSCRIBE v AS OF 1")
+            .unwrap();
 
         if let Err(err) = client_reads.query("FETCH ALL c", &[]) {
             break err;
@@ -491,8 +507,6 @@ fn test_subscribe_basic() -> Result<(), Box<dyn Error>> {
         .unwrap_db_error()
         .message()
         .starts_with("Timestamp (1) is not valid for all inputs"));
-
-    Ok(())
 }
 
 /// Test the done messages by sending inserting a single row and waiting to
@@ -500,19 +514,21 @@ fn test_subscribe_basic() -> Result<(), Box<dyn Error>> {
 /// batches and we won't yet insert a second row, we know that if we've seen a
 /// data row we will also see one progressed message.
 #[test]
-fn test_subscribe_progress() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
+fn test_subscribe_progress() {
     let config = util::Config::default().workers(2);
-    let server = util::start_server(config)?;
-    let mut client_writes = server.connect(postgres::NoTls)?;
-    let mut client_reads = server.connect(postgres::NoTls)?;
+    let server = util::start_server(config).unwrap();
+    let mut client_writes = server.connect(postgres::NoTls).unwrap();
+    let mut client_reads = server.connect(postgres::NoTls).unwrap();
 
-    client_writes.batch_execute("CREATE TABLE t1 (data text)")?;
-    client_reads.batch_execute(
-        "COMMIT; BEGIN;
+    client_writes
+        .batch_execute("CREATE TABLE t1 (data text)")
+        .unwrap();
+    client_reads
+        .batch_execute(
+            "COMMIT; BEGIN;
          DECLARE c1 CURSOR FOR SUBSCRIBE t1 WITH (PROGRESS);",
-    )?;
+        )
+        .unwrap();
 
     #[derive(PartialEq)]
     enum State {
@@ -523,7 +539,9 @@ fn test_subscribe_progress() -> Result<(), Box<dyn Error>> {
 
     for i in 1..=3 {
         let data = format!("line {}", i);
-        client_writes.execute("INSERT INTO t1 VALUES ($1)", &[&data])?;
+        client_writes
+            .execute("INSERT INTO t1 VALUES ($1)", &[&data])
+            .unwrap();
 
         // We have to try several times. It might be that the FETCH gets
         // a batch that only contains continuous progress statements, without
@@ -531,7 +549,7 @@ fn test_subscribe_progress() -> Result<(), Box<dyn Error>> {
         // then verify that it also has a progress statement.
         let mut state = State::WaitingForData;
         while state != State::Done {
-            let rows = client_reads.query("FETCH ALL c1", &[])?;
+            let rows = client_reads.query("FETCH ALL c1", &[]).unwrap();
 
             let rows = rows.iter();
 
@@ -575,27 +593,29 @@ fn test_subscribe_progress() -> Result<(), Box<dyn Error>> {
             }
         }
     }
-
-    Ok(())
 }
 
 // Verifies that subscribing to non-nullable columns with progress information
 // turns them into nullable columns. See #6304.
 #[test]
-fn test_subscribe_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
+fn test_subscribe_progress_non_nullable_columns() {
     let config = util::Config::default().workers(2);
-    let server = util::start_server(config)?;
-    let mut client_writes = server.connect(postgres::NoTls)?;
-    let mut client_reads = server.connect(postgres::NoTls)?;
+    let server = util::start_server(config).unwrap();
+    let mut client_writes = server.connect(postgres::NoTls).unwrap();
+    let mut client_reads = server.connect(postgres::NoTls).unwrap();
 
-    client_writes.batch_execute("CREATE TABLE t2 (data text NOT NULL)")?;
-    client_writes.batch_execute("INSERT INTO t2 VALUES ('data')")?;
-    client_reads.batch_execute(
-        "COMMIT; BEGIN;
+    client_writes
+        .batch_execute("CREATE TABLE t2 (data text NOT NULL)")
+        .unwrap();
+    client_writes
+        .batch_execute("INSERT INTO t2 VALUES ('data')")
+        .unwrap();
+    client_reads
+        .batch_execute(
+            "COMMIT; BEGIN;
             DECLARE c2 CURSOR FOR SUBSCRIBE t2 WITH (PROGRESS);",
-    )?;
+        )
+        .unwrap();
 
     #[derive(PartialEq)]
     enum State {
@@ -611,7 +631,7 @@ fn test_subscribe_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> 
     // that columns are in fact `Options`
 
     while state != State::Done {
-        let row = client_reads.query_one("FETCH 1 c2", &[])?;
+        let row = client_reads.query_one("FETCH 1 c2", &[]).unwrap();
 
         if !row.get::<_, bool>("mz_progressed") {
             assert_eq!(row.get::<_, i64>("mz_diff"), 1);
@@ -624,26 +644,26 @@ fn test_subscribe_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> 
             state = State::Done;
         }
     }
-
-    Ok(())
 }
 
 /// Verifies that we get continuous progress messages, regardless of if we
 /// receive data or not.
 #[test]
-fn test_subcribe_continuous_progress() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
+fn test_subcribe_continuous_progress() {
     let config = util::Config::default().workers(2);
-    let server = util::start_server(config)?;
-    let mut client_writes = server.connect(postgres::NoTls)?;
-    let mut client_reads = server.connect(postgres::NoTls)?;
+    let server = util::start_server(config).unwrap();
+    let mut client_writes = server.connect(postgres::NoTls).unwrap();
+    let mut client_reads = server.connect(postgres::NoTls).unwrap();
 
-    client_writes.batch_execute("CREATE TABLE t1 (data text)")?;
-    client_reads.batch_execute(
-        "COMMIT; BEGIN;
+    client_writes
+        .batch_execute("CREATE TABLE t1 (data text)")
+        .unwrap();
+    client_reads
+        .batch_execute(
+            "COMMIT; BEGIN;
          DECLARE c1 CURSOR FOR SUBSCRIBE t1 WITH (PROGRESS);",
-    )?;
+        )
+        .unwrap();
 
     let mut last_ts = MzTimestamp(u64::MIN);
     let mut verify_rows = move |rows: Vec<Row>| -> (usize, usize) {
@@ -679,7 +699,7 @@ fn test_subcribe_continuous_progress() -> Result<(), Box<dyn Error>> {
 
     // make sure we see progress without any data ever being produced
     loop {
-        let rows = client_reads.query("FETCH ALL c1", &[])?;
+        let rows = client_reads.query("FETCH ALL c1", &[]).unwrap();
         let (num_data_rows, num_progress_rows) = verify_rows(rows);
         assert_eq!(num_data_rows, 0);
         if num_progress_rows > 0 {
@@ -687,14 +707,16 @@ fn test_subcribe_continuous_progress() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    client_writes.execute("INSERT INTO t1 VALUES ($1)", &[&"hello".to_owned()])?;
+    client_writes
+        .execute("INSERT INTO t1 VALUES ($1)", &[&"hello".to_owned()])
+        .unwrap();
 
     // fetch away the data message, plus maybe some progress messages
     let mut num_data_rows = 0;
     let mut num_progress_rows = 0;
 
     while num_data_rows == 0 || num_progress_rows == 0 {
-        let rows = client_reads.query("FETCH ALL c1", &[])?;
+        let rows = client_reads.query("FETCH ALL c1", &[]).unwrap();
         let (current_num_data_rows, current_num_progress_rows) = verify_rows(rows);
         num_data_rows += current_num_data_rows;
         num_progress_rows += current_num_progress_rows;
@@ -703,30 +725,30 @@ fn test_subcribe_continuous_progress() -> Result<(), Box<dyn Error>> {
     // Try and read some progress messages. The normal update interval is
     // 1s, so only wait for two updates. Otherwise this would run for too long.
     for _i in 1..=2 {
-        let rows = client_reads.query("FETCH ALL c1", &[])?;
+        let rows = client_reads.query("FETCH ALL c1", &[]).unwrap();
 
         let (num_data_rows, num_progress_rows) = verify_rows(rows);
         assert_eq!(num_data_rows, 0);
         assert!(num_progress_rows > 0);
     }
-
-    Ok(())
 }
 
 #[test]
-fn test_subscribe_fetch_timeout() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
+fn test_subscribe_fetch_timeout() {
     let config = util::Config::default().workers(2);
-    let server = util::start_server(config)?;
-    let mut client = server.connect(postgres::NoTls)?;
+    let server = util::start_server(config).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
 
-    client.batch_execute("CREATE TABLE t (i INT8)")?;
-    client.batch_execute("INSERT INTO t VALUES (1), (2), (3);")?;
-    client.batch_execute(
-        "BEGIN;
+    client.batch_execute("CREATE TABLE t (i INT8)").unwrap();
+    client
+        .batch_execute("INSERT INTO t VALUES (1), (2), (3);")
+        .unwrap();
+    client
+        .batch_execute(
+            "BEGIN;
          DECLARE c CURSOR FOR SUBSCRIBE t;",
-    )?;
+        )
+        .unwrap();
 
     let expected: Vec<i64> = vec![1, 2, 3];
     let mut expected_iter = expected.iter();
@@ -734,7 +756,7 @@ fn test_subscribe_fetch_timeout() -> Result<(), Box<dyn Error>> {
 
     // Test 0s timeouts.
     while let Some(expect) = next {
-        let rows = client.query("FETCH c WITH (TIMEOUT = '0s')", &[])?;
+        let rows = client.query("FETCH c WITH (TIMEOUT = '0s')", &[]).unwrap();
         // It is fine for there to be no rows ready yet. Immediately try again because
         // they should be ready soon.
         if rows.len() != 1 {
@@ -747,7 +769,7 @@ fn test_subscribe_fetch_timeout() -> Result<(), Box<dyn Error>> {
 
     // Test a 1s timeout and make sure we waited for at least that long.
     let before = Instant::now();
-    let rows = client.query("FETCH c WITH (TIMEOUT = '1s')", &[])?;
+    let rows = client.query("FETCH c WITH (TIMEOUT = '1s')", &[]).unwrap();
     let duration = before.elapsed();
     assert_eq!(rows.len(), 0);
     // Make sure we waited at least 1s but also not too long.
@@ -757,13 +779,17 @@ fn test_subscribe_fetch_timeout() -> Result<(), Box<dyn Error>> {
     // Make a new cursor. Try to fetch more rows from it than exist. Verify that
     // we got all the rows we expect and also waited for at least the timeout
     // duration. Cursor may take a moment to be ready, so do it in a loop.
-    client.batch_execute(
-        "COMMIT; BEGIN;
+    client
+        .batch_execute(
+            "COMMIT; BEGIN;
         DECLARE c CURSOR FOR SUBSCRIBE t",
-    )?;
+        )
+        .unwrap();
     loop {
         let before = Instant::now();
-        let rows = client.query("FETCH 4 c WITH (TIMEOUT = '1s')", &[])?;
+        let rows = client
+            .query("FETCH 4 c WITH (TIMEOUT = '1s')", &[])
+            .unwrap();
         let duration = before.elapsed();
         if rows.len() != 0 {
             assert_eq!(rows.len(), expected.len());
@@ -777,45 +803,49 @@ fn test_subscribe_fetch_timeout() -> Result<(), Box<dyn Error>> {
     }
 
     // Another fetch should return nothing.
-    let rows = client.query("FETCH c WITH (TIMEOUT = '0s')", &[])?;
+    let rows = client.query("FETCH c WITH (TIMEOUT = '0s')", &[]).unwrap();
     assert_eq!(rows.len(), 0);
 
     // Make a third cursor. Fetch should return immediately if there are enough
     // rows, even with a really long timeout.
     //
     // Regression test for #6307
-    client.batch_execute(
-        "COMMIT; BEGIN;
+    client
+        .batch_execute(
+            "COMMIT; BEGIN;
         DECLARE c CURSOR FOR SUBSCRIBE t",
-    )?;
+        )
+        .unwrap();
     let before = Instant::now();
     // NB: This timeout is chosen such that the test will timeout if the bad
     // behavior occurs.
-    let rows = client.query("FETCH 3 c WITH (TIMEOUT = '1h')", &[])?;
+    let rows = client
+        .query("FETCH 3 c WITH (TIMEOUT = '1h')", &[])
+        .unwrap();
     let duration = before.elapsed();
     assert_eq!(rows.len(), expected.len());
     assert!(duration < Duration::from_secs(10));
     for i in 0..expected.len() {
         assert_eq!(rows[i].get::<_, i64>(2), expected[i])
     }
-
-    Ok(())
 }
 
 #[test]
-fn test_subscribe_fetch_wait() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
+fn test_subscribe_fetch_wait() {
     let config = util::Config::default().workers(2);
-    let server = util::start_server(config)?;
-    let mut client = server.connect(postgres::NoTls)?;
+    let server = util::start_server(config).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
 
-    client.batch_execute("CREATE TABLE t (i INT8)")?;
-    client.batch_execute("INSERT INTO t VALUES (1), (2), (3)")?;
-    client.batch_execute(
-        "BEGIN;
+    client.batch_execute("CREATE TABLE t (i INT8)").unwrap();
+    client
+        .batch_execute("INSERT INTO t VALUES (1), (2), (3)")
+        .unwrap();
+    client
+        .batch_execute(
+            "BEGIN;
          DECLARE c CURSOR FOR SUBSCRIBE t;",
-    )?;
+        )
+        .unwrap();
 
     let expected: Vec<i64> = vec![1, 2, 3];
     let mut expected_iter = expected.iter();
@@ -823,7 +853,7 @@ fn test_subscribe_fetch_wait() -> Result<(), Box<dyn Error>> {
 
     while let Some(expect) = next {
         // FETCH with no timeout will wait for at least 1 result.
-        let rows = client.query("FETCH c", &[])?;
+        let rows = client.query("FETCH c", &[]).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].get::<_, i64>(2), *expect);
         next = expected_iter.next();
@@ -833,13 +863,15 @@ fn test_subscribe_fetch_wait() -> Result<(), Box<dyn Error>> {
     // be returned, but it's up to the system to decide what is available. This
     // means that we could still get only one row per request, and we won't know
     // how many rows will come back otherwise.
-    client.batch_execute(
-        "COMMIT; BEGIN;
+    client
+        .batch_execute(
+            "COMMIT; BEGIN;
         DECLARE c CURSOR FOR SUBSCRIBE t;",
-    )?;
+        )
+        .unwrap();
     let mut expected_iter = expected.iter().peekable();
     while expected_iter.peek().is_some() {
-        let rows = client.query("FETCH ALL c", &[])?;
+        let rows = client.query("FETCH ALL c", &[]).unwrap();
         assert!(rows.len() > 0);
         for row in rows {
             let next = expected_iter.next().unwrap();
@@ -849,103 +881,115 @@ fn test_subscribe_fetch_wait() -> Result<(), Box<dyn Error>> {
 
     // Verify that the wait only happens for SUBSCRIBE. A SELECT with 0 rows should not
     // block.
-    client.batch_execute("COMMIT")?;
-    client.batch_execute("CREATE TABLE empty ()")?;
-    client.batch_execute(
-        "BEGIN;
+    client.batch_execute("COMMIT").unwrap();
+    client.batch_execute("CREATE TABLE empty ()").unwrap();
+    client
+        .batch_execute(
+            "BEGIN;
          DECLARE c CURSOR FOR SELECT * FROM empty;",
-    )?;
-    let rows = client.query("FETCH c", &[])?;
+        )
+        .unwrap();
+    let rows = client.query("FETCH c", &[]).unwrap();
     assert_eq!(rows.len(), 0);
-
-    Ok(())
 }
 
 #[test]
-fn test_subscribe_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
+fn test_subscribe_empty_upper_frontier() {
     let config = util::Config::default();
-    let server = util::start_server(config)?;
-    let mut client = server.connect(postgres::NoTls)?;
+    let server = util::start_server(config).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
 
-    client.batch_execute("CREATE MATERIALIZED VIEW foo AS VALUES (1), (2), (3);")?;
+    client
+        .batch_execute("CREATE MATERIALIZED VIEW foo AS VALUES (1), (2), (3);")
+        .unwrap();
 
-    let subscribe = client.query("SUBSCRIBE foo WITH (SNAPSHOT = false)", &[])?;
+    let subscribe = client
+        .query("SUBSCRIBE foo WITH (SNAPSHOT = false)", &[])
+        .unwrap();
     assert_eq!(0, subscribe.len());
 
-    let subscribe = client.query("SUBSCRIBE foo WITH (SNAPSHOT)", &[])?;
+    let subscribe = client.query("SUBSCRIBE foo WITH (SNAPSHOT)", &[]).unwrap();
     assert_eq!(3, subscribe.len());
-
-    Ok(())
 }
 
 // Tests that a client that launches a non-terminating SUBSCRIBE and disconnects
 // does not keep the server alive forever.
 #[test]
-fn test_subscribe_shutdown() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
-    let server = util::start_server(util::Config::default())?;
+fn test_subscribe_shutdown() {
+    let server = util::start_server(util::Config::default()).unwrap();
 
     // We have to use the async PostgreSQL client so that we can ungracefully
     // abort the connection task.
     // See: https://github.com/sfackler/rust-postgres/issues/725
-    server.runtime.block_on(async {
-        let (client, conn_task) = server.connect_async(tokio_postgres::NoTls).await?;
+    server
+        .runtime
+        .block_on(async {
+            let (client, conn_task) = server.connect_async(tokio_postgres::NoTls).await.unwrap();
 
-        // Create a table with no data that we can SUBSCRIBE. This is the simplest
-        // way to cause a SUBSCRIBE to never terminate.
-        client.batch_execute("CREATE TABLE t ()").await?;
+            // Create a table with no data that we can SUBSCRIBE. This is the simplest
+            // way to cause a SUBSCRIBE to never terminate.
+            client.batch_execute("CREATE TABLE t ()").await.unwrap();
 
-        // Launch the ill-fated subscribe.
-        client.copy_out("COPY (SUBSCRIBE t) TO STDOUT").await?;
+            // Launch the ill-fated subscribe.
+            client
+                .copy_out("COPY (SUBSCRIBE t) TO STDOUT")
+                .await
+                .unwrap();
 
-        // Un-gracefully abort the connection.
-        conn_task.abort();
+            // Un-gracefully abort the connection.
+            conn_task.abort();
 
-        // Need to await `conn_task` to actually deliver the `abort`. We don't
-        // care about the result though (it's probably `JoinError` with `is_cancelled` being true).
-        let _ = conn_task.await;
+            // Need to await `conn_task` to actually deliver the `abort`. We don't
+            // care about the result though (it's probably `JoinError` with `is_cancelled` being true).
+            let _ = conn_task.await;
 
-        Ok::<_, Box<dyn Error>>(())
-    })?;
+            Ok::<_, Box<dyn Error>>(())
+        })
+        .unwrap();
 
     // Dropping the server will initiate a graceful shutdown. We previously had
     // a bug where the server would fail to notice that the client running
     // `SUBSCRIBE v` had disconnected, and would hang forever waiting for data
     // to be written to `path`, which in this test never comes. So if this
     // function exits, things are working correctly.
-
-    Ok(())
 }
 
 #[test]
-fn test_subscribe_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
+fn test_subscribe_table_rw_timestamps() {
     let config = util::Config::default().workers(3);
-    let server = util::start_server(config)?;
-    let mut client_interactive = server.connect(postgres::NoTls)?;
-    let mut client_subscribe = server.connect(postgres::NoTls)?;
+    let server = util::start_server(config).unwrap();
+    let mut client_interactive = server.connect(postgres::NoTls).unwrap();
+    let mut client_subscribe = server.connect(postgres::NoTls).unwrap();
 
-    client_interactive.batch_execute("CREATE TABLE t1 (data text)")?;
+    client_interactive
+        .batch_execute("CREATE TABLE t1 (data text)")
+        .unwrap();
 
-    client_subscribe.batch_execute(
-        "COMMIT; BEGIN;
+    client_subscribe
+        .batch_execute(
+            "COMMIT; BEGIN;
          DECLARE c1 CURSOR FOR SUBSCRIBE t1 WITH (PROGRESS);",
-    )?;
+        )
+        .unwrap();
 
     client_interactive.execute("BEGIN", &[]).unwrap();
-    client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"first".to_owned()])?;
-    client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"first".to_owned()])?;
-    client_interactive.execute("COMMIT", &[])?;
-    let _ = client_interactive.query("SELECT * FROM T1", &[])?;
-    client_interactive.execute("BEGIN", &[])?;
-    client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"second".to_owned()])?;
-    client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"second".to_owned()])?;
-    client_interactive.execute("COMMIT", &[])?;
-    let _ = client_interactive.query("SELECT * FROM T1", &[])?;
+    client_interactive
+        .execute("INSERT INTO t1 VALUES ($1)", &[&"first".to_owned()])
+        .unwrap();
+    client_interactive
+        .execute("INSERT INTO t1 VALUES ($1)", &[&"first".to_owned()])
+        .unwrap();
+    client_interactive.execute("COMMIT", &[]).unwrap();
+    let _ = client_interactive.query("SELECT * FROM T1", &[]).unwrap();
+    client_interactive.execute("BEGIN", &[]).unwrap();
+    client_interactive
+        .execute("INSERT INTO t1 VALUES ($1)", &[&"second".to_owned()])
+        .unwrap();
+    client_interactive
+        .execute("INSERT INTO t1 VALUES ($1)", &[&"second".to_owned()])
+        .unwrap();
+    client_interactive.execute("COMMIT", &[]).unwrap();
+    let _ = client_interactive.query("SELECT * FROM T1", &[]).unwrap();
 
     let mut first_write_ts = None;
     let mut second_write_ts = None;
@@ -958,7 +1002,7 @@ fn test_subscribe_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
     // is available. This means that we could still get only one row per
     // request, and we won't know how many rows will come back otherwise.
     while !seen_second {
-        let rows = client_subscribe.query("FETCH ALL c1", &[])?;
+        let rows = client_subscribe.query("FETCH ALL c1", &[]).unwrap();
         for row in rows.iter() {
             let mz_timestamp = row.get::<_, MzTimestamp>("mz_timestamp");
             let mz_progressed = row.get::<_, Option<bool>>("mz_progressed").unwrap();
@@ -983,7 +1027,7 @@ fn test_subscribe_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    client_subscribe.batch_execute("COMMIT;")?;
+    client_subscribe.batch_execute("COMMIT;").unwrap();
 
     assert!(seen_first);
     assert!(seen_second);
@@ -991,51 +1035,48 @@ fn test_subscribe_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
     let first_write_ts = first_write_ts.unwrap();
     let second_write_ts = second_write_ts.unwrap();
     assert!(first_write_ts <= second_write_ts);
-
-    Ok(())
 }
 
 // Tests that temporary views created by one connection cannot be viewed
 // by another connection.
 #[test]
-fn test_temporary_views() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
-    let server = util::start_server(util::Config::default())?;
-    let mut client_a = server.connect(postgres::NoTls)?;
-    let mut client_b = server.connect(postgres::NoTls)?;
+fn test_temporary_views() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let mut client_a = server.connect(postgres::NoTls).unwrap();
+    let mut client_b = server.connect(postgres::NoTls).unwrap();
     client_a
-        .batch_execute("CREATE VIEW v AS VALUES (1, 'foo'), (2, 'bar'), (3, 'foo'), (1, 'bar')")?;
-    client_a.batch_execute("CREATE TEMPORARY VIEW temp_v AS SELECT * FROM v")?;
+        .batch_execute("CREATE VIEW v AS VALUES (1, 'foo'), (2, 'bar'), (3, 'foo'), (1, 'bar')")
+        .unwrap();
+    client_a
+        .batch_execute("CREATE TEMPORARY VIEW temp_v AS SELECT * FROM v")
+        .unwrap();
 
     let query_v = "SELECT count(*) FROM v;";
     let query_temp_v = "SELECT count(*) FROM temp_v;";
 
     // Ensure that client_a can query v and temp_v.
-    let count: i64 = client_b.query_one(query_v, &[])?.get("count");
+    let count: i64 = client_b.query_one(query_v, &[]).unwrap().get("count");
     assert_eq!(4, count);
-    let count: i64 = client_a.query_one(query_temp_v, &[])?.get("count");
+    let count: i64 = client_a.query_one(query_temp_v, &[]).unwrap().get("count");
     assert_eq!(4, count);
 
     // Ensure that client_b can query v, but not temp_v.
-    let count: i64 = client_b.query_one(query_v, &[])?.get("count");
+    let count: i64 = client_b.query_one(query_v, &[]).unwrap().get("count");
     assert_eq!(4, count);
 
     let err = client_b.query_one(query_temp_v, &[]).unwrap_db_error();
     assert_eq!(err.message(), "unknown catalog item \'temp_v\'");
-
-    Ok(())
 }
 
 // Test EXPLAIN TIMESTAMP with tables.
 #[test]
-fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
+fn test_explain_timestamp_table() {
     let config = util::Config::default();
-    let server = util::start_server(config)?;
-    let mut client = server.connect(postgres::NoTls)?;
+    let server = util::start_server(config).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
     let timestamp_re = Regex::new(r"\s*(\d+) \(\d+-\d\d-\d\d \d\d:\d\d:\d\d.\d\d\d\)").unwrap();
 
-    client.batch_execute("CREATE TABLE t1 (i1 INT)")?;
+    client.batch_execute("CREATE TABLE t1 (i1 INT)").unwrap();
 
     let expect = "                query timestamp:<TIMESTAMP>
           oracle read timestamp:<TIMESTAMP>
@@ -1055,8 +1096,6 @@ source materialize.public.t1 (u1, storage):
     let explain: String = row.get(0);
     let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
     assert_eq!(explain, expect, "{explain}\n\n{expect}");
-
-    Ok(())
 }
 
 // Test that a query that causes a compute instance to panic will resolve
@@ -1064,55 +1103,59 @@ source materialize.public.t1 (u1, storage):
 // forever) when a client is terminated (disconnects from the server) instead
 // of cancelled (sends a pgwire cancel request on a new connection).
 #[test]
-fn test_github_12546() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+fn test_github_12546() {
     let config = util::Config::default();
-    let server = util::start_server(config)?;
+    let server = util::start_server(config).unwrap();
 
-    server.runtime.block_on(async {
-        let (client, conn_task) = server.connect_async(tokio_postgres::NoTls).await?;
+    server
+        .runtime
+        .block_on(async {
+            let (client, conn_task) = server.connect_async(tokio_postgres::NoTls).await.unwrap();
 
-        client.batch_execute("CREATE TABLE test(a text);").await?;
-        client
-            .batch_execute("INSERT INTO test VALUES ('a');")
-            .await?;
-
-        let query = client.query("SELECT mz_internal.mz_panic(a) FROM test", &[]);
-        let timeout = tokio::time::timeout(Duration::from_secs(2), query);
-        // We expect the timeout to trigger because the query should be crashing the
-        // compute instance.
-        assert_eq!(
-            timeout.await.unwrap_err().to_string(),
-            "deadline has elapsed"
-        );
-
-        // Aborting the connection should cause its pending queries to be cancelled,
-        // allowing the compute instances to stop crashing while trying to execute
-        // them.
-        conn_task.abort();
-
-        // Need to await `conn_task` to actually deliver the `abort`.
-        let _ = conn_task.await;
-
-        // Make a new connection to verify the compute instance can now start.
-        let (client, _conn_task) = server.connect_async(tokio_postgres::NoTls).await?;
-        assert_eq!(
             client
-                .query_one("SELECT count(*) FROM test", &[])
-                .await?
-                .get::<_, i64>(0),
-            1,
-        );
+                .batch_execute("CREATE TABLE test(a text);")
+                .await
+                .unwrap();
+            client
+                .batch_execute("INSERT INTO test VALUES ('a');")
+                .await
+                .unwrap();
 
-        Ok::<_, Box<dyn Error>>(())
-    })?;
+            let query = client.query("SELECT mz_internal.mz_panic(a) FROM test", &[]);
+            let timeout = tokio::time::timeout(Duration::from_secs(2), query);
+            // We expect the timeout to trigger because the query should be crashing the
+            // compute instance.
+            assert_eq!(
+                timeout.await.unwrap_err().to_string(),
+                "deadline has elapsed"
+            );
 
-    Ok(())
+            // Aborting the connection should cause its pending queries to be cancelled,
+            // allowing the compute instances to stop crashing while trying to execute
+            // them.
+            conn_task.abort();
+
+            // Need to await `conn_task` to actually deliver the `abort`.
+            let _ = conn_task.await;
+
+            // Make a new connection to verify the compute instance can now start.
+            let (client, _conn_task) = server.connect_async(tokio_postgres::NoTls).await.unwrap();
+            assert_eq!(
+                client
+                    .query_one("SELECT count(*) FROM test", &[])
+                    .await
+                    .unwrap()
+                    .get::<_, i64>(0),
+                1,
+            );
+
+            Ok::<_, Box<dyn Error>>(())
+        })
+        .unwrap();
 }
 
 #[test]
 fn test_github_12951() {
-    mz_ore::test::init_logging();
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
 
@@ -1173,7 +1216,6 @@ fn test_github_12951() {
 #[test]
 // Tests github issue #13100
 fn test_subscribe_outlive_cluster() {
-    mz_ore::test::init_logging();
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
 
@@ -1209,7 +1251,6 @@ fn test_subscribe_outlive_cluster() {
 
 #[test]
 fn test_read_then_write_serializability() {
-    mz_ore::test::init_logging();
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
 
@@ -1260,42 +1301,39 @@ fn test_read_then_write_serializability() {
 }
 
 #[test]
-fn test_timestamp_recovery() -> Result<(), Box<dyn Error>> {
+fn test_timestamp_recovery() {
     let now = Arc::new(Mutex::new(1));
     let now_fn = {
         let timestamp = Arc::clone(&now);
         NowFn::from(move || *timestamp.lock().unwrap())
     };
-    let data_dir = tempfile::tempdir()?;
+    let data_dir = tempfile::tempdir().unwrap();
     let config = util::Config::default()
         .with_now(now_fn)
         .data_directory(data_dir.path());
 
     // Start a server and get the current global timestamp
     let global_timestamp = {
-        let server = util::start_server(config.clone())?;
-        let mut client = server.connect(postgres::NoTls)?;
+        let server = util::start_server(config.clone()).unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
 
-        client.batch_execute("CREATE TABLE t1 (i1 INT)")?;
-        get_explain_timestamp("t1", &mut client)
+        client.batch_execute("CREATE TABLE t1 (i1 INT)").unwrap();
+        util::get_explain_timestamp("t1", &mut client)
     };
 
     // Rollback the current time and ensure that a value larger than the old global timestamp is
     // recovered
     {
         *now.lock().expect("lock poisoned") = 0;
-        let server = util::start_server(config)?;
-        let mut client = server.connect(postgres::NoTls)?;
-        let recovered_timestamp = get_explain_timestamp("t1", &mut client);
+        let server = util::start_server(config).unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        let recovered_timestamp = util::get_explain_timestamp("t1", &mut client);
         assert!(recovered_timestamp > global_timestamp);
     }
-
-    Ok(())
 }
 
 #[test]
-fn test_timeline_read_holds() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+fn test_timeline_read_holds() {
     // Set the timestamp to zero for deterministic initial timestamps.
     let now = Arc::new(Mutex::new(0));
     let now_fn = {
@@ -1304,49 +1342,50 @@ fn test_timeline_read_holds() -> Result<(), Box<dyn Error>> {
     };
     let config = util::Config::default().with_now(now_fn).unsafe_mode();
     let server = util::start_server(config).unwrap();
-    let mut mz_client = server.connect(postgres::NoTls)?;
+    let mut mz_client = server.connect(postgres::NoTls).unwrap();
 
     let view_name = "v_hold";
     let source_name = "source_hold";
-    let (mut pg_client, cleanup_fn) = create_postgres_source_with_table(
+    let (mut pg_client, cleanup_fn) = util::create_postgres_source_with_table(
         &server.runtime,
         &mut mz_client,
         view_name,
         "(a INT)",
         source_name,
-    )?;
+    )
+    .unwrap();
 
     // Create user table in Materialize.
-    mz_client.batch_execute("DROP TABLE IF EXISTS t;")?;
-    mz_client.batch_execute("CREATE TABLE t (a INT);")?;
-    insert_with_deterministic_timestamps("t", "(42)", &server, Arc::clone(&now))?;
+    mz_client.batch_execute("DROP TABLE IF EXISTS t;").unwrap();
+    mz_client.batch_execute("CREATE TABLE t (a INT);").unwrap();
+    util::insert_with_deterministic_timestamps("t", "(42)", &server, Arc::clone(&now)).unwrap();
 
     // Insert data into source.
     let source_rows: i64 = 10;
     for _ in 0..source_rows {
         let _ = server
             .runtime
-            .block_on(pg_client.execute(&format!("INSERT INTO {view_name} VALUES (42);"), &[]))?;
+            .block_on(pg_client.execute(&format!("INSERT INTO {view_name} VALUES (42);"), &[]))
+            .unwrap();
     }
 
-    wait_for_view_population(&mut mz_client, view_name, source_rows)?;
+    util::wait_for_view_population(&mut mz_client, view_name, source_rows).unwrap();
 
     // Make sure that the table and view are joinable immediately at some timestamp.
-    let mut mz_join_client = server.connect(postgres::NoTls)?;
+    let mut mz_join_client = server.connect(postgres::NoTls).unwrap();
     let _ = mz_ore::test::timeout(Duration::from_millis(1_000), move || {
         Ok(mz_join_client
-            .query_one(&format!("SELECT COUNT(t.a) FROM t, {view_name};"), &[])?
+            .query_one(&format!("SELECT COUNT(t.a) FROM t, {view_name};"), &[])
+            .unwrap()
             .get::<_, i64>(0))
-    })?;
+    })
+    .unwrap();
 
-    cleanup_fn(&mut mz_client, &mut pg_client, &server.runtime)?;
-
-    Ok(())
+    cleanup_fn(&mut mz_client, &mut pg_client, &server.runtime).unwrap();
 }
 
 #[test]
-fn test_linearizability() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+fn test_linearizability() {
     // Set the timestamp to zero for deterministic initial timestamps.
     let now = Arc::new(Mutex::new(0));
     let now_fn = {
@@ -1354,24 +1393,26 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
         NowFn::from(move || *now.lock().unwrap())
     };
     let config = util::Config::default().with_now(now_fn).unsafe_mode();
-    let server = util::start_server(config)?;
-    let mut mz_client = server.connect(postgres::NoTls)?;
+    let server = util::start_server(config).unwrap();
+    let mut mz_client = server.connect(postgres::NoTls).unwrap();
 
     let view_name = "v_lin";
     let source_name = "source_lin";
-    let (mut pg_client, cleanup_fn) = create_postgres_source_with_table(
+    let (mut pg_client, cleanup_fn) = util::create_postgres_source_with_table(
         &server.runtime,
         &mut mz_client,
         view_name,
         "(a INT)",
         source_name,
-    )?;
+    )
+    .unwrap();
     // Insert value into postgres table.
     let _ = server
         .runtime
-        .block_on(pg_client.execute(&format!("INSERT INTO {view_name} VALUES (42);"), &[]))?;
+        .block_on(pg_client.execute(&format!("INSERT INTO {view_name} VALUES (42);"), &[]))
+        .unwrap();
 
-    wait_for_view_population(&mut mz_client, view_name, 1)?;
+    util::wait_for_view_population(&mut mz_client, view_name, 1).unwrap();
 
     // The user table's write frontier will be close to zero because we use a deterministic
     // now function in this test. It may be slightly higher than zero because bootstrapping
@@ -1382,39 +1423,41 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
     // than queries that involve the user table. However, we prevent this when in strict
     // serializable mode.
 
-    mz_client.batch_execute("SET transaction_isolation = serializable")?;
-    let view_ts = get_explain_timestamp(view_name, &mut mz_client);
+    mz_client
+        .batch_execute("SET transaction_isolation = serializable")
+        .unwrap();
+    let view_ts = util::get_explain_timestamp(view_name, &mut mz_client);
     // Create user table in Materialize.
-    mz_client.batch_execute("DROP TABLE IF EXISTS t;")?;
-    mz_client.batch_execute("CREATE TABLE t (a INT);")?;
-    let join_ts = get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
+    mz_client.batch_execute("DROP TABLE IF EXISTS t;").unwrap();
+    mz_client.batch_execute("CREATE TABLE t (a INT);").unwrap();
+    let join_ts = util::get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
     // In serializable transaction isolation, read timestamps can go backwards.
     assert!(join_ts < view_ts);
 
-    mz_client.batch_execute("SET transaction_isolation = 'strict serializable'")?;
-    let view_ts = get_explain_timestamp(view_name, &mut mz_client);
-    let join_ts = get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
+    mz_client
+        .batch_execute("SET transaction_isolation = 'strict serializable'")
+        .unwrap();
+    let view_ts = util::get_explain_timestamp(view_name, &mut mz_client);
+    let join_ts = util::get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
     // Since the query on the join was done after the query on the view, it should have a higher or
     // equal timestamp in strict serializable mode.
     assert!(join_ts >= view_ts);
 
-    mz_client.batch_execute("SET transaction_isolation = serializable")?;
-    let view_ts = get_explain_timestamp(view_name, &mut mz_client);
-    let join_ts = get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
+    mz_client
+        .batch_execute("SET transaction_isolation = serializable")
+        .unwrap();
+    let view_ts = util::get_explain_timestamp(view_name, &mut mz_client);
+    let join_ts = util::get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
     // If we go back to serializable, then timestamps can revert again.
     assert!(join_ts < view_ts);
 
-    cleanup_fn(&mut mz_client, &mut pg_client, &server.runtime)?;
-
-    Ok(())
+    cleanup_fn(&mut mz_client, &mut pg_client, &server.runtime).unwrap();
 }
 
 #[test]
-fn test_internal_users() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
+fn test_internal_users() {
     let config = util::Config::default();
-    let server = util::start_server(config)?;
+    let server = util::start_server(config).unwrap();
 
     assert!(server
         .pg_config()
@@ -1436,84 +1479,82 @@ fn test_internal_users() -> Result<(), Box<dyn Error>> {
         .user("mz_something_else")
         .connect(postgres::NoTls)
         .is_err());
-
-    Ok(())
 }
 
 #[test]
-fn test_internal_users_cluster() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
+fn test_internal_users_cluster() {
     let config = util::Config::default();
-    let server = util::start_server(config)?;
+    let server = util::start_server(config).unwrap();
 
     for user in INTERNAL_USER_NAMES.iter() {
         let mut internal_client = server
             .pg_config_internal()
             .user(user)
-            .connect(postgres::NoTls)?;
+            .connect(postgres::NoTls)
+            .unwrap();
 
         let cluster = internal_client
-            .query_one("SHOW CLUSTER", &[])?
+            .query_one("SHOW CLUSTER", &[])
+            .unwrap()
             .get::<_, String>(0);
         assert_eq!(user, &cluster);
     }
-
-    Ok(())
 }
 
 // Tests that you can have simultaneous connections on the internal and external ports without
 // crashing
 #[test]
-fn test_internal_ports() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
+fn test_internal_ports() {
     let config = util::Config::default();
-    let server = util::start_server(config)?;
+    let server = util::start_server(config).unwrap();
 
     {
-        let mut external_client = server.connect(postgres::NoTls)?;
+        let mut external_client = server.connect(postgres::NoTls).unwrap();
         let mut internal_client = server
             .pg_config_internal()
             .user(&SYSTEM_USER.name)
-            .connect(postgres::NoTls)?;
+            .connect(postgres::NoTls)
+            .unwrap();
 
         assert_eq!(
             1,
             external_client
-                .query_one("SELECT 1;", &[])?
+                .query_one("SELECT 1;", &[])
+                .unwrap()
                 .get::<_, i32>(0)
         );
         assert_eq!(
             1,
             internal_client
-                .query_one("SELECT 1;", &[])?
+                .query_one("SELECT 1;", &[])
+                .unwrap()
                 .get::<_, i32>(0)
         );
     }
 
     {
-        let mut external_client = server.connect(postgres::NoTls)?;
+        let mut external_client = server.connect(postgres::NoTls).unwrap();
         let mut internal_client = server
             .pg_config_internal()
             .user(&SYSTEM_USER.name)
-            .connect(postgres::NoTls)?;
+            .connect(postgres::NoTls)
+            .unwrap();
 
         assert_eq!(
             1,
             external_client
-                .query_one("SELECT 1;", &[])?
+                .query_one("SELECT 1;", &[])
+                .unwrap()
                 .get::<_, i32>(0)
         );
         assert_eq!(
             1,
             internal_client
-                .query_one("SELECT 1;", &[])?
+                .query_one("SELECT 1;", &[])
+                .unwrap()
                 .get::<_, i32>(0)
         );
     }
-
-    Ok(())
 }
 
 // Test that trying to alter an invalid system param returns an error.
@@ -1521,18 +1562,19 @@ fn test_internal_ports() -> Result<(), Box<dyn Error>> {
 // doesn't allow you to specify a connection and expect a failure which is
 // needed for this test.
 #[test]
-fn test_alter_system_invalid_param() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
+fn test_alter_system_invalid_param() {
     let config = util::Config::default();
-    let server = util::start_server(config)?;
+    let server = util::start_server(config).unwrap();
 
     let mut mz_client = server
         .pg_config_internal()
         .user(&SYSTEM_USER.name)
-        .connect(postgres::NoTls)?;
+        .connect(postgres::NoTls)
+        .unwrap();
 
-    mz_client.batch_execute("ALTER SYSTEM SET max_tables TO 2")?;
+    mz_client
+        .batch_execute("ALTER SYSTEM SET max_tables TO 2")
+        .unwrap();
     let res = mz_client
         .batch_execute("ALTER SYSTEM SET invalid_param TO 42")
         .unwrap_err();
@@ -1545,23 +1587,21 @@ fn test_alter_system_invalid_param() -> Result<(), Box<dyn Error>> {
     assert!(res
         .to_string()
         .contains("unrecognized configuration parameter \"invalid_param\""));
-
-    Ok(())
 }
 
 #[test]
-fn test_concurrent_writes() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
+fn test_concurrent_writes() {
     let config = util::Config::default();
-    let server = util::start_server(config)?;
+    let server = util::start_server(config).unwrap();
 
     let num_tables = 10;
 
     {
-        let mut client = server.connect(postgres::NoTls)?;
+        let mut client = server.connect(postgres::NoTls).unwrap();
         for i in 0..num_tables {
-            client.batch_execute(&format!("CREATE TABLE t_{i} (a INT, b text, c text)"))?;
+            client
+                .batch_execute(&format!("CREATE TABLE t_{i} (a INT, b text, c text)"))
+                .unwrap();
         }
     }
 
@@ -1570,7 +1610,7 @@ fn test_concurrent_writes() -> Result<(), Box<dyn Error>> {
 
     let mut clients = Vec::new();
     for _ in 0..num_threads {
-        clients.push(server.connect(postgres::NoTls)?);
+        clients.push(server.connect(postgres::NoTls).unwrap());
     }
 
     let handles: Vec<_> = clients
@@ -1596,193 +1636,19 @@ fn test_concurrent_writes() -> Result<(), Box<dyn Error>> {
         handle.join().unwrap();
     }
 
-    let mut client = server.connect(postgres::NoTls)?;
+    let mut client = server.connect(postgres::NoTls).unwrap();
 
     for i in 0..num_tables {
         let count = client
-            .query_one(&format!("SELECT count(*) FROM t_{i}"), &[])?
+            .query_one(&format!("SELECT count(*) FROM t_{i}"), &[])
+            .unwrap()
             .get::<_, i64>(0);
         assert_eq!(num_loops * num_threads, count);
     }
-
-    Ok(())
-}
-
-/// Group commit will block writes until the current time has advanced. This can make
-/// performing inserts while using deterministic time difficult. This is a helper
-/// method to perform writes and advance the current time.
-fn insert_with_deterministic_timestamps(
-    table: &'static str,
-    values: &'static str,
-    server: &util::Server,
-    now: Arc<Mutex<EpochMillis>>,
-) -> Result<(), Box<dyn Error>> {
-    let mut client_write = server.connect(postgres::NoTls)?;
-    let mut client_read = server.connect(postgres::NoTls)?;
-
-    let mut current_ts = get_explain_timestamp(table, &mut client_read);
-    let write_thread = thread::spawn(move || {
-        client_write
-            .execute(&format!("INSERT INTO {table} VALUES {values}"), &[])
-            .unwrap();
-    });
-    while !write_thread.is_finished() {
-        // Keep increasing `now` until the write has executed succeed. Table advancements may
-        // have increased the global timestamp by an unknown amount.
-        current_ts += 1;
-        *now.lock().expect("lock poisoned") = current_ts;
-        thread::sleep(Duration::from_millis(1));
-    }
-    write_thread.join().unwrap();
-    Ok(())
-}
-
-fn get_explain_timestamp(table: &str, client: &mut postgres::Client) -> EpochMillis {
-    let row = client
-        .query_one(&format!("EXPLAIN TIMESTAMP FOR SELECT * FROM {table}"), &[])
-        .unwrap();
-    let explain: String = row.get(0);
-    let timestamp_re = Regex::new(r"^\s+query timestamp:\s*(\d+)").unwrap();
-    let timestamp_caps = timestamp_re.captures(&explain).unwrap();
-    timestamp_caps.get(1).unwrap().as_str().parse().unwrap()
-}
-
-/// Helper function to create a Postgres source.
-///
-/// IMPORTANT: Make sure to call closure that is returned at
-/// the end of the test to clean up Postgres state.
-///
-/// WARNING: If multiple tests use this, and the tests are run
-/// in parallel, then make sure the test use different postgres
-/// tables.
-fn create_postgres_source_with_table(
-    runtime: &Arc<Runtime>,
-    mz_client: &mut postgres::Client,
-    table_name: &str,
-    table_schema: &str,
-    source_name: &str,
-) -> Result<
-    (
-        Client,
-        impl FnOnce(&mut postgres::Client, &mut Client, &Arc<Runtime>) -> Result<(), Box<dyn Error>>,
-    ),
-    Box<dyn Error>,
-> {
-    let postgres_url = env::var("POSTGRES_URL")
-        .map_err(|_| anyhow!("POSTGRES_URL environment variable is not set"))?;
-
-    let (pg_client, connection) =
-        runtime.block_on(tokio_postgres::connect(&postgres_url, postgres::NoTls))?;
-
-    let pg_config: tokio_postgres::Config = postgres_url.parse().unwrap();
-    let user = pg_config.get_user().unwrap_or("postgres");
-    let db_name = pg_config.get_dbname().unwrap_or(user);
-    let ports = pg_config.get_ports();
-    let port = if ports.is_empty() { 5432 } else { ports[0] };
-    let hosts = pg_config.get_hosts();
-    let host = if hosts.is_empty() {
-        "localhost".to_string()
-    } else {
-        match &hosts[0] {
-            Host::Tcp(host) => host.to_string(),
-            Host::Unix(host) => host.to_str().unwrap().to_string(),
-        }
-    };
-    let password = pg_config.get_password();
-
-    let pg_runtime = Arc::<tokio::runtime::Runtime>::clone(runtime);
-    thread::spawn(move || {
-        if let Err(e) = pg_runtime.block_on(connection) {
-            panic!("connection error: {}", e);
-        }
-    });
-
-    // Create table in Postgres with publication.
-    let _ =
-        runtime.block_on(pg_client.execute(&format!("DROP TABLE IF EXISTS {table_name};"), &[]))?;
-    let _ = runtime
-        .block_on(pg_client.execute(&format!("DROP PUBLICATION IF EXISTS {source_name};"), &[]))?;
-    let _ = runtime
-        .block_on(pg_client.execute(&format!("CREATE TABLE {table_name} {table_schema};"), &[]))?;
-    let _ = runtime.block_on(pg_client.execute(
-        &format!("ALTER TABLE {table_name} REPLICA IDENTITY FULL;"),
-        &[],
-    ))?;
-    let _ = runtime.block_on(pg_client.execute(
-        &format!("CREATE PUBLICATION {source_name} FOR TABLE {table_name};"),
-        &[],
-    ))?;
-
-    // Create postgres source in Materialize.
-    let mut connection_str = format!("HOST '{host}', PORT {port}, USER {user}, DATABASE {db_name}");
-    if let Some(password) = password {
-        let password = std::str::from_utf8(password).unwrap();
-        mz_client.batch_execute(&format!("CREATE SECRET s AS '{password}'"))?;
-        connection_str = format!("{connection_str}, PASSWORD SECRET s");
-    }
-    mz_client.batch_execute(&format!(
-        "CREATE CONNECTION pgconn TO POSTGRES ({connection_str})"
-    ))?;
-    mz_client.batch_execute(&format!(
-        "CREATE SOURCE {source_name}
-            FROM POSTGRES
-            CONNECTION pgconn
-            (PUBLICATION '{source_name}')
-            FOR TABLES ({table_name});"
-    ))?;
-
-    let table_name = table_name.to_string();
-    let source_name = source_name.to_string();
-    Ok((
-        pg_client,
-        move |mz_client: &mut postgres::Client, pg_client: &mut Client, runtime: &Arc<Runtime>| {
-            mz_client.batch_execute(&format!("DROP SOURCE {source_name};"))?;
-            mz_client.batch_execute("DROP CONNECTION pgconn;")?;
-
-            let _ = runtime
-                .block_on(pg_client.execute(&format!("DROP PUBLICATION {source_name};"), &[]))?;
-            let _ =
-                runtime.block_on(pg_client.execute(&format!("DROP TABLE {table_name};"), &[]))?;
-            Ok(())
-        },
-    ))
-}
-
-fn wait_for_view_population(
-    mz_client: &mut postgres::Client,
-    view_name: &str,
-    source_rows: i64,
-) -> Result<(), Box<dyn Error>> {
-    let current_isolation = mz_client
-        .query_one("SHOW transaction_isolation", &[])?
-        .get::<_, String>(0);
-    mz_client.batch_execute("SET transaction_isolation = SERIALIZABLE")?;
-    Retry::default()
-        .max_duration(Duration::from_secs(10))
-        .retry(|_| {
-            let rows = mz_client
-                .query_one(&format!("SELECT COUNT(*) FROM {view_name};"), &[])
-                .unwrap()
-                .get::<_, i64>(0);
-            if rows == source_rows {
-                Ok(())
-            } else {
-                Err(format!(
-                    "Waiting for {source_rows} row to be ingested. Currently at {rows}."
-                ))
-            }
-        })
-        .unwrap();
-    mz_client.batch_execute(&format!(
-        "SET transaction_isolation = '{current_isolation}'"
-    ))?;
-    Ok(())
 }
 
 #[test]
-fn test_load_generator() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
+fn test_load_generator() {
     let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -1815,26 +1681,27 @@ fn test_load_generator() -> Result<(), Box<dyn Error>> {
             }
         })
         .unwrap();
-
-    Ok(())
 }
 
 #[test]
-fn test_introspection_user_permissions() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
+fn test_introspection_user_permissions() {
     let config = util::Config::default();
-    let server = util::start_server(config)?;
+    let server = util::start_server(config).unwrap();
 
-    let mut external_client = server.connect(postgres::NoTls)?;
+    let mut external_client = server.connect(postgres::NoTls).unwrap();
     let mut introspection_client = server
         .pg_config_internal()
         .user(&INTROSPECTION_USER.name)
-        .connect(postgres::NoTls)?;
+        .connect(postgres::NoTls)
+        .unwrap();
 
-    external_client.batch_execute("CREATE TABLE materialize.public.t1 (a INT)")?;
+    external_client
+        .batch_execute("CREATE TABLE materialize.public.t1 (a INT)")
+        .unwrap();
 
-    introspection_client.batch_execute("SET CLUSTER TO 'mz_introspection'")?;
+    introspection_client
+        .batch_execute("SET CLUSTER TO 'mz_introspection'")
+        .unwrap();
 
     assert!(introspection_client
         .query("SELECT * FROM materialize.public.t1", &[])
@@ -1856,7 +1723,9 @@ fn test_introspection_user_permissions() -> Result<(), Box<dyn Error>> {
         .query("SELECT * FROM pg_catalog.pg_namespace", &[])
         .is_ok());
 
-    introspection_client.batch_execute("SET CLUSTER TO 'mz_system'")?;
+    introspection_client
+        .batch_execute("SET CLUSTER TO 'mz_system'")
+        .unwrap();
     assert!(introspection_client
         .query("SELECT * FROM mz_internal.mz_view_keys", &[])
         .is_ok());
@@ -1867,7 +1736,9 @@ fn test_introspection_user_permissions() -> Result<(), Box<dyn Error>> {
         .query("SELECT * FROM pg_catalog.pg_namespace", &[])
         .is_ok());
 
-    introspection_client.batch_execute("SET CLUSTER TO 'default'")?;
+    introspection_client
+        .batch_execute("SET CLUSTER TO 'default'")
+        .unwrap();
     assert!(introspection_client
         .query("SELECT * FROM mz_internal.mz_view_keys", &[])
         .is_err());
@@ -1877,18 +1748,18 @@ fn test_introspection_user_permissions() -> Result<(), Box<dyn Error>> {
     assert!(introspection_client
         .query("SELECT * FROM pg_catalog.pg_namespace", &[])
         .is_err());
-
-    Ok(())
 }
 
 #[test]
-fn test_idle_in_transaction_session_timeout() -> Result<(), Box<dyn Error>> {
+fn test_idle_in_transaction_session_timeout() {
     let config = util::Config::default();
-    let server = util::start_server(config)?;
+    let server = util::start_server(config).unwrap();
 
-    let mut client = server.connect(postgres::NoTls)?;
-    client.batch_execute("SET idle_in_transaction_session_timeout TO '4ms'")?;
-    client.batch_execute("BEGIN")?;
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .batch_execute("SET idle_in_transaction_session_timeout TO '4ms'")
+        .unwrap();
+    client.batch_execute("BEGIN").unwrap();
     std::thread::sleep(Duration::from_millis(5));
     // Retry because sleep might be woken up early.
     Retry::default()
@@ -1906,12 +1777,15 @@ fn test_idle_in_transaction_session_timeout() -> Result<(), Box<dyn Error>> {
             } else {
                 Err(format!("query should return error: {res:?}"))
             }
-        })?;
+        })
+        .unwrap();
 
     // session should be timed out even if transaction has failed.
-    let mut client = server.connect(postgres::NoTls)?;
-    client.batch_execute("SET idle_in_transaction_session_timeout TO '4ms'")?;
-    client.batch_execute("BEGIN")?;
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .batch_execute("SET idle_in_transaction_session_timeout TO '4ms'")
+        .unwrap();
+    client.batch_execute("BEGIN").unwrap();
     let error = client.batch_execute("SELECT 1/0").unwrap_err();
     assert!(
         !error.is_closed(),
@@ -1934,78 +1808,88 @@ fn test_idle_in_transaction_session_timeout() -> Result<(), Box<dyn Error>> {
             } else {
                 Err(format!("query should return error: {res:?}"))
             }
-        })?;
+        })
+        .unwrap();
 
     // session should not be timed out if it's not idle.
-    let mut client = server.connect(postgres::NoTls)?;
-    client.batch_execute("SET idle_in_transaction_session_timeout TO '4ms'")?;
-    client.batch_execute("BEGIN")?;
-    client.query("SELECT mz_internal.mz_sleep(0.5)", &[])?;
-    client.query("SELECT 1", &[])?;
-    client.batch_execute("COMMIT")?;
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .batch_execute("SET idle_in_transaction_session_timeout TO '4ms'")
+        .unwrap();
+    client.batch_execute("BEGIN").unwrap();
+    client
+        .query("SELECT mz_internal.mz_sleep(0.5)", &[])
+        .unwrap();
+    client.query("SELECT 1", &[]).unwrap();
+    client.batch_execute("COMMIT").unwrap();
 
     // 0 timeout indicated no timeout.
-    let mut client = server.connect(postgres::NoTls)?;
-    client.batch_execute("SET idle_in_transaction_session_timeout TO 0")?;
-    client.batch_execute("BEGIN")?;
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .batch_execute("SET idle_in_transaction_session_timeout TO 0")
+        .unwrap();
+    client.batch_execute("BEGIN").unwrap();
     std::thread::sleep(Duration::from_millis(5));
-    client.query("SELECT 1", &[])?;
-    client.batch_execute("COMMIT")?;
-
-    Ok(())
+    client.query("SELECT 1", &[]).unwrap();
+    client.batch_execute("COMMIT").unwrap();
 }
 
 #[test]
-fn test_coord_startup_blocking() -> Result<(), Box<dyn Error>> {
+fn test_coord_startup_blocking() {
     let initial_time = 0;
     let now = Arc::new(Mutex::new(initial_time));
     let now_fn = {
         let timestamp = Arc::clone(&now);
-        NowFn::from(move || *timestamp.lock().unwrap())
+        NowFn::from(move || *timestamp.lock().expect("lock poisoned"))
     };
-    let data_dir = tempfile::tempdir()?;
+    let data_dir = tempfile::tempdir().unwrap();
     let config = util::Config::default()
         .with_now(now_fn)
         .data_directory(data_dir.path());
 
     // Start 3 servers and reserve the first 3 timestamp ranges.
     {
-        let server = util::start_server(config.clone())?;
-        let mut client = server.connect(postgres::NoTls)?;
-
-        client.query("SELECT 1", &[])?;
-    };
-    {
-        let server = util::start_server(config.clone())?;
-        let mut client = server.connect(postgres::NoTls)?;
-
-        client.query("SELECT 1", &[])?;
-    };
-    {
-        let server = util::start_server(config.clone())?;
-        let mut client = server.connect(postgres::NoTls)?;
-
-        client.query("SELECT 1", &[])?;
-    };
-
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
         let server = util::start_server(config.clone()).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
         client.query("SELECT 1", &[]).unwrap();
-        tx.send(()).unwrap();
+    };
+    {
+        let server = util::start_server(config.clone()).unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+
+        client.query("SELECT 1", &[]).unwrap();
+    };
+    {
+        let server = util::start_server(config.clone()).unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+
+        client.query("SELECT 1", &[]).unwrap();
+    };
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let server =
+            util::start_server(config.clone()).expect("unable to start server asynchronously");
+        let mut client = server
+            .connect(postgres::NoTls)
+            .expect("unable to start client asynchronously");
+
+        client
+            .query("SELECT 1", &[])
+            .expect("unable to query server asynchronously");
+        tx.send(())
+            .expect("receiver waiting for server startup has hung up");
     });
 
     let server_started = Retry::default()
-        .max_duration(Duration::from_secs(1))
+        .max_duration(Duration::from_secs(3))
         .retry(|_| rx.try_recv());
     assert!(server_started.is_err(), "server should be blocked");
 
     *now.lock().expect("lock poisoned") = initial_time + 5_000;
     Retry::default()
-        .max_duration(Duration::from_secs(5))
-        .retry(|_| rx.try_recv())?;
-
-    Ok(())
+        .max_duration(Duration::from_secs(30))
+        .retry(|_| rx.try_recv())
+        .unwrap();
 }

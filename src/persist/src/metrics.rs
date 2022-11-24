@@ -18,6 +18,8 @@ pub struct PostgresConsensusMetrics {
     pub(crate) connpool_size: UIntGauge,
     pub(crate) connpool_acquires: IntCounter,
     pub(crate) connpool_acquire_seconds: Counter,
+    pub(crate) connpool_connections_created: Counter,
+    pub(crate) connpool_ttl_reconnections: Counter,
 }
 
 impl PostgresConsensusMetrics {
@@ -35,6 +37,14 @@ impl PostgresConsensusMetrics {
             connpool_acquire_seconds: registry.register(metric!(
                 name: "mz_persist_postgres_connpool_acquire_seconds",
                 help: "time spent acquiring connections from pool",
+            )),
+            connpool_connections_created: registry.register(metric!(
+                name: "mz_persist_postgres_connpool_connections_created",
+                help: "times a connection was created",
+            )),
+            connpool_ttl_reconnections: registry.register(metric!(
+                name: "mz_persist_postgres_connpool_ttl_reconnections",
+                help: "times a connection was recycled due to ttl",
             )),
         }
     }

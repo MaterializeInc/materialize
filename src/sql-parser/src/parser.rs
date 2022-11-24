@@ -2056,6 +2056,13 @@ impl<'a> Parser<'a> {
                 USERNAME => KafkaConnectionOptionName::SaslUsername,
                 _ => unreachable!(),
             },
+            SSH => {
+                self.expect_keyword(TUNNEL)?;
+                return Ok(KafkaConnectionOption {
+                    name: KafkaConnectionOptionName::SshTunnel,
+                    value: Some(self.parse_object_option_value()?),
+                });
+            }
             SSL => match self.expect_one_of_keywords(&[KEY, CERTIFICATE])? {
                 KEY => KafkaConnectionOptionName::SslKey,
                 CERTIFICATE => {
@@ -2078,28 +2085,38 @@ impl<'a> Parser<'a> {
     fn parse_kafka_broker(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
         let _ = self.consume_token(&Token::Eq);
         let address = self.parse_literal_string()?;
-        let aws_privatelink = if self.parse_keyword(USING) {
-            self.expect_keywords(&[AWS, PRIVATELINK])?;
-            let connection = self.parse_raw_name()?;
-            let options = if self.consume_token(&Token::LParen) {
-                let options =
-                    self.parse_comma_separated(Parser::parse_kafka_broker_aws_private_link_option)?;
-                self.expect_token(&Token::RParen)?;
-                options
-            } else {
-                vec![]
-            };
-            Some(KafkaBrokerAwsPrivatelink {
-                connection,
-                options,
-            })
+        let tunnel = if self.parse_keyword(USING) {
+            match self.expect_one_of_keywords(&[AWS, SSH])? {
+                AWS => {
+                    self.expect_keywords(&[PRIVATELINK])?;
+                    let connection = self.parse_raw_name()?;
+                    let options = if self.consume_token(&Token::LParen) {
+                        let options = self.parse_comma_separated(
+                            Parser::parse_kafka_broker_aws_private_link_option,
+                        )?;
+                        self.expect_token(&Token::RParen)?;
+                        options
+                    } else {
+                        vec![]
+                    };
+                    KafkaBrokerTunnel::AwsPrivatelink(KafkaBrokerAwsPrivatelink {
+                        connection,
+                        options,
+                    })
+                }
+                SSH => {
+                    self.expect_keywords(&[TUNNEL])?;
+                    KafkaBrokerTunnel::SshTunnel(self.parse_raw_name()?)
+                }
+                _ => unreachable!(),
+            }
         } else {
-            None
+            KafkaBrokerTunnel::Direct
         };
 
         Ok(WithOptionValue::ConnectionKafkaBroker(KafkaBroker {
             address,
-            aws_privatelink,
+            tunnel,
         }))
     }
 

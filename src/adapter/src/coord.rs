@@ -78,6 +78,7 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::StreamExt;
 use itertools::Itertools;
+use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::task::spawn;
 use rand::seq::SliceRandom;
 use tokio::runtime::Handle as TokioHandle;
@@ -257,10 +258,12 @@ pub struct Config<S> {
 }
 
 /// Soft-state metadata about a compute replica
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Default, Debug, Eq, PartialEq)]
 pub struct ReplicaMetadata {
     /// The last time we heard from this replica (possibly rounded)
-    pub last_heartbeat: DateTime<Utc>,
+    pub last_heartbeat: Option<DateTime<Utc>>,
+    /// The last known CPU and memory metrics
+    pub metrics: Option<Vec<ServiceProcessMetrics>>,
 }
 
 /// Metadata about an active connection.
@@ -779,7 +782,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         // Having installed all entries, creating all constraints, we can now relax read policies.
-        self.initialize_read_policies(policies_to_set, DEFAULT_LOGICAL_COMPACTION_WINDOW_MS)
+        self.initialize_read_policies(&policies_to_set, DEFAULT_LOGICAL_COMPACTION_WINDOW_MS)
             .await;
 
         info!("coordinator init: announcing completion of initialization to controller");
@@ -921,7 +924,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // Watcher that listens for and reports compute service status changes.
         let mut compute_events = self.controller.compute.watch_services();
         let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
-        let idle_metric = self.metrics.queue_busy_time.with_label_values(&[]);
+        let idle_metric = self.metrics.queue_busy_seconds.with_label_values(&[]);
         spawn(|| "coord idle metric", async move {
             // Every 5 seconds, attempt to measure how long it takes for the
             // coord select loop to be empty, because this message is the last

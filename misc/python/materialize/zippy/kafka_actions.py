@@ -13,7 +13,7 @@ from textwrap import dedent
 from typing import List, Set, Type
 
 from materialize.mzcompose import Composition
-from materialize.zippy.framework import Action, Capabilities, Capability
+from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
 from materialize.zippy.kafka_capabilities import Envelope, KafkaRunning, TopicExists
 from materialize.zippy.mz_capabilities import MzIsRunning
 
@@ -60,47 +60,53 @@ class KafkaStop(Action):
         c.kill("kafka")
 
 
-class CreateTopic(Action):
+class CreateTopicParameterized(ActionFactory):
     """Creates a Kafka topic and decides on the envelope that will be used."""
 
     @classmethod
     def requires(cls) -> Set[Type[Capability]]:
         return {MzIsRunning, KafkaRunning}
 
-    def __init__(self, capabilities: Capabilities) -> None:
-        this_topic = TopicExists(
-            name="topic" + str(random.randint(1, 10)),
-            envelope=random.choice([Envelope.NONE, Envelope.UPSERT]),
-            partitions=random.randint(1, 10),
-        )
-        existing_topics = [
-            t for t in capabilities.get(TopicExists) if t.name == this_topic.name
-        ]
+    def __init__(self, max_topics: int = 10) -> None:
+        self.max_topics = max_topics
 
-        if len(existing_topics) == 0:
-            self.new_topic = True
-            self.topic = this_topic
-        elif len(existing_topics) == 1:
-            self.new_topic = False
-            self.topic = existing_topics[0]
+    def new(self, capabilities: Capabilities) -> List[Action]:
+        new_topic_name = capabilities.get_free_capability_name(
+            TopicExists, self.max_topics
+        )
+
+        if new_topic_name:
+            return [
+                CreateTopic(
+                    topic=TopicExists(
+                        name=new_topic_name,
+                        envelope=random.choice([Envelope.NONE, Envelope.UPSERT]),
+                        partitions=random.randint(1, 10),
+                    )
+                )
+            ]
         else:
-            assert False
+            return []
+
+
+class CreateTopic(Action):
+    def __init__(self, topic: TopicExists) -> None:
+        self.topic = topic
 
     def provides(self) -> List[Capability]:
-        return [self.topic] if self.new_topic else []
+        return [self.topic]
 
     def run(self, c: Composition) -> None:
-        if self.new_topic:
-            c.testdrive(
+        c.testdrive(
+            SCHEMA
+            + dedent(
                 f"""
-$ kafka-create-topic topic={self.topic.name} partitions={self.topic.partitions}
-
-{SCHEMA}
-
-$ kafka-ingest format=avro key-format=avro topic={self.topic.name} schema=${{schema}} key-schema=${{keyschema}} repeat=1
-{{"key": 0}} {{"f1": 0}}
-"""
+                $ kafka-create-topic topic={self.topic.name} partitions={self.topic.partitions}
+                $ kafka-ingest format=avro key-format=avro topic={self.topic.name} schema=${{schema}} key-schema=${{keyschema}} repeat=1
+                {{"key": 0}} {{"f1": 0}}
+                """
             )
+        )
 
 
 class Ingest(Action):
@@ -169,12 +175,13 @@ class KafkaDeleteFromHead(Ingest):
 
         if actual_delta > 0:
             c.testdrive(
-                f"""
-{SCHEMA}
-
-$ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={self.topic.watermarks.max + 1} repeat={actual_delta}
-{{"key": ${{kafka-ingest.iteration}}}}
-"""
+                SCHEMA
+                + dedent(
+                    f"""
+                    $ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={self.topic.watermarks.max + 1} repeat={actual_delta}
+                    {{"key": ${{kafka-ingest.iteration}}}}
+                    """
+                )
             )
 
 
@@ -195,10 +202,11 @@ class KafkaDeleteFromTail(Ingest):
 
         if actual_delta > 0:
             c.testdrive(
-                f"""
-{SCHEMA}
-
-$ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={prev_min} repeat={actual_delta}
-{{"key": ${{kafka-ingest.iteration}}}}
-"""
+                SCHEMA
+                + dedent(
+                    f"""
+                   $ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={prev_min} repeat={actual_delta}
+                   {{"key": ${{kafka-ingest.iteration}}}}
+                   """
+                )
             )

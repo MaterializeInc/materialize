@@ -501,7 +501,7 @@ impl CatalogState {
         let plan = mz_sql::plan::plan(None, &session_catalog, stmt, &Params::empty())?;
         Ok(match plan {
             Plan::CreateView(CreateViewPlan { view, .. }) => {
-                let mut optimizer = Optimizer::logical_optimizer();
+                let optimizer = Optimizer::logical_optimizer();
                 let optimized_expr = optimizer.optimize(view.expr)?;
                 let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
                 CatalogItem::View(View {
@@ -4996,7 +4996,7 @@ impl<S: Append> Catalog<S> {
                 })
             }
             Plan::CreateView(CreateViewPlan { view, .. }) => {
-                let mut optimizer = Optimizer::logical_optimizer();
+                let optimizer = Optimizer::logical_optimizer();
                 let optimized_expr = optimizer.optimize(view.expr)?;
                 let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
                 CatalogItem::View(View {
@@ -5010,7 +5010,7 @@ impl<S: Append> Catalog<S> {
             Plan::CreateMaterializedView(CreateMaterializedViewPlan {
                 materialized_view, ..
             }) => {
-                let mut optimizer = Optimizer::logical_optimizer();
+                let optimizer = Optimizer::logical_optimizer();
                 let optimized_expr = optimizer.optimize(materialized_view.expr)?;
                 let desc = RelationDesc::new(optimized_expr.typ(), materialized_view.column_names);
                 CatalogItem::MaterializedView(MaterializedView {

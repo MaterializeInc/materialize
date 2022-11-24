@@ -1532,6 +1532,29 @@ pub static MZ_EGRESS_IPS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty().with_column("egress_ip", ScalarType::String.nullable(false)),
 });
 
+pub static MZ_CLUSTER_REPLICA_METRICS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_cluster_replica_metrics",
+    // TODO[btv] - make this public once we work out whether and how to fuse it with
+    // the corresponding Storage tables.
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("replica_id", ScalarType::UInt64.nullable(false))
+        .with_column("process_id", ScalarType::UInt64.nullable(false))
+        .with_column("nano_cpus", ScalarType::UInt64.nullable(true))
+        .with_column("bytes_memory", ScalarType::UInt64.nullable(true)),
+});
+
+pub static MZ_STORAGE_HOST_METRICS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_storage_host_metrics",
+    // TODO[btv] - make this public once we work out whether and how to fuse it with
+    // the corresponding Compute tables.
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("nano_cpus", ScalarType::UInt64.nullable(true))
+        .with_column("bytes_memory", ScalarType::UInt64.nullable(true)),
+});
+
 pub static MZ_STORAGE_SHARDS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_storage_shards",
     schema: MZ_INTERNAL_SCHEMA,
@@ -2755,6 +2778,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_CONNECTIONS),
         Builtin::Table(&MZ_SSH_TUNNEL_CONNECTIONS),
         Builtin::Table(&MZ_CLUSTER_REPLICAS),
+        Builtin::Table(&MZ_CLUSTER_REPLICA_METRICS),
         Builtin::Table(&MZ_CLUSTER_REPLICA_STATUSES),
         Builtin::Table(&MZ_CLUSTER_REPLICA_HEARTBEATS),
         Builtin::Table(&MZ_AUDIT_EVENTS),

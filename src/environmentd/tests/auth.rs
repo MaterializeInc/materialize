@@ -492,16 +492,15 @@ fn make_header<H: Header>(h: H) -> HeaderMap {
 }
 
 #[test]
-fn test_auth_expiry() -> Result<(), Box<dyn Error>> {
+fn test_auth_expiry() {
     // This function verifies that the background expiry refresh task runs. This
     // is done by starting a web server that awaits the refresh request, which the
     // test waits for.
 
-    mz_ore::test::init_logging();
-
-    let ca = Ca::new_root("test ca")?;
-    let (server_cert, server_key) =
-        ca.request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])?;
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
 
     let tenant_id = Uuid::new_v4();
     let client_id = Uuid::new_v4();
@@ -510,7 +509,8 @@ fn test_auth_expiry() -> Result<(), Box<dyn Error>> {
         (client_id.to_string(), secret.to_string()),
         "user@_.com".to_string(),
     )]);
-    let encoding_key = EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap())?;
+    let encoding_key =
+        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
 
     const EXPIRES_IN_SECS: u64 = 5;
     const REFRESH_BEFORE_SECS: u64 = 4;
@@ -520,10 +520,11 @@ fn test_auth_expiry() -> Result<(), Box<dyn Error>> {
         users,
         SYSTEM_TIME.clone(),
         EXPIRES_IN_SECS as i64,
-    )?;
+    )
+    .unwrap();
     let frontegg_auth = FronteggAuthentication::new(FronteggConfig {
         admin_api_token_url: frontegg_server.url.clone(),
-        decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem()?)?,
+        decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
         tenant_id,
         now: SYSTEM_TIME.clone(),
         refresh_before_secs: REFRESH_BEFORE_SECS as i64,
@@ -554,7 +555,7 @@ fn test_auth_expiry() -> Result<(), Box<dyn Error>> {
     let config = util::Config::default()
         .with_tls(TlsMode::Require, &server_cert, &server_key)
         .with_frontegg(&frontegg_auth);
-    let server = util::start_server(config)?;
+    let server = util::start_server(config).unwrap();
 
     let mut pg_client = server
         .pg_config()
@@ -593,25 +594,23 @@ fn test_auth_expiry() -> Result<(), Box<dyn Error>> {
     // Sleep until the expiry future should resolve.
     std::thread::sleep(Duration::from_secs(EXPIRES_IN_SECS + 1));
     assert!(pg_client.query_one("SELECT current_user", &[]).is_err());
-
-    Ok(())
 }
 
 #[allow(clippy::unit_arg)]
 #[test]
-fn test_auth() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+fn test_auth() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let (client_cert, client_key) = ca.request_client_cert("materialize").unwrap();
+    let (client_cert_other, client_key_other) = ca.request_client_cert("other").unwrap();
+    let (client_cert_cloud, client_key_cloud) = ca.request_client_cert("user@_.com").unwrap();
+    let (client_cert_system, client_key_system) =
+        ca.request_client_cert(&SYSTEM_USER.name).unwrap();
 
-    let ca = Ca::new_root("test ca")?;
-    let (server_cert, server_key) =
-        ca.request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])?;
-    let (client_cert, client_key) = ca.request_client_cert("materialize")?;
-    let (client_cert_other, client_key_other) = ca.request_client_cert("other")?;
-    let (client_cert_cloud, client_key_cloud) = ca.request_client_cert("user@_.com")?;
-    let (client_cert_system, client_key_system) = ca.request_client_cert(&SYSTEM_USER.name)?;
-
-    let bad_ca = Ca::new_root("test ca")?;
-    let (bad_client_cert, bad_client_key) = bad_ca.request_client_cert("materialize")?;
+    let bad_ca = Ca::new_root("test ca").unwrap();
+    let (bad_client_cert, bad_client_key) = bad_ca.request_client_cert("materialize").unwrap();
 
     let tenant_id = Uuid::new_v4();
     let client_id = Uuid::new_v4();
@@ -628,7 +627,8 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
             SYSTEM_USER.name.to_string(),
         ),
     ]);
-    let encoding_key = EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap())?;
+    let encoding_key =
+        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
     let timestamp = Arc::new(Mutex::new(500_000));
     let now = {
         let timestamp = Arc::clone(&timestamp);
@@ -671,10 +671,11 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
         &encoding_key,
     )
     .unwrap();
-    let frontegg_server = start_mzcloud(encoding_key, tenant_id, users, now.clone(), 1_000)?;
+    let frontegg_server =
+        start_mzcloud(encoding_key, tenant_id, users, now.clone(), 1_000).unwrap();
     let frontegg_auth = FronteggAuthentication::new(FronteggConfig {
         admin_api_token_url: frontegg_server.url,
-        decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem()?)?,
+        decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
         tenant_id,
         now,
         refresh_before_secs: 0,
@@ -702,7 +703,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
             &server_key,
         )
         .with_frontegg(&frontegg_auth);
-    let server = util::start_server(config)?;
+    let server = util::start_server(config).unwrap();
     run_tests(
         "TlsMode::VerifyFull, MzCloud",
         &server,
@@ -713,8 +714,9 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 password: Some(frontegg_password),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| {
-                    b.set_ca_file(ca.ca_cert_path())?;
-                    b.set_certificate_file(&client_cert_cloud, SslFiletype::PEM)?;
+                    b.set_ca_file(ca.ca_cert_path()).unwrap();
+                    b.set_certificate_file(&client_cert_cloud, SslFiletype::PEM)
+                        .unwrap();
                     b.set_private_key_file(&client_key_cloud, SslFiletype::PEM)
                 }),
                 assert: Assert::Success,
@@ -724,8 +726,9 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 scheme: Scheme::HTTPS,
                 headers: &frontegg_header_basic,
                 configure: Box::new(|b| {
-                    b.set_ca_file(ca.ca_cert_path())?;
-                    b.set_certificate_file(&client_cert_cloud, SslFiletype::PEM)?;
+                    b.set_ca_file(ca.ca_cert_path()).unwrap();
+                    b.set_certificate_file(&client_cert_cloud, SslFiletype::PEM)
+                        .unwrap();
                     b.set_private_key_file(&client_key_cloud, SslFiletype::PEM)
                 }),
                 assert: Assert::Success,
@@ -736,8 +739,9 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 password: Some(frontegg_password),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| {
-                    b.set_ca_file(ca.ca_cert_path())?;
-                    b.set_certificate_file(&client_cert, SslFiletype::PEM)?;
+                    b.set_ca_file(ca.ca_cert_path()).unwrap();
+                    b.set_certificate_file(&client_cert, SslFiletype::PEM)
+                        .unwrap();
                     b.set_private_key_file(&client_key, SslFiletype::PEM)
                 }),
                 assert: Assert::Err(Box::new(|err| {
@@ -749,8 +753,9 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 scheme: Scheme::HTTPS,
                 headers: &frontegg_header_basic,
                 configure: Box::new(|b| {
-                    b.set_ca_file(ca.ca_cert_path())?;
-                    b.set_certificate_file(&client_cert, SslFiletype::PEM)?;
+                    b.set_ca_file(ca.ca_cert_path()).unwrap();
+                    b.set_certificate_file(&client_cert, SslFiletype::PEM)
+                        .unwrap();
                     b.set_private_key_file(&client_key, SslFiletype::PEM)
                 }),
                 assert: Assert::Err(Box::new(|code, message| {
@@ -764,8 +769,9 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 password: Some(frontegg_system_password),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| {
-                    b.set_ca_file(ca.ca_cert_path())?;
-                    b.set_certificate_file(&client_cert_system, SslFiletype::PEM)?;
+                    b.set_ca_file(ca.ca_cert_path()).unwrap();
+                    b.set_certificate_file(&client_cert_system, SslFiletype::PEM)
+                        .unwrap();
                     b.set_private_key_file(&client_key_system, SslFiletype::PEM)
                 }),
                 assert: Assert::Err(Box::new(|err| {
@@ -777,8 +783,9 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 scheme: Scheme::HTTPS,
                 headers: &frontegg_system_header_basic,
                 configure: Box::new(|b| {
-                    b.set_ca_file(ca.ca_cert_path())?;
-                    b.set_certificate_file(&client_cert_system, SslFiletype::PEM)?;
+                    b.set_ca_file(ca.ca_cert_path()).unwrap();
+                    b.set_certificate_file(&client_cert_system, SslFiletype::PEM)
+                        .unwrap();
                     b.set_private_key_file(&client_key_system, SslFiletype::PEM)
                 }),
                 assert: Assert::Err(Box::new(|code, message| {
@@ -794,7 +801,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
     let config = util::Config::default()
         .with_tls(TlsMode::Require, &server_cert, &server_key)
         .with_frontegg(&frontegg_auth);
-    let server = util::start_server(config)?;
+    let server = util::start_server(config).unwrap();
     run_tests(
         "TlsMode::Require, MzCloud",
         &server,
@@ -1040,7 +1047,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
     );
 
     // Test TLS modes with a server that does not support TLS.
-    let server = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::default()).unwrap();
     run_tests(
         "TlsMode::Disable",
         &server,
@@ -1109,7 +1116,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
 
     // Test TLS modes with a server that requires TLS.
     let config = util::Config::default().with_tls(TlsMode::Require, &server_cert, &server_key);
-    let server = util::start_server(config)?;
+    let server = util::start_server(config).unwrap();
     run_tests(
         "TlsMode::Require",
         &server,
@@ -1201,14 +1208,17 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
         &server_cert,
         &server_key,
     );
-    let server = util::start_server(config)?;
+    let server = util::start_server(config).unwrap();
     server
         .connect(make_pg_tls(|b| {
-            b.set_ca_file(ca.ca_cert_path())?;
-            b.set_certificate_file(&client_cert, SslFiletype::PEM)?;
+            b.set_ca_file(ca.ca_cert_path()).unwrap();
+            b.set_certificate_file(&client_cert, SslFiletype::PEM)
+                .unwrap();
             b.set_private_key_file(&client_key, SslFiletype::PEM)
-        }))?
-        .batch_execute("CREATE ROLE other LOGIN SUPERUSER")?;
+        }))
+        .unwrap()
+        .batch_execute("CREATE ROLE other LOGIN SUPERUSER")
+        .unwrap();
     run_tests(
         "TlsMode::VerifyCa",
         &server,
@@ -1265,8 +1275,9 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| {
-                    b.set_ca_file(bad_ca.ca_cert_path())?;
-                    b.set_certificate_file(&bad_client_cert, SslFiletype::PEM)?;
+                    b.set_ca_file(bad_ca.ca_cert_path()).unwrap();
+                    b.set_certificate_file(&bad_client_cert, SslFiletype::PEM)
+                        .unwrap();
                     b.set_private_key_file(&bad_client_key, SslFiletype::PEM)
                 }),
                 assert: Assert::Err(Box::new(|err| {
@@ -1278,8 +1289,9 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
                 configure: Box::new(|b| {
-                    b.set_ca_file(bad_ca.ca_cert_path())?;
-                    b.set_certificate_file(&bad_client_cert, SslFiletype::PEM)?;
+                    b.set_ca_file(bad_ca.ca_cert_path()).unwrap();
+                    b.set_certificate_file(&bad_client_cert, SslFiletype::PEM)
+                        .unwrap();
                     b.set_private_key_file(&bad_client_key, SslFiletype::PEM)
                 }),
                 assert: Assert::Err(Box::new(|code, message| {
@@ -1293,8 +1305,9 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| {
-                    b.set_ca_file(ca.ca_cert_path())?;
-                    b.set_certificate_file(&client_cert, SslFiletype::PEM)?;
+                    b.set_ca_file(ca.ca_cert_path()).unwrap();
+                    b.set_certificate_file(&client_cert, SslFiletype::PEM)
+                        .unwrap();
                     b.set_private_key_file(&client_key, SslFiletype::PEM)
                 }),
                 assert: Assert::Success,
@@ -1306,8 +1319,9 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
                 configure: Box::new(|b| {
-                    b.set_ca_file(ca.ca_cert_path())?;
-                    b.set_certificate_file(&client_cert, SslFiletype::PEM)?;
+                    b.set_ca_file(ca.ca_cert_path()).unwrap();
+                    b.set_certificate_file(&client_cert, SslFiletype::PEM)
+                        .unwrap();
                     b.set_private_key_file(&client_key, SslFiletype::PEM)
                 }),
                 assert: Assert::Success,
@@ -1320,8 +1334,9 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| {
-                    b.set_ca_file(ca.ca_cert_path())?;
-                    b.set_certificate_file(&client_cert, SslFiletype::PEM)?;
+                    b.set_ca_file(ca.ca_cert_path()).unwrap();
+                    b.set_certificate_file(&client_cert, SslFiletype::PEM)
+                        .unwrap();
                     b.set_private_key_file(&client_key, SslFiletype::PEM)
                 }),
                 assert: Assert::Success,
@@ -1332,8 +1347,9 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| {
-                    b.set_ca_file(ca.ca_cert_path())?;
-                    b.set_certificate_file(&client_cert_system, SslFiletype::PEM)?;
+                    b.set_ca_file(ca.ca_cert_path()).unwrap();
+                    b.set_certificate_file(&client_cert_system, SslFiletype::PEM)
+                        .unwrap();
                     b.set_private_key_file(&client_key_system, SslFiletype::PEM)
                 }),
                 assert: Assert::Err(Box::new(|err| {
@@ -1352,14 +1368,17 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
         &server_cert,
         &server_key,
     );
-    let server = util::start_server(config)?;
+    let server = util::start_server(config).unwrap();
     server
         .connect(make_pg_tls(|b| {
-            b.set_ca_file(ca.ca_cert_path())?;
-            b.set_certificate_file(&client_cert, SslFiletype::PEM)?;
+            b.set_ca_file(ca.ca_cert_path()).unwrap();
+            b.set_certificate_file(&client_cert, SslFiletype::PEM)
+                .unwrap();
             b.set_private_key_file(&client_key, SslFiletype::PEM)
-        }))?
-        .batch_execute("CREATE ROLE other LOGIN SUPERUSER")?;
+        }))
+        .unwrap()
+        .batch_execute("CREATE ROLE other LOGIN SUPERUSER")
+        .unwrap();
     run_tests(
         "TlsMode::VerifyFull",
         &server,
@@ -1416,8 +1435,9 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| {
-                    b.set_ca_file(bad_ca.ca_cert_path())?;
-                    b.set_certificate_file(&bad_client_cert, SslFiletype::PEM)?;
+                    b.set_ca_file(bad_ca.ca_cert_path()).unwrap();
+                    b.set_certificate_file(&bad_client_cert, SslFiletype::PEM)
+                        .unwrap();
                     b.set_private_key_file(&bad_client_key, SslFiletype::PEM)
                 }),
                 assert: Assert::Err(Box::new(|err| {
@@ -1429,8 +1449,9 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
                 configure: Box::new(|b| {
-                    b.set_ca_file(bad_ca.ca_cert_path())?;
-                    b.set_certificate_file(&bad_client_cert, SslFiletype::PEM)?;
+                    b.set_ca_file(bad_ca.ca_cert_path()).unwrap();
+                    b.set_certificate_file(&bad_client_cert, SslFiletype::PEM)
+                        .unwrap();
                     b.set_private_key_file(&bad_client_key, SslFiletype::PEM)
                 }),
                 assert: Assert::Err(Box::new(|code, message| {
@@ -1444,8 +1465,9 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| {
-                    b.set_ca_file(ca.ca_cert_path())?;
-                    b.set_certificate_file(&client_cert, SslFiletype::PEM)?;
+                    b.set_ca_file(ca.ca_cert_path()).unwrap();
+                    b.set_certificate_file(&client_cert, SslFiletype::PEM)
+                        .unwrap();
                     b.set_private_key_file(&client_key, SslFiletype::PEM)
                 }),
                 assert: Assert::Success,
@@ -1455,8 +1477,9 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
                 configure: Box::new(|b| {
-                    b.set_ca_file(ca.ca_cert_path())?;
-                    b.set_certificate_file(&client_cert, SslFiletype::PEM)?;
+                    b.set_ca_file(ca.ca_cert_path()).unwrap();
+                    b.set_certificate_file(&client_cert, SslFiletype::PEM)
+                        .unwrap();
                     b.set_private_key_file(&client_key, SslFiletype::PEM)
                 }),
                 assert: Assert::Success,
@@ -1469,8 +1492,9 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| {
-                    b.set_ca_file(ca.ca_cert_path())?;
-                    b.set_certificate_file(&client_cert, SslFiletype::PEM)?;
+                    b.set_ca_file(ca.ca_cert_path()).unwrap();
+                    b.set_certificate_file(&client_cert, SslFiletype::PEM)
+                        .unwrap();
                     b.set_private_key_file(&client_key, SslFiletype::PEM)
                 }),
                 assert: Assert::Err(Box::new(|err| {
@@ -1489,8 +1513,9 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| {
-                    b.set_ca_file(ca.ca_cert_path())?;
-                    b.set_certificate_file(&client_cert_other, SslFiletype::PEM)?;
+                    b.set_ca_file(ca.ca_cert_path()).unwrap();
+                    b.set_certificate_file(&client_cert_other, SslFiletype::PEM)
+                        .unwrap();
                     b.set_private_key_file(&client_key_other, SslFiletype::PEM)
                 }),
                 assert: Assert::Success,
@@ -1500,8 +1525,9 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
                 configure: Box::new(|b| {
-                    b.set_ca_file(ca.ca_cert_path())?;
-                    b.set_certificate_file(&client_cert_other, SslFiletype::PEM)?;
+                    b.set_ca_file(ca.ca_cert_path()).unwrap();
+                    b.set_certificate_file(&client_cert_other, SslFiletype::PEM)
+                        .unwrap();
                     b.set_private_key_file(&client_key_other, SslFiletype::PEM)
                 }),
                 assert: Assert::Success,
@@ -1512,8 +1538,9 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| {
-                    b.set_ca_file(ca.ca_cert_path())?;
-                    b.set_certificate_file(&client_cert_system, SslFiletype::PEM)?;
+                    b.set_ca_file(ca.ca_cert_path()).unwrap();
+                    b.set_certificate_file(&client_cert_system, SslFiletype::PEM)
+                        .unwrap();
                     b.set_private_key_file(&client_key_system, SslFiletype::PEM)
                 }),
                 assert: Assert::Err(Box::new(|err| {
@@ -1525,8 +1552,9 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
                 configure: Box::new(|b| {
-                    b.set_ca_file(ca.ca_cert_path())?;
-                    b.set_certificate_file(&client_cert_system, SslFiletype::PEM)?;
+                    b.set_ca_file(ca.ca_cert_path()).unwrap();
+                    b.set_certificate_file(&client_cert_system, SslFiletype::PEM)
+                        .unwrap();
                     b.set_private_key_file(&client_key_system, SslFiletype::PEM)
                 }),
                 assert: Assert::Err(Box::new(|code, message| {
@@ -1536,34 +1564,39 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
             },
         ],
     );
-
-    Ok(())
 }
 
 #[test]
-fn test_auth_intermediate_ca() -> Result<(), Box<dyn Error>> {
+fn test_auth_intermediate_ca() {
     // Create a CA, an intermediate CA, and a server key pair signed by the
     // intermediate CA.
-    let ca = Ca::new_root("test ca")?;
-    let intermediate_ca = ca.request_ca("intermediary")?;
-    let (server_cert, server_key) =
-        intermediate_ca.request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])?;
+    let ca = Ca::new_root("test ca").unwrap();
+    let intermediate_ca = ca.request_ca("intermediary").unwrap();
+    let (server_cert, server_key) = intermediate_ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
 
     // Create a certificate chain bundle that contains the server's certificate
     // and the intermediate CA's certificate.
     let server_cert_chain = {
         let path = intermediate_ca.dir.path().join("server.chain.crt");
         let mut buf = vec![];
-        File::open(&server_cert)?.read_to_end(&mut buf)?;
-        File::open(intermediate_ca.ca_cert_path())?.read_to_end(&mut buf)?;
-        fs::write(&path, buf)?;
+        File::open(&server_cert)
+            .unwrap()
+            .read_to_end(&mut buf)
+            .unwrap();
+        File::open(intermediate_ca.ca_cert_path())
+            .unwrap()
+            .read_to_end(&mut buf)
+            .unwrap();
+        fs::write(&path, buf).unwrap();
         path
     };
 
     // When the server presents only its own certificate, without the
     // intermediary, the client should fail to verify the chain.
     let config = util::Config::default().with_tls(TlsMode::Require, &server_cert, &server_key);
-    let server = util::start_server(config)?;
+    let server = util::start_server(config).unwrap();
     run_tests(
         "TlsMode::Require",
         &server,
@@ -1595,7 +1628,7 @@ fn test_auth_intermediate_ca() -> Result<(), Box<dyn Error>> {
     // about the root CA.
     let config =
         util::Config::default().with_tls(TlsMode::Require, &server_cert_chain, &server_key);
-    let server = util::start_server(config)?;
+    let server = util::start_server(config).unwrap();
     run_tests(
         "TlsMode::Require",
         &server,
@@ -1616,6 +1649,4 @@ fn test_auth_intermediate_ca() -> Result<(), Box<dyn Error>> {
             },
         ],
     );
-
-    Ok(())
 }

@@ -11,7 +11,6 @@ import threading
 import time
 from io import StringIO
 
-import pytest
 from pg8000 import Connection
 
 from materialize.cloudtest.application import MaterializeApplication
@@ -48,7 +47,6 @@ def assert_notice(conn: Connection, contains: bytes) -> None:
 
 # Test that a crashed (and restarted) computed replica generates expected notice
 # events.
-@pytest.mark.skip(reason="https://github.com/MaterializeInc/materialize/issues/16002")
 def test_crash_computed(mz: MaterializeApplication) -> None:
     mz.environmentd.sql("DROP TABLE IF EXISTS t1 CASCADE")
     mz.environmentd.sql("CREATE TABLE t1 (f1 TEXT)")
@@ -100,8 +98,14 @@ def test_crash_computed(mz: MaterializeApplication) -> None:
     podcount = 0
     for pod in pods.splitlines():
         if "compute-cluster" in pod:
-            mz.kubectl("delete", "pod", pod)
-            podcount += 1
+            try:
+                mz.kubectl("delete", "pod", pod)
+                podcount += 1
+            except:
+                # It's OK if the pod delete fails --
+                # it probably means we raced with a previous test that
+                # dropped resources.
+                pass
     assert podcount > 0
 
     # Wait for expected notices on all connections.

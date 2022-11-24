@@ -30,7 +30,7 @@ use crate::util::ResultExt;
 use crate::{catalog, AdapterNotice};
 
 use crate::coord::{
-    Coordinator, CreateSourceStatementReady, Message, PendingReadTxn, ReplicaMetadata, SendDiffs,
+    Coordinator, CreateSourceStatementReady, Message, PendingReadTxn, SendDiffs,
     SinkConnectionReady,
 };
 
@@ -170,21 +170,19 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             ControllerResponse::ComputeReplicaHeartbeat(replica_id, when) => {
                 let replica_status_interval = chrono::Duration::seconds(60);
-                let when_coarsened = when
+                let new = when
                     .duration_trunc(replica_status_interval)
                     .expect("Time coarsening should not fail");
-                let new = ReplicaMetadata {
-                    last_heartbeat: when_coarsened,
-                };
-                let old = match self
+                let hb = match self
                     .transient_replica_metadata
-                    .insert(replica_id, Some(new.clone()))
+                    .entry(replica_id)
+                    .or_insert_with(|| Some(Default::default()))
                 {
-                    None => None,
                     // `None` is the tombstone for a removed replica
-                    Some(None) => return,
-                    Some(Some(md)) => Some(md),
+                    None => return,
+                    Some(md) => &mut md.last_heartbeat,
                 };
+                let old = std::mem::replace(hb, Some(new));
 
                 if old.as_ref() != Some(&new) {
                     let retraction = old.map(|old| {
@@ -200,6 +198,39 @@ impl<S: Append + 'static> Coordinator<S> {
                         vec![retraction, insertion]
                     } else {
                         vec![insertion]
+                    };
+                    self.send_builtin_table_updates(updates, BuiltinTableUpdateSource::Background)
+                        .await;
+                }
+            }
+            ControllerResponse::ComputeReplicaMetrics(replica_id, new) => {
+                let m = match self
+                    .transient_replica_metadata
+                    .entry(replica_id)
+                    .or_insert_with(|| Some(Default::default()))
+                {
+                    // `None` is the tombstone for a removed replica
+                    None => return,
+                    Some(md) => &mut md.metrics,
+                };
+                let old = std::mem::replace(m, Some(new.clone()));
+                if old.as_ref() != Some(&new) {
+                    let retractions = old.map(|old| {
+                        self.catalog
+                            .state()
+                            .pack_replica_metric_updates(replica_id, &old, -1)
+                    });
+                    let insertions = self
+                        .catalog
+                        .state()
+                        .pack_replica_metric_updates(replica_id, &new, 1);
+                    let updates = if let Some(retractions) = retractions {
+                        retractions
+                            .into_iter()
+                            .chain(insertions.into_iter())
+                            .collect()
+                    } else {
+                        insertions
                     };
                     self.send_builtin_table_updates(updates, BuiltinTableUpdateSource::Background)
                         .await;

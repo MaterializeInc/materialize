@@ -3173,6 +3173,7 @@ dependencies = [
  "mz-controller",
  "mz-expr",
  "mz-kafka-util",
+ "mz-orchestrator",
  "mz-ore",
  "mz-persist-client",
  "mz-persist-types",
@@ -3370,6 +3371,7 @@ name = "mz-compute-client"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-stream",
  "async-trait",
  "bytesize",
  "chrono",

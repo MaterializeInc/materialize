@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::anyhow;
 use tracing::warn;
@@ -127,6 +128,18 @@ pub enum ConsensusConfig {
     Mem,
 }
 
+/// Configuration knobs for [Consensus].
+pub trait ConsensusKnobs: std::fmt::Debug + Send + Sync {
+    /// Maximum number of connections allowed in a pool.
+    fn connection_pool_max_size(&self) -> usize;
+    /// Minimum TTL of a connection. It is expected that connections are
+    /// routinely culled to balance load to the backing store of [Consensus].
+    fn connection_pool_ttl(&self) -> Duration;
+    /// Minimum time between TTLing connections. Helps stagger reconnections
+    /// to avoid stampeding the backing store of [Consensus].
+    fn connection_pool_ttl_stagger(&self) -> Duration;
+}
+
 impl ConsensusConfig {
     /// Opens the associated implementation of [Consensus].
     pub async fn open(self) -> Result<Arc<dyn Consensus + Send + Sync>, ExternalError> {
@@ -143,7 +156,7 @@ impl ConsensusConfig {
     /// Parses a [Consensus] config from a uri string.
     pub fn try_from(
         value: &str,
-        connection_pool_max_size: usize,
+        knobs: Box<dyn ConsensusKnobs>,
         metrics: PostgresConsensusMetrics,
     ) -> Result<Self, ExternalError> {
         let url = Url::parse(value).map_err(|err| {
@@ -156,7 +169,7 @@ impl ConsensusConfig {
 
         let config = match url.scheme() {
             "postgres" | "postgresql" => Ok(ConsensusConfig::Postgres(
-                PostgresConsensusConfig::new(value, connection_pool_max_size, metrics)?,
+                PostgresConsensusConfig::new(value, knobs, metrics)?,
             )),
             "mem" => {
                 if !cfg!(debug_assertions) {

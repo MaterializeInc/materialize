@@ -90,6 +90,25 @@ class MaterializeApplication(Application):
             ),
         )
 
+        # Start metrics-server
+        self.kubectl(
+            "apply",
+            "-f",
+            "https://github.com/kubernetes-sigs/metrics-server/releases/download/metrics-server-helm-chart-3.8.2/components.yaml",
+        )
+
+        self.kubectl(
+            "patch",
+            "deployment",
+            "metrics-server",
+            "--namespace",
+            "kube-system",
+            "--type",
+            "json",
+            "-p",
+            '[{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--kubelet-insecure-tls" }]',
+        )
+
         self.resources = [
             *POSTGRES_RESOURCES,
             *POSTGRES_SOURCE_RESOURCES,

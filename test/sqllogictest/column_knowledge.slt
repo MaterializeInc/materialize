@@ -103,30 +103,27 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t
 Explained Query:
   Return // { arity: 3 }
     Union // { arity: 3 }
-      Get l0 // { arity: 3 }
       Map (null) // { arity: 3 }
         Union // { arity: 2 }
-          Project (#1, #0) // { arity: 2 }
-            Map (123) // { arity: 2 }
-              Negate // { arity: 1 }
-                Project (#1) // { arity: 1 }
-                  Get l0 // { arity: 3 }
-          Project (#2, #1) // { arity: 2 }
-            Filter (#0 = 123) // { arity: 3 }
-              Map (123) // { arity: 3 }
-                Get materialize.public.t1 // { arity: 2 }
+          Negate // { arity: 2 }
+            Project (#0, #1) // { arity: 2 }
+              Get l1 // { arity: 3 }
+          Get l0 // { arity: 2 }
+      Get l1 // { arity: 3 }
   With
-    cte l0 =
+    cte l1 =
       CrossJoin type=differential // { arity: 3 }
         implementation
-          %1:t2 » %0:t1[×]UAef
+          %1:t2 » %0:l0[×]UAef
         ArrangeBy keys=[[]] // { arity: 2 }
-          Filter (#0 = 123) // { arity: 2 }
-            Get materialize.public.t1 // { arity: 2 }
+          Get l0 // { arity: 2 }
         ArrangeBy keys=[[]] // { arity: 1 }
           Project (#1) // { arity: 1 }
             Filter (#0 = 123) // { arity: 2 }
               Get materialize.public.t2 // { arity: 2 }
+    cte l0 =
+      Filter (#0 = 123) // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
   filter=((#0 = 123))
@@ -477,8 +474,19 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 123 AND a1.f2 = 234;
 ----
 Explained Query:
-  Filter (#0 = 123) AND (#1 = 234) // { arity: 2 }
-    Get materialize.public.t4 // { arity: 2 }
+  Return // { arity: 2 }
+    Union // { arity: 2 }
+      Project (#1, #0) // { arity: 2 }
+        Map (234, 123) // { arity: 2 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l0 // { arity: 2 }
+      Get l0 // { arity: 2 }
+      Get l0 // { arity: 2 }
+  With
+    cte l0 =
+      Filter (#0 = 123) AND (#1 = 234) // { arity: 2 }
+        Get materialize.public.t4 // { arity: 2 }
 
 Source materialize.public.t4
   filter=((#0 = 123) AND (#1 = 234))

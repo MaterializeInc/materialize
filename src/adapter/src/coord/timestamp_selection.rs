@@ -39,7 +39,7 @@ impl<S: Append + 'static> Coordinator<S> {
     ///
     /// The timeline that `id_bundle` belongs to is also returned, if one exists.
     pub(crate) fn determine_timestamp(
-        &mut self,
+        &self,
         session: &Session,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
@@ -85,7 +85,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let timeline = timeline
                 .clone()
                 .expect("checked that timeline exists above");
-            let timestamp_oracle = self.get_timestamp_oracle_mut(&timeline);
+            let timestamp_oracle = self.get_timestamp_oracle(&timeline);
             oracle_read_ts = Some(timestamp_oracle.read_ts());
             candidate.join_assign(&oracle_read_ts.unwrap());
         } else if when.advance_to_upper() {

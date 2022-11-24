@@ -9,6 +9,7 @@
 
 //! Helpers for working with Kafka's client API.
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::error::Error;
 use std::time::Duration;
@@ -72,6 +73,8 @@ impl ProducerContext for MzClientContext {
 pub struct BrokerRewritingClientContext<C> {
     inner: C,
     overrides: HashMap<BrokerAddr, BrokerAddr>,
+    /// Opaque tokens to cleanup resources associated with overrides.
+    drop_tokens: Vec<Box<dyn Any + Send + Sync>>,
 }
 
 impl<C> BrokerRewritingClientContext<C> {
@@ -80,6 +83,7 @@ impl<C> BrokerRewritingClientContext<C> {
         BrokerRewritingClientContext {
             inner,
             overrides: HashMap::new(),
+            drop_tokens: vec![],
         }
     }
 
@@ -94,6 +98,28 @@ impl<C> BrokerRewritingClientContext<C> {
         rewrite_host: &str,
         rewrite_port: Option<u16>,
     ) {
+        self.add_broker_rewrite_inner(broker, rewrite_host, rewrite_port, None)
+    }
+
+    /// The same as `add_broker_rewrite`, but holds onto a token that may perform
+    /// some shutdown on drop.
+    pub fn add_broker_rewrite_with_token<T: Any + Send + Sync>(
+        &mut self,
+        broker: &str,
+        rewrite_host: &str,
+        rewrite_port: Option<u16>,
+        token: T,
+    ) {
+        self.add_broker_rewrite_inner(broker, rewrite_host, rewrite_port, Some(Box::new(token)))
+    }
+
+    fn add_broker_rewrite_inner(
+        &mut self,
+        broker: &str,
+        rewrite_host: &str,
+        rewrite_port: Option<u16>,
+        token: Option<Box<dyn Any + Send + Sync>>,
+    ) {
         let mut parts = broker.splitn(2, ':');
         let broker = BrokerAddr {
             host: parts.next().expect("at least one part").into(),
@@ -107,6 +133,10 @@ impl<C> BrokerRewritingClientContext<C> {
             },
         };
         self.overrides.insert(broker, rewrite);
+
+        if let Some(token) = token {
+            self.drop_tokens.push(token)
+        }
     }
 
     /// Returns a reference to the wrapped context.
