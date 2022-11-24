@@ -908,3 +908,31 @@ With
       - ()
 
 EOF
+
+query T multiline
+EXPLAIN DECORRELATED PLAN AS TEXT FOR SELECT COUNT(*);
+----
+Return
+  Union
+    Get l1
+    CrossJoin
+      Project ()
+        CrossJoin
+          Union
+            Negate
+              Distinct
+                Get l1
+            Distinct
+              Get l0
+          Get l0
+      Constant
+        - (0)
+With
+  cte l1 =
+    Reduce aggregates=[count(*)]
+      Get l0
+  cte l0 =
+    Constant
+      - ()
+
+EOF
