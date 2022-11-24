@@ -60,7 +60,6 @@ $ s3-create-bucket bucket=test-no-records
 
 $ s3-put-object bucket=test-no-records key=static-no-records.csv
 city,state,zip
-Rochester,NY,14618
 
 > CREATE SOURCE mismatched_column_names
   FROM S3 CONNECTION s3_conn
