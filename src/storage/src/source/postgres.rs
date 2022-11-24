@@ -17,6 +17,7 @@ use once_cell::sync::Lazy;
 use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
 };
+
 use timely::scheduling::SyncActivator;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -104,7 +105,7 @@ impl ErrorExt for tokio_postgres::Error {
 enum ReplicationError {
     /// This error is definite: this source is permanently wedged.
     /// Returning a definite error will cause the collection to become un-queryable.
-    Definite(anyhow::Error),
+    Definite(anyhow::Error, PgLsn),
     /// This error may or may not resolve itself in the future, and
     /// should be retried instead of being added to the output.
     Indefinite(anyhow::Error),
@@ -112,19 +113,16 @@ enum ReplicationError {
 
 impl<E: ErrorExt + Into<anyhow::Error>> From<E> for ReplicationError {
     fn from(err: E) -> Self {
-        if err.is_definite() {
-            Self::Definite(err.into())
-        } else {
-            Self::Indefinite(err.into())
-        }
+        // XXX is this okay?
+        Self::Indefinite(err.into())
     }
 }
 
 macro_rules! try_definite {
-    ($expr:expr $(,)?) => {
+    ($expr:expr, $lsn:expr $(,)?) => {
         match $expr {
             Ok(val) => val,
-            Err(err) => return Err(ReplicationError::Definite(err.into())),
+            Err(err) => return Err(ReplicationError::Definite(err.into(), $lsn)),
         }
     };
 }
@@ -137,21 +135,9 @@ macro_rules! try_indefinite {
     };
 }
 
-// Message used to communicate between `get_next_message` and the tokio task
-enum InternalMessage {
-    Err(SourceReaderError),
-    Value {
-        output: usize,
-        value: Row,
-        lsn: PgLsn,
-        diff: Diff,
-        end: bool,
-    },
-}
-
 /// Information required to sync data from Postgres
 pub struct PostgresSourceReader {
-    receiver_stream: Receiver<InternalMessage>,
+    receiver_stream: Receiver<SourceMessageType<(), Row, Diff>>,
 
     // Postgres sources support single-threaded ingestion only, so only one of
     // the `PostgresSourceReader`s will actually produce data.
@@ -162,10 +148,6 @@ pub struct PostgresSourceReader {
     // Before it can return a [`NextMessage::Finished`]. This is keeping track
     // of that.
     reported_unconsumed_partitions: bool,
-
-    /// The lsn we last emitted data at. Used to fabricate timestamps for errors. This should
-    /// ideally go away and only emit errors that we can associate with source timestamps
-    last_lsn: PgLsn,
 }
 
 /// An OffsetCommitter for postgres, that sends
@@ -199,7 +181,7 @@ struct PostgresTaskInfo {
     /// A map of the table oid to its information
     source_tables: HashMap<u32, SourceTable>,
     row_sender: RowSender,
-    sender: Sender<InternalMessage>,
+    sender: Sender<SourceMessageType<(), Row, Diff>>,
     /// Channel to receive lsn's from the PgOffsetCommitter
     /// that are safe to send status updates for.
     offset_rx: Receiver<HashMap<PartitionId, MzOffset>>,
@@ -297,7 +279,6 @@ impl SourceConnectionBuilder for PostgresSourceConnection {
                 receiver_stream: dataflow_rx,
                 active_read_worker,
                 reported_unconsumed_partitions: false,
-                last_lsn: start_offset.offset.into(),
             },
             PgOffsetCommitter {
                 logger: LogCommitter {
@@ -331,41 +312,7 @@ impl SourceReader for PostgresSourceReader {
 
         // TODO(guswynn): consider if `try_recv` is better or the same as `now_or_never`
         let ret = match self.receiver_stream.recv().now_or_never() {
-            Some(Some(InternalMessage::Value {
-                output,
-                value,
-                diff,
-                lsn,
-                end,
-            })) => {
-                self.last_lsn = lsn;
-                if end {
-                    let msg = SourceMessage {
-                        output,
-                        upstream_time_millis: None,
-                        key: (),
-                        value,
-                        headers: None,
-                    };
-                    let ts = (PartitionId::None, lsn.into());
-                    NextMessage::Ready(SourceMessageType::Finalized(Ok(msg), ts, diff))
-                } else {
-                    let msg = SourceMessage {
-                        output,
-                        upstream_time_millis: None,
-                        key: (),
-                        value,
-                        headers: None,
-                    };
-                    let ts = (PartitionId::None, lsn.into());
-                    NextMessage::Ready(SourceMessageType::InProgress(Ok(msg), ts, diff))
-                }
-            }
-            Some(Some(InternalMessage::Err(err))) => {
-                // XXX(petrosagg): we are fabricating a timestamp here!!
-                let non_definite_ts = (PartitionId::None, MzOffset::from(self.last_lsn) + 1);
-                NextMessage::Ready(SourceMessageType::Finalized(Err(err), non_definite_ts, 1))
-            }
+            Some(Some(message)) => NextMessage::Ready(message),
             None => NextMessage::Pending,
             Some(None) => NextMessage::Finished,
         };
@@ -391,13 +338,16 @@ impl OffsetCommitter for PgOffsetCommitter {
 async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
     match postgres_replication_loop_inner(&mut task_info).await {
         Ok(()) => {}
-        Err(e) => {
+        Err((e, lsn)) => {
             // Drop the send error, as we have no way of communicating back to the
             // source operator if the channel is gone.
             let _ = task_info
                 .row_sender
                 .sender
-                .send(InternalMessage::Err(e))
+                .send({
+                    let non_definite_ts = (PartitionId::None, lsn.into());
+                    SourceMessageType::Finalized(Err(e), non_definite_ts, 1)
+                })
                 .await;
             task_info
                 .row_sender
@@ -411,7 +361,7 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
 /// Core logic
 async fn postgres_replication_loop_inner(
     task_info: &mut PostgresTaskInfo,
-) -> Result<(), SourceReaderError> {
+) -> Result<(), (SourceReaderError, PgLsn)> {
     if task_info.lsn == PgLsn::from(0) {
         // Buffer rows from snapshot to retract and retry, if initial snapshot fails.
         // Postgres sources cannot proceed without a successful snapshot.
@@ -435,10 +385,13 @@ async fn postgres_replication_loop_inner(
                     e
                 );
             }
-            Err(ReplicationError::Definite(e)) => {
-                return Err(SourceReaderError {
-                    inner: SourceErrorDetails::Initialization(e.to_string()),
-                })
+            Err(ReplicationError::Definite(e, lsn)) => {
+                return Err((
+                    SourceReaderError {
+                        inner: SourceErrorDetails::Initialization(e.to_string()),
+                    },
+                    lsn,
+                ))
             }
         }
     }
@@ -451,10 +404,13 @@ async fn postgres_replication_loop_inner(
                     task_info.source_id, e
                 )
             }
-            Err(ReplicationError::Definite(e)) => {
-                return Err(SourceReaderError {
-                    inner: SourceErrorDetails::Other(e.to_string()),
-                })
+            Err(ReplicationError::Definite(e, lsn)) => {
+                return Err((
+                    SourceReaderError {
+                        inner: SourceErrorDetails::Other(e.to_string()),
+                    },
+                    lsn,
+                ))
             }
             Ok(_) => {
                 // shutdown initiated elsewhere
@@ -482,14 +438,14 @@ struct RowMessage {
 /// before dropping the `RowSender` or moving onto a new lsn.
 /// Internally, this type uses asserts to uphold the first requirement.
 struct RowSender {
-    sender: Sender<InternalMessage>,
+    sender: Sender<SourceMessageType<(), Row, Diff>>,
     activator: SyncActivator,
     buffered_message: Option<RowMessage>,
 }
 
 impl RowSender {
     /// Create a new `RowSender`.
-    pub fn new(sender: Sender<InternalMessage>, activator: SyncActivator) -> Self {
+    pub fn new(sender: Sender<SourceMessageType<(), Row, Diff>>, activator: SyncActivator) -> Self {
         Self {
             sender,
             activator,
@@ -563,12 +519,28 @@ impl RowSender {
         // without activation
         if let Ok(_) = self
             .sender
-            .send(InternalMessage::Value {
-                output,
-                value: row,
-                lsn,
-                diff,
-                end,
+            .send({
+                if end {
+                    let msg = SourceMessage {
+                        output,
+                        upstream_time_millis: None,
+                        key: (),
+                        value: row,
+                        headers: None,
+                    };
+                    let ts = (PartitionId::None, lsn.into());
+                    SourceMessageType::Finalized(Ok(msg), ts, diff)
+                } else {
+                    let msg = SourceMessage {
+                        output,
+                        upstream_time_millis: None,
+                        key: (),
+                        value: row,
+                        headers: None,
+                    };
+                    let ts = (PartitionId::None, lsn.into());
+                    SourceMessageType::InProgress(Ok(msg), ts, diff)
+                }
             })
             .await
         {
@@ -631,7 +603,7 @@ impl PostgresTaskInfo {
             .await;
 
         // Validate publication tables against the state snapshot
-        try_definite!(self.validate_tables(publication_tables));
+        try_definite!(self.validate_tables(publication_tables), self.lsn);
 
         // Start a transaction and immediately create a replication slot with the USE SNAPSHOT
         // directive. This makes the starting point of the slot and the snapshot of the transaction
@@ -663,9 +635,12 @@ impl PostgresTaskInfo {
         let consistent_point = try_indefinite!(slot_row
             .get("consistent_point")
             .ok_or_else(|| anyhow!("missing expected column: `consistent_point`")));
-        self.lsn = try_definite!(consistent_point
-            .parse()
-            .or_else(|_| Err(anyhow!("invalid lsn"))));
+        self.lsn = try_definite!(
+            consistent_point
+                .parse()
+                .or_else(|_| Err(anyhow!("invalid lsn"))),
+            self.lsn
+        );
 
         // Scratch space to use while evaluating casts
         let mut datum_vec = DatumVec::new();
@@ -696,10 +671,11 @@ impl PostgresTaskInfo {
 
                 let mut raw_values = parser.iter_raw(info.desc.columns.len() as i32);
                 while let Some(raw_value) = raw_values.next() {
-                    match try_definite!(raw_value) {
-                        Some(value) => {
-                            packer.push(Datum::String(try_definite!(std::str::from_utf8(value))))
-                        }
+                    match try_definite!(raw_value, self.lsn) {
+                        Some(value) => packer.push(Datum::String(try_definite!(
+                            std::str::from_utf8(value),
+                            self.lsn
+                        ))),
                         None => packer.push(Datum::Null),
                     }
                 }
@@ -707,7 +683,7 @@ impl PostgresTaskInfo {
                 let mut datums = datum_vec.borrow();
                 datums.extend(text_row.iter());
 
-                let row = try_definite!(PostgresTaskInfo::cast_row(&info.casts, &datums));
+                let row = try_definite!(PostgresTaskInfo::cast_row(&info.casts, &datums), self.lsn);
 
                 self.row_sender
                     .insert(info.output_index, row, self.lsn)
@@ -901,9 +877,10 @@ impl PostgresTaskInfo {
                     Begin(_) => {
                         last_data_message = Instant::now();
                         if !inserts.is_empty() || !deletes.is_empty() {
-                            return Err(Definite(anyhow!(
-                                "got BEGIN statement after uncommitted data"
-                            )));
+                            return Err(Definite(
+                                anyhow!("got BEGIN statement after uncommitted data"),
+                                self.lsn,
+                            ));
                         }
                     }
                     Insert(insert) if self.source_tables.contains_key(&insert.rel_id()) => {
@@ -913,12 +890,14 @@ impl PostgresTaskInfo {
                         let info = self.source_tables.get(&rel_id).unwrap();
                         let new_tuple = insert.tuple().tuple_data();
                         let mut datums = datum_vec.borrow();
-                        try_definite!(PostgresTaskInfo::datums_from_tuple(
-                            rel_id,
-                            new_tuple,
-                            &mut *datums
-                        ));
-                        let row = try_definite!(PostgresTaskInfo::cast_row(&info.casts, &datums));
+                        try_definite!(
+                            PostgresTaskInfo::datums_from_tuple(rel_id, new_tuple, &mut *datums),
+                            self.lsn
+                        );
+                        let row = try_definite!(
+                            PostgresTaskInfo::cast_row(&info.casts, &datums),
+                            self.lsn
+                        );
                         inserts.push((info.output_index, row));
                     }
                     Update(update) if self.source_tables.contains_key(&update.rel_id()) => {
@@ -933,16 +912,21 @@ impl PostgresTaskInfo {
                                 rel_id
                             )
                         };
-                        let old_tuple =
-                            try_definite!(update.old_tuple().ok_or_else(err)).tuple_data();
+                        let old_tuple = try_definite!(update.old_tuple().ok_or_else(err), self.lsn)
+                            .tuple_data();
                         let mut old_datums = datum_vec.borrow();
-                        try_definite!(PostgresTaskInfo::datums_from_tuple(
-                            rel_id,
-                            old_tuple,
-                            &mut *old_datums
-                        ));
-                        let old_row =
-                            try_definite!(PostgresTaskInfo::cast_row(&info.casts, &old_datums));
+                        try_definite!(
+                            PostgresTaskInfo::datums_from_tuple(
+                                rel_id,
+                                old_tuple,
+                                &mut *old_datums
+                            ),
+                            self.lsn
+                        );
+                        let old_row = try_definite!(
+                            PostgresTaskInfo::cast_row(&info.casts, &old_datums),
+                            self.lsn
+                        );
                         deletes.push((info.output_index, old_row));
                         drop(old_datums);
 
@@ -958,13 +942,18 @@ impl PostgresTaskInfo {
                                 _ => new,
                             });
                         let mut new_datums = datum_vec.borrow();
-                        try_definite!(PostgresTaskInfo::datums_from_tuple(
-                            rel_id,
-                            new_tuple,
-                            &mut *new_datums
-                        ));
-                        let new_row =
-                            try_definite!(PostgresTaskInfo::cast_row(&info.casts, &new_datums));
+                        try_definite!(
+                            PostgresTaskInfo::datums_from_tuple(
+                                rel_id,
+                                new_tuple,
+                                &mut *new_datums
+                            ),
+                            self.lsn
+                        );
+                        let new_row = try_definite!(
+                            PostgresTaskInfo::cast_row(&info.casts, &new_datums),
+                            self.lsn
+                        );
                         inserts.push((info.output_index, new_row));
                     }
                     Delete(delete) if self.source_tables.contains_key(&delete.rel_id()) => {
@@ -979,15 +968,17 @@ impl PostgresTaskInfo {
                                 rel_id
                             )
                         };
-                        let old_tuple =
-                            try_definite!(delete.old_tuple().ok_or_else(err)).tuple_data();
+                        let old_tuple = try_definite!(delete.old_tuple().ok_or_else(err), self.lsn)
+                            .tuple_data();
                         let mut datums = datum_vec.borrow();
-                        try_definite!(PostgresTaskInfo::datums_from_tuple(
-                            rel_id,
-                            old_tuple,
-                            &mut *datums
-                        ));
-                        let row = try_definite!(PostgresTaskInfo::cast_row(&info.casts, &datums));
+                        try_definite!(
+                            PostgresTaskInfo::datums_from_tuple(rel_id, old_tuple, &mut *datums),
+                            self.lsn
+                        );
+                        let row = try_definite!(
+                            PostgresTaskInfo::cast_row(&info.casts, &datums),
+                            self.lsn
+                        );
                         deletes.push((info.output_index, row));
                     }
                     Commit(commit) => {
@@ -1015,11 +1006,14 @@ impl PostgresTaskInfo {
                                     "alter table detected on {} with id {}",
                                     info.desc.name, info.desc.oid
                                 );
-                                return Err(Definite(anyhow!(
-                                    "source table {} with oid {} has been altered",
-                                    info.desc.name,
-                                    info.desc.oid
-                                )));
+                                return Err(Definite(
+                                    anyhow!(
+                                        "source table {} with oid {} has been altered",
+                                        info.desc.name,
+                                        info.desc.oid
+                                    ),
+                                    self.lsn,
+                                ));
                             }
                             let same_name = info.desc.name == relation.name().unwrap();
                             let same_namespace =
@@ -1033,11 +1027,14 @@ impl PostgresTaskInfo {
                                     relation.namespace().unwrap(),
                                     relation.name().unwrap()
                                 );
-                                return Err(Definite(anyhow!(
-                                    "source table {} with oid {} has been altered",
-                                    info.desc.name,
-                                    info.desc.oid
-                                )));
+                                return Err(Definite(
+                                    anyhow!(
+                                        "source table {} with oid {} has been altered",
+                                        info.desc.name,
+                                        info.desc.oid
+                                    ),
+                                    self.lsn,
+                                ));
                             }
                             // Relation messages do not include nullability/primary_key data so we
                             // check the name, type_oid, and type_mod explicitly and error if any
@@ -1056,11 +1053,14 @@ impl PostgresTaskInfo {
                                         info.desc.columns,
                                         relation.columns()
                                     );
-                                    return Err(Definite(anyhow!(
-                                        "source table {} with oid {} has been altered",
-                                        info.desc.name,
-                                        info.desc.oid
-                                    )));
+                                    return Err(Definite(
+                                        anyhow!(
+                                            "source table {} with oid {} has been altered",
+                                            info.desc.name,
+                                            info.desc.oid
+                                        ),
+                                        self.lsn,
+                                    ));
                                 }
                             }
                         }
@@ -1077,14 +1077,19 @@ impl PostgresTaskInfo {
                             .filter_map(|id| self.source_tables.get(id))
                             .map(|info| format!("name: {} id: {}", info.desc.name, info.desc.oid))
                             .collect::<Vec<String>>();
-                        return Err(Definite(anyhow!(
-                            "source table(s) {} got truncated",
-                            tables.join(", ")
-                        )));
+                        return Err(Definite(
+                            anyhow!("source table(s) {} got truncated", tables.join(", ")),
+                            self.lsn,
+                        ));
                     }
                     // The enum is marked as non_exhaustive. Better to be conservative here in
                     // case a new message is relevant to the semantics of our source
-                    _ => return Err(Definite(anyhow!("unexpected logical replication message"))),
+                    _ => {
+                        return Err(Definite(
+                            anyhow!("unexpected logical replication message"),
+                            self.lsn,
+                        ))
+                    }
                 },
                 PrimaryKeepAlive(keepalive) => {
                     needs_status_update = needs_status_update || keepalive.reply() == 1;
@@ -1095,7 +1100,12 @@ impl PostgresTaskInfo {
                     }
                 }
                 // The enum is marked non_exhaustive, better be conservative
-                _ => return Err(Definite(anyhow!("Unexpected replication message"))),
+                _ => {
+                    return Err(Definite(
+                        anyhow!("Unexpected replication message"),
+                        self.lsn,
+                    ))
+                }
             }
             if needs_status_update {
                 let ts: i64 = PG_EPOCH
