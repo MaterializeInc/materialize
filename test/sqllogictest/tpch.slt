@@ -189,7 +189,7 @@ Explained Query:
   Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#9]
     Project (#0..=#5, #9..=#11, #6) // { arity: 10 }
       Map (bigint_to_double(case when (#6 = 0) then null else #6 end), (numeric_to_double(#2) / #8), (numeric_to_double(#3) / #8), (numeric_to_double(#7) / #8)) // { arity: 12 }
-        Reduce group_by=[#4, #5] aggregates=[sum(#0), sum(#1), sum((#1 * (1 - #2))), sum(((#1 * (1 - #2)) * (1 + #3))), count(true), sum(#2)] // { arity: 8 }
+        Reduce group_by=[#4, #5] aggregates=[sum(#0), sum(#1), sum((#1 * (1 - #2))), sum(((#1 * (1 - #2)) * (1 + #3))), count(*), sum(#2)] // { arity: 8 }
           Project (#4..=#9) // { arity: 6 }
             Filter (date_to_timestamp(#10) <= 1998-10-02 00:00:00) // { arity: 16 }
               Get materialize.public.lineitem // { arity: 16 }
@@ -386,7 +386,7 @@ ORDER BY
 ----
 Explained Query:
   Finish order_by=[#0 asc nulls_last] output=[#0, #1]
-    Reduce group_by=[#0] aggregates=[count(true)] // { arity: 2 }
+    Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
       Project (#5) // { arity: 1 }
         Filter (#4 >= 1993-07-01) AND (date_to_timestamp(#4) < 1993-10-01 00:00:00) // { arity: 11 }
           Join on=(eq(#0, #9, #10)) type=delta // { arity: 11 }
@@ -979,7 +979,7 @@ ORDER BY
 Explained Query:
   Finish order_by=[#1 desc nulls_first, #0 desc nulls_first] output=[#0, #1]
     Return // { arity: 2 }
-      Reduce group_by=[#0] aggregates=[count(true)] // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
         Project (#1) // { arity: 1 }
           Reduce group_by=[#0] aggregates=[count(#1)] // { arity: 2 }
             Union // { arity: 2 }
@@ -1262,7 +1262,7 @@ Explained Query:
               ArrangeBy keys=[[#0]] // { arity: 3 }
                 Get l1 // { arity: 3 }
               ArrangeBy keys=[[#0]] // { arity: 3 }
-                Reduce group_by=[#0] aggregates=[sum(#1), count(true)] // { arity: 3 }
+                Reduce group_by=[#0] aggregates=[sum(#1), count(*)] // { arity: 3 }
                   Project (#0, #5) // { arity: 2 }
                     Join on=(#0 = #2) type=differential // { arity: 17 }
                       implementation
@@ -1601,7 +1601,7 @@ ORDER BY
 Explained Query:
   Finish order_by=[#1 desc nulls_first, #0 asc nulls_last] output=[#0, #1]
     Return // { arity: 2 }
-      Reduce group_by=[#0] aggregates=[count(true)] // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
         Project (#1) // { arity: 1 }
           Join on=(#0 = #4 AND #2 = #3) type=differential // { arity: 5 }
             implementation
@@ -1730,7 +1730,7 @@ ORDER BY
 Explained Query:
   Finish order_by=[#0 asc nulls_last] output=[#0..=#2]
     Return // { arity: 3 }
-      Reduce group_by=[substr(char_to_text(#0), 1, 2)] aggregates=[count(true), sum(#1)] // { arity: 3 }
+      Reduce group_by=[substr(char_to_text(#0), 1, 2)] aggregates=[count(*), sum(#1)] // { arity: 3 }
         Project (#1, #2) // { arity: 2 }
           Join on=(#0 = #3) type=differential // { arity: 4 }
             implementation
@@ -1767,7 +1767,7 @@ Explained Query:
                   Filter ((#8 = "13") OR (#8 = "17") OR (#8 = "18") OR (#8 = "23") OR (#8 = "29") OR (#8 = "30") OR (#8 = "31")) // { arity: 9 }
                     Get l0 // { arity: 9 }
               ArrangeBy keys=[[]] // { arity: 2 }
-                Reduce aggregates=[sum(#0), count(true)] // { arity: 2 }
+                Reduce aggregates=[sum(#0), count(*)] // { arity: 2 }
                   Project (#5) // { arity: 1 }
                     Filter (#5 > 0) AND ((#8 = "13") OR (#8 = "17") OR (#8 = "18") OR (#8 = "23") OR (#8 = "29") OR (#8 = "30") OR (#8 = "31")) // { arity: 9 }
                       Get l0 // { arity: 9 }

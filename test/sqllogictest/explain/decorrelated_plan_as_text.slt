@@ -421,7 +421,7 @@ With
       Map (error("more than one record produced in subquery"))
         Project (#0)
           Filter (#1 > 1)
-            Reduce group_by=[#0] aggregates=[count(true)]
+            Reduce group_by=[#0] aggregates=[count(*)]
               Get l8
   cte l8 =
     Project (#0, #1)
@@ -442,7 +442,7 @@ With
       Map (error("more than one record produced in subquery"))
         Project (#0)
           Filter (#1 > 1)
-            Reduce group_by=[#0] aggregates=[count(true)]
+            Reduce group_by=[#0] aggregates=[count(*)]
               Get l4
   cte l4 =
     Project (#0, #1)

@@ -161,7 +161,7 @@ Explained Query:
         Map (error("more than one record produced in subquery")) // { keys: "([])" }
           Project () // { keys: "([])" }
             Filter (#0 > 1) // { keys: "([])" }
-              Reduce aggregates=[count(true)] // { keys: "([])" }
+              Reduce aggregates=[count(*)] // { keys: "([])" }
                 Project () // { keys: "()" }
                   Get l0 // { keys: "()" }
     cte l0 =

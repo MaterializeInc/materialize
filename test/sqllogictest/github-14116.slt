@@ -55,12 +55,12 @@ Explained Query:
         Map (error("more than one record produced in subquery")) // { arity: 1 }
           Project () // { arity: 0 }
             Filter (#0 > 1) // { arity: 1 }
-              Reduce aggregates=[count(true)] // { arity: 1 }
+              Reduce aggregates=[count(*)] // { arity: 1 }
                 Project () // { arity: 0 }
                   Get l0 // { arity: 1 }
     cte l0 =
       Project (#2) // { arity: 1 }
-        Reduce group_by=[#0, #1] aggregates=[count(true)] // { arity: 3 }
+        Reduce group_by=[#0, #1] aggregates=[count(*)] // { arity: 3 }
           Filter (#0 = #0) AND (#1 = #1) // { arity: 2 }
             Get materialize.public.test2 // { arity: 2 }
 

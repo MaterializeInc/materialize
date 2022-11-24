@@ -816,7 +816,7 @@ Explained Query:
             Get materialize.public.t1 // { arity: 2 }
         ArrangeBy keys=[[#1]] // { arity: 2 }
           Filter (#1) IS NOT NULL // { arity: 2 }
-            Reduce aggregates=[count(true), max(#0)] // { arity: 2 }
+            Reduce aggregates=[count(*), max(#0)] // { arity: 2 }
               Union // { arity: 1 }
                 Project (#0) // { arity: 1 }
                   Get l0 // { arity: 2 }

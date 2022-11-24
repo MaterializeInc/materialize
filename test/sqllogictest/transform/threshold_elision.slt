@@ -288,7 +288,7 @@ Explained Query:
           Get l0
   With
     cte l0 =
-      Reduce group_by=[extract_year_d(#0)] aggregates=[count(true)]
+      Reduce group_by=[extract_year_d(#0)] aggregates=[count(*)]
         Project (#2)
           Get materialize.public.people
 
