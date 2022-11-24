@@ -699,8 +699,8 @@ mod tests {
 
     use differential_dataflow::consolidation::consolidate_updates;
     use futures_task::noop_waker;
-    use futures_util::FutureExt;
     use mz_ore::cast::CastFrom;
+    use mz_ore::future::OreFutureExt;
     use mz_persist::indexed::encoding::BlobTraceBatchPart;
     use mz_persist::workload::DataGenerator;
     use mz_proto::protobuf_roundtrip;
@@ -1588,7 +1588,7 @@ mod tests {
             .perform(&read.machine.clone(), &read.gc.clone())
             .await;
         let expired_writer_heartbeat = AssertUnwindSafe(write.maybe_heartbeat_writer())
-            .catch_unwind()
+            .ore_catch_unwind()
             .await;
         assert!(matches!(expired_writer_heartbeat, Err(_)));
     }
