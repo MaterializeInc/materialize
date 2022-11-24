@@ -5506,10 +5506,14 @@ impl<'a> Parser<'a> {
         };
 
         let config_flags = if self.parse_keyword(WITH) {
-            self.expect_token(&Token::LParen)?;
-            let config_flags = self.parse_comma_separated(Self::parse_identifier)?;
-            self.expect_token(&Token::RParen)?;
-            config_flags
+            if self.consume_token(&Token::LParen) {
+                let config_flags = self.parse_comma_separated(Self::parse_identifier)?;
+                self.expect_token(&Token::RParen)?;
+                config_flags
+            } else {
+                self.prev_token(); // push back WITH in case it's actually a CTE
+                vec![]
+            }
         } else {
             vec![]
         };
