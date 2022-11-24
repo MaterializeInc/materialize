@@ -110,13 +110,11 @@ Return // { arity: 1 }
   Filter (#0 = 3) // { arity: 1 }
     Union // { arity: 1 }
       Project (#1) // { arity: 1 }
-        Project (#0, #1) // { arity: 2 }
-          Map (#0) // { arity: 2 }
-            Get l1 // { arity: 1 }
+        Map (#0) // { arity: 2 }
+          Get l1 // { arity: 1 }
       Project (#1) // { arity: 1 }
-        Project (#0, #1) // { arity: 2 }
-          Map (#0) // { arity: 2 }
-            Get l2 // { arity: 1 }
+        Map (#0) // { arity: 2 }
+          Get l2 // { arity: 1 }
 With
   cte l2 =
     CrossJoin // { arity: 1 }

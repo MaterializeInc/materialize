@@ -91,8 +91,7 @@ build apply=(LiteralLifting,ProjectionLifting,LiteralLifting)
 ----
 %0 =
 | Get x (u0)
-| Map #0
-| Map 1, 1
+| Map #0, 1, 1
 | Project (#0..=#2, #4, #3)
 | Project (#2, #4)
 

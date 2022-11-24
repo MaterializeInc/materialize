@@ -124,18 +124,7 @@ impl JoinBuilder {
     fn add_input(&mut self, input: MirRelationExpr) {
         // Filter join identities out of the inputs.
         // The join identity is a single 0-ary row constant expression.
-        let insert = {
-            if let MirRelationExpr::Constant {
-                rows: Ok(rows),
-                typ,
-            } = &input
-            {
-                !(rows.len() == 1 && typ.column_types.len() == 0 && rows[0].1 == 1)
-            } else {
-                true
-            }
-        };
-        if insert {
+        if !input.is_constant_singleton() {
             self.num_columns += input.arity();
             self.inputs.push(input);
         }
