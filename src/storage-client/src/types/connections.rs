@@ -533,13 +533,19 @@ impl CsrConnection {
         }
 
         if let Some(aws_privatelink_id) = self.aws_privatelink_id {
+            // `net::lookup_host` requires a port but the port will be ignored
+            // when passed to `resolve_to_addrs`. We use a dummy port that will
+            // be easy to spot in the logs to make it obvious if some component
+            // downstream incorrectly starts using this port.
+            const DUMMY_PORT: u16 = 11111;
+
             // TODO: use types to enforce that the URL has a string hostname.
             let host = self
                 .url
                 .host_str()
                 .ok_or_else(|| anyhow!("url missing host"))?;
             let privatelink_host = mz_cloud_resources::vpc_endpoint_name(aws_privatelink_id);
-            let addrs: Vec<_> = net::lookup_host(privatelink_host)
+            let addrs: Vec<_> = net::lookup_host((privatelink_host, DUMMY_PORT))
                 .await
                 .context("resolving PrivateLink host")?
                 .collect();
