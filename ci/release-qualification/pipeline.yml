@@ -42,7 +42,7 @@ steps:
     label: "Large Zippy Kafka Sources"
     timeout_in_minutes: 1440
     agents:
-      queue: builder-linux-x86_64
+      queue: linux-x86_64-large
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
