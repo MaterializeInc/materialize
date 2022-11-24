@@ -16,7 +16,7 @@
 {% macro materialize__listagg(measure, delimiter_text, order_by_clause, limit_num) -%}
     {{ exceptions.raise_compiler_error(
         """
-        Materialize supports the list_agg() fuction; use it directly.
+        Materialize supports the list_agg() function; use it directly.
 
         For details, see: https://materialize.com/docs/sql/functions/list_agg/
         """

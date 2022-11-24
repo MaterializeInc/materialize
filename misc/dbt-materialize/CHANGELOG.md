@@ -6,7 +6,7 @@
   have this limitation, unlike PostgreSQL (see [dbt-core #2727](https://github.com/dbt-labs/dbt-core/pull/2727)).
 
 * Produce an error message when attempting to use the [`listagg`](https://docs.getdbt.com/reference/dbt-jinja-functions/cross-database-macros#listagg)
-  cross-database macro. Materialize has native support for [`list_agg`](https://materialize.com/docs/sql/functions/list_agg/), which should be used
+  cross-database macro. Materialize has native support for [`list_agg()`](https://materialize.com/docs/sql/functions/list_agg/), which should be used
   instead.
 
 * Remove the deprecated `mz_generate_name` macro.
