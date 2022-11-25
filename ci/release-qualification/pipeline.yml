@@ -40,7 +40,8 @@ steps:
 
   - id: zippy-kafka-sources-large
     label: "Large Zippy Kafka Sources"
-    timeout_in_minutes: 1440
+    # 48h
+    timeout_in_minutes: 2880
     agents:
       queue: linux-x86_64-large
     plugins:
