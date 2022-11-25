@@ -215,7 +215,7 @@ impl KafkaSinkSendRetryManager {
 
 pub struct SinkProducerContext {
     metrics: Arc<SinkMetrics>,
-    healthchecker: mpsc::Sender<SinkStatus>,
+    status_tx: mpsc::Sender<SinkStatus>,
     retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
 }
 
@@ -227,7 +227,7 @@ impl ClientContext for SinkProducerContext {
     }
     fn error(&self, error: KafkaError, reason: &str) {
         let status = SinkStatus::Stalled(error.to_string());
-        let _ = self.healthchecker.try_send(status);
+        let _ = self.status_tx.try_send(status);
         MzClientContext.error(error, reason)
     }
 }
@@ -373,7 +373,7 @@ struct KafkaSinkState {
 
     progress_topic: String,
     progress_key: String,
-    progress_client: Arc<BaseConsumer<BrokerRewritingClientContext<MzClientContext>>>,
+    progress_client: Arc<BaseConsumer<BrokerRewritingClientContext<SinkConsumerContext>>>,
 
     healthchecker: Arc<Mutex<Option<Healthchecker>>>,
     gate_ts: Rc<Cell<Option<Timestamp>>>,
@@ -391,6 +391,23 @@ struct KafkaSinkState {
     /// exactly-once guarantees.
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
 }
+
+struct SinkConsumerContext {
+    status_tx: mpsc::Sender<SinkStatus>,
+}
+
+impl ClientContext for SinkConsumerContext {
+    fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
+        MzClientContext.log(level, fac, log_message)
+    }
+    fn error(&self, error: KafkaError, reason: &str) {
+        let status = SinkStatus::Stalled(error.to_string());
+        let _ = self.status_tx.try_send(status);
+        MzClientContext.error(error, reason)
+    }
+}
+
+impl ConsumerContext for SinkConsumerContext {}
 
 impl KafkaSinkState {
     fn new(
@@ -416,7 +433,7 @@ impl KafkaSinkState {
 
         let producer_context = SinkProducerContext {
             metrics: Arc::clone(&metrics),
-            healthchecker: status_tx,
+            status_tx: status_tx.clone(),
             retry_manager: Arc::clone(&retry_manager),
         };
 
@@ -475,7 +492,7 @@ impl KafkaSinkState {
         let progress_client = TokioHandle::current()
             .block_on(connection.connection.create_with_context(
                 connection_context,
-                MzClientContext,
+                SinkConsumerContext { status_tx },
                 &btreemap! {
                     "group.id" => format!("materialize-bootstrap-sink-{sink_id}"),
                     "isolation.level" => "read_committed".into(),
