@@ -194,9 +194,8 @@ EXPLAIN WITH(types, no_fast_path) SELECT NULLIF(col_not_null, 'a') , NULLIF(col_
 ----
 Explained Query:
   Project (#3, #1, #0, #2) // { types: "(integer?, integer, integer?, integer?)" }
-    Map (error("invalid input syntax for type integer: invalid digit found in string: \"a\"")) // { types: "(integer?, integer, integer?, integer?)" }
-      Map (case when (#0 = #1) then null else #0 end) // { types: "(integer?, integer, integer?)" }
-        Get materialize.public.int_table // { types: "(integer?, integer)" }
+    Map (case when (#0 = #1) then null else #0 end, error("invalid input syntax for type integer: invalid digit found in string: \"a\"")) // { types: "(integer?, integer, integer?, integer?)" }
+      Get materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 

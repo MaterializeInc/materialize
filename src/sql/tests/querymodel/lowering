@@ -15,11 +15,7 @@ select;
 | Constant ()
 
 %1 =
-| Constant ()
-
-%2 =
-| Join %0 %1
-| | implementation = Unimplemented
+| Get %0 (l0)
 | Project ()
 ----
 ----
@@ -32,11 +28,7 @@ select 1;
 | Constant ()
 
 %1 =
-| Constant ()
-
-%2 =
-| Join %0 %1
-| | implementation = Unimplemented
+| Get %0 (l0)
 | Map 1
 | Project (#0)
 ----
@@ -50,13 +42,8 @@ select a, a from (select 1 as a);
 | Constant ()
 
 %1 =
-| Constant ()
-
-%2 =
-| Join %0 %1
-| | implementation = Unimplemented
+| Get %0 (l0)
 | Map 1
-| Project (#0)
 | Project (#0, #0)
 ----
 ----
@@ -70,13 +57,8 @@ select a, b, a from (select 1 as a, 2 as b);
 | Constant ()
 
 %1 =
-| Constant ()
-
-%2 =
-| Join %0 %1
-| | implementation = Unimplemented
+| Get %0 (l0)
 | Map 1, 2
-| Project (#0, #1)
 | Project (#0, #1, #0)
 ----
 ----
@@ -89,29 +71,20 @@ select x.a from (select true as a) x join (select false as b) y on x.a;
 | Constant ()
 
 %1 =
-| Constant ()
-
-%2 =
-| Join %0 %1
-| | implementation = Unimplemented
+| Get %0 (l0)
 | Map true
 | Project (#0)
 
-%3 =
-| Constant ()
-
-%4 =
-| Join %0 %3
-| | implementation = Unimplemented
+%2 =
+| Get %0 (l0)
 | Map false
 | Project (#0)
 
-%5 =
-| Join %2 %4
+%3 =
+| Join %1 %2
 | | implementation = Unimplemented
 | Project (#0, #1)
 | Filter #0
-| Project (#0, #1)
 | Project (#0)
 ----
 ----
@@ -125,11 +98,7 @@ coalesce(0, 2, 1) end
 | Constant ()
 
 %1 =
-| Constant ()
-
-%2 =
-| Join %0 %1
-| | implementation = Unimplemented
+| Get %0 (l0)
 | Map mz_now(), if (true = false) then {-((1 + 1))} else {coalesce(0, 2, 1)}
 | Project (#0, #1)
 ----
@@ -144,16 +113,11 @@ from (select 10 as a, 5 as b, 'world' as c, 'realm' as d) x
 | Constant ()
 
 %1 =
-| Constant ()
-
-%2 =
-| Join %0 %1
-| | implementation = Unimplemented
+| Get %0 (l0)
 | Map 10, 5, "world", "realm"
 | Project (#0..=#3)
 | Map #0, #1, #2, #3, if (#0 > #1) then {#2} else {lpad(#3, integer_to_bigint(4), "ab")}
-| Project (#4..=#8)
-| Project (#4)
+| Project (#8)
 ----
 ----
 
@@ -216,9 +180,6 @@ c from x where x.b is not null) z on y.a = z.b
 | Filter (#0 = 0)
 | | types = (Int32, Int64?, Int32?)
 | | keys = ()
-| Project (#0..=#2)
-| | types = (Int32, Int64?, Int32?)
-| | keys = ()
 | Project (#0, #2)
 | | types = (Int32, Int32?)
 | | keys = ()
@@ -228,9 +189,6 @@ c from x where x.b is not null) z on y.a = z.b
 | | types = (Int32, Int64?, Int32?)
 | | keys = ()
 | Filter (#1) IS NOT NULL
-| | types = (Int32, Int64, Int32?)
-| | keys = ()
-| Project (#0..=#2)
 | | types = (Int32, Int64, Int32?)
 | | keys = ()
 | Project (#1, #2)
@@ -248,9 +206,6 @@ c from x where x.b is not null) z on y.a = z.b
 | Filter (integer_to_bigint(#0) = #2)
 | | types = (Int32, Int32?, Int64, Int32?)
 | | keys = ()
-| Project (#0..=#3)
-| | types = (Int32, Int32?, Int64, Int32?)
-| | keys = ()
 | Project (#1, #3)
 | | types = (Int32?, Int32?)
 | | keys = ()
@@ -265,67 +220,58 @@ select a, b, a from (select 1 as a, 2 as b) where (select true);
 | Constant ()
 
 %1 =
-| Constant ()
-
-%2 =
-| Join %0 %1
-| | implementation = Unimplemented
+| Get %0 (l0)
 | Map 1, 2
 | Project (#0, #1)
 
-%3 =
-| Constant ()
-
-%4 = Let l1 =
-| Join %0 %3
-| | implementation = Unimplemented
+%2 = Let l1 =
+| Get %0 (l0)
 | Map true
 | Project (#0)
 
-%5 =
-| Get %4 (l1)
+%3 =
+| Get %2 (l1)
 | Reduce group=()
 | | agg count(true)
 | Filter (#0 > 1)
 | Project ()
 | Map (err: more than one record produced in subquery)
 
-%6 = Let l2 =
-| Union %4 %5
+%4 = Let l2 =
+| Union %2 %3
 
-%7 =
-| Get %6 (l2)
+%5 =
+| Get %4 (l2)
 | Distinct group=()
 | Negate
 
-%8 =
+%6 =
 | Get %0 (l0)
 | Distinct group=()
 
-%9 =
-| Union %7 %8
+%7 =
+| Union %5 %6
 
-%10 =
-| Join %9 %0
+%8 =
+| Join %7 %0
 | | implementation = Unimplemented
 | Project ()
 
-%11 =
+%9 =
 | Constant (null)
 
-%12 =
-| Join %10 %11
+%10 =
+| Join %8 %9
 | | implementation = Unimplemented
 
-%13 =
-| Union %6 %12
+%11 =
+| Union %4 %10
 
-%14 =
-| Join %2 %13
+%12 =
+| Join %1 %11
 | | implementation = Unimplemented
 | Project (#0..=#2)
 | Filter #2
-| Project (#0, #1)
 | Project (#0, #1, #0)
 ----
 ----
@@ -379,10 +325,8 @@ select b from x group by c, b;
 %2 =
 | Join %0 %1
 | | implementation = Unimplemented
-| Project (#0..=#2, #2, #1)
-| Project (#3, #4)
+| Project (#2, #1)
 | Distinct group=(#0, #1)
-| Project (#0, #1)
 | Project (#1)
 ----
 ----
@@ -407,7 +351,6 @@ select min(a), c, count(*), b, max(a) from x group by c, b;
 | | agg min(#2)
 | | agg count(#3)
 | | agg max(#2)
-| Project (#0..=#4)
 | Project (#2, #0, #3, #1, #4)
 ----
 ----
@@ -515,7 +458,6 @@ select x.a, x.b, y.a from x left join y on x.a > y.b
 
 %12 =
 | Union %5 %11
-| Project (#0..=#4)
 | Project (#0, #1, #3)
 ----
 ----
@@ -576,7 +518,6 @@ select * from x right join y on x.a > y.b
 %12 =
 | Union %5 %11
 | Project (#0..=#4)
-| Project (#0..=#4)
 ----
 ----
 
@@ -632,37 +573,33 @@ select * from x full join y on x.a > y.b
 | | implementation = Unimplemented
 
 %12 =
-| Union %5 %11
-
-%13 =
 | Get %5 (l3)
 | Project (#3, #4, #0..=#2)
 | Distinct group=(#0, #1)
 | Negate
 
-%14 =
+%13 =
 | Get %4 (l2)
 | Distinct group=(#0, #1)
 
-%15 =
-| Union %13 %14
+%14 =
+| Union %12 %13
 
-%16 =
-| Join %15 %4 (= #0 #2) (= #1 #3)
+%15 =
+| Join %14 %4 (= #0 #2) (= #1 #3)
 | | implementation = Unimplemented
 | Project (#0, #1)
 
-%17 =
+%16 =
 | Constant (null, null, null)
 
-%18 =
-| Join %16 %17
+%17 =
+| Join %15 %16
 | | implementation = Unimplemented
 | Project (#2..=#4, #0, #1)
 
-%19 =
-| Union %12 %18
-| Project (#0..=#4)
+%18 =
+| Union %5 %11 %17
 | Project (#0..=#4)
 ----
 ----
@@ -712,7 +649,6 @@ select x.a, x.b, y.a from x right join y on x.a = y.b and x.c = y.a
 
 %9 =
 | Union %8 %5
-| Project (#0..=#4)
 | Project (#0, #1, #3)
 ----
 ----
@@ -761,7 +697,6 @@ select * from x left join y on x.a = y.b
 
 %9 =
 | Union %8 %5
-| Project (#0..=#4)
 | Project (#0..=#4)
 ----
 ----
@@ -820,11 +755,7 @@ select * from x full outer join y on x.a = y.b
 | Map null, null
 
 %11 =
-| Union %10 %5
-
-%12 =
-| Union %8 %11
-| Project (#0..=#4)
+| Union %8 %10 %5
 | Project (#0..=#4)
 ----
 ----
@@ -883,15 +814,12 @@ select * from w w1 inner join w w2 on w1.f1 = w1.f5
 | Union %9 %2
 | Map null, null
 
-%11 =
-| Union %10 %5
-
-%12 = Let l5 =
-| Union %8 %11
+%11 = Let l5 =
+| Union %8 %10 %5
 | Project (#0..=#4)
 
-%13 =
-| Join %12 %12
+%12 =
+| Join %11 %11
 | | implementation = Unimplemented
 | Project (#0..=#9)
 | Filter (#0 = #4)
