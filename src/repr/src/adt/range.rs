@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::any::type_name;
 use std::cmp::Ordering;
 use std::error::Error;
 use std::fmt::{self, Debug, Display};
@@ -38,6 +39,20 @@ impl<'a> Display for Range<'a> {
         match self.inner {
             None => f.write_str("empty"),
             Some(i) => Display::fmt(&i, f),
+        }
+    }
+}
+
+/// Trait alias for traits required for generic range function implementations.
+pub trait RangeOps<'a>: Debug + Ord + PartialOrd + Eq + PartialEq + TryFrom<Datum<'a>> {}
+impl<'a, T: Debug + Ord + PartialOrd + Eq + PartialEq + TryFrom<Datum<'a>>> RangeOps<'a> for T {}
+
+impl<'a> Range<'a> {
+    #[allow(dead_code)]
+    fn contains<T: RangeOps<'a>>(&self, elem: &T) -> bool {
+        match self.inner {
+            None => false,
+            Some(inner) => inner.lower.satisfied_by(elem) && inner.upper.satisfied_by(elem),
         }
     }
 }
@@ -126,6 +141,9 @@ pub type RangeUpperBound<'a> = RangeBound<'a, true>;
 
 impl<'a, const UPPER: bool> RangeBound<'a, UPPER> {
     /// Determines where `elem` lies in relation to the range bound.
+    ///
+    /// # Panics
+    /// - If `self.bound.datum()` is not convertible to `T`.
     fn elem_cmp<T: RangeOps<'a>>(&self, elem: &T) -> Ordering {
         match self.bound.map(|bound| {
             <T>::try_from(bound.datum())
@@ -212,5 +230,136 @@ impl Error for RangeError {
 impl From<RangeError> for String {
     fn from(e: RangeError) -> Self {
         e.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::Range;
+    use crate::adt::range::RangeBoundDesc;
+    use crate::{Datum, RowArena};
+
+    // TODO: Once SQL supports this, the test can be moved into SLT.
+    #[test]
+    fn test_range_contains() {
+        fn test_range_contains_inner(
+            range: Range,
+            contains: Option<i32>,
+            does_not_contain: Option<i32>,
+        ) {
+            if let Some(el) = contains {
+                assert!(range.contains(&el), "el {:?}, range {}", el, range);
+            }
+
+            if let Some(el) = does_not_contain {
+                assert!(!range.contains(&el), "el {:?}, range {:?}", el, range);
+            }
+        }
+
+        let arena = RowArena::new();
+        for (lower, lower_inclusive, upper, upper_inclusive, contains, does_not_contain) in [
+            (
+                Datum::Null,
+                true,
+                Datum::Int32(1),
+                false,
+                Some(i32::MIN),
+                Some(1),
+            ),
+            (Datum::Null, true, Datum::Int32(1), true, Some(1), Some(2)),
+            (Datum::Null, true, Datum::Null, false, Some(i32::MAX), None),
+            (Datum::Null, true, Datum::Null, true, Some(i32::MAX), None),
+            (
+                Datum::Null,
+                false,
+                Datum::Int32(1),
+                false,
+                Some(i32::MIN),
+                Some(1),
+            ),
+            (Datum::Null, false, Datum::Int32(1), true, Some(1), Some(2)),
+            (Datum::Null, false, Datum::Null, false, Some(i32::MAX), None),
+            (Datum::Null, false, Datum::Null, true, Some(i32::MAX), None),
+            (
+                Datum::Int32(-1),
+                true,
+                Datum::Int32(1),
+                false,
+                Some(-1),
+                Some(1),
+            ),
+            (
+                Datum::Int32(-1),
+                true,
+                Datum::Int32(1),
+                true,
+                Some(1),
+                Some(-2),
+            ),
+            (
+                Datum::Int32(-1),
+                false,
+                Datum::Int32(1),
+                false,
+                Some(0),
+                Some(-1),
+            ),
+            (
+                Datum::Int32(-1),
+                false,
+                Datum::Int32(1),
+                true,
+                Some(1),
+                Some(-1),
+            ),
+            (Datum::Int32(1), true, Datum::Null, false, Some(1), Some(-1)),
+            (
+                Datum::Int32(1),
+                true,
+                Datum::Null,
+                true,
+                Some(i32::MAX),
+                Some(-1),
+            ),
+            (Datum::Int32(1), false, Datum::Null, false, Some(2), Some(1)),
+            (
+                Datum::Int32(1),
+                false,
+                Datum::Null,
+                true,
+                Some(i32::MAX),
+                Some(1),
+            ),
+        ] {
+            let range = arena.make_datum(|packer| {
+                packer
+                    .push_range(
+                        RangeBoundDesc::new(lower, lower_inclusive),
+                        RangeBoundDesc::new(upper, upper_inclusive),
+                    )
+                    .unwrap();
+            });
+
+            let range = match range {
+                Datum::Range(inner) => inner,
+                _ => unreachable!(),
+            };
+
+            test_range_contains_inner(range, contains, does_not_contain);
+        }
+
+        let range = arena.make_datum(|packer| {
+            packer.push_empty_range();
+        });
+
+        let range = match range {
+            Datum::Range(inner) => inner,
+            _ => unreachable!(),
+        };
+
+        for el in i16::MIN..i16::MAX {
+            test_range_contains_inner(range, None, Some(el.into()));
+        }
     }
 }
