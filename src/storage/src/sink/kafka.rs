@@ -373,7 +373,7 @@ struct KafkaSinkState {
 
     progress_topic: String,
     progress_key: String,
-    progress_client: Arc<BaseConsumer<BrokerRewritingClientContext<SinkConsumerContext>>>,
+    progress_client: Option<Arc<BaseConsumer<BrokerRewritingClientContext<SinkConsumerContext>>>>,
 
     healthchecker: Arc<Mutex<Option<Healthchecker>>>,
     gate_ts: Rc<Cell<Option<Timestamp>>>,
@@ -513,7 +513,7 @@ impl KafkaSinkState {
             retry_manager,
             progress_topic: connection.progress.topic,
             progress_key: format!("mz-sink-{sink_id}"),
-            progress_client: Arc::new(progress_client),
+            progress_client: Some(Arc::new(progress_client)),
             healthchecker,
             gate_ts,
             latest_progress_ts: Timestamp::minimum(),
@@ -596,7 +596,9 @@ impl KafkaSinkState {
             .expect("Infinite retry cannot fail");
     }
 
-    async fn determine_latest_progress_record(&self) -> Result<Option<Timestamp>, anyhow::Error> {
+    async fn determine_latest_progress_record(
+        &mut self,
+    ) -> Result<Option<Timestamp>, anyhow::Error> {
         // Polls a message from a Kafka Source.  Blocking so should always be called on background
         // thread.
         fn get_next_message<C>(
@@ -723,13 +725,17 @@ impl KafkaSinkState {
             Ok(latest_ts)
         }
 
+        let progress_client = self
+            .progress_client
+            .take()
+            .expect("Claiming just-created progress client");
         // Only actually used for retriable errors.
         Retry::default()
             .clamp_backoff(Duration::from_secs(60 * 10))
             .retry_async(|_| async {
                 let progress_topic = self.progress_topic.clone();
                 let progress_key = self.progress_key.clone();
-                let progress_client = Arc::clone(&self.progress_client);
+                let progress_client = Arc::clone(&progress_client);
                 task::spawn_blocking(
                     || format!("get_latest_ts:{}", self.name),
                     move || {
@@ -1067,9 +1073,8 @@ where
         )
         .await;
 
-        let latest_ts = s
-            .halt_on_err(s.determine_latest_progress_record().await)
-            .await;
+        let latest_ts = s.determine_latest_progress_record().await;
+        let latest_ts = s.halt_on_err(latest_ts).await;
         info!(
             "{}: initial as_of: {:?}, latest progress record: {:?}",
             s.name, as_of.frontier, latest_ts
