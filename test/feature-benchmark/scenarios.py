@@ -23,7 +23,6 @@ from materialize.feature_benchmark.scenario import (
     BenchmarkingSequence,
     Scenario,
     ScenarioBig,
-    ScenarioDisabled,
 )
 
 
@@ -539,8 +538,8 @@ class DeltaJoin(Dataflow):
   /* A */
 1
 
-
-> SELECT COUNT(*) FROM v1 AS a1 JOIN v1 AS a2 USING (f1)
+# Delta joins require 2+ tables
+> SELECT COUNT(*) FROM v1 AS a1 , v1 AS a2 , v1 AS a3 WHERE a1.f1 = a2.f1 AND a2.f1 = a3.f1
   /* B */
 {self.n()}
 """
@@ -650,51 +649,6 @@ class Kafka(Scenario):
     pass
 
 
-class KafkaRaw(ScenarioDisabled):
-    def shared(self) -> Action:
-        return TdAction(
-            self.schema()
-            + f"""
-$ kafka-create-topic topic=kafka-raw
-
-$ kafka-ingest format=avro topic=kafka-raw schema=${{schema}} repeat={self.n()}
-{{"f2": 1}}
-"""
-        )
-
-    def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
-
-> SELECT COUNT(*) = 0
-  FROM mz_kafka_source_statistics
-  WHERE CAST(statistics->'topics'->'testdrive-kafka-raw-${{testdrive.seed}}'->'partitions'->'0'->'msgs' AS INT) > 0
-true
-
-> DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
-> DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
-
-> CREATE CONNECTION s1_kafka_conn
-  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
-
-> CREATE CONNECTION IF NOT EXISTS s1_csr_conn
-  TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
-
-> CREATE SOURCE s1
-  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-raw-${{testdrive.seed}}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
-  ENVELOPE NONE
-  /* A */
-
-
-> SELECT SUM(CAST(statistics->'topics'->'testdrive-kafka-raw-${{testdrive.seed}}'->'partitions'->'0'->'msgs' AS INT)) = {self.n()}
-  /* B */
-  FROM mz_kafka_source_statistics;
-true
-"""
-        )
-
-
 class KafkaEnvelopeNoneBytes(Kafka):
     def shared(self) -> Action:
         data = "a" * 512
@@ -793,12 +747,12 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
   TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
 
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
-  TO CONFLUENT SCHEMA REGISTRY URL ('${{testdrive.schema-registry-url}}');
-
+  TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
   /* A */
+
 > CREATE SOURCE s1
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-upsert-unique-${{testdrive.seed}}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE UPSERT
 
 > SELECT COUNT(*) FROM s1;
@@ -808,9 +762,7 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
         )
 
 
-# The scenario is currently not compatible with Platform, as restarting Mz alone causes the computeds to exit and
-# there is no code to restart them as well.
-class KafkaRestart(ScenarioDisabled):
+class KafkaRestart(Scenario):
     def shared(self) -> Action:
         return TdAction(
             self.keyschema()
@@ -912,11 +864,12 @@ class KafkaRestartBig(ScenarioBig):
 
 > CREATE SOURCE s1
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-recovery-big-${testdrive.seed}')
-  FORMAT BYTES
+  KEY FORMAT BYTES
+  VALUE FORMAT BYTES
   ENVELOPE UPSERT;
 
 # Confirm that all the EOF markers generated above have been processed
-> CREATE MATERIALIZED VIEW s1_is_complete AS SELECT COUNT(*) = 256 FROM s1 WHERE key0 <= '\\x00000000000000ff'
+> CREATE MATERIALIZED VIEW s1_is_complete AS SELECT COUNT(*) = 256 FROM s1 WHERE key <= '\\x00000000000000ff'
 
 > SELECT * FROM s1_is_complete;
 true
@@ -973,7 +926,8 @@ $ kafka-create-topic topic=kafka-scalability partitions=8
 
 > CREATE SOURCE s1
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-scalability-${{testdrive.seed}}')
-  FORMAT BYTES
+  KEY FORMAT BYTES
+  VALUE FORMAT BYTES
   ENVELOPE NONE
   /* A */
 
@@ -992,8 +946,8 @@ class Sink(Scenario):
 
 class ExactlyOnce(Sink):
     """Measure the time it takes to emit 1M records to a reuse_topic=true sink. As we have limited
-    means to figure out when the complete output has been emited, we have no option of re-ingesting
-    the data again to determine completion.
+    means to figure out when the complete output has been emited, we have no option but to re-ingest
+    the data to determine completion.
     """
 
     def shared(self) -> Action:
@@ -1011,19 +965,16 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
     def init(self) -> Action:
         return TdAction(
             f"""
-> DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
-> DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
-
-> CREATE CONNECTION s1_kafka_conn
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
   TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
 
-> CREATE CONNECTION s1_csr_conn
-FOR CONFLUENT SCHEMA REGISTRY
-URL '${{testdrive.schema-registry-url}}';
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${{testdrive.schema-registry-url}}';
 
 > CREATE SOURCE source1
-  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-sink-input-${{testdrive.seed}}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-input-${{testdrive.seed}}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
 
 > SELECT COUNT(*) FROM source1;
@@ -1034,14 +985,12 @@ URL '${{testdrive.schema-registry-url}}';
     def benchmark(self) -> MeasurementSource:
         return Td(
             """
-> DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
+> DROP SINK IF EXISTS sink1;
+> DROP SOURCE IF EXISTS sink1_check CASCADE;
   /* A */
 
-> CREATE CONNECTION s1_kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}')
-
 > CREATE SINK sink1 FROM source1
-  INTO KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-sink-output-${testdrive.seed}')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${testdrive.seed}')
   KEY (f1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -1049,7 +998,7 @@ URL '${{testdrive.schema-registry-url}}';
 # Wait until all the records have been emited from the sink, as observed by the sink1_check source
 
 > CREATE SOURCE sink1_check
-  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-sink-output-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${testdrive.seed}')
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
@@ -1098,11 +1047,21 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
     def benchmark(self) -> MeasurementSource:
         return Td(
             f"""
+> CREATE SECRET IF NOT EXISTS pgpass AS 'postgres'
+
+> CREATE CONNECTION IF NOT EXISTS pg_conn TO POSTGRES (
+    HOST postgres,
+    DATABASE postgres,
+    USER postgres,
+    PASSWORD SECRET pgpass
+  )
+
 > CREATE SOURCE mz_source_pgcdc
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres' (PUBLICATION 'mz_source');
+  FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source')
+  FOR TABLES ("pk_table")
   /* A */
 
-> SELECT count(*) FROM mz_source_pgcdc
+> SELECT count(*) FROM pk_table
   /* B */
 {self.n()}
             """
@@ -1137,8 +1096,18 @@ DROP TABLE IF EXISTS t1;
 CREATE TABLE t1 (pk SERIAL PRIMARY KEY, f2 BIGINT);
 ALTER TABLE t1 REPLICA IDENTITY FULL;
 
+> CREATE SECRET IF NOT EXISTS pgpass AS 'postgres'
+
+> CREATE CONNECTION IF NOT EXISTS pg_conn TO POSTGRES (
+    HOST postgres,
+    DATABASE postgres,
+    USER postgres,
+    PASSWORD SECRET pgpass
+  )
+
 > CREATE SOURCE s1
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres' (PUBLICATION 'p1');
+  FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'p1')
+  FOR TABLES ("t1")
             """
         )
 
@@ -1159,7 +1128,7 @@ ALTER TABLE t1 REPLICA IDENTITY FULL;
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 {insertions}
 
-> SELECT count(*) FROM s1
+> SELECT count(*) FROM t1
   /* B */
 {self.n()}
             """
@@ -1245,14 +1214,10 @@ class StartupEmpty(Startup):
         ]
 
 
-# Scenario is not currently compatible with Platform -- the computed instances
-# also need to be taken into account, which is currently not the case
-class StartupLoaded(ScenarioDisabled):
+class StartupLoaded(Scenario):
     """Measure the time it takes to restart a populated Mz instance and have all the dataflows be ready to return something"""
 
-    # Create 10^1.2 ~ 15 objects of each kind
-    # The usable SCALE value is limited by https://github.com/MaterializeInc/materialize/issues/11332
-    SCALE = 1.2
+    SCALE = 1.2  # 25 objects of each kind
 
     def shared(self) -> Action:
         return TdAction(
@@ -1272,19 +1237,9 @@ $ kafka-ingest format=avro topic=startup-time schema=${{schema}} repeat=1
         )
         create_sources = "\n".join(
             f"""
-> DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
-> DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
-
-> CREATE CONNECTION s1_kafka_conn
-  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
-
-> CREATE CONNECTION IF NOT EXISTS s1_csr_conn
-FOR CONFLUENT SCHEMA REGISTRY
-URL '${{testdrive.schema-registry-url}}';
-
 > CREATE SOURCE source{i}
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-startup-time-${{testdrive.seed}}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_kafka_conn
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE NONE
 """
             for i in range(0, self.n())
@@ -1311,6 +1266,21 @@ URL '${{testdrive.schema-registry-url}}';
 
         return TdAction(
             f"""
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_objects_per_schema = {self.n() * 10};
+ALTER SYSTEM SET max_materialized_views = {self.n() * 2};
+ALTER SYSTEM SET max_sources = {self.n() * 2};
+ALTER SYSTEM SET max_sinks = {self.n() * 2};
+ALTER SYSTEM SET max_tables = {self.n() * 2};
+
+> CREATE CONNECTION IF NOT EXISTS s1_kafka_conn
+  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
+
+> CREATE CONNECTION IF NOT EXISTS s1_csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${{testdrive.schema-registry-url}}';
+
 {create_tables}
 {create_sources}
 {create_views}

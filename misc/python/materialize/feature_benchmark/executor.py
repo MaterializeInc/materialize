@@ -10,6 +10,7 @@
 from typing import Any, Callable, List
 
 from materialize.mzcompose import Composition
+from materialize.mzcompose.services import Materialized
 
 
 class Executor:
@@ -19,16 +20,18 @@ class Executor:
 
 class Docker(Executor):
     def __init__(
-        self,
-        composition: Composition,
-        seed: int,
+        self, composition: Composition, seed: int, materialized: Materialized
     ) -> None:
         self._composition = composition
         self._seed = seed
+        self._materialized = materialized
 
     def RestartMz(self) -> None:
         self._composition.kill("materialized")
-        self._composition.up("materialized")
+        # Make sure we are restarting Materialized() with the
+        # same parameters (docker tag, SIZE) it was initially started with
+        with self._composition.override(self._materialized):
+            self._composition.up("materialized")
         return None
 
     def Td(self, input: str) -> Any:
@@ -36,7 +39,7 @@ class Docker(Executor):
             "testdrive",
             "--no-reset",
             f"--seed={self._seed}",
-            "--initial-backoff=10ms",
+            "--initial-backoff=10ms",  # Retry every 10ms until success
             "--backoff-factor=0",
             stdin=input,
             capture=True,

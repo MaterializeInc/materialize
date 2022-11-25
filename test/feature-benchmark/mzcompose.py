@@ -11,6 +11,7 @@ import argparse
 import os
 import sys
 import time
+from textwrap import dedent
 from typing import List, Type
 
 # mzcompose may start this script from the root of the Mz repository,
@@ -35,8 +36,7 @@ from materialize.feature_benchmark.termination import (
     RunAtMost,
     TerminationCondition,
 )
-from materialize.mzcompose import Composition, Service, WorkflowArgumentParser
-from materialize.mzcompose.services import Computed
+from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import Kafka as KafkaService
 from materialize.mzcompose.services import Kgen as KgenService
 from materialize.mzcompose.services import (
@@ -96,78 +96,6 @@ SERVICES = [
 ]
 
 
-def start_services(
-    c: Composition, args: argparse.Namespace, instance: str
-) -> List[Service]:
-    tag, options, nodes, workers = (
-        (args.this_tag, args.this_options, args.this_nodes, args.this_workers)
-        if instance == "this"
-        else (args.other_tag, args.other_options, args.other_nodes, args.other_workers)
-    )
-
-    cluster_services: List[Service] = []
-
-    if nodes:
-        cluster_services.append(
-            Materialized(
-                image=f"materialize/materialized:{tag}" if tag else None,
-            )
-        )
-
-        node_names = [f"computed_{n}" for n in range(0, nodes)]
-        for node_id in range(0, nodes):
-            cluster_services.append(
-                Computed(
-                    name=node_names[node_id],
-                    options=options,
-                    image=f"materialize/computed:{tag}" if tag else None,
-                )
-            )
-    else:
-        cluster_services.append(
-            Materialized(
-                image=f"materialize/materialized:{tag}" if tag else None,
-                workers=workers,
-                options=options,
-            )
-        )
-
-    with c.override(*cluster_services):
-        print(f"The version of the '{instance.upper()}' Mz instance is:")
-        c.run("materialized", "--version")
-
-        # Single-binary legacy Mz instances only have port 6875 open
-        # so only check that port before proceeding
-        c.up("materialized")
-        c.wait_for_materialized(port=6875)
-
-        if nodes:
-            print(f"Starting cluster for '{instance.upper()}' ...")
-            c.up(*[f"computed_{n}" for n in range(0, nodes)])
-
-            c.sql(
-                "CREATE CLUSTER REPLICA default.feature_benchmark REMOTE ["
-                + ",".join([f"'computed_{n}:2100'" for n in range(0, nodes)])
-                + "], COMPUTE ["
-                + ",".join([f"'computed_{n}:2102'" for n in range(0, nodes)])
-                + f"], WORKERS {workers};"
-            )
-
-            c.sql("DROP CLUSTER REPLICA default.r1")
-
-    c.up("testdrive", persistent=True)
-
-    return cluster_services
-
-
-def stop_services(c: Composition, cluster_services: List[Service]) -> None:
-    service_names = [s.name for s in cluster_services] + ["testdrive"]
-    c.kill(*service_names)
-    c.rm(*service_names)
-
-    c.rm_volumes("mzdata", "pgdata")
-
-
 def run_one_scenario(
     c: Composition, scenario: Type[Scenario], args: argparse.Namespace
 ) -> Comparator:
@@ -177,28 +105,47 @@ def run_one_scenario(
     common_seed = round(time.time())
 
     for mz_id, instance in enumerate(["this", "other"]):
-        cluster_services = start_services(c, args, instance)
+        tag, size = (
+            (args.this_tag, args.this_size)
+            if instance == "this"
+            else (args.other_tag, args.other_size)
+        )
 
-        with c.override(*cluster_services):
-            executor = Docker(
-                composition=c,
-                seed=common_seed,
+        c.up("testdrive", persistent=True)
+
+        mz = Materialized(
+            image=f"materialize/materialized:{tag}" if tag else None,
+            default_size=size,
+        )
+
+        with c.override(mz):
+            print(f"The version of the '{instance.upper()}' Mz instance is:")
+            c.run(
+                "materialized",
+                "-c",
+                "environmentd --version | grep environmentd",
+                entrypoint="bash",
             )
 
-            benchmark = Benchmark(
-                mz_id=mz_id,
-                scenario=scenario,
-                scale=args.scale,
-                executor=executor,
-                filter=make_filter(args),
-                termination_conditions=make_termination_conditions(args),
-                aggregation=make_aggregation(),
-            )
+            c.start_and_wait_for_tcp(services=["materialized"])
 
-            outcome, iterations = benchmark.run()
-            comparator.append(outcome)
+        executor = Docker(composition=c, seed=common_seed, materialized=mz)
 
-            stop_services(c, cluster_services)
+        benchmark = Benchmark(
+            mz_id=mz_id,
+            scenario=scenario,
+            scale=args.scale,
+            executor=executor,
+            filter=make_filter(args),
+            termination_conditions=make_termination_conditions(args),
+            aggregation=make_aggregation(),
+        )
+
+        outcome, iterations = benchmark.run()
+        comparator.append(outcome)
+        c.kill("materialized", "testdrive")
+        c.rm("materialized", "testdrive")
+        c.rm_volumes("mzdata", "pgdata")
 
     return comparator
 
@@ -223,27 +170,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--this-options",
-        metavar="OPTIONS",
-        type=str,
-        default=os.getenv("THIS_OPTIONS", None),
-        help="Options to pass to the 'This' instance.",
-    )
-
-    parser.add_argument(
         "--other-tag",
         metavar="TAG",
         type=str,
         default=os.getenv("OTHER_TAG", None),
         help="'Other' Materialize container tag to benchmark. If not provided, the current source will be used.",
-    )
-
-    parser.add_argument(
-        "--other-options",
-        metavar="OPTIONS",
-        type=str,
-        default=os.getenv("OTHER_OPTIONS", None),
-        help="Options to pass to the 'Other' instance.",
     )
 
     parser.add_argument(
@@ -280,48 +211,30 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--this-nodes",
+        "--this-size",
         metavar="N",
         type=int,
-        default=None,
-        help="Start a cluster with that many nodes for 'THIS'",
+        default=4,
+        help="SIZE use for 'THIS'",
     )
 
     parser.add_argument(
-        "--other-nodes",
-        metavar="N",
-        type=int,
-        default=None,
-        help="Start a cluster with that many nodes for 'OTHER'",
-    )
-
-    parser.add_argument(
-        "--this-workers",
-        metavar="N",
-        type=int,
-        default=None,
-        help="Number of workers to use for 'THIS'",
-    )
-
-    parser.add_argument(
-        "--other-workers",
-        metavar="N",
-        type=int,
-        default=None,
-        help="Number of workers to use for 'OTHER'",
+        "--other-size", metavar="N", type=int, default=4, help="SIZE to use for 'OTHER'"
     )
 
     args = parser.parse_args()
 
     print(
-        f"""
-this_tag: {args.this_tag}
-this_options: {args.this_options}
+        dedent(
+            f"""
+            this_tag: {args.this_tag}
+            this_size: {args.this_size}
 
-other_tag: {args.other_tag}
-other_options: {args.other_options}
+            other_tag: {args.other_tag}
+            other_size: {args.other_size}
 
-root_scenario: {args.root_scenario}"""
+            root_scenario: {args.root_scenario}"""
+        )
     )
 
     # Build the list of scenarios to run

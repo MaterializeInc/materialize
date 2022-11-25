@@ -30,8 +30,7 @@ steps:
           - { value: testdrive-size-1}
           - { value: testdrive-size-8}
           - { value: testdrive-in-cloudtest}
-#          - { value: feature-benchmark-single-node }
-#          - { value: feature-benchmark-cluster }
+          - { value: feature-benchmark }
           - { value: zippy-kafka-sources }
           - { value: zippy-kafka-parallel-insert }
           - { value: zippy-user-tables }
@@ -80,40 +79,17 @@ steps:
 
   - wait: ~
 
-# Disabled until we formulate a general performance strategy
-#  - id: feature-benchmark-single-node
-#    label: "Feature benchmark (single node)"
-#    timeout_in_minutes: 360
-#    agents:
-#      queue: linux-x86_64
-#    plugins:
-#      - ./ci/plugins/mzcompose:
-#          composition: feature-benchmark
-#          args:
-#            - --this-nodes
-#            - 1
-#            - --this-workers
-#            - 4
-#            - --other-tag
-#            - latest
-#            - --other-options
-#            - --workers 4
-
-#  - id: feature-benchmark-cluster
-#    label: "Feature benchmark (cluster)"
-#    timeout_in_minutes: 360
-#    agents:
-#      queue: linux-x86_64
-#    plugins:
-#      - ./ci/plugins/mzcompose:
-#          composition: feature-benchmark
-#          args:
-#            - --this-nodes
-#            - 4
-#            - --other-tag
-#            - latest
-#            - --other-options
-#            - --workers 4
+  - id: feature-benchmark
+    label: "Feature benchmark against 'latest'"
+    timeout_in_minutes: 360
+    agents:
+      queue: linux-x86_64-large
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: feature-benchmark
+          args:
+             - --other-tag
+             - latest
 
   - id: coverage
     label: Code coverage
