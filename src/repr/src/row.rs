@@ -577,6 +577,7 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             Datum::MzTimestamp(t)
         }
         Tag::Range => {
+            // See notes on `push_range_with` for details about encoding.
             let flag_byte = read_byte(data, offset);
             let flags =
                 range::Flags::from_bits(flag_byte).expect("range flags must be encoded validly");
@@ -836,6 +837,7 @@ where
             }
         }
         Datum::Range(Range { inner }) => {
+            // See notes on `push_range_with` for details about encoding.
             data.push(Tag::Range.into());
 
             match inner {
@@ -1329,8 +1331,7 @@ impl RowPacker<'_> {
 
     /// Pushes a `DatumRange` that is considered empty.
     ///
-    /// - To construct other ranges, use [`Self::push_range`],
-    ///   [`Self::push_range_with`].
+    /// - To construct other ranges, use [`Self::push_range`].
     pub fn push_empty_range(&mut self) {
         self.row.data.push(Tag::Range.into());
         // Untagged bytes only contains the `RANGE_EMPTY` flag value.
@@ -1345,6 +1346,13 @@ impl RowPacker<'_> {
     /// - If lower or upper express finite values and are equal to
     ///   `Datum::Null`. To handle `Datum::Null` properly, use
     ///   `RangeBoundDescValue::From<Datum<'a>>`.
+    ///
+    /// # Notes
+    /// - Prefer this function over `push_range_with`.
+    /// - Prefer creating [`RangeBoundDesc`]s using
+    ///   [`RangeBoundDesc<Datum<'a>>::new`], which handles `Datum::Null` in a
+    ///   SQL-friendly way.
+    /// - To generate an empty range, use `push_empty_range`.
     pub fn push_range<'a>(
         &mut self,
         lower: RangeBoundDesc<Datum<'a>>,
@@ -1380,6 +1388,15 @@ impl RowPacker<'_> {
     /// - If lower and upper express finite values and they are datums of
     ///   different types.
     /// - If lower or upper express finite values and push `Datum::Null`.
+    ///
+    /// # Notes
+    /// - Prefer `push_range_with` over this function. This function should be
+    ///   used only when you are not pushing `Datum`s to the inner row.
+    /// - To generate an empty range, use `push_empty_range`.
+    /// - Range encoding is `[<flag bytes>,<lower>?,<upper>?]`, where `lower`
+    ///   and `upper` are optional, contingent on the flag value expressing an
+    ///   empty range (where neither will be present) or infinite bounds (where
+    ///   each infinite bound will be absent).
     pub fn push_range_with<L, U, E>(
         &mut self,
         lower: RangeBoundDesc<L>,
