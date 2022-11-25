@@ -125,6 +125,20 @@ impl<T> Instance<T> {
         self.collections.get_mut(&id).ok_or(CollectionMissing(id))
     }
 
+    /// Return the IDs of pending peeks targeting the specified replica.
+    fn peeks_targeting(
+        &self,
+        replica_id: ReplicaId,
+    ) -> impl Iterator<Item = (Uuid, &PendingPeek<T>)> {
+        self.peeks.iter().filter_map(move |(uuid, peek)| {
+            if peek.target_replica == Some(replica_id) {
+                Some((*uuid, peek))
+            } else {
+                None
+            }
+        })
+    }
+
     /// Acquire an [`ActiveInstance`] by providing a storage controller.
     pub fn activate<'a>(
         &'a mut self,
@@ -384,6 +398,21 @@ where
                 }
             });
         }
+
+        // Peeks targeting this replica won't be served anymore now. We return an error for them to
+        // avoid leaving them pending forever.
+        let mut peek_responses = Vec::new();
+        let mut peek_ids = BTreeSet::new();
+        for (uuid, peek) in self.compute.peeks_targeting(id) {
+            peek_responses.push(ComputeControllerResponse::PeekResponse(
+                uuid,
+                PeekResponse::Error("target replica was dropped".into()),
+                peek.otel_ctx.clone(),
+            ));
+            peek_ids.insert(uuid);
+        }
+        self.compute.ready_responses.extend(peek_responses);
+        self.remove_peeks(&peek_ids);
 
         self.remove_replica_state(id);
         Ok(())

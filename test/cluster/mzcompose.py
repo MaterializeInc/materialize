@@ -10,6 +10,7 @@
 import re
 import time
 from textwrap import dedent
+from threading import Thread
 from typing import Tuple
 
 from pg8000.dbapi import ProgrammingError
@@ -69,6 +70,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-builtin-migration",
         "pg-snapshot-resumption",
         "test-system-table-indexes",
+        "test-replica-targeted-select-drop",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -851,3 +853,46 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
     """
             )
         )
+
+
+def workflow_test_replica_targeted_select_drop(c: Composition) -> None:
+    """
+    Test that a replica-targeted SELECT is aborted then the target
+    replica is dropped.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("computed_1")
+    c.wait_for_materialized()
+
+    c.sql(
+        """
+        DROP CLUSTER IF EXISTS cluster1 CASCADE;
+        CREATE CLUSTER cluster1 REPLICAS (
+            replica1 (REMOTE ['computed_1:2100'], COMPUTE ['computed_1:2102'], WORKERS 2)
+        );
+        """
+    )
+
+    def drop_replica_with_delay() -> None:
+        time.sleep(2)
+        c.sql("DROP CLUSTER REPLICA cluster1.replica1")
+
+    dropper = Thread(target=drop_replica_with_delay)
+    dropper.start()
+
+    try:
+        c.sql(
+            """
+            SET cluster = cluster1;
+            SET cluster_replica = replica1;
+            SELECT * FROM mz_views AS OF 18446744073709551615
+            """
+        )
+    except ProgrammingError as e:
+        assert "target replica was dropped" in e.args[0]["M"], e
+    else:
+        assert False, "SELECT was unexpectedly successful"
+
+    dropper.join()
