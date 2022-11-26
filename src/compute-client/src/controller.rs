@@ -477,6 +477,13 @@ where
         const METRICS_INTERVAL: Duration = Duration::from_secs(10);
 
         let orchestrator = self.orchestrator.clone();
+        // TODO[btv] -- I tried implementing a `watch_metrics` function,
+        // similar to `watch_services`, but it crashed due to
+        // https://github.com/kube-rs/kube/issues/1092 .
+        //
+        // If `metrics-server` can be made to fill in `resourceVersion`,
+        // or if that bug is fixed, we can try that again rather than using this inelegant
+        // loop.
         let s = async_stream::stream! {
             let mut interval = tokio::time::interval(METRICS_INTERVAL);
             loop {
