@@ -65,6 +65,18 @@ impl crate::Transform for InlineLet {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
+        let result = self.transform_without_trace(relation);
+        mz_repr::explain_new::trace_plan(&*relation);
+        result
+    }
+}
+
+impl InlineLet {
+    /// Performs the `InlineLet` transformation without tracing the result.
+    pub fn transform_without_trace(
+        &self,
+        relation: &mut MirRelationExpr,
+    ) -> Result<(), crate::TransformError> {
         let mut lets = vec![];
         self.action(relation, &mut lets)?;
         for (id, value) in lets.into_iter().rev() {
@@ -74,12 +86,9 @@ impl crate::Transform for InlineLet {
                 body: Box::new(relation.take_dangerous()),
             };
         }
-        mz_repr::explain_new::trace_plan(&*relation);
         Ok(())
     }
-}
 
-impl InlineLet {
     /// Install replace certain `Get` operators with their `Let` value.
     ///
     /// IMPORTANT: This transform is used for cleaning up after `RelationCSE`, which
