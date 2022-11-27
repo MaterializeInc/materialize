@@ -9,24 +9,22 @@
 
 //! Remove semijoins that are applied multiple times to no further effect.
 //!
-//! When we observe a candidate `A semijoin B`, in which the columns of `B`
-//! are unique keys and are all equated to columns of A, we:
+//! Mechanically, this transform looks for instances of `A join B` and replaces
+//! `B` with a simpler `C`. It does this in the restricted setting that each `join`
+//! would be a "semijoin": a cardinality preserving restriction.
 //!
-//! 1. Look for a `Get{id}` that populates the columns of `A`, perhaps with some filtering.
-//! 2. Chase down `B` looking for another semijoin between `Get{id}` and some `S`.
-//! 3. After some careful tests, and futzing around, replace `B` by `S`.
+//! The approach we use here is to restrict our attention to cases where
 //!
-//! The intent is that we only perform the replacement when we are certain that the
-//! columns surfaced by `B` are those of `Get{id}` restricted by `S`, permuted so that
-//! the `A semijoin B` equates like columns of `Get{id}`.
+//! 1. `A` is a potentially filtered instance of some `Get{id}`,
+//! 2. `A join B` equate columns of `A` to all columns of `B`,
+//! 3. The cardinality of any record in `B` is at most one.
+//! 4. The values in these records are exactly `Get{id} join C`.
 //!
-//! We give ourselves permission to allow `A` to be an arbitrarily filtered `Get{id}`:
-//! any restrictions we apply to `Get{id}` in producing `A` do not invalidate the transform.
-//! If we find in `B` a filtered `Get{id}` we attempt to transform those filters to `S`,
-//! which we can only do if the predicates are on the equated columns.
-//!
-//! Much more work could be done to incorporate projections, and potentially other ways
-//! that the colunms of `A` or `B` could derive from `Get{id}`.
+//! We find a candidate `C` by descending `B` looking for another semijoin between
+//! `Get{id}` and some other collection `D` on the same columns as `A` means to join `B`.
+//! Should we find such, allowing arbitrary filters of `Get{id}` on the equated columns,
+//! which we will transfer to the columns of `D` thereby forming `C`.
+
 use std::collections::{BTreeMap, HashMap};
 
 use crate::TransformArgs;
@@ -62,7 +60,7 @@ impl crate::Transform for SemijoinIdempotence {
                     MirRelationExpr::Let { id, value, .. } => {
                         bindings.insert(
                             Id::Local(*id),
-                            semijoin_replacements(&*value, &bindings, &rebindings),
+                            list_replacements(&*value, &bindings, &rebindings),
                         );
                         rebindings.insert(Id::Local(*id), as_filtered_get(value, &rebindings));
                     }
@@ -119,7 +117,7 @@ fn attempt_join_simplification(
         if distinct_on_keys_of(&inputs[1], &rtl)
             && input_mapper.input_arity(1) == equivalences.len()
         {
-            for mut candidate in semijoin_replacements(&inputs[1], bindings, rebindings) {
+            for mut candidate in list_replacements(&inputs[1], bindings, rebindings) {
                 if ids0.contains(&candidate.id) {
                     if let Some(permutation) = validate_replacement(&ltr, &mut candidate) {
                         inputs[1] = candidate.replacement.project(permutation);
@@ -140,6 +138,8 @@ fn attempt_join_simplification(
                             }
                         }
                         if !is_not_nulls.is_empty() {
+                            // Canonicalize otherwise arbitrary predicate order.
+                            is_not_nulls.sort();
                             inputs[0] = inputs[0].take_dangerous().filter(is_not_nulls);
                         }
 
@@ -149,11 +149,11 @@ fn attempt_join_simplification(
                 }
             }
         }
-        // Consider replacing the second input for the benefit of the first.
+        // Consider replacing the first input for the benefit of the second.
         if distinct_on_keys_of(&inputs[0], &ltr)
             && input_mapper.input_arity(0) == equivalences.len()
         {
-            for mut candidate in semijoin_replacements(&inputs[0], bindings, rebindings) {
+            for mut candidate in list_replacements(&inputs[0], bindings, rebindings) {
                 if ids1.contains(&candidate.id) {
                     if let Some(permutation) = validate_replacement(&rtl, &mut candidate) {
                         inputs[0] = candidate.replacement.project(permutation);
@@ -188,8 +188,7 @@ fn attempt_join_simplification(
 
 /// Evaluates the viability of a `candidate` to drive the replacement at `semijoin`.
 ///
-/// Returns a projection to apply to `candidate.replacement` if everything checks out,
-/// as well as the equivalence between columns of semijoin and the replacement.
+/// Returns a projection to apply to `candidate.replacement` if everything checks out.
 fn validate_replacement(
     map: &HashMap<usize, usize>,
     candidate: &mut Replacement,
@@ -215,22 +214,27 @@ fn validate_replacement(
 
 /// A restricted form of a semijoin idempotence information.
 ///
-/// This identifies two inputs to a semijoin, one of which is a `Get{id}` and the other an arbitrary relation.
-/// We also indicate which columns were equated, from each inputs, as well as a permutation to the columns of
-/// the latter which can allow us to substitute it in for the relation that offers this information.
+/// A `Replacement` may be offered up by any `MirRelationExpression`, meant to be `B` from above or similar,
+/// and indicates that the offered expression can be projected onto columns such that it then exactly equals
+/// a column projection of `Get{id} semijoin replacement`.
+
+/// Specifically,
+/// the `columns` member lists indexes `(a, b, c)` where column `b` of the offering expression corresponds to
+/// columns `a` in `Get{id}` and `c` in `replacement`, and for which the semijoin requires `a = c`. The values
+/// of the projection of the offering expression onto the `b` indexes exactly equal the intersection of the
+/// projection of `Get{id}` onto the `a` indexes and the projection of `replacement` onto the `c` columns.
 #[derive(Clone, Debug)]
 struct Replacement {
     id: Id,
-    // matching columns from `id`, `other`, and `replacement` respectively.
     columns: Vec<(usize, usize, usize)>,
     replacement: MirRelationExpr,
 }
 
-/// Return a list of potential semijoin fits, expressed as a list of
-/// 1. candidate let binding identifier,
-/// 2. expressions on which the semijoin has occurred.
-/// 3. replacement `MirRelationExpr`
-fn semijoin_replacements(
+/// Return a list of potential semijoin replacements for `expr`.
+///
+/// This method descends recursively, traversing `Get`, `Project`, `Reduce`, and `ArrangeBy` operators
+/// looking for a `Join` operator, at which point it defers to the `list_replacements_join` method.
+fn list_replacements(
     expr: &MirRelationExpr,
     bindings: &BTreeMap<Id, Vec<Replacement>>,
     rebindings: &BTreeMap<Id, Vec<(Id, Vec<MirScalarExpr>)>>,
@@ -248,12 +252,12 @@ fn semijoin_replacements(
             equivalences,
             ..
         } => {
-            results.extend(list_replacements(inputs, equivalences, rebindings));
+            results.extend(list_replacements_join(inputs, equivalences, rebindings));
         }
         MirRelationExpr::Project { input, outputs } => {
             // If the columns are preserved by projection ..
             results.extend(
-                semijoin_replacements(input, bindings, rebindings)
+                list_replacements(input, bindings, rebindings)
                     .into_iter()
                     .filter_map(|mut replacement| {
                         let new_cols = replacement
@@ -277,7 +281,7 @@ fn semijoin_replacements(
         } => {
             // If the columns are preserved by `group_key` ..
             results.extend(
-                semijoin_replacements(input, bindings, rebindings)
+                list_replacements(input, bindings, rebindings)
                     .into_iter()
                     .filter_map(|mut replacement| {
                         let new_cols = replacement
@@ -300,23 +304,15 @@ fn semijoin_replacements(
             );
         }
         MirRelationExpr::ArrangeBy { input, .. } => {
-            results.extend(semijoin_replacements(input, bindings, rebindings));
+            results.extend(list_replacements(input, bindings, rebindings));
         }
         _ => {}
     }
     results
 }
 
-/// Attempts to re-cast a binary join as a certain form of semijoin, where it can identify:
-///
-/// 1. A `Get(id)` input,
-/// 2. An other input with unique keys (columns),
-/// 3. Expressions that equate those keys to columns in the first input.
-///
-/// If the join is exactly these things (no additional inputs or equivalences) it is bundled
-/// up as a `Replacement` identifying each. A join could potentially have multiple replacements,
-/// although maybe math prevents that from happening, with some deeper thought.
-fn list_replacements(
+/// Return a list of potential semijoin replacements for `expr`.
+fn list_replacements_join(
     inputs: &[MirRelationExpr],
     equivalences: &Vec<Vec<MirScalarExpr>>,
     rebindings: &BTreeMap<Id, Vec<(Id, Vec<MirScalarExpr>)>>,
