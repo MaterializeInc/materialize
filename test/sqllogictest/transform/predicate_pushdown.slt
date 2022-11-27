@@ -9,6 +9,8 @@
 
 # This file contains tests for the PredicatePushdown transform.
 
+mode cockroach
+
 statement ok
 CREATE TABLE x (a int not null, u int, b bool)
 
@@ -422,24 +424,40 @@ Source mz_catalog.mz_materialized_views
 
 EOF
 
-DROP SCHEMA public CASCADE ;
- CREATE SCHEMA public ;
- CREATE TABLE table_f2_f3 ( f2 INTEGER , f3 INTEGER  ) ;
- CREATE TABLE table_f3_f4_f5 ( f3 INTEGER , f4 INTEGER , f5 INTEGER  ) ;
- CREATE TABLE table_f4_f5_f6 ( f4 INTEGER , f5 INTEGER , f6 INTEGER  ) ;
- INSERT INTO table_f2_f3 VALUES ( 0 , 0 ) ;
- INSERT INTO table_f2_f3 VALUES ( 0 , 1 ) ;
- INSERT INTO table_f2_f3 VALUES ( NULL , 0 ) ;
- INSERT INTO table_f3_f4_f5 VALUES ( 0 , 1 , NULL ) ;
- INSERT INTO table_f3_f4_f5 VALUES ( 1 , 1 , 0 ) ;
- INSERT INTO table_f3_f4_f5 VALUES ( 1 , NULL , 0 ) ;
- INSERT INTO table_f4_f5_f6 VALUES ( 0 , 0 , 1 ) ;
- INSERT INTO table_f4_f5_f6 VALUES ( 1 , 0 , 0 ) ;
- INSERT INTO table_f4_f5_f6 VALUES ( NULL , 0 , 1 ) ;
- INSERT INTO table_f4_f5_f6 VALUES ( NULL , 1 , 0 ) ;
- INSERT INTO table_f4_f5_f6 VALUES ( NULL , 1 , 0 ) ;
+# One more for https://github.com/MaterializeInc/materialize/issues/16128
+# https://github.com/MaterializeInc/materialize/pull/16147#issuecomment-1322042176
 
-query IIIIII
+statement ok
+DROP SCHEMA public CASCADE ;
+
+statement ok
+CREATE SCHEMA public ;
+
+statement ok
+CREATE TABLE table_f2_f3 ( f2 INTEGER , f3 INTEGER  ) ;
+
+statement ok
+CREATE TABLE table_f3_f4_f5 ( f3 INTEGER , f4 INTEGER , f5 INTEGER  ) ;
+
+statement ok
+CREATE TABLE table_f4_f5_f6 ( f4 INTEGER , f5 INTEGER , f6 INTEGER  ) ;
+
+statement ok
+INSERT INTO table_f2_f3 VALUES ( 0 , 0 ), ( 0 , 1 ), ( NULL , 0 );
+
+statement ok
+INSERT INTO table_f3_f4_f5 VALUES ( 0 , 1 , NULL ), ( 1 , 1 , 0 ), ( 1 , NULL , 0 );
+
+statement ok
+INSERT INTO table_f4_f5_f6 VALUES ( 0 , 0 , 1 ), ( 1 , 0 , 0 ), ( NULL , 0 , 1 ), ( NULL , 1 , 0 ), ( NULL , 1 , 0 );
+
+query IIIIII rowsort
 SELECT * FROM table_f2_f3  JOIN ( table_f3_f4_f5  JOIN table_f4_f5_f6  USING ( f5  )  )  USING ( f3  )
  WHERE f6  IS  NULL  OR f3  >= f6  AND f6  <=  10000   ;
 ----
+1  0  0  1  0  1
+1  0  0  1  1  0
+1  0  0  1  NULL  1
+1  0  0  NULL  0  1
+1  0  0  NULL  1  0
+1  0  0  NULL  NULL  1
