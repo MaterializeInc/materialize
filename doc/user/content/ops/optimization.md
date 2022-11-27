@@ -17,9 +17,8 @@ Building an efficient index depends on the clauses used in your queries, as well
 
 * [WHERE](#where)
 * [JOIN](#join)
-* [GROUP BY](#group-by)
 
-`ORDER BY` and `LIMIT` aren't clauses that benefit from an index.
+`GROUP BY`, `ORDER BY` and `LIMIT` clauses currently do not benefit from an index.
 
 ### `WHERE`
 Speed up a query involving a `WHERE` clause with equality comparisons to literals (e.g., `42`, or `'foo'`):
@@ -88,16 +87,9 @@ Delta joins have the advantage of using negligible additional memory outside the
 
 If your query filters one or more of the join inputs by a literal equality (e.g., `t1.y = 42`), place one of those inputs first in the `FROM` clause. In particular, this can speed up [ad hoc `SELECT` queries](/sql/select/#ad-hoc-queries) by accessing inputs using index lookups, rather than full scans.
 
-### `GROUP BY`
-Speed up a query using a `GROUP BY` by indexing the aggregation keys:
-
-Clause          | Index                             |
-----------------|-----------------------------------|
-`GROUP BY x,y`  | `CREATE INDEX ON obj_name (x,y);` |
-
 ### Default
 
-Create a default index when there is no particular `WHERE`, `JOIN`, or `GROUP BY` clause to fulfill. This can still speed up your query by reading the input from memory.
+Create a default index when there is no particular `WHERE` or `JOIN` clause that would fit the above cases. This can still speed up your query by reading the input from memory.
 
 Clause                                               | Index                               |
 -----------------------------------------------------|-------------------------------------|
