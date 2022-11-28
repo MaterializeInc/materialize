@@ -868,6 +868,11 @@ impl CatalogState {
         self.system_configuration = SystemVars::default();
     }
 
+    /// Returns the `config_has_synced_once` configuration parameter.
+    pub fn set_config_has_synced_once(&mut self) -> Result<(), AdapterError> {
+        self.system_configuration.set_config_has_synced_once()
+    }
+
     /// Gets the schema map for the database matching `database_spec`.
     fn resolve_schema_in_database(
         &self,

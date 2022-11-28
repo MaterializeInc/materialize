@@ -321,6 +321,15 @@ static WINDOW_FUNCTIONS: ServerVar<bool> = ServerVar {
     internal: false,
 };
 
+/// Boolean flag indicating that the remote configuration was synchronized at
+/// least once with the persistent [SessionVars].
+static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("config_has_synced_once"),
+    value: &false,
+    description: "Boolean flag indicating that the remote configuration was synchronized at least once (Materialize).",
+    internal: true,
+};
+
 /// Session variables.
 ///
 /// Materialize roughly follows the PostgreSQL configuration model, which works
@@ -878,6 +887,7 @@ pub struct SystemVars {
     max_result_size: SystemVar<u32>,
     allowed_cluster_replica_sizes: SystemVar<Vec<String>>, // TODO: BTreeSet<String> will be better
     window_functions: SystemVar<bool>,
+    config_has_synced_once: SystemVar<bool>,
 }
 
 impl Default for SystemVars {
@@ -898,6 +908,7 @@ impl Default for SystemVars {
             max_result_size: SystemVar::new(&MAX_RESULT_SIZE),
             allowed_cluster_replica_sizes: SystemVar::new(&ALLOWED_CLUSTER_REPLICA_SIZES),
             window_functions: SystemVar::new(&WINDOW_FUNCTIONS),
+            config_has_synced_once: SystemVar::new(&CONFIG_HAS_SYNCED_ONCE),
         }
     }
 }
@@ -922,6 +933,7 @@ impl SystemVars {
             &self.max_result_size,
             &self.allowed_cluster_replica_sizes,
             &self.window_functions,
+            &self.config_has_synced_once,
         ]
         .into_iter()
     }
@@ -967,6 +979,8 @@ impl SystemVars {
             Ok(&self.allowed_cluster_replica_sizes)
         } else if name == WINDOW_FUNCTIONS.name {
             Ok(&self.window_functions)
+        } else if name == CONFIG_HAS_SYNCED_ONCE.name {
+            Ok(&self.config_has_synced_once)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -1010,6 +1024,8 @@ impl SystemVars {
             self.allowed_cluster_replica_sizes.set(value)
         } else if name == WINDOW_FUNCTIONS.name {
             self.window_functions.set(value)
+        } else if name == CONFIG_HAS_SYNCED_ONCE.name {
+            self.config_has_synced_once.set(value)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -1051,6 +1067,8 @@ impl SystemVars {
             self.allowed_cluster_replica_sizes.reset()
         } else if name == WINDOW_FUNCTIONS.name {
             self.window_functions.reset()
+        } else if name == CONFIG_HAS_SYNCED_ONCE.name {
+            self.config_has_synced_once.reset()
         } else {
             return Err(AdapterError::UnknownParameter(name.into()));
         }
@@ -1130,6 +1148,16 @@ impl SystemVars {
     /// Returns the `window_functions` configuration parameter.
     pub fn window_functions(&self) -> bool {
         *self.window_functions.value()
+    }
+
+    /// Returns the `config_has_synced_once` configuration parameter.
+    pub fn config_has_synced_once(&self) -> bool {
+        *self.config_has_synced_once.value()
+    }
+
+    /// Returns the `config_has_synced_once` configuration parameter.
+    pub fn set_config_has_synced_once(&mut self) -> Result<(), AdapterError> {
+        self.config_has_synced_once.set("true")
     }
 }
 
