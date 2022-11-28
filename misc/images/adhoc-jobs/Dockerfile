@@ -11,4 +11,4 @@ MZFROM ubuntu-base
 
 COPY examples/persistcli /usr/local/bin/persistcli
 
-ENTRYPOINT ["--bin=/usr/local/bin/persistcli"]
+ENTRYPOINT ["persistcli"]
