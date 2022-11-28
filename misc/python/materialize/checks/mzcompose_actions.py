@@ -112,12 +112,15 @@ class StartComputed(MzcomposeAction):
             c.up("computed_1")
 
 
-class RestartRedpanda(MzcomposeAction):
+class RestartRedpandaDebezium(MzcomposeAction):
+    """Restarts Redpanda and Debezium. Debezium is unable to survive Redpanda restarts so the two go together."""
+
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        c.kill("redpanda")
-        c.start_and_wait_for_tcp(services=["redpanda"])
+        for service in ["redpanda", "debezium"]:
+            c.kill(service)
+            c.start_and_wait_for_tcp(services=[service])
 
 
 class RestartPostgresBackend(MzcomposeAction):

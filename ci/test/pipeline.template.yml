@@ -551,7 +551,7 @@ steps:
           args: [--exitfirst, -m, "not long", --aws-region=us-east-2, test/cloudtest/]
 
   - id: checks-restart-redpanda
-    label: "Checks + restart Redpanda"
+    label: "Checks + restart Redpanda & Debezium"
     depends_on: build-x86_64
     inputs: [misc/python/materialize/checks]
     timeout_in_minutes: 30
@@ -560,7 +560,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=RestartRedpanda]
+          args: [--scenario=RestartRedpandaDebezium]
 
   - id: lang-csharp
     label: ":csharp: tests"

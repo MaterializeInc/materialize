@@ -366,15 +366,15 @@ steps:
           composition: platform-checks
           args: [--scenario=RestartPostgresBackend, --execution-mode=oneatatime]
 
-  - id: checks-oneatatime-restart-redpanda
-    label: "Checks oneatatime + restart Redpanda"
+  - id: checks-oneatatime-restart-redpanda-debezium
+    label: "Checks oneatatime + restart Redpanda & Debezium"
     timeout_in_minutes: 300
     agents:
       queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=RestartRedpanda, --execution-mode=oneatatime]
+          args: [--scenario=RestartRedpandaDebezium, --execution-mode=oneatatime]
 
   - id: checks-parallel-drop-create-default-replica
     label: "Checks parallel + DROP/CREATE replica"
@@ -437,14 +437,14 @@ steps:
           args: [--scenario=RestartPostgresBackend, --execution-mode=parallel]
 
   - id: checks-parallel-restart-redpanda
-    label: "Checks parallel + restart Redpanda"
+    label: "Checks parallel + restart Redpanda & Debezium"
     timeout_in_minutes: 300
     agents:
       queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=RestartRedpanda, --execution-mode=parallel]
+          args: [--scenario=RestartRedpandaDebezium, --execution-mode=parallel]
 
   - id: checks-upgrade-entire-mz
     label: "Platform checks upgrade, whole-Mz restart"
