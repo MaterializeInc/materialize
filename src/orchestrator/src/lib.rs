@@ -111,8 +111,8 @@ pub trait Service: fmt::Debug + Send + Sync {
 
 #[derive(Copy, Clone, Debug, Default, Serialize, Deserialize, Eq, PartialEq)]
 pub struct ServiceProcessMetrics {
-    pub nano_cpus: Option<u64>,
-    pub bytes_memory: Option<u64>,
+    pub cpu_nano_cores: Option<u64>,
+    pub memory_bytes: Option<u64>,
 }
 
 /// A simple language for describing assertions about a label's existence and value.

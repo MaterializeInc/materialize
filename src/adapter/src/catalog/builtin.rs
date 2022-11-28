@@ -1540,8 +1540,8 @@ pub static MZ_CLUSTER_REPLICA_METRICS: Lazy<BuiltinTable> = Lazy::new(|| Builtin
     desc: RelationDesc::empty()
         .with_column("replica_id", ScalarType::UInt64.nullable(false))
         .with_column("process_id", ScalarType::UInt64.nullable(false))
-        .with_column("nano_cpus", ScalarType::UInt64.nullable(true))
-        .with_column("bytes_memory", ScalarType::UInt64.nullable(true)),
+        .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(true))
+        .with_column("memory_bytes", ScalarType::UInt64.nullable(true)),
 });
 
 pub static MZ_STORAGE_HOST_METRICS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1551,8 +1551,8 @@ pub static MZ_STORAGE_HOST_METRICS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTab
     schema: MZ_INTERNAL_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
-        .with_column("nano_cpus", ScalarType::UInt64.nullable(true))
-        .with_column("bytes_memory", ScalarType::UInt64.nullable(true)),
+        .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(true))
+        .with_column("memory_bytes", ScalarType::UInt64.nullable(true)),
 });
 
 pub static MZ_STORAGE_SHARDS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {

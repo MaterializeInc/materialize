@@ -412,8 +412,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             };
 
             ServiceProcessMetrics {
-                nano_cpus: cpu,
-                bytes_memory: memory,
+                cpu_nano_cores: cpu,
+                memory_bytes: memory,
             }
         }
         let ret = futures::future::join_all((0..scale.get()).map(|i| get_metrics(self, id, i)));
