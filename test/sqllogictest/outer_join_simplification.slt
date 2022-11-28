@@ -1,0 +1,317 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+create table foo_raw (a int4, b int8, u text)
+
+statement ok
+create materialized view foo as select * from foo_raw where a is not null and b is not null
+
+statement ok
+create table bar_raw (a int4, v text)
+
+statement ok
+create materialized view bar as select distinct on (a) a, v from bar_raw
+
+statement ok
+create materialized view ban_nn as select * from bar where a is not null
+
+statement ok
+create table baz_raw (b int8, c int2, w text)
+
+statement ok
+create materialized view baz as select distinct on (b) b, c, w from baz_raw where b is not null
+
+statement ok
+create table quux_raw (c int2, x text)
+
+statement ok
+create materialized view quux as select distinct on (c) c, x from quux_raw where c is not null
+
+# Demonstrate core semijoin idempotence simplification: semijoin removal.
+# The resulting plan should have one join and no distinct operators.
+query T multiline
+explain select * from (with keys as (
+    select distinct foo.a from foo, bar where foo.a = bar.a
+)
+select * from foo, keys where foo.a = keys.a)
+----
+Explained Query:
+  Project (#0..=#2, #0)
+    Join on=(#0 = #3) type=differential
+      ArrangeBy keys=[[#0]]
+        Get materialize.public.foo
+      ArrangeBy keys=[[#0]]
+        Project (#0)
+          Filter (#0) IS NOT NULL
+            Get materialize.public.bar
+
+Source materialize.public.bar
+  project=(#0, #2)
+  filter=((#0) IS NOT NULL)
+  map=(dummy)
+
+EOF
+
+# Ensure LEFT JOIN is planned with only one join.
+query T multiline
+explain
+select * from
+foo_raw left join bar on foo_raw.a = bar.a;
+----
+Explained Query:
+  Return
+    Union
+      Map (null, null)
+        Union
+          Negate
+            Project (#0..=#2)
+              Get l0
+          Get materialize.public.foo_raw
+      Project (#0..=#2, #0, #3)
+        Get l0
+  With
+    cte l0 =
+      Project (#0..=#2, #4)
+        Join on=(#0 = #3) type=differential
+          ArrangeBy keys=[[#0]]
+            Filter (#0) IS NOT NULL
+              Get materialize.public.foo_raw
+          ArrangeBy keys=[[#0]]
+            Filter (#0) IS NOT NULL
+              Get materialize.public.bar
+
+Source materialize.public.bar
+  filter=((#0) IS NOT NULL)
+
+EOF
+
+# RIGHT JOIN should be planned with only one join.
+# At the moment, we do not see the join symmetry.
+query T multiline
+explain
+select * from
+bar right join foo_raw on foo_raw.a = bar.a;
+----
+Explained Query:
+  Return
+    Union
+      Project (#3, #4, #0..=#2)
+        Map (null, null)
+          Union
+            Negate
+              Project (#0..=#2)
+                Join on=(#0 = #3) type=differential
+                  Get l0
+                  ArrangeBy keys=[[#0]]
+                    Project (#0)
+                      Get l1
+            Get materialize.public.foo_raw
+      Project (#0, #1, #0, #3, #4)
+        Join on=(#0 = #2) type=differential
+          ArrangeBy keys=[[#0]]
+            Get l1
+          Get l0
+  With
+    cte l1 =
+      Filter (#0) IS NOT NULL
+        Get materialize.public.bar
+    cte l0 =
+      ArrangeBy keys=[[#0]]
+        Filter (#0) IS NOT NULL
+          Get materialize.public.foo_raw
+
+Source materialize.public.bar
+  filter=((#0) IS NOT NULL)
+
+EOF
+
+# Ensure that multiple left joins still produce one join operator each.
+query T multiline
+explain
+select * from
+foo left join bar on foo.a = bar.a
+    left join baz on foo.b = baz.b
+    left join quux on baz.c = quux.c;
+----
+Explained Query:
+  Return
+    Union
+      Map (null, null)
+        Union
+          Negate
+            Project (#0..=#7)
+              Get l4
+          Get l3
+      Project (#0..=#7, #6, #8)
+        Get l4
+  With
+    cte l4 =
+      Project (#0..=#7, #9)
+        Join on=(#6 = #8) type=differential
+          ArrangeBy keys=[[#6]]
+            Filter (#6) IS NOT NULL
+              Get l3
+          ArrangeBy keys=[[#0]]
+            Get materialize.public.quux
+    cte l3 =
+      Union
+        Map (null, null, null)
+          Union
+            Negate
+              Project (#0..=#4)
+                Get l2
+            Get l1
+        Project (#0..=#4, #1, #5, #6)
+          Get l2
+    cte l2 =
+      Project (#0..=#4, #6, #7)
+        Join on=(#1 = #5) type=differential
+          ArrangeBy keys=[[#1]]
+            Get l1
+          ArrangeBy keys=[[#0]]
+            Get materialize.public.baz
+    cte l1 =
+      Union
+        Map (null, null)
+          Union
+            Negate
+              Project (#0..=#2)
+                Get l0
+            Get materialize.public.foo
+        Project (#0..=#2, #0, #3)
+          Get l0
+    cte l0 =
+      Project (#0..=#2, #4)
+        Join on=(#0 = #3) type=differential
+          ArrangeBy keys=[[#0]]
+            Get materialize.public.foo
+          ArrangeBy keys=[[#0]]
+            Filter (#0) IS NOT NULL
+              Get materialize.public.bar
+
+Source materialize.public.bar
+  filter=((#0) IS NOT NULL)
+
+EOF
+
+# Record how we do not yet fully optimize projections in left join stacks.
+# This plan appears to require further projection pushdown to cancel the last join.
+query T multiline
+explain
+select count(*) from
+foo left join bar on foo.a = bar.a
+    left join baz on foo.b = baz.b
+    left join quux on baz.c = quux.c;
+----
+Explained Query:
+  Return
+    Union
+      Get l1
+      Map (0)
+        Union
+          Negate
+            Project ()
+              Get l1
+          Constant
+            - ()
+  With
+    cte l1 =
+      Reduce aggregates=[count(true)]
+        Project ()
+          Union
+            Map (null)
+              Union
+                Negate
+                  Project ()
+                    Get l0
+                Project ()
+                  Get materialize.public.foo
+            Get l0
+    cte l0 =
+      Project (#2)
+        Join on=(#0 = #1) type=differential
+          ArrangeBy keys=[[#0]]
+            Project (#1)
+              Get materialize.public.foo
+          ArrangeBy keys=[[#0]]
+            Project (#0, #1)
+              Get materialize.public.baz
+
+Source materialize.public.foo
+  project=(#0, #1, #3)
+  map=(dummy)
+Source materialize.public.bar
+  project=(#0, #2)
+  filter=((#0) IS NOT NULL)
+  map=(dummy)
+Source materialize.public.baz
+  project=(#0, #1, #3)
+  map=(dummy)
+Source materialize.public.quux
+  project=(#0, #2)
+  map=(dummy)
+
+EOF
+
+# Record how we can push filters through left joins to their source.
+query T multiline
+explain
+select * from
+foo left join baz on foo.b = baz.b
+    left join quux on baz.c = quux.c
+where foo.a = 7;
+----
+Explained Query:
+  Return
+    Union
+      Map (null, null)
+        Union
+          Negate
+            Project (#0..=#5)
+              Get l3
+          Get l2
+      Project (#0..=#5, #4, #6)
+        Get l3
+  With
+    cte l3 =
+      Project (#0..=#5, #7)
+        Join on=(#4 = #6) type=differential
+          ArrangeBy keys=[[#4]]
+            Filter (#4) IS NOT NULL
+              Get l2
+          ArrangeBy keys=[[#0]]
+            Get materialize.public.quux
+    cte l2 =
+      Union
+        Map (null, null, null)
+          Union
+            Negate
+              Project (#0..=#2)
+                Get l1
+            Get l0
+        Project (#0..=#2, #1, #3, #4)
+          Get l1
+    cte l1 =
+      Project (#0..=#2, #4, #5)
+        Join on=(#1 = #3) type=differential
+          ArrangeBy keys=[[#1]]
+            Get l0
+          ArrangeBy keys=[[#0]]
+            Get materialize.public.baz
+    cte l0 =
+      Filter (#0 = 7)
+        Get materialize.public.foo
+
+Source materialize.public.foo
+  filter=((#0 = 7))
+
+EOF
