@@ -368,8 +368,8 @@ Field         | Type       | Meaning
 --------------|------------|--------
 `replica_id`  | [`bigint`] | The ID of a cluster replica.
 `process_id`  | [`bigint`] | An identifier of a compute process within a replica.
-`nano_cpus`   | [`bigint`] | Approximate CPU usage, in billionths of a vCPU core.
-`bytes_memory`| [`bigint`] | Approximate RAM usage, in bytes.
+`cpu_nano_cores`   | [`bigint`] | Approximate CPU usage, in billionths of a vCPU core.
+`memory_bytes`| [`bigint`] | Approximate RAM usage, in bytes.
 
 [`bigint`]: /sql/types/bigint
 [`bigint list`]: /sql/types/list

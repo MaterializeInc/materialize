@@ -845,15 +845,15 @@ impl CatalogState {
             |(
                 process_id,
                 ServiceProcessMetrics {
-                    nano_cpus,
-                    bytes_memory,
+                    cpu_nano_cores,
+                    memory_bytes,
                 },
             )| {
                 Row::pack_slice(&[
                     replica_id.into(),
                     u64::cast_from(process_id).into(),
-                    (*nano_cpus).into(),
-                    (*bytes_memory).into(),
+                    (*cpu_nano_cores).into(),
+                    (*memory_bytes).into(),
                 ])
             },
         );
