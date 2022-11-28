@@ -23,6 +23,7 @@ use mz_secrets::SecretsReader;
 use mz_storage_client::types::hosts::StorageHostResourceAllocation;
 
 use crate::catalog::storage;
+use crate::config::SystemParameterFrontend;
 
 /// Configures a catalog.
 #[derive(Debug)]
@@ -60,6 +61,10 @@ pub struct Config<'a, S> {
     pub egress_ips: Vec<Ipv4Addr>,
     /// Context for generating an AWS Principal.
     pub aws_principal_context: Option<AwsPrincipalContext>,
+    /// A optional frontend used to pull system parameters for initial sync in
+    /// Catalog::open. A `None` value indicates that the initial sync should be
+    /// skipped.
+    pub system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -252,6 +252,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         segment_api_key: None,
         egress_ips: vec![],
         aws_account_id: None,
+        system_parameter_frontend: None,
     }))?;
     let server = Server {
         inner,

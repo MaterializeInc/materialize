@@ -87,6 +87,7 @@ pub use crate::catalog::config::{
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::catalog::storage::{BootstrapArgs, Transaction};
 use crate::client::ConnectionId;
+use crate::config::SynchronizedParameters;
 use crate::session::vars::SystemVars;
 use crate::session::{PreparedStatement, Session, User, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
@@ -2484,6 +2485,28 @@ impl<S: Append> Catalog<S> {
         for (name, value) in system_config {
             catalog.state.insert_system_configuration(&name, &value)?;
         }
+        if !catalog.state.system_config().config_has_synced_once() {
+            if let Some(system_parameter_frontend) = config.system_parameter_frontend {
+                let system_config = catalog.state.system_config();
+                let mut params = SynchronizedParameters::new(
+                    system_config.window_functions(),
+                    system_config.allowed_cluster_replica_sizes().to_vec(),
+                    system_config.max_result_size(),
+                );
+
+                if system_parameter_frontend.start_and_initialize().await {
+                    system_parameter_frontend.pull(&mut params);
+
+                    for (name, value) in params.iter_modified() {
+                        catalog
+                            .state
+                            .insert_system_configuration(name.as_str(), value.as_str())?;
+                    }
+
+                    catalog.state.set_config_has_synced_once()?;
+                }
+            }
+        }
 
         let last_seen_version = catalog
             .storage()
@@ -3100,6 +3123,7 @@ impl<S: Append> Catalog<S> {
             secrets_reader,
             egress_ips: vec![],
             aws_principal_context: None,
+            system_parameter_frontend: None,
         })
         .await?;
         Ok(catalog)

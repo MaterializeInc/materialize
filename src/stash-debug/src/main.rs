@@ -340,6 +340,7 @@ impl Usage {
             secrets_reader,
             egress_ips: vec![],
             aws_principal_context: None,
+            system_parameter_frontend: None,
         })
         .await?;
 

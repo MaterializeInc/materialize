@@ -22,13 +22,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-use mz_stash::Stash;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::sync::{mpsc, oneshot};
 use tower_http::cors::AllowOrigin;
 
 use mz_adapter::catalog::storage::BootstrapArgs;
 use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageHostSizeMap};
+use mz_adapter::config::SystemParameterFrontend;
 use mz_build_info::{build_info, BuildInfo};
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
@@ -39,6 +39,7 @@ use mz_ore::task;
 use mz_ore::tracing::TracingTargetCallbacks;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
+use mz_stash::Stash;
 use mz_storage_client::types::connections::ConnectionContext;
 
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
@@ -122,6 +123,10 @@ pub struct Config {
     pub egress_ips: Vec<Ipv4Addr>,
     /// 12-digit AWS account id, which will be used to generate an AWS Principal.
     pub aws_account_id: Option<String>,
+    /// A optional frontend used to pull system parameters for initial sync in
+    /// Catalog::open. A `None` value indicates that the initial sync should be
+    /// skipped.
+    pub system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
 
     // === Tracing options. ===
     /// The metrics registry to use.
@@ -309,6 +314,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         storage_usage_collection_interval: config.storage_usage_collection_interval,
         segment_client: segment_client.clone(),
         egress_ips: config.egress_ips,
+        system_parameter_frontend: config.system_parameter_frontend,
         consolidations_tx,
         consolidations_rx,
         aws_account_id: config.aws_account_id,
