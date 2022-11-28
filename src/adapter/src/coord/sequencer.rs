@@ -519,13 +519,10 @@ impl<S: Append + 'static> Coordinator<S> {
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => {
                 for (source_id, source) in sources {
-                    let source_status_collection_id = if self.catalog.config().unsafe_mode {
+                    let source_status_collection_id =
                         Some(self.catalog.resolve_builtin_storage_collection(
                             &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
-                        ))
-                    } else {
-                        None
-                    };
+                        ));
 
                     let (data_source, status_collection_id) = match source.data_source {
                         DataSourceDesc::Ingestion(ingestion) => {
