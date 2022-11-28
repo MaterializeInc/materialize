@@ -67,6 +67,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-invalid-computed-reuse",
         "test-builtin-migration",
         "pg-snapshot-resumption",
+        "test-system-table-indexes",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -749,3 +750,43 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
         )
 
         c.run("testdrive", "resources/bootstrapped-system-vars.td")
+
+
+def workflow_test_system_table_indexes(c: Composition) -> None:
+    """Test system table indexes."""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Testdrive(),
+        Materialized(),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.wait_for_materialized()
+        c.testdrive(
+            input=dedent(
+                """
+        > CREATE DEFAULT INDEX ON mz_views;
+        > SELECT id FROM mz_indexes WHERE id like 'u%';
+        u1
+    """
+            )
+        )
+        c.kill("materialized")
+
+    with c.override(
+        Testdrive(),
+        Materialized(),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.wait_for_materialized()
+        c.testdrive(
+            input=dedent(
+                """
+        > SELECT id FROM mz_indexes WHERE id like 'u%';
+        u1
+    """
+            )
+        )
