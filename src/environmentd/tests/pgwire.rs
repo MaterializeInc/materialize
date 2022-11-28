@@ -36,6 +36,7 @@ use crate::util::PostgresErrorExt;
 pub mod util;
 
 #[test]
+#[ignore]
 fn test_bind_params() {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
