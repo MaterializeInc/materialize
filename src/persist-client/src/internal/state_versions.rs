@@ -17,7 +17,6 @@ use std::time::SystemTime;
 use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use mz_ore::cast::CastFrom;
 use mz_persist::location::{
     Atomicity, Blob, Consensus, Indeterminate, SeqNo, VersionedData, SCAN_ALL,
 };
