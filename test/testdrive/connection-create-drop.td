@@ -319,6 +319,16 @@ contains:under-specified security configuration
   );
 contains:under-specified security configuration
 
+> CREATE SECRET s AS '...';
+
+! CREATE CONNECTION kafka_sasl_lowercase_mechanism TO KAFKA (
+    BROKER 'kafka:9092',
+    SASL MECHANISMS = 'plain',
+    SASL USERNAME = 'materialize',
+    SASL PASSWORD = SECRET s
+  );
+contains:invalid SASL MECHANISM "plain": must be uppercase
+
 ! CREATE CONNECTION multiple_brokers TO KAFKA (
     BROKER 'kafka:9092, kafka:9093'
   );
@@ -334,8 +344,6 @@ contains:cannot specify multiple Kafka broker addresses in one string
     USERNAME 'foo'
   );
 contains:must specify URL
-
-> CREATE SECRET s AS '...';
 
 ! CREATE CONNECTION missing_cert TO CONFLUENT SCHEMA REGISTRY (
     URL 'http://localhost',
