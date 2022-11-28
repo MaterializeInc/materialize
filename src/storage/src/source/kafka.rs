@@ -215,18 +215,32 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
                 // Default value obtained from https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
                 .unwrap_or_else(|| Duration::from_secs(300));
 
+            let status_report = Arc::clone(&health_status);
+
             thread::Builder::new()
                 .name("kafka-metadata".to_string())
                 .spawn(move || {
+                    info!(
+                        refresh_frequency =? metadata_refresh_frequency,
+                        "starting kafka metadata refresh thread"
+                    );
                     while let Some(partition_info) = partition_info.upgrade() {
-                        match get_kafka_partitions(&consumer, &topic, Duration::from_secs(30)) {
+                        let result =
+                            get_kafka_partitions(&consumer, &topic, Duration::from_secs(30));
+                        match result {
                             Ok(info) => {
                                 *partition_info.lock().unwrap() = Some(info);
+                                *status_report.lock().unwrap() = Some(HealthStatus::Running);
                                 thread::park_timeout(metadata_refresh_frequency);
                             }
-                            Err(_) => thread::park_timeout(Duration::from_secs(30)),
+                            Err(e) => {
+                                *status_report.lock().unwrap() =
+                                    Some(HealthStatus::StalledWithError(e.to_string()));
+                                thread::park_timeout(Duration::from_secs(30))
+                            }
                         }
                     }
+                    info!("Partition info has been dropped; shutting down.")
                 })
                 .unwrap()
                 .unpark_on_drop()
