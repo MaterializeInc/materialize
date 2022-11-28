@@ -11,13 +11,13 @@
 //!
 //! Mechanically, this transform looks for instances of `A join B` and replaces
 //! `B` with a simpler `C`. It does this in the restricted setting that each `join`
-//! would be a "semijoin": a cardinality preserving restriction.
+//! would be a "semijoin": a multiplicity preserving restriction.
 //!
 //! The approach we use here is to restrict our attention to cases where
 //!
 //! 1. `A` is a potentially filtered instance of some `Get{id}`,
 //! 2. `A join B` equate columns of `A` to all columns of `B`,
-//! 3. The cardinality of any record in `B` is at most one.
+//! 3. The multiplicity of any record in `B` is at most one.
 //! 4. The values in these records are exactly `Get{id} join C`.
 //!
 //! We find a candidate `C` by descending `B` looking for another semijoin between
@@ -52,17 +52,18 @@ impl crate::Transform for SemijoinIdempotence {
     ) -> Result<(), crate::TransformError> {
         {
             // Iteratively descend the expression, at each node attempting to simplify a join.
-            let mut bindings = BTreeMap::<Id, Vec<Replacement>>::new();
-            let mut rebindings = BTreeMap::<Id, Vec<(Id, Vec<MirScalarExpr>)>>::new();
+            let mut let_replacements = BTreeMap::<Id, Vec<Replacement>>::new();
+            let mut gets_behind_gets = BTreeMap::<Id, Vec<(Id, Vec<MirScalarExpr>)>>::new();
             let mut worklist = vec![&mut *relation];
             while let Some(expr) = worklist.pop() {
                 match expr {
                     MirRelationExpr::Let { id, value, .. } => {
-                        bindings.insert(
+                        let_replacements.insert(
                             Id::Local(*id),
-                            list_replacements(&*value, &bindings, &rebindings),
+                            list_replacements(&*value, &let_replacements, &gets_behind_gets),
                         );
-                        rebindings.insert(Id::Local(*id), as_filtered_get(value, &rebindings));
+                        gets_behind_gets
+                            .insert(Id::Local(*id), as_filtered_get(value, &gets_behind_gets));
                     }
                     MirRelationExpr::Join {
                         inputs,
@@ -74,8 +75,8 @@ impl crate::Transform for SemijoinIdempotence {
                             inputs,
                             equivalences,
                             implementation,
-                            &bindings,
-                            &rebindings,
+                            &let_replacements,
+                            &gets_behind_gets,
                         );
                     }
                     _ => {}
@@ -96,19 +97,19 @@ fn attempt_join_simplification(
     inputs: &mut [MirRelationExpr],
     equivalences: &mut Vec<Vec<MirScalarExpr>>,
     implementation: &mut mz_expr::JoinImplementation,
-    bindings: &BTreeMap<Id, Vec<Replacement>>,
-    rebindings: &BTreeMap<Id, Vec<(Id, Vec<MirScalarExpr>)>>,
+    let_replacements: &BTreeMap<Id, Vec<Replacement>>,
+    gets_behind_gets: &BTreeMap<Id, Vec<(Id, Vec<MirScalarExpr>)>>,
 ) {
     // Useful join manipulation helper.
     let input_mapper = JoinInputMapper::new(inputs);
 
     if let Some((ltr, rtl)) = semijoin_bijection(inputs, equivalences) {
         // Collect the `Get` identifiers each input might present as.
-        let ids0 = as_filtered_get(&inputs[0], rebindings)
+        let ids0 = as_filtered_get(&inputs[0], gets_behind_gets)
             .iter()
             .map(|(id, _)| *id)
             .collect::<Vec<_>>();
-        let ids1 = as_filtered_get(&inputs[1], rebindings)
+        let ids1 = as_filtered_get(&inputs[1], gets_behind_gets)
             .iter()
             .map(|(id, _)| *id)
             .collect::<Vec<_>>();
@@ -117,24 +118,22 @@ fn attempt_join_simplification(
         if distinct_on_keys_of(&inputs[1], &rtl)
             && input_mapper.input_arity(1) == equivalences.len()
         {
-            for mut candidate in list_replacements(&inputs[1], bindings, rebindings) {
+            for mut candidate in list_replacements(&inputs[1], let_replacements, gets_behind_gets) {
                 if ids0.contains(&candidate.id) {
                     if let Some(permutation) = validate_replacement(&ltr, &mut candidate) {
                         inputs[1] = candidate.replacement.project(permutation);
                         *implementation = mz_expr::JoinImplementation::Unimplemented;
 
                         // Take a moment to think about pushing down `IS NOT NULL` tests.
+                        // The pushdown is for the benefit of CSE on the `A` expressions,
+                        // in the not uncommon case of nullable foreign keys in outer joins.
+                        // TODO: Discover the transform that would not require this code.
                         let typ0 = inputs[0].typ().column_types;
                         let typ1 = inputs[1].typ().column_types;
                         let mut is_not_nulls = Vec::new();
                         for (col0, col1) in ltr.iter() {
                             if !typ1[*col1].nullable && typ0[*col0].nullable {
-                                use mz_expr::UnaryFunc;
-                                is_not_nulls.push(
-                                    MirScalarExpr::Column(*col0)
-                                        .call_unary(UnaryFunc::IsNull(mz_expr::func::IsNull))
-                                        .call_unary(UnaryFunc::Not(mz_expr::func::Not)),
-                                )
+                                is_not_nulls.push(MirScalarExpr::Column(*col0).call_is_null().not())
                             }
                         }
                         if !is_not_nulls.is_empty() {
@@ -153,24 +152,22 @@ fn attempt_join_simplification(
         if distinct_on_keys_of(&inputs[0], &ltr)
             && input_mapper.input_arity(0) == equivalences.len()
         {
-            for mut candidate in list_replacements(&inputs[0], bindings, rebindings) {
+            for mut candidate in list_replacements(&inputs[0], let_replacements, gets_behind_gets) {
                 if ids1.contains(&candidate.id) {
                     if let Some(permutation) = validate_replacement(&rtl, &mut candidate) {
                         inputs[0] = candidate.replacement.project(permutation);
                         *implementation = mz_expr::JoinImplementation::Unimplemented;
 
                         // Take a moment to think about pushing down `IS NOT NULL` tests.
+                        // The pushdown is for the benefit of CSE on the `A` expressions,
+                        // in the not uncommon case of nullable foreign keys in outer joins.
+                        // TODO: Discover the transform that would not require this code.
                         let typ0 = inputs[0].typ().column_types;
                         let typ1 = inputs[1].typ().column_types;
                         let mut is_not_nulls = Vec::new();
                         for (col1, col0) in rtl.iter() {
                             if !typ0[*col0].nullable && typ1[*col1].nullable {
-                                use mz_expr::UnaryFunc;
-                                is_not_nulls.push(
-                                    MirScalarExpr::Column(*col1)
-                                        .call_unary(UnaryFunc::IsNull(mz_expr::func::IsNull))
-                                        .call_unary(UnaryFunc::Not(mz_expr::func::Not)),
-                                )
+                                is_not_nulls.push(MirScalarExpr::Column(*col1).call_is_null().not())
                             }
                         }
                         if !is_not_nulls.is_empty() {
@@ -236,14 +233,14 @@ struct Replacement {
 /// looking for a `Join` operator, at which point it defers to the `list_replacements_join` method.
 fn list_replacements(
     expr: &MirRelationExpr,
-    bindings: &BTreeMap<Id, Vec<Replacement>>,
-    rebindings: &BTreeMap<Id, Vec<(Id, Vec<MirScalarExpr>)>>,
+    let_replacements: &BTreeMap<Id, Vec<Replacement>>,
+    gets_behind_gets: &BTreeMap<Id, Vec<(Id, Vec<MirScalarExpr>)>>,
 ) -> Vec<Replacement> {
     let mut results = Vec::new();
     match expr {
         MirRelationExpr::Get { id, .. } => {
             // The `Get` may reference an `id` that offers semijoin replacements.
-            if let Some(replacements) = bindings.get(id) {
+            if let Some(replacements) = let_replacements.get(id) {
                 results.extend(replacements.iter().cloned());
             }
         }
@@ -252,12 +249,16 @@ fn list_replacements(
             equivalences,
             ..
         } => {
-            results.extend(list_replacements_join(inputs, equivalences, rebindings));
+            results.extend(list_replacements_join(
+                inputs,
+                equivalences,
+                gets_behind_gets,
+            ));
         }
         MirRelationExpr::Project { input, outputs } => {
             // If the columns are preserved by projection ..
             results.extend(
-                list_replacements(input, bindings, rebindings)
+                list_replacements(input, let_replacements, gets_behind_gets)
                     .into_iter()
                     .filter_map(|mut replacement| {
                         let new_cols = replacement
@@ -281,7 +282,7 @@ fn list_replacements(
         } => {
             // If the columns are preserved by `group_key` ..
             results.extend(
-                list_replacements(input, bindings, rebindings)
+                list_replacements(input, let_replacements, gets_behind_gets)
                     .into_iter()
                     .filter_map(|mut replacement| {
                         let new_cols = replacement
@@ -304,7 +305,7 @@ fn list_replacements(
             );
         }
         MirRelationExpr::ArrangeBy { input, .. } => {
-            results.extend(list_replacements(input, bindings, rebindings));
+            results.extend(list_replacements(input, let_replacements, gets_behind_gets));
         }
         _ => {}
     }
@@ -315,7 +316,7 @@ fn list_replacements(
 fn list_replacements_join(
     inputs: &[MirRelationExpr],
     equivalences: &Vec<Vec<MirScalarExpr>>,
-    rebindings: &BTreeMap<Id, Vec<(Id, Vec<MirScalarExpr>)>>,
+    gets_behind_gets: &BTreeMap<Id, Vec<(Id, Vec<MirScalarExpr>)>>,
 ) -> Vec<Replacement> {
     // Result replacements.
     let mut results = Vec::new();
@@ -331,7 +332,7 @@ fn list_replacements_join(
                 .map(|(k0, k1)| (*k0, *k0, *k1))
                 .collect::<Vec<_>>();
 
-            for (id, mut predicates) in as_filtered_get(&inputs[0], rebindings) {
+            for (id, mut predicates) in as_filtered_get(&inputs[0], gets_behind_gets) {
                 if predicates
                     .iter()
                     .all(|e| e.support().iter().all(|c| ltr.contains_key(c)))
@@ -361,7 +362,7 @@ fn list_replacements_join(
                 .map(|(k0, k1)| (*k1, *k0, *k0))
                 .collect::<Vec<_>>();
 
-            for (id, mut predicates) in as_filtered_get(&inputs[1], rebindings) {
+            for (id, mut predicates) in as_filtered_get(&inputs[1], gets_behind_gets) {
                 if predicates
                     .iter()
                     .all(|e| e.support().iter().all(|c| rtl.contains_key(c)))
@@ -400,7 +401,7 @@ fn distinct_on_keys_of(expr: &MirRelationExpr, map: &HashMap<usize, usize>) -> b
 /// Returns a list of such interpretations, potentially spanning `Let` bindings.
 fn as_filtered_get(
     mut expr: &MirRelationExpr,
-    bindings: &BTreeMap<Id, Vec<(Id, Vec<MirScalarExpr>)>>,
+    gets_behind_gets: &BTreeMap<Id, Vec<(Id, Vec<MirScalarExpr>)>>,
 ) -> Vec<(Id, Vec<MirScalarExpr>)> {
     let mut results = Vec::new();
     while let MirRelationExpr::Filter { input, predicates } = expr {
@@ -409,7 +410,7 @@ fn as_filtered_get(
     }
     if let MirRelationExpr::Get { id, .. } = expr {
         let mut output = Vec::new();
-        if let Some(bound) = bindings.get(id) {
+        if let Some(bound) = gets_behind_gets.get(id) {
             for (id, list) in bound.iter() {
                 let mut predicates = list.clone();
                 predicates.extend(results.iter().cloned());
