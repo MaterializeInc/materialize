@@ -35,8 +35,8 @@ use mz_storage_client::types::errors::{DecodeError, SourceErrorDetails};
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
 use mz_storage_client::types::sources::MzOffset;
 
-use crate::source::healthcheck::SourceStatusUpdate;
 use crate::source::metrics::SourceBaseMetrics;
+use crate::source::source_reader_pipeline::HealthStatus;
 
 /// Extension trait to the SourceConnection trait that defines how to intantiate a particular
 /// connetion into a reader and offset committer
@@ -186,7 +186,7 @@ pub enum SourceMessageType<Key, Value, Diff> {
         Diff,
     ),
     /// Information about the source status
-    SourceStatus(SourceStatusUpdate),
+    SourceStatus(HealthStatus),
     /// Signals that this [`SourceReader`] instance will never emit
     /// messages/updates for a given partition anymore. This is similar enough
     /// to a timely operator dropping a capability, hence the naming.

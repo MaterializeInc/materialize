@@ -33,7 +33,8 @@ use mz_storage_client::types::sources::encoding::SourceDataEncoding;
 use mz_storage_client::types::sources::{KafkaSourceConnection, MzOffset};
 
 use crate::source::commit::LogCommitter;
-use crate::source::healthcheck::{SourceStatus, SourceStatusUpdate};
+
+use crate::source::source_reader_pipeline::HealthStatus;
 use crate::source::types::{OffsetCommitter, SourceConnectionBuilder};
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
@@ -77,8 +78,8 @@ pub struct KafkaSourceReader {
     partition_metrics: KafkaPartitionMetrics,
     /// Whether or not to unpack and allocate headers and pass them through in the `SourceMessage`
     include_headers: bool,
-    /// The latest error reported to the consumer context.
-    recent_error: Arc<Mutex<Option<KafkaError>>>,
+    /// The latest status detected by the metadata refresh thread.
+    health_status: Arc<Mutex<Option<HealthStatus>>>,
 }
 
 pub struct KafkaOffsetCommiter {
@@ -113,14 +114,13 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
             ..
         } = self;
         let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
-        let recent_error = Arc::new(Mutex::new(None));
+        let health_status = Arc::new(Mutex::new(None));
         let consumer: BaseConsumer<_> =
             TokioHandle::current().block_on(connection.create_with_context(
                 &connection_context,
                 GlueConsumerContext {
                     activator: consumer_activator,
                     stats_tx,
-                    recent_error: Arc::clone(&recent_error),
                 },
                 &btreemap! {
                     // Default to disabling Kafka auto commit. This can be
@@ -253,7 +253,7 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
                     topic.clone(),
                     source_id,
                 ),
-                recent_error,
+                health_status,
             },
             KafkaOffsetCommiter {
                 source_id,
@@ -318,11 +318,9 @@ impl SourceReader for KafkaSourceReader {
                         "kafka error when polling consumer for source: {} topic: {} : {}",
                         self.source_name, self.topic_name, e
                     );
-                    next_message =
-                        NextMessage::Ready(SourceMessageType::SourceStatus(SourceStatusUpdate {
-                            status: SourceStatus::Stalled,
-                            error: Some(message),
-                        }))
+                    next_message = NextMessage::Ready(SourceMessageType::SourceStatus(
+                        HealthStatus::StalledWithError(message),
+                    ))
                 }
                 Ok(message) => {
                     let (message, ts) = construct_source_message(&message, self.include_headers);
@@ -351,19 +349,17 @@ impl SourceReader for KafkaSourceReader {
                     next_message = self.handle_message(Ok(message), ts);
                 }
                 Err(error) => {
-                    next_message =
-                        NextMessage::Ready(SourceMessageType::SourceStatus(SourceStatusUpdate {
-                            status: SourceStatus::Stalled,
-                            error: Some(error),
-                        }))
+                    next_message = NextMessage::Ready(SourceMessageType::SourceStatus(
+                        HealthStatus::StalledWithError(error),
+                    ))
                 }
                 Ok(None) => {
                     // no message in this queue; keep looping
                 }
             }
         }
-        if let Some(err) = self
-            .recent_error
+        if let Some(status) = self
+            .health_status
             .lock()
             .expect("locking error mutex")
             .take()
@@ -373,11 +369,7 @@ impl SourceReader for KafkaSourceReader {
             // are more messages in the queue; in that case, we'll rely on the client reporting that
             // error again in the future if the error condition persists.
             if let NextMessage::Pending = next_message {
-                next_message =
-                    NextMessage::Ready(SourceMessageType::SourceStatus(SourceStatusUpdate {
-                        status: SourceStatus::Stalled,
-                        error: Some(err.to_string()),
-                    }))
+                next_message = NextMessage::Ready(SourceMessageType::SourceStatus(status))
             }
         }
 
@@ -761,7 +753,6 @@ impl PartitionConsumer {
 struct GlueConsumerContext {
     activator: SyncActivator,
     stats_tx: crossbeam_channel::Sender<Jsonb>,
-    recent_error: Arc<Mutex<Option<KafkaError>>>,
 }
 
 impl ClientContext for GlueConsumerContext {
@@ -783,8 +774,6 @@ impl ClientContext for GlueConsumerContext {
         MzClientContext.log(level, fac, log_message)
     }
     fn error(&self, error: rdkafka::error::KafkaError, reason: &str) {
-        let mut recent_error = self.recent_error.lock().expect("recording error");
-        *recent_error = Some(error.clone());
         MzClientContext.error(error, reason)
     }
 }
