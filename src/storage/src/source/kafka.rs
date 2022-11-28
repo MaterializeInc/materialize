@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use anyhow::Context;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -15,10 +16,11 @@ use std::time::Duration;
 use maplit::btreemap;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
-use rdkafka::error::KafkaError;
+use rdkafka::error::{KafkaError, RDKafkaErrorCode};
 use rdkafka::message::{BorrowedMessage, Headers};
 use rdkafka::statistics::Statistics;
 use rdkafka::topic_partition_list::Offset;
+use rdkafka::types::RDKafkaRespErr;
 use rdkafka::{ClientContext, Message, TopicPartitionList};
 use timely::scheduling::activate::SyncActivator;
 use tokio::runtime::Handle as TokioHandle;
@@ -817,11 +819,27 @@ where
     C: ConsumerContext,
 {
     let metadata = consumer.fetch_metadata(Some(topic), timeout)?;
-    Ok(metadata.topics()[0]
-        .partitions()
-        .iter()
-        .map(|x| x.id())
-        .collect())
+    let topic_meta = metadata
+        .topics()
+        .get(0)
+        .context("expected a topic in the metadata result")?;
+
+    fn check_err(err: Option<RDKafkaRespErr>) -> anyhow::Result<()> {
+        if let Some(err) = err {
+            Err(RDKafkaErrorCode::from(err))?
+        }
+        Ok(())
+    }
+
+    check_err(topic_meta.error())?;
+
+    let mut partition_ids = Vec::with_capacity(topic_meta.partitions().len());
+    for partition_meta in topic_meta.partitions() {
+        check_err(partition_meta.error())?;
+
+        partition_ids.push(partition_meta.id());
+    }
+    Ok(partition_ids)
 }
 
 #[cfg(test)]
