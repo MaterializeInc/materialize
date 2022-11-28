@@ -32,12 +32,6 @@ To run one benchmark scenario or a named subset:
 ./mzcompose run default --root-scenario=FastPath
 ```
 
-To use specific Mz command-line options:
-
-```
- ./mzcompose run default --this-options "--workers 16" --other-options "--workers 1"
-```
-
 To compare specific Mz versions:
 
 ```
@@ -49,10 +43,9 @@ To compare specific Mz git revisions:
 ./mzcompose run default --this-tag unstable-42ad7432657d3e5c1a3492fa76985cd6b79fcab6 ...
 ```
 
-To start a 2-node computed cluster for `THIS`:
-
+To use a specific SIZE for sources, sinks and dataflows:
 ```
-./mzcompose run default --this-nodes 2 ...
+./mzcompose run default --this-size 2 --other-size 4 ...
 ```
 
 # Output
@@ -132,6 +125,15 @@ Currently, the `Min` strategy is used, that is, the minimum value measured is us
 The framework will report failure in case a particular measurement indicates a performance regression between the two Mz instances that exceeds a particular threshold. Otherwise the number will
 be reported.
 
+## Retry policy
+
+Any suspected performance regressions will be retried up to `--max-retries` times (default is 3). Only regressions that are
+repeatedly reproducible will cause the benchmark to exit with a nonzero exit code. The bottom of the Buildkite log will show
+the retry attempts.
+
+Reported performance improvements are not retried to establish reprodicibility, so should be considered flukes if seen in the CI
+output until reliably reproduced locally.
+
 # Troubleshooting
 
 ## Benchmark terminated prematurely
@@ -146,8 +148,7 @@ of the `feature-benchmark_testdrive_*` container that exited most recently and t
 
 ## Dealing with false positives
 
-The feature benchmark will retry any regressed scenarios up to `--max-cycles=3` times in order to weed out false positives. mzcompose.py will exit with a non-zero
-exit code only if there are scenarios that reported a regression every time they were tried.
+The feature benchmark will retry any regressed scenarios up to `--max-cycles=3` times in order to weed out false positives.
 
 # Writing benchmark scenarios
 

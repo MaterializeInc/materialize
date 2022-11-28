@@ -548,7 +548,7 @@ steps:
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
-          args: [-m, "not long", --aws-region=us-east-2, test/cloudtest/]
+          args: [--exitfirst, -m, "not long", --aws-region=us-east-2, test/cloudtest/]
 
   - id: checks-restart-redpanda
     label: "Checks + restart Redpanda"

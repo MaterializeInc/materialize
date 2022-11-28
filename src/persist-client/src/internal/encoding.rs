@@ -891,7 +891,7 @@ mod tests {
         // losing or misinterpreting something written out by a future version
         // of code.
         mz_ore::process::PANIC_ON_HALT.store(true, Ordering::SeqCst);
-        let v1_res = std::panic::catch_unwind(|| State::<(), (), u64, i64>::decode(&v1, &buf));
+        let v1_res = mz_ore::panic::catch_unwind(|| State::<(), (), u64, i64>::decode(&v1, &buf));
         assert!(v1_res.is_err());
     }
 
@@ -919,7 +919,7 @@ mod tests {
         // losing or misinterpreting something written out by a future version
         // of code.
         mz_ore::process::PANIC_ON_HALT.store(true, Ordering::SeqCst);
-        let v1_res = std::panic::catch_unwind(|| StateDiff::<u64>::decode(&v1, &buf));
+        let v1_res = mz_ore::panic::catch_unwind(|| StateDiff::<u64>::decode(&v1, &buf));
         assert!(v1_res.is_err());
     }
 

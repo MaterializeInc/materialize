@@ -902,6 +902,19 @@ impl MirRelationExpr {
         MirRelationExpr::Constant { rows, typ }
     }
 
+    /// Checks if `self` is the single element collection with no columns.
+    pub fn is_constant_singleton(&self) -> bool {
+        if let MirRelationExpr::Constant {
+            rows: Ok(rows),
+            typ,
+        } = &self
+        {
+            rows.len() == 1 && typ.column_types.len() == 0 && rows[0].1 == 1
+        } else {
+            false
+        }
+    }
+
     /// Constructs the expression for getting a global collection
     pub fn global_get(id: GlobalId, typ: RelationType) -> Self {
         MirRelationExpr::Get {
@@ -911,27 +924,43 @@ impl MirRelationExpr {
     }
 
     /// Retains only the columns specified by `output`.
-    pub fn project(self, outputs: Vec<usize>) -> Self {
-        MirRelationExpr::Project {
-            input: Box::new(self),
-            outputs,
+    pub fn project(mut self, mut outputs: Vec<usize>) -> Self {
+        if let MirRelationExpr::Project {
+            outputs: columns, ..
+        } = &mut self
+        {
+            // Update `outputs` to reference base columns of `input`.
+            for column in outputs.iter_mut() {
+                *column = columns[*column];
+            }
+            *columns = outputs;
+            self
+        } else {
+            MirRelationExpr::Project {
+                input: Box::new(self),
+                outputs,
+            }
         }
     }
 
     /// Append to each row the results of applying elements of `scalar`.
-    pub fn map(self, scalars: Vec<MirScalarExpr>) -> Self {
-        MirRelationExpr::Map {
-            input: Box::new(self),
-            scalars,
+    pub fn map(mut self, scalars: Vec<MirScalarExpr>) -> Self {
+        if let MirRelationExpr::Map { scalars: s, .. } = &mut self {
+            s.extend(scalars);
+            self
+        } else if !scalars.is_empty() {
+            MirRelationExpr::Map {
+                input: Box::new(self),
+                scalars,
+            }
+        } else {
+            self
         }
     }
 
     /// Append to each row a single `scalar`.
     pub fn map_one(self, scalar: MirScalarExpr) -> Self {
-        MirRelationExpr::Map {
-            input: Box::new(self),
-            scalars: vec![scalar],
-        }
+        self.map(vec![scalar])
     }
 
     /// Like `map`, but yields zero-or-more output rows per input row
@@ -944,19 +973,44 @@ impl MirRelationExpr {
     }
 
     /// Retain only the rows satisfying each of several predicates.
-    pub fn filter<I>(self, predicates: I) -> Self
+    pub fn filter<I>(mut self, predicates: I) -> Self
     where
         I: IntoIterator<Item = MirScalarExpr>,
     {
-        MirRelationExpr::Filter {
-            input: Box::new(self),
-            predicates: predicates.into_iter().collect(),
+        // Extract existing predicates
+        let mut new_predicates = if let MirRelationExpr::Filter { input, predicates } = self {
+            self = *input;
+            predicates
+        } else {
+            Vec::new()
+        };
+        // Normalize collection of predicates.
+        new_predicates.extend(predicates);
+        new_predicates.sort();
+        new_predicates.dedup();
+        // Introduce a `Filter` only if we have predicates.
+        if !new_predicates.is_empty() {
+            self = MirRelationExpr::Filter {
+                input: Box::new(self),
+                predicates: new_predicates,
+            };
         }
+
+        self
     }
 
     /// Form the Cartesian outer-product of rows in both inputs.
-    pub fn product(self, right: Self) -> Self {
-        MirRelationExpr::join(vec![self, right], vec![])
+    pub fn product(mut self, right: Self) -> Self {
+        if right.is_constant_singleton() {
+            self
+        } else if self.is_constant_singleton() {
+            right
+        } else if let MirRelationExpr::Join { inputs, .. } = &mut self {
+            inputs.push(right);
+            self
+        } else {
+            MirRelationExpr::join(vec![self, right], vec![])
+        }
     }
 
     /// Performs a relational equijoin among the input collections.
@@ -1076,8 +1130,12 @@ impl MirRelationExpr {
 
     /// Negates the occurrences of each row.
     pub fn negate(self) -> Self {
-        MirRelationExpr::Negate {
-            input: Box::new(self),
+        if let MirRelationExpr::Negate { input } = self {
+            *input
+        } else {
+            MirRelationExpr::Negate {
+                input: Box::new(self),
+            }
         }
     }
 
@@ -1095,8 +1153,12 @@ impl MirRelationExpr {
 
     /// Discards rows with a negative frequency.
     pub fn threshold(self) -> Self {
-        MirRelationExpr::Threshold {
-            input: Box::new(self),
+        if let MirRelationExpr::Threshold { .. } = &self {
+            self
+        } else {
+            MirRelationExpr::Threshold {
+                input: Box::new(self),
+            }
         }
     }
 
@@ -1105,6 +1167,17 @@ impl MirRelationExpr {
     /// If `inputs` is empty, then an empty relation of type `typ` is
     /// constructed.
     pub fn union_many(mut inputs: Vec<Self>, typ: RelationType) -> Self {
+        // Deconstruct `inputs` as `Union`s and reconstitute.
+        let mut flat_inputs = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            if let MirRelationExpr::Union { base, inputs } = input {
+                flat_inputs.push(*base);
+                flat_inputs.extend(inputs);
+            } else {
+                flat_inputs.push(input);
+            }
+        }
+        inputs = flat_inputs;
         if inputs.len() == 0 {
             MirRelationExpr::Constant {
                 rows: Ok(vec![]),
@@ -1122,9 +1195,24 @@ impl MirRelationExpr {
 
     /// Produces one collection where each row is present with the sum of its frequencies in each input.
     pub fn union(self, other: Self) -> Self {
+        // Deconstruct `self` and `other` as `Union`s and reconstitute.
+        let mut flat_inputs = Vec::with_capacity(2);
+        if let MirRelationExpr::Union { base, inputs } = self {
+            flat_inputs.push(*base);
+            flat_inputs.extend(inputs);
+        } else {
+            flat_inputs.push(self);
+        }
+        if let MirRelationExpr::Union { base, inputs } = other {
+            flat_inputs.push(*base);
+            flat_inputs.extend(inputs);
+        } else {
+            flat_inputs.push(other);
+        }
+
         MirRelationExpr::Union {
-            base: Box::new(self),
-            inputs: vec![other],
+            base: Box::new(flat_inputs.remove(0)),
+            inputs: flat_inputs,
         }
     }
 

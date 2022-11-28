@@ -857,53 +857,40 @@ EXPLAIN DECORRELATED PLAN WITH(arity, types) FOR SELECT CASE (SELECT 1) WHEN 1 T
 ----
 Return // { arity: 2, types: "(integer, text)" }
   Project (#1, #2) // { arity: 2, types: "(integer, text)" }
-    Map ("TEXT") // { arity: 3, types: "(integer?, integer, text)" }
-      Map (case when (#0 = 1) then 0 else 2 end) // { arity: 2, types: "(integer?, integer)" }
-        Project (#0) // { arity: 1, types: "(integer?)" }
-          CrossJoin // { arity: 1, types: "(integer?)" }
-            Get l2 // { arity: 0, types: "()" }
-            Union // { arity: 1, types: "(integer?)" }
-              Get l6 // { arity: 1, types: "(integer)" }
-              CrossJoin // { arity: 1, types: "(integer?)" }
-                Project () // { arity: 0, types: "()" }
-                  CrossJoin // { arity: 0, types: "()" }
-                    Union // { arity: 0, types: "()" }
-                      Negate // { arity: 0, types: "()" }
-                        Distinct // { arity: 0, types: "()" }
-                          Get l6 // { arity: 1, types: "(integer)" }
+    Map (case when (#0 = 1) then 0 else 2 end, "TEXT") // { arity: 3, types: "(integer?, integer, text)" }
+      Project (#0) // { arity: 1, types: "(integer?)" }
+        CrossJoin // { arity: 1, types: "(integer?)" }
+          Get l0 // { arity: 0, types: "()" }
+          Union // { arity: 1, types: "(integer?)" }
+            Get l3 // { arity: 1, types: "(integer)" }
+            CrossJoin // { arity: 1, types: "(integer?)" }
+              Project () // { arity: 0, types: "()" }
+                CrossJoin // { arity: 0, types: "()" }
+                  Union // { arity: 0, types: "()" }
+                    Negate // { arity: 0, types: "()" }
                       Distinct // { arity: 0, types: "()" }
-                        Get l3 // { arity: 0, types: "()" }
-                    Get l3 // { arity: 0, types: "()" }
-                Constant // { arity: 1, types: "(integer?)" }
-                  - (null)
+                        Get l3 // { arity: 1, types: "(integer)" }
+                    Distinct // { arity: 0, types: "()" }
+                      Get l1 // { arity: 0, types: "()" }
+                  Get l1 // { arity: 0, types: "()" }
+              Constant // { arity: 1, types: "(integer?)" }
+                - (null)
 With
-  cte l6 =
+  cte l3 =
     Union // { arity: 1, types: "(integer)" }
-      Get l5 // { arity: 1, types: "(integer)" }
+      Get l2 // { arity: 1, types: "(integer)" }
       Map (error("more than one record produced in subquery")) // { arity: 1, types: "(integer)" }
         Project () // { arity: 0, types: "()" }
           Filter (#0 > 1) // { arity: 1, types: "(bigint)" }
             Reduce aggregates=[count(true)] // { arity: 1, types: "(bigint)" }
-              Get l5 // { arity: 1, types: "(integer)" }
-  cte l5 =
+              Get l2 // { arity: 1, types: "(integer)" }
+  cte l2 =
     Project (#0) // { arity: 1, types: "(integer)" }
       Map (1) // { arity: 1, types: "(integer)" }
-        Get l4 // { arity: 0, types: "()" }
-  cte l4 =
-    CrossJoin // { arity: 0, types: "()" }
-      Get l3 // { arity: 0, types: "()" }
-      Constant // { arity: 0, types: "()" }
-        - ()
-  cte l3 =
+        Get l1 // { arity: 0, types: "()" }
+  cte l1 =
     Constant // { arity: 0, types: "()" }
       - ()
-  cte l2 =
-    Get l1 // { arity: 0, types: "()" }
-  cte l1 =
-    CrossJoin // { arity: 0, types: "()" }
-      Get l0 // { arity: 0, types: "()" }
-      Constant // { arity: 0, types: "()" }
-        - ()
   cte l0 =
     Constant // { arity: 0, types: "()" }
       - ()
