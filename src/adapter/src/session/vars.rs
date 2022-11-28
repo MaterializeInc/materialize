@@ -12,12 +12,12 @@ use std::fmt;
 use std::time::Duration;
 
 use const_format::concatcp;
-use mz_sql::ast::{Ident, SetVariableValue, Value as AstValue};
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use uncased::UncasedStr;
 
 use mz_ore::cast;
+use mz_sql::ast::{Ident, SetVariableValue, Value as AstValue};
 use mz_sql::DEFAULT_SCHEMA;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_sql_parser::parser::parse_set_variable_value;
@@ -1493,7 +1493,7 @@ where
     }
 }
 
-/// A value that can be stored in a session variable.
+/// A value that can be stored in a session or server variable.
 pub trait Value: ToOwned + Send + Sync {
     /// The name of the value type.
     const TYPE_NAME: &'static str;
@@ -1709,25 +1709,29 @@ impl Value for Vec<String> {
     const TYPE_NAME: &'static str = "string list";
 
     fn parse(s: &str) -> Result<Vec<String>, ()> {
-        match parse_set_variable_value(s) {
-            Ok(SetVariableValue::Ident(ident)) => {
-                let value = vec![ident.into_string()];
-                Ok(value)
+        if s.is_empty() {
+            Ok(vec![]) // The empty vector might be a valid default and should be allowed.
+        } else {
+            match parse_set_variable_value(s) {
+                Ok(SetVariableValue::Ident(ident)) => {
+                    let value = vec![ident.into_string()];
+                    Ok(value)
+                }
+                Ok(SetVariableValue::Literal(value)) => {
+                    // Don't assume that value matches AstValue::String(...) here, as
+                    // a single string might be wrongly parsed as a non-string literal.
+                    let value = vec![value.to_string()];
+                    Ok(value)
+                }
+                Ok(SetVariableValue::Literals(values)) => values
+                    .into_iter()
+                    .map(|value| match value {
+                        AstValue::String(value) => Ok(value),
+                        _ => Err(()),
+                    })
+                    .collect(),
+                _ => Err(()),
             }
-            Ok(SetVariableValue::Literal(value)) => {
-                // Don't assume that value matches AstValue::String(...) here, as
-                // a single string might be wrongly parsed as a non-string literal.
-                let value = vec![value.to_string()];
-                Ok(value)
-            }
-            Ok(SetVariableValue::Literals(values)) => values
-                .into_iter()
-                .map(|value| match value {
-                    AstValue::String(value) => Ok(value),
-                    _ => Err(()),
-                })
-                .collect(),
-            _ => Err(()),
         }
     }
 
