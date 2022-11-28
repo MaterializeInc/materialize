@@ -16,6 +16,7 @@ use itertools::{max, Itertools};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 use tokio::sync::mpsc;
+use tracing::error;
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::command::ReplicaId;
@@ -1000,19 +1001,21 @@ impl<'a, S: Append> Transaction<'a, S> {
                 Some(schema) => schema,
                 None => return,
             };
-            let database_id = match schema.database_id {
-                Some(id) => id,
-                None => return,
-            };
-            let _database = match databases.get(&DatabaseKey { id: database_id }) {
-                Some(database) => database,
-                None => return,
+            let database_spec = match schema.database_id {
+                Some(id) => {
+                    if databases.get(&DatabaseKey { id }).is_none() {
+                        error!("unknown database id {id}");
+                        return;
+                    }
+                    ResolvedDatabaseSpecifier::from(id)
+                }
+                None => ResolvedDatabaseSpecifier::Ambient,
             };
             items.push((
                 k.gid,
                 QualifiedObjectName {
                     qualifiers: ObjectQualifiers {
-                        database_spec: ResolvedDatabaseSpecifier::from(database_id),
+                        database_spec,
                         schema_spec: SchemaSpecifier::from(v.schema_id),
                     },
                     item: v.name.clone(),
