@@ -93,16 +93,21 @@ impl Healthchecker {
         drop(persist_clients);
 
         let (write_handle, read_handle) = persist_client
-            .open(storage_metadata.status_shard.unwrap())
+            .open(
+                storage_metadata.status_shard.unwrap(),
+                &format!("healthchecker {}", source_id),
+            )
             .await
             .context("error opening Healthchecker persist shard")?;
 
         let (since, upper) = (read_handle.since().clone(), write_handle.upper().clone());
 
+        let bootstrap_read_handle = read_handle
+            .clone(&format!("healthchecker::bootstrap {}", source_id))
+            .await;
+
         // More details on why the listener starts at `since` instead of `upper` in the docstring for [`bootstrap_state`]
         let listener = read_handle
-            .clone()
-            .await
             .listen(since.clone())
             .await
             .expect("since <= as_of asserted");
@@ -118,7 +123,9 @@ impl Healthchecker {
         };
 
         // Bootstrap should reload the previous state of the source, if any
-        healthchecker.bootstrap_state(read_handle, &upper).await;
+        healthchecker
+            .bootstrap_state(bootstrap_read_handle, &upper)
+            .await;
         tracing::trace!(
             "Healthchecker for source {} at status {} finished bootstrapping!",
             &healthchecker.source_id,
@@ -221,6 +228,7 @@ impl Healthchecker {
             self.process_collection_updates(updates);
         };
         self.sync(upper).await;
+        read_handle.expire().await;
         trace!("State bootstrapped as of {since:?}!");
     }
 
@@ -712,7 +720,10 @@ mod tests {
             .await
             .unwrap();
 
-        let (write_handle, mut read_handle) = persist_client.open(shard_id).await.unwrap();
+        let (write_handle, mut read_handle) = persist_client
+            .open(shard_id, "tests::dump_storage_collection")
+            .await
+            .unwrap();
 
         let upper = write_handle.upper();
         let readable_upper = Antichain::from_elem(upper.elements()[0] - 1);

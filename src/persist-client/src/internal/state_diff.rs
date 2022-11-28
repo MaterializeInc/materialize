@@ -68,6 +68,7 @@ pub struct StateDiff<T> {
     pub(crate) seqno_to: SeqNo,
     pub(crate) latest_rollup_key: PartialRollupKey,
     pub(crate) rollups: Vec<StateFieldDiff<SeqNo, PartialRollupKey>>,
+    pub(crate) hostname: Vec<StateFieldDiff<(), String>>,
     pub(crate) last_gc_req: Vec<StateFieldDiff<(), SeqNo>>,
     pub(crate) leased_readers: Vec<StateFieldDiff<LeasedReaderId, LeasedReaderState<T>>>,
     pub(crate) critical_readers: Vec<StateFieldDiff<CriticalReaderId, CriticalReaderState<T>>>,
@@ -89,6 +90,7 @@ impl<T: Timestamp + Codec64> StateDiff<T> {
             seqno_to,
             latest_rollup_key,
             rollups: Vec::default(),
+            hostname: Vec::default(),
             last_gc_req: Vec::default(),
             leased_readers: Vec::default(),
             critical_readers: Vec::default(),
@@ -107,6 +109,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
             applier_version: _,
             shard_id: from_shard_id,
             seqno: from_seqno,
+            hostname: from_hostname,
             collections:
                 StateCollections {
                     last_gc_req: from_last_gc_req,
@@ -122,6 +125,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
             applier_version: to_applier_version,
             shard_id: to_shard_id,
             seqno: to_seqno,
+            hostname: to_hostname,
             collections:
                 StateCollections {
                     last_gc_req: to_last_gc_req,
@@ -142,6 +146,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
             *to_seqno,
             latest_rollup_key.clone(),
         );
+        diff_field_single(from_hostname, to_hostname, &mut diffs.hostname);
         diff_field_single(from_last_gc_req, to_last_gc_req, &mut diffs.last_gc_req);
         diff_field_sorted_iter(from_rollups.iter(), to_rollups, &mut diffs.rollups);
         diff_field_sorted_iter(
@@ -177,7 +182,8 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         use mz_proto::RustType;
         use prost::Message;
 
-        let mut roundtrip_state = from_state.clone(to_state.applier_version.clone());
+        let mut roundtrip_state =
+            from_state.clone(to_state.applier_version.clone(), to_state.hostname.clone());
         roundtrip_state.apply_diff(metrics, diff.clone())?;
 
         if &roundtrip_state != to_state {
@@ -1035,9 +1041,13 @@ mod tests {
             hb(7185234, 7185859, 20),
         ];
 
-        let version = DUMMY_BUILD_INFO.semver_version();
-        let state = State::<(), (), u64, i64>::new(version.clone(), ShardId([0u8; 16]));
-        let state = state.clone_apply(&version, &mut |_seqno, state| {
+        let cfg = PersistConfig::new_for_tests();
+        let state = State::<(), (), u64, i64>::new(
+            cfg.build_version.clone(),
+            cfg.hostname.clone(),
+            ShardId([0u8; 16]),
+        );
+        let state = state.clone_apply(&cfg, &mut |_seqno, _cfg, state| {
             for b in batches_before.iter() {
                 let _merge_reqs = state.trace.push_batch(b.clone());
             }

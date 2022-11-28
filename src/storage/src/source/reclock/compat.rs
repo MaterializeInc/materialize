@@ -130,7 +130,7 @@ impl PersistHandle {
         drop(persist_clients);
 
         let (write_handle, read_handle) = persist_client
-            .open(metadata.remap_shard)
+            .open(metadata.remap_shard, &format!("reclock {}", id))
             .await
             .context("error opening persist shard")?;
 
@@ -151,7 +151,7 @@ impl PersistHandle {
         );
 
         let listener = read_handle
-            .clone()
+            .clone(&format!("reclock::listener {}", id))
             .await
             .listen(as_of.clone())
             .await

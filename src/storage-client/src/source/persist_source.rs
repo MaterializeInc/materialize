@@ -181,7 +181,10 @@ where
 
         let read = read
             .expect("could not open persist client")
-            .open_leased_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(data_shard)
+            .open_leased_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(
+                data_shard,
+                &format!("persist_source data {}", source_id),
+            )
             .await;
 
         // This is a moment where we may have dropped our source if our token

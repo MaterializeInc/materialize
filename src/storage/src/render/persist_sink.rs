@@ -115,7 +115,10 @@ pub fn render<G>(
                 .open(metadata.persist_location)
                 .await
                 .expect("could not open persist client")
-                .open_writer::<SourceData, (), Timestamp, Diff>(metadata.data_shard)
+                .open_writer::<SourceData, (), Timestamp, Diff>(
+                    metadata.data_shard,
+                    &format!("persist_sink::storage {}", src_id),
+                )
                 .await
                 .expect("could not open persist shard");
 
