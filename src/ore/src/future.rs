@@ -262,33 +262,3 @@ impl<T, E> Sink<T> for DevNull<T, E> {
         Poll::Ready(Ok(()))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::panic;
-
-    use scopeguard::defer;
-
-    use super::OreFutureExt;
-
-    #[tokio::test]
-    async fn catch_panic_async() {
-        let old_hook = panic::take_hook();
-        defer! {
-            panic::set_hook(old_hook);
-        }
-
-        crate::panic::set_abort_on_panic();
-
-        let result = async {
-            panic!("panicked");
-        }
-        .ore_catch_unwind()
-        .await
-        .unwrap_err()
-        .downcast::<&str>()
-        .unwrap();
-
-        assert_eq!(*result, "panicked");
-    }
-}
