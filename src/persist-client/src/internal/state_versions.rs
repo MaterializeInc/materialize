@@ -439,8 +439,8 @@ impl StateVersions {
     }
 
     /// Fetches all live_diffs for a shard. Intended only for when a caller needs to reconstruct
-    /// _all_ states still referenced by Consensus. Prefer [fetch_recent_live_diffs] when the
-    /// caller simply needs to fetch the latest state.
+    /// _all_ states still referenced by Consensus. Prefer [Self::fetch_recent_live_diffs] when
+    /// the caller simply needs to fetch the latest state.
     ///
     /// Returns an empty Vec iff called on an uninitialized shard.
     pub async fn fetch_all_live_diffs(&self, shard_id: &ShardId) -> AllLiveDiffs {

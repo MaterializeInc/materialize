@@ -454,10 +454,14 @@ impl Consensus for PostgresConsensus {
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 AND sequence_number >= $2
              ORDER BY sequence_number ASC LIMIT $3";
+        let Ok(limit) = i64::try_from(limit) else {
+            return Err(ExternalError::from(anyhow!(
+                    "limit must be [0, i64::MAX]. was: {:?}", limit
+                )));
+        };
         let rows = {
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
-            let limit = limit.try_into().unwrap_or(i64::MAX);
             client.query(&statement, &[&key, &from, &limit]).await?
         };
         let mut results = Vec::with_capacity(rows.len());
