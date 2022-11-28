@@ -203,7 +203,7 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
             let partition_info = Arc::downgrade(&partition_info);
             let topic = topic.clone();
             let consumer = Arc::clone(&consumer);
-            let metadata_refresh_frequency = connection
+            let metadata_refresh_interval = connection
                 .options
                 .get("topic.metadata.refresh.interval.ms")
                 // Safe conversion: statement::extract_config enforces that option is a value
@@ -212,8 +212,13 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
                     StringOrSecret::String(s) => Duration::from_millis(s.parse().unwrap()),
                     StringOrSecret::Secret(_) => unreachable!(),
                 })
-                // Default value obtained from https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
-                .unwrap_or_else(|| Duration::from_secs(300));
+                // By default, rdkafka will check for updated metadata every five minutes:
+                // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
+                .unwrap_or_else(|| Duration::from_secs(15));
+
+            // We want a fairly low ceiling on our polling frequency, since we rely
+            // on this heartbeat to determine the health of our Kafka connection.
+            let metadata_refresh_frequency = metadata_refresh_interval.min(Duration::from_secs(60));
 
             let status_report = Arc::clone(&health_status);
 
@@ -236,7 +241,7 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
                             Err(e) => {
                                 *status_report.lock().unwrap() =
                                     Some(HealthStatus::StalledWithError(e.to_string()));
-                                thread::park_timeout(Duration::from_secs(30))
+                                thread::park_timeout(metadata_refresh_frequency);
                             }
                         }
                     }
