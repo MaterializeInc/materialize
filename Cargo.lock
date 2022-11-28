@@ -675,7 +675,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "acee9fd5073ab6b045a275b3e709c163dd36c90685219cb21804a147b58dba43"
 dependencies = [
  "async-trait",
- "axum-core",
+ "axum-core 0.2.9",
+ "bitflags",
+ "bytes",
+ "futures-util",
+ "http",
+ "http-body",
+ "hyper",
+ "itoa",
+ "matchit 0.5.0",
+ "memchr",
+ "mime",
+ "percent-encoding",
+ "pin-project-lite",
+ "serde",
+ "sync_wrapper",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tower-layer",
+ "tower-service",
+]
+
+[[package]]
+name = "axum"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "744864363a200a5e724a7e61bc8c11b6628cf2e3ec519c8a1a48e609a8156b40"
+dependencies = [
+ "async-trait",
+ "axum-core 0.3.0",
  "bitflags",
  "bytes",
  "futures-util",
@@ -684,13 +713,15 @@ dependencies = [
  "http-body",
  "hyper",
  "itoa",
- "matchit",
+ "matchit 0.6.0",
  "memchr",
  "mime",
  "percent-encoding",
  "pin-project-lite",
+ "rustversion",
  "serde",
  "serde_json",
+ "serde_path_to_error",
  "serde_urlencoded",
  "sync_wrapper",
  "tokio",
@@ -712,6 +743,23 @@ dependencies = [
  "http",
  "http-body",
  "mime",
+ "tower-layer",
+ "tower-service",
+]
+
+[[package]]
+name = "axum-core"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79b8558f5a0581152dc94dcd289132a1d377494bdeafcd41869b3258e3e2ad92"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures-util",
+ "http",
+ "http-body",
+ "mime",
+ "rustversion",
  "tower-layer",
  "tower-service",
 ]
@@ -2979,6 +3027,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73cbba799671b762df5a175adf59ce145165747bb891505c43d09aefbbf38beb"
 
 [[package]]
+name = "matchit"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3dfc802da7b1cf80aefffa0c7b2f77247c8b32206cc83c270b61264f5b360a80"
+
+[[package]]
 name = "md-5"
 version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3133,7 +3187,7 @@ name = "mz"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "axum",
+ "axum 0.6.0",
  "clap",
  "dirs",
  "indicatif",
@@ -3334,7 +3388,7 @@ version = "0.33.0-dev"
 dependencies = [
  "anyhow",
  "async-trait",
- "axum",
+ "axum 0.6.0",
  "bytesize",
  "clap",
  "crossbeam-channel",
@@ -3438,7 +3492,7 @@ dependencies = [
  "askama",
  "assert_cmd",
  "async-trait",
- "axum",
+ "axum 0.6.0",
  "base64",
  "bytes",
  "cc",
@@ -3606,7 +3660,7 @@ name = "mz-http-util"
 version = "0.0.0"
 dependencies = [
  "askama",
- "axum",
+ "axum 0.6.0",
  "headers",
  "include_dir",
  "mz-ore",
@@ -3923,7 +3977,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
- "axum",
+ "axum 0.6.0",
  "bytes",
  "clap",
  "criterion",
@@ -4071,7 +4125,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "askama",
- "axum",
+ "axum 0.6.0",
  "backtrace",
  "cfg-if",
  "headers",
@@ -4412,7 +4466,7 @@ dependencies = [
  "aws-sdk-kinesis",
  "aws-sdk-s3",
  "aws-sdk-sqs",
- "axum",
+ "axum 0.6.0",
  "chrono",
  "clap",
  "crossbeam-channel",
@@ -5991,6 +6045,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustversion"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97477e48b4cf8603ad5f7aaf897467cf42ab4218a38ef76fb14c2d6773a6d6a8"
+
+[[package]]
 name = "ryu"
 version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6270,6 +6330,15 @@ dependencies = [
  "indexmap",
  "itoa",
  "ryu",
+ "serde",
+]
+
+[[package]]
+name = "serde_path_to_error"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "184c643044780f7ceb59104cef98a5a6f12cb2288a7bc701ab93a362b49fd47d"
+dependencies = [
  "serde",
 ]
 
@@ -7038,7 +7107,7 @@ checksum = "55b9af819e54b8f33d453655bef9b9acc171568fb49523078d0cc4e7484200ec"
 dependencies = [
  "async-stream",
  "async-trait",
- "axum",
+ "axum 0.5.17",
  "base64",
  "bytes",
  "futures-core",
@@ -7118,9 +7187,9 @@ dependencies = [
 
 [[package]]
 name = "tower-layer"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "343bc9466d3fe6b0f960ef45960509f84480bf4fd96f92901afe7ff3df9d3a62"
+checksum = "c20c8dbed6283a09604c3e69b4b7eeb54e298b8a600d4d5ecb5ad39de609f1d0"
 
 [[package]]
 name = "tower-service"
