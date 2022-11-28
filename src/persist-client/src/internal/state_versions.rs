@@ -464,18 +464,7 @@ impl StateVersions {
         T: Timestamp + Lattice + Codec64,
     {
         let path = shard_id.to_string();
-        // pick a scan limit that:
-        // * is big enough to hit the fast-path (we fetch all live diffs) in steady-state usage [1]
-        // * is small enough to query Consensus for at high volume
-        //
-        // [1]: seqnos advance by roughly 1 per second, and we should accommodate readers that
-        // require a seqno-hold for a reasonable amount of time to complete, where "reasonable"
-        // is defined with the waving of hands. to start: we'll allow for readers to hold back
-        // seqno/truncation by 10s of minutes.
-        //
-        // NB: we make this a function of `NEED_ROLLUP_THRESHOLD` to approximate when we expect
-        // rollups to be written and therefore when old states will be truncated by GC.
-        let scan_limit = 30 * usize::cast_from(PersistConfig::NEED_ROLLUP_THRESHOLD);
+        let scan_limit = self.cfg.state_versions_recent_live_diffs_limit;
         let oldest_diffs =
             retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
                 self.consensus
