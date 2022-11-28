@@ -40,10 +40,10 @@ use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::Mutex;
 use tokio_stream::StreamMap;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use mz_build_info::BuildInfo;
-use mz_orchestrator::NamespacedOrchestrator;
+use mz_orchestrator::{NamespacedOrchestrator, ServiceProcessMetrics};
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
@@ -331,7 +331,7 @@ pub trait StorageController: Debug + Send {
     ///
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
-    async fn process(&mut self) -> Result<(), anyhow::Error>;
+    async fn process(&mut self) -> Result<Option<StorageControllerResponse>, anyhow::Error>;
 }
 
 /// Compaction policies for collections maintained by `Controller`.
@@ -614,6 +614,7 @@ pub struct StorageControllerState<
     /// These handles are on the other end of a Tokio task, so that work can be done asynchronously
     /// without blocking the storage controller.
     persist_read_handles: persist_read_handles::PersistWorker<T>,
+    stashed_metrics: Option<(GlobalId, Vec<ServiceProcessMetrics>)>,
     stashed_response: Option<StorageResponse<T>>,
     /// Storage hosts that should be deprovisioned during the next call to `StorageController::process`.
     pending_host_deprovisions: BTreeSet<GlobalId>,
@@ -727,6 +728,16 @@ impl From<DataflowError> for StorageError {
     }
 }
 
+/// A response returned by the storage controller to the coordinator
+#[derive(Clone, Debug)]
+pub enum StorageControllerResponse {
+    /// The resource usage metrics for a collection have been updated
+    Metrics {
+        id: GlobalId,
+        process_metrics: Vec<ServiceProcessMetrics>,
+    },
+}
+
 impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation>
     StorageControllerState<T>
 {
@@ -762,6 +773,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             persist_write_handles,
             persist_read_handles: persist_read_handles::PersistWorker::new(),
             stashed_response: None,
+            stashed_metrics: None,
             pending_host_deprovisions: BTreeSet::new(),
             collection_manager,
             introspection_ids: HashMap::new(),
@@ -1385,19 +1397,39 @@ where
             .enumerate()
             .collect::<StreamMap<_, _>>();
 
-        let msg = tokio::select! {
-            // Order matters here. We want to process internal commands
-            // before processing external commands.
-            biased;
+        let msg = loop {
+            tokio::select! {
+                // Order matters here. We want to process internal commands
+                // before processing external commands.
+                biased;
 
-            Some(m) = self.internal_response_queue.recv() => m,
-            Some((_id, m)) = clients.next() => m,
+                result = self.hosts.next_metrics() => {
+                    match result {
+                        Ok((id, metrics)) => {
+                            self.state.stashed_metrics = Some((id, metrics));
+                            return;
+                        },
+                        Err(e) => {
+                            warn!("Metrics collection failed: {e}");
+                            continue;
+                        }
+                    }
+                }
+                Some(m) = self.internal_response_queue.recv() => break m,
+                Some((_id, m)) = clients.next() => break m,
+            }
         };
 
         self.state.stashed_response = Some(msg);
     }
 
-    async fn process(&mut self) -> Result<(), anyhow::Error> {
+    async fn process(&mut self) -> Result<Option<StorageControllerResponse>, anyhow::Error> {
+        if let Some((id, process_metrics)) = self.state.stashed_metrics.take() {
+            return Ok(Some(StorageControllerResponse::Metrics {
+                id,
+                process_metrics,
+            }));
+        };
         match self.state.stashed_response.take() {
             None => (),
             Some(StorageResponse::FrontierUppers(updates)) => {
@@ -1414,7 +1446,7 @@ where
             self.hosts.deprovision(id).await?;
         }
 
-        Ok(())
+        Ok(None)
     }
 }
 

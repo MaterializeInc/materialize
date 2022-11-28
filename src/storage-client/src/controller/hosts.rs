@@ -23,15 +23,20 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::Duration;
 
+use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
+use futures::stream::{BoxStream, FuturesUnordered};
+use futures::{FutureExt, StreamExt};
+use mz_ore::soft_assert;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::Codec64;
 use timely::progress::Timestamp;
 use tokio::sync::Mutex;
 
 use mz_build_info::BuildInfo;
-use mz_orchestrator::{NamespacedOrchestrator, ServiceConfig, ServicePort};
+use mz_orchestrator::{NamespacedOrchestrator, ServiceConfig, ServicePort, ServiceProcessMetrics};
 use mz_ore::collections::CollectionExt;
 use mz_proto::RustType;
 use mz_repr::GlobalId;
@@ -59,7 +64,8 @@ pub struct StorageHostsConfig {
 /// to those hosts.
 ///
 /// See the [module documentation](self) for details.
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct StorageHosts<T> {
     /// The build information for this process.
     pub build_info: &'static BuildInfo,
@@ -77,6 +83,10 @@ pub struct StorageHosts<T> {
     initialized: bool,
     /// A handle to Persist
     persist: Arc<Mutex<PersistClientCache>>,
+    /// Per-collection streams of metrics data
+    #[derivative(Debug = "ignore")]
+    metrics_streams:
+        HashMap<GlobalId, BoxStream<'static, Result<Vec<ServiceProcessMetrics>, anyhow::Error>>>,
 }
 
 /// Metadata about a single storage host, effectively used for reference-counting
@@ -109,6 +119,7 @@ where
             hosts: HashMap::new(),
             initialized: false,
             persist,
+            metrics_streams: HashMap::new(),
         }
     }
 
@@ -225,9 +236,37 @@ where
         self.hosts.values_mut().map(|h| &mut h.client)
     }
 
+    /// Install a stream that returns resource usage metrics
+    /// for the host serving a given collection.
+    // TODO[btv] - This needs to be rethought if we ever give up
+    // the 1-1 correspondence between collections and storage hosts.
+    fn start_metrics_collection(&mut self, id: GlobalId) {
+        const METRICS_INTERVAL: Duration = Duration::from_secs(10);
+
+        let id_s = id.to_string();
+        let orchestrator = self.orchestrator.clone();
+        // See comments in the similar function in `compute_client`
+        // for why we poll in a loop instead of trying to use a watcher
+        let s = async_stream::stream! {
+            let mut interval = tokio::time::interval(METRICS_INTERVAL);
+            loop {
+                interval.tick().await;
+                yield orchestrator.fetch_service_metrics(&id_s).await
+            }
+        };
+        self.metrics_streams.insert(id, s.boxed());
+    }
+
+    /// Stop collecting resource usage metrics for the host
+    /// serving the given collection.
+    fn stop_metrics_collection(&mut self, id: GlobalId) {
+        let old = self.metrics_streams.remove(&id);
+        soft_assert!(old.is_some());
+    }
+
     /// Starts a orchestrated storage host for the specified ID.
     async fn ensure_storage_host(
-        &self,
+        &mut self,
         id: GlobalId,
         allocation: StorageHostResourceAllocation,
     ) -> Result<StorageHostAddr, anyhow::Error> {
@@ -275,11 +314,35 @@ where
                 },
             )
             .await?;
+        self.start_metrics_collection(id);
         Ok(storage_service.addresses("controller").into_element())
     }
 
     /// Drops an orchestrated storage host for the specified ID.
-    async fn drop_storage_host(&self, id: GlobalId) -> Result<(), anyhow::Error> {
+    async fn drop_storage_host(&mut self, id: GlobalId) -> Result<(), anyhow::Error> {
+        self.stop_metrics_collection(id);
         self.orchestrator.drop_service(&id.to_string()).await
+    }
+
+    /// Gets the next available resource usage data.
+    pub async fn next_metrics(
+        &mut self,
+    ) -> Result<(GlobalId, Vec<ServiceProcessMetrics>), anyhow::Error> {
+        if self.metrics_streams.is_empty() {
+            return futures::future::pending().await;
+        }
+        self.metrics_streams
+            .iter_mut()
+            .map(|(id, s)| {
+                s.next().map(|result| {
+                    result
+                        .expect("metrics streams are infinite loops")
+                        .map(|ok| (*id, ok))
+                })
+            })
+            .collect::<FuturesUnordered<_>>()
+            .next()
+            .await
+            .expect("there is at least one element, checked above")
     }
 }
