@@ -5312,12 +5312,12 @@ checksum = "15eb2c6e362923af47e13c23ca5afb859e83d54452c55b0b9ac763b8f7c1ac16"
 
 [[package]]
 name = "postgres"
-version = "0.19.3"
-source = "git+https://github.com/MaterializeInc/rust-postgres#abff35ecc553dc23ca8f85e64945e87a93cbba28"
+version = "0.19.4"
+source = "git+https://github.com/MaterializeInc/rust-postgres#9c9086235344fe794361a9985d97a64b42e61929"
 dependencies = [
  "bytes",
  "fallible-iterator",
- "futures",
+ "futures-util",
  "log",
  "tokio",
  "tokio-postgres",
@@ -5326,9 +5326,8 @@ dependencies = [
 [[package]]
 name = "postgres-openssl"
 version = "0.5.0"
-source = "git+https://github.com/MaterializeInc/rust-postgres#abff35ecc553dc23ca8f85e64945e87a93cbba28"
+source = "git+https://github.com/MaterializeInc/rust-postgres#9c9086235344fe794361a9985d97a64b42e61929"
 dependencies = [
- "futures",
  "openssl",
  "tokio",
  "tokio-openssl",
@@ -5338,7 +5337,7 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.6.4"
-source = "git+https://github.com/MaterializeInc/rust-postgres#abff35ecc553dc23ca8f85e64945e87a93cbba28"
+source = "git+https://github.com/MaterializeInc/rust-postgres#9c9086235344fe794361a9985d97a64b42e61929"
 dependencies = [
  "base64",
  "byteorder",
@@ -5354,8 +5353,8 @@ dependencies = [
 
 [[package]]
 name = "postgres-types"
-version = "0.2.3"
-source = "git+https://github.com/MaterializeInc/rust-postgres#abff35ecc553dc23ca8f85e64945e87a93cbba28"
+version = "0.2.4"
+source = "git+https://github.com/MaterializeInc/rust-postgres#9c9086235344fe794361a9985d97a64b42e61929"
 dependencies = [
  "bytes",
  "chrono",
@@ -6961,14 +6960,15 @@ dependencies = [
 
 [[package]]
 name = "tokio-postgres"
-version = "0.7.6"
-source = "git+https://github.com/MaterializeInc/rust-postgres#abff35ecc553dc23ca8f85e64945e87a93cbba28"
+version = "0.7.7"
+source = "git+https://github.com/MaterializeInc/rust-postgres#9c9086235344fe794361a9985d97a64b42e61929"
 dependencies = [
  "async-trait",
  "byteorder",
  "bytes",
  "fallible-iterator",
- "futures",
+ "futures-channel",
+ "futures-util",
  "log",
  "parking_lot",
  "percent-encoding",
