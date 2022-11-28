@@ -428,25 +428,12 @@ async fn postgres_replication_loop_inner(
                 );
             }
             Err(ReplicationError::Indefinite(e)) => {
-                // If the channel is shutting down, so is the source.
-                let _ = task_info
-                    .sender
-                    .send(InternalMessage::Status(SourceStatusUpdate {
-                        status: SourceStatus::Stalled,
-                        error: Some(e.to_string()),
-                    }))
-                    .await;
                 // TODO: In the future we probably want to handle this more gracefully,
                 // but for now halting is the easiest way to dump the data in the pipe.
                 // The restarted storaged instance will restart the snapshot fresh, which will
                 // avoid any inconsistencies. Note that if the same lsn is chosen in the
                 // next snapshotting, the remapped timestamp chosen will be the same for
                 // both instances of storaged.
-                // In the meantime, we'd like to increase the changes that the stall reported
-                // above will make it to the status history table, so we'll wait a little
-                // bit before halting. This should be removed once we have a more graceful
-                // shutdown approach.
-                tokio::time::sleep(Duration::from_secs(10)).await;
                 halt!(
                     "replication snapshot for source {} failed: {}",
                     &task_info.source_id,
