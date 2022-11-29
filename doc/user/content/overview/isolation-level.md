@@ -83,6 +83,8 @@ large propagation delays. For example, if SQL-transaction T1 happens before SQL-
 table t, and T2 queries materialized view mv where mv is an expensive materialized view including t, then T2 may not see
 all the rows that were seen by T1 if they are executed close enough together in real time.
 
+If a consistent snapshot is not available across all objects in a query, the query will be blocked until one becomes available. On the other hand, if a consistent snapshot is available, the query will be executed immediately. A consistent snapshot is guaranteed to be available for queries that involve a single object (which includes queries against a single materialized view that was created using multiple objects). Such queries will therefore never block, and always be executed immediately.
+
 ## Strict serializable
 
 The Strict Serializable isolation level provides all the same guarantees as Serializable, with the addition that
@@ -110,6 +112,12 @@ linearizable transactions, then you should downgrade to the Serializable isolati
 Strict Serializable provides stronger consistency guarantees but may have slower reads than Serializable. This is
 because Strict Serializable may need to wait for writes to propagate through materialized views and indexes, while
 Serializable does not.
+
+In Serializable mode, If a consistent snapshot is not available across all objects in a query, the query will be
+blocked until one becomes available. On the other hand, if a consistent snapshot is available, the query will be
+executed immediately. A consistent snapshot is guaranteed to be available for queries that involve a single object
+(which includes queries against a single materialized view that was created using multiple objects). Such queries will
+therefore never block, and always be executed immediately.
 
 
 ## Learn more
