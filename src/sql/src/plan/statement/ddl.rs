@@ -2744,18 +2744,30 @@ impl From<&KafkaConnectionOptionExtracted> for Option<KafkaTlsConfig> {
     }
 }
 
-impl From<&KafkaConnectionOptionExtracted> for Option<SaslConfig> {
-    fn from(k: &KafkaConnectionOptionExtracted) -> Self {
-        if k.sasl_config().iter().all(|config| k.seen.contains(config)) {
+impl TryFrom<&KafkaConnectionOptionExtracted> for Option<SaslConfig> {
+    type Error = PlanError;
+    fn try_from(k: &KafkaConnectionOptionExtracted) -> Result<Self, Self::Error> {
+        let res = if k.sasl_config().iter().all(|config| k.seen.contains(config)) {
+            let sasl_mechanism = k.sasl_mechanisms.clone().unwrap();
+            if sasl_mechanism
+                .chars()
+                .any(|c| c.is_ascii_alphabetic() && !c.is_uppercase())
+            {
+                sql_bail!(
+                    "invalid SASL MECHANISM {}: must be uppercase",
+                    sasl_mechanism.quoted()
+                );
+            }
             Some(SaslConfig {
-                mechanisms: k.sasl_mechanisms.clone().unwrap(),
+                mechanisms: sasl_mechanism,
                 username: k.sasl_username.clone().unwrap(),
                 password: k.sasl_password.unwrap().into(),
                 tls_root_cert: k.ssl_certificate_authority.clone(),
             })
         } else {
             None
-        }
+        };
+        Ok(res)
     }
 }
 
@@ -2763,7 +2775,7 @@ impl TryFrom<&KafkaConnectionOptionExtracted> for Option<KafkaSecurity> {
     type Error = PlanError;
     fn try_from(value: &KafkaConnectionOptionExtracted) -> Result<Self, Self::Error> {
         let ssl_config = Option::<KafkaTlsConfig>::from(value).map(KafkaSecurity::from);
-        let sasl_config = Option::<SaslConfig>::from(value).map(KafkaSecurity::from);
+        let sasl_config = Option::<SaslConfig>::try_from(value)?.map(KafkaSecurity::from);
 
         let mut security_iter = vec![ssl_config, sasl_config].into_iter();
         let res = match security_iter.find(|v| v.is_some()) {
