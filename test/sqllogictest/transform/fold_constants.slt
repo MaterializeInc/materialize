@@ -15,7 +15,7 @@ CREATE VIEW billion AS SELECT * FROM generate_series(0, 999) AS x, generate_seri
 #
 # If we make it so that reductions on constants
 # can be computed without writing out
-# out the entire input constant in unary, we can get rid of this test:
+# the entire input constant in unary, we can get rid of this test:
 # See https://github.com/MaterializeInc/materialize/issues/12963 .
 
 query T multiline
@@ -39,3 +39,15 @@ Explained Query:
           - (() x 1000000000)
 
 EOF
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/16195
+
+statement ok
+CREATE TABLE t1 (f1 int, f2 int);
+
+statement ok
+CREATE TABLE t2 (f1 int, f2 int);
+
+query IIIRR
+SELECT  (a1.f1) AS c1, (a2.f1) AS c2, (a1.f2) AS c3, (MIN ( 4 )) AS agg1 , (AVG ( a1 . f2 + 4 )) AS agg2 FROM ( SELECT a1 . f2 + 4 AS f1 , a2 . f2 AS f2 FROM t1 AS a1  JOIN t2 AS a2 ON ( a1 . f1 = a1 . f2 + 8 ) WHERE a1 . f1 + a1 . f2 < a2 . f2 + a1 . f2 AND NOT ( NOT ( a2 . f2 IS NOT NULL ) ) ORDER BY 1 , 2 LIMIT 4  ) AS a1  JOIN ( SELECT AVG ( a2 . f2 + a2 . f2 ) AS f1 , AVG ( a2 . f2 ) AS f2 FROM t2 AS a1  JOIN t2 AS a2 ON ( NOT ( NOT ( a2 . f2 = 5 ) ) ) WHERE a2 . f1 IS NOT NULL AND a2 . f2  IN ( 0 , 3 , 0 , 4 , 9 , 6 ) ORDER BY 1 , 2 LIMIT 2  ) AS a2 ON ( NOT ( 4 = 3 ) ) WHERE a1 . f2 + a2 . f1  IN ( 0 , 7 ) AND 5 NOT IN ( SELECT  c3 AS x1 FROM ( SELECT  (a1.f1) AS c1, (a2.f1) AS c2, (a1.f2) AS c3, (FIRST_VALUE ( a2.f1 ) OVER (  ORDER BY a1.f1 , a2.f1 , a1.f2 )) AS agg1 , (MIN ( 7 )) AS agg2 FROM ( SELECT a2 . f1 AS f1 , COUNT ( 2 ) AS f2 FROM t1 AS a1  JOIN t1 AS a2 ON ( 8 NOT IN ( 3 , 2 ) ) WHERE a1 . f1 + a2 . f2 IS NOT NULL AND a2 . f2  IN ( SELECT DISTINCT agg2 AS x1 FROM ( SELECT  (a1.f1) AS c1, (a2.f1) AS c2, (a1.f2) AS c3, (MIN ( a2 . f1 )) AS agg1 , (MIN ( 2 )) AS agg2 FROM t1 AS a1  JOIN ( SELECT 8 AS f1 , COUNT ( 8 ) AS f2 FROM t2 AS a1 LEFT JOIN t2 AS a2 ON ( 1 < a1 . f2 ) WHERE 2 > 7 AND a2 . f2 + a1 . f2 > a1 . f2 + a1 . f2 AND a2 . f2 + a2 . f1 IS  NULL GROUP BY 1 ORDER BY 1 , 2 LIMIT 5 OFFSET 2 ) AS a2 USING ( f2 , f1 ) WHERE a1 . f1 + a1 . f2 IS NOT NULL AND NOT ( 2  IN ( 8 , 2 ) ) AND 3 > a1 . f1 AND a2 . f2 IS  NULL GROUP BY 1 , 2 , 3  ) AS dt ORDER BY 1 LIMIT 5  ) OR 3 = a1 . f1 GROUP BY 1 ORDER BY 1 , 2 LIMIT 8  ) AS a1 RIGHT JOIN t1 AS a2 ON ( NOT ( 4 NOT IN ( 5 , 3 ) ) ) WHERE NOT ( 8 > a1 . f2 + a1 . f1 ) OR a2 . f2 IS NOT NULL AND 5 NOT IN ( 4 , 4 , 2 , 6 ) GROUP BY 1 , 2 , 3  ) AS dt ORDER BY 1 LIMIT 9 OFFSET 8 ) GROUP BY 1 , 2 , 3 ;
+----

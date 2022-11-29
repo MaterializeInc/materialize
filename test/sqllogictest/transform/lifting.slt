@@ -201,9 +201,10 @@ Explained Query:
     Map ((1 + #0), 1) // { arity: 3 }
       CrossJoin type=differential // { arity: 1 }
         implementation
-          %0[×] » %1:t[×]A
-        Constant // { arity: 0 }
-          - (() x 7)
+          %1:t[×] » %0[×]A
+        ArrangeBy keys=[[]] // { arity: 0 }
+          Constant // { arity: 0 }
+            - (() x 7)
         ArrangeBy keys=[[]] // { arity: 1 }
           Project (#0) // { arity: 1 }
             Get materialize.public.t // { arity: 2 }
@@ -234,10 +235,11 @@ Explained Query:
   Project (#1, #0) // { types: "(integer, integer)" }
     Map (1) // { types: "(integer, integer)" }
       CrossJoin type=differential // { types: "(integer)" }
-        Constant // { types: "(integer)" }
-          - (2)
-          - (3)
-          - (4)
+        ArrangeBy keys=[[]] // { types: "(integer)" }
+          Constant // { types: "(integer)" }
+            - (2)
+            - (3)
+            - (4)
         ArrangeBy keys=[[]] // { types: "()" }
           Project () // { types: "()" }
             Get materialize.public.t // { types: "(integer?, integer?)" }
@@ -256,16 +258,17 @@ Explained Query:
   Project (#0, #2, #1) // { types: "(integer, integer, integer)" }
     Map (1) // { types: "(integer, integer, integer)" }
       CrossJoin type=differential // { types: "(integer, integer)" }
-        Constant // { types: "(integer, integer)" }
-          - (2, 3)
-          - (2, 4)
-          - (2, 5)
-          - (3, 3)
-          - (3, 4)
-          - (3, 5)
-          - (4, 3)
-          - (4, 4)
-          - (4, 5)
+        ArrangeBy keys=[[]] // { types: "(integer, integer)" }
+          Constant // { types: "(integer, integer)" }
+            - (2, 3)
+            - (2, 4)
+            - (2, 5)
+            - (3, 3)
+            - (3, 4)
+            - (3, 5)
+            - (4, 3)
+            - (4, 4)
+            - (4, 5)
         ArrangeBy keys=[[]] // { types: "()" }
           Project () // { types: "()" }
             Get materialize.public.t // { types: "(integer?, integer?)" }
