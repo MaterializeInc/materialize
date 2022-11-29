@@ -29,7 +29,7 @@ from materialize.checks.mzcompose_actions import (
     RestartPostgresBackend as RestartPostgresBackendAction,
 )
 from materialize.checks.mzcompose_actions import (
-    RestartRedpanda as RestartRedpandaAction,
+    RestartRedpandaDebezium as RestartRedpandaDebeziumAction,
 )
 from materialize.checks.mzcompose_actions import (
     RestartSourcePostgres as RestartSourcePostgresAction,
@@ -176,15 +176,15 @@ class RestartSourcePostgres(Scenario):
         ]
 
 
-class RestartRedpanda(Scenario):
+class RestartRedpandaDebezium(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
             Initialize(self.checks),
-            RestartRedpandaAction(),
+            RestartRedpandaDebeziumAction(),
             Manipulate(self.checks, phase=1),
-            RestartRedpandaAction(),
+            RestartRedpandaDebeziumAction(),
             Manipulate(self.checks, phase=2),
-            RestartRedpandaAction(),
+            RestartRedpandaDebeziumAction(),
             Validate(self.checks),
         ]

@@ -676,12 +676,17 @@ where
     /// Returns an independent [ReadHandle] with a new [LeasedReaderId] but the
     /// same `since`.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
-    pub async fn clone(&self) -> Self {
+    pub async fn clone(&self, purpose: &str) -> Self {
         let new_reader_id = LeasedReaderId::new();
         let mut machine = self.machine.clone();
         let heartbeat_ts = (self.cfg.now)();
         let read_cap = machine
-            .clone_reader(&new_reader_id, self.cfg.reader_lease_duration, heartbeat_ts)
+            .clone_reader(
+                &new_reader_id,
+                purpose,
+                self.cfg.reader_lease_duration,
+                heartbeat_ts,
+            )
             .await;
         let new_reader = ReadHandle::new(
             self.cfg.clone(),
@@ -959,7 +964,7 @@ mod tests {
 
         // Create machinery for subscribe + fetch
 
-        let fetcher = read.clone().await.batch_fetcher().await;
+        let fetcher = read.clone("").await.batch_fetcher().await;
 
         let mut subscribe = read
             .subscribe(timely::progress::Antichain::from_elem(1))

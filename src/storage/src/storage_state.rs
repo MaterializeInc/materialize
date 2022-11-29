@@ -117,6 +117,7 @@ pub struct SinkHandle {
 impl SinkHandle {
     /// A new handle.
     pub fn new(
+        sink_id: GlobalId,
         persist_location: PersistLocation,
         shard_id: ShardId,
         persist_clients: Arc<Mutex<PersistClientCache>>,
@@ -132,7 +133,7 @@ impl SinkHandle {
                 .expect("opening persist client");
 
             let mut read_handle: ReadHandle<SourceData, (), Timestamp, Diff> = client
-                .open_leased_reader(shard_id)
+                .open_leased_reader(shard_id, &format!("sink::since {}", sink_id))
                 .await
                 .expect("opening reader for shard");
 
@@ -299,6 +300,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     self.storage_state.sink_handles.insert(
                         export.id,
                         SinkHandle::new(
+                            export.id,
                             export
                                 .description
                                 .from_storage_metadata

@@ -350,7 +350,7 @@ mod tests {
         let shard_id = crate::ShardId::new();
 
         let mut since = client
-            .open_critical_since::<(), (), u64, i64, i64>(shard_id, CriticalReaderId::new())
+            .open_critical_since::<(), (), u64, i64, i64>(shard_id, CriticalReaderId::new(), "")
             .await
             .expect("codec mismatch");
 
@@ -379,6 +379,7 @@ mod tests {
             .open_critical_since::<(), (), u64, i64, i64>(
                 shard_id,
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
+                "",
             )
             .await
             .expect("codec mismatch");
@@ -398,6 +399,7 @@ mod tests {
             .open_critical_since::<(), (), u64, i64, i64>(
                 shard_id,
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
+                "",
             )
             .await
             .expect("codec mismatch");

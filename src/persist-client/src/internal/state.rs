@@ -75,13 +75,17 @@ impl IdempotencyToken {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct LeasedReaderState<T> {
+    /// The seqno capability of this reader.
     pub seqno: SeqNo,
+    /// The since capability of this reader.
     pub since: Antichain<T>,
     /// UNIX_EPOCH timestamp (in millis) of this reader's most recent heartbeat
     pub last_heartbeat_timestamp_ms: u64,
     /// Duration (in millis) allowed after [Self::last_heartbeat_timestamp_ms]
     /// after which this reader may be expired
     pub lease_duration_ms: u64,
+    /// For debugging.
+    pub debug: HandleDebugState,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -89,9 +93,14 @@ pub struct OpaqueState(pub [u8; 8]);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CriticalReaderState<T> {
+    /// The since capability of this reader.
     pub since: Antichain<T>,
+    /// An opaque token matched on by compare_and_downgrade_since.
     pub opaque: OpaqueState,
+    /// The [Codec64] used to encode [Self::opaque].
     pub opaque_codec: String,
+    /// For debugging.
+    pub debug: HandleDebugState,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -107,6 +116,18 @@ pub struct WriterState<T> {
     /// The upper of the most recent successful compare_and_append by this
     /// writer.
     pub most_recent_write_upper: Antichain<T>,
+    /// For debugging.
+    pub debug: HandleDebugState,
+}
+
+/// Debugging info for a reader or writer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HandleDebugState {
+    /// Hostname of the persist user that registered this writer or reader. For
+    /// critical readers, this is the _most recent_ registration.
+    pub hostname: String,
+    /// Plaintext description of this writer or reader's intent.
+    pub purpose: String,
 }
 
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
@@ -244,7 +265,9 @@ where
 
     pub fn register_leased_reader(
         &mut self,
+        hostname: &str,
         reader_id: &LeasedReaderId,
+        purpose: &str,
         seqno: SeqNo,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
@@ -252,6 +275,10 @@ where
         // TODO: Handle if the reader or writer already exist (probably with a
         // retry).
         let read_cap = LeasedReaderState {
+            debug: HandleDebugState {
+                hostname: hostname.to_owned(),
+                purpose: purpose.to_owned(),
+            },
             seqno,
             since: self.trace.since().clone(),
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
@@ -265,12 +292,25 @@ where
 
     pub fn register_critical_reader<O: Opaque + Codec64>(
         &mut self,
+        hostname: &str,
         reader_id: &CriticalReaderId,
+        purpose: &str,
     ) -> ControlFlow<Infallible, CriticalReaderState<T>> {
         let state = match self.critical_readers.get(reader_id) {
-            Some(state) => state.clone(),
+            Some(state) => {
+                let mut state = state.clone();
+                state.debug = HandleDebugState {
+                    hostname: hostname.to_owned(),
+                    purpose: purpose.to_owned(),
+                };
+                state
+            }
             None => {
                 let state = CriticalReaderState {
+                    debug: HandleDebugState {
+                        hostname: hostname.to_owned(),
+                        purpose: purpose.to_owned(),
+                    },
                     since: self.trace.since().clone(),
                     opaque: OpaqueState(Codec64::encode(&O::initial())),
                     opaque_codec: O::codec_name(),
@@ -285,11 +325,17 @@ where
 
     pub fn register_writer(
         &mut self,
+        hostname: &str,
         writer_id: &WriterId,
+        purpose: &str,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<Infallible, (Upper<T>, WriterState<T>)> {
         let writer_state = WriterState {
+            debug: HandleDebugState {
+                hostname: hostname.to_owned(),
+                purpose: purpose.to_owned(),
+            },
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
             lease_duration_ms: u64::try_from(lease_duration.as_millis())
                 .expect("lease duration as millis must fit within u64"),
@@ -302,13 +348,19 @@ where
 
     pub fn clone_reader(
         &mut self,
+        hostname: &str,
         new_reader_id: &LeasedReaderId,
+        purpose: &str,
         seqno: SeqNo,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<Infallible, LeasedReaderState<T>> {
         // TODO: Handle if the reader already exists (probably with a retry).
         let read_cap = LeasedReaderState {
+            debug: HandleDebugState {
+                hostname: hostname.to_owned(),
+                purpose: purpose.to_owned(),
+            },
             seqno,
             since: self.trace.since().clone(),
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
@@ -639,6 +691,9 @@ pub struct State<K, V, T, D> {
     pub(crate) shard_id: ShardId,
 
     pub(crate) seqno: SeqNo,
+    /// Hostname of the persist user that created this version of state. For
+    /// debugging.
+    pub(crate) hostname: String,
     pub(crate) collections: StateCollections<T>,
 
     // According to the docs, PhantomData is to "mark things that act like they
@@ -652,11 +707,12 @@ pub struct State<K, V, T, D> {
 }
 
 impl<K, V, T: Clone, D> State<K, V, T, D> {
-    pub(crate) fn clone(&self, applier_version: Version) -> Self {
+    pub(crate) fn clone(&self, applier_version: Version, hostname: String) -> Self {
         Self {
             applier_version,
             shard_id: self.shard_id.clone(),
             seqno: self.seqno.clone(),
+            hostname,
             collections: self.collections.clone(),
             _phantom: self._phantom.clone(),
         }
@@ -671,6 +727,7 @@ impl<K, V, T: Debug, D> Debug for State<K, V, T, D> {
             applier_version,
             shard_id,
             seqno,
+            hostname,
             collections,
             _phantom,
         } = self;
@@ -678,6 +735,7 @@ impl<K, V, T: Debug, D> Debug for State<K, V, T, D> {
             .field("applier_version", applier_version)
             .field("shard_id", shard_id)
             .field("seqno", seqno)
+            .field("hostname", hostname)
             .field("collections", collections)
             .field("_phantom", _phantom)
             .finish()
@@ -694,6 +752,7 @@ impl<K, V, T: PartialEq, D> PartialEq for State<K, V, T, D> {
             applier_version: self_applier_version,
             shard_id: self_shard_id,
             seqno: self_seqno,
+            hostname: self_hostname,
             collections: self_collections,
             _phantom: _,
         } = self;
@@ -701,12 +760,14 @@ impl<K, V, T: PartialEq, D> PartialEq for State<K, V, T, D> {
             applier_version: other_applier_version,
             shard_id: other_shard_id,
             seqno: other_seqno,
+            hostname: other_hostname,
             collections: other_collections,
             _phantom: _,
         } = other;
         self_applier_version == other_applier_version
             && self_shard_id == other_shard_id
             && self_seqno == other_seqno
+            && self_hostname == other_hostname
             && self_collections == other_collections
     }
 }
@@ -771,11 +832,12 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Codec64,
 {
-    pub fn new(applier_version: Version, shard_id: ShardId) -> Self {
+    pub fn new(applier_version: Version, hostname: String, shard_id: ShardId) -> Self {
         State {
             applier_version,
             shard_id,
             seqno: SeqNo::minimum(),
+            hostname,
             collections: StateCollections {
                 last_gc_req: SeqNo::minimum(),
                 rollups: BTreeMap::new(),
@@ -833,20 +895,21 @@ where
 
     pub fn clone_apply<R, E, WorkFn>(
         &self,
-        build_version: &Version,
+        cfg: &PersistConfig,
         work_fn: &mut WorkFn,
     ) -> ControlFlow<E, (R, Self)>
     where
-        WorkFn: FnMut(SeqNo, &mut StateCollections<T>) -> ControlFlow<E, R>,
+        WorkFn: FnMut(SeqNo, &PersistConfig, &mut StateCollections<T>) -> ControlFlow<E, R>,
     {
         let mut new_state = State {
-            applier_version: build_version.clone(),
+            applier_version: cfg.build_version.clone(),
             shard_id: self.shard_id,
             seqno: self.seqno.next(),
+            hostname: cfg.hostname.clone(),
             collections: self.collections.clone(),
             _phantom: PhantomData,
         };
-        let work_ret = work_fn(new_state.seqno, &mut new_state.collections)?;
+        let work_ret = work_fn(new_state.seqno, cfg, &mut new_state.collections)?;
         Continue((work_ret, new_state))
     }
 
@@ -988,13 +1051,18 @@ mod tests {
 
     #[test]
     fn downgrade_since() {
-        let mut state =
-            State::<(), (), u64, i64>::new(DUMMY_BUILD_INFO.semver_version(), ShardId::new());
+        let mut state = State::<(), (), u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            "".to_owned(),
+            ShardId::new(),
+        );
         let reader = LeasedReaderId::new();
         let seqno = SeqNo::minimum();
         let now = SYSTEM_TIME.clone();
         let _ = state.collections.register_leased_reader(
+            "",
             &reader,
+            "",
             seqno,
             Duration::from_secs(10),
             now(),
@@ -1043,7 +1111,9 @@ mod tests {
         // Create a second reader.
         let reader2 = LeasedReaderId::new();
         let _ = state.collections.register_leased_reader(
+            "",
             &reader2,
+            "",
             seqno,
             Duration::from_secs(10),
             now(),
@@ -1084,7 +1154,9 @@ mod tests {
         // Create a third reader.
         let reader3 = LeasedReaderId::new();
         let _ = state.collections.register_leased_reader(
+            "",
             &reader3,
+            "",
             seqno,
             Duration::from_secs(10),
             now(),
@@ -1131,12 +1203,13 @@ mod tests {
         mz_ore::test::init_logging();
         let mut state = State::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
+            "".to_owned(),
             ShardId::new(),
         )
         .collections;
 
         let writer_id = WriterId::new();
-        let _ = state.register_writer(&writer_id, Duration::from_secs(10), 0);
+        let _ = state.register_writer("", &writer_id, "", Duration::from_secs(10), 0);
         let now = SYSTEM_TIME.clone();
 
         // State is initially empty.
@@ -1217,6 +1290,7 @@ mod tests {
 
         let mut state = State::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
+            "".to_owned(),
             ShardId::new(),
         );
         // Cannot take a snapshot with as_of == shard upper.
@@ -1234,7 +1308,7 @@ mod tests {
         let writer_id = WriterId::new();
         let _ = state
             .collections
-            .register_writer(&writer_id, Duration::from_secs(10), 0);
+            .register_writer("", &writer_id, "", Duration::from_secs(10), 0);
 
         // Advance upper to 5.
         assert!(state
@@ -1272,7 +1346,9 @@ mod tests {
         let reader = LeasedReaderId::new();
         // Advance the since to 2.
         let _ = state.collections.register_leased_reader(
+            "",
             &reader,
+            "",
             SeqNo::minimum(),
             Duration::from_secs(10),
             now(),
@@ -1361,6 +1437,7 @@ mod tests {
 
         let mut state = State::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
+            "".to_owned(),
             ShardId::new(),
         );
 
@@ -1372,7 +1449,7 @@ mod tests {
         let writer_id = WriterId::new();
         let _ = state
             .collections
-            .register_writer(&writer_id, Duration::from_secs(10), 0);
+            .register_writer("", &writer_id, "", Duration::from_secs(10), 0);
         let now = SYSTEM_TIME.clone();
 
         // Add two batches of data, one from [0, 5) and then another from [5, 10).
@@ -1425,6 +1502,7 @@ mod tests {
 
         let mut state = State::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
+            "".to_owned(),
             ShardId::new(),
         );
         let now = SYSTEM_TIME.clone();
@@ -1446,13 +1524,13 @@ mod tests {
 
         assert!(state
             .collections
-            .register_writer(&writer_id_one, Duration::from_secs(10), 0)
+            .register_writer("", &writer_id_one, "", Duration::from_secs(10), 0)
             .is_continue());
 
         let writer_id_two = WriterId::new();
         assert!(state
             .collections
-            .register_writer(&writer_id_two, Duration::from_secs(10), 0)
+            .register_writer("", &writer_id_two, "", Duration::from_secs(10), 0)
             .is_continue());
 
         // Writer is registered and is now eligible to write
@@ -1501,6 +1579,7 @@ mod tests {
         mz_ore::test::init_logging();
         let mut state = State::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
+            "".to_owned(),
             ShardId::new(),
         );
 
@@ -1517,7 +1596,7 @@ mod tests {
         let writer_id = WriterId::new();
         let _ = state
             .collections
-            .register_writer(&writer_id, Duration::from_secs(10), 0);
+            .register_writer("", &writer_id, "", Duration::from_secs(10), 0);
         assert_eq!(state.maybe_gc(false), None);
 
         // A write will gc though.

@@ -97,27 +97,6 @@ Key | Value
 }
 ```
 
-#### TypeScript definition
-
-You can model these with the following TypeScript definitions:
-
-```typescript
-interface Simple {
-    query: string;
-}
-
-interface ExtendedRequest {
-    query: string;
-    params?: (string | null)[];
-}
-
-interface Extended {
-    queries: ExtendedRequest;
-}
-
-type Sql = Simple | Extended;
-```
-
 ### Output format
 
 The output format is a JSON object with one key, `results`, whose value is
@@ -145,6 +124,45 @@ Note that the returned values include the results of statements which were
 ultimately rolled back because of an error in a later part of the transaction.
 You must parse the results to understand which statements ultimately reflect
 the resultant state.
+
+#### TypeScript definition
+
+You can model these with the following TypeScript definitions:
+
+```typescript
+interface Simple {
+    query: string;
+}
+
+interface ExtendedRequest {
+    query: string;
+    params?: (string | null)[];
+}
+
+interface Extended {
+    queries: ExtendedRequest[];
+}
+
+type SqlRequest = Simple | Extended;
+
+interface Notice {
+	message: string;
+	severity: string;
+}
+
+type SqlResult =
+  | {
+	rows: any[][];
+	col_names: string[];
+	notices: Notice[];
+} | {
+	ok?: string;
+	notices: Notice[];
+} | {
+	error: string;
+	notices: Notice[];
+};
+```
 
 ## Examples
 ### Run a transaction

@@ -57,11 +57,7 @@ impl PersistClientCache {
     /// metrics.
     #[cfg(test)]
     pub fn new_no_metrics() -> Self {
-        use mz_build_info::DUMMY_BUILD_INFO;
-        use mz_ore::now::SYSTEM_TIME;
-
-        let cfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
-        Self::new(cfg, &MetricsRegistry::new())
+        Self::new(PersistConfig::new_for_tests(), &MetricsRegistry::new())
     }
 
     /// Returns a new [PersistClient] for interfacing with persist shards made

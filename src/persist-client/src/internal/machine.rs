@@ -67,7 +67,10 @@ impl<K, V, T: Clone, D> Clone for Machine<K, V, T, D> {
             metrics: Arc::clone(&self.metrics),
             shard_metrics: Arc::clone(&self.shard_metrics),
             state_versions: Arc::clone(&self.state_versions),
-            state: self.state.clone(self.cfg.build_version.clone()),
+            state: self.state.clone(
+                self.state.applier_version.clone(),
+                self.state.hostname.clone(),
+            ),
         }
     }
 }
@@ -155,7 +158,7 @@ where
         let mut applied_ever_true = false;
         let metrics = Arc::clone(&self.metrics);
         let (_seqno, _applied, _maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.add_and_remove_rollups, |_, state| {
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.add_and_remove_rollups, |_, _, state| {
                 let ret = state.add_and_remove_rollups(add_rollup, remove_rollups);
                 if let Continue(applied) = ret {
                     applied_ever_true = applied_ever_true || applied;
@@ -169,14 +172,17 @@ where
     pub async fn register_leased_reader(
         &mut self,
         reader_id: &LeasedReaderId,
+        purpose: &str,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> (Upper<T>, LeasedReaderState<T>) {
         let metrics = Arc::clone(&self.metrics);
         let (seqno, (shard_upper, read_cap), _maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |seqno, state| {
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |seqno, cfg, state| {
                 state.register_leased_reader(
+                    &cfg.hostname,
                     reader_id,
+                    purpose,
                     seqno,
                     lease_duration,
                     heartbeat_timestamp_ms,
@@ -190,11 +196,12 @@ where
     pub async fn register_critical_reader<O: Opaque + Codec64>(
         &mut self,
         reader_id: &CriticalReaderId,
+        purpose: &str,
     ) -> CriticalReaderState<T> {
         let metrics = Arc::clone(&self.metrics);
         let (_seqno, state, _maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, state| {
-                state.register_critical_reader::<O>(reader_id)
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, cfg, state| {
+                state.register_critical_reader::<O>(&cfg.hostname, reader_id, purpose)
             })
             .await;
         state
@@ -203,13 +210,20 @@ where
     pub async fn register_writer(
         &mut self,
         writer_id: &WriterId,
+        purpose: &str,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> (Upper<T>, WriterState<T>) {
         let metrics = Arc::clone(&self.metrics);
         let (_seqno, (shard_upper, writer_state), _maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, state| {
-                state.register_writer(writer_id, lease_duration, heartbeat_timestamp_ms)
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, cfg, state| {
+                state.register_writer(
+                    &cfg.hostname,
+                    writer_id,
+                    purpose,
+                    lease_duration,
+                    heartbeat_timestamp_ms,
+                )
             })
             .await;
         (shard_upper, writer_state)
@@ -218,13 +232,21 @@ where
     pub async fn clone_reader(
         &mut self,
         new_reader_id: &LeasedReaderId,
+        purpose: &str,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> LeasedReaderState<T> {
         let metrics = Arc::clone(&self.metrics);
         let (seqno, read_cap, _maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.clone_reader, |seqno, state| {
-                state.clone_reader(new_reader_id, seqno, lease_duration, heartbeat_timestamp_ms)
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.clone_reader, |seqno, cfg, state| {
+                state.clone_reader(
+                    &cfg.hostname,
+                    new_reader_id,
+                    purpose,
+                    seqno,
+                    lease_duration,
+                    heartbeat_timestamp_ms,
+                )
             })
             .await;
         debug_assert_eq!(seqno, read_cap.seqno);
@@ -374,7 +396,7 @@ where
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         loop {
             let cmd_res = self
-                .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |_, state| {
+                .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |_, _, state| {
                     state.compare_and_append(
                         batch,
                         writer_id,
@@ -515,7 +537,7 @@ where
         // crashes.
         let mut merge_result_ever_applied = ApplyMergeResult::NotAppliedNoMatch;
         let (_seqno, _apply_merge_result, _maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, state| {
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, _, state| {
                 let ret = state.apply_merge_res(res);
                 if let Continue(result) = ret {
                     // record if we've ever applied the merge
@@ -543,7 +565,7 @@ where
         heartbeat_timestamp_ms: u64,
     ) -> (SeqNo, Since<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.metrics);
-        self.apply_unbatched_idempotent_cmd(&metrics.cmds.downgrade_since, |seqno, state| {
+        self.apply_unbatched_idempotent_cmd(&metrics.cmds.downgrade_since, |seqno, _cfg, state| {
             state.downgrade_since(
                 reader_id,
                 seqno,
@@ -565,7 +587,7 @@ where
         let (_seqno, res, maintenance) = self
             .apply_unbatched_idempotent_cmd(
                 &metrics.cmds.compare_and_downgrade_since,
-                |_seqno, state| {
+                |_seqno, _cfg, state| {
                     state.compare_and_downgrade_since::<O>(
                         reader_id,
                         expected_opaque,
@@ -588,7 +610,7 @@ where
     ) -> (SeqNo, bool, RoutineMaintenance) {
         let metrics = Arc::clone(&self.metrics);
         let (seqno, existed, maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.heartbeat_reader, |_, state| {
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.heartbeat_reader, |_, _, state| {
                 state.heartbeat_leased_reader(reader_id, heartbeat_timestamp_ms)
             })
             .await;
@@ -642,7 +664,7 @@ where
     ) -> (SeqNo, bool, RoutineMaintenance) {
         let metrics = Arc::clone(&self.metrics);
         let (seqno, existed, maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.heartbeat_writer, |_, state| {
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.heartbeat_writer, |_, _, state| {
                 state.heartbeat_writer(writer_id, heartbeat_timestamp_ms)
             })
             .await;
@@ -692,7 +714,7 @@ where
     pub async fn expire_leased_reader(&mut self, reader_id: &LeasedReaderId) -> SeqNo {
         let metrics = Arc::clone(&self.metrics);
         let (seqno, _existed, _maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_reader, |_, state| {
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_reader, |_, _, state| {
                 state.expire_leased_reader(reader_id)
             })
             .await;
@@ -702,7 +724,7 @@ where
     pub async fn expire_critical_reader(&mut self, reader_id: &CriticalReaderId) -> SeqNo {
         let metrics = Arc::clone(&self.metrics);
         let (seqno, _existed, _maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_reader, |_, state| {
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_reader, |_, _, state| {
                 state.expire_critical_reader(reader_id)
             })
             .await;
@@ -712,7 +734,7 @@ where
     pub async fn expire_writer(&mut self, writer_id: &WriterId) -> SeqNo {
         let metrics = Arc::clone(&self.metrics);
         let (seqno, _existed, _maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_writer, |_, state| {
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_writer, |_, _, state| {
                 state.expire_writer(writer_id)
             })
             .await;
@@ -791,7 +813,7 @@ where
 
     async fn apply_unbatched_idempotent_cmd<
         R,
-        WorkFn: FnMut(SeqNo, &mut StateCollections<T>) -> ControlFlow<Infallible, R>,
+        WorkFn: FnMut(SeqNo, &PersistConfig, &mut StateCollections<T>) -> ControlFlow<Infallible, R>,
     >(
         &mut self,
         cmd: &CmdMetrics,
@@ -824,7 +846,7 @@ where
     async fn apply_unbatched_cmd<
         R,
         E,
-        WorkFn: FnMut(SeqNo, &mut StateCollections<T>) -> ControlFlow<E, R>,
+        WorkFn: FnMut(SeqNo, &PersistConfig, &mut StateCollections<T>) -> ControlFlow<E, R>,
     >(
         &mut self,
         cmd: &CmdMetrics,
@@ -837,7 +859,7 @@ where
             loop {
                 let (work_ret, mut new_state) = match self
                     .state
-                    .clone_apply(&self.cfg.build_version, &mut work_fn)
+                    .clone_apply(&self.cfg, &mut work_fn)
                 {
                     Continue(x) => x,
                     Break(err) => {
@@ -1511,7 +1533,7 @@ pub mod datadriven {
         let as_of = args.expect_antichain("as_of");
         let read = datadriven
             .client
-            .open_leased_reader::<String, (), u64, i64>(datadriven.shard_id)
+            .open_leased_reader::<String, (), u64, i64>(datadriven.shard_id, "")
             .await
             .expect("invalid shard types");
         let listen = read
@@ -1557,7 +1579,7 @@ pub mod datadriven {
         let reader_id = args.expect("reader_id");
         let state = datadriven
             .machine
-            .register_critical_reader::<u64>(&reader_id)
+            .register_critical_reader::<u64>(&reader_id, "tests")
             .await;
         Ok(format!(
             "{} {:?}\n",
@@ -1575,6 +1597,7 @@ pub mod datadriven {
             .machine
             .register_leased_reader(
                 &reader_id,
+                "tests",
                 datadriven.client.cfg.reader_lease_duration,
                 (datadriven.client.cfg.now)(),
             )
@@ -1595,6 +1618,7 @@ pub mod datadriven {
             .machine
             .register_writer(
                 &writer_id,
+                "tests",
                 datadriven.client.cfg.writer_lease_duration,
                 (datadriven.client.cfg.now)(),
             )

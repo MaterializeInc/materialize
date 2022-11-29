@@ -481,7 +481,10 @@ mod tests {
             .await
             .unwrap();
 
-        let (write_handle, mut read_handle) = persist_client.open(shard_id).await.unwrap();
+        let (write_handle, mut read_handle) = persist_client
+            .open(shard_id, "tests::dump_storage_collection")
+            .await
+            .unwrap();
 
         let upper = write_handle.upper();
         let readable_upper = Antichain::from_elem(upper.elements()[0] - 1);

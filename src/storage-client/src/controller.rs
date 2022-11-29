@@ -886,8 +886,9 @@ where
                 .await
                 .unwrap();
 
+            let purpose = format!("controller data {}", id);
             let write = persist_client
-                .open_writer(metadata.data_shard)
+                .open_writer(metadata.data_shard, &purpose)
                 .await
                 .expect("invalid persist usage");
 
@@ -897,6 +898,7 @@ where
                     .open_critical_since(
                         metadata.data_shard,
                         PersistClient::CONTROLLER_CRITICAL_SINCE,
+                        &purpose,
                     )
                     .await
                     .expect("invalid persist usage");
@@ -1240,7 +1242,10 @@ where
         // heartbeat continously. The assumption is that calls to snapshot are rare and therefore
         // worth it to always create a new handle.
         let mut read_handle = persist_client
-            .open_leased_reader::<SourceData, (), _, _>(metadata.data_shard)
+            .open_leased_reader::<SourceData, (), _, _>(
+                metadata.data_shard,
+                &format!("snapshot {}", id),
+            )
             .await
             .expect("invalid persist usage");
 

@@ -80,31 +80,3 @@ where
         res
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use std::panic;
-
-    use scopeguard::defer;
-
-    use super::*;
-
-    #[test]
-    fn catch_panic() {
-        let old_hook = panic::take_hook();
-        defer! {
-            panic::set_hook(old_hook);
-        }
-
-        set_abort_on_panic();
-
-        let result = catch_unwind(|| {
-            panic!("panicked");
-        })
-        .unwrap_err()
-        .downcast::<&str>()
-        .unwrap();
-
-        assert_eq!(*result, "panicked");
-    }
-}

@@ -102,13 +102,13 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         .parse()
         .map_err(anyhow::Error::msg)?;
 
-    let (bindings_write, bindings_read) = persist.open(bindings_id).await?;
+    let (bindings_write, bindings_read) = persist.open(bindings_id, "source example").await?;
 
     let consensus = PersistConsensus::new(bindings_write, bindings_read);
     let timestamper =
         ConsensusTimestamper::new(now_fn.clone(), timestamp_interval.clone(), consensus).await;
 
-    let (data_write, data_read) = persist.open(data_id).await?;
+    let (data_write, data_read) = persist.open(data_id, "source example").await?;
 
     // First, render one instance of the source.
     let source1 = source.clone();
@@ -130,7 +130,9 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
     for i in 0..num_readers {
         let reader_name = format!("reader-{}", i);
         let reader_name_clone = reader_name.clone();
-        let (_write, data_read) = persist.open::<String, (), Timestamp, _>(data_id).await?;
+        let (_write, data_read) = persist
+            .open::<String, (), Timestamp, _>(data_id, "source example")
+            .await?;
         let pipeline = mz_ore::task::spawn(|| &reader_name_clone, async move {
             let as_of = data_read.since().clone();
             if let Err(e) = reader::spawn_reader_pipeline(reader_name, data_read, as_of).await {
@@ -150,12 +152,12 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
     // timestamper.
     tokio::time::sleep(Duration::from_secs(5)).await;
 
-    let (bindings_write, bindings_read) = persist.open(bindings_id).await?;
+    let (bindings_write, bindings_read) = persist.open(bindings_id, "source example").await?;
     let consensus = PersistConsensus::new(bindings_write, bindings_read);
     let timestamper =
         ConsensusTimestamper::new(now_fn.clone(), timestamp_interval.clone(), consensus).await;
 
-    let data_write = persist.open_writer(data_id).await?;
+    let data_write = persist.open_writer(data_id, "source example").await?;
 
     let source2 = source.clone();
     let source_pipeline2 = mz_ore::task::spawn(|| "source-2", async move {
@@ -1383,7 +1385,7 @@ mod reader {
                 }
             }
             let mut listen = read
-                .clone()
+                .clone("source example")
                 .await
                 .listen(as_of.clone())
                 .await

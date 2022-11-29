@@ -258,6 +258,8 @@ pub struct PersistConfig {
     pub reader_lease_duration: Duration,
     /// Length of time between critical handles' calls to downgrade since
     pub critical_downgrade_interval: Duration,
+    /// Hostname of this persist user. Stored in state and used for debugging.
+    pub hostname: String,
 }
 
 // Tuning inputs:
@@ -326,7 +328,23 @@ impl PersistConfig {
             writer_lease_duration: 60 * Duration::from_secs(60),
             reader_lease_duration: Self::DEFAULT_READ_LEASE_DURATION,
             critical_downgrade_interval: Duration::from_secs(30),
+            // TODO: This doesn't work with the process orchestrator. Instead,
+            // separate --log-prefix into --service-name and --enable-log-prefix
+            // options, where the first is always provided and the second is
+            // conditionally enabled by the process orchestrator.
+            hostname: std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_owned()),
         }
+    }
+
+    /// Returns a new instance of [PersistConfig] for tests.
+    #[cfg(test)]
+    pub fn new_for_tests() -> Self {
+        use mz_build_info::DUMMY_BUILD_INFO;
+        use mz_ore::now::SYSTEM_TIME;
+
+        let mut cfg = Self::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+        cfg.hostname = "tests".into();
+        cfg
     }
 }
 
@@ -368,7 +386,7 @@ impl ConsensusKnobs for PersistConfig {
 /// # let timeout: std::time::Duration = unimplemented!();
 /// # let id = mz_persist_client::ShardId::new();
 /// # async {
-/// tokio::time::timeout(timeout, client.open::<String, String, u64, i64>(id)).await
+/// tokio::time::timeout(timeout, client.open::<String, String, u64, i64>(id, "desc")).await
 /// # };
 /// ```
 #[derive(Debug, Clone)]
@@ -421,6 +439,7 @@ impl PersistClient {
     pub async fn open<K, V, T, D>(
         &self,
         shard_id: ShardId,
+        purpose: &str,
     ) -> Result<(WriteHandle<K, V, T, D>, ReadHandle<K, V, T, D>), InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -429,8 +448,8 @@ impl PersistClient {
         D: Semigroup + Codec64 + Send + Sync,
     {
         Ok((
-            self.open_writer(shard_id).await?,
-            self.open_leased_reader(shard_id).await?,
+            self.open_writer(shard_id, purpose).await?,
+            self.open_leased_reader(shard_id, purpose).await?,
         ))
     }
 
@@ -442,6 +461,7 @@ impl PersistClient {
     pub async fn open_leased_reader<K, V, T, D>(
         &self,
         shard_id: ShardId,
+        purpose: &str,
     ) -> Result<ReadHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -467,7 +487,12 @@ impl PersistClient {
         let reader_id = LeasedReaderId::new();
         let heartbeat_ts = (self.cfg.now)();
         let (_, read_cap) = machine
-            .register_leased_reader(&reader_id, self.cfg.reader_lease_duration, heartbeat_ts)
+            .register_leased_reader(
+                &reader_id,
+                purpose,
+                self.cfg.reader_lease_duration,
+                heartbeat_ts,
+            )
             .await;
         let reader = ReadHandle::new(
             self.cfg.clone(),
@@ -571,6 +596,7 @@ impl PersistClient {
         &self,
         shard_id: ShardId,
         reader_id: CriticalReaderId,
+        purpose: &str,
     ) -> Result<SinceHandle<K, V, T, D, O>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -594,7 +620,9 @@ impl PersistClient {
         .await?;
         let gc = GarbageCollector::new(machine.clone());
 
-        let state = machine.register_critical_reader::<O>(&reader_id).await;
+        let state = machine
+            .register_critical_reader::<O>(&reader_id, purpose)
+            .await;
         let handle = SinceHandle::new(
             machine,
             gc,
@@ -614,6 +642,7 @@ impl PersistClient {
     pub async fn open_writer<K, V, T, D>(
         &self,
         shard_id: ShardId,
+        purpose: &str,
     ) -> Result<WriteHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -646,7 +675,12 @@ impl PersistClient {
         });
         let heartbeat_ts = (self.cfg.now)();
         let (shard_upper, _) = machine
-            .register_writer(&writer_id, self.cfg.writer_lease_duration, heartbeat_ts)
+            .register_writer(
+                &writer_id,
+                purpose,
+                self.cfg.writer_lease_duration,
+                heartbeat_ts,
+            )
             .await;
         let writer = WriteHandle::new(
             self.cfg.clone(),
@@ -677,7 +711,7 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        self.open(shard_id).await.expect("codec mismatch")
+        self.open(shard_id, "tests").await.expect("codec mismatch")
     }
 
     /// Return the metrics being used by this client.
@@ -822,7 +856,7 @@ mod tests {
             all_ok(&data[..1], 1)
         );
 
-        let mut listen = read.clone().await.expect_listen(1).await;
+        let mut listen = read.clone("").await.expect_listen(1).await;
 
         // Write a [3,4) batch.
         write
@@ -855,19 +889,19 @@ mod tests {
         let shard_id = ShardId::new();
         let client = new_test_client().await;
         let mut write1 = client
-            .open_writer::<String, String, u64, i64>(shard_id)
+            .open_writer::<String, String, u64, i64>(shard_id, "")
             .await
             .expect("codec mismatch");
         let mut read1 = client
-            .open_leased_reader::<String, String, u64, i64>(shard_id)
+            .open_leased_reader::<String, String, u64, i64>(shard_id, "")
             .await
             .expect("codec mismatch");
         let mut read2 = client
-            .open_leased_reader::<String, String, u64, i64>(shard_id)
+            .open_leased_reader::<String, String, u64, i64>(shard_id, "")
             .await
             .expect("codec mismatch");
         let mut write2 = client
-            .open_writer::<String, String, u64, i64>(shard_id)
+            .open_writer::<String, String, u64, i64>(shard_id, "")
             .await
             .expect("codec mismatch");
 
@@ -909,7 +943,7 @@ mod tests {
 
             assert_eq!(
                 client
-                    .open::<Vec<u8>, String, u64, i64>(shard_id0)
+                    .open::<Vec<u8>, String, u64, i64>(shard_id0, "")
                     .await
                     .unwrap_err(),
                 InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
@@ -919,7 +953,7 @@ mod tests {
             );
             assert_eq!(
                 client
-                    .open::<String, Vec<u8>, u64, i64>(shard_id0)
+                    .open::<String, Vec<u8>, u64, i64>(shard_id0, "")
                     .await
                     .unwrap_err(),
                 InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
@@ -929,7 +963,7 @@ mod tests {
             );
             assert_eq!(
                 client
-                    .open::<String, String, i64, i64>(shard_id0)
+                    .open::<String, String, i64, i64>(shard_id0, "")
                     .await
                     .unwrap_err(),
                 InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
@@ -939,7 +973,7 @@ mod tests {
             );
             assert_eq!(
                 client
-                    .open::<String, String, u64, u64>(shard_id0)
+                    .open::<String, String, u64, u64>(shard_id0, "")
                     .await
                     .unwrap_err(),
                 InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
@@ -953,7 +987,7 @@ mod tests {
             // set.
             assert_eq!(
                 client
-                    .open_leased_reader::<Vec<u8>, String, u64, i64>(shard_id0)
+                    .open_leased_reader::<Vec<u8>, String, u64, i64>(shard_id0, "")
                     .await
                     .unwrap_err(),
                 InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
@@ -963,7 +997,7 @@ mod tests {
             );
             assert_eq!(
                 client
-                    .open_writer::<Vec<u8>, String, u64, i64>(shard_id0)
+                    .open_writer::<Vec<u8>, String, u64, i64>(shard_id0, "")
                     .await
                     .unwrap_err(),
                 InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
@@ -986,7 +1020,7 @@ mod tests {
             let (_, read1) = client
                 .expect_open::<String, String, u64, i64>(shard_id1)
                 .await;
-            let fetcher1 = read1.clone().await.batch_fetcher().await;
+            let fetcher1 = read1.clone("").await.batch_fetcher().await;
             for batch in snap {
                 let (batch, res) = fetcher1.fetch_leased_part(batch).await;
                 read0.process_returned_leased_part(batch);
@@ -1306,7 +1340,7 @@ mod tests {
         let (mut write2, _read) = client.expect_open::<String, String, u64, i64>(id).await;
 
         // Grab a listener before we do any writing
-        let mut listen = read.clone().await.expect_listen(0).await;
+        let mut listen = read.clone("").await.expect_listen(0).await;
 
         // Write a [0,3) batch.
         write1
@@ -1786,7 +1820,7 @@ mod tests {
         let (mut write, mut read) = client.expect_open::<String, String, u64, i64>(id).await;
 
         // Grab a listener as_of (aka gt) 1, which is not yet closed out.
-        let mut listen = read.clone().await.expect_listen(1).await;
+        let mut listen = read.clone("").await.expect_listen(1).await;
         let mut listen_next = Box::pin(listen.next());
         // Intentionally don't await the listen_next, but instead manually poke
         // it for a while and assert that it doesn't resolve yet. See below for

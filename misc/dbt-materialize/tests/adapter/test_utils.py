@@ -19,6 +19,7 @@ from dbt.tests.adapter.utils.fixture_cast_bool_to_text import (
     models__test_cast_bool_to_text_yml,
 )
 from dbt.tests.adapter.utils.test_cast_bool_to_text import BaseCastBoolToText
+from dbt.tests.adapter.utils.test_listagg import BaseListagg
 
 models__test_cast_bool_to_text_sql = """
 with data_bool as (
@@ -54,4 +55,9 @@ class TestCastBoolToText(BaseCastBoolToText):
             ),
         }
 
+    pass
+
+
+@pytest.mark.skip(reason="Materialize supports the list_agg() function")
+class TestListagg(BaseListagg):
     pass

@@ -6,7 +6,7 @@ menu:
     parent: 'sql-patterns'
 ---
 
-The **time to live (TTL)** pattern helps to remove rows in views, queries, tails, or sinks using expiration times, keeping rows until they are no longer useful, and enabling new use cases.
+The **time to live (TTL)** pattern helps to filter rows using expiration times, keeping rows until they are no longer useful and enabling new use cases.
 
 The following examples are possible TTL use cases:
 

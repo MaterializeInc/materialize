@@ -396,6 +396,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn message_write_lock_grant(
         &mut self,
         write_lock_guard: tokio::sync::OwnedMutexGuard<()>,

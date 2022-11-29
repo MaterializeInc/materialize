@@ -998,21 +998,29 @@ impl<'a, S: Append> Transaction<'a, S> {
         self.items.for_values(|k, v| {
             let schema = match schemas.get(&SchemaKey { id: v.schema_id }) {
                 Some(schema) => schema,
-                None => return,
+                None => panic!(
+                    "corrupt stash! unknown schema id {}, for item with key \
+                        {k:?} and value {v:?}",
+                    v.schema_id
+                ),
             };
-            let database_id = match schema.database_id {
-                Some(id) => id,
-                None => return,
-            };
-            let _database = match databases.get(&DatabaseKey { id: database_id }) {
-                Some(database) => database,
-                None => return,
+            let database_spec = match schema.database_id {
+                Some(id) => {
+                    if databases.get(&DatabaseKey { id }).is_none() {
+                        panic!(
+                            "corrupt stash! unknown database id {id}, for item with key \
+                        {k:?} and value {v:?}"
+                        );
+                    }
+                    ResolvedDatabaseSpecifier::from(id)
+                }
+                None => ResolvedDatabaseSpecifier::Ambient,
             };
             items.push((
                 k.gid,
                 QualifiedObjectName {
                     qualifiers: ObjectQualifiers {
-                        database_spec: ResolvedDatabaseSpecifier::from(database_id),
+                        database_spec,
                         schema_spec: SchemaSpecifier::from(v.schema_id),
                     },
                     item: v.name.clone(),
@@ -1819,12 +1827,12 @@ pub struct SchemaValue {
     name: String,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
 pub struct ItemKey {
     gid: GlobalId,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Debug)]
 pub struct ItemValue {
     schema_id: u64,
     name: String,

@@ -217,7 +217,10 @@ where
                 (&tokio_runtime).spawn_named(|| "check_loop".to_string(), async move {
                     loop {
                         let (mut data_write_handle, data_read_handle) = persist_client
-                            .open::<SourceData, (), Timestamp, Diff>(data_shard.clone())
+                            .open::<SourceData, (), Timestamp, Diff>(
+                                data_shard.clone(),
+                                "tests::check_loop",
+                            )
                             .await
                             .unwrap();
                         if let Some(values) = until(
