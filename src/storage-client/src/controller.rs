@@ -1219,11 +1219,10 @@ where
     }
 
     fn drop_sources_unvalidated(&mut self, identifiers: Vec<GlobalId>) {
-        let policies = identifiers
-            .into_iter()
-            .map(|id| (id, ReadPolicy::ValidFrom(Antichain::new())))
-            .collect();
-        self.set_read_policy(policies);
+        for id in identifiers {
+            self.update_write_frontiers(&[(id, Antichain::new())]);
+            self.set_read_policy(vec![(id.clone(), ReadPolicy::ValidFrom(Antichain::new()))]);
+        }
     }
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
