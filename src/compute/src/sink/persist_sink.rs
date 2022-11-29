@@ -373,6 +373,10 @@ where
                         }
                     }
                 }
+                else => {
+                    // All inputs are exhausted, so we can shut down.
+                    return;
+                }
             };
 
             if !active_worker {
@@ -666,6 +670,10 @@ where
                             persist_frontier = frontier;
                         }
                     }
+                }
+                else => {
+                    // All inputs are exhausted, so we can shut down.
+                    return;
                 }
             }
 
@@ -981,6 +989,10 @@ where
                             batches_frontier = frontier;
                         }
                     }
+                }
+                else => {
+                    // All inputs are exhausted, so we can shut down.
+                    return;
                 }
             };
 
