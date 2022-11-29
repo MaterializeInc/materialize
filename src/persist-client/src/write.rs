@@ -562,8 +562,12 @@ where
         Batch {
             shard_id: self.machine.shard_id(),
             batch: hollow.batch,
-            _blob: Arc::clone(&self.blob),
+            blob: Arc::clone(&self.blob),
             _phantom: std::marker::PhantomData,
+            cfg: self.cfg.clone(),
+            metrics: Arc::clone(&self.metrics),
+            cpu_heavy_runtime: Arc::clone(&self.cpu_heavy_runtime),
+            writer_id: self.writer_id.clone(),
         }
     }
 

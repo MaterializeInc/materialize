@@ -27,10 +27,11 @@ use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::task::JoinHandle;
-use tracing::{debug_span, instrument, trace_span, warn, Instrument};
+use tracing::{debug_span, instrument, trace_span, Instrument};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::InvalidUsage;
+use crate::internal::compact::{CompactReq, Compactor};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{BatchWriteMetrics, Metrics};
 use crate::internal::paths::{PartId, PartialBatchKey};
@@ -54,49 +55,62 @@ where
     pub(crate) batch: HollowBatch<T>,
 
     /// Handle to the [Blob] that the blobs of this batch were uploaded to.
-    pub(crate) _blob: Arc<dyn Blob + Send + Sync>,
+    pub(crate) blob: Arc<dyn Blob + Send + Sync>,
 
     // These provide a bit more safety against appending a batch with the wrong
     // type to a shard.
     pub(crate) _phantom: PhantomData<(K, V, T, D)>,
+
+    pub(crate) cfg: PersistConfig,
+    pub(crate) metrics: Arc<Metrics>,
+    pub(crate) cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+    pub(crate) writer_id: WriterId,
 }
 
-impl<K, V, T, D> Drop for Batch<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-{
-    fn drop(&mut self) {
-        if self.batch.parts.len() > 0 {
-            warn!(
-                "un-consumed Batch, with {} dangling blob keys: {:?}",
-                self.batch.parts.len(),
-                self.batch
-                    .parts
-                    .iter()
-                    .map(|x| &x.key.0)
-                    .collect::<Vec<_>>(),
-            );
-        }
-    }
-}
+// impl<K, V, T, D> Drop for Batch<K, V, T, D>
+// where
+//     T: Timestamp + Lattice + Codec64,
+// {
+//     fn drop(&mut self) {
+//         if self.batch.parts.len() > 0 {
+//             warn!(
+//                 "un-consumed Batch, with {} dangling blob keys: {:?}",
+//                 self.batch.parts.len(),
+//                 self.batch
+//                     .parts
+//                     .iter()
+//                     .map(|x| &x.key.0)
+//                     .collect::<Vec<_>>(),
+//             );
+//         }
+//     }
+// }
 
 impl<K, V, T, D> Batch<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send,
 {
     pub(crate) fn new(
         blob: Arc<dyn Blob + Send + Sync>,
         shard_id: ShardId,
         batch: HollowBatch<T>,
+        cfg: PersistConfig,
+        metrics: Arc<Metrics>,
+        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+        writer_id: WriterId,
     ) -> Self {
         Self {
             shard_id,
             batch,
-            _blob: blob,
+            blob,
             _phantom: PhantomData,
+            cfg,
+            metrics,
+            cpu_heavy_runtime,
+            writer_id,
         }
     }
 
@@ -165,6 +179,56 @@ where
         self.mark_consumed();
         ret
     }
+
+    /// WIP
+    pub async fn consolidate(self) -> Self {
+        let Self {
+            shard_id,
+            blob,
+            mut batch,
+            cfg,
+            metrics,
+            cpu_heavy_runtime,
+            writer_id,
+            _phantom: _,
+        } = self;
+        loop {
+            if batch.runs().count() <= 1 {
+                return Batch {
+                    shard_id,
+                    batch,
+                    blob,
+                    _phantom: PhantomData,
+                    cfg,
+                    metrics,
+                    cpu_heavy_runtime,
+                    writer_id,
+                };
+            };
+            let req = CompactReq {
+                shard_id,
+                desc: batch.desc.clone(),
+                inputs: vec![batch.clone()],
+            };
+            // WIP plumb the shard compactor here so we can limit parallelism.
+            let res = Compactor::<K, V, T, D>::compact(
+                cfg.clone(),
+                Arc::clone(&blob),
+                Arc::clone(&metrics),
+                Arc::clone(&cpu_heavy_runtime),
+                req,
+                writer_id.clone(),
+            )
+            .await
+            .expect("WIP handle this error case");
+            for part in batch.parts.iter() {
+                blob.delete(&part.key.complete(&shard_id))
+                    .await
+                    .expect("WIP add retry_external loop");
+            }
+            batch = res.output;
+        }
+    }
 }
 
 /// Indicates what work was done in a call to [BatchBuilder::add]
@@ -184,6 +248,8 @@ pub struct BatchBuilder<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
 {
+    cfg: PersistConfig,
+
     size_hint: usize,
     lower: Antichain<T>,
     max_ts: T,
@@ -209,7 +275,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send,
 {
     pub(crate) fn new(
         cfg: PersistConfig,
@@ -244,6 +310,7 @@ where
             key_buf: Vec::new(),
             val_buf: Vec::new(),
             _phantom: PhantomData,
+            cfg,
         }
     }
 
@@ -280,6 +347,9 @@ where
             assert!(part.len() > 0);
             self.parts.write(part, upper.clone(), since.clone()).await;
         }
+        let metrics = Arc::clone(&self.parts.metrics);
+        let cpu_heavy_runtime = Arc::clone(&self.parts.cpu_heavy_runtime);
+        let writer_id = self.parts.writer_id.clone();
         let parts = self.parts.finish().await;
 
         let desc = Description::new(self.lower, upper, since);
@@ -292,6 +362,10 @@ where
                 len: self.num_updates,
                 runs: vec![],
             },
+            self.cfg,
+            metrics,
+            cpu_heavy_runtime,
+            writer_id,
         );
 
         Ok(batch)
