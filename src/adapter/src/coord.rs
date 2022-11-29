@@ -79,6 +79,7 @@ use derivative::Derivative;
 use futures::StreamExt;
 use itertools::Itertools;
 use rand::seq::SliceRandom;
+use timely::progress::Antichain;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
@@ -912,7 +913,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let appends = entries
             .iter()
             .filter(|entry| entry.is_table())
-            .map(|entry| (entry.id(), Vec::new(), advance_to))
+            .map(|entry| (entry.id(), Vec::new(), Antichain::from_elem(advance_to)))
             .collect();
         self.controller
             .storage

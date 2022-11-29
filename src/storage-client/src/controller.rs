@@ -263,10 +263,13 @@ pub trait StorageController: Debug + Send {
     /// The method returns a oneshot that can be awaited to indicate completion of the write.
     /// The method may return an error, indicating an immediately visible error, and also the
     /// oneshot may return an error if one is encountered during the write.
-    // TODO(petrosagg): switch upper to `Antichain<Timestamp>`
     fn append(
         &mut self,
-        commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
+        commands: Vec<(
+            GlobalId,
+            Vec<Update<Self::Timestamp>>,
+            Antichain<Self::Timestamp>,
+        )>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
 
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
@@ -1254,12 +1257,19 @@ where
     #[tracing::instrument(level = "debug", skip_all)]
     fn append(
         &mut self,
-        commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
+        commands: Vec<(
+            GlobalId,
+            Vec<Update<Self::Timestamp>>,
+            Antichain<Self::Timestamp>,
+        )>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError> {
         // TODO(petrosagg): validate appends against the expected RelationDesc of the collection
         for (id, updates, batch_upper) in commands.iter() {
             for update in updates.iter() {
-                if !update.timestamp.less_than(batch_upper) {
+                if !PartialOrder::less_than(
+                    &Antichain::from_elem(update.timestamp.clone()),
+                    batch_upper,
+                ) {
                     return Err(StorageError::UpdateBeyondUpper(*id));
                 }
             }

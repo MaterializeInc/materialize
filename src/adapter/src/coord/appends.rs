@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use derivative::Derivative;
+use timely::progress::Antichain;
 use tokio::sync::OwnedMutexGuard;
 use tracing::warn;
 
@@ -294,7 +295,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         timestamp,
                     })
                     .collect();
-                (id, updates, advance_to)
+                (id, updates, Antichain::from_elem(advance_to))
             })
             .collect();
 
