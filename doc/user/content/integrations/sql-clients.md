@@ -18,9 +18,9 @@ You can connect to Materialize using a PostgreSQL-compatible client, like `psql`
 
 Detail       | Info
 -------------|------
-**Host**     | <host>
+**Host**     | `<host>`
 **Port**     | `6875`
-**User**     | <user>
+**User**     | `<user>`
 **Database** | `materialize`
 
 [//]: # "Add details about managing users once RBAC lands"
