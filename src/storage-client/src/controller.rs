@@ -597,7 +597,7 @@ impl Arbitrary for DurableExportMetadata<mz_repr::Timestamp> {
 #[derive(Debug)]
 pub struct StorageControllerState<
     T: Timestamp + Lattice + Codec64 + TimestampManipulation,
-    S = mz_stash::Memory<mz_stash::Postgres>,
+    S = mz_stash::Cache<mz_stash::Postgres>,
 > {
     /// Collections maintained by the storage controller.
     ///
@@ -746,7 +746,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             .open(postgres_url, None, tls)
             .await
             .expect("could not connect to postgres storage stash");
-        let stash = mz_stash::Memory::new(stash);
+        let stash = mz_stash::Cache::new(stash);
 
         let persist_write_handles = persist_write_handles::PersistWorker::new(tx);
         let collection_manager_write_handle = persist_write_handles.clone();

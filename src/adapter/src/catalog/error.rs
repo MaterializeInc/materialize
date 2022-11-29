@@ -64,8 +64,6 @@ pub enum ErrorKind {
     InvalidTemporarySchema,
     #[error("catalog item '{depender_name}' depends on system logging, but logging is disabled")]
     UnsatisfiableLoggingDependency { depender_name: String },
-    #[error("sqlite error: {0}")]
-    Storage(#[from] rusqlite::Error),
     #[error(transparent)]
     AmbiguousRename(#[from] AmbiguousRename),
     #[error("cannot rename type: {0}")]
@@ -114,12 +112,6 @@ impl Error {
     /// Reports a hint for the user about how the error could be fixed.
     pub fn hint(&self) -> Option<String> {
         None
-    }
-}
-
-impl From<rusqlite::Error> for Error {
-    fn from(e: rusqlite::Error) -> Error {
-        Error::new(ErrorKind::from(e))
     }
 }
 

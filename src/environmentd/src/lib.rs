@@ -173,7 +173,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         .postgres_factory
         .open(config.adapter_stash_url.clone(), None, tls)
         .await?;
-    let stash = mz_stash::Memory::new(stash);
+    let stash = mz_stash::Cache::new(stash);
 
     // Validate TLS configuration, if present.
     let (pgwire_tls, http_tls) = match &config.tls {

@@ -68,7 +68,7 @@ use mz_sql::plan::{
 use mz_sql::{plan, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{CreateSinkOption, CreateSourceOption, Statement, WithOptionValue};
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_stash::{Append, Postgres, PostgresFactory, Sqlite};
+use mz_stash::{Append, Memory, Postgres, PostgresFactory};
 use mz_storage_client::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 use mz_storage_client::types::sinks::{
     SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder,
@@ -2023,12 +2023,12 @@ impl BuiltinMigrationMetadata {
     }
 }
 
-impl Catalog<Sqlite> {
-    /// Opens a debug in-memory sqlite catalog.
+impl Catalog<Memory> {
+    /// Opens a debug in-memory catalog.
     ///
     /// See [`Catalog::open_debug`].
-    pub async fn open_debug_sqlite(now: NowFn) -> Result<Catalog<Sqlite>, anyhow::Error> {
-        let stash = mz_stash::Sqlite::open(None)?;
+    pub async fn open_debug_memory(now: NowFn) -> Result<Catalog<Memory>, anyhow::Error> {
+        let stash = mz_stash::Memory::new();
         Catalog::open_debug(stash, now).await
     }
 }
@@ -6005,6 +6005,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 mod tests {
     use itertools::Itertools;
     use mz_compute_client::controller::ComputeInstanceId;
+    use mz_stash::Memory;
     use std::collections::HashMap;
     use std::error::Error;
 
@@ -6018,7 +6019,6 @@ mod tests {
     };
     use mz_sql::DEFAULT_SCHEMA;
     use mz_sql_parser::ast::Expr;
-    use mz_stash::Sqlite;
 
     use crate::catalog::{Catalog, CatalogItem, MaterializedView, Op, Table, SYSTEM_CONN_ID};
     use crate::session::{Session, DEFAULT_DATABASE_NAME};
@@ -6037,7 +6037,7 @@ mod tests {
             normal_output: PartialObjectName,
         }
 
-        let catalog = Catalog::open_debug_sqlite(NOW_ZERO.clone()).await?;
+        let catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
 
         let test_cases = vec![
             TestCase {
@@ -6103,7 +6103,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_catalog_revision() -> Result<(), anyhow::Error> {
-        let mut catalog = Catalog::open_debug_sqlite(NOW_ZERO.clone()).await?;
+        let mut catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
         assert_eq!(catalog.transient_revision(), 1);
         catalog
             .transact(
@@ -6120,7 +6120,7 @@ mod tests {
         assert_eq!(catalog.transient_revision(), 2);
         drop(catalog);
 
-        let catalog = Catalog::open_debug_sqlite(NOW_ZERO.clone()).await?;
+        let catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
         assert_eq!(catalog.transient_revision(), 1);
 
         Ok(())
@@ -6128,7 +6128,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_effective_search_path() -> Result<(), anyhow::Error> {
-        let catalog = Catalog::open_debug_sqlite(NOW_ZERO.clone()).await?;
+        let catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
         let mz_catalog_schema = (
             ResolvedDatabaseSpecifier::Ambient,
             SchemaSpecifier::Id(catalog.state().get_mz_catalog_schema_id().clone()),
@@ -6322,7 +6322,7 @@ mod tests {
         }
 
         async fn add_item(
-            catalog: &mut Catalog<Sqlite>,
+            catalog: &mut Catalog<Memory>,
             name: String,
             item: CatalogItem,
             item_namespace: ItemNamespace,
@@ -6511,7 +6511,7 @@ mod tests {
         ];
 
         for test_case in test_cases {
-            let mut catalog = Catalog::open_debug_sqlite(NOW_ZERO.clone()).await?;
+            let mut catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
 
             let mut id_mapping = HashMap::new();
             for entry in test_case.initial_state {

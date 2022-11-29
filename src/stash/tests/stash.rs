@@ -14,45 +14,30 @@ use std::{
 
 use futures::Future;
 use postgres_openssl::MakeTlsConnector;
-use tempfile::NamedTempFile;
 use timely::progress::Antichain;
 use tokio_postgres::Config;
 
 use mz_ore::{assert_contains, metrics::MetricsRegistry};
 
 use mz_stash::{
-    Append, Memory, Postgres, PostgresFactory, Sqlite, Stash, StashCollection, StashError,
+    Append, Cache, Memory, Postgres, PostgresFactory, Stash, StashCollection, StashError,
     TableTransaction, Timestamp, TypedCollection,
 };
 
 #[tokio::test]
-async fn test_stash_memory() -> Result<(), anyhow::Error> {
-    {
-        let file = NamedTempFile::new()?;
-        test_stash(|| async { Memory::new(Sqlite::open(Some(file.path())).unwrap()) }).await?;
-    }
-    {
-        let file = NamedTempFile::new()?;
-        test_append(|| async { Memory::new(Sqlite::open(Some(file.path())).unwrap()) }).await?;
-    }
-    Ok(())
+async fn test_stash_memory() {
+    test_stash(|| async { Memory::new() }).await;
+    test_append(|| async { Memory::new() }).await;
 }
 
 #[tokio::test]
-async fn test_stash_sqlite() -> Result<(), anyhow::Error> {
-    {
-        let file = NamedTempFile::new()?;
-        test_stash(|| async { Sqlite::open(Some(file.path())).unwrap() }).await?;
-    }
-    {
-        let file = NamedTempFile::new()?;
-        test_append(|| async { Sqlite::open(Some(file.path())).unwrap() }).await?;
-    }
-    Ok(())
+async fn test_stash_cache() {
+    test_stash(|| async { Cache::new(Memory::new()) }).await;
+    test_append(|| async { Cache::new(Memory::new()) }).await;
 }
 
 #[tokio::test]
-async fn test_stash_postgres() -> Result<(), anyhow::Error> {
+async fn test_stash_postgres() {
     mz_ore::test::init_logging();
 
     let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
@@ -72,7 +57,7 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
         Ok(s) => s,
         Err(_) => {
             println!("skipping test_stash_postgres because POSTGRES_URL is not set");
-            return Ok(());
+            return;
         }
     };
     async fn connect(
@@ -88,16 +73,14 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
     }
     {
         connect(&factory, &connstr, tls.clone(), true).await;
-        let stash = test_stash(|| async { connect(&factory, &connstr, tls.clone(), false).await })
-            .await
-            .unwrap();
+        let stash =
+            test_stash(|| async { connect(&factory, &connstr, tls.clone(), false).await }).await;
         stash.verify().await.unwrap();
     }
     {
         connect(&factory, &connstr, tls.clone(), true).await;
-        let stash = test_append(|| async { connect(&factory, &connstr, tls.clone(), false).await })
-            .await
-            .unwrap();
+        let stash =
+            test_append(|| async { connect(&factory, &connstr, tls.clone(), false).await }).await;
         stash.verify().await.unwrap();
     }
     // Test the fence.
@@ -109,7 +92,7 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
             Err(e) => e.is_unrecoverable(),
             _ => panic!("expected error"),
         });
-        let _: StashCollection<String, String> = conn2.collection("c").await?;
+        let _: StashCollection<String, String> = conn2.collection("c").await.unwrap();
     }
     // Test readonly.
     {
@@ -190,11 +173,9 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
         assert_eq!(stash_rw.peek(c1_rw).await.unwrap(), vec![(1, 2, 1)]);
         stash_rw.verify().await.unwrap();
     }
-
-    Ok(())
 }
 
-async fn test_append<F, S, O>(f: F) -> Result<S, anyhow::Error>
+async fn test_append<F, S, O>(f: F) -> S
 where
     S: Append,
     O: Future<Output = S>,
@@ -215,7 +196,9 @@ where
         .upsert_key(&mut stash, &"k1".to_string(), |_| {
             Ok::<_, Infallible>("v1".to_string())
         })
-        .await??;
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(
         TYPED.peek_one(&mut stash).await.unwrap(),
         BTreeMap::from([("k1".to_string(), "v1".to_string())])
@@ -224,7 +207,9 @@ where
         .upsert_key(&mut stash, &"k1".to_string(), |_| {
             Ok::<_, Infallible>("v2".to_string())
         })
-        .await??;
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(
         TYPED.peek_one(&mut stash).await.unwrap(),
         BTreeMap::from([("k1".to_string(), "v2".to_string())])
@@ -251,7 +236,8 @@ where
                 ("k2".to_string(), "v4".to_string()),
             ],
         )
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(
         TYPED.peek_one(&mut stash).await.unwrap(),
         BTreeMap::from([
@@ -261,13 +247,16 @@ where
     );
 
     // Test append across collections.
-    let orders = stash.collection::<String, String>("orders").await?;
-    let other = stash.collection::<String, String>("other").await?;
+    let orders = stash.collection::<String, String>("orders").await.unwrap();
+    let other = stash.collection::<String, String>("other").await.unwrap();
     // Seal so we can invalidate the upper below.
-    stash.seal(other, Antichain::from_elem(1).borrow()).await?;
-    let mut orders_batch = orders.make_batch(&mut stash).await?;
+    stash
+        .seal(other, Antichain::from_elem(1).borrow())
+        .await
+        .unwrap();
+    let mut orders_batch = orders.make_batch(&mut stash).await.unwrap();
     orders.append_to_batch(&mut orders_batch, &"k1".to_string(), &"v1".to_string(), 1);
-    let mut other_batch = other.make_batch(&mut stash).await?;
+    let mut other_batch = other.make_batch(&mut stash).await.unwrap();
     other.append_to_batch(&mut other_batch, &"k2".to_string(), &"v2".to_string(), 1);
 
     // Invalidate one upper and ensure append doesn't commit partial batches.
@@ -291,59 +280,68 @@ where
 
     // Fix the upper, append should work now.
     other_batch.upper = other_upper;
-    stash.append(&[other_batch, orders_batch]).await?;
+    stash.append(&[other_batch, orders_batch]).await.unwrap();
     assert_eq!(
-        stash.iter(orders).await?,
+        stash.iter(orders).await.unwrap(),
         &[(("k1".into(), "v1".into()), -9223372036854775808, 1),]
     );
     assert_eq!(
-        stash.iter(other).await?,
+        stash.iter(other).await.unwrap(),
         &[(("k2".into(), "v2".into()), 1, 1),]
     );
     assert_eq!(
-        stash.peek_one(orders).await?,
+        stash.peek_one(orders).await.unwrap(),
         BTreeMap::from([("k1".to_string(), "v1".to_string())])
     );
     assert_eq!(
-        stash.peek_one(other).await?,
+        stash.peek_one(other).await.unwrap(),
         BTreeMap::from([("k2".to_string(), "v2".to_string())])
     );
 
     // Verify the upper got bumped.
     assert_eq!(
-        stash.since(orders).await?.into_option().unwrap(),
-        stash.upper(orders).await?.into_option().unwrap() - 1
+        stash.since(orders).await.unwrap().into_option().unwrap(),
+        stash.upper(orders).await.unwrap().into_option().unwrap() - 1
     );
     // Multiple empty batches should bump the upper and the since because append
     // must also compact and consolidate.
     for _ in 0..5 {
-        let orders_batch = orders.make_batch(&mut stash).await?;
-        stash.append(&[orders_batch]).await?;
+        let orders_batch = orders.make_batch(&mut stash).await.unwrap();
+        stash.append(&[orders_batch]).await.unwrap();
         assert_eq!(
-            stash.since(orders).await?.into_option().unwrap(),
-            stash.upper(orders).await?.into_option().unwrap() - 1
+            stash.since(orders).await.unwrap().into_option().unwrap(),
+            stash.upper(orders).await.unwrap().into_option().unwrap() - 1
         );
+    }
+
+    // Don't attempt to verify persisted data for stashes that do not advertise it.
+    if stash.epoch().is_none() {
+        return stash;
     }
 
     // Remake the stash and ensure data remains.
     let mut stash = f().await;
     assert_eq!(
-        stash.peek_one(orders).await?,
+        stash.peek_one(orders).await.unwrap(),
         BTreeMap::from([("k1".to_string(), "v1".to_string())])
     );
     assert_eq!(
-        stash.peek_one(other).await?,
+        stash.peek_one(other).await.unwrap(),
         BTreeMap::from([("k2".to_string(), "v2".to_string())])
     );
     // Remake again, mutate before reading, then read.
     let mut stash = f().await;
     stash
         .update_many(orders, [(("k3".into(), "v3".into()), 1, 1)])
-        .await?;
-    stash.seal(orders, Antichain::from_elem(2).borrow()).await?;
+        .await
+        .unwrap();
+    stash
+        .seal(orders, Antichain::from_elem(2).borrow())
+        .await
+        .unwrap();
 
     assert_eq!(
-        stash.peek_one(orders).await?,
+        stash.peek_one(orders).await.unwrap(),
         BTreeMap::from([
             ("k1".to_string(), "v1".to_string()),
             ("k3".to_string(), "v3".to_string())
@@ -352,11 +350,11 @@ where
 
     // Remake the stash, mutate, then read.
     let mut stash = f().await;
-    let mut orders_batch = orders.make_batch(&mut stash).await?;
+    let mut orders_batch = orders.make_batch(&mut stash).await.unwrap();
     orders.append_to_batch(&mut orders_batch, &"k4".to_string(), &"v4".to_string(), 1);
-    stash.append(&[orders_batch]).await?;
+    stash.append(&[orders_batch]).await.unwrap();
     assert_eq!(
-        stash.peek_one(orders).await?,
+        stash.peek_one(orders).await.unwrap(),
         BTreeMap::from([
             ("k1".to_string(), "v1".to_string()),
             ("k3".to_string(), "v3".to_string()),
@@ -367,7 +365,7 @@ where
     // Remake and read again.
     let mut stash = f().await;
     assert_eq!(
-        stash.peek_one(orders).await?,
+        stash.peek_one(orders).await.unwrap(),
         BTreeMap::from([
             ("k1".to_string(), "v1".to_string()),
             ("k3".to_string(), "v3".to_string()),
@@ -375,12 +373,12 @@ where
         ])
     );
 
-    test_stash_table(&mut stash).await?;
+    test_stash_table(&mut stash).await;
 
-    Ok(stash)
+    stash
 }
 
-async fn test_stash<F, S, O>(f: F) -> Result<S, anyhow::Error>
+async fn test_stash<F, S, O>(f: F) -> S
 where
     S: Stash,
     O: Future<Output = S>,
@@ -388,41 +386,50 @@ where
 {
     let mut stash = f().await;
     // Create an arrangement, write some data into it, then read it back.
-    let orders = stash.collection::<String, String>("orders").await?;
+    let orders = stash.collection::<String, String>("orders").await.unwrap();
     stash
         .update(orders, ("widgets".into(), "1".into()), 1, 1)
-        .await?;
+        .await
+        .unwrap();
     stash
         .update(orders, ("wombats".into(), "2".into()), 1, 2)
-        .await?;
+        .await
+        .unwrap();
     // Move this before iter to better test the memory stash's iter_key.
     assert_eq!(
-        stash.iter_key(orders, &"widgets".to_string()).await?,
+        stash
+            .iter_key(orders, &"widgets".to_string())
+            .await
+            .unwrap(),
         &[("1".into(), 1, 1)]
     );
     assert_eq!(
-        stash.iter(orders).await?,
+        stash.iter(orders).await.unwrap(),
         &[
             (("widgets".into(), "1".into()), 1, 1),
             (("wombats".into(), "2".into()), 1, 2),
         ]
     );
     assert_eq!(
-        stash.iter_key(orders, &"wombats".to_string()).await?,
+        stash
+            .iter_key(orders, &"wombats".to_string())
+            .await
+            .unwrap(),
         &[("2".into(), 1, 2)]
     );
 
     // Write to another arrangement and ensure the data stays separate.
-    let other = stash.collection::<String, String>("other").await?;
+    let other = stash.collection::<String, String>("other").await.unwrap();
     stash
         .update(other, ("foo".into(), "bar".into()), 1, 1)
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(
-        stash.iter(other).await?,
+        stash.iter(other).await.unwrap(),
         &[(("foo".into(), "bar".into()), 1, 1)],
     );
     assert_eq!(
-        stash.iter(orders).await?,
+        stash.iter(orders).await.unwrap(),
         &[
             (("widgets".into(), "1".into()), 1, 1),
             (("wombats".into(), "2".into()), 1, 2),
@@ -432,9 +439,10 @@ where
     // Check that consolidation happens immediately...
     stash
         .update(orders, ("wombats".into(), "2".into()), 1, -1)
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(
-        stash.iter(orders).await?,
+        stash.iter(orders).await.unwrap(),
         &[
             (("widgets".into(), "1".into()), 1, 1),
             (("wombats".into(), "2".into()), 1, 1),
@@ -444,9 +452,10 @@ where
     // ...even when it results in a entry's removal.
     stash
         .update(orders, ("wombats".into(), "2".into()), 1, -1)
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(
-        stash.iter(orders).await?,
+        stash.iter(orders).await.unwrap(),
         &[(("widgets".into(), "1".into()), 1, 1),]
     );
 
@@ -460,12 +469,16 @@ where
                 (("widgets".into(), "1".into()), 4, 1),
             ],
         )
-        .await?;
-    stash.seal(orders, Antichain::from_elem(3).borrow()).await?;
+        .await
+        .unwrap();
+    stash
+        .seal(orders, Antichain::from_elem(3).borrow())
+        .await
+        .unwrap();
     // Peek should not observe widgets from timestamps 3 or 4.
-    assert_eq!(stash.peek_timestamp(orders).await?, 2);
+    assert_eq!(stash.peek_timestamp(orders).await.unwrap(), 2);
     assert_eq!(
-        stash.peek(orders).await?,
+        stash.peek(orders).await.unwrap(),
         vec![("widgets".into(), "1".into(), 2)]
     );
     assert_eq!(
@@ -474,9 +487,10 @@ where
     );
     stash
         .compact(orders, Antichain::from_elem(3).borrow())
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(
-        stash.iter(orders).await?,
+        stash.iter(orders).await.unwrap(),
         &[
             (("widgets".into(), "1".into()), 3, 3),
             (("widgets".into(), "1".into()), 4, 1),
@@ -484,9 +498,9 @@ where
     );
 
     // Check that physical compaction does not change the collection's contents.
-    stash.consolidate(orders.id).await?;
+    stash.consolidate(orders.id).await.unwrap();
     assert_eq!(
-        stash.iter(orders).await?,
+        stash.iter(orders).await.unwrap(),
         &[
             (("widgets".into(), "1".into()), 3, 3),
             (("widgets".into(), "1".into()), 4, 1),
@@ -528,8 +542,11 @@ where
     );
 
     // Test advancing since and upper to the empty frontier.
-    stash.seal(orders, Antichain::new().borrow()).await?;
-    stash.compact(orders, Antichain::new().borrow()).await?;
+    stash.seal(orders, Antichain::new().borrow()).await.unwrap();
+    stash
+        .compact(orders, Antichain::new().borrow())
+        .await
+        .unwrap();
     assert_eq!(
         match stash.iter(orders).await {
             Ok(_) => panic!("call to iter unexpectedly succeeded"),
@@ -544,53 +561,56 @@ where
         },
         "stash error: cannot iterate collection with empty since frontier",
     );
-    stash.consolidate(orders.id).await?;
+    stash.consolidate(orders.id).await.unwrap();
 
     // Double check that the other collection is still untouched.
     assert_eq!(
-        stash.iter(other).await?,
+        stash.iter(other).await.unwrap(),
         &[(("foo".into(), "bar".into()), 1, 1)],
     );
     assert_eq!(
-        stash.since(other).await?,
+        stash.since(other).await.unwrap(),
         Antichain::from_elem(Timestamp::MIN)
     );
     assert_eq!(
-        stash.upper(other).await?,
+        stash.upper(other).await.unwrap(),
         Antichain::from_elem(Timestamp::MIN)
     );
 
     // Test peek_one.
-    stash.seal(other, Antichain::from_elem(2).borrow()).await?;
+    stash
+        .seal(other, Antichain::from_elem(2).borrow())
+        .await
+        .unwrap();
     assert_eq!(
-        stash.peek_one(other).await?,
+        stash.peek_one(other).await.unwrap(),
         BTreeMap::from([("foo".to_string(), "bar".to_string())])
     );
     assert_eq!(
-        stash.peek_key_one(other, &"foo".to_string()).await?,
+        stash.peek_key_one(other, &"foo".to_string()).await.unwrap(),
         Some("bar".to_string())
     );
 
-    Ok(stash)
+    stash
 }
 
-async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> {
+async fn test_stash_table(stash: &mut impl Append) {
     const TABLE: TypedCollection<Vec<u8>, String> = TypedCollection::new("table");
     fn uniqueness_violation(a: &String, b: &String) -> bool {
         a == b
     }
-    let collection = TABLE.get(stash).await?;
+    let collection = TABLE.get(stash).await.unwrap();
 
     async fn commit(
         stash: &mut impl Append,
         collection: StashCollection<Vec<u8>, String>,
         pending: Vec<(Vec<u8>, String, i64)>,
     ) -> Result<(), StashError> {
-        let mut batch = collection.make_batch(stash).await?;
+        let mut batch = collection.make_batch(stash).await.unwrap();
         for (k, v, diff) in pending {
             collection.append_to_batch(&mut batch, &k, &v, diff);
         }
-        stash.append(&[batch]).await?;
+        stash.append(&[batch]).await.unwrap();
         Ok(())
     }
 
@@ -598,11 +618,15 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
         .upsert_key(stash, &1i64.to_le_bytes().to_vec(), |_| {
             Ok::<_, Infallible>("v1".to_string())
         })
-        .await??;
+        .await
+        .unwrap()
+        .unwrap();
     TABLE
         .upsert(stash, vec![(2i64.to_le_bytes().to_vec(), "v2".to_string())])
-        .await?;
-    let mut table = TableTransaction::new(TABLE.peek_one(stash).await?, uniqueness_violation);
+        .await
+        .unwrap();
+    let mut table =
+        TableTransaction::new(TABLE.peek_one(stash).await.unwrap(), uniqueness_violation);
     assert_eq!(
         table.items(),
         BTreeMap::from([
@@ -616,7 +640,7 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
         table.items(),
         BTreeMap::from([(1i64.to_le_bytes().to_vec(), "v1".to_string())])
     );
-    assert_eq!(table.update(|_k, _v| Some("v3".to_string()))?, 1);
+    assert_eq!(table.update(|_k, _v| Some("v3".to_string())).unwrap(), 1);
 
     // Uniqueness violation.
     table
@@ -650,8 +674,8 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
             (3i64.to_le_bytes().to_vec(), "v4".to_string(), 1),
         ]
     );
-    commit(stash, collection, pending).await?;
-    let items = TABLE.peek_one(stash).await?;
+    commit(stash, collection, pending).await.unwrap();
+    let items = TABLE.peek_one(stash).await.unwrap();
     assert_eq!(
         items,
         BTreeMap::from([
@@ -691,8 +715,8 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
             (5i64.to_le_bytes().to_vec(), "v3".to_string(), 1),
         ]
     );
-    commit(stash, collection, pending).await?;
-    let items = TABLE.peek_one(stash).await?;
+    commit(stash, collection, pending).await.unwrap();
+    let items = TABLE.peek_one(stash).await.unwrap();
     assert_eq!(
         items,
         BTreeMap::from([
@@ -708,8 +732,8 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
         .insert(1i64.to_le_bytes().to_vec(), "v1".to_string())
         .unwrap();
 
-    commit(stash, collection, table.pending()).await?;
-    let items = TABLE.peek_one(stash).await?;
+    commit(stash, collection, table.pending()).await.unwrap();
+    let items = TABLE.peek_one(stash).await.unwrap();
     assert_eq!(
         items,
         BTreeMap::from([(1i64.to_le_bytes().to_vec(), "v1".to_string()),])
@@ -720,8 +744,8 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
     table
         .insert(1i64.to_le_bytes().to_vec(), "v2".to_string())
         .unwrap();
-    commit(stash, collection, table.pending()).await?;
-    let items = TABLE.peek_one(stash).await?;
+    commit(stash, collection, table.pending()).await.unwrap();
+    let items = TABLE.peek_one(stash).await.unwrap();
     assert_eq!(
         items,
         BTreeMap::from([(1i64.to_le_bytes().to_vec(), "v2".to_string()),])
@@ -740,15 +764,15 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
     table
         .insert(1i64.to_le_bytes().to_vec(), "v5".to_string())
         .unwrap();
-    commit(stash, collection, table.pending()).await?;
-    let items = stash.peek(collection).await?;
+    commit(stash, collection, table.pending()).await.unwrap();
+    let items = stash.peek(collection).await.unwrap();
     assert_eq!(
         items,
         vec![(1i64.to_le_bytes().to_vec(), "v5".to_string(), 1)]
     );
 
     // Test `set`.
-    let items = TABLE.peek_one(stash).await?;
+    let items = TABLE.peek_one(stash).await.unwrap();
     let mut table = TableTransaction::new(items, uniqueness_violation);
     // Uniqueness violation.
     table
@@ -767,14 +791,12 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
             (3i64.to_le_bytes().to_vec(), "v6".to_string(), 1),
         ]
     );
-    commit(stash, collection, pending).await?;
-    let items = TABLE.peek_one(stash).await?;
+    commit(stash, collection, pending).await.unwrap();
+    let items = TABLE.peek_one(stash).await.unwrap();
     assert_eq!(
         items,
         BTreeMap::from([(3i64.to_le_bytes().to_vec(), "v6".to_string())])
     );
-
-    Ok(())
 }
 
 #[test]
