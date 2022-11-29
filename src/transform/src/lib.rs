@@ -36,6 +36,7 @@ pub mod canonicalize_mfp;
 pub mod column_knowledge;
 pub mod cse;
 pub mod demand;
+pub mod fold_constants;
 pub mod fusion;
 pub mod inline_let;
 pub mod join_implementation;
@@ -48,7 +49,6 @@ pub mod projection_extraction;
 pub mod projection_lifting;
 pub mod projection_pushdown;
 pub mod reduce_elision;
-pub mod reduction;
 pub mod reduction_pushdown;
 pub mod redundant_join;
 pub mod semijoin_idempotence;
@@ -263,7 +263,7 @@ impl Default for FuseAndCollapse {
                 // Some optimizations fight against this, and we want to be sure to end as a
                 // `MirRelationExpr::Constant` if that is the case, so that subsequent use can
                 // clearly see this.
-                Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
+                Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
             ],
         }
     }
@@ -386,7 +386,7 @@ impl Optimizer {
                 transforms: vec![
                     Box::new(crate::join_implementation::JoinImplementation::default()),
                     Box::new(crate::column_knowledge::ColumnKnowledge::default()),
-                    Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
+                    Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
                     Box::new(crate::demand::Demand::default()),
                     Box::new(crate::literal_lifting::LiteralLifting::default()),
                 ],
@@ -394,7 +394,7 @@ impl Optimizer {
             Box::new(crate::canonicalize_mfp::CanonicalizeMfp),
             // Identifies common relation subexpressions.
             Box::new(crate::cse::relation_cse::RelationCSE::new(false)),
-            Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
+            Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
             // Remove threshold operators which have no effect.
             // Must be done at the very end of the physical pass, because before
             // that (at least at the moment) we cannot be sure that all trees
@@ -430,7 +430,7 @@ impl Optimizer {
                     // more branches at a time.
                     Box::new(crate::union_cancel::UnionBranchCancellation),
                     Box::new(crate::cse::relation_cse::RelationCSE::new(true)),
-                    Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
+                    Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
                 ],
             }),
         ];
