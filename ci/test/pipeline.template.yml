@@ -562,6 +562,17 @@ steps:
           composition: platform-checks
           args: [--scenario=RestartRedpandaDebezium]
 
+  - id: source-sink-errors
+    label: "Source/Sink Error Reporting"
+    artifact_paths: junit_mzcompose_*.xml
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: source-sink-errors
+
   - id: lang-csharp
     label: ":csharp: tests"
     depends_on: build-x86_64
