@@ -39,6 +39,7 @@ use mz_storage_client::types::sources::{
 use self::metrics::PgSourceMetrics;
 use super::metrics::SourceBaseMetrics;
 use crate::source::commit::LogCommitter;
+use crate::source::healthcheck::{SourceStatus, SourceStatusUpdate};
 use crate::source::types::{OffsetCommitter, SourceConnectionBuilder};
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
@@ -140,6 +141,7 @@ macro_rules! try_indefinite {
 // Message used to communicate between `get_next_message` and the tokio task
 enum InternalMessage {
     Err(SourceReaderError),
+    Status(SourceStatusUpdate),
     Value {
         output: usize,
         value: Row,
@@ -361,6 +363,9 @@ impl SourceReader for PostgresSourceReader {
                     NextMessage::Ready(SourceMessageType::InProgress(Ok(msg), ts, diff))
                 }
             }
+            Some(Some(InternalMessage::Status(update))) => {
+                NextMessage::Ready(SourceMessageType::SourceStatus(update))
+            }
             Some(Some(InternalMessage::Err(err))) => {
                 // XXX(petrosagg): we are fabricating a timestamp here!!
                 let non_definite_ts = (PartitionId::None, MzOffset::from(self.last_lsn) + 1);
@@ -446,10 +451,18 @@ async fn postgres_replication_loop_inner(
     loop {
         match task_info.produce_replication().await {
             Err(ReplicationError::Indefinite(e)) => {
+                // If the channel is shutting down, so is the source.
+                let _ = task_info
+                    .sender
+                    .send(InternalMessage::Status(SourceStatusUpdate {
+                        status: SourceStatus::Stalled,
+                        error: Some(e.to_string()),
+                    }))
+                    .await;
                 warn!(
                     "replication for source {} interrupted, retrying: {}",
                     task_info.source_id, e
-                )
+                );
             }
             Err(ReplicationError::Definite(e)) => {
                 return Err(SourceReaderError {
