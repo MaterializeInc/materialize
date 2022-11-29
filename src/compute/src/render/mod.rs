@@ -180,6 +180,8 @@ pub fn build_compute_dataflow<A: Allocate>(
                     dataflow.as_of.clone(),
                     dataflow.until.clone(),
                     mfp.as_mut(),
+                    // TODO: provide a more meaningful flow control input
+                    &timely::dataflow::operators::generic::operator::empty(region),
                     // Copy the logic in DeltaJoin/Get/Join to start.
                     |_timer, count| count > 1_000_000,
                 );
@@ -248,7 +250,7 @@ pub fn build_compute_dataflow<A: Allocate>(
 
             // Export declared sinks.
             for (sink_id, imports, sink) in sinks {
-                context.export_sink(compute_state, &mut tokens, imports, sink_id, &sink);
+                context.export_sink(region, compute_state, &mut tokens, imports, sink_id, &sink);
             }
         });
     })
