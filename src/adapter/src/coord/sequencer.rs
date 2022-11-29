@@ -2673,7 +2673,12 @@ impl<S: Append + 'static> Coordinator<S> {
                     .into_iter()
                     .find(|entry| entry.path == stage.path())
                     .map(|entry| Row::pack_slice(&[Datum::from(entry.plan.as_str())]))
-                    .unwrap_or_else(|| panic!("plan at {}", stage.path()));
+                    .ok_or_else(|| {
+                        AdapterError::Internal(format!(
+                            "a plan at stage {} does not exist in the collected optimizer trace",
+                            stage.path(),
+                        ))
+                    })?;
                 vec![row]
             }
         };
