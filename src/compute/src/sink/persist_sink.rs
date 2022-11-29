@@ -19,7 +19,6 @@ use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{
     Broadcast, Capability, CapabilitySet, ConnectLoop, Feedback, Inspect,
 };
@@ -39,7 +38,7 @@ use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::errors::DataflowError;
 use mz_storage_client::types::sources::SourceData;
 use mz_timely_util::activator::LimitingActivator;
-use mz_timely_util::operators_async_ext::OperatorBuilderExt;
+use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 
 use crate::compute_state::ComputeState;
 use crate::render::sinks::SinkRender;
@@ -266,10 +265,8 @@ where
         .sink_write_frontiers
         .insert(sink_id, Rc::clone(&shared_frontier));
 
-    let mut mint_op = OperatorBuilder::new(
-        format!("{} mint_batch_descriptions", operator_name),
-        scope.clone(),
-    );
+    let mut mint_op =
+        AsyncOperatorBuilder::new(format!("{} mint_batch_descriptions", operator_name), scope);
 
     let (mut output, output_stream) = mint_op.new_output();
 
@@ -277,214 +274,215 @@ where
     let mut persist_feedback_input =
         mint_op.new_input_connection(persist_feedback_stream, Pipeline, vec![Antichain::new()]);
 
-    // Dropping this token signals that the operator should shut down cleanly.
-    let token = Rc::new(());
-    let token_weak = Rc::downgrade(&token);
+    let shutdown_button = mint_op.build(move |mut capabilities| async move {
+        let mut cap_set = if active_worker {
+            CapabilitySet::from_elem(capabilities.pop().expect("missing capability"))
+        } else {
+            // We have to eagerly drop unneeded capabilities!
+            capabilities.pop();
+            CapabilitySet::new()
+        };
 
-    mint_op.build_async(
-        scope,
-        move |mut capabilities, frontiers, scheduler| async move {
-            let mut cap_set = if active_worker {
-                CapabilitySet::from_elem(capabilities.pop().expect("missing capability"))
-            } else {
-                // We have to eagerly drop unneeded capabilities!
-                capabilities.pop();
-                CapabilitySet::new()
-            };
+        // TODO(aljoscha): We need to figure out what to do with error
+        // results from these calls.
+        let persist_client = persist_clients
+            .lock()
+            .await
+            .open(persist_location)
+            .await
+            .expect("could not open persist client");
 
-            // TODO(aljoscha): We need to figure out what to do with error
-            // results from these calls.
-            let persist_client = persist_clients
-                .lock()
-                .await
-                .open(persist_location)
-                .await
-                .expect("could not open persist client");
+        let mut write = persist_client
+            .open_writer::<SourceData, (), Timestamp, Diff>(
+                shard_id,
+                &format!("persist_sink::mint_batch_descriptions {}", sink_id),
+            )
+            .await
+            .expect("could not open persist shard");
 
-            let mut write = persist_client
-                .open_writer::<SourceData, (), Timestamp, Diff>(
-                    shard_id,
-                    &format!("persist_sink::mint_batch_descriptions {}", sink_id),
+        let mut current_persist_frontier = write.upper().clone();
+
+        // Advance the persist shard's upper to at least our write lower
+        // bound.
+        if PartialOrder::less_than(&current_persist_frontier, &write_lower_bound) {
+            if sink_id.is_user() {
+                trace!(
+                    "persist_sink {sink_id}/{shard_id}: \
+                        advancing to write_lower_bound: {:?}",
+                    write_lower_bound
+                );
+            }
+
+            let empty_updates: &[((SourceData, ()), Timestamp, Diff)] = &[];
+            // It's fine if we don't succeed here. This just means that
+            // someone else already advanced the persist frontier further,
+            // which is great!
+            let res = write
+                .append(
+                    empty_updates,
+                    current_persist_frontier.clone(),
+                    write_lower_bound.clone(),
                 )
                 .await
-                .expect("could not open persist shard");
+                .expect("invalid usage");
 
-            let mut current_persist_frontier = write.upper().clone();
-
-            // Advance the persist shard's upper to at least our write lower
-            // bound.
-            if PartialOrder::less_than(&current_persist_frontier, &write_lower_bound) {
-                if sink_id.is_user() {
-                    trace!(
-                        "persist_sink {sink_id}/{shard_id}: \
-                        advancing to write_lower_bound: {:?}",
-                        write_lower_bound
-                    );
-                }
-
-                let empty_updates: &[((SourceData, ()), Timestamp, Diff)] = &[];
-                // It's fine if we don't succeed here. This just means that
-                // someone else already advanced the persist frontier further,
-                // which is great!
-                let res = write
-                    .append(
-                        empty_updates,
-                        current_persist_frontier.clone(),
-                        write_lower_bound.clone(),
-                    )
-                    .await
-                    .expect("invalid usage");
-
-                if sink_id.is_user() {
-                    trace!(
-                        "persist_sink {sink_id}/{shard_id}: \
+            if sink_id.is_user() {
+                trace!(
+                    "persist_sink {sink_id}/{shard_id}: \
                         advancing to write_lower_bound result: {:?}",
-                        res
-                    );
-                }
-
-                current_persist_frontier.clone_from(&write_lower_bound);
+                    res
+                );
             }
 
-            // The frontiers as they where when we last ran through our minting
-            // logic.
-            let mut current_desired_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
-            // SUBTLE: As described below, we only mint new batch descriptions
-            // when the persist frontier moves. We therefore have to encode this
-            // one as an `Option<Antichain<T>>` where the change from `None` to
-            // `Some([minimum])` is also a change in the frontier. If we didn't
-            // do this, we would be stuck at `[minimum]`.
-            let mut current_persist_frontier = None;
+            current_persist_frontier.clone_from(&write_lower_bound);
+        }
 
-            while scheduler.notified().await {
-                if token_weak.upgrade().is_none() {
-                    return;
-                }
+        // The current input frontiers.
+        let mut desired_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
+        let mut persist_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
 
-                desired_input.for_each(|_cap, _data| {
-                    // Just read away data.
-                    // WIP: Is this idiomatic timely?
-                });
-                persist_feedback_input.for_each(|_cap, _data| {
-                    // Just read away data.
-                    // WIP: Is this idiomatic timely?
-                });
+        // The persist_frontier as it was when we last ran through our minting logic.
+        // SUBTLE: As described below, we only mint new batch descriptions
+        // when the persist frontier moves. We therefore have to encode this
+        // one as an `Option<Antichain<T>>` where the change from `None` to
+        // `Some([minimum])` is also a change in the frontier. If we didn't
+        // do this, we would be stuck at `[minimum]`.
+        let mut emitted_persist_frontier: Option<Antichain<_>> = None;
 
-                if !active_worker {
-                    // SUBTLE: We must not simply return, because this will
-                    // de-schedule the operator. Even if we're not active we
-                    // must still remain and pump away input updates, otherwise
-                    // the one active operator will not have its frontiers
-                    // advanced.
-                    continue;
-                }
-
-                // Capture current frontiers.
-                let frontiers = frontiers.borrow().clone();
-                let desired_frontier = &frontiers[0];
-                let persist_frontier = &frontiers[1];
-
-                if PartialOrder::less_than(&*shared_frontier.borrow(), persist_frontier) {
-                    if sink_id.is_user() {
-                        trace!(
-                            "persist_sink {sink_id}/{shard_id}: \
-                            updating shared_frontier to {:?}",
-                            persist_frontier,
-                        );
+        loop {
+            tokio::select! {
+                Some(event) = desired_input.next() => {
+                    match event {
+                        Event::Data(_cap, _data) => {
+                            // Just read away data.
+                            continue;
+                        }
+                        Event::Progress(frontier) => {
+                            desired_frontier = frontier;
+                        }
                     }
+                }
+                Some(event) = persist_feedback_input.next() => {
+                    match event {
+                        Event::Data(_cap, _data) => {
+                            // Just read away data.
+                            continue;
+                        }
+                        Event::Progress(frontier) => {
+                            persist_frontier = frontier;
+                        }
+                    }
+                }
+            };
 
-                    // Share that we have finished processing all times less than the persist frontier.
-                    // Advancing the sink upper communicates to the storage controller that it is
-                    // permitted to compact our target storage collection up to the new upper. So we
-                    // must be careful to not advance the sink upper beyond our read frontier.
-                    shared_frontier.borrow_mut().clear();
-                    shared_frontier
-                        .borrow_mut()
-                        .extend(persist_frontier.iter().cloned());
+            if !active_worker {
+                // SUBTLE: We must not simply return, because this will
+                // de-schedule the operator. Even if we're not active we
+                // must still remain and pump away input updates, otherwise
+                // the one active operator will not have its frontiers
+                // advanced.
+                continue;
+            }
+
+            if PartialOrder::less_than(&*shared_frontier.borrow(), &persist_frontier) {
+                if sink_id.is_user() {
+                    trace!(
+                        "persist_sink {sink_id}/{shard_id}: \
+                            updating shared_frontier to {:?}",
+                        persist_frontier,
+                    );
                 }
 
-                // We only mint new batch desriptions when:
-                //  1. the desired frontier is past the persist frontier
-                //  2. the persist frontier has moved since we last emitted a
-                //     batch
-                //
-                // That last point is _subtle_: If we emitted new batch
-                // descriptions whenever the desired frontier moves but the
-                // persist frontier doesn't move, we would mint overlapping
-                // batch descriptions, which would lead to errors when trying to
-                // appent batches based on them.
-                //
-                // We never use the same lower frontier twice.
-                // We only emit new batches when the persist frontier moves.
-                // A batch description that we mint for a given `lower` will
-                // either succeed in being appended, in which case the
-                // persist frontier moves. Or it will fail because the
-                // persist frontier got moved by someone else, in which case
-                // we also won't mint a new batch description for the same
-                // frontier.
-                if PartialOrder::less_than(persist_frontier, desired_frontier)
-                    && (current_persist_frontier.is_none()
-                        || PartialOrder::less_than(
-                            current_persist_frontier.as_ref().unwrap(),
-                            persist_frontier,
-                        ))
-                {
-                    let batch_description =
-                        (persist_frontier.to_owned(), desired_frontier.to_owned());
+                // Share that we have finished processing all times less than the persist frontier.
+                // Advancing the sink upper communicates to the storage controller that it is
+                // permitted to compact our target storage collection up to the new upper. So we
+                // must be careful to not advance the sink upper beyond our read frontier.
+                shared_frontier.borrow_mut().clear();
+                shared_frontier
+                    .borrow_mut()
+                    .extend(persist_frontier.iter().cloned());
+            }
 
-                    let lower = batch_description.0.first().unwrap();
-                    let batch_ts = batch_description.0.first().unwrap().clone();
+            // We only mint new batch desriptions when:
+            //  1. the desired frontier is past the persist frontier
+            //  2. the persist frontier has moved since we last emitted a
+            //     batch
+            //
+            // That last point is _subtle_: If we emitted new batch
+            // descriptions whenever the desired frontier moves but the
+            // persist frontier doesn't move, we would mint overlapping
+            // batch descriptions, which would lead to errors when trying to
+            // appent batches based on them.
+            //
+            // We never use the same lower frontier twice.
+            // We only emit new batches when the persist frontier moves.
+            // A batch description that we mint for a given `lower` will
+            // either succeed in being appended, in which case the
+            // persist frontier moves. Or it will fail because the
+            // persist frontier got moved by someone else, in which case
+            // we also won't mint a new batch description for the same
+            // frontier.
+            if PartialOrder::less_than(&persist_frontier, &desired_frontier)
+                && (emitted_persist_frontier.is_none()
+                    || PartialOrder::less_than(
+                        emitted_persist_frontier.as_ref().unwrap(),
+                        &persist_frontier,
+                    ))
+            {
+                let batch_description = (persist_frontier.to_owned(), desired_frontier.to_owned());
 
-                    let cap = cap_set
-                        .try_delayed(&batch_ts)
-                        .ok_or_else(|| {
-                            format!(
-                                "minter cannot delay {:?} to {:?}. \
+                let lower = batch_description.0.first().unwrap();
+                let batch_ts = batch_description.0.first().unwrap().clone();
+
+                let cap = cap_set
+                    .try_delayed(&batch_ts)
+                    .ok_or_else(|| {
+                        format!(
+                            "minter cannot delay {:?} to {:?}. \
                                 Likely because we already emitted a \
                                 batch description and delayed.",
-                                cap_set, lower
-                            )
-                        })
-                        .unwrap();
+                            cap_set, lower
+                        )
+                    })
+                    .unwrap();
 
-                    trace!(
-                        "persist_sink {sink_id}/{shard_id}: \
+                trace!(
+                    "persist_sink {sink_id}/{shard_id}: \
                         new batch_description: {:?}",
-                        batch_description
-                    );
+                    batch_description
+                );
 
-                    let mut output = output.activate();
-                    let mut session = output.session(&cap);
-                    session.give(batch_description);
+                let mut output = output.activate();
+                let mut session = output.session(&cap);
+                session.give(batch_description);
 
-                    // WIP: We downgrade our capability so that downstream
-                    // operators (writer and appender) can know when all the
-                    // writers have had a chance to write updates to persist for
-                    // a given batch. Just stepping forward feels a bit icky,
-                    // though.
-                    let new_batch_frontier = Antichain::from_elem(batch_ts.step_forward());
-                    trace!(
-                        "persist_sink {sink_id}/{shard_id}: \
+                // WIP: We downgrade our capability so that downstream
+                // operators (writer and appender) can know when all the
+                // writers have had a chance to write updates to persist for
+                // a given batch. Just stepping forward feels a bit icky,
+                // though.
+                let new_batch_frontier = Antichain::from_elem(batch_ts.step_forward());
+                trace!(
+                    "persist_sink {sink_id}/{shard_id}: \
                         downgrading to {:?}",
-                        new_batch_frontier
-                    );
-                    let res = cap_set.try_downgrade(new_batch_frontier.iter());
-                    match res {
-                        Ok(_) => (),
-                        Err(e) => panic!("in minter: {:?}", e),
-                    }
-
-                    current_desired_frontier.clone_from(desired_frontier);
-                    current_persist_frontier.replace(persist_frontier.clone());
+                    new_batch_frontier
+                );
+                let res = cap_set.try_downgrade(new_batch_frontier.iter());
+                match res {
+                    Ok(_) => (),
+                    Err(e) => panic!("in minter: {:?}", e),
                 }
+
+                emitted_persist_frontier.replace(persist_frontier.clone());
             }
-        },
-    );
+        }
+    });
 
     if sink_id.is_user() {
         output_stream.inspect(|d| trace!("batch_description: {:?}", d));
     }
 
+    let token = Rc::new(shutdown_button.press_on_drop());
     (output_stream, token)
 }
 
@@ -499,10 +497,7 @@ fn write_batches<G>(
     desired_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     persist_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     persist_clients: Arc<Mutex<PersistClientCache>>,
-) -> (
-    Stream<G, WriterEnrichedHollowBatch<Timestamp>>,
-    Option<Rc<dyn Any>>,
-)
+) -> (Stream<G, WriterEnrichedHollowBatch<Timestamp>>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -513,7 +508,7 @@ where
     let worker_index = scope.index();
 
     let mut write_op =
-        OperatorBuilder::new(format!("{} write_batches", operator_name), scope.clone());
+        AsyncOperatorBuilder::new(format!("{} write_batches", operator_name), scope.clone());
 
     let activator = scope.activator_for(&write_op.operator_info().address[..]);
     let mut activator = LimitingActivator::new(activator);
@@ -544,265 +539,282 @@ where
         vec![Antichain::new()],
     );
 
-    // Dropping this token signals that the operator should shut down cleanly.
-    let token = Rc::new(());
-    let token_weak = Rc::downgrade(&token);
-
     // This operator accepts the current and desired update streams for a `persist` shard.
     // It attempts to write out updates, starting from the current's upper frontier, that
     // will cause the changes of desired to be committed to persist.
 
-    write_op.build_async(
-        scope,
-        move |_capabilities, frontiers, scheduler| async move {
-            let mut buffer = Vec::new();
-            let mut batch_descriptions_buffer = Vec::new();
+    let shutdown_button = write_op.build(move |_capabilities| async move {
+        let mut buffer = Vec::new();
+        let mut batch_descriptions_buffer = Vec::new();
 
-            // Contains `desired - persist`, reflecting the updates we would like to commit
-            // to `persist` in order to "correct" it to track `desired`. This collection is
-            // only modified by updates received from either the `desired` or `persist` inputs.
-            let mut correction = Vec::new();
+        // Contains `desired - persist`, reflecting the updates we would like to commit
+        // to `persist` in order to "correct" it to track `desired`. This collection is
+        // only modified by updates received from either the `desired` or `persist` inputs.
+        let mut correction = Vec::new();
 
-            // Contains descriptions of batches for which we know that we can
-            // write data. We got these from the "centralized" operator that
-            // determines batch descriptions for all writers.
-            let mut in_flight_batches: HashMap<
-                (Antichain<Timestamp>, Antichain<Timestamp>),
-                Capability<Timestamp>,
-            > = HashMap::new();
+        // Contains descriptions of batches for which we know that we can
+        // write data. We got these from the "centralized" operator that
+        // determines batch descriptions for all writers.
+        let mut in_flight_batches: HashMap<
+            (Antichain<Timestamp>, Antichain<Timestamp>),
+            Capability<Timestamp>,
+        > = HashMap::new();
 
-            // TODO(aljoscha): We need to figure out what to do with error results from these calls.
-            let persist_client = persist_clients
-                .lock()
-                .await
-                .open(persist_location)
-                .await
-                .expect("could not open persist client");
+        // TODO(aljoscha): We need to figure out what to do with error results from these calls.
+        let persist_client = persist_clients
+            .lock()
+            .await
+            .open(persist_location)
+            .await
+            .expect("could not open persist client");
 
-            let mut write = persist_client
-                .open_writer::<SourceData, (), Timestamp, Diff>(
-                    shard_id,
-                    &format!("persist_sink::write_batches {}", sink_id),
-                )
-                .await
-                .expect("could not open persist shard");
+        let mut write = persist_client
+            .open_writer::<SourceData, (), Timestamp, Diff>(
+                shard_id,
+                &format!("persist_sink::write_batches {}", sink_id),
+            )
+            .await
+            .expect("could not open persist shard");
 
-            while scheduler.notified().await {
-                if token_weak.upgrade().is_none() {
-                    return;
-                }
+        // The current input frontiers.
+        let mut batch_descriptions_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
+        let mut desired_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
+        let mut persist_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
 
-                // Make sure that our write handle lease does not expire!
-                //
-                // We don't write to _Consensus_ but instead only write batch
-                // data to _Blob_ so someone might eventually expire our lease.
-                // This could lead to the "leaked blob reaper" eventually
-                // removing blobs that have been written but not yet appended to
-                // the shard.
-                //
-                write.maybe_heartbeat_writer().await;
-                trace!("persist_sink {sink_id}/{shard_id}: writer heartbeating write handle");
-                // NOTE: We schedule ourselves to make sure that we keep
-                // heartbeating even in cases where there are no changes in our
-                // inputs (updates or frontier changes).
-                activator.activate_after(Duration::from_secs(60));
+        loop {
+            tokio::select! {
+                Some(event) = descriptions_input.next() => {
+                    match event {
+                        Event::Data(cap, data) => {
+                            // Ingest new batch descriptions.
+                            data.swap(&mut batch_descriptions_buffer);
+                            for description in batch_descriptions_buffer.drain(..) {
+                                if sink_id.is_user() {
+                                    trace!(
+                                        "persist_sink {sink_id}/{shard_id}: \
+                                            write_batches: \
+                                            new_description: {:?}, \
+                                            desired_frontier: {:?}, \
+                                            batch_descriptions_frontier: {:?}, \
+                                            persist_frontier: {:?}",
+                                        description,
+                                        desired_frontier,
+                                        batch_descriptions_frontier,
+                                        persist_frontier
+                                    );
+                                }
+                                let existing = in_flight_batches.insert(
+                                    description.clone(),
+                                    cap.delayed(description.0.first().unwrap()),
+                                );
+                                assert!(
+                                    existing.is_none(),
+                                    "write_batches: sink {} got more than one \
+                                        batch for description {:?}, in-flight: {:?}",
+                                    sink_id,
+                                    description,
+                                    in_flight_batches
+                                );
+                            }
 
-                // Capture current frontiers.
-                let frontiers = frontiers.borrow().clone();
-                let batch_descriptions_frontier = &frontiers[0];
-                let desired_frontier = &frontiers[1];
-                let persist_frontier = &frontiers[2];
-
-                // Ingest new batch descriptions.
-                descriptions_input.for_each(|cap, data| {
-                    data.swap(&mut batch_descriptions_buffer);
-                    for description in batch_descriptions_buffer.drain(..) {
-                        if sink_id.is_user() {
-                            trace!(
-                                "persist_sink {sink_id}/{shard_id}: \
-                                write_batches: \
-                                new_description: {:?}, \
-                                desired_frontier: {:?}, \
-                                batch_descriptions_frontier: {:?}, \
-                                persist_frontier: {:?}",
-                                description,
-                                desired_frontier,
-                                batch_descriptions_frontier,
-                                persist_frontier
-                            );
+                            continue;
                         }
-                        let existing = in_flight_batches.insert(
-                            description.clone(),
-                            cap.delayed(description.0.first().unwrap()),
-                        );
-                        assert!(
-                            existing.is_none(),
-                            "write_batches: sink {} got more than one \
-                            batch for description {:?}, in-flight: {:?}",
-                            sink_id,
-                            description,
-                            in_flight_batches
-                        );
+                        Event::Progress(frontier) => {
+                            batch_descriptions_frontier = frontier;
+                        }
                     }
-                });
+                }
+                Some(event) = desired_input.next() => {
+                    match event {
+                        Event::Data(_cap, data) => {
+                            // Extract desired rows as positive contributions to `correction`.
+                            data.swap(&mut buffer);
+                            if sink_id.is_user() && !buffer.is_empty() {
+                                trace!(
+                                    "persist_sink {sink_id}/{shard_id}: \
+                                        updates: {:?}, \
+                                        in-flight-batches: {:?}, \
+                                        desired_frontier: {:?}, \
+                                        batch_descriptions_frontier: {:?}, \
+                                        persist_frontier: {:?}",
+                                    buffer,
+                                    in_flight_batches,
+                                    desired_frontier,
+                                    batch_descriptions_frontier,
+                                    persist_frontier
+                                );
+                            }
+                            correction.append(&mut buffer);
 
-                // Extract desired rows as positive contributions to `correction`.
-                desired_input.for_each(|_cap, data| {
-                    data.swap(&mut buffer);
-                    if sink_id.is_user() && !buffer.is_empty() {
-                        trace!(
-                            "persist_sink {sink_id}/{shard_id}: \
-                            updates: {:?}, \
-                            in-flight-batches: {:?}, \
-                            desired_frontier: {:?}, \
-                            batch_descriptions_frontier: {:?}, \
-                            persist_frontier: {:?}",
-                            buffer,
-                            in_flight_batches,
-                            desired_frontier,
-                            batch_descriptions_frontier,
-                            persist_frontier
-                        );
+                            continue;
+                        }
+                        Event::Progress(frontier) => {
+                            desired_frontier = frontier;
+                        }
                     }
-                    correction.append(&mut buffer);
-                });
+                }
+                Some(event) = persist_input.next() => {
+                    match event {
+                        Event::Data(_cap, data) => {
+                            // Extract persist rows as negative contributions to `correction`.
+                            data.swap(&mut buffer);
+                            correction.extend(buffer.drain(..).map(|(d, t, r)| (d, t, -r)));
 
-                // Extract persist rows as negative contributions to `correction`.
-                persist_input.for_each(|_cap, data| {
-                    data.swap(&mut buffer);
-                    correction.extend(buffer.drain(..).map(|(d, t, r)| (d, t, -r)));
-                });
+                            continue;
+                        }
+                        Event::Progress(frontier) => {
+                            persist_frontier = frontier;
+                        }
+                    }
+                }
+            }
 
-                // We may have the opportunity to commit updates.
-                if !PartialOrder::less_equal(desired_frontier, persist_frontier) {
-                    trace!(
-                        "persist_sink {sink_id}/{shard_id}: \
+            // FIXME
+            // Make sure that our write handle lease does not expire!
+            //
+            // We don't write to _Consensus_ but instead only write batch
+            // data to _Blob_ so someone might eventually expire our lease.
+            // This could lead to the "leaked blob reaper" eventually
+            // removing blobs that have been written but not yet appended to
+            // the shard.
+            //
+            write.maybe_heartbeat_writer().await;
+            trace!("persist_sink {sink_id}/{shard_id}: writer heartbeating write handle");
+            // NOTE: We schedule ourselves to make sure that we keep
+            // heartbeating even in cases where there are no changes in our
+            // inputs (updates or frontier changes).
+            activator.activate_after(Duration::from_secs(60));
+
+            // We may have the opportunity to commit updates.
+            if !PartialOrder::less_equal(&desired_frontier, &persist_frontier) {
+                trace!(
+                    "persist_sink {sink_id}/{shard_id}: \
                         CAN emit: \
                         persist_frontier: {:?}, \
                         desired_frontier: {:?}",
-                        persist_frontier,
-                        desired_frontier
-                    );
-                    // Advance all updates to `persist`'s frontier.
-                    for (row, time, diff) in correction.iter_mut() {
-                        let time_before = *time;
-                        time.advance_by(persist_frontier.borrow());
-                        if sink_id.is_user() && &time_before != time {
-                            trace!(
-                                "persist_sink {sink_id}/{shard_id}: \
+                    persist_frontier,
+                    desired_frontier
+                );
+                // Advance all updates to `persist`'s frontier.
+                for (row, time, diff) in correction.iter_mut() {
+                    let time_before = *time;
+                    time.advance_by(persist_frontier.borrow());
+                    if sink_id.is_user() && &time_before != time {
+                        trace!(
+                            "persist_sink {sink_id}/{shard_id}: \
                                 advanced {:?}, {}, {} to {}",
-                                row,
-                                time_before,
-                                diff,
-                                time
-                            );
-                        }
+                            row,
+                            time_before,
+                            diff,
+                            time
+                        );
                     }
+                }
 
-                    trace!(
-                        "persist_sink {sink_id}/{shard_id}: \
+                trace!(
+                    "persist_sink {sink_id}/{shard_id}: \
                         in-flight batches: {:?}, \
                         batch_descriptions_frontier: {:?}, \
                         desired_frontier: {:?} \
                         persist_frontier: {:?}",
-                        in_flight_batches,
-                        batch_descriptions_frontier,
-                        desired_frontier,
-                        persist_frontier
-                    );
+                    in_flight_batches,
+                    batch_descriptions_frontier,
+                    desired_frontier,
+                    persist_frontier
+                );
 
-                    // We can write updates for a given batch description when
-                    // a) the batch is not beyond `batch_descriptions_frontier`,
-                    // and b) we know that we have seen all updates that would
-                    // fall into the batch, from `desired_frontier`.
-                    let ready_batches = in_flight_batches
-                        .keys()
-                        .filter(|(lower, upper)| {
-                            !PartialOrder::less_equal(batch_descriptions_frontier, lower)
-                                && !PartialOrder::less_than(desired_frontier, upper)
-                                && !PartialOrder::less_than(persist_frontier, lower)
-                        })
-                        .cloned()
-                        .collect::<Vec<_>>();
+                // We can write updates for a given batch description when
+                // a) the batch is not beyond `batch_descriptions_frontier`,
+                // and b) we know that we have seen all updates that would
+                // fall into the batch, from `desired_frontier`.
+                let ready_batches = in_flight_batches
+                    .keys()
+                    .filter(|(lower, upper)| {
+                        !PartialOrder::less_equal(&batch_descriptions_frontier, lower)
+                            && !PartialOrder::less_than(&desired_frontier, upper)
+                            && !PartialOrder::less_than(&persist_frontier, lower)
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
 
-                    trace!(
-                        "persist_sink {sink_id}/{shard_id}: \
+                trace!(
+                    "persist_sink {sink_id}/{shard_id}: \
                         ready batches: {:?}",
-                        ready_batches,
-                    );
+                    ready_batches,
+                );
 
-                    if !ready_batches.is_empty() {
-                        // Consolidate updates only when they are required by an
-                        // attempt to write out new updates. Otherwise, we might
-                        // spend a lot of time "consolidating" the same updates
-                        // over and over again, with no changes.
-                        consolidate_updates(&mut correction);
+                if !ready_batches.is_empty() {
+                    // Consolidate updates only when they are required by an
+                    // attempt to write out new updates. Otherwise, we might
+                    // spend a lot of time "consolidating" the same updates
+                    // over and over again, with no changes.
+                    consolidate_updates(&mut correction);
+                }
+
+                for batch_description in ready_batches.into_iter() {
+                    let cap = in_flight_batches.remove(&batch_description).unwrap();
+
+                    if sink_id.is_user() {
+                        trace!(
+                            "persist_sink {sink_id}/{shard_id}: \
+                                emitting done batch: {:?}, cap: {:?}",
+                            batch_description,
+                            cap
+                        );
                     }
 
-                    for batch_description in ready_batches.into_iter() {
-                        let cap = in_flight_batches.remove(&batch_description).unwrap();
+                    let (batch_lower, batch_upper) = batch_description;
+
+                    let mut to_append = correction
+                        .iter()
+                        .filter(|(_, time, _)| {
+                            batch_lower.less_equal(time) && !batch_upper.less_equal(time)
+                        })
+                        .map(|(data, time, diff)| ((SourceData(data.clone()), ()), time, diff))
+                        .peekable();
+
+                    let mut batch_tokens = if to_append.peek().is_some() {
+                        let batch = write
+                            .batch(to_append, batch_lower.clone(), batch_upper.clone())
+                            .await
+                            .expect("invalid usage");
 
                         if sink_id.is_user() {
                             trace!(
                                 "persist_sink {sink_id}/{shard_id}: \
-                                emitting done batch: {:?}, cap: {:?}",
-                                batch_description,
-                                cap
+                                    wrote batch from worker {}: ({:?}, {:?})",
+                                worker_index,
+                                batch.lower(),
+                                batch.upper()
                             );
                         }
 
-                        let (batch_lower, batch_upper) = batch_description;
+                        vec![batch.into_writer_hollow_batch()]
+                    } else {
+                        vec![]
+                    };
 
-                        let mut to_append = correction
-                            .iter()
-                            .filter(|(_, time, _)| {
-                                batch_lower.less_equal(time) && !batch_upper.less_equal(time)
-                            })
-                            .map(|(data, time, diff)| ((SourceData(data.clone()), ()), time, diff))
-                            .peekable();
-
-                        let mut batch_tokens = if to_append.peek().is_some() {
-                            let batch = write
-                                .batch(to_append, batch_lower.clone(), batch_upper.clone())
-                                .await
-                                .expect("invalid usage");
-
-                            if sink_id.is_user() {
-                                trace!(
-                                    "persist_sink {sink_id}/{shard_id}: \
-                                    wrote batch from worker {}: ({:?}, {:?})",
-                                    worker_index,
-                                    batch.lower(),
-                                    batch.upper()
-                                );
-                            }
-
-                            vec![batch.into_writer_hollow_batch()]
-                        } else {
-                            vec![]
-                        };
-
-                        let mut output = output.activate();
-                        let mut session = output.session(&cap);
-                        session.give_vec(&mut batch_tokens);
-                    }
-                } else {
-                    trace!(
-                        "persist_sink {sink_id}/{shard_id}: \
-                        cannot emit: persist_frontier: {:?}, desired_frontier: {:?}",
-                        persist_frontier,
-                        desired_frontier
-                    );
+                    let mut output = output.activate();
+                    let mut session = output.session(&cap);
+                    session.give_vec(&mut batch_tokens);
                 }
+            } else {
+                trace!(
+                    "persist_sink {sink_id}/{shard_id}: \
+                        cannot emit: persist_frontier: {:?}, desired_frontier: {:?}",
+                    persist_frontier,
+                    desired_frontier
+                );
             }
-        },
-    );
+        }
+    });
 
     if sink_id.is_user() {
         output_stream.inspect(|d| trace!("batch: {:?}", d));
     }
 
-    (output_stream, Some(token))
+    let token = Rc::new(shutdown_button.press_on_drop());
+    (output_stream, token)
 }
 
 /// Fuses written batches together and appends them to persist using one
@@ -817,7 +829,7 @@ fn append_batches<G>(
     batch_descriptions: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
     batches: &Stream<G, WriterEnrichedHollowBatch<Timestamp>>,
     persist_clients: Arc<Mutex<PersistClientCache>>,
-) -> (Stream<G, ()>, Option<Rc<dyn Any>>)
+) -> (Stream<G, ()>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -827,7 +839,7 @@ where
     let shard_id = target.data_shard;
 
     let operator_name = format!("{} append_batches", operator_name);
-    let mut append_op = OperatorBuilder::new(operator_name, scope.clone());
+    let mut append_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
 
     let activator = scope.activator_for(&append_op.operator_info().address[..]);
     let mut activator = LimitingActivator::new(activator);
@@ -856,229 +868,237 @@ where
         vec![Antichain::new()],
     );
 
-    // Dropping this token signals that the operator should shut down cleanly.
-    let token = Rc::new(());
-    let token_weak = Rc::downgrade(&token);
-
     // This operator accepts the batch descriptions and tokens that represent
     // written batches. Written batches get appended to persist when we learn
     // from our input frontiers that we have seen all batches for a given batch
     // description.
 
-    append_op.build_async(
-        scope,
-        move |mut capabilities, frontiers, scheduler| async move {
-            if !active_worker {
-                // SUBTLE: This is different from `mint_batch_description`
-                // where the non-active workers have to stay alive and keep
-                // pumping input, to ensure that the one active worker sees
-                // its frontiers advancing.
-                //
-                // In this here operator only the active worker will ever
-                // get messages, so the inactive ones don't have anything
-                // that needs pumping away.
-                return;
-            }
+    let shutdown_button = append_op.build(move |mut capabilities| async move {
+        if !active_worker {
+            // SUBTLE: This is different from `mint_batch_description`
+            // where the non-active workers have to stay alive and keep
+            // pumping input, to ensure that the one active worker sees
+            // its frontiers advancing.
+            //
+            // In this here operator only the active worker will ever
+            // get messages, so the inactive ones don't have anything
+            // that needs pumping away.
+            return;
+        }
 
-            let mut cap_set =
-                CapabilitySet::from_elem(capabilities.pop().expect("missing capability"));
+        let mut cap_set = CapabilitySet::from_elem(capabilities.pop().expect("missing capability"));
 
-            let mut description_buffer = Vec::new();
-            let mut batch_buffer = Vec::new();
+        let mut description_buffer = Vec::new();
+        let mut batch_buffer = Vec::new();
 
-            // Contains descriptions of batches for which we know that we can
-            // write data. We got these from the "centralized" operator that
-            // determines batch descriptions for all writers.
-            let mut in_flight_descriptions: HashSet<(Antichain<Timestamp>, Antichain<Timestamp>)> =
-                HashSet::new();
+        // Contains descriptions of batches for which we know that we can
+        // write data. We got these from the "centralized" operator that
+        // determines batch descriptions for all writers.
+        let mut in_flight_descriptions: HashSet<(Antichain<Timestamp>, Antichain<Timestamp>)> =
+            HashSet::new();
 
-            let mut in_flight_batches: HashMap<
-                (Antichain<Timestamp>, Antichain<Timestamp>),
-                Vec<Batch<_, _, _, _>>,
-            > = HashMap::new();
+        let mut in_flight_batches: HashMap<
+            (Antichain<Timestamp>, Antichain<Timestamp>),
+            Vec<Batch<_, _, _, _>>,
+        > = HashMap::new();
 
-            // TODO(aljoscha): We need to figure out what to do with error results from these calls.
-            let persist_client = persist_clients
-                .lock()
-                .await
-                .open(persist_location)
-                .await
-                .expect("could not open persist client");
+        // TODO(aljoscha): We need to figure out what to do with error results from these calls.
+        let persist_client = persist_clients
+            .lock()
+            .await
+            .open(persist_location)
+            .await
+            .expect("could not open persist client");
 
-            let mut write = persist_client
-                .open_writer::<SourceData, (), Timestamp, Diff>(
-                    shard_id,
-                    &format!("persist_sink::append_batches {}", sink_id),
-                )
-                .await
-                .expect("could not open persist shard");
+        let mut write = persist_client
+            .open_writer::<SourceData, (), Timestamp, Diff>(
+                shard_id,
+                &format!("persist_sink::append_batches {}", sink_id),
+            )
+            .await
+            .expect("could not open persist shard");
 
-            while scheduler.notified().await {
-                if token_weak.upgrade().is_none() {
-                    return;
-                }
+        // The current input frontiers.
+        let mut batch_description_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
+        let mut batches_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
 
-                // Make sure that our write handle lease does not expire!
-                write.maybe_heartbeat_writer().await;
-                trace!("persist_sink {sink_id}/{shard_id}: appender heartbeating write handle");
-                // NOTE: We schedule ourselves to make sure that we keep
-                // heartbeating even in cases where there are no changes in our
-                // inputs (updates or frontier changes).
-                activator.activate_after(Duration::from_secs(60));
+        loop {
+            tokio::select! {
+                Some(event) = descriptions_input.next() => {
+                    match event {
+                        Event::Data(_cap, data) => {
+                            // Ingest new batch descriptions.
+                            data.swap(&mut description_buffer);
+                            for batch_description in description_buffer.drain(..) {
+                                if sink_id.is_user() {
+                                    trace!(
+                                        "persist_sink {sink_id}/{shard_id}: \
+                                            append_batches: sink {}, \
+                                            new description: {:?}, \
+                                            batch_description_frontier: {:?}",
+                                        sink_id,
+                                        batch_description,
+                                        batch_description_frontier
+                                    );
+                                }
 
-                // Capture current frontiers.
-                let frontiers = frontiers.borrow().clone();
-                let batch_description_frontier = &frontiers[0];
-                let batches_frontier = &frontiers[1];
+                                let is_new = in_flight_descriptions.insert(batch_description.clone());
 
-                // Ingest new batch descriptions.
-                descriptions_input.for_each(|_cap, data| {
-                    data.swap(&mut description_buffer);
-                    for batch_description in description_buffer.drain(..) {
-                        if sink_id.is_user() {
-                            trace!(
-                                "persist_sink {sink_id}/{shard_id}: \
-                                append_batches: sink {}, \
-                                new description: {:?}, \
-                                batch_description_frontier: {:?}",
-                                sink_id,
-                                batch_description,
-                                batch_description_frontier
-                            );
+                                assert!(
+                                    is_new,
+                                    "append_batches: sink {} got more than one batch \
+                                        for a given description in-flight: {:?}",
+                                    sink_id, in_flight_batches
+                                );
+                            }
+
+                            continue;
                         }
-
-                        let is_new = in_flight_descriptions.insert(batch_description.clone());
-
-                        assert!(
-                            is_new,
-                            "append_batches: sink {} got more than one batch \
-                            for a given description in-flight: {:?}",
-                            sink_id, in_flight_batches
-                        );
+                        Event::Progress(frontier) => {
+                            batch_description_frontier = frontier;
+                        }
                     }
-                });
+                }
+                Some(event) = batches_input.next() => {
+                    match event {
+                        Event::Data(_cap, data) => {
+                            // Ingest new written batches
+                            data.swap(&mut batch_buffer);
+                            for batch in batch_buffer.drain(..) {
+                                let batch = write.batch_from_hollow_batch(batch);
+                                let batch_description = (batch.lower().clone(), batch.upper().clone());
 
-                // Ingest new written batches
-                batches_input.for_each(|_cap, data| {
-                    data.swap(&mut batch_buffer);
-                    for batch in batch_buffer.drain(..) {
-                        let batch = write.batch_from_hollow_batch(batch);
-                        let batch_description = (batch.lower().clone(), batch.upper().clone());
+                                let batches = in_flight_batches
+                                    .entry(batch_description)
+                                    .or_insert_with(Vec::new);
 
-                        let batches = in_flight_batches
-                            .entry(batch_description)
-                            .or_insert_with(Vec::new);
+                                batches.push(batch);
+                            }
 
-                        batches.push(batch);
+                            continue;
+                        }
+                        Event::Progress(frontier) => {
+                            batches_frontier = frontier;
+                        }
                     }
-                });
+                }
+            };
 
-                // Peel off any batches that are not beyond the frontier
-                // anymore.
-                //
-                // It is correct to consider batches that are not beyond the
-                // `batches_frontier` because it is held back by the writer
-                // operator as long as a) the `batch_description_frontier` did
-                // not advance and b) as long as the `desired_frontier` has not
-                // advanced to the `upper` of a given batch description.
+            // FIXME
+            // Make sure that our write handle lease does not expire!
+            write.maybe_heartbeat_writer().await;
+            trace!("persist_sink {sink_id}/{shard_id}: appender heartbeating write handle");
+            // NOTE: We schedule ourselves to make sure that we keep
+            // heartbeating even in cases where there are no changes in our
+            // inputs (updates or frontier changes).
+            activator.activate_after(Duration::from_secs(60));
 
-                let mut done_batches = in_flight_descriptions
-                    .iter()
-                    .filter(|(lower, _upper)| !PartialOrder::less_equal(batches_frontier, lower))
-                    .cloned()
-                    .collect::<Vec<_>>();
+            // Peel off any batches that are not beyond the frontier
+            // anymore.
+            //
+            // It is correct to consider batches that are not beyond the
+            // `batches_frontier` because it is held back by the writer
+            // operator as long as a) the `batch_description_frontier` did
+            // not advance and b) as long as the `desired_frontier` has not
+            // advanced to the `upper` of a given batch description.
 
-                trace!(
-                    "persist_sink {sink_id}/{shard_id}: \
+            let mut done_batches = in_flight_descriptions
+                .iter()
+                .filter(|(lower, _upper)| !PartialOrder::less_equal(&batches_frontier, lower))
+                .cloned()
+                .collect::<Vec<_>>();
+
+            trace!(
+                "persist_sink {sink_id}/{shard_id}: \
                     append_batches: in_flight: {:?}, \
                     done: {:?}, \
                     batch_frontier: {:?}, \
                     batch_description_frontier: {:?}",
-                    in_flight_descriptions,
-                    done_batches,
-                    batches_frontier,
-                    batch_description_frontier
+                in_flight_descriptions,
+                done_batches,
+                batches_frontier,
+                batch_description_frontier
+            );
+
+            // Append batches in order, to ensure that their `lower` and
+            // `upper` lign up.
+            done_batches.sort_by(|a, b| {
+                if PartialOrder::less_than(a, b) {
+                    Ordering::Less
+                } else if PartialOrder::less_than(b, a) {
+                    Ordering::Greater
+                } else {
+                    Ordering::Equal
+                }
+            });
+
+            for done_batch_metadata in done_batches.into_iter() {
+                in_flight_descriptions.remove(&done_batch_metadata);
+
+                let mut batches = in_flight_batches
+                    .remove(&done_batch_metadata)
+                    .unwrap_or_else(Vec::new);
+
+                trace!(
+                    "persist_sink {sink_id}/{shard_id}: \
+                        done batch: {:?}, {:?}",
+                    done_batch_metadata,
+                    batches
                 );
 
-                // Append batches in order, to ensure that their `lower` and
-                // `upper` lign up.
-                done_batches.sort_by(|a, b| {
-                    if PartialOrder::less_than(a, b) {
-                        Ordering::Less
-                    } else if PartialOrder::less_than(b, a) {
-                        Ordering::Greater
-                    } else {
-                        Ordering::Equal
-                    }
-                });
+                let (batch_lower, batch_upper) = done_batch_metadata;
 
-                for done_batch_metadata in done_batches.into_iter() {
-                    in_flight_descriptions.remove(&done_batch_metadata);
+                let mut to_append = batches.iter_mut().collect::<Vec<_>>();
 
-                    let mut batches = in_flight_batches
-                        .remove(&done_batch_metadata)
-                        .unwrap_or_else(Vec::new);
+                let result = write
+                    .compare_and_append_batch(
+                        &mut to_append[..],
+                        batch_lower.clone(),
+                        batch_upper.clone(),
+                    )
+                    .await
+                    .expect("Indeterminate")
+                    .expect("Invalid usage");
 
+                if sink_id.is_user() {
                     trace!(
                         "persist_sink {sink_id}/{shard_id}: \
-                        done batch: {:?}, {:?}",
-                        done_batch_metadata,
-                        batches
-                    );
-
-                    let (batch_lower, batch_upper) = done_batch_metadata;
-
-                    let mut to_append = batches.iter_mut().collect::<Vec<_>>();
-
-                    let result = write
-                        .compare_and_append_batch(
-                            &mut to_append[..],
-                            batch_lower.clone(),
-                            batch_upper.clone(),
-                        )
-                        .await
-                        .expect("Indeterminate")
-                        .expect("Invalid usage");
-
-                    if sink_id.is_user() {
-                        trace!(
-                            "persist_sink {sink_id}/{shard_id}: \
                             append result for batch ({:?} -> {:?}): {:?}",
-                            batch_lower,
-                            batch_upper,
-                            result
-                        );
+                        batch_lower,
+                        batch_upper,
+                        result
+                    );
+                }
+
+                match result {
+                    Ok(()) => {
+                        cap_set.downgrade(batch_upper);
                     }
+                    Err(current_upper) => {
+                        cap_set.downgrade(current_upper.0.iter());
 
-                    match result {
-                        Ok(()) => {
-                            cap_set.downgrade(batch_upper);
+                        // Clean up in case we didn't manage to append the
+                        // batches to persist.
+                        for batch in batches {
+                            batch.delete().await;
                         }
-                        Err(current_upper) => {
-                            cap_set.downgrade(current_upper.0.iter());
-
-                            // Clean up in case we didn't manage to append the
-                            // batches to persist.
-                            for batch in batches {
-                                batch.delete().await;
-                            }
-                            trace!(
-                                "persist_sink({}): invalid upper! \
+                        trace!(
+                            "persist_sink({}): invalid upper! \
                                 Tried to append batch ({:?} -> {:?}) but upper \
                                 is {:?}. This is not a problem, it just means \
                                 someone else was faster than us. We will try \
                                 again with a new batch description.",
-                                sink_id,
-                                batch_lower,
-                                batch_upper,
-                                current_upper
-                            );
-                        }
+                            sink_id,
+                            batch_lower,
+                            batch_upper,
+                            current_upper
+                        );
                     }
                 }
             }
-        },
-    );
+        }
+    });
 
-    (output_stream, Some(token))
+    let token = Rc::new(shutdown_button.press_on_drop());
+    (output_stream, token)
 }
