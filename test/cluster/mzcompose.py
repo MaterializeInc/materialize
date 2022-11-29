@@ -37,7 +37,8 @@ SERVICES = [
     Computed(name="computed_2"),
     Computed(name="computed_3"),
     Computed(name="computed_4"),
-    Materialized(),
+    # We use mz_panic() in some test scenarios, so environmentd must stay up.
+    Materialized(propagate_crashes=False),
     Redpanda(),
     Testdrive(
         volumes=[

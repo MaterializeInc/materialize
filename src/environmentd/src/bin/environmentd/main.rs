@@ -299,6 +299,10 @@ pub struct Args {
         required_if_eq("orchestrator", "process")
     )]
     orchestrator_process_secrets_directory: Option<PathBuf>,
+    /// Whether the process orchestrator should handle crashes in child
+    /// processes by crashing the parent process.
+    #[clap(long, env = "ORCHESTRATOR_PROCESS_PROPAGATE_CRASHES")]
+    orchestrator_process_propagate_crashes: bool,
 
     /// The init container to use for computed and storaged when using the
     /// kubernetes orchestrator.
@@ -600,6 +604,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                         command_wrapper: args
                             .orchestrator_process_wrapper
                             .map_or(Ok(vec![]), |s| shell_words::split(&s))?,
+                        propagate_crashes: args.orchestrator_process_propagate_crashes,
                     }))
                     .context("creating process orchestrator")?,
             );

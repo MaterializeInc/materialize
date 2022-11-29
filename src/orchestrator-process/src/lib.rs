@@ -13,8 +13,9 @@ use std::fmt::Debug;
 use std::fs::Permissions;
 use std::future::Future;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -24,6 +25,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
 use itertools::Itertools;
+use libc::{SIGABRT, SIGBUS, SIGILL, SIGSEGV, SIGTRAP};
 use scopeguard::defer;
 use sha1::{Digest, Sha1};
 use sysinfo::{Pid, PidExt, ProcessExt, ProcessRefreshKind, System, SystemExt};
@@ -59,6 +61,8 @@ pub struct ProcessOrchestratorConfig {
     pub secrets_dir: PathBuf,
     /// A command to wrap the child command invocation
     pub command_wrapper: Vec<String>,
+    /// Whether to crash this process if a child process crashes.
+    pub propagate_crashes: bool,
 }
 
 /// An orchestrator backed by processes on the local machine.
@@ -78,6 +82,7 @@ pub struct ProcessOrchestrator {
     metadata_dir: PathBuf,
     secrets_dir: PathBuf,
     command_wrapper: Vec<String>,
+    propagate_crashes: bool,
 }
 
 impl ProcessOrchestrator {
@@ -89,6 +94,7 @@ impl ProcessOrchestrator {
             environment_id,
             secrets_dir,
             command_wrapper,
+            propagate_crashes,
         }: ProcessOrchestratorConfig,
     ) -> Result<ProcessOrchestrator, anyhow::Error> {
         let metadata_dir = env::temp_dir().join(format!("environmentd-{environment_id}"));
@@ -109,6 +115,7 @@ impl ProcessOrchestrator {
             metadata_dir: fs::canonicalize(metadata_dir).await?,
             secrets_dir: fs::canonicalize(secrets_dir).await?,
             command_wrapper,
+            propagate_crashes,
         })
     }
 }
@@ -128,6 +135,7 @@ impl Orchestrator for ProcessOrchestrator {
                 services: Arc::new(Mutex::new(HashMap::new())),
                 service_event_tx,
                 system: Mutex::new(System::new()),
+                propagate_crashes: self.propagate_crashes,
             })
         }))
     }
@@ -144,6 +152,7 @@ struct NamespacedProcessOrchestrator {
     services: Arc<Mutex<HashMap<String, Vec<ProcessState>>>>,
     service_event_tx: Sender<ServiceEvent>,
     system: Mutex<System>,
+    propagate_crashes: bool,
 }
 
 #[async_trait]
@@ -291,6 +300,7 @@ impl NamespacedProcessOrchestrator {
         }: ServiceProcessConfig,
     ) -> impl Future<Output = ()> {
         let suppress_output = self.suppress_output;
+        let propagate_crashes = self.propagate_crashes;
         let command_wrapper = self.command_wrapper.clone();
         let image = self.image_dir.join(image);
         let pid_file = run_dir.join(format!("{i}.pid"));
@@ -355,16 +365,15 @@ impl NamespacedProcessOrchestrator {
                     cmd.stdout(Stdio::null());
                     cmd.stderr(Stdio::null());
                 }
-                match cmd.spawn() {
-                    Ok(process) => {
-                        state_updater.update_state(ProcessStatus::Ready {
-                            pid: Pid::from_u32(process.id().unwrap()),
-                        });
-                        let status = KillOnDropChild(process).0.wait().await;
+                match spawn_process(&state_updater, cmd).await {
+                    Ok(status) => {
+                        if propagate_crashes && did_process_crash(status) {
+                            panic!("{full_id}-{i} crashed; aborting because propagate_crashes is enabled");
+                        }
                         error!("{full_id}-{i} exited: {:?}; relaunching in 5s", status);
                     }
                     Err(e) => {
-                        error!("{full_id}-{i} failed to launch: {}; relaunching in 5s", e);
+                        error!("{full_id}-{i} failed to spawn: {}; relaunching in 5s", e);
                     }
                 };
                 state_updater.update_state(ProcessStatus::NotReady);
@@ -438,12 +447,33 @@ fn interpolate_command(
     command_part
 }
 
-struct KillOnDropChild(Child);
+async fn spawn_process(
+    state_updater: &ProcessStateUpdater,
+    mut cmd: Command,
+) -> Result<ExitStatus, anyhow::Error> {
+    struct KillOnDropChild(Child);
 
-impl Drop for KillOnDropChild {
-    fn drop(&mut self) {
-        let _ = self.0.start_kill();
+    impl Drop for KillOnDropChild {
+        fn drop(&mut self) {
+            let _ = self.0.start_kill();
+        }
     }
+
+    let mut child = KillOnDropChild(cmd.spawn()?);
+    state_updater.update_state(ProcessStatus::Ready {
+        pid: Pid::from_u32(child.0.id().unwrap()),
+    });
+    Ok(child.0.wait().await?)
+}
+
+fn did_process_crash(status: ExitStatus) -> bool {
+    // Likely not exhaustive. Feel free to add additional tests for other
+    // indications of a crashed child process, as those conditions are
+    // discovered.
+    matches!(
+        status.signal(),
+        Some(SIGABRT | SIGBUS | SIGSEGV | SIGTRAP | SIGILL)
+    )
 }
 
 struct ProcessStateUpdater {

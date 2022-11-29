@@ -59,6 +59,7 @@ pub struct Config {
     storage_usage_collection_interval: Duration,
     default_cluster_replica_size: String,
     builtin_cluster_replica_size: String,
+    propagate_crashes: bool,
 }
 
 impl Default for Config {
@@ -74,6 +75,7 @@ impl Default for Config {
             storage_usage_collection_interval: Duration::from_secs(3600),
             default_cluster_replica_size: "1".to_string(),
             builtin_cluster_replica_size: "1".to_string(),
+            propagate_crashes: false,
         }
     }
 }
@@ -141,6 +143,11 @@ impl Config {
         self.builtin_cluster_replica_size = builtin_cluster_replica_size;
         self
     }
+
+    pub fn with_propagate_crashes(mut self, propagate_crashes: bool) -> Self {
+        self.propagate_crashes = propagate_crashes;
+        self
+    }
 }
 
 pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
@@ -186,6 +193,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             environment_id: environment_id.clone(),
             secrets_dir: data_directory.join("secrets"),
             command_wrapper: vec![],
+            propagate_crashes: config.propagate_crashes,
         }))?,
     );
     // Messing with the clock causes persist to expire leases, causing hangs and
