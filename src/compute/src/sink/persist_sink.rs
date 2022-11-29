@@ -13,7 +13,6 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
 
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
@@ -37,7 +36,6 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::errors::DataflowError;
 use mz_storage_client::types::sources::SourceData;
-use mz_timely_util::activator::LimitingActivator;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 
 use crate::compute_state::ComputeState;
@@ -511,11 +509,7 @@ where
     let scope = desired_stream.scope();
     let worker_index = scope.index();
 
-    let mut write_op =
-        AsyncOperatorBuilder::new(format!("{} write_batches", operator_name), scope.clone());
-
-    let activator = scope.activator_for(&write_op.operator_info().address[..]);
-    let mut activator = LimitingActivator::new(activator);
+    let mut write_op = AsyncOperatorBuilder::new(format!("{} write_batches", operator_name), scope);
 
     let (mut output, output_stream) = write_op.new_output();
 
@@ -677,22 +671,6 @@ where
                 }
             }
 
-            // FIXME
-            // Make sure that our write handle lease does not expire!
-            //
-            // We don't write to _Consensus_ but instead only write batch
-            // data to _Blob_ so someone might eventually expire our lease.
-            // This could lead to the "leaked blob reaper" eventually
-            // removing blobs that have been written but not yet appended to
-            // the shard.
-            //
-            write.maybe_heartbeat_writer().await;
-            trace!("persist_sink {sink_id}/{shard_id}: writer heartbeating write handle");
-            // NOTE: We schedule ourselves to make sure that we keep
-            // heartbeating even in cases where there are no changes in our
-            // inputs (updates or frontier changes).
-            activator.activate_after(Duration::from_secs(60));
-
             // We may have the opportunity to commit updates.
             if !PartialOrder::less_equal(&desired_frontier, &persist_frontier) {
                 trace!(
@@ -849,9 +827,6 @@ where
     let operator_name = format!("{} append_batches", operator_name);
     let mut append_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
 
-    let activator = scope.activator_for(&append_op.operator_info().address[..]);
-    let mut activator = LimitingActivator::new(activator);
-
     // We never output anything, but we update our capabilities based on the
     // persist frontier we know about. So someone can listen on our output
     // frontier and learn about the persist frontier advancing.
@@ -995,15 +970,6 @@ where
                     return;
                 }
             };
-
-            // FIXME
-            // Make sure that our write handle lease does not expire!
-            write.maybe_heartbeat_writer().await;
-            trace!("persist_sink {sink_id}/{shard_id}: appender heartbeating write handle");
-            // NOTE: We schedule ourselves to make sure that we keep
-            // heartbeating even in cases where there are no changes in our
-            // inputs (updates or frontier changes).
-            activator.activate_after(Duration::from_secs(60));
 
             // Peel off any batches that are not beyond the frontier
             // anymore.
