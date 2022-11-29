@@ -2857,7 +2857,7 @@ impl<S: Append + 'static> Coordinator<S> {
         mut session: Session,
         plan: InsertPlan,
     ) {
-        let optimized_mir = if let MirRelationExpr::Constant { .. } = &plan.values {
+        let optimized_mir = if let Some(..) = &plan.values.as_const() {
             // We don't perform any optimizations on an expression that is already
             // a constant for writes, as we want to maximize bulk-insert throughput.
             OptimizedMirRelationExpr(plan.values)
@@ -2872,8 +2872,8 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         match optimized_mir.into_inner() {
-            constants @ MirRelationExpr::Constant { .. } if plan.returning.is_empty() => tx.send(
-                self.sequence_insert_constant(&mut session, plan.id, constants),
+            selection if selection.as_const().is_some() && plan.returning.is_empty() => tx.send(
+                self.sequence_insert_constant(&mut session, plan.id, selection),
                 session,
             ),
             // All non-constant values must be planned as read-then-writes.
@@ -2950,9 +2950,9 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         };
 
-        match constants {
-            MirRelationExpr::Constant { rows, typ: _ } => {
-                let rows = rows?;
+        match constants.as_const() {
+            Some((rows, ..)) => {
+                let rows = rows.clone()?;
                 for (row, _) in &rows {
                     for (i, datum) in row.iter().enumerate() {
                         desc.constraints_met(i, &datum)?;
@@ -2966,9 +2966,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 };
                 self.sequence_send_diffs(session, diffs_plan)
             }
-            o => panic!(
+            None => panic!(
                 "tried using sequence_insert_constant on non-constant MirRelationExpr {:?}",
-                o
+                constants
             ),
         }
     }
