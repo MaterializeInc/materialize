@@ -111,7 +111,7 @@ linearizable transactions, then you should downgrade to the Serializable isolati
 
 Strict Serializable provides stronger consistency guarantees but may have slower reads than Serializable. This is
 because Strict Serializable may need to wait for writes to propagate through materialized views and indexes, while
-Serializable does not. 
+Serializable does not.
 
 In Serializable mode, If a consistent snapshot is not available across all objects in a query, the query will be
 blocked until one becomes available. On the other hand, if a consistent snapshot is available, the query will be
