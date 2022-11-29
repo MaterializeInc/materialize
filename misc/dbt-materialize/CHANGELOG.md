@@ -5,6 +5,12 @@
 * Remove the 63-character limitation on relation names. Materialize does not
   have this limitation, unlike PostgreSQL (see [dbt-core #2727](https://github.com/dbt-labs/dbt-core/pull/2727)).
 
+* Produce an error message when attempting to use the [`listagg`](https://docs.getdbt.com/reference/dbt-jinja-functions/cross-database-macros#listagg)
+  cross-database macro. Materialize has native support for [`list_agg()`](https://materialize.com/docs/sql/functions/list_agg/), which should be used
+  instead.
+
+* Remove the deprecated `mz_generate_name` macro.
+
 ## 1.3.2 - 2022-11-17
 
 * Add the `IN CLUSTER` clause to the custom seed materialization to ensure that
