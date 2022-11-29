@@ -476,31 +476,6 @@ where
 
                     current_desired_frontier.clone_from(desired_frontier);
                     current_persist_frontier.replace(persist_frontier.clone());
-                } else {
-                    // WIP: Remove this!
-                    if sink_id.is_user() {
-                        trace!(
-                            "persist_sink {sink_id}/{shard_id}: \
-                            NOT MINTING: \
-                            desired: {:?}, \
-                            persist {:?}, \
-                            current_desired: {:?}, \
-                            current_persist {:?}, \
-                            persist < desired: {}",
-                            desired_frontier,
-                            persist_frontier,
-                            current_desired_frontier,
-                            current_persist_frontier,
-                            PartialOrder::less_than(persist_frontier, desired_frontier)
-                        );
-                    }
-                    // WIP: Do something smart about this! As it is now, this is
-                    // a busy loop that keeps polling for the latest upper from
-                    // persist.
-                    // We could, for example, pipe the output of
-                    // `append_batches` back into this and let it's frontier
-                    // (which we have to carefully manage in that operator) tell
-                    // us about advances in the shard upper.
                 }
             }
         },
@@ -893,13 +868,20 @@ where
     append_op.build_async(
         scope,
         move |mut capabilities, frontiers, scheduler| async move {
-            let mut cap_set = if active_worker {
-                CapabilitySet::from_elem(capabilities.pop().expect("missing capability"))
-            } else {
-                // Pop away, because we don't need it.
-                capabilities.pop().expect("missing capability");
-                CapabilitySet::new()
-            };
+            if !active_worker {
+                // SUBTLE: This is different from `mint_batch_description`
+                // where the non-active workers have to stay alive and keep
+                // pumping input, to ensure that the one active worker sees
+                // its frontiers advancing.
+                //
+                // In this here operator only the active worker will ever
+                // get messages, so the inactive ones don't have anything
+                // that needs pumping away.
+                return;
+            }
+
+            let mut cap_set =
+                CapabilitySet::from_elem(capabilities.pop().expect("missing capability"));
 
             let mut description_buffer = Vec::new();
             let mut batch_buffer = Vec::new();
@@ -933,18 +915,6 @@ where
 
             while scheduler.notified().await {
                 if token_weak.upgrade().is_none() {
-                    return;
-                }
-
-                if !active_worker {
-                    // SUBTLE: This is different from `mint_batch_description`
-                    // where the non-active workers have to stay alive and keep
-                    // pumping input, to ensure that the one active worker sees
-                    // its frontiers advancing.
-                    //
-                    // In this here operator only the active worker will ever
-                    // get messages, so the inactive ones don't have anything
-                    // that needs pumping away.
                     return;
                 }
 
