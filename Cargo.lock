@@ -3927,6 +3927,7 @@ dependencies = [
  "futures",
  "hex",
  "itertools",
+ "libc",
  "mz-orchestrator",
  "mz-ore",
  "mz-pid-file",

@@ -57,6 +57,7 @@ class Materialized(Service):
         depends_on: Optional[List[str]] = None,
         allow_host_ports: bool = False,
         environment_id: Optional[str] = None,
+        propagate_crashes: bool = True,
     ) -> None:
         if persist_blob_url is None:
             persist_blob_url = f"file://{data_directory}/persist/blob"
@@ -94,6 +95,9 @@ class Materialized(Service):
 
         if environment_id:
             environment += [f"MZ_ENVIRONMENT_ID={environment_id}"]
+
+        if propagate_crashes:
+            environment += ["MZ_ORCHESTRATOR_PROCESS_PROPAGATE_CRASHES=1"]
 
         self.default_storage_size = default_size
         self.default_replica_size = (

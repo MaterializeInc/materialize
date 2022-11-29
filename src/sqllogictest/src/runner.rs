@@ -649,6 +649,7 @@ impl Runner {
                 environment_id: environment_id.clone(),
                 secrets_dir: temp_dir.path().join("secrets"),
                 command_wrapper: vec![],
+                propagate_crashes: true,
             })
             .await?,
         );

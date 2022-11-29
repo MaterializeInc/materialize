@@ -30,7 +30,6 @@ from materialize.zippy.replica_actions import (
     CreateReplica,
     DropDefaultReplica,
     DropReplica,
-    KillReplica,
 )
 from materialize.zippy.sink_actions import CreateSinkParameterized
 from materialize.zippy.source_actions import CreateSourceParameterized
@@ -129,7 +128,6 @@ class ClusterReplicas(Scenario):
             KillStoraged: 10,
             KillComputed: 10,
             CreateReplica: 30,
-            KillReplica: 10,
             DropReplica: 10,
             CreateTopicParameterized(): 10,
             CreateSourceParameterized(): 10,
