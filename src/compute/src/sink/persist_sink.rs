@@ -50,6 +50,7 @@ where
 {
     fn render_continuous_sink(
         &self,
+        scope: &G,
         compute_state: &mut ComputeState,
         sink: &ComputeSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
@@ -62,6 +63,7 @@ where
         let desired_collection = sinked_collection.map(Ok).concat(&err_collection.map(Err));
 
         persist_sink(
+            scope,
             sink_id,
             &self.storage_metadata,
             desired_collection,
@@ -72,6 +74,7 @@ where
 }
 
 pub(crate) fn persist_sink<G>(
+    scope: &G,
     sink_id: GlobalId,
     target: &CollectionMetadata,
     desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,
@@ -94,6 +97,8 @@ where
         source_as_of,
         Antichain::new(), // we want all updates
         None,             // no MFP
+        // TODO: provide a more meaningful flow control input
+        &timely::dataflow::operators::generic::operator::empty(scope),
         // Copy the logic in DeltaJoin/Get/Join to start.
         |_timer, count| count > 1_000_000,
     );

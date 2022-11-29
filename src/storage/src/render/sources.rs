@@ -342,6 +342,7 @@ where
                                     Some(as_of),
                                     Antichain::new(),
                                     None,
+                                    &timely::dataflow::operators::generic::operator::empty(scope),
                                     // Copy the logic in DeltaJoin/Get/Join to start.
                                     |_timer, count| count > 1_000_000,
                                 );
@@ -400,6 +401,7 @@ where
                                 Some(Antichain::from_elem(previous_as_of)),
                                 Antichain::new(),
                                 None,
+                                &timely::dataflow::operators::generic::operator::empty(scope),
                                 // Copy the logic in DeltaJoin/Get/Join to start.
                                 |_timer, count| count > 1_000_000,
                             );

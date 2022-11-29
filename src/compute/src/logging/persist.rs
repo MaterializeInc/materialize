@@ -18,6 +18,7 @@ use mz_storage_client::controller::CollectionMetadata;
 use crate::compute_state::ComputeState;
 
 pub(crate) fn persist_sink<G>(
+    scope: &G,
     target_id: GlobalId,
     target: &CollectionMetadata,
     compute_state: &mut ComputeState,
@@ -28,8 +29,14 @@ pub(crate) fn persist_sink<G>(
     let desired_collection = log_collection.map(Ok);
     let as_of = Antichain::from_elem(Timestamp::minimum());
 
-    let token =
-        crate::sink::persist_sink(target_id, target, desired_collection, as_of, compute_state);
+    let token = crate::sink::persist_sink(
+        scope,
+        target_id,
+        target,
+        desired_collection,
+        as_of,
+        compute_state,
+    );
 
     compute_state.sink_tokens.insert(
         target_id,

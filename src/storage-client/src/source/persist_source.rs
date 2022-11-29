@@ -21,7 +21,8 @@ use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp as _};
+use timely::PartialOrder;
 use tokio::sync::{mpsc, Mutex};
 use tracing::trace;
 
@@ -45,6 +46,21 @@ use crate::types::sources::SourceData;
 /// The `map_filter_project` argument, if supplied, may be partially applied,
 /// and any un-applied part of the argument will be left behind in the argument.
 ///
+/// Users of this function have the ability to apply flow control to the output by providing a
+/// timely stream whose only purpose is to communicate the frontier until which data must be
+/// emitted. When the frontier of that flow control input is reached the source will stop producing
+/// data and it will wait for the frontier of the flow control input to advance. When the flow
+/// control frontier advances past the data frontier data emission resumes. This effectively
+/// limits the number of timestamps that can be in-flight at any given moment.
+///
+/// **Note:** Because this function is reading batches from `persist`, it is working at batch
+/// granularity. In practice, the source will be overshooting the target flow control upper by an
+/// amount that is related to the size of batches.
+///
+/// If no flow control is desired an empty stream whose frontier immediately advances to the empty
+/// antichain can be used. An easy easy of creating such stream is by using
+/// [`timely::dataflow::operators::generic::operator::empty`].
+///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
 pub fn persist_source<G, YFn>(
     scope: &G,
@@ -54,6 +70,7 @@ pub fn persist_source<G, YFn>(
     as_of: Option<Antichain<Timestamp>>,
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
+    flow_control_input: &Stream<G, ()>,
     yield_fn: YFn,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
@@ -72,6 +89,7 @@ where
         as_of,
         until,
         map_filter_project,
+        flow_control_input,
         yield_fn,
     );
     let (ok_stream, err_stream) = stream.ok_err(|(d, t, r)| match d {
@@ -96,6 +114,7 @@ pub fn persist_source_core<G, YFn>(
     as_of: Option<Antichain<Timestamp>>,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
+    flow_control_input: &Stream<G, ()>,
     yield_fn: YFn,
 ) -> (
     Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
@@ -248,7 +267,7 @@ where
             // If `until.less_equal(progress)`, it means that all subsequent batches will
             // contain only times greater or equal to `until`, which means they can be dropped
             // in their entirety. The current batch must be emitted, but we can stop afterwards.
-            if timely::PartialOrder::less_equal(&until_clone, &progress) {
+            if PartialOrder::less_equal(&until_clone, &progress) {
                 done = true;
             }
             yield (parts, progress);
@@ -269,19 +288,22 @@ where
     let (inner, token) = crate::source::util::source(
         scope,
         format!("persist_source {}: part distribution", source_id),
+        flow_control_input,
         move |info| {
             let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
             let waker = futures::task::waker(waker_activator);
 
-            let mut current_ts = timely::progress::Timestamp::minimum();
+            let mut data_upper = Antichain::from_elem(Timestamp::minimum());
 
-            move |cap_set, output| {
+            move |cap_set, flow_control_upper, output| {
                 let mut context = Context::from_waker(&waker);
 
-                while let Poll::Ready(item) = pinned_stream.as_mut().poll_next(&mut context) {
-                    match item {
-                        Some(Ok((parts, progress))) => {
-                            let session_cap = cap_set.delayed(&current_ts);
+                while PartialOrder::less_than(&data_upper.borrow(), &flow_control_upper) {
+                    match pinned_stream.as_mut().poll_next(&mut context) {
+                        Poll::Ready(Some(Ok((parts, upper)))) => {
+                            let session_cap = cap_set
+                                .first()
+                                .expect("got data after reaching empty antichain");
                             let mut session = output.session(&session_cap);
 
                             for part in parts {
@@ -290,27 +312,20 @@ where
                                 session.give((worker_idx, part.into_exchangeable_part()));
                             }
 
-                            cap_set.downgrade(progress.iter());
-                            match progress.into_option() {
-                                Some(ts) => {
-                                    current_ts = ts;
-                                }
-                                None => {
-                                    cap_set.downgrade(&[]);
-                                    return;
-                                }
-                            }
+                            cap_set.downgrade(upper.iter());
+                            data_upper = upper;
                         }
-                        Some(Err::<_, ExternalError>(e)) => {
+                        Poll::Ready(Some(Err::<_, ExternalError>(e))) => {
                             panic!("unexpected error from persist {e}")
                         }
                         // We never expect any further output from
                         // `pinned_stream`, so propagate that information
                         // downstream.
-                        None => {
+                        Poll::Ready(None) => {
                             cap_set.downgrade(&[]);
                             return;
                         }
+                        Poll::Pending => break,
                     }
                 }
             }
