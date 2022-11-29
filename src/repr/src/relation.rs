@@ -208,6 +208,32 @@ impl RelationType {
             (0..self.column_types.len()).collect()
         }
     }
+
+    /// True if the column types match, and keys / nullability are at least as strict.
+    pub fn as_strict_as(&self, other: &RelationType) -> bool {
+        let all_keys = other.keys.iter().all(|key1| {
+            self.keys
+                .iter()
+                .any(|key2| key1.iter().all(|k| key2.contains(k)))
+        });
+        if !all_keys {
+            return false;
+        }
+
+        if self.column_types.len() != other.column_types.len() {
+            return false;
+        }
+
+        for (col1, col2) in self.column_types.iter().zip(other.column_types.iter()) {
+            if col1.nullable && !col2.nullable {
+                return false;
+            }
+            if col1.scalar_type != col2.scalar_type {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 impl RustType<ProtoRelationType> for RelationType {

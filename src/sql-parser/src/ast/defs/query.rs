@@ -32,7 +32,7 @@ use crate::ast::{
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Query<T: AstInfo> {
     /// WITH (common table expressions, or CTEs)
-    pub ctes: Vec<Cte<T>>,
+    pub ctes: CteBlock<T>,
     /// SELECT or UNION / EXCEPT / INTERSECT
     pub body: SetExpr<T>,
     /// ORDER BY
@@ -48,7 +48,7 @@ impl<T: AstInfo> AstDisplay for Query<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         if !self.ctes.is_empty() {
             f.write_str("WITH ");
-            f.write_node(&display::comma_separated(&self.ctes));
+            f.write_node(&self.ctes);
             f.write_str(" ");
         }
         f.write_node(&self.body);
@@ -85,7 +85,7 @@ impl_display_t!(Query);
 impl<T: AstInfo> Query<T> {
     pub fn select(select: Select<T>) -> Query<T> {
         Query {
-            ctes: vec![],
+            ctes: CteBlock::empty(),
             body: SetExpr::Select(Box::new(select)),
             order_by: vec![],
             limit: None,
@@ -95,7 +95,7 @@ impl<T: AstInfo> Query<T> {
 
     pub fn query(query: Query<T>) -> Query<T> {
         Query {
-            ctes: vec![],
+            ctes: CteBlock::empty(),
             body: SetExpr::Query(Box::new(query)),
             order_by: vec![],
             limit: None,
@@ -107,7 +107,7 @@ impl<T: AstInfo> Query<T> {
         mem::replace(
             self,
             Query::<T> {
-                ctes: vec![],
+                ctes: CteBlock::empty(),
                 order_by: vec![],
                 body: SetExpr::Values(Values(vec![])),
                 limit: None,
@@ -310,6 +310,65 @@ impl<T: AstInfo> AstDisplay for Distinct<T> {
     }
 }
 
+/// A block of common table expressions (CTEs).
+///
+/// The block can either be entirely "simple" (traditional SQL `WITH` block),
+/// or "mutually recursive", which introduce their bindings before the block
+/// and may result in mutually recursive definitions.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CteBlock<T: AstInfo> {
+    Simple(Vec<Cte<T>>),
+    MutuallyRecursive(Vec<CteMutRec<T>>),
+}
+
+impl<T: AstInfo> CteBlock<T> {
+    /// Returns an empty (simple) CTE block.
+    pub fn empty() -> Self {
+        CteBlock::Simple(Vec::new())
+    }
+    /// True if there are no bindings in the block.
+    pub fn is_empty(&self) -> bool {
+        match self {
+            CteBlock::Simple(list) => list.is_empty(),
+            CteBlock::MutuallyRecursive(list) => list.is_empty(),
+        }
+    }
+    /// Returns a duplicate name if one exists. `None` means there are none.
+    pub fn reused_ident(&self) -> Option<&Ident> {
+        let mut used_names = std::collections::HashSet::new();
+        match self {
+            CteBlock::Simple(list) => {
+                for cte in list.iter() {
+                    if !used_names.insert(&cte.alias.name) {
+                        return Some(&cte.alias.name);
+                    }
+                }
+            }
+            CteBlock::MutuallyRecursive(list) => {
+                for cte in list.iter() {
+                    if !used_names.insert(&cte.name) {
+                        return Some(&cte.name);
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
+impl<T: AstInfo> AstDisplay for CteBlock<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            CteBlock::Simple(list) => {
+                f.write_node(&display::comma_separated(list));
+            }
+            CteBlock::MutuallyRecursive(list) => {
+                f.write_node(&display::comma_separated(list));
+            }
+        }
+    }
+}
+
 /// A single CTE (used after `WITH`): `alias [(col1, col2, ...)] AS ( query )`
 /// The names in the column list before `AS`, when specified, replace the names
 /// of the columns returned by the query. The parser does not validate that the
@@ -330,6 +389,31 @@ impl<T: AstInfo> AstDisplay for Cte<T> {
     }
 }
 impl_display_t!(Cte);
+
+use crate::ast::ColumnDef;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CteMutRec<T: AstInfo> {
+    pub name: Ident,
+    pub columns: Vec<ColumnDef<T>>,
+    pub id: T::CteId,
+    pub query: Query<T>,
+}
+
+impl<T: AstInfo> AstDisplay for CteMutRec<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if !self.columns.is_empty() {
+            f.write_str(" (");
+            f.write_node(&display::comma_separated(&self.columns));
+            f.write_str(")");
+        }
+        f.write_str(" AS (");
+        f.write_node(&self.query);
+        f.write_str(")");
+    }
+}
+impl_display_t!(CteMutRec);
 
 /// One item of the comma-separated list following `SELECT`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
