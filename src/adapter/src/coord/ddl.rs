@@ -698,7 +698,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 | Op::AlterSource { .. }
                 | Op::DropTimeline(_)
                 | Op::RenameItem { .. }
-                | Op::UpdateComputeReplicaStatus { .. }
+                | Op::UpdateComputeInstanceStatus { .. }
                 | Op::UpdateStorageUsage { .. }
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }
