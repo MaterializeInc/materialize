@@ -629,8 +629,6 @@ impl Service for TransactorService {
         // to simplify some downstream logic (+ a bit more stress testing),
         // always downgrade the since of critical handles when asked
         config.critical_downgrade_interval = Duration::from_secs(0);
-        // set a live diff scan limit such that we'll explore both the fast and slow paths
-        config.state_versions_recent_live_diffs_limit = 5;
         let metrics = Arc::new(Metrics::new(&config, &MetricsRegistry::new()));
         let consensus = match &args.consensus_uri {
             Some(consensus_uri) => {

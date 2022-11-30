@@ -900,8 +900,6 @@ pub struct StateMetrics {
     pub(crate) update_state_fast_path: IntCounter,
     pub(crate) update_state_slow_path: IntCounter,
     pub(crate) rollup_at_seqno_migration: IntCounter,
-    pub(crate) fetch_recent_live_diffs_fast_path: IntCounter,
-    pub(crate) fetch_recent_live_diffs_slow_path: IntCounter,
 }
 
 impl StateMetrics {
@@ -938,14 +936,6 @@ impl StateMetrics {
             rollup_at_seqno_migration: registry.register(metric!(
                 name: "mz_persist_state_rollup_at_seqno_migration",
                 help: "count of fetch_rollup_at_seqno calls that only worked because of the migration",
-            )),
-            fetch_recent_live_diffs_fast_path: registry.register(metric!(
-                name: "mz_persist_state_fetch_recent_live_diffs_fast_path",
-                help: "count of fetch_recent_live_diffs that hit the fast path",
-            )),
-            fetch_recent_live_diffs_slow_path: registry.register(metric!(
-                name: "mz_persist_state_fetch_recent_live_diffs_slow_path",
-                help: "count of fetch_recent_live_diffs that hit the slow path",
             )),
         }
     }
@@ -1496,17 +1486,12 @@ impl Consensus for MetricsConsensus {
         res
     }
 
-    async fn scan(
-        &self,
-        key: &str,
-        from: SeqNo,
-        limit: usize,
-    ) -> Result<Vec<VersionedData>, ExternalError> {
+    async fn scan(&self, key: &str, from: SeqNo) -> Result<Vec<VersionedData>, ExternalError> {
         let res = self
             .metrics
             .consensus
             .scan
-            .run_op(|| self.consensus.scan(key, from, limit), Self::on_err)
+            .run_op(|| self.consensus.scan(key, from), Self::on_err)
             .await;
         if let Ok(dataz) = res.as_ref() {
             let bytes = dataz.iter().map(|x| x.data.len()).sum();
