@@ -49,7 +49,7 @@ use mz_kafka_util::client::{BrokerRewritingClientContext, MzClientContext};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
-use mz_ore::retry::Retry;
+use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::task;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::types::connections::ConnectionContext;
@@ -330,46 +330,56 @@ impl KafkaTxProducer {
             .map_err(|(e, record)| (e, Box::new(record)))
     }
 
-    async fn retry_on_txn_error<'a, F, Fut, T>(&self, f: F) -> anyhow::Result<T>
+    async fn retry_on_txn_error<'a, F, Fut, T>(&self, f: F) -> Result<T, anyhow::Error>
     where
         F: Fn(KafkaTxProducer) -> Fut,
         Fut: Future<Output = KafkaResult<T>>,
     {
-        // Results are nested so we can exit early on a non-retriable (inner) error.
         Retry::default()
             .clamp_backoff(BACKOFF_CLAMP)
             .max_tries(3)
             .retry_async(|_| async {
                 match f(self.clone()).await {
-                    Ok(value) => Ok(Ok(value)),
+                    Ok(value) => RetryResult::Ok(value),
                     Err(KafkaError::Transaction(e)) if e.txn_requires_abort() => {
-                        self.abort_active_txn().await?;
-                        Ok(Err(e).context("transaction error required abort"))
+                        match self.abort_active_txn().await {
+                            Ok(()) => RetryResult::FatalErr(
+                                anyhow!(e).context("transaction error required abort"),
+                            ),
+                            Err(e) => RetryResult::FatalErr(e),
+                        }
                     }
                     Err(KafkaError::Transaction(e)) if e.is_retriable() => {
-                        Err(e).context("retriable transaction error")
+                        RetryResult::RetryableErr(anyhow!(e).context("retriable transaction error"))
                     }
-                    Err(e) => Ok(Err(e).context("non-retriable transaction error")),
+                    Err(e) => {
+                        RetryResult::FatalErr(anyhow!(e).context("non-retriable transaction error"))
+                    }
                 }
             })
-            .await?
+            .await
     }
 
-    async fn abort_active_txn(&self) -> anyhow::Result<()> {
+    async fn abort_active_txn(&self) -> Result<(), anyhow::Error> {
         // Results are nested so we can exit early on a non-retriable (inner) error.
         Retry::default()
             .clamp_backoff(BACKOFF_CLAMP)
             .max_tries(3)
             .retry_async(|_| async {
                 match self.abort_transaction().await {
-                    Ok(()) => Ok(Ok(())),
+                    Ok(()) => RetryResult::Ok(()),
                     Err(KafkaError::Transaction(e)) if e.is_retriable() => {
-                        Err(e).context("retriable transaction error while aborting transaction")
+                        RetryResult::RetryableErr(
+                            anyhow!(e)
+                                .context("retryable transaction error while aborting transaction"),
+                        )
                     }
-                    Err(e) => Ok(Err(e).context("non-retriable error while aborting transaction")),
+                    Err(e) => RetryResult::FatalErr(
+                        anyhow!(e).context("non-retriable error while aborting transaction"),
+                    ),
                 }
             })
-            .await?
+            .await
     }
 }
 
