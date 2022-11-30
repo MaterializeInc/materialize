@@ -3183,6 +3183,16 @@ impl<S: Append> Catalog<S> {
         self.storage().await.get_persisted_timestamp(timeline).await
     }
 
+    /// Get the next user id without allocating it.
+    pub async fn get_next_user_global_id(&mut self) -> Result<GlobalId, Error> {
+        self.storage().await.get_next_user_global_id().await
+    }
+
+    /// Get the next replica id without allocating it.
+    pub async fn get_next_replica_id(&mut self) -> Result<ReplicaId, Error> {
+        self.storage().await.get_next_replica_id().await
+    }
+
     /// Persist new global timestamp for a timeline to disk.
     pub async fn persist_timestamp(
         &mut self,

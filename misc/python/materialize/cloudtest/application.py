@@ -9,7 +9,11 @@
 
 import os
 import subprocess
+import time
+from datetime import datetime, timedelta
 from typing import List, Optional
+
+from pg8000.exceptions import InterfaceError
 
 from materialize import ROOT, mzbuild
 from materialize.cloudtest.k8s import K8sResource
@@ -146,3 +150,32 @@ class MaterializeApplication(Application):
     def create(self) -> None:
         super().create()
         wait(condition="condition=Ready", resource="pod/compute-cluster-u1-replica-1-0")
+
+    def wait_for_sql(self) -> None:
+        """Wait until environmentd pod is ready and can accept SQL connections"""
+        wait(condition="condition=Ready", resource="pod/environmentd-0")
+
+        start = datetime.now()
+        while datetime.now() - start < timedelta(seconds=300):
+            try:
+                self.environmentd.sql("SELECT 1")
+                break
+            except InterfaceError as e:
+                # Since we crash environmentd, we expect some errors that we swallow.
+                print(f"SQL interface not ready, {e} while SELECT 1. Waiting...")
+                time.sleep(2)
+
+    def set_environmentd_failpoints(self, failpoints: str) -> None:
+        """Set the FAILPOINTS environmentd variable in the stateful set. This
+        will most likely restart environmentd"""
+        stateful_set = [
+            resource
+            for resource in self.resources
+            if type(resource) == EnvironmentdStatefulSet
+        ]
+        assert len(stateful_set) == 1
+        stateful_set = stateful_set[0]
+
+        stateful_set.env["FAILPOINTS"] = failpoints
+        stateful_set.replace()
+        self.wait_for_sql()

@@ -184,6 +184,15 @@ impl ComputeOrchestrator {
         self.inner.drop_service(&service_name).await
     }
 
+    pub(super) async fn list_replicas(
+        &self,
+    ) -> Result<impl Iterator<Item = (ComputeInstanceId, ReplicaId)>, anyhow::Error> {
+        self.inner.list_services().await.map(|s| {
+            s.into_iter()
+                .filter_map(|x| parse_replica_service_name(&x).ok())
+        })
+    }
+
     pub(super) fn watch_services(&self) -> BoxStream<'static, ComputeInstanceEvent> {
         fn translate_event(event: ServiceEvent) -> Result<ComputeInstanceEvent, anyhow::Error> {
             let (instance_id, replica_id) = parse_replica_service_name(&event.service_id)?;

@@ -8,8 +8,10 @@
 # by the Apache License, Version 2.0.
 
 from textwrap import dedent
+from typing import Tuple
 
-from pg8000.exceptions import InterfaceError  # type: ignore
+from kubernetes.client import V1Pod, V1StatefulSet
+from pg8000.exceptions import InterfaceError
 
 from materialize.cloudtest.application import MaterializeApplication
 from materialize.cloudtest.wait import wait
@@ -97,12 +99,40 @@ def test_crash_storaged(mz: MaterializeApplication) -> None:
 
 
 def test_crash_environmentd(mz: MaterializeApplication) -> None:
+    def restarts(p: V1Pod) -> int:
+        assert p.status is not None
+        assert p.status.container_statuses is not None
+        return p.status.container_statuses[0].restart_count
+
+    def get_replica() -> Tuple[V1Pod, V1StatefulSet]:
+        """Find the stateful set for the replica of the default cluster"""
+        compute_pod_name = f"compute-cluster-u1-replica-1-0"
+        ss_name = f"compute-cluster-u1-replica-1"
+        compute_pod = mz.environmentd.api().read_namespaced_pod(
+            compute_pod_name, mz.environmentd.namespace()
+        )
+        for ss in (
+            mz.environmentd.apps_api().list_stateful_set_for_all_namespaces().items
+        ):
+            assert ss.metadata is not None
+            if ss.metadata.name == ss_name:
+                return (compute_pod, ss)
+        assert False
+
     populate(mz, 2)
+
+    before = get_replica()
+
     try:
         mz.environmentd.sql("SELECT mz_internal.mz_panic('forced panic')")
     except InterfaceError:
         pass
     validate(mz, 2)
+
+    after = get_replica()
+
+    # A environmentd crash must not restart other nodes
+    assert restarts(before[0]) == restarts(after[0])
 
 
 def test_crash_computed(mz: MaterializeApplication) -> None:

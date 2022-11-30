@@ -22,9 +22,11 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
+use mz_ore::halt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::Codec64;
 use timely::progress::Timestamp;
@@ -281,5 +283,63 @@ where
     /// Drops an orchestrated storage host for the specified ID.
     async fn drop_storage_host(&self, id: GlobalId) -> Result<(), anyhow::Error> {
         self.orchestrator.drop_service(&id.to_string()).await
+    }
+
+    /// Removes orphaned storageds from the orchestrator.
+    ///
+    /// A storaged is considered orphaned if it is present in the orchestrator but not in the
+    /// controller and the storaged id is less than `next_id`. We assume that the controller knows
+    /// all storageds with ids [0..next_id).
+    pub async fn remove_orphans(&self, next_id: GlobalId) -> Result<(), anyhow::Error> {
+        // Parse GlobalId and return contained user id, if any
+        fn user_id(id: &String) -> Option<u64> {
+            GlobalId::from_str(id).ok().and_then(|id| match id {
+                GlobalId::User(x) => Some(x),
+                _ => None,
+            })
+        }
+
+        tracing::debug!("Removing storaged orphans. next_id = {}", next_id);
+
+        let next_id = match next_id {
+            GlobalId::User(x) => x,
+            _ => anyhow::bail!("Expected GlobalId::User, got {}", next_id),
+        };
+
+        let service_ids: HashSet<_> = self
+            .orchestrator
+            .list_services()
+            .await?
+            .iter()
+            .filter_map(user_id)
+            .collect();
+
+        let catalog_ids: HashSet<_> = self
+            .objects
+            .keys()
+            .filter_map(|x| match x {
+                GlobalId::User(x) => Some(x),
+                _ => None,
+            })
+            .collect();
+
+        for id in service_ids {
+            if id >= next_id {
+                // Found a storaged in kubernetes with a higher id than what we are aware of. This
+                // must have been created by an environmentd with a higher epoch number.
+                halt!(
+                    "Found storaged id ({}) in orchestrator >= than next_id ({})",
+                    id,
+                    next_id
+                );
+            }
+            if !catalog_ids.contains(&id) && id < next_id {
+                let gid = GlobalId::User(id);
+                tracing::warn!("Removing storaged orphan {}", gid);
+                self.orchestrator.drop_service(&gid.to_string()).await?;
+            }
+        }
+
+        Ok(())
     }
 }

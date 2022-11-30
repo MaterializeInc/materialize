@@ -1162,8 +1162,20 @@ pub async fn serve<S: Append + 'static>(
                 segment_client,
                 metrics: Metrics::register_with(&inner_metrics_registry),
             };
-            let bootstrap =
-                handle.block_on(coord.bootstrap(builtin_migration_metadata, builtin_table_updates));
+            let bootstrap = handle.block_on(async {
+                coord
+                    .bootstrap(builtin_migration_metadata, builtin_table_updates)
+                    .await?;
+                coord
+                    .controller
+                    .remove_orphans(
+                        coord.catalog.get_next_replica_id().await?,
+                        coord.catalog.get_next_user_global_id().await?,
+                    )
+                    .await
+                    .map_err(AdapterError::Orchestrator)?;
+                Ok(())
+            });
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();
             if ok {

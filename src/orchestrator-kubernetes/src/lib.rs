@@ -207,7 +207,7 @@ impl k8s_openapi::Metadata for PodMetrics {
 impl NamespacedKubernetesOrchestrator {
     /// Return a `ListParams` instance that limits results to the namespace
     /// assigned to this orchestrator.
-    fn list_params(&self) -> ListParams {
+    fn list_pod_params(&self) -> ListParams {
         let ns_selector = format!(
             "environmentd.materialize.cloud/namespace={}",
             self.namespace
@@ -740,6 +740,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
     /// Drops the identified service, if it exists.
     async fn drop_service(&self, id: &str) -> Result<(), anyhow::Error> {
+        fail::fail_point!("kubernetes_drop_service", |_| Err(anyhow!("failpoint")));
         self.service_scales
             .lock()
             .expect("poisoned lock")
@@ -768,7 +769,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
     /// Lists the identifiers of all known services.
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {
-        let stateful_sets = self.stateful_set_api.list(&self.list_params()).await?;
+        let stateful_sets = self.stateful_set_api.list(&Default::default()).await?;
         let name_prefix = format!("{}-", self.namespace);
         Ok(stateful_sets
             .into_iter()
@@ -818,7 +819,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             })
         }
 
-        let stream = watcher(self.pod_api.clone(), self.list_params())
+        let stream = watcher(self.pod_api.clone(), self.list_pod_params())
             .touched_objects()
             .filter_map(|object| async move {
                 match object {
