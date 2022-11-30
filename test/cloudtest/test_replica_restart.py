@@ -109,7 +109,7 @@ def test_crash_computed(mz: MaterializeApplication) -> None:
     assert podcount > 0
 
     # Wait for expected notices on all connections.
-    msg = b'cluster replica default.r1 changed status to "not-ready"'
+    msg = b"cluster replica default.r1 changed status to: NotReady"
     assert_notice(c_select, msg)
     assert_notice(c_subscribe, msg)
     assert_notice(c_copy, msg)
