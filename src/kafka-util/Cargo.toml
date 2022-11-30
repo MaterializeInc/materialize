@@ -13,7 +13,7 @@ clap = { version = "3.2.20", features = ["derive"] }
 crossbeam = "0.8.2"
 mz-avro = { path = "../avro" }
 mz-ccsr = { path = "../ccsr" }
-mz-ore = { path = "../ore", features = ["network", "task"] }
+mz-ore = { path = "../ore", features = ["cli", "network", "async"] }
 num_cpus = "1.14.0"
 prost = { version = "0.11.2", features = ["no-recursion-limit"] }
 rand = "0.8.5"

@@ -15,7 +15,7 @@ bytes = "1.2.1"
 clap = { version = "3.2.20", features = ["derive"] }
 futures = "0.3.25"
 mz-kinesis-util = { path = "../../src/kinesis-util" }
-mz-ore = { path = "../../src/ore", features = ["task"] }
+mz-ore = { path = "../../src/ore", features = ["async"] }
 mz-test-util = { path = "../test-util" }
 rand = "0.8.5"
 tokio = "1.22.0"

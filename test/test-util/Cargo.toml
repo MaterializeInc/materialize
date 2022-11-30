@@ -10,7 +10,7 @@ publish = false
 anyhow = "1.0.66"
 chrono = { version = "0.4.23", default-features = false, features = ["clock", "std"] }
 mz-kafka-util = { path = "../../src/kafka-util" }
-mz-ore = { path = "../../src/ore", features = ["task"] }
+mz-ore = { path = "../../src/ore", features = ["async"] }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 tokio = "1.22.0"

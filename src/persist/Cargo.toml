@@ -35,7 +35,7 @@ fail = { version = "0.5.1", features = ["failpoints"] }
 futures-util = "0.3.25"
 once_cell = "1.16.0"
 md-5 = "0.10.5"
-mz-ore = { path = "../ore", default-features = false, features = ["metrics", "task"] }
+mz-ore = { path = "../ore", default-features = false, features = ["metrics", "async"] }
 mz-persist-types = { path = "../persist-types" }
 mz-proto = { path = "../proto" }
 openssl = { version = "0.10.42", features = ["vendored"] }

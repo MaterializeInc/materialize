@@ -22,7 +22,7 @@ maplit = "1.0.2"
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-avro-derive = { path = "../avro-derive" }
 mz-ccsr = { path = "../ccsr" }
-mz-ore = { path = "../ore" }
+mz-ore = { path = "../ore", features = ["network"] }
 mz-repr = { path = "../repr" }
 ordered-float = { version = "3.4.0", features = ["serde"] }
 prost = { version = "0.11.2", features = ["no-recursion-limit"] }

@@ -88,6 +88,7 @@ pub static SYSTEM_TIME: Lazy<NowFn> = Lazy::new(|| NowFn::from(system_time));
 /// For use in tests.
 pub static NOW_ZERO: Lazy<NowFn> = Lazy::new(|| NowFn::from(now_zero));
 
+#[cfg(feature = "chrono")]
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDate;

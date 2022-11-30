@@ -28,7 +28,7 @@ itertools = "0.10.5"
 once_cell = "1.16.0"
 mz-avro = { path = "../avro" }
 mz-lowertest = { path = "../lowertest" }
-mz-ore = { path = "../ore", features = ["bytes", "smallvec"] }
+mz-ore = { path = "../ore", features = ["bytes", "smallvec", "stack", "test"] }
 mz-persist-types = { path = "../persist-types" }
 mz-proto = { path = "../proto" }
 num-traits = "0.2.15"

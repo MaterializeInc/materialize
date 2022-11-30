@@ -10,7 +10,7 @@ publish = false
 anyhow = "1.0.66"
 itertools = "0.10.5"
 mz-metabase = { path = "../../../src/metabase" }
-mz-ore = { path = "../../../src/ore", features = ["task"] }
-tokio = "1.22.0"
+mz-ore = { path = "../../../src/ore", features = ["network", "async", "test"] }
+tokio = { version = "1.22.0", features = ["macros"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tracing = "0.1.37"

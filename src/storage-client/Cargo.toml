@@ -27,7 +27,7 @@ mz-cloud-resources = { path = "../cloud-resources" }
 mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
-mz-ore = { path = "../ore", features = ["task", "tracing_"] }
+mz-ore = { path = "../ore", features = ["async", "tracing_"] }
 mz-orchestrator = { path = "../orchestrator" }
 mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
