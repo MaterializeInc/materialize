@@ -72,22 +72,18 @@ impl NormalizeLets {
         &self,
         relation: &mut MirRelationExpr,
     ) -> Result<(), crate::TransformError> {
-        let mut id_gen = IdGen::default();
-        self.action(relation, &mut id_gen)?;
+        self.action(relation)?;
         relation.typ();
         Ok(())
     }
 
     /// Install replace certain `Get` operators with their `Let` value.
-    pub fn action(
-        &self,
-        relation: &mut MirRelationExpr,
-        id_gen: &mut IdGen,
-    ) -> Result<(), crate::TransformError> {
+    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
         // Rename all bindings to be distinct.
         let mut renaming = BTreeMap::new();
         let recursion_guard = RecursionGuard::with_limit(RECURSION_LIMIT);
-        reallocate_bindings(&recursion_guard, relation, &mut renaming, id_gen)?;
+        let mut id_gen = IdGen::default();
+        renumber_bindings_helper(&recursion_guard, relation, &mut renaming, &mut id_gen)?;
 
         // Extract all let bindings into let-free expressions.
         let let_bindings = digest_lets(relation);
@@ -170,6 +166,11 @@ impl NormalizeLets {
             }
         });
 
+        let renumber = to_emit
+            .keys()
+            .enumerate()
+            .any(|(i, b)| LocalId::new(i as u64) != *b);
+
         // Reconstitute the stack of let bindings.
         for (id, value) in to_emit.into_iter().rev() {
             *relation = MirRelationExpr::Let {
@@ -179,13 +180,21 @@ impl NormalizeLets {
             };
         }
 
+        // Do a final pass if we inlined anything, in order to count from zero.
+        if renumber {
+            let mut renaming = BTreeMap::new();
+            let recursion_guard = RecursionGuard::with_limit(RECURSION_LIMIT);
+            let mut id_gen = IdGen::default();
+            renumber_bindings_helper(&recursion_guard, relation, &mut renaming, &mut id_gen)?;
+        }
+
         Ok(())
     }
 }
 
 // This is pretty simple, but it is used in two locations and seemed clearer named.
 /// Populates `counts` with the number of uses of each local identifier.
-pub fn count_local_id_uses(
+fn count_local_id_uses(
     expr: &MirRelationExpr,
     counts: &mut std::collections::BTreeMap<LocalId, usize>,
 ) {
@@ -202,7 +211,7 @@ pub fn count_local_id_uses(
 /// Convert an expression containing `Let` bindings into a map from `LocalId` to `Let`-free expressions.
 ///
 /// The special key `None` indicates the root of the expression; all other keys are `Some(local_id)`.
-pub fn digest_lets(expr: &mut MirRelationExpr) -> BTreeMap<LocalId, MirRelationExpr> {
+fn digest_lets(expr: &mut MirRelationExpr) -> BTreeMap<LocalId, MirRelationExpr> {
     let mut lets = BTreeMap::new();
     let mut worklist = Vec::new();
     digest_lets_helper(expr, &mut worklist);
@@ -216,10 +225,7 @@ pub fn digest_lets(expr: &mut MirRelationExpr) -> BTreeMap<LocalId, MirRelationE
 /// Extract all `Let` bindings from `expr`, into `(id, value)` pairs.
 ///
 /// Importantly, the `value` pairs may not be `Let`-free, and must be further processed.
-pub fn digest_lets_helper(
-    expr: &mut MirRelationExpr,
-    bindings: &mut Vec<(LocalId, MirRelationExpr)>,
-) {
+fn digest_lets_helper(expr: &mut MirRelationExpr, bindings: &mut Vec<(LocalId, MirRelationExpr)>) {
     let mut to_visit = vec![expr];
     while let Some(expr) = to_visit.pop() {
         if let MirRelationExpr::Let { id, value, body } = expr {
@@ -264,7 +270,16 @@ pub fn inline_gets(
 }
 
 /// Re-assign an identifier to each `Let`.
-pub fn reallocate_bindings(
+pub fn renumber_bindings(
+    relation: &mut MirRelationExpr,
+    id_gen: &mut IdGen,
+) -> Result<(), crate::TransformError> {
+    let mut renaming = BTreeMap::new();
+    let recursion_guard = RecursionGuard::with_limit(RECURSION_LIMIT);
+    renumber_bindings_helper(&recursion_guard, relation, &mut renaming, id_gen)
+}
+
+fn renumber_bindings_helper(
     guard: &RecursionGuard,
     relation: &mut MirRelationExpr,
     remap: &mut BTreeMap<LocalId, LocalId>,
@@ -273,11 +288,11 @@ pub fn reallocate_bindings(
     guard.checked_recur(|_| {
         match relation {
             MirRelationExpr::Let { id, value, body } => {
-                reallocate_bindings(guard, value, remap, id_gen)?;
+                renumber_bindings_helper(guard, value, remap, id_gen)?;
                 // If a local id, assign a new identifier and refresh the type.
                 let new_id = LocalId::new(id_gen.allocate_id());
                 let prev = remap.insert(id.clone(), new_id);
-                reallocate_bindings(guard, body, remap, id_gen)?;
+                renumber_bindings_helper(guard, body, remap, id_gen)?;
                 remap.remove(id);
                 if let Some(prev_stuff) = prev {
                     remap.insert(id.clone(), prev_stuff);
@@ -300,7 +315,8 @@ pub fn reallocate_bindings(
             }
             _ => {
                 use mz_expr::visit::VisitChildren;
-                relation.try_visit_mut_children(|e| reallocate_bindings(guard, e, remap, id_gen))
+                relation
+                    .try_visit_mut_children(|e| renumber_bindings_helper(guard, e, remap, id_gen))
             }
         }
     })

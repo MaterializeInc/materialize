@@ -19,7 +19,6 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use mz_compute_client::command::DataflowDesc;
 use mz_expr::visit::Visit;
 use mz_expr::{CollectionPlan, Id, LocalId, MapFilterProject, MirRelationExpr};
-use mz_ore::id_gen::IdGen;
 
 use crate::{monotonic::MonotonicFlag, IndexOracle, Optimizer, TransformError};
 
@@ -119,16 +118,15 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
             // identifiers for the Let's `body` and `value`, as well as a new
             // identifier for the binding itself. Following `UpdateLet`, we
             // go with the binding first, then the value, then the body.
-            let normalize_lets = crate::normalize_lets::NormalizeLets::new(false);
             let mut id_gen = crate::IdGen::default();
             let new_local = LocalId::new(id_gen.allocate_id());
             // Use the same `id_gen` to assign new identifiers to `index`.
-            normalize_lets.action(
+            crate::normalize_lets::renumber_bindings(
                 dataflow.objects_to_build[index].plan.as_inner_mut(),
                 &mut id_gen,
             )?;
             // Assign new identifiers to the other relation.
-            normalize_lets.action(
+            crate::normalize_lets::renumber_bindings(
                 dataflow.objects_to_build[other].plan.as_inner_mut(),
                 &mut id_gen,
             )?;
@@ -297,7 +295,7 @@ where
         projection_pushdown.update_projection_around_get(view, &applied_projection)?;
         // Types need to be updated after ProjectionPushdown
         // because the width of each view may have changed.
-        typ_update.action(view, &mut IdGen::default())?;
+        typ_update.action(view)?;
     }
 
     Ok(())
