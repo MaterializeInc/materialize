@@ -115,11 +115,10 @@ class Disruption:
                 > SELECT COUNT(*) FROM source1;
                 2
 
-                # TODO(bkirwi) https://github.com/MaterializeInc/materialize/issues/16065
-                #> SELECT status, error
-                #  FROM mz_internal.mz_source_status
-                #  WHERE name = 'source1'
-                #running <null>
+                > SELECT status, error
+                  FROM mz_internal.mz_source_status
+                  WHERE name = 'source1'
+                running <null>
 
                 #> SELECT status, error
                 #  FROM mz_internal.mz_sink_status
