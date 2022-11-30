@@ -77,7 +77,7 @@ pub struct TracingCliArgs {
         long,
         env = "LOG_FILTER",
         value_name = "FILTER",
-        default_value = "info"
+        default_value = "info,mz_storage=trace"
     )]
     pub log_filter: SerializableTargets,
     /// An optional prefix for each stderr log line.
