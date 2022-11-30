@@ -28,7 +28,7 @@ itertools = "0.10.5"
 once_cell = "1.16.0"
 md-5 = "0.10.5"
 mz-lowertest = { path = "../lowertest" }
-mz-ore = { path = "../ore" }
+mz-ore = { path = "../ore", features = ["network"] }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
 mz-persist-types = { path = "../persist-types" }

@@ -19,9 +19,9 @@ use scopeguard::defer;
 
 use mz_ore::panic::{catch_unwind, set_abort_on_panic};
 
-// IMPORTANT!!! Do not add any tests to this file. This test sets and removes panic hooks
-// and can interfere with any concurrently running test. Therefore, it needs to be run
-// in isolation.
+// IMPORTANT!!! Do not add any additional tests to this file. This test sets and
+// removes panic hooks and can interfere with any concurrently running test.
+// Therefore, it needs to be run in isolation.
 
 #[test]
 fn catch_panic() {

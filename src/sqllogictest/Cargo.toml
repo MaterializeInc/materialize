@@ -20,7 +20,7 @@ md-5 = "0.10.5"
 mz-build-info = { path = "../build-info" }
 mz-controller = { path = "../controller" }
 mz-environmentd = { path = "../environmentd", default-features = false }
-mz-ore = { path = "../ore", features = ["task", "tracing_"] }
+mz-ore = { path = "../ore", features = ["async", "tracing_"] }
 mz-orchestrator = { path = "../orchestrator" }
 mz-orchestrator-process = { path = "../orchestrator-process" }
 mz-persist-client = { path = "../persist-client" }

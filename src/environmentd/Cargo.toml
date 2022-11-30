@@ -40,7 +40,7 @@ mz-orchestrator = { path = "../orchestrator" }
 mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
 mz-orchestrator-process = { path = "../orchestrator-process" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
-mz-ore = { path = "../ore", features = ["task", "tracing_"] }
+mz-ore = { path = "../ore", features = ["async", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-pgwire = { path = "../pgwire" }

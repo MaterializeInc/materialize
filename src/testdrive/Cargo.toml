@@ -41,7 +41,7 @@ mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-kinesis-util = { path = "../kinesis-util" }
-mz-ore = { path = "../ore", features = ["task"] }
+mz-ore = { path = "../ore", features = ["async"] }
 mz-pgrepr = { path = "../pgrepr" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }

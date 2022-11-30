@@ -14,7 +14,7 @@ futures-core = "0.3.21"
 http = "0.2.8"
 humantime = { version = "2.1.0", optional = true }
 mz-orchestrator = { path = "../orchestrator" }
-mz-ore = { path = "../ore", features = ["tracing_"] }
+mz-ore = { path = "../ore", features = ["tracing_", "cli"] }
 mz-repr = { path = "../repr", optional = true }
 tracing-subscriber = { version = "0.3.16", default-features = false }
 opentelemetry = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git", features = ["rt-tokio", "trace"] }

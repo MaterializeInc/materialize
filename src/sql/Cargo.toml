@@ -24,7 +24,7 @@ mz-compute-client = { path = "../compute-client" }
 mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
-mz-ore = { path = "../ore", features = ["task"] }
+mz-ore = { path = "../ore", features = ["chrono", "async"] }
 mz-pgcopy = { path = "../pgcopy" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-postgres-util = { path = "../postgres-util" }
