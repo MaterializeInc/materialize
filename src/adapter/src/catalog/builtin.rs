@@ -45,6 +45,7 @@ pub const INFORMATION_SCHEMA: &str = "information_schema";
 
 pub static BUILTIN_PREFIXES: Lazy<Vec<&str>> = Lazy::new(|| vec!["mz_", "pg_"]);
 
+#[derive(Debug)]
 pub enum Builtin<T: 'static + TypeReference> {
     Log(&'static BuiltinLog),
     Table(&'static BuiltinTable),
@@ -100,7 +101,7 @@ pub struct BuiltinLog {
     pub schema: &'static str,
 }
 
-#[derive(Hash)]
+#[derive(Hash, Debug)]
 pub struct BuiltinTable {
     pub name: &'static str,
     pub schema: &'static str,
@@ -115,13 +116,14 @@ pub struct BuiltinSource {
     pub data_source: Option<IntrospectionType>,
 }
 
-#[derive(Hash)]
+#[derive(Hash, Debug)]
 pub struct BuiltinView {
     pub name: &'static str,
     pub schema: &'static str,
     pub sql: &'static str,
 }
 
+#[derive(Debug)]
 pub struct BuiltinType<T: TypeReference> {
     pub name: &'static str,
     pub schema: &'static str,
@@ -129,12 +131,14 @@ pub struct BuiltinType<T: TypeReference> {
     pub details: CatalogTypeDetails<T>,
 }
 
+#[derive(Debug)]
 pub struct BuiltinFunc {
     pub schema: &'static str,
     pub name: &'static str,
     pub inner: &'static mz_sql::func::Func,
 }
 
+#[derive(Debug)]
 pub struct BuiltinIndex {
     pub name: &'static str,
     pub schema: &'static str,
