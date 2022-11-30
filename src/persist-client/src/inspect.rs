@@ -55,12 +55,10 @@ pub async fn fetch_latest_state(
     let blob = blob.clone().open().await?;
 
     let state_versions = StateVersions::new(cfg, consensus, blob, Arc::clone(&metrics));
-    let versions = state_versions
-        .fetch_recent_live_diffs::<u64>(&shard_id)
-        .await;
+    let versions = state_versions.fetch_live_diffs(&shard_id).await;
 
     let state = match state_versions
-        .fetch_current_state::<K, V, u64, D>(&shard_id, versions.0.clone())
+        .fetch_current_state::<K, V, u64, D>(&shard_id, versions.clone())
         .await
     {
         Ok(s) => s.into_proto(),
@@ -70,7 +68,7 @@ pub async fn fetch_latest_state(
                 *kvtd = codec.actual;
             }
             state_versions
-                .fetch_current_state::<K, V, u64, D>(&shard_id, versions.0)
+                .fetch_current_state::<K, V, u64, D>(&shard_id, versions)
                 .await
                 .expect("codecs match")
                 .into_proto()
@@ -134,7 +132,7 @@ pub async fn fetch_state_rollups(
     let state_versions =
         StateVersions::new(cfg, consensus, Arc::clone(&blob), Arc::clone(&metrics));
     let mut state_iter = match state_versions
-        .fetch_all_live_states::<K, V, u64, D>(&shard_id)
+        .fetch_live_states::<K, V, u64, D>(&shard_id)
         .await
     {
         Ok(state_iter) => state_iter,
@@ -144,7 +142,7 @@ pub async fn fetch_state_rollups(
                 *kvtd = codec.actual;
             }
             state_versions
-                .fetch_all_live_states::<K, V, u64, D>(&shard_id)
+                .fetch_live_states::<K, V, u64, D>(&shard_id)
                 .await?
         }
     };
@@ -193,7 +191,7 @@ pub async fn fetch_state_diffs(
 
     let mut live_states = vec![];
     let mut state_iter = match state_versions
-        .fetch_all_live_states::<K, V, u64, D>(&shard_id)
+        .fetch_live_states::<K, V, u64, D>(&shard_id)
         .await
     {
         Ok(state_iter) => state_iter,
@@ -203,7 +201,7 @@ pub async fn fetch_state_diffs(
                 *kvtd = codec.actual;
             }
             state_versions
-                .fetch_all_live_states::<K, V, u64, D>(&shard_id)
+                .fetch_live_states::<K, V, u64, D>(&shard_id)
                 .await?
         }
     };
@@ -294,7 +292,7 @@ pub async fn unreferenced_blobs(
 
     let state_versions = StateVersions::new(cfg, consensus, blob, Arc::clone(&metrics));
     let mut state_iter = match state_versions
-        .fetch_all_live_states::<K, V, u64, D>(shard_id)
+        .fetch_live_states::<K, V, u64, D>(shard_id)
         .await
     {
         Ok(state_iter) => state_iter,
@@ -304,7 +302,7 @@ pub async fn unreferenced_blobs(
                 *kvtd = codec.actual;
             }
             state_versions
-                .fetch_all_live_states::<K, V, u64, D>(shard_id)
+                .fetch_live_states::<K, V, u64, D>(shard_id)
                 .await?
         }
     };
