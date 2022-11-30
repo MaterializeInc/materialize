@@ -21,6 +21,7 @@
 //! Consult the `StorageController` and `ComputeController` documentation for more information
 //! about each of these interfaces.
 
+use std::collections::HashMap;
 use std::mem;
 use std::num::NonZeroI64;
 use std::sync::Arc;
@@ -96,6 +97,8 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     ComputeReplicaHeartbeat(ReplicaId, DateTime<Utc>),
     /// Notification that new resource usage metrics are available for a given replica.
     ComputeReplicaMetrics(ReplicaId, Vec<ServiceProcessMetrics>),
+    /// Notification that the write frontiers of the replicas have changed.
+    ComputeReplicaWriteFrontiers(HashMap<ReplicaId, Vec<(GlobalId, T)>>),
 }
 
 impl<T> From<ComputeControllerResponse<T>> for ControllerResponse<T> {
@@ -112,6 +115,9 @@ impl<T> From<ComputeControllerResponse<T>> for ControllerResponse<T> {
             }
             ComputeControllerResponse::ReplicaMetrics(id, metrics) => {
                 ControllerResponse::ComputeReplicaMetrics(id, metrics)
+            }
+            ComputeControllerResponse::ReplicaWriteFrontiers(frontiers) => {
+                ControllerResponse::ComputeReplicaWriteFrontiers(frontiers)
             }
         }
     }

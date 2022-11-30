@@ -254,6 +254,10 @@ impl<S: Append + 'static> Coordinator<S> {
                         .await;
                 }
             }
+            ControllerResponse::ComputeReplicaWriteFrontiers(updates) => {
+                // TODO: implement this
+                tracing::info!("Received ComputeReplicaWriteFrontiers: {}", updates.len());
+            }
         }
     }
 

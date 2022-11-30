@@ -29,7 +29,7 @@
 //! from compacting beyond the allowed compaction of each of its outputs, ensuring that we can
 //! recover each dataflow to its current state in case of failure or other reconfiguration.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::str::FromStr;
@@ -41,6 +41,7 @@ use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::BoxStream;
 use futures::{future, FutureExt};
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, Timestamp};
@@ -153,6 +154,8 @@ pub enum ComputeControllerResponse<T> {
     ReplicaHeartbeat(ReplicaId, DateTime<Utc>),
     /// A notification that new resource usage metrics are available for a given replica.
     ReplicaMetrics(ReplicaId, Vec<ServiceProcessMetrics>),
+    /// A notification that the write frontiers of the replicas have changed.
+    ReplicaWriteFrontiers(HashMap<ReplicaId, Vec<(GlobalId, T)>>),
 }
 
 /// Replica configuration
@@ -277,6 +280,10 @@ pub struct ComputeController<T> {
     replica_metrics: BTreeMap<ReplicaId, Vec<ServiceProcessMetrics>>,
     /// A number that increases on every `environmentd` restart.
     envd_epoch: NonZeroI64,
+    /// Periodic notification to produce a `ReplicaWriteFrontiers` response.
+    stats_update_ticker: tokio::time::Interval,
+    /// Set to `true` if `process` should produce a `ReplicaWriteFrontiers` next.
+    stats_update_pending: bool,
 }
 
 impl<T> ComputeController<T> {
@@ -288,6 +295,9 @@ impl<T> ComputeController<T> {
         init_container_image: Option<String>,
         envd_epoch: NonZeroI64,
     ) -> Self {
+        let mut stats_update_ticker = tokio::time::interval(Duration::from_secs(1));
+        stats_update_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
         Self {
             instances: BTreeMap::new(),
             build_info,
@@ -301,6 +311,8 @@ impl<T> ComputeController<T> {
             replica_heartbeats: BTreeMap::new(),
             replica_metrics: BTreeMap::new(),
             envd_epoch,
+            stats_update_ticker,
+            stats_update_pending: false,
         }
     }
 
@@ -479,27 +491,31 @@ where
             .iter_mut()
             .map(|(id, instance)| Box::pin(instance.recv().map(|result| (*id, result))));
 
-        let ((instance_id, result), _index, _remaining) = future::select_all(receives).await;
-        match result {
-            Ok((replica_id, ReplicaResponse::ComputeResponse(resp))) => {
-                self.replica_heartbeats.insert(replica_id, Utc::now());
-                self.stashed_response = Some((instance_id, replica_id, resp));
-            }
-            Ok((replica_id, ReplicaResponse::MetricsUpdate(result))) => {
-                let metrics = match result {
-                    Ok(metrics) => metrics,
-                    Err(e) => {
-                        warn!("failed to get metrics for replica {replica_id}: {e}");
-                        return;
+        tokio::select! {
+            ((instance_id, result), _index, _remaining) = future::select_all(receives) => {
+                match result {
+                    Ok((replica_id, ReplicaResponse::ComputeResponse(resp))) => {
+                        self.replica_heartbeats.insert(replica_id, Utc::now());
+                        self.stashed_response = Some((instance_id, replica_id, resp));
                     }
-                };
-                self.replica_metrics.insert(replica_id, metrics);
-            }
-            Err(_) => {
-                // There is nothing to do here. `recv` has already added the failed replica to
-                // `instance.failed_replicas`, so it will be rehydrated in the next call to
-                // `ActiveComputeController::process`.
-            }
+                    Ok((replica_id, ReplicaResponse::MetricsUpdate(result))) => {
+                        let metrics = match result {
+                            Ok(metrics) => metrics,
+                            Err(e) => {
+                                warn!("failed to get metrics for replica {replica_id}: {e}");
+                                return;
+                            }
+                        };
+                        self.replica_metrics.insert(replica_id, metrics);
+                    }
+                    Err(_) => {
+                        // There is nothing to do here. `recv` has already added the failed replica to
+                        // `instance.failed_replicas`, so it will be rehydrated in the next call to
+                        // `ActiveComputeController::process`.
+                    }
+                }
+            },
+            _ = self.stats_update_ticker.tick() => { self.stats_update_pending = true }
         }
     }
 
@@ -722,15 +738,37 @@ where
         // Process pending responses from replicas.
         if let Some((instance_id, replica_id, response)) = self.compute.stashed_response.take() {
             if let Ok(mut instance) = self.instance(instance_id) {
-                instance.handle_response(response, replica_id)
+                return instance.handle_response(response, replica_id);
             } else {
                 warn!(
                     ?instance_id,
                     ?response,
                     "processed response from unknown instance"
                 );
-                None
-            }
+            };
+        }
+
+        // Process pending stats updates
+        if self.compute.stats_update_pending {
+            self.compute.stats_update_pending = false;
+            let r = self
+                .compute
+                .instances
+                .values()
+                .flat_map(|inst| inst.collections_iter())
+                .flat_map(|(coll_id, cs)| {
+                    cs.replica_write_frontiers
+                        .iter()
+                        .filter_map(|(replica_id, frontier)| {
+                            frontier
+                                .elements()
+                                .get(0)
+                                .map(|x| (*replica_id, (*coll_id, x.clone())))
+                        })
+                })
+                // iterator over (replica_id, (collection_id, write_frontier)) tuples
+                .into_group_map();
+            Some(ComputeControllerResponse::ReplicaWriteFrontiers(r))
         } else {
             None
         }

@@ -127,6 +127,10 @@ impl<T> Instance<T> {
         self.collections.get_mut(&id).ok_or(CollectionMissing(id))
     }
 
+    pub fn collections_iter(&self) -> impl Iterator<Item = (&GlobalId, &CollectionState<T>)> {
+        self.collections.iter()
+    }
+
     /// Acquire an [`ActiveInstance`] by providing a storage controller.
     pub fn activate<'a>(
         &'a mut self,
