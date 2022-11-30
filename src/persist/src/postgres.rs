@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 use tracing::debug;
 
 use crate::error::Error;
-use crate::location::{Consensus, ExternalError, SeqNo, VersionedData, SCAN_ALL};
+use crate::location::{Consensus, ExternalError, SeqNo, VersionedData};
 use crate::metrics::PostgresConsensusMetrics;
 
 const SCHEMA: &str = "
@@ -440,29 +440,19 @@ impl Consensus for PostgresConsensus {
             // 2. All operations that modify the (seqno, data) can only increase
             //    the sequence number.
             let from = expected.map_or_else(SeqNo::minimum, |x| x.next());
-            let current = self.scan(key, from, SCAN_ALL).await?;
+            let current = self.scan(key, from).await?;
             Ok(Err(current))
         }
     }
 
-    async fn scan(
-        &self,
-        key: &str,
-        from: SeqNo,
-        limit: usize,
-    ) -> Result<Vec<VersionedData>, ExternalError> {
+    async fn scan(&self, key: &str, from: SeqNo) -> Result<Vec<VersionedData>, ExternalError> {
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 AND sequence_number >= $2
-             ORDER BY sequence_number ASC LIMIT $3";
-        let Ok(limit) = i64::try_from(limit) else {
-            return Err(ExternalError::from(anyhow!(
-                    "limit must be [0, i64::MAX]. was: {:?}", limit
-                )));
-        };
+             ORDER BY sequence_number";
         let rows = {
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
-            client.query(&statement, &[&key, &from, &limit]).await?
+            client.query(&statement, &[&key, &from]).await?
         };
         let mut results = Vec::with_capacity(rows.len());
 
