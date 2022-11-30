@@ -828,6 +828,8 @@ impl PostgresTaskInfo {
                 lsn = cur_lsn,
                 publication = self.publication
             );
+
+            let peek_binary_start_time = Instant::now();
             let rows = try_indefinite!(client.simple_query(&query).await);
 
             match rows.first().expect("query returns exactly one row") {
@@ -837,12 +839,24 @@ impl PostgresTaskInfo {
                         .expect("query returns one column")
                         .parse()
                         .expect("count returned invalid number");
-                    if changes == 0 {
+                    let chosen_lsn = if changes == 0 {
                         // If there are no changes until the end of the WAL it's safe to fast forward
                         cur_lsn
                     } else {
                         self.lsn
-                    }
+                    };
+
+                    tracing::info!(
+                        slot = ?self.slot,
+                        query_time = ?peek_binary_start_time.elapsed(),
+                        ?chosen_lsn,
+                        current_lsn = ?cur_lsn,
+                        resumption_lsn = ?self.lsn,
+                        "Found {} changes in the wal.",
+                        changes
+                    );
+
+                    chosen_lsn
                 }
                 _ => panic!(),
             }
@@ -1101,9 +1115,18 @@ impl PostgresTaskInfo {
                 },
                 PrimaryKeepAlive(keepalive) => {
                     needs_status_update = needs_status_update || keepalive.reply() == 1;
+
+                    // Additional logging for incident 25
                     if last_data_message.elapsed() > WAL_LAG_GRACE_PERIOD
                         && keepalive.wal_end().saturating_sub(self.lsn.into()) > MAX_WAL_LAG
                     {
+                        tracing::info!(
+                            wal_lag_grace_period = ?WAL_LAG_GRACE_PERIOD,
+                            max_wal_lag = %bytesize::to_string(MAX_WAL_LAG, false),
+                            last_elapsed = ?last_data_message.elapsed(),
+                            lsn_diff = ?keepalive.wal_end().saturating_sub(self.lsn.into()),
+                            resumption_lsn = ?self.lsn,
+                            "Got PrimaryKeepAlive");
                         return Err(Indefinite(anyhow!("reached maximum WAL lag")));
                     }
                 }
