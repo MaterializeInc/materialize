@@ -69,7 +69,6 @@ impl AdapterNotice {
             AdapterNotice::ClusterDoesNotExist { name: _ } => Some("Create the cluster with CREATE CLUSTER or pick an extant cluster with SET CLUSTER = name. List available clusters with SHOW CLUSTERS.".into()),
             AdapterNotice::DroppedActiveDatabase { name: _ } => Some("Choose a new active database by executing SET DATABASE = <name>.".into()),
             AdapterNotice::DroppedActiveCluster { name: _ } => Some("Choose a new active cluster by executing SET CLUSTER = <name>.".into()),
-            AdapterNotice::ClusterReplicaStatusChanged { .. } => Some("The cluster replica may be restarting or going offline.".into()),
             _ => None
         }
     }
