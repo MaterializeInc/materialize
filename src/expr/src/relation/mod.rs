@@ -1565,7 +1565,7 @@ impl CollectionPlan for MirRelationExpr {
 
 impl MirRelationExpr {
     /// Iterates through references to child expressions.
-    pub fn children(&self) -> impl Iterator<Item = &Self> {
+    pub fn children(&self) -> impl DoubleEndedIterator<Item = &Self> {
         let mut first = None;
         let mut second = None;
         let mut rest = None;
@@ -1604,7 +1604,7 @@ impl MirRelationExpr {
     }
 
     /// Iterates through mutable references to child expressions.
-    pub fn children_mut(&mut self) -> impl Iterator<Item = &mut Self> {
+    pub fn children_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut Self> {
         let mut first = None;
         let mut second = None;
         let mut rest = None;
@@ -1640,6 +1640,24 @@ impl MirRelationExpr {
             .into_iter()
             .chain(second)
             .chain(rest.into_iter().flatten())
+    }
+
+    /// Iterative pre-order visitor.
+    pub fn visit_pre<'a, F: FnMut(&'a Self)>(&'a self, mut f: F) {
+        let mut worklist = vec![self];
+        while let Some(expr) = worklist.pop() {
+            f(expr);
+            worklist.extend(expr.children().rev());
+        }
+    }
+
+    /// Iterative pre-order visitor.
+    pub fn visit_pre_mut<F: FnMut(&mut Self)>(&mut self, mut f: F) {
+        let mut worklist = vec![self];
+        while let Some(expr) = worklist.pop() {
+            f(expr);
+            worklist.extend(expr.children_mut().rev());
+        }
     }
 
     /// Return a vector of references to the subtrees of this expression

@@ -17,30 +17,26 @@
 
 use std::collections::HashMap;
 
-use crate::inline_let::InlineLet;
 use mz_expr::visit::VisitChildren;
 use mz_expr::{Id, LocalId, MirRelationExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
-use crate::update_let::UpdateLet;
+use crate::normalize_lets::NormalizeLets;
 use crate::TransformArgs;
 
 /// Identifies common relation subexpressions and places them behind `Let` bindings.
 #[derive(Debug)]
 pub struct RelationCSE {
-    inline_let: InlineLet,
-    update_let: UpdateLet,
+    normalize_lets: NormalizeLets,
 }
 
 impl RelationCSE {
     /// Constructs a new [`RelationCSE`] instance.
-    /// This also creates an [`InlineLet`] and an [`UpdateLet`] transformation, which will always
-    /// run as the last step of [`RelationCSE`].
-    /// The given `inline_mfp` is passed to the [`InlineLet`].
+    ///
+    /// Also communicates its argument to let normalization.
     pub fn new(inline_mfp: bool) -> RelationCSE {
         RelationCSE {
-            inline_let: InlineLet::new(inline_mfp),
-            update_let: UpdateLet::default(),
+            normalize_lets: NormalizeLets::new(inline_mfp),
         }
     }
 }
@@ -55,13 +51,12 @@ impl crate::Transform for RelationCSE {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        args: TransformArgs,
+        _args: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         let mut bindings = Bindings::default();
         bindings.intern_expression(relation)?;
         bindings.populate_expression(relation);
-        self.inline_let.transform_without_trace(relation)?;
-        self.update_let.transform_without_trace(relation, args)?;
+        self.normalize_lets.transform_without_trace(relation)?;
         mz_repr::explain_new::trace_plan(&*relation);
         Ok(())
     }
@@ -134,7 +129,14 @@ impl Bindings {
                 }
                 MirRelationExpr::Get { id, .. } => {
                     if let Id::Local(id) = id {
-                        *id = this.rebindings[id];
+                        if let Some(rebound) = this.rebindings.get(id) {
+                            *id = *rebound;
+                        } else {
+                            Err(crate::TransformError::Internal(format!(
+                                "Identifier missing: {:?}",
+                                id
+                            )))?;
+                        }
                     }
                 }
 

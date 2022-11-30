@@ -119,19 +119,17 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
             // identifiers for the Let's `body` and `value`, as well as a new
             // identifier for the binding itself. Following `UpdateLet`, we
             // go with the binding first, then the value, then the body.
-            let update_let = crate::update_let::UpdateLet::default();
+            let normalize_lets = crate::normalize_lets::NormalizeLets::new(false);
             let mut id_gen = crate::IdGen::default();
             let new_local = LocalId::new(id_gen.allocate_id());
             // Use the same `id_gen` to assign new identifiers to `index`.
-            update_let.action(
+            normalize_lets.action(
                 dataflow.objects_to_build[index].plan.as_inner_mut(),
-                &mut HashMap::new(),
                 &mut id_gen,
             )?;
             // Assign new identifiers to the other relation.
-            update_let.action(
+            normalize_lets.action(
                 dataflow.objects_to_build[other].plan.as_inner_mut(),
-                &mut HashMap::new(),
                 &mut id_gen,
             )?;
             // Install the `new_local` name wherever `global_id` was used.
@@ -293,13 +291,13 @@ where
         view_refs.push(view);
     }
 
-    let typ_update = crate::update_let::UpdateLet::default();
+    let typ_update = crate::normalize_lets::NormalizeLets::new(false);
     for view in view_refs {
         // Update column references to views where projections were pushed down.
         projection_pushdown.update_projection_around_get(view, &applied_projection)?;
         // Types need to be updated after ProjectionPushdown
         // because the width of each view may have changed.
-        typ_update.action(view, &mut HashMap::new(), &mut IdGen::default())?;
+        typ_update.action(view, &mut IdGen::default())?;
     }
 
     Ok(())
