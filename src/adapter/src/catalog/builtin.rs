@@ -1382,7 +1382,7 @@ pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| Builti
         .with_column("replica_id", ScalarType::UInt64.nullable(false))
         .with_column("process_id", ScalarType::UInt64.nullable(false))
         .with_column("status", ScalarType::String.nullable(false))
-        .with_column("updated_at", ScalarType::TimestampTz.nullable(false)),
+        .with_column("last_update", ScalarType::TimestampTz.nullable(false)),
 });
 
 pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
