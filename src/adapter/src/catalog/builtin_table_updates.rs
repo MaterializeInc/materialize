@@ -168,6 +168,7 @@ impl CatalogState {
         let status = match event.status {
             ComputeInstanceStatus::Ready => "ready",
             ComputeInstanceStatus::NotReady => "not-ready",
+            ComputeInstanceStatus::Unknown => "unknown",
         };
 
         BuiltinTableUpdate {

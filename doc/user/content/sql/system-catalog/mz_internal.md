@@ -54,7 +54,7 @@ Field               | Type                          | Meaning
 --------------------|-------------------------------|--------
 `replica_id`        | [`uint8`]                     | Materialize's unique ID for the cluster replica.
 `process_id`        | [`uint8`]                     | The ID of the process within the cluster replica.
-`status`            | [`text`]                      | The status of the cluster replica: `ready` or `not-ready`.
+`status`            | [`text`]                      | The status of the cluster replica: `ready` or `not-ready`. <!-- `unknown` intentionally undocumented because it is only used when running locally. -->
 `updated_at`        | [`timestamp with time zone`]  | The time at which the status was last updated.
 
 ### `mz_dataflows`

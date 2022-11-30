@@ -753,7 +753,7 @@ impl CatalogState {
             process_status: (0..config.location.num_processes())
                 .map(|process_id| {
                     let status = ComputeReplicaProcessStatus {
-                        status: ComputeInstanceStatus::NotReady,
+                        status: ComputeInstanceStatus::Unknown,
                         time: to_datetime((self.config.now)()),
                     };
                     (u64::cast_from(process_id), status)

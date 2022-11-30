@@ -96,6 +96,8 @@ pub enum ServiceStatus {
     Ready,
     /// Service is not ready to accept requests.
     NotReady,
+    /// Service status is unknown.
+    Unknown,
 }
 
 /// Describes a running service managed by an `Orchestrator`.

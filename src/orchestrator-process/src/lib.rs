@@ -321,8 +321,9 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
 
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
         // The process orchestrator currently doesn't provide good support for
-        // tracking service status, so we punt and always return an "ready"
-        // status for each process.
+        // tracking service status, so we punt and always return an "unknown"
+        // status instead. We can still report the existence of individual
+        // processes though.
 
         let supervisors = Arc::clone(&self.supervisors);
         let stream = async_stream::stream! {
@@ -341,7 +342,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                             events.push(ServiceEvent {
                                 service_id: service.clone(),
                                 process_id: u64::cast_from(process_idx),
-                                status: ServiceStatus::Ready,
+                                status: ServiceStatus::Unknown,
                                 time: Utc::now(),
                             });
                         }
