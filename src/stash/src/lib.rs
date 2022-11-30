@@ -28,13 +28,13 @@ use timely::PartialOrder;
 
 use mz_ore::collections::CollectionExt;
 
+mod cache;
 mod memory;
 mod postgres;
-mod sqlite;
 
+pub use crate::cache::Cache;
 pub use crate::memory::Memory;
 pub use crate::postgres::{Postgres, PostgresFactory};
-pub use crate::sqlite::Sqlite;
 
 pub type Diff = i64;
 pub type Timestamp = i64;
@@ -464,7 +464,7 @@ impl<'a, T> From<&'a Antichain<T>> for AntichainFormatter<'a, T> {
 /// conditions, like running out of disk space.
 #[derive(Debug)]
 pub struct StashError {
-    // Internal to avoid leaking implementation details about SQLite.
+    // Internal to avoid leaking implementation details.
     inner: InternalStashError,
 }
 
@@ -483,7 +483,6 @@ impl StashError {
 
 #[derive(Debug)]
 enum InternalStashError {
-    Sqlite(rusqlite::Error),
     Postgres(::tokio_postgres::Error),
     Fence(String),
     PeekSinceUpper(String),
@@ -494,7 +493,6 @@ impl fmt::Display for StashError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("stash error: ")?;
         match &self.inner {
-            InternalStashError::Sqlite(e) => write!(f, "sqlite: {e}"),
             InternalStashError::Postgres(e) => write!(f, "postgres: {e}"),
             InternalStashError::Fence(e) => f.write_str(e),
             InternalStashError::PeekSinceUpper(e) => f.write_str(e),

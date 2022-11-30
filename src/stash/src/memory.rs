@@ -7,33 +7,36 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::hash_map::Entry;
 use std::collections::{BTreeSet, HashMap};
 use std::marker::PhantomData;
 use std::num::NonZeroI64;
 
 use async_trait::async_trait;
+use futures::Future;
 use timely::{progress::Antichain, PartialOrder};
 
 use timely::progress::frontier::AntichainRef;
 
-use crate::{Append, AppendBatch, Data, Diff, Id, Stash, StashCollection, StashError, Timestamp};
+use crate::{
+    AntichainFormatter, Append, AppendBatch, Data, Diff, Id, Stash, StashCollection, StashError,
+    Timestamp,
+};
 
 /// An in-memory Stash that is backed by another Stash but serves read requests
 /// from its memory. Write requests are propogated to the other Stash.
-#[derive(Debug)]
-pub struct Memory<S> {
-    stash: S,
+#[derive(Debug, Clone)]
+pub struct Memory {
+    next_id: Id,
     collections: HashMap<String, Id>,
     uppers: HashMap<Id, Antichain<Timestamp>>,
     sinces: HashMap<Id, Antichain<Timestamp>>,
     entries: HashMap<Id, Vec<((Vec<u8>, Vec<u8>), Timestamp, Diff)>>,
 }
 
-impl<S: Stash> Memory<S> {
-    pub fn new(stash: S) -> Self {
+impl Memory {
+    pub fn new() -> Self {
         Self {
-            stash,
+            next_id: 1,
             collections: HashMap::new(),
             uppers: HashMap::new(),
             sinces: HashMap::new(),
@@ -41,60 +44,134 @@ impl<S: Stash> Memory<S> {
         }
     }
 
+    async fn transact<F, U>(&mut self, f: F) -> Result<(), StashError>
+    where
+        F: Fn(Self) -> U,
+        U: Future<Output = Result<Self, StashError>>,
+    {
+        let copy = self.clone();
+        let copy = f(copy).await?;
+        let Self {
+            next_id,
+            collections,
+            uppers,
+            sinces,
+            entries,
+        } = copy;
+        self.next_id = next_id;
+        self.collections = collections;
+        self.uppers = uppers;
+        self.sinces = sinces;
+        self.entries = entries;
+        Ok(())
+    }
+
     fn consolidate_id(&mut self, collection_id: Id) {
-        if let Some(entry) = self.entries.get_mut(&collection_id) {
-            let since = match self.sinces.get(&collection_id) {
-                Some(since) => since,
-                // If we don't know the since for this collection, remove the entries. We can't
-                // merely fetch the since because the API requires a full StashCollection, and
-                // we only have the Id here.
-                None => {
-                    self.entries.remove(&collection_id);
-                    return;
-                }
-            };
-            match since.as_option() {
-                Some(since) => {
-                    for ((_k, _v), ts, _diff) in entry.iter_mut() {
-                        if ts.less_than(since) {
-                            *ts = *since;
-                        }
+        let entry = self.entries.get_mut(&collection_id).unwrap();
+        match self.sinces.get(&collection_id).unwrap().as_option() {
+            Some(since) => {
+                for ((_k, _v), ts, _diff) in entry.iter_mut() {
+                    if ts.less_than(since) {
+                        *ts = *since;
                     }
-                    differential_dataflow::consolidation::consolidate_updates(entry);
                 }
-                None => {
-                    // This will cause all calls to iter over this collection to always pass
-                    // through to the underlying stash, making those calls not cached. This isn't
-                    // currently a performance problem because the empty since is not used.
-                    self.entries.remove(&collection_id);
-                }
+                differential_dataflow::consolidation::consolidate_updates(entry);
+            }
+            None => {
+                entry.clear();
             }
         }
+    }
+
+    fn seal_tx<'a, I>(&mut self, seals: I) -> Result<(), StashError>
+    where
+        I: IntoIterator<Item = (Id, &'a Antichain<Timestamp>)>,
+    {
+        for (collection, upper) in seals {
+            let prev = self.uppers.get(&collection).unwrap();
+            if PartialOrder::less_than(upper, prev) {
+                return Err(StashError::from(format!(
+                    "seal request {} is less than the current upper frontier {}",
+                    AntichainFormatter(upper),
+                    AntichainFormatter(prev),
+                )));
+            }
+            self.uppers.insert(collection, upper.clone()).unwrap();
+        }
+        Ok(())
+    }
+
+    fn update_many_tx<I>(&mut self, collection: Id, entries: I) -> Result<(), StashError>
+    where
+        I: IntoIterator<Item = ((Vec<u8>, Vec<u8>), Timestamp, Diff)>,
+    {
+        let upper = self.uppers.get(&collection).unwrap();
+        let entry = self.entries.entry(collection).or_default();
+        for ((k, v), ts, diff) in entries.into_iter() {
+            if !upper.less_equal(&ts) {
+                return Err(StashError::from(format!(
+                    "entry time {} is less than the current upper frontier {}",
+                    ts,
+                    AntichainFormatter(upper)
+                )));
+            }
+            entry.push(((k, v), ts, diff));
+        }
+        Ok(())
+    }
+
+    fn compact_batch_tx<'a, I>(&mut self, compactions: I) -> Result<(), StashError>
+    where
+        I: IntoIterator<Item = (Id, &'a Antichain<Timestamp>)>,
+    {
+        for (collection, new_since) in compactions {
+            let prev_since = self.sinces.get(&collection).unwrap();
+            if PartialOrder::less_than(new_since, prev_since) {
+                return Err(StashError::from(format!(
+                    "compact request {} is less than the current since frontier {}",
+                    AntichainFormatter(new_since),
+                    AntichainFormatter(prev_since)
+                )));
+            }
+            let upper = self.uppers.get(&collection).unwrap();
+            if PartialOrder::less_than(upper, new_since) {
+                return Err(StashError::from(format!(
+                    "compact request {} is greater than the current upper frontier {}",
+                    AntichainFormatter(new_since),
+                    AntichainFormatter(upper)
+                )));
+            }
+            self.sinces.insert(collection, new_since.clone()).unwrap();
+            self.consolidate_id(collection);
+        }
+        Ok(())
     }
 }
 
 #[async_trait]
-impl<S: Stash> Stash for Memory<S> {
+impl Stash for Memory {
     async fn collection<K, V>(&mut self, name: &str) -> Result<StashCollection<K, V>, StashError>
     where
         K: Data,
         V: Data,
     {
-        Ok(match self.collections.entry(name.to_string()) {
-            Entry::Occupied(entry) => StashCollection {
-                id: *entry.get(),
-                _kv: PhantomData,
-            },
-            Entry::Vacant(entry) => {
-                let collection = self.stash.collection(name).await?;
-                entry.insert(collection.id);
-                collection
-            }
+        let id = self.collections.entry(name.to_string()).or_insert_with(|| {
+            self.next_id += 1;
+            self.sinces
+                .insert(self.next_id, Antichain::from_elem(Timestamp::MIN));
+            self.uppers
+                .insert(self.next_id, Antichain::from_elem(Timestamp::MIN));
+            self.entries.insert(self.next_id, Vec::new());
+            self.next_id
+        });
+        Ok(StashCollection {
+            id: *id,
+            _kv: PhantomData,
         })
     }
 
     async fn collections(&mut self) -> Result<BTreeSet<String>, StashError> {
-        self.stash.collections().await
+        Ok(self.collections.keys().cloned().collect())
     }
 
     async fn iter<K, V>(
@@ -105,31 +182,35 @@ impl<S: Stash> Stash for Memory<S> {
         K: Data,
         V: Data,
     {
-        Ok(match self.entries.entry(collection.id) {
-            Entry::Occupied(entry) => entry
-                .get()
-                .iter()
-                .map(|((k, v), ts, diff)| {
-                    let k: K = serde_json::from_slice(k)?;
-                    let v: V = serde_json::from_slice(v)?;
-                    Ok(((k, v), *ts, *diff))
-                })
-                .collect::<Result<Vec<_>, StashError>>()?,
-            Entry::Vacant(entry) => {
-                let entries = self.stash.iter(collection).await?;
-                entry.insert(
-                    entries
-                        .iter()
-                        .map(|((k, v), ts, diff)| {
-                            let key = serde_json::to_vec(k).expect("must serialize");
-                            let value = serde_json::to_vec(v).expect("must serialize");
-                            ((key, value), *ts, *diff)
-                        })
-                        .collect(),
-                );
-                entries
+        let since = match self
+            .sinces
+            .get(&collection.id)
+            .unwrap()
+            .clone()
+            .into_option()
+        {
+            Some(since) => since,
+            None => {
+                return Err(StashError::from(
+                    "cannot iterate collection with empty since frontier",
+                ));
             }
-        })
+        };
+        match self.entries.get(&collection.id) {
+            Some(entries) => {
+                let mut rows = entries
+                    .iter()
+                    .map(|((k, v), ts, diff)| {
+                        let k: K = serde_json::from_slice(k).expect("must deserialize");
+                        let v: V = serde_json::from_slice(v).expect("must deserialize");
+                        ((k, v), std::cmp::max(*ts, since), *diff)
+                    })
+                    .collect();
+                differential_dataflow::consolidation::consolidate_updates(&mut rows);
+                Ok(rows)
+            }
+            None => Ok(Vec::new()),
+        }
     }
 
     async fn iter_key<K, V>(
@@ -141,39 +222,39 @@ impl<S: Stash> Stash for Memory<S> {
         K: Data,
         V: Data,
     {
-        Ok(match self.entries.entry(collection.id) {
-            Entry::Occupied(entry) => entry
-                .get()
-                .iter()
-                .filter_map(|((k, v), ts, diff)| {
-                    let k: K = serde_json::from_slice(k).expect("must deserialize");
-                    if &k == key {
-                        let v: V = serde_json::from_slice(v).expect("must deserialize");
-                        Some((v, *ts, *diff))
-                    } else {
-                        None
-                    }
-                })
-                .collect(),
-            Entry::Vacant(_) => {
-                // If vacant, do a full `iter` to correctly populate the cache
-                // (`entries`, if present, must contain all keys in the source
-                // collection).
-                let entries = self.iter(collection).await?;
-                entries
-                    .into_iter()
-                    .filter_map(
-                        |((k, v), ts, diff)| {
-                            if &k == key {
-                                Some((v, ts, diff))
-                            } else {
-                                None
-                            }
-                        },
-                    )
-                    .collect()
+        let since = match self
+            .sinces
+            .get(&collection.id)
+            .unwrap()
+            .clone()
+            .into_option()
+        {
+            Some(since) => since,
+            None => {
+                return Err(StashError::from(
+                    "cannot iterate collection with empty since frontier",
+                ));
             }
-        })
+        };
+        match self.entries.get(&collection.id) {
+            Some(entries) => {
+                let mut rows = entries
+                    .iter()
+                    .filter_map(|((k, v), ts, diff)| {
+                        let k: K = serde_json::from_slice(k).expect("must deserialize");
+                        if &k == key {
+                            let v: V = serde_json::from_slice(v).expect("must deserialize");
+                            Some((v, std::cmp::max(*ts, since), *diff))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                differential_dataflow::consolidation::consolidate_updates(&mut rows);
+                Ok(rows)
+            }
+            None => Ok(Vec::new()),
+        }
     }
 
     async fn update_many<K, V, I>(
@@ -187,22 +268,22 @@ impl<S: Stash> Stash for Memory<S> {
         I: IntoIterator<Item = ((K, V), Timestamp, Diff)> + Send,
         I::IntoIter: Send,
     {
-        let entries: Vec<_> = entries.into_iter().collect();
-        let local_entries: Vec<_> = entries
-            .iter()
+        let entries = entries
+            .into_iter()
             .map(|((k, v), ts, diff)| {
-                let key = serde_json::to_vec(k).expect("must serialize");
-                let value = serde_json::to_vec(v).expect("must serialize");
-                ((key, value), *ts, *diff)
+                let key = serde_json::to_vec(&k).expect("must serialize");
+                let value = serde_json::to_vec(&v).expect("must serialize");
+                ((key, value), ts, diff)
             })
-            .collect();
-        self.stash.update_many(collection, entries).await?;
-        // Only update the memory cache if it's already present.
-        if let Some(entry) = self.entries.get_mut(&collection.id) {
-            entry.extend(local_entries);
-            self.consolidate_id(collection.id);
-        }
-        Ok(())
+            .collect::<Vec<_>>();
+        self.transact(|mut _self| {
+            let entries = entries.clone();
+            async {
+                _self.update_many_tx(collection.id, entries)?;
+                Ok(_self)
+            }
+        })
+        .await
     }
 
     async fn seal<K, V>(
@@ -225,11 +306,15 @@ impl<S: Stash> Stash for Memory<S> {
         K: Data,
         V: Data,
     {
-        self.stash.seal_batch(seals).await?;
-        for (collection, upper) in seals {
-            self.uppers.insert(collection.id, upper.clone());
-        }
-        Ok(())
+        self.transact(|mut _self| async {
+            _self.seal_tx(
+                seals
+                    .iter()
+                    .map(|(collection, upper)| (collection.id, upper)),
+            )?;
+            Ok(_self)
+        })
+        .await
     }
 
     async fn compact<'a, K, V>(
@@ -253,12 +338,15 @@ impl<S: Stash> Stash for Memory<S> {
         K: Data,
         V: Data,
     {
-        self.stash.compact_batch(compactions).await?;
-        for (collection, since) in compactions {
-            self.sinces.insert(collection.id, since.clone());
-            self.consolidate_id(collection.id);
-        }
-        Ok(())
+        self.transact(|mut _self| async {
+            _self.compact_batch_tx(
+                compactions
+                    .iter()
+                    .map(|(collection, since)| (collection.id, since)),
+            )?;
+            Ok(_self)
+        })
+        .await
     }
 
     async fn consolidate(&mut self, collection: Id) -> Result<(), StashError> {
@@ -266,11 +354,13 @@ impl<S: Stash> Stash for Memory<S> {
     }
 
     async fn consolidate_batch(&mut self, collections: &[Id]) -> Result<(), StashError> {
-        self.stash.consolidate_batch(collections).await?;
-        for collection in collections {
-            self.consolidate_id(*collection);
-        }
-        Ok(())
+        self.transact(|mut _self| async {
+            for collection in collections {
+                _self.consolidate_id(*collection);
+            }
+            Ok(_self)
+        })
+        .await
     }
 
     async fn since<K, V>(
@@ -281,14 +371,10 @@ impl<S: Stash> Stash for Memory<S> {
         K: Data,
         V: Data,
     {
-        Ok(match self.sinces.entry(collection.id) {
-            Entry::Occupied(entry) => entry.get().clone(),
-            Entry::Vacant(entry) => {
-                let since = self.stash.since(collection).await?;
-                entry.insert(since.clone());
-                since
-            }
-        })
+        match self.sinces.get(&collection.id) {
+            Some(since) => Ok(since.clone()),
+            None => Err(format!("unknown collection in sinces: {}", collection.id).into()),
+        }
     }
 
     async fn upper<K, V>(
@@ -299,42 +385,50 @@ impl<S: Stash> Stash for Memory<S> {
         K: Data,
         V: Data,
     {
-        Ok(match self.uppers.entry(collection.id) {
-            Entry::Occupied(entry) => entry.get().clone(),
-            Entry::Vacant(entry) => {
-                let upper = self.stash.upper(collection).await?;
-                entry.insert(upper.clone());
-                upper
-            }
-        })
+        match self.uppers.get(&collection.id) {
+            Some(upper) => Ok(upper.clone()),
+            None => Err(format!("unknown collection in uppers: {}", collection.id).into()),
+        }
     }
 
     async fn confirm_leadership(&mut self) -> Result<(), StashError> {
-        self.stash.confirm_leadership().await
+        Ok(())
     }
 
     fn epoch(&self) -> Option<NonZeroI64> {
-        self.stash.epoch()
+        None
     }
 }
 
 #[async_trait]
-impl<S: Append> Append for Memory<S> {
+impl Append for Memory {
     async fn append_batch(&mut self, batches: &[AppendBatch]) -> Result<(), StashError> {
-        self.stash.append_batch(batches).await?;
-        for batch in batches {
-            self.uppers.insert(batch.collection_id, batch.upper.clone());
-            self.sinces
-                .insert(batch.collection_id, batch.compact.clone());
-            // Only update the memory cache if it's already present.
-            if let Some(entry) = self.entries.get_mut(&batch.collection_id) {
-                entry.extend(batch.entries.iter().map(|((key, value), ts, diff)| {
-                    let key = serde_json::to_vec(key).expect("must serialise");
-                    let value = serde_json::to_vec(value).expect("must serialize");
-                    ((key, value), *ts, *diff)
-                }));
+        self.transact(|mut _self| async {
+            for AppendBatch {
+                collection_id,
+                lower,
+                upper,
+                compact,
+                timestamp: _,
+                entries,
+            } in batches
+            {
+                let current_upper = _self.uppers.get(collection_id).unwrap();
+                if current_upper != lower {
+                    return Err(StashError::from("unexpected lower"));
+                }
+
+                let entries = entries.iter().map(|((k, v), ts, diff)| {
+                    let k = serde_json::to_vec(&k).unwrap();
+                    let v = serde_json::to_vec(&v).unwrap();
+                    ((k, v), *ts, *diff)
+                });
+                _self.update_many_tx(*collection_id, entries)?;
+                _self.seal_tx([(*collection_id, upper)])?;
+                _self.compact_batch_tx([(*collection_id, compact)])?;
             }
-        }
-        Ok(())
+            Ok(_self)
+        })
+        .await
     }
 }

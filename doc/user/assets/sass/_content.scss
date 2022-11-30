@@ -409,6 +409,10 @@ p+p {
             &:last-child {
                 padding-bottom: 0;
             }
+
+            p {
+                display: block;
+            }
         }
     }
 

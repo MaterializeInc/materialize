@@ -189,3 +189,16 @@ impl From<CollectionMissing> for CollectionUpdateError {
         Self::CollectionMissing(error.0)
     }
 }
+
+/// Errors arising during orphan removal.
+#[derive(Error, Debug)]
+pub enum RemoveOrphansError {
+    #[error("orchestrator error: {0}")]
+    OrchestratorError(anyhow::Error),
+}
+
+impl From<anyhow::Error> for RemoveOrphansError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::OrchestratorError(error)
+    }
+}

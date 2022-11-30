@@ -84,7 +84,7 @@ pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
 #[derive(Debug, Clone, Serialize)]
 pub struct ServiceEvent {
     pub service_id: String,
-    pub process_id: i64,
+    pub process_id: u64,
     pub status: ServiceStatus,
     pub time: DateTime<Utc>,
 }
@@ -96,8 +96,16 @@ pub enum ServiceStatus {
     Ready,
     /// Service is not ready to accept requests.
     NotReady,
-    /// Service status is unknown.
-    Unknown,
+}
+
+impl ServiceStatus {
+    /// Returns the service status as a kebab-case string.
+    pub fn as_kebab_case_str(&self) -> &'static str {
+        match self {
+            ServiceStatus::Ready => "ready",
+            ServiceStatus::NotReady => "not-ready",
+        }
+    }
 }
 
 /// Describes a running service managed by an `Orchestrator`.

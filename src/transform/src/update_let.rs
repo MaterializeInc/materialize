@@ -56,14 +56,23 @@ impl crate::Transform for UpdateLet {
         relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        *args.id_gen = IdGen::default(); // Get a fresh IdGen.
-        let result = self.action(relation, &mut HashMap::new(), args.id_gen);
+        let result = self.transform_without_trace(relation, args);
         mz_repr::explain_new::trace_plan(&*relation);
         result
     }
 }
 
 impl UpdateLet {
+    /// Performs the `UpdateLet` transformation without tracing the result.
+    pub fn transform_without_trace(
+        &self,
+        relation: &mut MirRelationExpr,
+        args: TransformArgs,
+    ) -> Result<(), crate::TransformError> {
+        *args.id_gen = IdGen::default(); // Get a fresh IdGen.
+        self.action(relation, &mut HashMap::new(), args.id_gen)
+    }
+
     /// Re-assign type information and identifier to each `Get`.
     pub fn action(
         &self,

@@ -157,27 +157,24 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_compute_instance_status_update(
+    pub(super) fn pack_compute_replica_status_update(
         &self,
         compute_instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
         process_id: ProcessId,
         diff: Diff,
     ) -> BuiltinTableUpdate {
-        let event = self
-            .try_get_compute_instance_status(compute_instance_id, replica_id, process_id)
-            .expect("status not known");
+        let event = self.get_compute_instance_status(compute_instance_id, replica_id, process_id);
         let status = match event.status {
             ComputeInstanceStatus::Ready => "ready",
-            ComputeInstanceStatus::NotReady => "not_ready",
-            ComputeInstanceStatus::Unknown => "unknown",
+            ComputeInstanceStatus::NotReady => "not-ready",
         };
 
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_STATUSES),
             row: Row::pack_slice(&[
                 Datum::UInt64(replica_id),
-                Datum::Int64(process_id),
+                Datum::UInt64(process_id),
                 Datum::String(status),
                 Datum::TimestampTz(event.time.try_into().expect("must fit")),
             ]),

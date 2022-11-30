@@ -108,7 +108,7 @@ async fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
         ),
     ];
 
-    let catalog = Catalog::open_debug_sqlite(NOW_ZERO.clone()).await?;
+    let catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
     let catalog = catalog.for_system_session();
     for (sql, types) in test_cases {
         let stmt = mz_sql::parse::parse(sql)?.into_element();

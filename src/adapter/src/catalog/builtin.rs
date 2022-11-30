@@ -1380,9 +1380,9 @@ pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| Builti
     schema: MZ_INTERNAL_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("replica_id", ScalarType::UInt64.nullable(false))
-        .with_column("process_id", ScalarType::Int64.nullable(false))
+        .with_column("process_id", ScalarType::UInt64.nullable(false))
         .with_column("status", ScalarType::String.nullable(false))
-        .with_column("last_update", ScalarType::TimestampTz.nullable(false)),
+        .with_column("updated_at", ScalarType::TimestampTz.nullable(false)),
 });
 
 pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2459,36 +2459,26 @@ FROM
 pub const MZ_SHOW_CLUSTER_REPLICAS: BuiltinView = BuiltinView {
     name: "mz_show_cluster_replicas",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: r#"CREATE VIEW
-    mz_internal.mz_show_cluster_replicas
-    AS
-        SELECT
-            mz_catalog.mz_clusters.name AS cluster,
-            mz_catalog.mz_cluster_replicas.name AS replica,
-            mz_catalog.mz_cluster_replicas.size AS size,
-            coalesce(statuses.ready, false) AS ready
-        FROM
-            mz_catalog.mz_cluster_replicas
-                JOIN
-                    mz_catalog.mz_clusters
-                    ON mz_catalog.mz_cluster_replicas.cluster_id = mz_catalog.mz_clusters.id
-                -- TODO[btv] This has to be a left join, because `mz_cluster_replica_statuses`
-                -- is not filled in immediately on replica creation.
-                LEFT JOIN
-                    (
-                            SELECT
-                                replica_id,
-                                mz_internal.mz_all(
-                                        mz_internal.mz_cluster_replica_statuses.status
-                                        = 'ready'
-                                    )
-                                    AS ready
-                            FROM mz_internal.mz_cluster_replica_statuses
-                            GROUP BY replica_id
-                        )
-                        AS statuses
-                    ON mz_catalog.mz_cluster_replicas.id = statuses.replica_id
-        ORDER BY 1, 2"#,
+    sql: r#"CREATE VIEW mz_internal.mz_show_cluster_replicas
+AS SELECT
+    mz_catalog.mz_clusters.name AS cluster,
+    mz_catalog.mz_cluster_replicas.name AS replica,
+    mz_catalog.mz_cluster_replicas.size AS size,
+    statuses.ready AS ready
+FROM
+    mz_catalog.mz_cluster_replicas
+        JOIN mz_catalog.mz_clusters
+            ON mz_catalog.mz_cluster_replicas.cluster_id = mz_catalog.mz_clusters.id
+        JOIN
+            (
+                SELECT
+                    replica_id,
+                    mz_internal.mz_all(status = 'ready') AS ready
+                FROM mz_internal.mz_cluster_replica_statuses
+                GROUP BY replica_id
+            ) AS statuses
+            ON mz_catalog.mz_cluster_replicas.id = statuses.replica_id
+ORDER BY 1, 2"#,
 };
 
 pub const MZ_SHOW_DATABASES_IND: BuiltinIndex = BuiltinIndex {
@@ -3016,7 +3006,7 @@ mod tests {
             })
             .collect();
 
-        let catalog = Catalog::open_debug_sqlite(NOW_ZERO.clone()).await?;
+        let catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
         let conn_catalog = catalog.for_system_session();
         let resolve_type_oid = |item: &str| {
             conn_catalog
@@ -3215,7 +3205,7 @@ mod tests {
     // Make sure pg views don't use types that only exist in Materialize.
     #[tokio::test]
     async fn test_pg_views_forbidden_types() -> Result<(), anyhow::Error> {
-        let catalog = Catalog::open_debug_sqlite(SYSTEM_TIME.clone()).await?;
+        let catalog = Catalog::open_debug_memory(SYSTEM_TIME.clone()).await?;
         let conn_catalog = catalog.for_system_session();
 
         for view in BUILTINS::views()

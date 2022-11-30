@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use anyhow::Context;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -15,10 +16,11 @@ use std::time::Duration;
 use maplit::btreemap;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
-use rdkafka::error::KafkaError;
+use rdkafka::error::{KafkaError, RDKafkaErrorCode};
 use rdkafka::message::{BorrowedMessage, Headers};
 use rdkafka::statistics::Statistics;
 use rdkafka::topic_partition_list::Offset;
+use rdkafka::types::RDKafkaRespErr;
 use rdkafka::{ClientContext, Message, TopicPartitionList};
 use timely::scheduling::activate::SyncActivator;
 use tokio::runtime::Handle as TokioHandle;
@@ -33,7 +35,8 @@ use mz_storage_client::types::sources::encoding::SourceDataEncoding;
 use mz_storage_client::types::sources::{KafkaSourceConnection, MzOffset};
 
 use crate::source::commit::LogCommitter;
-use crate::source::healthcheck::{SourceStatus, SourceStatusUpdate};
+
+use crate::source::source_reader_pipeline::HealthStatus;
 use crate::source::types::{OffsetCommitter, SourceConnectionBuilder};
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
@@ -77,8 +80,8 @@ pub struct KafkaSourceReader {
     partition_metrics: KafkaPartitionMetrics,
     /// Whether or not to unpack and allocate headers and pass them through in the `SourceMessage`
     include_headers: bool,
-    /// The latest error reported to the consumer context.
-    recent_error: Arc<Mutex<Option<KafkaError>>>,
+    /// The latest status detected by the metadata refresh thread.
+    health_status: Arc<Mutex<Option<HealthStatus>>>,
 }
 
 pub struct KafkaOffsetCommiter {
@@ -113,14 +116,13 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
             ..
         } = self;
         let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
-        let recent_error = Arc::new(Mutex::new(None));
+        let health_status = Arc::new(Mutex::new(None));
         let consumer: BaseConsumer<_> =
             TokioHandle::current().block_on(connection.create_with_context(
                 &connection_context,
                 GlueConsumerContext {
                     activator: consumer_activator,
                     stats_tx,
-                    recent_error: Arc::clone(&recent_error),
                 },
                 &btreemap! {
                     // Default to disabling Kafka auto commit. This can be
@@ -203,7 +205,7 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
             let partition_info = Arc::downgrade(&partition_info);
             let topic = topic.clone();
             let consumer = Arc::clone(&consumer);
-            let metadata_refresh_frequency = connection
+            let metadata_refresh_interval = connection
                 .options
                 .get("topic.metadata.refresh.interval.ms")
                 // Safe conversion: statement::extract_config enforces that option is a value
@@ -212,21 +214,40 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
                     StringOrSecret::String(s) => Duration::from_millis(s.parse().unwrap()),
                     StringOrSecret::Secret(_) => unreachable!(),
                 })
-                // Default value obtained from https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
-                .unwrap_or_else(|| Duration::from_secs(300));
+                // By default, rdkafka will check for updated metadata every five minutes:
+                // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
+                .unwrap_or_else(|| Duration::from_secs(15));
+
+            // We want a fairly low ceiling on our polling frequency, since we rely
+            // on this heartbeat to determine the health of our Kafka connection.
+            let metadata_refresh_frequency = metadata_refresh_interval.min(Duration::from_secs(60));
+
+            let status_report = Arc::clone(&health_status);
 
             thread::Builder::new()
                 .name("kafka-metadata".to_string())
                 .spawn(move || {
+                    info!(
+                        refresh_frequency =? metadata_refresh_frequency,
+                        "starting kafka metadata refresh thread"
+                    );
                     while let Some(partition_info) = partition_info.upgrade() {
-                        match get_kafka_partitions(&consumer, &topic, Duration::from_secs(30)) {
+                        let result =
+                            get_kafka_partitions(&consumer, &topic, Duration::from_secs(30));
+                        match result {
                             Ok(info) => {
                                 *partition_info.lock().unwrap() = Some(info);
+                                *status_report.lock().unwrap() = Some(HealthStatus::Running);
                                 thread::park_timeout(metadata_refresh_frequency);
                             }
-                            Err(_) => thread::park_timeout(Duration::from_secs(30)),
+                            Err(e) => {
+                                *status_report.lock().unwrap() =
+                                    Some(HealthStatus::StalledWithError(e.to_string()));
+                                thread::park_timeout(metadata_refresh_frequency);
+                            }
                         }
                     }
+                    info!("Partition info has been dropped; shutting down.")
                 })
                 .unwrap()
                 .unpark_on_drop()
@@ -253,7 +274,7 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
                     topic.clone(),
                     source_id,
                 ),
-                recent_error,
+                health_status,
             },
             KafkaOffsetCommiter {
                 source_id,
@@ -318,11 +339,9 @@ impl SourceReader for KafkaSourceReader {
                         "kafka error when polling consumer for source: {} topic: {} : {}",
                         self.source_name, self.topic_name, e
                     );
-                    next_message =
-                        NextMessage::Ready(SourceMessageType::SourceStatus(SourceStatusUpdate {
-                            status: SourceStatus::Stalled,
-                            error: Some(message),
-                        }))
+                    next_message = NextMessage::Ready(SourceMessageType::SourceStatus(
+                        HealthStatus::StalledWithError(message),
+                    ))
                 }
                 Ok(message) => {
                     let (message, ts) = construct_source_message(&message, self.include_headers);
@@ -351,19 +370,17 @@ impl SourceReader for KafkaSourceReader {
                     next_message = self.handle_message(Ok(message), ts);
                 }
                 Err(error) => {
-                    next_message =
-                        NextMessage::Ready(SourceMessageType::SourceStatus(SourceStatusUpdate {
-                            status: SourceStatus::Stalled,
-                            error: Some(error),
-                        }))
+                    next_message = NextMessage::Ready(SourceMessageType::SourceStatus(
+                        HealthStatus::StalledWithError(error),
+                    ))
                 }
                 Ok(None) => {
                     // no message in this queue; keep looping
                 }
             }
         }
-        if let Some(err) = self
-            .recent_error
+        if let Some(status) = self
+            .health_status
             .lock()
             .expect("locking error mutex")
             .take()
@@ -373,11 +390,7 @@ impl SourceReader for KafkaSourceReader {
             // are more messages in the queue; in that case, we'll rely on the client reporting that
             // error again in the future if the error condition persists.
             if let NextMessage::Pending = next_message {
-                next_message =
-                    NextMessage::Ready(SourceMessageType::SourceStatus(SourceStatusUpdate {
-                        status: SourceStatus::Stalled,
-                        error: Some(err.to_string()),
-                    }))
+                next_message = NextMessage::Ready(SourceMessageType::SourceStatus(status))
             }
         }
 
@@ -761,7 +774,6 @@ impl PartitionConsumer {
 struct GlueConsumerContext {
     activator: SyncActivator,
     stats_tx: crossbeam_channel::Sender<Jsonb>,
-    recent_error: Arc<Mutex<Option<KafkaError>>>,
 }
 
 impl ClientContext for GlueConsumerContext {
@@ -783,8 +795,6 @@ impl ClientContext for GlueConsumerContext {
         MzClientContext.log(level, fac, log_message)
     }
     fn error(&self, error: rdkafka::error::KafkaError, reason: &str) {
-        let mut recent_error = self.recent_error.lock().expect("recording error");
-        *recent_error = Some(error.clone());
         MzClientContext.error(error, reason)
     }
 }
@@ -809,11 +819,27 @@ where
     C: ConsumerContext,
 {
     let metadata = consumer.fetch_metadata(Some(topic), timeout)?;
-    Ok(metadata.topics()[0]
-        .partitions()
-        .iter()
-        .map(|x| x.id())
-        .collect())
+    let topic_meta = metadata
+        .topics()
+        .get(0)
+        .context("expected a topic in the metadata result")?;
+
+    fn check_err(err: Option<RDKafkaRespErr>) -> anyhow::Result<()> {
+        if let Some(err) = err {
+            Err(RDKafkaErrorCode::from(err))?
+        }
+        Ok(())
+    }
+
+    check_err(topic_meta.error())?;
+
+    let mut partition_ids = Vec::with_capacity(topic_meta.partitions().len());
+    for partition_meta in topic_meta.partitions() {
+        check_err(partition_meta.error())?;
+
+        partition_ids.push(partition_meta.id());
+    }
+    Ok(partition_ids)
 }
 
 #[cfg(test)]

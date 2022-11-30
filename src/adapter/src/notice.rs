@@ -9,8 +9,11 @@
 
 use std::fmt;
 
+use chrono::{DateTime, Utc};
+
 use mz_compute_client::controller::ComputeInstanceStatus;
 use mz_ore::str::StrExt;
+use mz_repr::strconv;
 use mz_sql::ast::NoticeSeverity;
 
 /// Notices that can occur in the adapter layer.
@@ -47,6 +50,7 @@ pub enum AdapterNotice {
         cluster: String,
         replica: String,
         status: ComputeInstanceStatus,
+        time: DateTime<Utc>,
     },
     DroppedActiveDatabase {
         name: String,
@@ -69,7 +73,7 @@ impl AdapterNotice {
             AdapterNotice::ClusterDoesNotExist { name: _ } => Some("Create the cluster with CREATE CLUSTER or pick an extant cluster with SET CLUSTER = name. List available clusters with SHOW CLUSTERS.".into()),
             AdapterNotice::DroppedActiveDatabase { name: _ } => Some("Choose a new active database by executing SET DATABASE = <name>.".into()),
             AdapterNotice::DroppedActiveCluster { name: _ } => Some("Choose a new active cluster by executing SET CLUSTER = <name>.".into()),
-            AdapterNotice::ClusterReplicaStatusChanged { .. } => Some("The cluster replica may be restarting or going offline.".into()),
+            AdapterNotice::ClusterReplicaStatusChanged { status, .. } if *status == ComputeInstanceStatus::NotReady => Some("The cluster replica may be restarting or going offline.".into()),
             _ => None
         }
     }
@@ -109,12 +113,19 @@ impl fmt::Display for AdapterNotice {
                 cluster,
                 replica,
                 status,
+                time,
             } => {
+                let mut time_buf = String::new();
+                strconv::format_timestamptz(&mut time_buf, time);
                 write!(
                     f,
-                    "cluster replica {}.{} changed status to: {:?}",
-                    cluster, replica, status,
-                )
+                    "cluster replica {}.{} changed status to {} at {}",
+                    cluster,
+                    replica,
+                    status.as_kebab_case_str().quoted(),
+                    time_buf,
+                )?;
+                Ok(())
             }
             AdapterNotice::DroppedActiveDatabase { name } => {
                 write!(f, "active database {} has been dropped", name.quoted())

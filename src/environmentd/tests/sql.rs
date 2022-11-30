@@ -1783,7 +1783,7 @@ fn test_idle_in_transaction_session_timeout() {
     // session should be timed out even if transaction has failed.
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
-        .batch_execute("SET idle_in_transaction_session_timeout TO '4ms'")
+        .batch_execute("SET idle_in_transaction_session_timeout TO '50ms'")
         .unwrap();
     client.batch_execute("BEGIN").unwrap();
     let error = client.batch_execute("SELECT 1/0").unwrap_err();
@@ -1791,7 +1791,7 @@ fn test_idle_in_transaction_session_timeout() {
         !error.is_closed(),
         "failing a transaction should not close the connection: {error:?}"
     );
-    std::thread::sleep(Duration::from_millis(5));
+    std::thread::sleep(Duration::from_millis(51));
     // Retry because sleep might be woken up early.
     Retry::default()
         .max_duration(Duration::from_secs(1))
@@ -1814,12 +1814,10 @@ fn test_idle_in_transaction_session_timeout() {
     // session should not be timed out if it's not idle.
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
-        .batch_execute("SET idle_in_transaction_session_timeout TO '4ms'")
+        .batch_execute("SET idle_in_transaction_session_timeout TO '50ms'")
         .unwrap();
     client.batch_execute("BEGIN").unwrap();
-    client
-        .query("SELECT mz_internal.mz_sleep(0.5)", &[])
-        .unwrap();
+    client.query("SELECT mz_internal.mz_sleep(1)", &[]).unwrap();
     client.query("SELECT 1", &[]).unwrap();
     client.batch_execute("COMMIT").unwrap();
 

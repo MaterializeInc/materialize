@@ -550,13 +550,9 @@ impl<S: Append + 'static> Coordinator<S> {
         // This is disabled for the moment because it has unusual upper
         // advancement behavior.
         // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
-        let source_status_collection_id = if self.catalog.config().unsafe_mode {
-            Some(self.catalog.resolve_builtin_storage_collection(
-                &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
-            ))
-        } else {
-            None
-        };
+        let source_status_collection_id = Some(self.catalog.resolve_builtin_storage_collection(
+            &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
+        ));
 
         info!("coordinator init: installing existing objects in catalog");
         let mut privatelink_connections = HashMap::new();
@@ -1166,8 +1162,20 @@ pub async fn serve<S: Append + 'static>(
                 segment_client,
                 metrics: Metrics::register_with(&inner_metrics_registry),
             };
-            let bootstrap =
-                handle.block_on(coord.bootstrap(builtin_migration_metadata, builtin_table_updates));
+            let bootstrap = handle.block_on(async {
+                coord
+                    .bootstrap(builtin_migration_metadata, builtin_table_updates)
+                    .await?;
+                coord
+                    .controller
+                    .remove_orphans(
+                        coord.catalog.get_next_replica_id().await?,
+                        coord.catalog.get_next_user_global_id().await?,
+                    )
+                    .await
+                    .map_err(AdapterError::Orchestrator)?;
+                Ok(())
+            });
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();
             if ok {

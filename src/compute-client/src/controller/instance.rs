@@ -143,6 +143,11 @@ impl<T> Instance<T> {
         // Do we have responses ready to deliver?
         || !self.ready_responses.is_empty()
     }
+
+    /// Returns the ids of all replicas of this instance
+    pub fn replica_ids(&self) -> impl Iterator<Item = &ReplicaId> {
+        self.replicas.keys()
+    }
 }
 
 impl<T> Instance<T>

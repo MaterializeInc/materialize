@@ -1111,14 +1111,28 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 // Extract temporal predicates as joins cannot currently absorb them.
                 let (plan, missing) = match implementation {
                     IndexedFilter(_id, key, _val) => {
-                        // Start with the constant input. This is important at least until #14059
-                        // is fixed.
+                        // Start with the constant input. (This used to be important before #14059
+                        // was fixed.)
                         let start: usize = 1;
                         let order = vec![(0usize, key.clone(), None)];
-                        let source_arrangement = input_keys[start].arbitrary_arrangement();
+                        // All columns of the constant input will be part of the arrangement key.
+                        // Note that currently nothing else would make this arrangement exist, so
+                        // this will end up in `missing`, and thus we'll insert an LIR ArrangeBy
+                        // later.
+                        let source_arrangement = (
+                            (0..key.len())
+                                .into_iter()
+                                .map(MirScalarExpr::Column)
+                                .collect::<Vec<_>>(),
+                            (0..key.len())
+                                .into_iter()
+                                .map(|i| (i, i))
+                                .collect::<HashMap<_, _>>(),
+                            Vec::<usize>::new(),
+                        );
                         let (ljp, missing) = LinearJoinPlan::create_from(
                             start,
-                            source_arrangement,
+                            Some(&source_arrangement),
                             equivalences,
                             &order,
                             input_mapper,

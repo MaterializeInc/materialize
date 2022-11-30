@@ -69,7 +69,6 @@ use mz_timely_util::order::Partitioned;
 
 use crate::healthcheck::write_to_persist;
 use crate::source::antichain::{MutableOffsetAntichain, OffsetAntichain};
-use crate::source::healthcheck::{SourceStatus, SourceStatusUpdate};
 
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, ReclockOperator};
@@ -381,16 +380,7 @@ where
                                     untimestamped_messages.entry(pid).or_default().push(((message, ts, diff), offset));
                                 }
                                 SourceMessageType::SourceStatus(update) => {
-                                    let update = match update {
-                                        SourceStatusUpdate { status: SourceStatus::Starting, ..} => Some(HealthStatus::Starting),
-                                        SourceStatusUpdate { status: SourceStatus::Running, ..} => Some(HealthStatus::Running),
-                                        SourceStatusUpdate { status: SourceStatus::Stalled, error: Some(e)} => Some(HealthStatus::StalledWithError(e)),
-                                        other => {
-                                            warn!("Received currently-unhandled source status update: {other:?}");
-                                            None
-                                        },
-                                    };
-                                    status_update = update.or(status_update);
+                                    status_update = Some(update);
                                 }
                             }
                         }
@@ -1409,7 +1399,7 @@ where
                                 reclock.source_frontier: {:?}",
                                 untimestamped_batch.batch_upper,
                                 untimestamped_batch.batch_lower,
-                                OffsetAntichain::from(timestamper.source_upper())
+                                timestamper.source_upper()
                             );
                             // We keep batches in the order they arrive from the
                             // source. And we assume that the source frontier never

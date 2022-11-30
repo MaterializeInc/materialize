@@ -216,6 +216,10 @@ class K8sStatefulSet(K8sResource):
         apps_v1_api.replace_namespaced_stateful_set(
             name=name, body=self.stateful_set, namespace=self.namespace()
         )
+        # Despite the name "status" this kubectl command will actually wait
+        # until the rollout is complete.
+        # See https://github.com/kubernetes/kubernetes/issues/79606#issuecomment-779779928
+        self.kubectl("rollout", "status", f"statefulset/{name}")
 
 
 class K8sConfigMap(K8sResource):

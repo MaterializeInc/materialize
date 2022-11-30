@@ -11,20 +11,39 @@
 //!
 //! All structurally equivalent expressions, defined recursively as having structurally
 //! equivalent inputs, and identical parameters, will be placed behind `Let` bindings.
-//! The resulting expressions likely have an excess of `Let` expressions, and should be
-//! subjected to the `InlineLet` transformation to remove those that are not necessary.
+//! The resulting expressions likely have an excess of `Let` expressions, and therefore
+//! we automatically run the `InlineLet` transformation to remove those that are not necessary.
+//! We also automatically run `UpdateLet`.
 
 use std::collections::HashMap;
 
+use crate::inline_let::InlineLet;
 use mz_expr::visit::VisitChildren;
 use mz_expr::{Id, LocalId, MirRelationExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
+use crate::update_let::UpdateLet;
 use crate::TransformArgs;
 
 /// Identifies common relation subexpressions and places them behind `Let` bindings.
 #[derive(Debug)]
-pub struct RelationCSE;
+pub struct RelationCSE {
+    inline_let: InlineLet,
+    update_let: UpdateLet,
+}
+
+impl RelationCSE {
+    /// Constructs a new [`RelationCSE`] instance.
+    /// This also creates an [`InlineLet`] and an [`UpdateLet`] transformation, which will always
+    /// run as the last step of [`RelationCSE`].
+    /// The given `inline_mfp` is passed to the [`InlineLet`].
+    pub fn new(inline_mfp: bool) -> RelationCSE {
+        RelationCSE {
+            inline_let: InlineLet::new(inline_mfp),
+            update_let: UpdateLet::default(),
+        }
+    }
+}
 
 impl crate::Transform for RelationCSE {
     #[tracing::instrument(
@@ -36,11 +55,13 @@ impl crate::Transform for RelationCSE {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        args: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         let mut bindings = Bindings::default();
         bindings.intern_expression(relation)?;
         bindings.populate_expression(relation);
+        self.inline_let.transform_without_trace(relation)?;
+        self.update_let.transform_without_trace(relation, args)?;
         mz_repr::explain_new::trace_plan(&*relation);
         Ok(())
     }
