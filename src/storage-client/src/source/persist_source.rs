@@ -426,15 +426,18 @@ where
                             // tradeoff in tuning yield_fn.
                             differential_dataflow::consolidation::consolidate_updates(&mut updates);
 
-                            // Do very fine-grained output activation/session
-                            // creation to ensure that we don't hold activated
-                            // outputs or sessions across await points, which
-                            // would prevent messages from being flushed from
-                            // the shared timely output buffer.
-                            let mut output_handle = update_output.activate();
-                            let mut update_session = output_handle.session(&cap);
+                            {
+                                // Do very fine-grained output activation/session
+                                // creation to ensure that we don't hold activated
+                                // outputs or sessions across await points, which
+                                // would prevent messages from being flushed from
+                                // the shared timely output buffer.
+                                let mut output_handle = update_output.activate();
+                                let mut update_session = output_handle.session(&cap);
 
-                            update_session.give_vec(&mut updates);
+                                update_session.give_vec(&mut updates);
+                            }
+
                             // Force a yield to give back the timely thread, reactivating on our
                             // way out.
                             tokio::task::yield_now().await;
