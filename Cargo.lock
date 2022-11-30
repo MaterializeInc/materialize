@@ -4558,6 +4558,7 @@ dependencies = [
  "aws-sdk-s3",
  "aws-sdk-sqs",
  "axum",
+ "bytesize",
  "chrono",
  "clap",
  "crossbeam-channel",
