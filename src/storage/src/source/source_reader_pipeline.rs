@@ -1399,7 +1399,7 @@ where
                                 reclock.source_frontier: {:?}",
                                 untimestamped_batch.batch_upper,
                                 untimestamped_batch.batch_lower,
-                                OffsetAntichain::from(timestamper.source_upper())
+                                timestamper.source_upper()
                             );
                             // We keep batches in the order they arrive from the
                             // source. And we assume that the source frontier never
