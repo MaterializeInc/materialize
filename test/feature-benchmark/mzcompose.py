@@ -116,6 +116,8 @@ def run_one_scenario(
         mz = Materialized(
             image=f"materialize/materialized:{tag}" if tag else None,
             default_size=size,
+            # Avoid clashes with the Kafka sink progress topic across restarts
+            environment_id=str(time.time()),
         )
 
         with c.override(mz):

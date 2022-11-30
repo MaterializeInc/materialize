@@ -56,6 +56,7 @@ class Materialized(Service):
         volumes_extra: Optional[List[str]] = None,
         depends_on: Optional[List[str]] = None,
         allow_host_ports: bool = False,
+        environment_id: Optional[str] = None,
     ) -> None:
         if persist_blob_url is None:
             persist_blob_url = f"file://{data_directory}/persist/blob"
@@ -86,6 +87,9 @@ class Materialized(Service):
                 "AWS_SECRET_ACCESS_KEY",
                 "AWS_SESSION_TOKEN",
             ]
+
+        if environment_id:
+            environment += [f"MZ_ENVIRONMENT_ID={environment_id}"]
 
         self.default_storage_size = default_size
         self.default_replica_size = (
