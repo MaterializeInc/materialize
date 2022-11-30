@@ -98,16 +98,6 @@ pub enum ServiceStatus {
     NotReady,
 }
 
-impl ServiceStatus {
-    /// Returns the service status as a kebab-case string.
-    pub fn as_kebab_case_str(&self) -> &'static str {
-        match self {
-            ServiceStatus::Ready => "ready",
-            ServiceStatus::NotReady => "not-ready",
-        }
-    }
-}
-
 /// Describes a running service managed by an `Orchestrator`.
 pub trait Service: fmt::Debug + Send + Sync {
     /// Given the name of a port, returns the addresses for each of the

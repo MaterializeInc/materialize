@@ -750,7 +750,6 @@ impl CatalogState {
     ) {
         self.insert_replica_introspection_items(&config.logging, replica_id);
         let replica = ComputeReplica {
-            name: replica_name.clone(),
             process_status: (0..config.location.num_processes())
                 .map(|process_id| {
                     let status = ComputeReplicaProcessStatus {
@@ -1384,22 +1383,8 @@ pub struct ComputeInstance {
 
 #[derive(Debug, Serialize, Clone)]
 pub struct ComputeReplica {
-    pub name: String,
     pub config: ComputeReplicaConfig,
     pub process_status: HashMap<ProcessId, ComputeReplicaProcessStatus>,
-}
-
-impl ComputeReplica {
-    /// Computes the status of the compute replica as a whole.
-    pub fn status(&self) -> ComputeInstanceStatus {
-        use ComputeInstanceStatus::*;
-        self.process_status
-            .values()
-            .fold(Ready, |s, p| match (s, p.status) {
-                (Ready, Ready) => Ready,
-                _ => NotReady,
-            })
-    }
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -4921,27 +4906,35 @@ impl<S: Append> Catalog<S> {
                 }
 
                 Action::UpdateComputeReplicaStatus { event } => {
-                    builtin_table_updates.push(state.pack_compute_replica_status_update(
-                        event.instance_id,
-                        event.replica_id,
-                        event.process_id,
-                        -1,
-                    ));
-                    state.ensure_compute_replica_status(
-                        event.instance_id,
-                        event.replica_id,
-                        event.process_id,
-                        ComputeReplicaProcessStatus {
-                            status: event.status,
-                            time: event.time,
-                        },
-                    );
-                    builtin_table_updates.push(state.pack_compute_replica_status_update(
-                        event.instance_id,
-                        event.replica_id,
-                        event.process_id,
-                        1,
-                    ));
+                    // It is possible that we receive a status update for a
+                    // replica that has already been dropped from the catalog.
+                    // Just ignore these events.
+                    let replica_known = state
+                        .try_get_compute_replica(event.instance_id, event.replica_id)
+                        .is_some();
+                    if replica_known {
+                        builtin_table_updates.push(state.pack_compute_replica_status_update(
+                            event.instance_id,
+                            event.replica_id,
+                            event.process_id,
+                            -1,
+                        ));
+                        state.ensure_compute_replica_status(
+                            event.instance_id,
+                            event.replica_id,
+                            event.process_id,
+                            ComputeReplicaProcessStatus {
+                                status: event.status,
+                                time: event.time,
+                            },
+                        );
+                        builtin_table_updates.push(state.pack_compute_replica_status_update(
+                            event.instance_id,
+                            event.replica_id,
+                            event.process_id,
+                            1,
+                        ));
+                    }
                 }
                 Action::UpdateSystemConfiguration { name, value } => {
                     state.insert_system_configuration(&name, &value)?;
@@ -5204,13 +5197,6 @@ impl<S: Append> Catalog<S> {
 
     pub fn compute_instances(&self) -> impl Iterator<Item = &ComputeInstance> {
         self.state.compute_instances_by_id.values()
-    }
-
-    pub fn try_get_compute_instance(
-        &self,
-        instance_id: ComputeInstanceId,
-    ) -> Option<&ComputeInstance> {
-        self.state.compute_instances_by_id.get(&instance_id)
     }
 
     pub fn user_compute_instances(&self) -> impl Iterator<Item = &ComputeInstance> {
