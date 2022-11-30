@@ -177,7 +177,7 @@ impl CatalogState {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_STATUSES),
             row: Row::pack_slice(&[
                 Datum::UInt64(replica_id),
-                Datum::UInt64(process_id),
+                Datum::Int64(process_id),
                 Datum::String(status),
                 Datum::TimestampTz(event.time.try_into().expect("must fit")),
             ]),

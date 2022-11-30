@@ -309,7 +309,7 @@ impl Ord for ComputeStartupEpoch {
 pub type ReplicaId = u64;
 
 /// Identifier of a process within a replica.
-pub type ProcessId = u64;
+pub type ProcessId = i64;
 
 #[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize)]
 /// Configuration sent to new compute instances.

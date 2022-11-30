@@ -34,7 +34,6 @@ use mz_orchestrator::{
     NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
     ServiceProcessMetrics, ServiceStatus,
 };
-use mz_ore::cast::CastFrom;
 use mz_ore::id_gen::PortAllocator;
 use mz_pid_file::PidFile;
 
@@ -341,7 +340,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                         for process_idx in 0..processes.len() {
                             events.push(ServiceEvent {
                                 service_id: service.clone(),
-                                process_id: u64::cast_from(process_idx),
+                                process_id: process_idx as i64,
                                 status: ServiceStatus::Unknown,
                                 time: Utc::now(),
                             });

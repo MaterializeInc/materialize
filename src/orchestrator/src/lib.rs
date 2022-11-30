@@ -84,7 +84,7 @@ pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
 #[derive(Debug, Clone, Serialize)]
 pub struct ServiceEvent {
     pub service_id: String,
-    pub process_id: u64,
+    pub process_id: i64,
     pub status: ServiceStatus,
     pub time: DateTime<Utc>,
 }
