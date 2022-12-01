@@ -101,6 +101,16 @@ p+p {
     li {
         position: relative;
 
+        p:first-child {
+            margin-top: 0;
+        }
+
+        ul,
+        ol {
+            margin-top: var(--micro);
+            margin-left: var(--milli);
+        }
+
         &:not(:last-child) {
             margin-bottom: var(--pico);
         }
