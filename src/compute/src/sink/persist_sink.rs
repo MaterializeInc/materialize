@@ -36,6 +36,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriterEnrichedHollowBatch;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::source::persist_source::NO_FLOW_CONTROL;
 use mz_storage_client::types::errors::DataflowError;
 use mz_storage_client::types::sources::SourceData;
 use mz_timely_util::activator::LimitingActivator;
@@ -99,6 +100,7 @@ where
         None,             // no MFP
         // TODO: provide a more meaningful flow control input
         &timely::dataflow::operators::generic::operator::empty(scope),
+        NO_FLOW_CONTROL,
         // Copy the logic in DeltaJoin/Get/Join to start.
         |_timer, count| count > 1_000_000,
     );

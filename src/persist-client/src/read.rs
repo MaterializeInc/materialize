@@ -633,6 +633,7 @@ where
             metadata: metadata.clone(),
             desc: batch.desc.clone(),
             key: part.key,
+            encoded_size_bytes: part.encoded_size_bytes,
             leased_seqno: Some(self.lease_seqno()),
         })
     }

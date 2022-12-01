@@ -182,6 +182,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     mfp.as_mut(),
                     // TODO: provide a more meaningful flow control input
                     &timely::dataflow::operators::generic::operator::empty(region),
+                    NO_FLOW_CONTROL,
                     // Copy the logic in DeltaJoin/Get/Join to start.
                     |_timer, count| count > 1_000_000,
                 );
@@ -619,6 +620,7 @@ where
 }
 
 use differential_dataflow::lattice::Lattice;
+use mz_storage_client::source::persist_source::NO_FLOW_CONTROL;
 use timely::progress::timestamp::Refines;
 
 /// A timestamp type that can be used for operations within MZ's dataflow layer.

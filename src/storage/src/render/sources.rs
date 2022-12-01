@@ -25,6 +25,7 @@ use tokio::runtime::Handle as TokioHandle;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::source::persist_source;
+use mz_storage_client::source::persist_source::NO_FLOW_CONTROL;
 use mz_storage_client::types::errors::{DataflowError, DecodeError, EnvelopeError};
 use mz_storage_client::types::sources::{encoding::*, *};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
@@ -343,6 +344,7 @@ where
                                     Antichain::new(),
                                     None,
                                     &timely::dataflow::operators::generic::operator::empty(scope),
+                                    NO_FLOW_CONTROL,
                                     // Copy the logic in DeltaJoin/Get/Join to start.
                                     |_timer, count| count > 1_000_000,
                                 );
@@ -402,6 +404,7 @@ where
                                 Antichain::new(),
                                 None,
                                 &timely::dataflow::operators::generic::operator::empty(scope),
+                                NO_FLOW_CONTROL,
                                 // Copy the logic in DeltaJoin/Get/Join to start.
                                 |_timer, count| count > 1_000_000,
                             );

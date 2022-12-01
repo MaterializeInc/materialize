@@ -21,13 +21,14 @@ use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::{Scope, Stream};
-use timely::progress::{Antichain, Timestamp as _};
+use timely::progress::Antichain;
 use timely::PartialOrder;
 use tokio::sync::{mpsc, Mutex};
 use tracing::trace;
 
 use mz_expr::MfpPlan;
 use mz_ore::cast::CastFrom;
+use mz_ore::vec::VecExt;
 use mz_persist::location::ExternalError;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::fetch::SerdeLeasedBatchPart;
@@ -46,20 +47,18 @@ use crate::types::sources::SourceData;
 /// The `map_filter_project` argument, if supplied, may be partially applied,
 /// and any un-applied part of the argument will be left behind in the argument.
 ///
-/// Users of this function have the ability to apply flow control to the output by providing a
-/// timely stream whose only purpose is to communicate the frontier until which data must be
-/// emitted. When the frontier of that flow control input is reached the source will stop producing
-/// data and it will wait for the frontier of the flow control input to advance. When the flow
-/// control frontier advances past the data frontier data emission resumes. This effectively
-/// limits the number of timestamps that can be in-flight at any given moment.
+/// Users of this function have the ability to apply flow control to the output
+/// to limit the in-flight data (measured in bytes) it can emit. The flow control
+/// input is a timely stream that communicates the frontier at which the data
+/// emitted from by this source have been dropped.
 ///
-/// **Note:** Because this function is reading batches from `persist`, it is working at batch
-/// granularity. In practice, the source will be overshooting the target flow control upper by an
-/// amount that is related to the size of batches.
+/// **Note:** Because this function is reading batches from `persist`, it is working
+/// at batch granularity. In practice, the source will be overshooting the target
+/// flow control upper by an amount that is related to the size of batches.
 ///
-/// If no flow control is desired an empty stream whose frontier immediately advances to the empty
-/// antichain can be used. An easy easy of creating such stream is by using
-/// [`timely::dataflow::operators::generic::operator::empty`].
+/// If no flow control is desired an empty stream whose frontier immediately advances
+/// to the empty antichain can be used. An easy easy of creating such stream is by
+/// using [`timely::dataflow::operators::generic::operator::empty`].
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
 pub fn persist_source<G, YFn>(
@@ -71,6 +70,7 @@ pub fn persist_source<G, YFn>(
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
     flow_control_input: &Stream<G, ()>,
+    flow_control_max_inflight_bytes: usize,
     yield_fn: YFn,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
@@ -90,6 +90,7 @@ where
         until,
         map_filter_project,
         flow_control_input,
+        flow_control_max_inflight_bytes,
         yield_fn,
     );
     let (ok_stream, err_stream) = stream.ok_err(|(d, t, r)| match d {
@@ -98,6 +99,9 @@ where
     });
     (ok_stream, err_stream, token)
 }
+
+/// Informs a `persist_source` to skip flow control on its output
+pub const NO_FLOW_CONTROL: usize = usize::MAX;
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -115,6 +119,7 @@ pub fn persist_source_core<G, YFn>(
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
     flow_control_input: &Stream<G, ()>,
+    flow_control_max_inflight_bytes: usize,
     yield_fn: YFn,
 ) -> (
     Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
@@ -228,7 +233,7 @@ where
         // will only write out new data once it knows that earlier writes went
         // through, including the initial downgrade of the shard upper to the
         // `as_of`.
-        yield (Vec::new(), as_of_stream.clone());
+        yield (Vec::new(), as_of_stream.clone(), 0);
 
         // Always poll drop_rx first. drop_rx returns only if drop_tx has been dropped.
         // In this case, we deliberately do not continue on the subscribe. but terminate this task
@@ -270,7 +275,9 @@ where
             if PartialOrder::less_equal(&until_clone, &progress) {
                 done = true;
             }
-            yield (parts, progress);
+
+            let parts_size_bytes = parts.iter().map(|x| x.encoded_size_bytes()).sum();
+            yield (parts, progress, parts_size_bytes);
         }
 
         // Rather than simply end, we spawn a task that can continue to return leases.
@@ -293,18 +300,46 @@ where
             let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
             let waker = futures::task::waker(waker_activator);
 
-            let mut data_upper = Antichain::from_elem(Timestamp::minimum());
+            let mut current_ts = timely::progress::Timestamp::minimum();
+            let mut inflight_bytes = 0;
+            let mut inflight_parts: Vec<(Antichain<Timestamp>, usize)> = Vec::new();
 
             move |cap_set, flow_control_upper, output| {
                 let mut context = Context::from_waker(&waker);
 
-                while PartialOrder::less_than(&data_upper.borrow(), &flow_control_upper) {
+                let retired_parts = inflight_parts.drain_filter_swapping(|(upper, _size)| {
+                    PartialOrder::less_equal(&upper.borrow(), &flow_control_upper)
+                });
+
+                for (_upper, size_in_bytes) in retired_parts {
+                    inflight_bytes -= size_in_bytes;
+                    trace!(
+                        "shard {} returning {} bytes. total: {}. batch frontier {:?} less_equal to {:?}",
+                        data_shard,
+                        size_in_bytes,
+                        inflight_bytes,
+                        _upper,
+                        flow_control_upper,
+                    );
+                }
+
+                while inflight_bytes < flow_control_max_inflight_bytes {
                     match pinned_stream.as_mut().poll_next(&mut context) {
-                        Poll::Ready(Some(Ok((parts, upper)))) => {
-                            let session_cap = cap_set
-                                .first()
-                                .expect("got data after reaching empty antichain");
+                        Poll::Ready(Some(Ok((parts, progress, size_in_bytes)))) => {
+                            let session_cap = cap_set.delayed(&current_ts);
                             let mut session = output.session(&session_cap);
+
+                            if size_in_bytes > 0 {
+                                inflight_parts.push((progress.clone(), size_in_bytes));
+                                inflight_bytes += size_in_bytes;
+                                trace!(
+                                    "shard {} putting {} bytes inflight. total: {}. batch frontier {:?}",
+                                    data_shard,
+                                    size_in_bytes,
+                                    inflight_bytes,
+                                    progress,
+                                );
+                            }
 
                             for part in parts {
                                 // Give the part to a random worker.
@@ -312,8 +347,16 @@ where
                                 session.give((worker_idx, part.into_exchangeable_part()));
                             }
 
-                            cap_set.downgrade(upper.iter());
-                            data_upper = upper;
+                            cap_set.downgrade(progress.iter());
+                            match progress.into_option() {
+                                Some(ts) => {
+                                    current_ts = ts;
+                                }
+                                None => {
+                                    cap_set.downgrade(&[]);
+                                    return;
+                                }
+                            }
                         }
                         Poll::Ready(Some(Err::<_, ExternalError>(e))) => {
                             panic!("unexpected error from persist {e}")
