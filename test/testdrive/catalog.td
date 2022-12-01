@@ -527,6 +527,7 @@ mz_worker_compute_import_frontiers              log   <null>
 > SHOW TABLES FROM mz_internal
 name
 ----
+mz_cluster_replica_frontiers
 mz_cluster_replica_heartbeats
 mz_cluster_replica_metrics
 mz_cluster_replica_sizes
@@ -580,7 +581,7 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-36
+37
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

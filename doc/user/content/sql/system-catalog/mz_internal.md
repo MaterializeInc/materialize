@@ -172,6 +172,21 @@ Field        | Type       | Meaning
 `export_id ` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
 `time`       | [`mz_timestamp`] | The next timestamp at which the output may change.
 
+### `mz_cluster_replica_frontiers`
+
+The `mz_cluster_replica_frontiers` table describes the frontiers of each [dataflow] in the system.
+[`mz_compute_frontiers`](#mz_compute_frontiers) is similar to this table, but `mz_compute_frontiers`
+exposes the frontiers known to the compute replicas while `mz_cluster_replica_frontiers` contains
+the frontiers the coordinator is aware of.
+
+At this time, we do not make any guarantees about the freshness of these numbers.
+
+Field        | Type       | Meaning
+-------------|------------|--------
+`replica_id` | [`bigint`] | The ID of a cluster replica.
+`export_id ` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
+`time`       | [`mz_timestamp`] | The next timestamp at which the output may change.
+
 ### `mz_compute_import_frontiers`
 
 The `mz_compute_import_frontiers` view describes the frontiers for every
