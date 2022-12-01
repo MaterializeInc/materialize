@@ -154,7 +154,7 @@ database_objects = [
             > CREATE MATERIALIZED VIEW obj AS SELECT COUNT(*) FROM t1;
             """
         ),
-        expected_size=12 * 1024,
+        expected_size=9 * 1024,
     ),
     # The pg-cdc source is expected to be empty. The data is in the sub-source
     DatabaseObject(
