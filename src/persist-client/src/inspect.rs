@@ -348,15 +348,15 @@ pub async fn unreferenced_blobs(
 /// the type system and our safety checks that we really can read the data.
 
 #[derive(Debug)]
-struct K;
+pub(crate) struct K;
 #[derive(Debug)]
-struct V;
+pub(crate) struct V;
 #[derive(Debug)]
 struct T;
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord)]
 struct D(i64);
 
-static KVTD_CODECS: Mutex<(String, String, String, String)> =
+pub(crate) static KVTD_CODECS: Mutex<(String, String, String, String)> =
     Mutex::new((String::new(), String::new(), String::new(), String::new()));
 
 impl Codec for K {

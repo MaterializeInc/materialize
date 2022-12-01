@@ -124,6 +124,10 @@ where
         self.state.seqno()
     }
 
+    pub(crate) fn state(&self) -> &State<K, V, T, D> {
+        &self.state
+    }
+
     #[cfg(test)]
     pub fn seqno_since(&self) -> SeqNo {
         self.state.seqno_since()

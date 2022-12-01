@@ -16,7 +16,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
-use mz_build_info::DUMMY_BUILD_INFO;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
@@ -31,6 +30,7 @@ use mz_persist::workload::DataGenerator;
 use mz_persist_client::{Metrics, PersistConfig, PersistLocation, ShardId};
 
 use crate::open_loop::api::{BenchmarkReader, BenchmarkWriter};
+use crate::BUILD_INFO;
 
 /// Different benchmark configurations.
 #[derive(clap::ArgEnum, Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
@@ -128,7 +128,7 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         consensus_uri: args.consensus_uri.clone(),
     };
     let persist = PersistClientCache::new(
-        PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
+        PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone()),
         &metrics_registry,
     )
     .open(location)

@@ -4058,7 +4058,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.0.0"
+version = "0.34.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
