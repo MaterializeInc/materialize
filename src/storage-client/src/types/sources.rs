@@ -2329,16 +2329,6 @@ pub struct SourceToken {
     pub(crate) _activator: Rc<ActivateOnDrop<()>>,
 }
 
-/// A `AsyncSourceToken` manages interest in a source.
-///
-/// When the `AsyncSourceToken` is dropped the associated source will be stopped.
-///
-/// This type does the same thing as `SourceToken`, but operates in a way
-/// optimized for async timely operators.
-pub struct AsyncSourceToken {
-    pub(crate) _drop_closes_the_oneshot: tokio::sync::oneshot::Sender<()>,
-}
-
 #[test]
 fn test_timeline_parsing() {
     assert_eq!(Ok(Timeline::EpochMilliseconds), "M".parse());
