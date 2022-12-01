@@ -11,6 +11,7 @@
 
 use std::cell::RefCell;
 use std::future::Future;
+use std::mem::ManuallyDrop;
 use std::pin::Pin;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,6 +42,9 @@ pub struct OperatorBuilder<G: Scope> {
     registered_wakers: Rc<RefCell<Vec<Waker>>>,
     /// The waker set up to activate this timely operator when woken
     operator_waker: Arc<TimelyWaker>,
+    /// Holds type erased closures that should drain a handle when called. These handles will be
+    /// automatically drained when the operator is scheduled and the logic future has exited
+    drain_pipe: Rc<RefCell<Vec<Box<dyn FnMut()>>>>,
 }
 
 /// An async Waker that activates a specific operator when woken and marks the task as ready
@@ -61,9 +65,9 @@ impl ArcWake for TimelyWaker {
 }
 
 /// Async handle to an operator's input stream
-pub struct AsyncInputHandle<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> {
+pub struct AsyncInputHandle<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> {
     /// The underying synchronous input handle
-    sync_handle: InputHandleCore<T, D, P>,
+    sync_handle: ManuallyDrop<InputHandleCore<T, D, P>>,
     /// Frontier information of input streams shared with the operator. Each frontier is paired
     /// with a flag indicating whether or not the handle has seen the updated frontier.
     shared_frontiers: Rc<RefCell<Vec<(Antichain<T>, bool)>>>,
@@ -71,9 +75,12 @@ pub struct AsyncInputHandle<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>
     index: usize,
     /// Reference to the reactor queue of this input handle where Wakers can be registered
     reactor_registry: Weak<RefCell<Vec<Waker>>>,
+    /// Holds type erased closures that should drain a handle when called. These handles will be
+    /// automatically drained when the operator is scheduled and the logic future has exited
+    drain_pipe: Rc<RefCell<Vec<Box<dyn FnMut()>>>>,
 }
 
-impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> AsyncInputHandle<T, D, P> {
+impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> AsyncInputHandle<T, D, P> {
     /// Produces a future that will resolve to the next event of this input stream
     ///
     /// # Cancel safety
@@ -84,8 +91,18 @@ impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> AsyncInputHandle<T, 
     }
 }
 
+impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> Drop for AsyncInputHandle<T, D, P> {
+    fn drop(&mut self) {
+        // SAFETY: We're in a Drop impl so this runs only once
+        let mut sync_handle = unsafe { ManuallyDrop::take(&mut self.sync_handle) };
+        self.drain_pipe
+            .borrow_mut()
+            .push(Box::new(move || sync_handle.for_each(|_, _| {})));
+    }
+}
+
 /// The future returned by `AsyncInputHandle::next`
-struct NextFut<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> {
+struct NextFut<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> {
     handle: Option<&'handle mut AsyncInputHandle<T, D, P>>,
 }
 
@@ -165,6 +182,7 @@ impl<G: Scope> OperatorBuilder<G> {
             shared_frontiers: Default::default(),
             registered_wakers: Default::default(),
             operator_waker: Arc::new(operator_waker),
+            drain_pipe: Default::default(),
         }
     }
 
@@ -206,11 +224,14 @@ impl<G: Scope> OperatorBuilder<G> {
             .borrow_mut()
             .push((Antichain::from_elem(G::Timestamp::minimum()), false));
 
+        let sync_handle = self.builder.new_input_connection(stream, pact, connection);
+
         AsyncInputHandle {
-            sync_handle: self.builder.new_input_connection(stream, pact, connection),
+            sync_handle: ManuallyDrop::new(sync_handle),
             shared_frontiers: Rc::clone(&self.shared_frontiers),
             reactor_registry: Rc::downgrade(&self.registered_wakers),
             index,
+            drain_pipe: Rc::clone(&self.drain_pipe),
         }
     }
 
@@ -253,6 +274,7 @@ impl<G: Scope> OperatorBuilder<G> {
         let operator_waker = self.operator_waker;
         let registered_wakers = self.registered_wakers;
         let shared_frontiers = self.shared_frontiers;
+        let drain_pipe = self.drain_pipe;
         self.builder.build_reschedule(move |caps| {
             let mut logic_fut = Some(Box::pin(constructor(caps)));
             move |new_frontiers| {
@@ -291,7 +313,16 @@ impl<G: Scope> OperatorBuilder<G> {
                     }
                 }
                 // The timely operator needs to be kept alive if the task is pending
-                logic_fut.is_some()
+                if logic_fut.is_some() {
+                    true
+                } else {
+                    // Othewise we should drain any dropped handles
+                    let mut drains = drain_pipe.borrow_mut();
+                    for drain in drains.iter_mut() {
+                        (drain)()
+                    }
+                    false
+                }
             }
         })
     }
