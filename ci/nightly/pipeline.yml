@@ -251,7 +251,7 @@ steps:
     label: "Zippy Kafka Parallel Insert"
     timeout_in_minutes: 120
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
