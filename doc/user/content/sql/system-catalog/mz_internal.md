@@ -409,7 +409,7 @@ Field         | Type                          | Meaning
 `source_id`   | [`text`]                      | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).
 `status`      | [`text`]                      | The status of the source: one of `setup`, `starting`, `running`, `stalled`, `failed`, or `dropped`.
 `error`       | [`text`]                      | If the source is in an error state, the error message.
-`details`     | [`jsonb`]                     | Additional metadata provided by the source.The next timestamp at which the dataflow may change.
+`details`     | [`jsonb`]                     | Additional metadata provided by the source.
 
 [`bigint`]: /sql/types/bigint
 [`bigint list`]: /sql/types/list
