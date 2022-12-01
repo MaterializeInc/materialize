@@ -36,9 +36,13 @@ name = "log"
 wrappers = [
     "deadpool-postgres",
     "env_logger",
+    "eventsource-client",
     "fail",
     "globset",
+    "hyper-rustls",
     "jsonpath_lib",
+    "launchdarkly-server-sdk",
+    "launchdarkly-server-sdk-evaluation",
     "mio",
     "native-tls",
     "opentls",
@@ -82,6 +86,8 @@ wrappers = [
   "fail",
   "findshlibs",
   "indicatif",
+  "launchdarkly-server-sdk",
+  "launchdarkly-server-sdk-evaluation",
   "mysql_async",
   "mysql_common",
   "native-tls",
@@ -106,7 +112,10 @@ wrappers = [
 # actively maintained.
 [[bans.deny]]
 name = "unicase"
-wrappers = ["mime_guess"]
+wrappers = [
+    "mime_guess",
+    "pulldown-cmark",
+]
 
 [licenses]
 allow = [
@@ -150,7 +159,7 @@ allow-git = [
     # v0.18 of opentelemetry.
     "https://github.com/MaterializeInc/tracing.git",
 
-    # Waiting on https://github.com/tikv/pprof-rs/pull/158 to make it into a
+    # Waiting on https://github.com/tikv/pprof-rs/pull/181 to make it into a
     # release.
     "https://github.com/MaterializeInc/pprof-rs.git",
 
@@ -179,9 +188,6 @@ allow-git = [
     # into a release.
     "https://github.com/jorgecarleitao/arrow2.git",
 
-    # Waiting on https://github.com/Byron/open-rs/pull/59.
-    "https://github.com/Byron/open-rs.git",
-
     # Waiting for hashlink, indexmap, and lru to upgrade to hashbrown v0.13,
     # which depends on ahash v0.8 instead of v0.7. In the meantime we've
     # backported the ahash v0.8 bump into hashbrown v0.12.
@@ -192,4 +198,17 @@ allow-git = [
     "https://github.com/frankmcsherry/columnation",
     "https://github.com/TimelyDataflow/timely-dataflow",
     "https://github.com/TimelyDataflow/differential-dataflow.git",
+
+    # Waiting on https://github.com/launchdarkly/rust-eventsource-client/pull/43
+    # to make it into a release.
+    "https://github.com/MaterializeInc/rust-eventsource-client.git",
+
+    # Waiting on
+    # https://github.com/launchdarkly/rust-server-sdk-evaluation/pull/1 to make
+    # it into a release.
+    "https://github.com/MaterializeInc/rust-server-sdk-evaluation",
+
+    # Waiting on https://github.com/launchdarkly/rust-server-sdk/pull/20 to make
+    # it into a release.
+    "https://github.com/MaterializeInc/rust-server-sdk",
 ]
