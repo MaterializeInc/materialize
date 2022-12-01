@@ -1943,7 +1943,7 @@ impl CatalogEntry {
 struct AllocatedBuiltinSystemIds<T> {
     all_builtins: Vec<(T, GlobalId)>,
     new_builtins: Vec<(T, GlobalId)>,
-    migrated_builtins: Vec<(GlobalId, String)>,
+    migrated_builtins: Vec<GlobalId>,
 }
 
 /// Functions can share the same name as any other catalog item type
@@ -2002,7 +2002,7 @@ pub struct BuiltinMigrationMetadata {
     pub introspection_source_index_updates:
         HashMap<ComputeInstanceId, Vec<(LogVariant, String, GlobalId)>>,
     // Used to update persisted on disk catalog state
-    pub migrated_system_table_mappings: HashMap<GlobalId, SystemObjectMapping>,
+    pub migrated_system_object_mappings: HashMap<GlobalId, SystemObjectMapping>,
     pub user_drop_ops: Vec<GlobalId>,
     pub user_create_ops: Vec<(GlobalId, SchemaId, String)>,
 }
@@ -2016,7 +2016,7 @@ impl BuiltinMigrationMetadata {
             all_drop_ops: Vec::new(),
             all_create_ops: Vec::new(),
             introspection_source_index_updates: HashMap::new(),
-            migrated_system_table_mappings: HashMap::new(),
+            migrated_system_object_mappings: HashMap::new(),
             user_drop_ops: Vec::new(),
             user_create_ops: Vec::new(),
         }
@@ -2202,6 +2202,10 @@ impl<S: Append> Catalog<S> {
             )
             .await?;
 
+        let id_fingerprint_map: HashMap<GlobalId, String> = all_builtins
+            .iter()
+            .map(|(builtin, id)| (*id, builtin.fingerprint()))
+            .collect();
         let (builtin_indexes, builtin_non_indexes): (Vec<_>, Vec<_>) = all_builtins
             .into_iter()
             .partition(|(builtin, _)| matches!(builtin, Builtin::Index(_)));
@@ -2470,7 +2474,7 @@ impl<S: Append> Catalog<S> {
         };
 
         let mut builtin_migration_metadata = catalog
-            .generate_builtin_migration_metadata(migrated_builtins)
+            .generate_builtin_migration_metadata(migrated_builtins, id_fingerprint_map)
             .await?;
         catalog.apply_in_memory_builtin_migration(&mut builtin_migration_metadata)?;
         catalog
@@ -2738,23 +2742,23 @@ impl<S: Append> Catalog<S> {
     /// and they need to be recreated starting at the root of the DAG and going towards the leafs.
     pub async fn generate_builtin_migration_metadata(
         &mut self,
-        migrated_ids: Vec<(GlobalId, String)>,
+        migrated_ids: Vec<GlobalId>,
+        id_fingerprint_map: HashMap<GlobalId, String>,
     ) -> Result<BuiltinMigrationMetadata, Error> {
         let mut migration_metadata = BuiltinMigrationMetadata::new();
 
-        let mut object_queue: VecDeque<_> = migrated_ids.iter().map(|(id, _)| (*id)).collect();
-        let mut visited_set: HashSet<_> = migrated_ids.iter().map(|(id, _)| (*id)).collect();
+        let mut object_queue: VecDeque<_> = migrated_ids.iter().collect();
+        let mut visited_set: HashSet<_> = migrated_ids.iter().collect();
         let mut topological_sort = Vec::new();
         let mut ancestor_ids = HashMap::new();
         let mut migrated_log_ids = HashMap::new();
 
-        let id_fingerprint_map: HashMap<GlobalId, String> = migrated_ids.into_iter().collect();
         let log_name_map: HashMap<_, _> = BUILTINS::logs()
             .map(|log| (log.variant.clone(), log.name))
             .collect();
 
         while let Some(id) = object_queue.pop_front() {
-            let entry = self.get_entry(&id);
+            let entry = self.get_entry(id);
 
             let new_id = match id {
                 GlobalId::System(_) => self
@@ -2767,8 +2771,16 @@ impl<S: Append> Catalog<S> {
                 _ => unreachable!("can't migrate id: {id}"),
             };
 
-            // Generate value to update fingerprint and global ID persisted mapping.
-            if let Some(fingerprint) = id_fingerprint_map.get(&id) {
+            let name = self.resolve_full_name(entry.name(), None);
+            info!("migrating {name} from {id} to {new_id}");
+
+            // Generate value to update fingerprint and global ID persisted mapping for system objects.
+            // Not every system object has a fingerprint, like introspection source indexes.
+            if let Some(fingerprint) = id_fingerprint_map.get(id) {
+                assert!(
+                    id.is_system(),
+                    "id_fingerprint_map should only contain builtin objects"
+                );
                 let schema_name = self
                     .get_schema(
                         &entry.name.qualifiers.database_spec,
@@ -2778,8 +2790,8 @@ impl<S: Append> Catalog<S> {
                     .name
                     .schema
                     .as_str();
-                migration_metadata.migrated_system_table_mappings.insert(
-                    id,
+                migration_metadata.migrated_system_object_mappings.insert(
+                    *id,
                     SystemObjectMapping {
                         schema_name: schema_name.to_string(),
                         object_type: entry.item_type(),
@@ -2793,13 +2805,13 @@ impl<S: Append> Catalog<S> {
             // Defer adding the create/drop ops until we know more about the dependency graph.
             topological_sort.push((entry, new_id));
 
-            ancestor_ids.insert(id, new_id);
+            ancestor_ids.insert(*id, new_id);
 
             // Add children to queue.
             for dependant in &entry.used_by {
                 if !visited_set.contains(dependant) {
-                    object_queue.push_back(*dependant);
-                    visited_set.insert(*dependant);
+                    object_queue.push_back(dependant);
+                    visited_set.insert(dependant);
                 } else {
                     // If dependant is a child of the current node, then we need to make sure that
                     // it appears later in the topologically sorted list.
@@ -2928,7 +2940,7 @@ impl<S: Append> Catalog<S> {
         }
         tx.update_system_object_mappings(
             migration_metadata
-                .migrated_system_table_mappings
+                .migrated_system_object_mappings
                 .drain()
                 .collect(),
         )?;
@@ -3130,10 +3142,11 @@ impl<S: Append> Catalog<S> {
         let mut migrated_builtins = Vec::new();
         for builtin in &builtins {
             match builtin_lookup(builtin) {
-                Some((id, fingerprint)) => {
+                Some((id, old_fingerprint)) => {
                     all_builtins.push((*builtin, id));
-                    if fingerprint != builtin.fingerprint() {
-                        migrated_builtins.push((id, builtin.fingerprint()));
+                    let new_fingerprint = builtin.fingerprint();
+                    if old_fingerprint != new_fingerprint {
+                        migrated_builtins.push(id);
                     }
                 }
                 None => {
@@ -6016,7 +6029,7 @@ mod tests {
     use itertools::Itertools;
     use mz_compute_client::controller::ComputeInstanceId;
     use mz_stash::Memory;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::error::Error;
 
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
@@ -6030,7 +6043,9 @@ mod tests {
     use mz_sql::DEFAULT_SCHEMA;
     use mz_sql_parser::ast::Expr;
 
-    use crate::catalog::{Catalog, CatalogItem, MaterializedView, Op, Table, SYSTEM_CONN_ID};
+    use crate::catalog::{
+        Catalog, CatalogItem, Index, MaterializedView, Op, Table, SYSTEM_CONN_ID,
+    };
     use crate::session::{Session, DEFAULT_DATABASE_NAME};
 
     /// System sessions have an empty `search_path` so it's necessary to
@@ -6267,6 +6282,7 @@ mod tests {
         enum SimplifiedItem {
             Table,
             MaterializedView { depends_on: Vec<String> },
+            Index { on: String },
         }
 
         struct SimplifiedCatalogEntry {
@@ -6313,6 +6329,17 @@ mod tests {
                             compute_instance: ComputeInstanceId::User(1),
                         })
                     }
+                    SimplifiedItem::Index { on } => {
+                        let on_id = id_mapping[&on];
+                        CatalogItem::Index(Index {
+                            create_sql: format!("CREATE INDEX idx ON {on} (a)"),
+                            on: on_id,
+                            keys: Vec::new(),
+                            conn_id: None,
+                            depends_on: vec![on_id],
+                            compute_instance: ComputeInstanceId::User(1),
+                        })
+                    }
                 };
                 (self.name, self.namespace, item)
             }
@@ -6329,6 +6356,7 @@ mod tests {
             expected_user_drop_ops: Vec<String>,
             expected_all_create_ops: Vec<String>,
             expected_user_create_ops: Vec<String>,
+            expected_migrated_system_object_mappings: Vec<String>,
         }
 
         async fn add_item(
@@ -6397,6 +6425,7 @@ mod tests {
                 expected_user_drop_ops: vec![],
                 expected_all_create_ops: vec![],
                 expected_user_create_ops: vec![],
+                expected_migrated_system_object_mappings: vec![],
             },
             BuiltinMigrationTestCase {
                 test_name: "single_migrations",
@@ -6413,6 +6442,7 @@ mod tests {
                 expected_user_drop_ops: vec![],
                 expected_all_create_ops: vec!["s1".to_string()],
                 expected_user_create_ops: vec![],
+                expected_migrated_system_object_mappings: vec!["s1".to_string()],
             },
             BuiltinMigrationTestCase {
                 test_name: "child_migrations",
@@ -6438,6 +6468,7 @@ mod tests {
                 expected_user_drop_ops: vec!["u1".to_string()],
                 expected_all_create_ops: vec!["s1".to_string(), "u1".to_string()],
                 expected_user_create_ops: vec!["u1".to_string()],
+                expected_migrated_system_object_mappings: vec!["s1".to_string()],
             },
             BuiltinMigrationTestCase {
                 test_name: "multi_child_migrations",
@@ -6470,6 +6501,7 @@ mod tests {
                 expected_user_drop_ops: vec!["u2".to_string(), "u1".to_string()],
                 expected_all_create_ops: vec!["s1".to_string(), "u1".to_string(), "u2".to_string()],
                 expected_user_create_ops: vec!["u1".to_string(), "u2".to_string()],
+                expected_migrated_system_object_mappings: vec!["s1".to_string()],
             },
             BuiltinMigrationTestCase {
                 test_name: "topological_sort",
@@ -6517,6 +6549,33 @@ mod tests {
                     "u1".to_string(),
                 ],
                 expected_user_create_ops: vec!["u2".to_string(), "u1".to_string()],
+                expected_migrated_system_object_mappings: vec!["s1".to_string(), "s2".to_string()],
+            },
+            BuiltinMigrationTestCase {
+                test_name: "system_child_migrations",
+                initial_state: vec![
+                    SimplifiedCatalogEntry {
+                        name: "s1".to_string(),
+                        namespace: ItemNamespace::System,
+                        item: SimplifiedItem::Table,
+                    },
+                    SimplifiedCatalogEntry {
+                        name: "s2".to_string(),
+                        namespace: ItemNamespace::System,
+                        item: SimplifiedItem::Index {
+                            on: "s1".to_string(),
+                        },
+                    },
+                ],
+                migrated_names: vec!["s1".to_string()],
+                expected_previous_sink_names: vec![],
+                expected_previous_materialized_view_names: vec![],
+                expected_previous_source_names: vec!["s1".to_string()],
+                expected_all_drop_ops: vec!["s2".to_string(), "s1".to_string()],
+                expected_user_drop_ops: vec![],
+                expected_all_create_ops: vec!["s1".to_string(), "s2".to_string()],
+                expected_user_create_ops: vec![],
+                expected_migrated_system_object_mappings: vec!["s1".to_string(), "s2".to_string()],
             },
         ];
 
@@ -6533,11 +6592,16 @@ mod tests {
             let migrated_ids = test_case
                 .migrated_names
                 .into_iter()
+                .map(|name| id_mapping[&name])
+                .collect();
+            let id_fingerprint_map: HashMap<GlobalId, String> = id_mapping
+                .iter()
+                .filter(|(_name, id)| id.is_system())
                 // We don't use the new fingerprint in this test, so we can just hard code it
-                .map(|name| (id_mapping[&name], "".to_string()))
+                .map(|(_name, id)| (*id, "".to_string()))
                 .collect();
             let migration_metadata = catalog
-                .generate_builtin_migration_metadata(migrated_ids)
+                .generate_builtin_migration_metadata(migrated_ids, id_fingerprint_map)
                 .await?;
 
             assert_eq!(
@@ -6591,6 +6655,21 @@ mod tests {
                     .collect::<Vec<_>>(),
                 test_case.expected_user_create_ops,
                 "{} test failed with wrong user create ops",
+                test_case.test_name
+            );
+            assert_eq!(
+                migration_metadata
+                    .migrated_system_object_mappings
+                    .keys()
+                    .cloned()
+                    .collect::<HashSet<_>>(),
+                convert_name_vec_to_id_vec(
+                    test_case.expected_migrated_system_object_mappings,
+                    &id_mapping
+                )
+                .into_iter()
+                .collect::<HashSet<_>>(),
+                "{} test failed with wrong migrated system object mappings",
                 test_case.test_name
             );
         }

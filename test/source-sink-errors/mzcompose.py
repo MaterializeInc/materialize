@@ -77,11 +77,6 @@ class Disruption:
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM
                   /* WITH ( REMOTE 'storaged:2100' ) REMOTE causes the status source to be empty */
-
-                # Wait for the source to start up
-                # TODO(bkirwi) - catch errors while blocked on client startup
-                > SELECT COUNT(*) FROM source1
-                1
                 """
             )
         )
@@ -115,11 +110,10 @@ class Disruption:
                 > SELECT COUNT(*) FROM source1;
                 2
 
-                # TODO(bkirwi) https://github.com/MaterializeInc/materialize/issues/16065
-                #> SELECT status, error
-                #  FROM mz_internal.mz_source_status
-                #  WHERE name = 'source1'
-                #running <null>
+                > SELECT status, error
+                  FROM mz_internal.mz_source_status
+                  WHERE name = 'source1'
+                running <null>
 
                 #> SELECT status, error
                 #  FROM mz_internal.mz_sink_status
