@@ -457,6 +457,7 @@ name
 -----------------------------
 mz_array_types
 mz_audit_events
+mz_aws_privatelink_connections
 mz_base_types
 mz_clusters
 mz_cluster_replicas
@@ -571,7 +572,7 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-33
+34
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

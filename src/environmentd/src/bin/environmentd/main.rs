@@ -419,6 +419,10 @@ pub struct Args {
     )]
     announce_egress_ip: Vec<Ipv4Addr>,
 
+    /// The 12-digit AWS account id, which is used to generate an AWS Principal.
+    #[clap(long, env = "AWS_ACCOUNT_ID")]
+    aws_account_id: Option<String>,
+
     // === Tracing options. ===
     #[clap(flatten)]
     tracing: TracingCliArgs,
@@ -768,6 +772,7 @@ max log level: {max_log_level}",
         storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
         segment_api_key: args.segment_api_key,
         egress_ips: args.announce_egress_ip,
+        aws_account_id: args.aws_account_id,
     }))?;
 
     metrics.start_time_environmentd.set(

@@ -50,6 +50,10 @@ mz_audit_events
 BASE TABLE
 materialize
 mz_catalog
+mz_aws_privatelink_connections
+BASE TABLE
+materialize
+mz_catalog
 mz_base_types
 BASE TABLE
 materialize
