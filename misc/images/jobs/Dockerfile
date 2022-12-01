@@ -9,6 +9,8 @@
 
 MZFROM ubuntu-base
 
+RUN apt-get update && apt-get -qy install ca-certificates
+
 COPY examples/persistcli /usr/local/bin/persistcli
 
 ENTRYPOINT ["persistcli"]
