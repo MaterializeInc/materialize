@@ -67,8 +67,6 @@ extern crate num_derive;
 /// Arguments that get threaded through all transforms.
 #[derive(Debug)]
 pub struct TransformArgs<'a> {
-    /// A shared instance of IdGen to allow constructing new Let expressions.
-    pub id_gen: &'a mut IdGen,
     /// The indexes accessible.
     pub indexes: &'a dyn IndexOracle,
 }
@@ -182,7 +180,6 @@ impl Transform for Fixpoint {
                         transform.transform(
                             relation,
                             TransformArgs {
-                                id_gen: args.id_gen,
                                 indexes: args.indexes,
                             },
                         )?;
@@ -206,7 +203,6 @@ impl Transform for Fixpoint {
             transform.transform(
                 relation,
                 TransformArgs {
-                    id_gen: args.id_gen,
                     indexes: args.indexes,
                 },
             )?;
@@ -289,7 +285,6 @@ impl Transform for FuseAndCollapse {
             transform.transform(
                 relation,
                 TransformArgs {
-                    id_gen: args.id_gen,
                     indexes: args.indexes,
                 },
             )?;
@@ -485,15 +480,8 @@ impl Optimizer {
         relation: &mut MirRelationExpr,
         indexes: &dyn IndexOracle,
     ) -> Result<(), TransformError> {
-        let mut id_gen = Default::default();
         for transform in self.transforms.iter() {
-            transform.transform(
-                relation,
-                TransformArgs {
-                    id_gen: &mut id_gen,
-                    indexes,
-                },
-            )?;
+            transform.transform(relation, TransformArgs { indexes })?;
         }
 
         Ok(())

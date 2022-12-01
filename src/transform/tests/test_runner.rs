@@ -123,12 +123,10 @@ mod tests {
         test_type: TestType,
     ) -> Result<String, Error> {
         let mut rel = parse_relation(s, cat, args)?;
-        let mut id_gen = Default::default();
         for t in args.get("apply").cloned().unwrap_or_else(Vec::new).iter() {
             get_transform(t)?.transform(
                 &mut rel,
                 TransformArgs {
-                    id_gen: &mut id_gen,
                     indexes: &EmptyIndexOracle,
                 },
             )?;
@@ -142,7 +140,6 @@ mod tests {
                     transform.transform(
                         &mut rel,
                         TransformArgs {
-                            id_gen: &mut id_gen,
                             indexes: &EmptyIndexOracle,
                         },
                     )?;
@@ -166,7 +163,6 @@ mod tests {
                         transform.transform(
                             &mut rel,
                             TransformArgs {
-                                id_gen: &mut id_gen,
                                 indexes: &EmptyIndexOracle,
                             },
                         )?;

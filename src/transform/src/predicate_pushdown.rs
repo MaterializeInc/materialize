@@ -59,7 +59,6 @@
 //!
 //! use mz_transform::{Transform, TransformArgs};
 //! PredicatePushdown::default().transform(&mut expr, TransformArgs {
-//!   id_gen: &mut Default::default(),
 //!   indexes: &mz_transform::EmptyIndexOracle,
 //! });
 //!
