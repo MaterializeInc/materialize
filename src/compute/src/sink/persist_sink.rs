@@ -34,6 +34,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriterEnrichedHollowBatch;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::source::persist_source::NO_FLOW_CONTROL;
 use mz_storage_client::types::errors::DataflowError;
 use mz_storage_client::types::sources::SourceData;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
@@ -47,6 +48,7 @@ where
 {
     fn render_continuous_sink(
         &self,
+        scope: &G,
         compute_state: &mut ComputeState,
         sink: &ComputeSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
@@ -59,6 +61,7 @@ where
         let desired_collection = sinked_collection.map(Ok).concat(&err_collection.map(Err));
 
         persist_sink(
+            scope,
             sink_id,
             &self.storage_metadata,
             desired_collection,
@@ -69,6 +72,7 @@ where
 }
 
 pub(crate) fn persist_sink<G>(
+    scope: &G,
     sink_id: GlobalId,
     target: &CollectionMetadata,
     desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,
@@ -91,6 +95,9 @@ where
         source_as_of,
         Antichain::new(), // we want all updates
         None,             // no MFP
+        // TODO: provide a more meaningful flow control input
+        &timely::dataflow::operators::generic::operator::empty(scope),
+        NO_FLOW_CONTROL,
         // Copy the logic in DeltaJoin/Get/Join to start.
         |_timer, count| count > 1_000_000,
     );
