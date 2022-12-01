@@ -4594,15 +4594,15 @@ WHERE a = c AND d = e AND b + d > 42
                     [
                       [
                         {
-                          "Column": 1
+                          "Column": 0
                         }
                       ],
                       {
-                        "0": 1,
-                        "1": 0
+                        "0": 0,
+                        "1": 1
                       },
                       [
-                        0
+                        1
                       ]
                     ]
                   ]
@@ -4674,7 +4674,7 @@ WHERE a = c AND d = e AND b + d > 42
           ],
           "plan": {
             "Linear": {
-              "source_relation": 2,
+              "source_relation": 0,
               "source_key": [
                 {
                   "Column": 0
@@ -4684,34 +4684,6 @@ WHERE a = c AND d = e AND b + d > 42
               "stage_plans": [
                 {
                   "lookup_relation": 1,
-                  "stream_key": [
-                    {
-                      "Column": 0
-                    }
-                  ],
-                  "stream_thinning": [],
-                  "lookup_key": [
-                    {
-                      "Column": 1
-                    }
-                  ],
-                  "closure": {
-                    "ready_equivalences": [],
-                    "before": {
-                      "mfp": {
-                        "expressions": [],
-                        "predicates": [],
-                        "projection": [
-                          1,
-                          0
-                        ],
-                        "input_arity": 2
-                      }
-                    }
-                  }
-                },
-                {
-                  "lookup_relation": 0,
                   "stream_key": [
                     {
                       "Column": 0
@@ -4734,10 +4706,10 @@ WHERE a = c AND d = e AND b + d > 42
                             "CallBinary": {
                               "func": "AddInt32",
                               "expr1": {
-                                "Column": 2
+                                "Column": 1
                               },
                               "expr2": {
-                                "Column": 1
+                                "Column": 2
                               }
                             }
                           },
@@ -4748,7 +4720,7 @@ WHERE a = c AND d = e AND b + d > 42
                                 "Column": 0
                               },
                               "expr2": {
-                                "Column": 1
+                                "Column": 2
                               }
                             }
                           }
@@ -4786,8 +4758,40 @@ WHERE a = c AND d = e AND b + d > 42
                           ]
                         ],
                         "projection": [
+                          2,
                           3,
                           4
+                        ],
+                        "input_arity": 3
+                      }
+                    }
+                  }
+                },
+                {
+                  "lookup_relation": 2,
+                  "stream_key": [
+                    {
+                      "Column": 0
+                    }
+                  ],
+                  "stream_thinning": [
+                    1,
+                    2
+                  ],
+                  "lookup_key": [
+                    {
+                      "Column": 0
+                    }
+                  ],
+                  "closure": {
+                    "ready_equivalences": [],
+                    "before": {
+                      "mfp": {
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          1,
+                          2
                         ],
                         "input_arity": 3
                       }
@@ -5056,15 +5060,15 @@ WHERE a = c AND d = e AND f = a
                     [
                       [
                         {
-                          "Column": 0
+                          "Column": 1
                         },
                         {
-                          "Column": 1
+                          "Column": 0
                         }
                       ],
                       {
-                        "0": 0,
-                        "1": 1
+                        "0": 1,
+                        "1": 0
                       },
                       []
                     ]
@@ -5178,15 +5182,15 @@ WHERE a = c AND d = e AND f = a
                     [
                       [
                         {
-                          "Column": 1
+                          "Column": 0
                         },
                         {
-                          "Column": 0
+                          "Column": 1
                         }
                       ],
                       {
-                        "0": 1,
-                        "1": 0
+                        "0": 0,
+                        "1": 1
                       },
                       []
                     ]
@@ -5207,7 +5211,7 @@ WHERE a = c AND d = e AND f = a
           ],
           "plan": {
             "Linear": {
-              "source_relation": 2,
+              "source_relation": 1,
               "source_key": [
                 {
                   "Column": 1
@@ -5219,7 +5223,7 @@ WHERE a = c AND d = e AND f = a
               "initial_closure": null,
               "stage_plans": [
                 {
-                  "lookup_relation": 1,
+                  "lookup_relation": 2,
                   "stream_key": [
                     {
                       "Column": 1
@@ -5256,11 +5260,11 @@ WHERE a = c AND d = e AND f = a
                   "lookup_relation": 0,
                   "stream_key": [
                     {
-                      "Column": 1
+                      "Column": 0
                     }
                   ],
                   "stream_thinning": [
-                    0
+                    1
                   ],
                   "lookup_key": [
                     {

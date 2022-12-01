@@ -1206,7 +1206,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                         );
                         (JoinPlan::Linear(ljp), missing)
                     }
-                    Differential((start, start_arr), order) => {
+                    Differential((start, start_arr, _start_characteristic), order) => {
                         let source_arrangement = start_arr.as_ref().and_then(|key| {
                             input_keys[*start]
                                 .arranged
