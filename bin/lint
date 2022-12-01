@@ -95,4 +95,6 @@ if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
     try bin/completion check
 fi
 
+try xargs misc/lint/keep-sorted.sh <<< "$(git_files '*.rs')"
+
 try_finish
