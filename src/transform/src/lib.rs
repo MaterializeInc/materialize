@@ -225,11 +225,8 @@ impl Default for FuseAndCollapse {
         Self {
             // TODO: The relative orders of the transforms have not been
             // determined except where there are comments.
-            // TODO (#6542): All the transforms here except for
-            // `ProjectionLifting`, `InlineLet`, `UpdateLet`, and
-            // `RedundantJoin` can be implemented as free functions. Note that
-            // (#716) proposes the removal of `InlineLet` and `UpdateLet` as a
-            // transforms.
+            // TODO (#6542): All the transforms here except for `ProjectionLifting`
+            //  and `RedundantJoin` can be implemented as free functions.
             transforms: vec![
                 Box::new(crate::projection_extraction::ProjectionExtraction),
                 Box::new(crate::projection_lifting::ProjectionLifting::default()),

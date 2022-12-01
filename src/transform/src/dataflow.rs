@@ -116,7 +116,7 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
 
             // When splicing in the `index` view, we need to create disjoint
             // identifiers for the Let's `body` and `value`, as well as a new
-            // identifier for the binding itself. Following `UpdateLet`, we
+            // identifier for the binding itself. Following `NormalizeLets`, we
             // go with the binding first, then the value, then the body.
             let mut id_gen = crate::IdGen::default();
             let new_local = LocalId::new(id_gen.allocate_id());
@@ -183,8 +183,6 @@ fn optimize_dataflow_relations(
     // just before we plan to install the dataflow. This would also allow us to not
     // add indexes imperatively to `DataflowDesc`.
     for object in dataflow.objects_to_build.iter_mut() {
-        // Re-name bindings to accommodate other analyses, specifically
-        // `InlineLet` which probably wants a reworking in any case.
         // Re-run all optimizations on the composite views.
         optimizer.transform(object.plan.as_inner_mut(), indexes)?;
     }

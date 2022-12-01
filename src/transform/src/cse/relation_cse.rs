@@ -12,8 +12,7 @@
 //! All structurally equivalent expressions, defined recursively as having structurally
 //! equivalent inputs, and identical parameters, will be placed behind `Let` bindings.
 //! The resulting expressions likely have an excess of `Let` expressions, and therefore
-//! we automatically run the `InlineLet` transformation to remove those that are not necessary.
-//! We also automatically run `UpdateLet`.
+//! we automatically run the `NormalizeLets` transformation to remove those that are not necessary.
 
 use std::collections::HashMap;
 
@@ -174,7 +173,7 @@ impl Bindings {
     /// Populates `expression` with necessary `Let` bindings.
     ///
     /// This population may result in substantially more `Let` bindings that one
-    /// might expect. It is very appropriate to run the `InlineLet` transformation
+    /// might expect. It is very appropriate to run the `NormalizeLets` transformation
     /// afterwards to remove `Let` bindings that it deems unhelpful.
     fn populate_expression(self, expression: &mut MirRelationExpr) {
         // Convert the bindings in to a sequence, by the local identifier.
