@@ -13,22 +13,24 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use mz_ore::metric;
-use mz_ore::metrics::MetricsRegistry;
-use prometheus::IntCounterVec;
+use anyhow::bail;
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::error;
 use uuid::Uuid;
 
+use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdAllocator;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_ore::thread::JoinOnDropHandle;
 use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 
+use crate::catalog::INTROSPECTION_USER;
 use crate::command::{Canceled, Command, ExecuteResponse, Response, StartupResponse};
 use crate::error::AdapterError;
+use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionId};
+use crate::PeekResponseUnary;
 
 /// An abstraction allowing us to name different connections.
 pub type ConnectionId = u32;
@@ -60,23 +62,6 @@ impl Handle {
     }
 }
 
-#[derive(Debug, Clone)]
-struct Metrics {
-    pub commands: IntCounterVec,
-}
-
-impl Metrics {
-    pub fn register_into(registry: &MetricsRegistry) -> Metrics {
-        Metrics {
-            commands: registry.register(metric!(
-                name: "mz_adapter_commands",
-                help: "The total number of adapter commands issued of the given type since process start.",
-                var_labels: ["command_type", "status"],
-            )),
-        }
-    }
-}
-
 /// A coordinator client.
 ///
 /// A coordinator client is a simple handle to a communication channel with the
@@ -92,14 +77,11 @@ pub struct Client {
 }
 
 impl Client {
-    pub(crate) fn new(
-        cmd_tx: mpsc::UnboundedSender<Command>,
-        registry: &MetricsRegistry,
-    ) -> Client {
+    pub(crate) fn new(cmd_tx: mpsc::UnboundedSender<Command>, metrics: Metrics) -> Client {
         Client {
             inner_cmd_tx: cmd_tx,
             id_alloc: Arc::new(IdAllocator::new(1, 1 << 16)),
-            metrics: Metrics::register_into(registry),
+            metrics,
         }
     }
 
@@ -112,6 +94,41 @@ impl Client {
                 .ok_or(AdapterError::IdExhaustionError)?,
             inner: self.clone(),
         })
+    }
+
+    /// Executes a single SQL statement that returns rows as the
+    /// `mz_introspection` user.
+    pub async fn introspection_execute_one(&self, sql: &str) -> Result<Vec<Row>, anyhow::Error> {
+        // Connect to the coordinator.
+        let conn_client = self.new_conn()?;
+        let session = Session::new(conn_client.conn_id(), INTROSPECTION_USER.clone());
+        let (mut session_client, _) = conn_client.startup(session, false).await?;
+
+        // Parse the SQL statement.
+        let stmts = mz_sql::parse::parse(sql)?;
+        if stmts.len() != 1 {
+            bail!("must supply exactly one query");
+        }
+        let stmt = stmts.into_element();
+
+        const EMPTY_PORTAL: &str = "";
+        session_client.start_transaction(Some(1)).await?;
+        session_client
+            .declare(EMPTY_PORTAL.into(), stmt, vec![])
+            .await?;
+        match session_client.execute(EMPTY_PORTAL.into()).await? {
+            ExecuteResponse::SendingRows { future, span: _ } => match future.await {
+                PeekResponseUnary::Rows(rows) => Ok(rows),
+                PeekResponseUnary::Canceled => bail!("query canceled"),
+                PeekResponseUnary::Error(e) => bail!(e),
+            },
+            r => bail!("unsupported response type: {r:?}"),
+        }
+    }
+
+    /// Returns the metrics associated with the adapter layer.
+    pub fn metrics(&self) -> &Metrics {
+        &self.metrics
     }
 
     fn send(&self, cmd: Command) {

@@ -7,35 +7,41 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use prometheus::{HistogramVec, IntCounterVec, IntGauge};
+use prometheus::{HistogramVec, IntCounterVec, IntGaugeVec};
 
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_sql::ast::{AstInfo, Statement, StatementKind};
 
+use crate::session::Session;
+
+#[derive(Debug, Clone)]
 pub struct Metrics {
     pub query_total: IntCounterVec,
-    pub active_sessions: IntGauge,
-    pub active_subscribes: IntGauge,
+    pub active_sessions: IntGaugeVec,
+    pub active_subscribes: IntGaugeVec,
     pub queue_busy_seconds: HistogramVec,
     pub determine_timestamp: IntCounterVec,
+    pub commands: IntCounterVec,
 }
 
 impl Metrics {
-    pub fn register_with(registry: &MetricsRegistry) -> Self {
+    pub(crate) fn register_into(registry: &MetricsRegistry) -> Self {
         Self {
             query_total: registry.register(metric!(
                 name: "mz_query_total",
                 help: "The total number of queries issued of the given type since process start.",
-                var_labels: ["statement_type"],
+                var_labels: ["session_type", "statement_type"],
             )),
             active_sessions: registry.register(metric!(
                 name: "mz_active_sessions",
                 help: "The number of active coordinator sessions.",
+                var_labels: ["session_type"],
             )),
             active_subscribes: registry.register(metric!(
                 name: "mz_active_subscribes",
                 help: "The number of active SUBSCRIBE queries.",
+                var_labels: ["session_type"],
             )),
             queue_busy_seconds: registry.register(metric!(
                 name: "mz_coord_queue_busy_seconds",
@@ -46,11 +52,23 @@ impl Metrics {
                 help: "The total number of calls to determine_timestamp.",
                 var_labels:["respond_immediately", "isolation_level", "compute_instance"],
             )),
+            commands: registry.register(metric!(
+                name: "mz_adapter_commands",
+                help: "The total number of adapter commands issued of the given type since process start.",
+                var_labels: ["command_type", "status"],
+            )),
         }
     }
 }
 
-pub fn statement_type_label_value<T>(stmt: &Statement<T>) -> &'static str
+pub(crate) fn session_type_label_value(session: &Session) -> &'static str {
+    match session.is_system() {
+        true => "system",
+        false => "user",
+    }
+}
+
+pub(crate) fn statement_type_label_value<T>(stmt: &Statement<T>) -> &'static str
 where
     T: AstInfo,
 {

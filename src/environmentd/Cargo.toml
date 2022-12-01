@@ -48,6 +48,7 @@ mz-postgres-util = { path = "../postgres-util" }
 mz-prof = { path = "../prof" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
+mz-segment = { path = "../segment" }
 mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
 mz-stash = { path = "../stash" }

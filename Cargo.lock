@@ -3617,6 +3617,7 @@ dependencies = [
  "mz-prof",
  "mz-repr",
  "mz-secrets",
+ "mz-segment",
  "mz-service",
  "mz-sql",
  "mz-stash",
