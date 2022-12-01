@@ -227,7 +227,7 @@ Explained Query:
     Project (#0) // { arity: 1 }
       Join on=(#0 = #1) type=differential // { arity: 2 }
         implementation
-          %0:l0[#0] » %1[#0]UKA
+          %1[#0]UKA » %0:l0[#0]KA
         ArrangeBy keys=[[#0]] // { arity: 1 }
           Get l0 // { arity: 1 }
         ArrangeBy keys=[[#0]] // { arity: 1 }
@@ -239,7 +239,7 @@ Explained Query:
                     Reduce group_by=[#0] aggregates=[row_number(row(list[row(#0, #1, #2)]))] // { arity: 2 }
                       CrossJoin type=differential // { arity: 3 }
                         implementation
-                          %1:t2[×] » %0[×]A
+                          %0[×]A » %1:t2[×]A
                         ArrangeBy keys=[[]] // { arity: 1 }
                           Distinct group_by=[#0] // { arity: 1 }
                             Get l0 // { arity: 1 }
