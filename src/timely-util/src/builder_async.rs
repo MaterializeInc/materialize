@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
+use differential_dataflow::operators::arrange::agent::ShutdownButton;
 use futures_util::task::ArcWake;
 use polonius_the_crab::{polonius, WithLifetime};
 use timely::communication::{message::RefOrMut, Pull};
@@ -29,7 +30,7 @@ use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo, Output
 use timely::dataflow::operators::{Capability, CapabilityRef};
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::{Antichain, Timestamp};
-use timely::scheduling::SyncActivator;
+use timely::scheduling::{Activator, SyncActivator};
 use timely::{Container, PartialOrder};
 
 /// Builds async operators with generic shape.
@@ -40,6 +41,8 @@ pub struct OperatorBuilder<G: Scope> {
     shared_frontiers: Rc<RefCell<Vec<(Antichain<G::Timestamp>, bool)>>>,
     /// Wakers registered by input handles
     registered_wakers: Rc<RefCell<Vec<Waker>>>,
+    /// The activator for this operator
+    activator: Activator,
     /// The waker set up to activate this timely operator when woken
     operator_waker: Arc<TimelyWaker>,
     /// Holds type erased closures that should drain a handle when called. These handles will be
@@ -170,9 +173,10 @@ impl<G: Scope> OperatorBuilder<G> {
     pub fn new(name: String, scope: G) -> Self {
         let builder = OperatorBuilderRc::new(name, scope.clone());
         let info = builder.operator_info();
-        let activator = scope.sync_activator_for(&info.address);
+        let activator = scope.activator_for(&info.address);
+        let sync_activator = scope.sync_activator_for(&info.address);
         let operator_waker = TimelyWaker {
-            activator,
+            activator: sync_activator,
             active: AtomicBool::new(false),
             task_ready: AtomicBool::new(true),
         };
@@ -181,6 +185,7 @@ impl<G: Scope> OperatorBuilder<G> {
             builder,
             shared_frontiers: Default::default(),
             registered_wakers: Default::default(),
+            activator,
             operator_waker: Arc::new(operator_waker),
             drain_pipe: Default::default(),
         }
@@ -265,8 +270,11 @@ impl<G: Scope> OperatorBuilder<G> {
         self.builder.new_output_connection(connection)
     }
 
-    /// Creates an operator implementation from supplied logic constructor.
-    pub fn build<B, L>(self, constructor: B)
+    /// Creates an operator implementation from supplied logic constructor. It returns a shutdown
+    /// button that when pressed it will cause the logic future to be dropped and input handles to
+    /// be drained. The button can be converted into a token by using
+    /// [`ShutdownButton::press_on_drop`]
+    pub fn build<B, L>(self, constructor: B) -> ShutdownButton<()>
     where
         B: FnOnce(Vec<Capability<G::Timestamp>>) -> L,
         L: Future + 'static,
@@ -275,6 +283,8 @@ impl<G: Scope> OperatorBuilder<G> {
         let registered_wakers = self.registered_wakers;
         let shared_frontiers = self.shared_frontiers;
         let drain_pipe = self.drain_pipe;
+        let token = Rc::new(RefCell::new(Some(())));
+        let button = ShutdownButton::new(Rc::clone(&token), self.activator);
         self.builder.build_reschedule(move |caps| {
             let mut logic_fut = Some(Box::pin(constructor(caps)));
             move |new_frontiers| {
@@ -300,6 +310,13 @@ impl<G: Scope> OperatorBuilder<G> {
                     }
                     operator_waker.active.store(false, Ordering::SeqCst);
                 }
+
+                // If the shutdown button got pressed we should immediately drop the logic future
+                // which will also register all the handles for drainage
+                if token.borrow().is_none() {
+                    logic_fut = None;
+                }
+
                 // Schedule the logic future if any of the wakers above marked the task as ready
                 if let Some(fut) = logic_fut.as_mut() {
                     if operator_waker.task_ready.load(Ordering::SeqCst) {
@@ -324,7 +341,9 @@ impl<G: Scope> OperatorBuilder<G> {
                     false
                 }
             }
-        })
+        });
+
+        button
     }
 
     /// Creates operator info for the operator.
