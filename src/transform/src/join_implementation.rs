@@ -460,7 +460,6 @@ mod delta_queries {
 
 mod differential {
     use crate::join_implementation::{FilterCharacteristics, JoinInputCharacteristics};
-    use itertools::Itertools;
     use mz_expr::{JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
     use mz_ore::soft_assert;
 
@@ -482,7 +481,8 @@ mod differential {
             implementation,
         } = &mut new_join
         {
-            // We prefer a starting point based on the characteristics of the other input arrangements.
+            // We compute one order for each possible starting point, and we will choose one from
+            // these.
             // We could change this preference at any point, but the list of orders should still inform.
             // Important, we should choose something stable under re-ordering, to converge under fixed
             // point iteration; we choose to start with the first input optimizing our criteria, which
@@ -494,10 +494,7 @@ mod differential {
             // to every other element to the right. This is because we are gonna be looking for the
             // worst `Characteristic` in every order, and for this it makes sense to include a
             // filter in a `Characteristic` if the filter was applied not just at that input but
-            // any input before. Two examples for bad join orders without this:
-            //  - chbench.slt Query 20: a cross join would come before a filtered input.
-            //  - lifting.slt "tricky join ordering": a filtered input would go to the end. (Note
-            //    the `skip(1)` when thinking this through.)
+            // any input before. For examples, see chbench.slt Query 02 and 11.
             orders.iter_mut().for_each(|order| {
                 let mut sum = FilterCharacteristics::none();
                 for (JoinInputCharacteristics { filters, .. }, _, _) in order {
@@ -510,20 +507,15 @@ mod differential {
             // from these. First, we find the worst `Characteristics` inside each order, and then we
             // find the best one among these across all orders, which goes into
             // `max_min_characteristics`.
-            //
-            // For differential join, it is not as important for the starting
-            // input to have good characteristics because the other ones
-            // determine whether intermediate results blow up. Thus, we do not
-            // include the starting input when max-minning.
             let max_min_characteristics = orders
                 .iter()
-                .flat_map(|order| order.iter().skip(1).map(|(c, _, _)| c.clone()).min())
+                .flat_map(|order| order.iter().map(|(c, _, _)| c.clone()).min())
                 .max();
             let mut order = if let Some(max_min_characteristics) = max_min_characteristics {
                 orders
                     .into_iter()
                     .filter(|o| {
-                        o.iter().skip(1).map(|(c, _, _)| c).min().unwrap()
+                        o.iter().map(|(c, _, _)| c).min().unwrap()
                             == &max_min_characteristics
                     })
                     // It can happen that `orders` has multiple such orders that have the same worst
@@ -531,7 +523,7 @@ mod differential {
                     // worst `Characteristic`: we inspect the entire `Characteristic` vector of each
                     // of these orders, and choose the best among these. This pushes bad stuff to
                     // happen later, by which time we might have applied some filters.
-                    .max_by_key(|o| o.clone().into_iter().skip(1).collect_vec())
+                    .max_by_key(|o| o.clone())
                     .ok_or_else(|| {
                         TransformError::Internal(String::from(
                             "could not find max-min characteristics",
@@ -551,7 +543,7 @@ mod differential {
                     .collect::<Vec<_>>()
             };
 
-            let (start, start_keys, _characteristics) = order[0].clone();
+            let (start, start_key, start_characteristics) = order[0].clone();
 
             // Implement arrangements in each of the inputs.
             let lifted_mfp = super::implement_arrangements(inputs, available, order.iter());
@@ -562,7 +554,7 @@ mod differential {
             order.remove(0);
 
             // Install the implementation.
-            *implementation = JoinImplementation::Differential((start, Some(start_keys)), order);
+            *implementation = JoinImplementation::Differential((start, Some(start_key), start_characteristics.clone()), order);
 
             super::install_lifted_mfp(&mut new_join, lifted_mfp)?;
 

@@ -646,7 +646,7 @@ Explained Query:
   Return // { types: "(boolean, boolean, boolean?)" }
     Project (#2, #5, #7) // { types: "(boolean, boolean, boolean?)" }
       Join on=(eq(#0, #3, #6) AND #1 = #4) type=differential // { types: "(integer?, integer, boolean, integer?, integer, boolean, integer?, boolean?)" }
-        ArrangeBy keys=[[]] // { types: "(integer?, integer)" }
+        ArrangeBy keys=[[#0]] // { types: "(integer?, integer)" }
           Get materialize.public.int_table // { types: "(integer?, integer)" }
         ArrangeBy keys=[[]] // { types: "(boolean)" }
           Union // { types: "(boolean)" }

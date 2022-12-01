@@ -652,23 +652,23 @@ Explained Query:
       project=(#0, #1, #1)
     linear_stage[1]
       closure
-        project=(#3, #4)
-        filter=((#3 > 42))
-        map=((#2 + #1), (#0 + #1))
-      lookup={ relation=0, key=[#0] }
-      stream={ key=[#0], thinning=(#1) }
+        project=(#1, #2)
+      lookup={ relation=2, key=[#0] }
+      stream={ key=[#0], thinning=(#1, #2) }
     linear_stage[0]
       closure
-        project=(#1, #0)
-      lookup={ relation=1, key=[#1] }
-      stream={ key=[#0], thinning=() }
-    source={ relation=2, key=[#0] }
+        project=(#2..=#4)
+        filter=((#3 > 42))
+        map=((#1 + #2), (#0 + #2))
+      lookup={ relation=1, key=[#0] }
+      stream={ key=[#0], thinning=(#1) }
+    source={ relation=0, key=[#0] }
     Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
     ArrangeBy
       raw=true
-      arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+      arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
       Get::Collection materialize.public.u
         raw=true
     ArrangeBy
@@ -714,19 +714,19 @@ Explained Query:
       closure
         project=(#0, #2, #1)
       lookup={ relation=0, key=[#0] }
-      stream={ key=[#1], thinning=(#0) }
+      stream={ key=[#0], thinning=(#1) }
     linear_stage[0]
       closure
         project=(#1, #0)
-      lookup={ relation=1, key=[#0, #1] }
+      lookup={ relation=2, key=[#0, #1] }
       stream={ key=[#1, #0], thinning=() }
-    source={ relation=2, key=[#1, #0] }
+    source={ relation=1, key=[#1, #0] }
     Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
     ArrangeBy
       raw=true
-      arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
+      arrangements[0]={ key=[#1, #0], permutation={#0: #1, #1: #0}, thinning=() }
       Get::Arrangement materialize.public.u
         filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
         key=#0
@@ -734,7 +734,7 @@ Explained Query:
         arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
     ArrangeBy
       raw=true
-      arrangements[0]={ key=[#1, #0], permutation={#0: #1, #1: #0}, thinning=() }
+      arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
       Get::Arrangement materialize.public.v
         filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
         key=#0
