@@ -49,7 +49,7 @@ use mz_kafka_util::client::{BrokerRewritingClientContext, MzClientContext};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
-use mz_ore::retry::Retry;
+use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::task;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::types::connections::ConnectionContext;
@@ -330,57 +330,43 @@ impl KafkaTxProducer {
             .map_err(|(e, record)| (e, Box::new(record)))
     }
 
-    async fn retry_on_txn_error<'a, F, Fut, T>(&self, f: F) -> Result<T, String>
+    async fn retry_on_txn_error<'a, F, Fut, T>(&self, f: F) -> Result<T, anyhow::Error>
     where
         F: Fn(KafkaTxProducer) -> Fut,
         Fut: Future<Output = KafkaResult<T>>,
     {
-        let stream = Retry::default()
+        Retry::default()
             .clamp_backoff(BACKOFF_CLAMP)
-            .into_retry_stream();
-        tokio::pin!(stream);
-        loop {
-            stream.next().await;
-            match f(self.clone()).await {
-                Ok(result) => return Ok(result),
-                Err(KafkaError::Transaction(e)) if e.txn_requires_abort() => {
-                    info!("error requiring txn abort in kafka sink: {:?}", e);
-                    self.abort_active_txn().await?;
-                    return Err(format!(
-                        "shutting down due to error requiring txn abort in kafka sink: {e:?}"
-                    ));
+            .max_tries(3)
+            .retry_async(|_| async {
+                match f(self.clone()).await {
+                    Ok(value) => RetryResult::Ok(value),
+                    Err(KafkaError::Transaction(e)) if e.txn_requires_abort() => {
+                        // Make one attempt at aborting the transaction before letting the error
+                        // percolate up and the process exit. Aborting allows the consumers of the
+                        // topic to skip over any messages we've written in the transaction, so it's
+                        // polite to do... but if it fails, the transaction will be aborted either
+                        // when fenced out by a future version of this producer or by the
+                        // broker-side timeout.
+                        if let Err(e) = self.abort_transaction().await {
+                            warn!(
+                                error =? e,
+                                "failed to abort transaction after an error that required it"
+                            );
+                        }
+                        RetryResult::FatalErr(
+                            anyhow!(e).context("transaction error requiring abort"),
+                        )
+                    }
+                    Err(KafkaError::Transaction(e)) if e.is_retriable() => {
+                        RetryResult::RetryableErr(anyhow!(e).context("retriable transaction error"))
+                    }
+                    Err(e) => {
+                        RetryResult::FatalErr(anyhow!(e).context("non-retriable transaction error"))
+                    }
                 }
-                Err(KafkaError::Transaction(e)) if e.is_retriable() => {
-                    info!("retriable error in kafka sink: {e:?}; will retry");
-                    continue;
-                }
-                Err(e) => {
-                    return Err(format!("shutting down due to non-retriable error: {e:?}"));
-                }
-            }
-        }
-    }
-
-    async fn abort_active_txn(&self) -> Result<(), String> {
-        let stream = Retry::default()
-            .clamp_backoff(BACKOFF_CLAMP)
-            .into_retry_stream();
-        tokio::pin!(stream);
-        loop {
-            stream.next().await;
-            info!("Attempting to abort kafka transaction");
-            match self.abort_transaction().await {
-                Ok(()) => return Ok(()),
-                Err(KafkaError::Transaction(e)) if e.is_retriable() => {
-                    continue;
-                }
-                Err(e) => {
-                    return Err(format!(
-                        "non-retriable error while aborting kafka transaction: {e:?}"
-                    ));
-                }
-            }
-        }
+            })
+            .await
     }
 }
 

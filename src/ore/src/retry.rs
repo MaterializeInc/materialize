@@ -77,6 +77,26 @@ pub struct RetryState {
     pub next_backoff: Option<Duration>,
 }
 
+/// The result of a retryable operation.
+#[derive(Debug)]
+pub enum RetryResult<T, E> {
+    /// The operation was successful and does not need to be retried.
+    Ok(T),
+    /// The operation was unsuccessful but can be retried.
+    RetryableErr(E),
+    /// The operation was unsuccessful but cannot be retried.
+    FatalErr(E),
+}
+
+impl<T, E> From<Result<T, E>> for RetryResult<T, E> {
+    fn from(res: Result<T, E>) -> RetryResult<T, E> {
+        match res {
+            Ok(t) => RetryResult::Ok(t),
+            Err(e) => RetryResult::RetryableErr(e),
+        }
+    }
+}
+
 /// Configures a retry operation.
 ///
 /// See the [module documentation](self) for usage examples.
@@ -150,11 +170,19 @@ impl Retry {
 
     /// Retries the fallible operation `f` according to the configured policy.
     ///
-    /// The `retry` method invokes `f` repeatedly until it succeeds or until the
-    /// maximum duration or tries have been reached, as configured via
+    /// The `retry` method invokes `f` repeatedly until it returns either
+    /// [`RetryResult::Ok`] or [`RetryResult::FatalErr`], or until the maximum
+    /// duration or tries have been reached, as configured via
     /// [`max_duration`](Retry::max_duration) or
-    /// [`max_tries`](Retry::max_tries). If `f` never succeeds, then `retry`
-    /// returns `f`'s return value from its last invocation.
+    /// [`max_tries`](Retry::max_tries). If the last invocation of `f` returns
+    /// `RetryResult::Ok(t)`, then `retry` returns `Ok(t)`. If the last
+    /// invocation of `f` returns `RetryResult::RetriableErr(e)` or
+    /// `RetryResult::FatalErr(e)`, then `retry` returns `Err(e)`.
+    ///
+    /// As a convenience, `f` can return any type that is convertible to a
+    /// `RetryResult`. The conversion from [`Result`] to `RetryResult` converts
+    /// `Err(e)` to `RetryResult::RetryableErr(e)`, that is, it considers all
+    /// errors retryable.
     ///
     /// After the first failure, `retry` sleeps for the initial backoff
     /// configured via [`initial_backoff`](Retry::initial_backoff). After each
@@ -166,9 +194,10 @@ impl Retry {
     /// The operation does not attempt to forcibly time out `f`, even if there
     /// is a maximum duration. If there is the possibility of `f` blocking
     /// forever, consider adding a timeout internally.
-    pub fn retry<F, T, E>(self, mut f: F) -> Result<T, E>
+    pub fn retry<F, R, T, E>(self, mut f: F) -> Result<T, E>
     where
-        F: FnMut(RetryState) -> Result<T, E>,
+        F: FnMut(RetryState) -> R,
+        R: Into<RetryResult<T, E>>,
     {
         let start = Instant::now();
         let mut i = 0;
@@ -181,9 +210,10 @@ impl Retry {
                 next_backoff = Some(self.max_duration - elapsed);
             }
             let state = RetryState { i, next_backoff };
-            match f(state) {
-                Ok(t) => return Ok(t),
-                Err(e) => match &mut next_backoff {
+            match f(state).into() {
+                RetryResult::Ok(t) => return Ok(t),
+                RetryResult::FatalErr(e) => return Err(e),
+                RetryResult::RetryableErr(e) => match &mut next_backoff {
                     None => return Err(e),
                     Some(next_backoff) => {
                         thread::sleep(*next_backoff);
@@ -197,18 +227,20 @@ impl Retry {
     }
 
     /// Like [`Retry::retry`] but for asynchronous operations.
-    pub async fn retry_async<F, U, T, E>(self, mut f: F) -> Result<T, E>
+    pub async fn retry_async<F, U, R, T, E>(self, mut f: F) -> Result<T, E>
     where
         F: FnMut(RetryState) -> U,
-        U: Future<Output = Result<T, E>>,
+        U: Future<Output = R>,
+        R: Into<RetryResult<T, E>>,
     {
         let stream = self.into_retry_stream();
         tokio::pin!(stream);
         let mut err = None;
         while let Some(state) = stream.next().await {
-            match f(state).await {
-                Ok(v) => return Ok(v),
-                Err(e) => err = Some(e),
+            match f(state).await.into() {
+                RetryResult::Ok(v) => return Ok(v),
+                RetryResult::FatalErr(e) => return Err(e),
+                RetryResult::RetryableErr(e) => err = Some(e),
             }
         }
         Err(err.expect("retry produces at least one element"))
@@ -514,6 +546,67 @@ mod tests {
                 RetryState {
                     i: 2,
                     next_backoff: Some(Duration::from_millis(4))
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_retry_fatal() {
+        let mut states = vec![];
+        let res = Retry::default()
+            .initial_backoff(Duration::from_millis(1))
+            .retry(|state| {
+                states.push(state);
+                if state.i == 0 {
+                    RetryResult::RetryableErr::<(), _>("retry me")
+                } else {
+                    RetryResult::FatalErr("injected")
+                }
+            });
+        assert_eq!(res, Err("injected"));
+        assert_eq!(
+            states,
+            &[
+                RetryState {
+                    i: 0,
+                    next_backoff: Some(Duration::from_millis(1))
+                },
+                RetryState {
+                    i: 1,
+                    next_backoff: Some(Duration::from_millis(2))
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_retry_async_fatal() {
+        let mut states = vec![];
+        let res = Retry::default()
+            .initial_backoff(Duration::from_millis(1))
+            .retry_async(|state| {
+                states.push(state);
+                async move {
+                    if state.i == 0 {
+                        RetryResult::RetryableErr::<(), _>("retry me")
+                    } else {
+                        RetryResult::FatalErr("injected")
+                    }
+                }
+            })
+            .await;
+        assert_eq!(res, Err("injected"));
+        assert_eq!(
+            states,
+            &[
+                RetryState {
+                    i: 0,
+                    next_backoff: Some(Duration::from_millis(1))
+                },
+                RetryState {
+                    i: 1,
+                    next_backoff: Some(Duration::from_millis(2))
                 },
             ]
         );
