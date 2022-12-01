@@ -7,10 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::net::SocketAddr;
+use mz_repr::Row;
+use mz_sql::ast::{Ident, Raw, ShowStatement, ShowVariableStatement, Statement};
 
-use futures::future::join_all;
-use tokio_postgres::tls::NoTls;
+use crate::catalog::SYSTEM_USER;
+use crate::session::{EndTransactionAction, Session};
+use crate::{AdapterError, Client, ExecuteResponse, PeekResponseUnary, SessionClient};
 
 use super::SynchronizedParameters;
 
@@ -19,82 +21,143 @@ use super::SynchronizedParameters;
 /// Pulling is required in order to catch concurrent changes before pushing
 /// modified values in the [crate::config::system_parameter_sync].
 pub struct SystemParameterBackend {
-    client: tokio_postgres::Client,
+    session_client: SessionClient,
 }
 
 impl SystemParameterBackend {
-    pub async fn new(addr: SocketAddr) -> Result<Self, anyhow::Error> {
-        let (client, connection) = tokio_postgres::connect(
-            &format!("host={} port={} user=mz_system", addr.ip(), addr.port()),
-            NoTls,
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!(e))?;
-
-        // The connection object performs the actual communication with the database,
-        // so spawn it off to run on its own.
-        mz_ore::task::spawn(|| "sys_param_sync:postgres", async move {
-            if let Err(e) = connection.await {
-                // TODO (15956): can/should I just log this as a tracing error here?
-                // We should probably handle try to reconnect in order to recover.
-                tracing::error!("SystemParameterBackend Postgres connection error: {}", e);
-            }
-        });
-
-        Ok(Self { client })
+    pub async fn new(client: Client) -> Result<Self, AdapterError> {
+        let conn_client = client.new_conn()?;
+        let session = Session::new(conn_client.conn_id(), SYSTEM_USER.clone());
+        let (session_client, _) = conn_client.startup(session, true).await?;
+        Ok(Self { session_client })
     }
 
     /// Push all current values from the given [SynchronizedParameters] that are
-    /// marked as modified to the [SystemParameterBackend] and reset the their
-    /// modified flags.
-    pub async fn push(&self, params: &mut SynchronizedParameters) {
-        let mut requests = vec![];
-        let mut updates = vec![];
-
-        requests.push(params.window_functions.as_request());
-        requests.push(params.allowed_cluster_replica_sizes.as_request());
-        requests.push(params.max_result_size.as_request());
-
-        for request in requests.into_iter().flatten() {
-            let client = &self.client;
-            let update = async move {
-                match client.execute(request.sql_statement().as_str(), &[]).await {
-                    Ok(_updated_rows) => {
-                        *request.parameter_flag = false;
-                    }
-                    Err(e) => {
-                        tracing::error!("SystemParameterBackend::push error: {}", e);
-                    }
+    /// marked as modified to the [SystemParameterBackend] and reset their
+    /// modified status.
+    pub async fn push(&mut self, params: &mut SynchronizedParameters) {
+        for param in params.modified() {
+            let alter_system = param.as_stmt();
+            match self.execute_alter_system(alter_system).await {
+                Ok(()) => {
+                    tracing::debug!(name = param.name, value = param.value, "sync parameter");
                 }
-            };
-            updates.push(update);
+                Err(error) => {
+                    tracing::error!("cannot execute `ALTER SYSTEM` query: {}", error);
+                }
+            }
         }
-
-        join_all(updates).await;
     }
 
     /// Pull the current values for all [SynchronizedParameters] from the
     /// [SystemParameterBackend].
-    pub async fn pull(&self, params: &mut SynchronizedParameters) {
-        match self.client.query("SHOW ALL", &[]).await {
-            Ok(result) => {
-                for row in result {
-                    let name: &str = row.get("name");
-                    if name == params.window_functions.name {
-                        let value = row.get("setting");
-                        params.window_functions.modify(value);
-                    } else if name == params.allowed_cluster_replica_sizes.name {
-                        let value = row.get("setting");
-                        params.allowed_cluster_replica_sizes.modify(value);
-                    } else if name == params.max_result_size.name {
-                        let value = row.get("setting");
-                        params.max_result_size.modify(value);
+    pub async fn pull(&mut self, params: &mut SynchronizedParameters) {
+        let show_all = Statement::Show(ShowStatement::ShowVariable(ShowVariableStatement {
+            variable: Ident::from("ALL"),
+        }));
+        match self.execute_query(show_all).await {
+            Ok(rows) => {
+                let mut datum_vec = mz_repr::DatumVec::new();
+                for row in rows {
+                    let datums = datum_vec.borrow_with(&row);
+                    let name = datums[NAME_COLUMN].unwrap_str();
+                    let value = datums[VALUE_COLUMN].unwrap_str();
+                    if params.is_synchronized(name) {
+                        params.modify(name, value);
                     }
                 }
             }
-            Err(e) => {
-                tracing::error!("SystemParameterBackend::pull error: {}", e);
+            Err(error) => {
+                tracing::error!("cannot execute `SHOW ALL` query: {}", error)
             }
         }
     }
+
+    /// Execute a single `ALTER SYSTEM` statement.
+    async fn execute_alter_system(&mut self, stmt: Statement<Raw>) -> Result<(), AdapterError> {
+        self.session_client.start_transaction(Some(1)).await?;
+
+        self.prepare(stmt).await?;
+        let result = match self.session_client.execute(EMPTY_PORTAL.into()).await? {
+            ExecuteResponse::AlteredSystemConfiguration => Ok(()),
+            _ => Err(AdapterError::Internal(UNEXPECTED_RESPONSE.to_string())),
+        };
+
+        if result.is_ok() {
+            self.session_client
+                .end_transaction(EndTransactionAction::Commit)
+                .await?;
+        } else {
+            self.session_client.fail_transaction();
+        }
+
+        result
+    }
+
+    /// Execute a single query and returns the results.
+    async fn execute_query(&mut self, stmt: Statement<Raw>) -> Result<Vec<Row>, AdapterError> {
+        self.session_client.start_transaction(Some(1)).await?;
+
+        self.prepare(stmt).await?;
+        let result = match self.session_client.execute(EMPTY_PORTAL.into()).await? {
+            ExecuteResponse::SendingRows { future: rows, .. } => match rows.await {
+                PeekResponseUnary::Rows(rows) => Ok(rows),
+                PeekResponseUnary::Error(e) => Err(AdapterError::Internal(e)),
+                PeekResponseUnary::Canceled => {
+                    Err(AdapterError::Internal(UNEXPECTED_RESPONSE.to_string()))
+                }
+            },
+            _ => Err(AdapterError::Internal(UNEXPECTED_RESPONSE.to_string())),
+        };
+
+        if result.is_ok() {
+            self.session_client
+                .end_transaction(EndTransactionAction::Commit)
+                .await?;
+        } else {
+            self.session_client.fail_transaction();
+        }
+
+        result
+    }
+
+    /// Prepare a statement for execution. After calling this, you can call
+    /// [SessionClient::execute] in order to execute the passed [Statement].
+    async fn prepare(&mut self, stmt: Statement<Raw>) -> Result<(), AdapterError> {
+        self.session_client
+            .describe(EMPTY_PORTAL.into(), Some(stmt.clone()), vec![])
+            .await?;
+
+        let prep_stmt = self
+            .session_client
+            .get_prepared_statement(EMPTY_PORTAL)
+            .await?;
+        let params = vec![];
+        let result_formats = vec![
+            mz_pgrepr::Format::Text;
+            prep_stmt
+                .desc()
+                .relation_desc
+                .clone()
+                .map(|desc| desc.typ().column_types.len())
+                .unwrap_or(0)
+        ];
+        let desc = prep_stmt.desc().clone();
+        let revision = prep_stmt.catalog_revision;
+        let stmt = prep_stmt.sql().cloned();
+
+        self.session_client.session().set_portal(
+            EMPTY_PORTAL.into(),
+            desc,
+            stmt,
+            params,
+            result_formats,
+            revision,
+        )
+    }
 }
+
+const NAME_COLUMN: usize = 0;
+const VALUE_COLUMN: usize = 1;
+const EMPTY_PORTAL: &str = "";
+const UNEXPECTED_RESPONSE: &str = "unexpected response to SessionClient::execute request";

@@ -7,24 +7,25 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::sync::Arc;
+use std::time::Duration;
+
+use tokio::time;
+
 mod backend;
 mod frontend;
 mod params;
 
-use std::{sync::Arc, time::Duration};
-
-use tokio::time;
-
 pub use backend::SystemParameterBackend;
 pub use frontend::SystemParameterFrontend;
-pub use params::SynchronizedParameters;
+pub use params::{ModifiedParameter, SynchronizedParameters};
 
 /// Run a loop that periodically pulls system parameters defined in the
 /// LaunchDarkly-backed [SystemParameterFrontend] and pushes modified values to the
 /// `ALTER SYSTEM`-backed [SystemParameterBackend].
 pub async fn system_parameter_sync(
     frontend: Arc<SystemParameterFrontend>,
-    backend: SystemParameterBackend,
+    mut backend: SystemParameterBackend,
     tick_interval: Duration,
 ) -> Result<(), anyhow::Error> {
     // Ensure the frontend client is initialized.
