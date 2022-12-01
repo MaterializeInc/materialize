@@ -353,7 +353,6 @@ impl MetricsVecs {
                 rollup_set: self.retry_metrics("rollup::set"),
                 storage_usage_shard_size: self.retry_metrics("storage_usage::shard_size"),
             },
-            append_batch: self.retry_metrics("append_batch"),
             compare_and_append_idempotent: self.retry_metrics("compare_and_append_idempotent"),
             fetch_latest_state: self.retry_metrics("fetch_latest_state"),
             fetch_live_states: self.retry_metrics("fetch_live_states"),
@@ -538,7 +537,6 @@ pub struct RetriesMetrics {
     pub(crate) determinate: RetryDeterminate,
     pub(crate) external: RetryExternal,
 
-    pub(crate) append_batch: RetryMetrics,
     pub(crate) compare_and_append_idempotent: RetryMetrics,
     pub(crate) fetch_latest_state: RetryMetrics,
     pub(crate) fetch_live_states: RetryMetrics,

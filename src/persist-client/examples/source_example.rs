@@ -27,13 +27,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures_util::future::BoxFuture;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::async_runtime::CpuHeavyRuntime;
-use tracing::{error, trace};
+use tracing::error;
 
 use mz_ore::now::SYSTEM_TIME;
-use mz_persist::location::{Blob, Consensus, ExternalError, Indeterminate};
+use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHandle};
 use mz_persist_client::{Metrics, PersistClient, PersistConfig, PersistLocation};
 
@@ -61,26 +60,6 @@ pub struct Args {
     /// unreliability.
     #[clap(long, default_value_t = 0.0)]
     unreliability: f64,
-}
-
-async fn retry_mut<F, I, T>(name: &str, input: &mut I, mut action: F) -> T
-where
-    F: for<'a> FnMut(&'a mut I) -> BoxFuture<'a, Result<T, Indeterminate>>,
-{
-    let mut i = 0;
-    loop {
-        let result = action(input);
-        match result.await {
-            Ok(ok) => {
-                trace!("success after {i} retries",);
-                return ok;
-            }
-            Err(e) => {
-                trace!("attempt {i} of {name} failed, retrying: {:?}", e);
-            }
-        }
-        i += 1;
-    }
 }
 
 pub async fn run(args: Args) -> Result<(), anyhow::Error> {
@@ -580,7 +559,6 @@ mod impls {
     use mz_persist_types::{Codec, Codec64};
 
     use super::api::{Batch, IteratedConsensus, Source, TimestampBindings, Timestamper};
-    use super::retry_mut;
     use super::types::{PartitionOffset, Timestamp};
 
     #[derive(Clone)]
@@ -930,24 +908,15 @@ mod impls {
             expected_upper: Antichain<T>,
             new_upper: Antichain<T>,
         ) -> Result<(), Antichain<T>> {
-            let mut input = (&mut self.write, &updates);
-
-            let result = retry_mut(
-                "consensus::compare_and_append",
-                &mut input,
-                move |(write, updates)| {
-                    let updates = updates.iter().map(|((k, v), ts)| ((k, v), ts, 1));
-                    let fut = write.compare_and_append(
-                        updates,
-                        expected_upper.clone(),
-                        new_upper.clone(),
-                    );
-                    Box::pin(fut)
-                },
-            )
-            .await
-            .expect("invalid usage");
-
+            let updates = updates
+                .iter()
+                .map(|((k, v), ts)| ((k, v), ts, 1))
+                .collect::<Vec<_>>();
+            let result = self
+                .write
+                .compare_and_append(updates, expected_upper.clone(), new_upper.clone())
+                .await
+                .expect("invalid usage");
             match result {
                 Ok(x) => Ok(x),
                 Err(Upper(upper)) => Err(upper),

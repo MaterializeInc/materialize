@@ -155,7 +155,6 @@ async fn bench_write_to_listen_one_iter(
                 Antichain::from_elem(max_ts + 1),
             )
             .await
-            .expect("external durability failure")
             .expect("invalid usage")
             .expect("unexpected upper");
 

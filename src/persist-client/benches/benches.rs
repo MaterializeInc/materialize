@@ -299,7 +299,6 @@ async fn load(
                 Antichain::from_elem(max_ts + 1),
             )
             .await
-            .expect("external durability failure")
             .expect("invalid usage")
             .expect("unexpected upper");
     }

@@ -2150,7 +2150,7 @@ mod persist_write_handles {
                                                         // by a failure on our next interaction with the catalog stash,
                                                         // but we would incorrectly think this committed and may serve
                                                         // results in the meantime.
-                                                        result = Ok(Ok(Ok(())))
+                                                        result = Ok(Ok(()))
                                                     } else {
                                                         tracing::info!(
                                                             "Persist writer failed: `write.upper` for {:?} advanced by
@@ -2163,7 +2163,6 @@ mod persist_write_handles {
                                                 }
 
                                                 result
-                                                    .expect("Indeterminate response not resolved")
                                                     .expect("cannot append updates")
                                                     .or(Err(*id))?;
 

@@ -17,7 +17,6 @@ use timely::progress::Antichain;
 use mz_persist_client::{PersistClient, ShardId, Upper};
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_storage_client::types::sources::SourceData;
-use tracing::trace;
 
 pub async fn write_to_persist(
     collection_id: GlobalId,
@@ -73,15 +72,12 @@ pub async fn write_to_persist(
             .compare_and_append(updates, recent_upper.clone(), new_upper)
             .await;
         match cas_result {
-            Ok(Ok(Ok(()))) => break 'retry_loop,
-            Ok(Ok(Err(Upper(upper)))) => {
+            Ok(Ok(())) => break 'retry_loop,
+            Ok(Err(Upper(upper))) => {
                 recent_upper = upper;
             }
-            Ok(Err(e)) => {
-                panic!("Invalid usage of the persist client for collection {collection_id} status history shard: {e:?}");
-            }
             Err(e) => {
-                trace!("compare_and_append in update_status failed: {e}");
+                panic!("Invalid usage of the persist client for collection {collection_id} status history shard: {e:?}");
             }
         }
     }

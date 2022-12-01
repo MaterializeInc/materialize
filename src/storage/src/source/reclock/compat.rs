@@ -283,33 +283,18 @@ impl RemapHandle for PersistHandle {
             row_updates.push((pack_binding(pid, offset), ts, diff));
         }
 
-        loop {
-            let updates = row_updates
-                .iter()
-                .map(|(data, time, diff)| ((data, ()), time, diff));
-            let upper = upper.clone();
-            let new_upper = new_upper.clone();
-            match self
-                .write_handle
-                .compare_and_append(updates, upper, new_upper)
-                .await
-            {
-                Ok(Ok(result)) => return result,
-                Ok(Err(invalid_use)) => panic!("compare_and_append failed: {invalid_use}"),
-                // An external error means that the operation might have suceeded or failed but we
-                // don't know. In either case it is safe to retry because:
-                // * If it succeeded, then on retry we'll get an `Upper(_)` error as if some other
-                //   process raced us (but we actually raced ourselves). Since the operator is
-                //   built to handle concurrent instances of itself this safe to do and will
-                //   correctly re-sync its state. Once it resyncs we'll re-enter `mint` and notice
-                //   that there are no updates to add (because we just added them and don't know
-                //   it!) and the reclock operation will proceed normally.
-                // * If it failed, then we'll succeed on retry and proceed normally.
-                Err(external_err) => {
-                    tracing::debug!("compare_and_append failed: {external_err}");
-                    continue;
-                }
-            }
+        let updates = row_updates
+            .iter()
+            .map(|(data, time, diff)| ((data, ()), time, diff));
+        let upper = upper.clone();
+        let new_upper = new_upper.clone();
+        match self
+            .write_handle
+            .compare_and_append(updates, upper, new_upper)
+            .await
+        {
+            Ok(result) => return result,
+            Err(invalid_use) => panic!("compare_and_append failed: {invalid_use}"),
         }
     }
 
