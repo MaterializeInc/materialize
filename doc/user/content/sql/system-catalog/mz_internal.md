@@ -393,7 +393,7 @@ Field                   | Type                          | Meaning
 `name`                  | [`text`]                      | The name of the source.
 `type`                  | [`text`]                      | The type of the source.
 `last_status_change_at` | [`timestamp with time zone`]  | Wall-clock timestamp of the source status change.
-`status`                | [`text`]                      | The status of the source: one of `setup`, `starting`, `running`, `stalled`, `failed`, or `dropped`.
+`status`                | [`text`]                      | The status of the source: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.
 `error`                 | [`text`]                      | If the source is in an error state, the error message.
 `details`               | [`jsonb`]                     | Additional metadata provided by the source.The next timestamp at which the dataflow may change.
 
