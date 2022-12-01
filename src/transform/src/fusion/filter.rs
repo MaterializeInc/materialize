@@ -35,7 +35,6 @@
 //! // .transform() will deduplicate any predicates
 //! use mz_transform::{Transform, TransformArgs};
 //! Filter.transform(&mut expr, TransformArgs {
-//!   id_gen: &mut Default::default(),
 //!   indexes: &mz_transform::EmptyIndexOracle,
 //! });
 //!
