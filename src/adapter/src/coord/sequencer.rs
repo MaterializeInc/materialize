@@ -1908,7 +1908,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .vars()
                 .iter()
                 .chain(self.catalog.system_config().iter())
-                .filter(|v| !v.experimental())
+                .filter(|v| !v.experimental() && v.visible(session.user()))
                 .map(|v| {
                     Row::pack_slice(&[
                         Datum::String(v.name()),
@@ -1929,8 +1929,13 @@ impl<S: Append + 'static> Coordinator<S> {
             .vars()
             .get(&plan.name)
             .or_else(|_| self.catalog.system_config().get(&plan.name))?;
-        let row = Row::pack_slice(&[Datum::String(&variable.value())]);
-        Ok(send_immediate_rows(vec![row]))
+
+        if variable.visible(session.user()) {
+            let row = Row::pack_slice(&[Datum::String(&variable.value())]);
+            Ok(send_immediate_rows(vec![row]))
+        } else {
+            Err(AdapterError::UnknownParameter(plan.name))
+        }
     }
 
     fn sequence_set_variable(
