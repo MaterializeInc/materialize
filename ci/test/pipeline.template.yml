@@ -296,7 +296,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: upgrade
-          args: [--most-recent, "1"]
     agents:
       queue: linux-x86_64
 

@@ -53,6 +53,7 @@ steps:
           - { value: checks-parallel-restart-postgres-backend }
           - { value: checks-parallel-restart-redpanda }
           - { value: checks-upgrade-entire-mz }
+          - { value: checks-upgrade-entire-mz-previous-version }
           - { value: checks-upgrade-computed-first }
           - { value: checks-upgrade-computed-last }
           - { value: cloudtest-upgrade }
@@ -447,7 +448,7 @@ steps:
           args: [--scenario=RestartRedpandaDebezium, --execution-mode=parallel]
 
   - id: checks-upgrade-entire-mz
-    label: "Platform checks upgrade, whole-Mz restart"
+    label: "Checks upgrade, whole-Mz restart"
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -455,6 +456,16 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=UpgradeEntireMz]
+
+  - id: checks-upgrade-entire-mz-previous-version
+    label: "Checks upgrade from previous version, whole-Mz restart"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=UpgradeEntireMzPreviousVersion]
 
   - id: checks-upgrade-computed-first
     label: "Platform checks upgrade, restarting computed first"
