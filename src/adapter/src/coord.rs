@@ -876,7 +876,11 @@ impl<S: Append + 'static> Coordinator<S> {
                 .snapshot(system_table.id(), read_ts)
                 .await
                 .unwrap();
-            info!("coordinator init: table size {}", current_contents.len());
+            info!(
+                "coordinator init: table size {} elements, {} bytes",
+                current_contents.len(),
+                std::mem::size_of_val(&*current_contents),
+            );
             let retractions = current_contents
                 .into_iter()
                 .map(|(row, diff)| BuiltinTableUpdate {
