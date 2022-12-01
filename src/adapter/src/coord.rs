@@ -123,13 +123,13 @@ use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::metrics::Metrics;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::ReadCapability;
 use crate::coord::timeline::{
     TimelineState, WriteTimestamp, TIMESTAMP_INTERVAL_UPPER_BOUND, TIMESTAMP_PERSIST_INTERVAL,
 };
 use crate::error::AdapterError;
+use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, Session};
 use crate::subscribe::PendingSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId};
@@ -144,7 +144,6 @@ mod dataflows;
 mod ddl;
 mod indexes;
 mod message_handler;
-mod metrics;
 mod read_policy;
 mod sequencer;
 mod sql;
@@ -251,7 +250,7 @@ pub struct Config<S> {
     pub connection_context: ConnectionContext,
     pub storage_usage_client: StorageUsageClient,
     pub storage_usage_collection_interval: Duration,
-    pub segment_api_key: Option<String>,
+    pub segment_client: Option<mz_segment::Client>,
     pub egress_ips: Vec<Ipv4Addr>,
     pub consolidations_tx: mpsc::UnboundedSender<Vec<mz_stash::Id>>,
     pub consolidations_rx: mpsc::UnboundedReceiver<Vec<mz_stash::Id>>,
@@ -1031,7 +1030,7 @@ pub async fn serve<S: Append + 'static>(
         connection_context,
         storage_usage_client,
         storage_usage_collection_interval,
-        segment_api_key,
+        segment_client,
         egress_ips,
         consolidations_tx,
         consolidations_rx,
@@ -1087,7 +1086,8 @@ pub async fn serve<S: Append + 'static>(
     let handle = TokioHandle::current();
 
     let initial_timestamps = catalog.get_all_persisted_timestamps().await?;
-    let inner_metrics_registry = metrics_registry.clone();
+    let metrics = Metrics::register_into(&metrics_registry);
+    let metrics_clone = metrics.clone();
     let thread = thread::Builder::new()
         // The Coordinator thread tends to keep a lot of data on its stack. To
         // prevent a stack overflow we allocate a stack twice as big as the default
@@ -1131,9 +1131,6 @@ pub async fn serve<S: Append + 'static>(
                 ));
             }
 
-            let segment_client =
-                handle.block_on(async { segment_api_key.map(mz_segment::Client::new) });
-
             let mut coord = Coordinator {
                 controller: dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(),
@@ -1160,7 +1157,7 @@ pub async fn serve<S: Append + 'static>(
                 storage_usage_client,
                 storage_usage_collection_interval,
                 segment_client,
-                metrics: Metrics::register_with(&inner_metrics_registry),
+                metrics,
             };
             let bootstrap = handle.block_on(async {
                 coord
@@ -1196,7 +1193,7 @@ pub async fn serve<S: Append + 'static>(
                 start_instant,
                 _thread: thread.join_on_drop(),
             };
-            let client = Client::new(cmd_tx.clone(), &metrics_registry);
+            let client = Client::new(cmd_tx.clone(), metrics_clone);
             Ok((handle, client))
         }
         Err(e) => Err(e),

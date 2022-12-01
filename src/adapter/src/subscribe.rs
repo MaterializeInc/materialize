@@ -18,34 +18,20 @@ use mz_repr::{Datum, Row};
 use crate::coord::peek::PeekResponseUnary;
 
 /// A description of a pending subscribe from coord's perspective
-pub(crate) struct PendingSubscribe {
+pub struct PendingSubscribe {
+    /// The type of the session that created the subscribe.
+    pub session_type: &'static str,
     /// Channel to send responses to the client
     ///
     /// The responses have the form `PeekResponseUnary` but should perhaps become `TailResponse`.
-    channel: mpsc::UnboundedSender<PeekResponseUnary>,
+    pub channel: mpsc::UnboundedSender<PeekResponseUnary>,
     /// Whether progress information should be emitted
-    emit_progress: bool,
+    pub emit_progress: bool,
     /// Number of columns in the output
-    arity: usize,
+    pub arity: usize,
 }
 
 impl PendingSubscribe {
-    /// Create a new [PendingSubscribe].
-    /// * The `channel` receives batches of finalized PeekResponses.
-    /// * If `emit_progress` is true, the finalized rows are either data or progress updates
-    /// * `arity` is the arity of the sink relation.
-    pub(crate) fn new(
-        channel: mpsc::UnboundedSender<PeekResponseUnary>,
-        emit_progress: bool,
-        arity: usize,
-    ) -> Self {
-        Self {
-            channel,
-            emit_progress,
-            arity,
-        }
-    }
-
     /// Process a subscribe response
     ///
     /// Returns `true` if the sink should be removed.

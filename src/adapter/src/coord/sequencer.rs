@@ -75,6 +75,7 @@ use crate::coord::{
 };
 use crate::error::AdapterError;
 use crate::explain_new::optimizer_trace::OptimizerTrace;
+use crate::metrics;
 use crate::notice::AdapterNotice;
 use crate::session::vars::{IsolationLevel, CLUSTER_VAR_NAME, DATABASE_VAR_NAME};
 use crate::session::{
@@ -2482,9 +2483,20 @@ impl<S: Append + 'static> Coordinator<S> {
             });
         let arity = sink_desc.from_desc.arity();
         let (tx, rx) = mpsc::unbounded_channel();
-        self.metrics.active_subscribes.inc();
-        self.pending_subscribes
-            .insert(*sink_id, PendingSubscribe::new(tx, emit_progress, arity));
+        let session_type = metrics::session_type_label_value(session);
+        self.metrics
+            .active_subscribes
+            .with_label_values(&[session_type])
+            .inc();
+        self.pending_subscribes.insert(
+            *sink_id,
+            PendingSubscribe {
+                session_type,
+                channel: tx,
+                emit_progress,
+                arity,
+            },
+        );
         self.ship_dataflow(dataflow, compute_instance_id).await;
 
         let resp = ExecuteResponse::Subscribing { rx };

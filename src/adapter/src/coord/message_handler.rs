@@ -160,11 +160,14 @@ impl<S: Append + 'static> Coordinator<S> {
                 // We use an `if let` here because the peek could have been canceled already.
                 // We can also potentially receive multiple `Complete` responses, followed by
                 // a `Dropped` response.
-                if let Some(pending_subscribes) = self.pending_subscribes.get_mut(&sink_id) {
-                    let remove = pending_subscribes.process_response(response);
+                if let Some(pending_subscribe) = self.pending_subscribes.get_mut(&sink_id) {
+                    let remove = pending_subscribe.process_response(response);
                     if remove {
+                        self.metrics
+                            .active_subscribes
+                            .with_label_values(&[pending_subscribe.session_type])
+                            .dec();
                         self.pending_subscribes.remove(&sink_id);
-                        self.metrics.active_subscribes.dec();
                     }
                 }
             }
