@@ -615,7 +615,8 @@ def workflow_test_builtin_migration(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     with c.override(
-        # Random commit before pg_proc and mz_dataflow_operator_reachability was updated.
+        # Random commit before pg_proc, mz_dataflow_operator_reachability, mz_show_cluster_replicas, and
+        # mz_cluster_replica_statuses were updated.
         Materialized(
             image="materialize/materialized:devel-aa4128c9c485322f90ab0af2b9cb4d16e1c470c0",
             default_size=1,
@@ -642,6 +643,18 @@ def workflow_test_builtin_migration(c: Composition) -> None:
 
         > SELECT pg_typeof(address) FROM mz_internal.mz_dataflow_operator_reachability LIMIT 1;
         "bigint list"
+
+        > SELECT pg_typeof(process_id) FROM mz_internal.mz_cluster_replica_statuses LIMIT 1;
+        "bigint"
+
+        ! SELECT updated_at FROM mz_internal.mz_cluster_replica_statuses;
+        contains:column "updated_at" does not exist
+
+        > SELECT last_update FROM mz_internal.mz_cluster_replica_statuses LIMIT 0;
+
+        ! SELECT ready FROM mz_internal.mz_show_cluster_replicas LIMIT 0;
+        contains:column "ready" does not exist
+
     """
             )
         )
@@ -660,14 +673,61 @@ def workflow_test_builtin_migration(c: Composition) -> None:
         c.testdrive(
             input=dedent(
                 """
-       > SELECT * FROM v1;
-       5
-       # This column is new after the migration
-       > SELECT DISTINCT proowner FROM pg_proc;
-       <null>
+        > SELECT * FROM v1;
+        5
+        # This column is new after the migration
+        > SELECT DISTINCT proowner FROM pg_proc;
+        <null>
 
-       > SELECT pg_typeof(address) FROM mz_internal.mz_dataflow_operator_reachability LIMIT 1;
-       "uint8 list"
+        > SELECT pg_typeof(address) FROM mz_internal.mz_dataflow_operator_reachability LIMIT 1;
+        "uint8 list"
+
+        > SELECT pg_typeof(process_id) FROM mz_internal.mz_cluster_replica_statuses LIMIT 1;
+        "uint8"
+
+        ! SELECT last_update FROM mz_internal.mz_cluster_replica_statuses;
+        contains:column "last_update" does not exist
+
+        > SELECT updated_at FROM mz_internal.mz_cluster_replica_statuses LIMIT 0;
+
+        > SELECT ready FROM mz_internal.mz_show_cluster_replicas LIMIT 0;
+
+    """
+            )
+        )
+
+    # Restart materialize and test that everything still works to ensure that the migration was persisted correctly.
+    with c.override(
+        # This will stop working if we introduce a breaking change.
+        Materialized(),
+        Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.wait_for_materialized()
+
+        c.testdrive(
+            input=dedent(
+                """
+        > SELECT * FROM v1;
+        5
+        # This column is new after the migration
+        > SELECT DISTINCT proowner FROM pg_proc;
+        <null>
+
+        > SELECT pg_typeof(address) FROM mz_internal.mz_dataflow_operator_reachability LIMIT 1;
+        "uint8 list"
+
+        > SELECT pg_typeof(process_id) FROM mz_internal.mz_cluster_replica_statuses LIMIT 1;
+        "uint8"
+
+        ! SELECT last_update FROM mz_internal.mz_cluster_replica_statuses;
+        contains:column "last_update" does not exist
+
+        > SELECT updated_at FROM mz_internal.mz_cluster_replica_statuses LIMIT 0;
+
+        > SELECT ready FROM mz_internal.mz_show_cluster_replicas LIMIT 0;
+
     """
             )
         )
