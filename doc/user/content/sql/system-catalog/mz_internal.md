@@ -407,7 +407,7 @@ Field         | Type                          | Meaning
 --------------|-------------------------------|--------
 `occurred_at` | [`timestamp with time zone`]  | Wall-clock timestamp of the source status change.
 `source_id`   | [`text`]                      | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).
-`status`      | [`text`]                      | The status of the source: one of `setup`, `starting`, `running`, `stalled`, `failed`, or `dropped`.
+`status`      | [`text`]                      | The status of the source: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.
 `error`       | [`text`]                      | If the source is in an error state, the error message.
 `details`     | [`jsonb`]                     | Additional metadata provided by the source.
 
