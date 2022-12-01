@@ -13,4 +13,8 @@ RUN apt-get update && apt-get -qy install ca-certificates
 
 COPY examples/persistcli /usr/local/bin/persistcli
 
+# TODO: the intention is for this image to eventually serve as the one-off
+# job launcher for all of materialize, not just for persist. but because of
+# short-term reasons, the entrypoint for now is just into persistcli.
+
 ENTRYPOINT ["persistcli"]
