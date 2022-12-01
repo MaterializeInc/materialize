@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.66"
 async-trait = "0.1.59"
-k8s-openapi = { version = "0.16.0", features = ["v1_22"] }
+k8s-openapi = { version = "0.16.0", features = ["v1_23"] }
 kube = { version = "0.76.0", features = ["derive", "openssl-tls", "ws"] }
 mz-repr = { path = "../repr" }
 schemars = { version = "0.8", features = ["uuid1"] }
