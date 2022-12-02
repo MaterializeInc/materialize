@@ -17,6 +17,7 @@ from materialize.zippy.kafka_actions import (
     KafkaInsertParallel,
     KafkaStart,
 )
+from materialize.zippy.kafka_capabilities import Envelope
 from materialize.zippy.mz_actions import KillComputed, KillStoraged, MzStart, MzStop
 from materialize.zippy.peek_actions import PeekCancellation
 from materialize.zippy.pg_cdc_actions import CreatePostgresCdcTable
@@ -183,4 +184,30 @@ class KafkaSourcesLarge(Scenario):
             ValidateView: 10,
             Ingest: 100,
             PeekCancellation: 5,
+        }
+
+
+class DataflowsLarge(Scenario):
+    """A Zippy test using a smaller number but more complex dataflows."""
+
+    def bootstrap(self) -> List[ActionOrFactory]:
+        return [KafkaStart, MzStart]
+
+    def config(self) -> Dict[ActionOrFactory, float]:
+        return {
+            # Killing computed causes a massive memory spike during re-hyration
+            # MzStart: 1,
+            # MzStop: 2,
+            # KillComputed: 2,
+            KillStoraged: 2,
+            CreateReplica: 2,
+            CreateTableParameterized(max_tables=2): 10,
+            CreateTopicParameterized(max_topics=2, envelopes=[Envelope.UPSERT]): 10,
+            CreateSourceParameterized(max_sources=10): 10,
+            CreateViewParameterized(
+                max_views=5, expensive_aggregates=True, max_inputs=5
+            ): 10,
+            ValidateView: 10,
+            Ingest: 50,
+            DML: 50,
         }
