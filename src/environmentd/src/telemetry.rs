@@ -37,7 +37,7 @@ use mz_ore::retry::Retry;
 use mz_ore::task;
 
 /// How frequently to send a summary to Segment.
-const REPORT_INTERVAL: Duration = Duration::from_secs(15);
+const REPORT_INTERVAL: Duration = Duration::from_secs(3600);
 
 /// Telemetry configuration.
 #[derive(Clone)]
