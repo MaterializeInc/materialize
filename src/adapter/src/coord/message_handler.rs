@@ -135,6 +135,9 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     pub fn schedule_storage_usage_collection(&self) {
+        // Instead of using an `tokio::timer::Interval`, we calculate the time since the last
+        // collection and wait for however much time is left. This is so we can keep the intervals
+        // consistent even across restarts.
         let time_since_previous_collection = self
             .now()
             .saturating_sub(self.catalog.most_recent_storage_usage_collection());
