@@ -18,6 +18,7 @@ use tracing::{event, warn, Level};
 
 use mz_compute_client::controller::ComputeInstanceEvent;
 use mz_controller::ControllerResponse;
+use mz_ore::now::EpochMillis;
 use mz_ore::task;
 use mz_persist_client::ShardId;
 use mz_sql::ast::Statement;
@@ -73,11 +74,11 @@ impl<S: Append + 'static> Coordinator<S> {
             Message::LinearizeReads(pending_read_txns) => {
                 self.message_linearize_reads(pending_read_txns).await;
             }
-            Message::StorageUsageFetch => {
-                self.storage_usage_fetch().await;
+            Message::StorageUsageFetch(collection_timestamp) => {
+                self.storage_usage_fetch(collection_timestamp).await;
             }
-            Message::StorageUsageUpdate(sizes) => {
-                self.storage_usage_update(sizes).await;
+            Message::StorageUsageUpdate(sizes, collection_timestamp) => {
+                self.storage_usage_update(sizes, collection_timestamp).await;
             }
             Message::Consolidate(collections) => {
                 self.consolidate(&collections).await;
@@ -93,14 +94,17 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn storage_usage_fetch(&self) {
+    async fn storage_usage_fetch(&self, collection_timestamp: EpochMillis) {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let client = self.storage_usage_client.clone();
         task::spawn(|| "storage_usage_fetch", async move {
             let shard_sizes = client.shard_sizes().await;
             // It is not an error for shard sizes to become ready after `internal_cmd_rx`
             // is dropped.
-            let result = internal_cmd_tx.send(Message::StorageUsageUpdate(shard_sizes));
+            let result = internal_cmd_tx.send(Message::StorageUsageUpdate(
+                shard_sizes,
+                collection_timestamp,
+            ));
             if let Err(e) = result {
                 warn!("internal_cmd_rx dropped before we could send: {:?}", e);
             }
@@ -108,8 +112,11 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn storage_usage_update(&mut self, shard_sizes: HashMap<Option<ShardId>, u64>) {
-        let collection_timestamp = (self.catalog.config().now)();
+    async fn storage_usage_update(
+        &mut self,
+        shard_sizes: HashMap<Option<ShardId>, u64>,
+        collection_timestamp: EpochMillis,
+    ) {
         let mut ops = vec![];
         for (shard_id, size_bytes) in shard_sizes {
             ops.push(catalog::Op::UpdateStorageUsage {
@@ -128,6 +135,9 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     pub fn schedule_storage_usage_collection(&self) {
+        // Instead of using an `tokio::timer::Interval`, we calculate the time since the last
+        // collection and wait for however much time is left. This is so we can keep the intervals
+        // consistent even across restarts.
         let time_since_previous_collection = self
             .now()
             .saturating_sub(self.catalog.most_recent_storage_usage_collection());
@@ -135,9 +145,13 @@ impl<S: Append + 'static> Coordinator<S> {
             .storage_usage_collection_interval
             .saturating_sub(Duration::from_millis(time_since_previous_collection));
         let internal_cmd_tx = self.internal_cmd_tx.clone();
+        let now_fn = self.now_fn();
         task::spawn(|| "storage_usage_collection", async move {
             tokio::time::sleep(next_collection_interval).await;
-            if internal_cmd_tx.send(Message::StorageUsageFetch).is_err() {
+            if internal_cmd_tx
+                .send(Message::StorageUsageFetch(now_fn()))
+                .is_err()
+            {
                 // If sending fails, the main thread has shutdown.
             }
         });

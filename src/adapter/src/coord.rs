@@ -93,7 +93,7 @@ use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::NowFn;
+use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -183,8 +183,8 @@ pub enum Message<T = mz_repr::Timestamp> {
         conn_id: ConnectionId,
     },
     LinearizeReads(Vec<PendingReadTxn>),
-    StorageUsageFetch,
-    StorageUsageUpdate(HashMap<Option<ShardId>, u64>),
+    StorageUsageFetch(EpochMillis),
+    StorageUsageUpdate(HashMap<Option<ShardId>, u64>, EpochMillis),
     Consolidate(Vec<mz_stash::Id>),
 }
 
