@@ -125,7 +125,7 @@ impl AvroSchemaGenerator {
         key_desc: Option<RelationDesc>,
         value_desc: RelationDesc,
         debezium: bool,
-    ) -> Self {
+    ) -> Result<Self, anyhow::Error> {
         let mut value_columns = column_names_and_types(value_desc);
         if debezium {
             value_columns = envelopes::dbz_envelope(value_columns);
@@ -134,22 +134,28 @@ impl AvroSchemaGenerator {
             &value_columns,
             value_fullname.unwrap_or("envelope"),
             &ENVELOPE_CUSTOM_NAMES,
-        );
+        )?;
         let writer_schema = Schema::parse(&row_schema).expect("valid schema constructed");
-        let key_info = key_desc.map(|key_desc| {
-            let columns = column_names_and_types(key_desc);
-            let row_schema =
-                build_row_schema_json(&columns, key_fullname.unwrap_or("row"), &HashMap::new());
-            KeyInfo {
-                schema: Schema::parse(&row_schema).expect("valid schema constructed"),
-                columns,
+        let key_info = match key_desc {
+            None => None,
+            Some(key_desc) => {
+                let columns = column_names_and_types(key_desc);
+                let row_schema = build_row_schema_json(
+                    &columns,
+                    key_fullname.unwrap_or("row"),
+                    &HashMap::new(),
+                )?;
+                Some(KeyInfo {
+                    schema: Schema::parse(&row_schema).expect("valid schema constructed"),
+                    columns,
+                })
             }
-        });
-        AvroSchemaGenerator {
+        };
+        Ok(AvroSchemaGenerator {
             value_columns,
             key_info,
             writer_schema,
-        }
+        })
     }
 
     pub fn value_writer_schema(&self) -> &Schema {
