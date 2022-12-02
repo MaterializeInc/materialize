@@ -82,7 +82,6 @@ impl NormalizeLets {
         relation: &mut MirRelationExpr,
     ) -> Result<(), crate::TransformError> {
         self.action(relation)?;
-        relation.typ();
         Ok(())
     }
 
@@ -251,9 +250,9 @@ mod support {
         });
     }
 
-    /// Convert an expression containing `Let` bindings into a map from `LocalId` to `Let`-free expressions.
+    /// Extract all `Let` bindings from an expression, into a map from `LocalId` to `Let`-free expressions.
     ///
-    /// The special key `None` indicates the root of the expression; all other keys are `Some(local_id)`.
+    /// An equivalent expression can be reconstructed by introducing the bindings atop the resulting `expr`.
     pub(super) fn digest_lets(expr: &mut MirRelationExpr) -> BTreeMap<LocalId, MirRelationExpr> {
         let mut lets = BTreeMap::new();
         let mut worklist = Vec::new();
