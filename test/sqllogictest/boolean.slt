@@ -254,10 +254,6 @@ Explained Query:
   Project (#0) // { arity: 1 }
     Get materialize.public.y // { arity: 2 }
 
-Source materialize.public.y
-  project=(#0, #2)
-  map=(dummy)
-
 EOF
 
 # Bypass if statements with identical branches
@@ -270,10 +266,6 @@ Explained Query:
   Project (#2) // { arity: 1 }
     Map ((null OR NOT(#1) OR (#1) IS NULL)) // { arity: 3 }
       Get materialize.public.y // { arity: 2 }
-
-Source materialize.public.y
-  project=(#2, #1)
-  map=(dummy)
 
 EOF
 
@@ -289,10 +281,6 @@ Explained Query:
     Map ((#1 AND null AND (#1) IS NOT NULL)) // { arity: 3 }
       Get materialize.public.y // { arity: 2 }
 
-Source materialize.public.y
-  project=(#2, #1)
-  map=(dummy)
-
 EOF
 
 
@@ -305,10 +293,6 @@ Explained Query:
   Project (#2) // { arity: 1 }
     Map ((null OR (#1 AND (#1) IS NOT NULL))) // { arity: 3 }
       Get materialize.public.y // { arity: 2 }
-
-Source materialize.public.y
-  project=(#2, #1)
-  map=(dummy)
 
 EOF
 
@@ -323,10 +307,6 @@ Explained Query:
     Map ((null AND (NOT(#1) OR (#1) IS NULL))) // { arity: 3 }
       Get materialize.public.y // { arity: 2 }
 
-Source materialize.public.y
-  project=(#2, #1)
-  map=(dummy)
-
 EOF
 
 query T multiline
@@ -338,10 +318,6 @@ Explained Query:
   Project (#2) // { arity: 1 }
     Map ((NOT(#1) OR (#1) IS NULL)) // { arity: 3 }
       Get materialize.public.y // { arity: 2 }
-
-Source materialize.public.y
-  project=(#2, #1)
-  map=(dummy)
 
 EOF
 

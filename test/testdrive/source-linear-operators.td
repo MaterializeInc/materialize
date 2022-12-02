@@ -68,9 +68,7 @@ Explained Query:
       Get materialize.public.data
 
 Source materialize.public.data
-  project=(#4, #1, #5, #6)
   filter=((#1 = 1))
-  map=(dummy, dummy, dummy)
 
 
 > SELECT * FROM v
@@ -94,9 +92,7 @@ Explained Query:
       Get materialize.public.data
 
 Source materialize.public.data
-  project=(#0, #1, #4, #3)
   filter=((#0 = 1) AND (#3 = 4))
-  map=(dummy)
 
 > SELECT * FROM v
 1
@@ -115,9 +111,7 @@ Explained Query:
       Get materialize.public.data
 
 Source materialize.public.data
-  project=(#0, #4, #5, #3)
   filter=((#0 = 1) AND (#3 = 4))
-  map=(dummy, dummy)
 
 > SELECT * FROM v
 4
@@ -139,10 +133,6 @@ Explained Query:
         Project (#1)
           Filter (#3 = 4) AND (#1) IS NOT NULL
             Get materialize.public.data
-
-Source materialize.public.data
-  project=(#0, #1, #4, #3)
-  map=(dummy)
 
 > SELECT * FROM v
 1
@@ -171,9 +161,7 @@ Explained Query:
             Get materialize.public.data
 
 Source materialize.public.data
-  project=(#0, #1, #4, #3)
   filter=((#3 = 4))
-  map=(dummy)
 
 > SELECT * FROM v
 1
@@ -201,9 +189,7 @@ Explained Query:
         Get materialize.public.data
 
 Source materialize.public.data
-  project=(#0, #4, #2, #5)
   filter=((#0) IS NOT NULL)
-  map=(dummy, dummy)
 
 > SELECT * FROM v
 3
@@ -233,9 +219,7 @@ Explained Query:
           Get materialize.public.data
 
 Source materialize.public.data
-  project=(#0..=#2, #4)
   filter=((#0 = 1))
-  map=(dummy)
 
 > SELECT * FROM v
 1 3
@@ -270,13 +254,8 @@ Explained Query:
           Filter (#3) IS NULL
             Get materialize.public.data2
 
-Source materialize.public.data
-  project=(#0, #4, #2, #5)
-  map=(dummy, dummy)
 Source materialize.public.data2
-  project=(#0, #4, #2, #3)
   filter=((#3) IS NULL)
-  map=(dummy)
 
 > SELECT * FROM v
 1 2

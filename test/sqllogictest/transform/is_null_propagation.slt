@@ -41,9 +41,6 @@ Explained Query:
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
-Source materialize.public.t2
-  project=(#0, #2)
-  map=(dummy)
 
 EOF
 
@@ -100,12 +97,5 @@ Explained Query:
     cte l0 =
       Project (#1) // { arity: 1 }
         Get materialize.public.t1 // { arity: 2 }
-
-Source materialize.public.t1
-  project=(#2, #1)
-  map=(dummy)
-Source materialize.public.t2
-  project=(#2, #1)
-  map=(dummy)
 
 EOF

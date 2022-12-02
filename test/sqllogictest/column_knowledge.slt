@@ -203,13 +203,9 @@ Explained Query:
             Get materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t1
-  project=(#0, #2)
   filter=((#0 = 123))
-  map=(dummy)
 Source materialize.public.t2
-  project=(#0, #2)
   filter=((#0 = 123))
-  map=(dummy)
 
 EOF
 
@@ -254,13 +250,9 @@ Explained Query:
           Get materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t1
-  project=(#0, #2)
   filter=((#0 = 123))
-  map=(dummy)
 Source materialize.public.t2
-  project=(#0, #2)
   filter=((#0 = 123))
-  map=(dummy)
 
 EOF
 
@@ -302,13 +294,8 @@ Explained Query:
                 Project () // { arity: 0 }
                   Get materialize.public.t1 // { arity: 2 }
 
-Source materialize.public.t1
-  project=(#0, #2)
-  map=(dummy)
 Source materialize.public.t2
-  project=(#0, #2)
   filter=((#0 = 123))
-  map=(dummy)
 
 EOF
 
@@ -330,9 +317,7 @@ Explained Query:
 Source materialize.public.t1
   filter=((#0 = 123))
 Source materialize.public.t2
-  project=(#0, #2)
   filter=((#0 = 123))
-  map=(dummy)
 
 EOF
 
@@ -360,13 +345,9 @@ Explained Query:
 Source materialize.public.t1
   filter=((#0 = 123))
 Source materialize.public.t2
-  project=(#0, #2)
   filter=((#0 = 123))
-  map=(dummy)
 Source materialize.public.t3
-  project=(#0, #2)
   filter=((#0 = 123))
-  map=(dummy)
 
 EOF
 
@@ -388,9 +369,7 @@ Explained Query:
 Source materialize.public.t1
   filter=((#0 = 123))
 Source materialize.public.t2
-  project=(#0, #2)
   filter=((#0 = 123))
-  map=(dummy)
 
 EOF
 
@@ -413,10 +392,6 @@ Explained Query:
             Reduce aggregates=[count(true)] // { arity: 1 }
               Project () // { arity: 0 }
                 Get materialize.public.t2 // { arity: 2 }
-
-Source materialize.public.t2
-  project=(#0, #2)
-  map=(dummy)
 
 EOF
 
@@ -443,9 +418,6 @@ Explained Query:
 
 Source materialize.public.t1
   filter=((#0 = 123))
-Source materialize.public.t2
-  project=(#0, #2)
-  map=(dummy)
 
 EOF
 

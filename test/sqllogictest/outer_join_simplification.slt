@@ -55,9 +55,7 @@ Explained Query:
             Get materialize.public.bar
 
 Source materialize.public.bar
-  project=(#0, #2)
   filter=((#0) IS NOT NULL)
-  map=(dummy)
 
 EOF
 
@@ -246,19 +244,8 @@ Explained Query:
             Project (#0, #1)
               Get materialize.public.baz
 
-Source materialize.public.foo
-  project=(#0, #1, #3)
-  map=(dummy)
 Source materialize.public.bar
-  project=(#0, #2)
   filter=((#0) IS NOT NULL)
-  map=(dummy)
-Source materialize.public.baz
-  project=(#0, #1, #3)
-  map=(dummy)
-Source materialize.public.quux
-  project=(#0, #2)
-  map=(dummy)
 
 EOF
 

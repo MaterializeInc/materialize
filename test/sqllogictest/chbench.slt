@@ -344,13 +344,9 @@ Explained Query:
               Get materialize.public.region // { arity: 3 }
 
 Source materialize.public.item
-  project=(#0, #5, #2, #6, #4)
   filter=("%b" ~~(padchar(#4)))
-  map=(dummy, dummy)
 Source materialize.public.region
-  project=(#0, #1, #3)
   filter=("EUROP%" ~~(padchar(#1)))
-  map=(dummy)
 
 Used Indexes:
   - materialize.public.fk_stock_supplier
@@ -519,9 +515,7 @@ Explained Query:
                 Get materialize.public.region // { arity: 3 }
 
 Source materialize.public.region
-  project=(#0, #1, #3)
   filter=((#1 = "EUROPE"))
-  map=(dummy)
 
 Used Indexes:
   - materialize.public.fk_customer_district
@@ -715,13 +709,9 @@ Explained Query:
                     Get materialize.public.region // { arity: 3 }
 
 Source materialize.public.item
-  project=(#0, #5..=#7, #4)
   filter=((#0 < 1000) AND "%b" ~~(padchar(#4)))
-  map=(dummy, dummy, dummy)
 Source materialize.public.region
-  project=(#0, #1, #3)
   filter=((#1 = "EUROPE"))
-  map=(dummy)
 
 Used Indexes:
   - materialize.public.fk_customer_district
@@ -781,9 +771,7 @@ Explained Query:
               Get materialize.public.nation // { arity: 4 }
 
 Source materialize.public.item
-  project=(#0, #5..=#7, #4)
   filter=("%BB" ~~(padchar(#4)))
-  map=(dummy, dummy, dummy)
 
 Used Indexes:
   - materialize.public.fk_order_customer
@@ -1030,10 +1018,6 @@ Explained Query:
                   Project (#0, #4) // { arity: 2 }
                     Get materialize.public.item // { arity: 5 }
 
-Source materialize.public.item
-  project=(#0, #5..=#7, #4)
-  map=(dummy, dummy, dummy)
-
 Used Indexes:
   - materialize.public.fk_orderline_item
 
@@ -1169,9 +1153,7 @@ Explained Query:
                   Get materialize.public.item // { arity: 5 }
 
 Source materialize.public.item
-  project=(#0, #5, #2..=#4)
   filter=(NOT("zz%" ~~(padchar(#4))))
-  map=(dummy)
 
 Used Indexes:
   - materialize.public.fk_stock_item
@@ -1233,9 +1215,7 @@ Explained Query:
         Get materialize.public.orderline // { arity: 10 }
 
 Source materialize.public.item
-  project=(#0, #5..=#7, #4)
   filter=("%b" ~~(padchar(#4)))
-  map=(dummy, dummy, dummy)
 
 Used Indexes:
   - materialize.public.fk_orderline_item
@@ -1341,9 +1321,8 @@ Explained Query:
                         Get materialize.public.item // { arity: 5 }
 
 Source materialize.public.item
-  project=(#0, #6, #7, #3, #4)
   filter=((#3 <= 400000) AND (#3 >= 1) AND ("%a" ~~(#5) OR "%b" ~~(#5) OR "%c" ~~(#5)))
-  map=(padchar(#4), dummy, dummy)
+  map=(padchar(#4))
 
 Used Indexes:
   - materialize.public.fk_orderline_item
@@ -1413,9 +1392,7 @@ Explained Query:
                   Get materialize.public.nation // { arity: 4 }
 
 Source materialize.public.item
-  project=(#0, #5..=#7, #4)
   filter=("co%" ~~(padchar(#4)))
-  map=(dummy, dummy, dummy)
 
 Used Indexes:
   - materialize.public.fk_orderline_item

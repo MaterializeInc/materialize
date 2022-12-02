@@ -961,10 +961,6 @@ Explained Query:
     Map (((#0 >> smallint_to_integer(#1)) << smallint_to_integer(#2)), ((#3 << #4) >> #5)) // { arity: 11 }
       Get materialize.public.nums // { arity: 9 }
 
-Source materialize.public.nums
-  project=(#0..=#5, #9..=#11)
-  map=(dummy, dummy, dummy)
-
 EOF
 
 # precedence between bitwise operators and '&'
@@ -995,10 +991,6 @@ Explained Query:
   Project (#9, #10) // { arity: 2 }
     Map (((#0 >> smallint_to_integer(#1)) & #2), ((#3 << #4) & #5)) // { arity: 11 }
       Get materialize.public.nums // { arity: 9 }
-
-Source materialize.public.nums
-  project=(#0..=#5, #9..=#11)
-  map=(dummy, dummy, dummy)
 
 EOF
 
