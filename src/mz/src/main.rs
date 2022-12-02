@@ -107,6 +107,8 @@ enum RegionCommand {
         cloud_provider_region: String,
         #[clap(long, hide = true)]
         version: Option<String>,
+        #[clap(long, hide = true)]
+        environmentd_extra_arg: Vec<String>,
     },
     /// Disable a region.
     #[clap(hide = true)]
@@ -240,6 +242,7 @@ async fn main() -> Result<()> {
                 RegionCommand::Enable {
                     cloud_provider_region,
                     version,
+                    environmentd_extra_arg,
                 } => {
                     let cloud_provider_region =
                         CloudProviderRegion::from_str(&cloud_provider_region)?;
@@ -260,6 +263,7 @@ async fn main() -> Result<()> {
                         &client,
                         &cloud_provider,
                         version,
+                        environmentd_extra_arg,
                         &valid_profile,
                     )
                     .await

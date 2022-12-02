@@ -117,6 +117,7 @@ pub(crate) async fn enable_region_environment(
     client: &Client,
     cloud_provider: &CloudProvider,
     version: Option<String>,
+    environmentd_extra_args: Vec<String>,
     valid_profile: &ValidProfile<'_>,
 ) -> Result<Region, reqwest::Error> {
     #[derive(Serialize)]
@@ -124,6 +125,8 @@ pub(crate) async fn enable_region_environment(
     struct Body {
         #[serde(skip_serializing_if = "Option::is_none")]
         environmentd_image_ref: Option<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        environmentd_extra_args: Vec<String>,
     }
 
     let authorization: String = format!("Bearer {}", valid_profile.frontegg_auth.access_token);
