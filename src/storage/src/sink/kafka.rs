@@ -731,6 +731,7 @@ impl KafkaSinkState {
             .expect("Claiming just-created progress client");
         // Only actually used for retriable errors.
         Retry::default()
+            .max_tries(3)
             .clamp_backoff(Duration::from_secs(60 * 10))
             .retry_async(|_| async {
                 let progress_topic = self.progress_topic.clone();
