@@ -3277,12 +3277,14 @@ dependencies = [
  "dirs",
  "indicatif",
  "mz-ore",
+ "once_cell",
  "open",
  "reqwest",
  "rpassword",
  "serde",
  "tokio",
  "toml",
+ "url",
  "uuid",
 ]
 

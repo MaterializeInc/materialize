@@ -7,17 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::fmt::Display;
+use std::str::FromStr;
 
-use crate::configuration::ValidProfile;
-use crate::{CloudProvider, CloudProviderAndRegion, Environment, Region, CLOUD_PROVIDERS_URL};
 use anyhow::{bail, ensure, Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use reqwest::{Client, Error};
 use serde::de::{Unexpected, Visitor};
 use serde::{Deserialize, Serialize};
-use std::fmt::Display;
-use std::str::FromStr;
+
+use crate::configuration::ValidProfile;
+use crate::{CloudProvider, CloudProviderAndRegion, Environment, Region};
 
 /// Cloud providers and regions available.
 #[derive(Debug, Clone, Copy)]
@@ -116,12 +116,26 @@ fn build_region_request_headers(authorization: &str) -> HeaderMap {
 pub(crate) async fn enable_region_environment(
     client: &Client,
     cloud_provider: &CloudProvider,
+    version: Option<String>,
     valid_profile: &ValidProfile<'_>,
 ) -> Result<Region, reqwest::Error> {
-    let authorization: String = format!("Bearer {}", valid_profile.frontegg_auth.access_token);
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Body {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        environmentd_image_ref: Option<String>,
+    }
 
+    let authorization: String = format!("Bearer {}", valid_profile.frontegg_auth.access_token);
     let headers = build_region_request_headers(&authorization);
-    let body: HashMap<char, char> = HashMap::new();
+
+    let body = Body {
+        environmentd_image_ref: version.map(|v| match v.split_once(':') {
+            None => format!("materialize/environmentd:{v}"),
+            Some((user, v)) => format!("{user}/environmentd:{v}"),
+        }),
+        environmentd_extra_args,
+    };
 
     client
         .post(
@@ -137,6 +151,30 @@ pub(crate) async fn enable_region_environment(
         .await?
         .json::<Region>()
         .await
+}
+
+/// Disables a particular cloud provider's region.
+pub(crate) async fn disable_region_environment(
+    client: &Client,
+    cloud_provider: &CloudProvider,
+    valid_profile: &ValidProfile<'_>,
+) -> Result<(), reqwest::Error> {
+    let authorization: String = format!("Bearer {}", valid_profile.frontegg_auth.access_token);
+    let headers = build_region_request_headers(&authorization);
+
+    client
+        .delete(
+            format!(
+                "{:}/api/environmentassignment",
+                cloud_provider.region_controller_url
+            )
+            .as_str(),
+        )
+        .headers(headers)
+        .send()
+        .await?
+        .error_for_status()?;
+    Ok(())
 }
 
 //// Get a cloud provider's regions
@@ -222,7 +260,7 @@ pub(crate) async fn list_cloud_providers(
     let headers = build_region_request_headers(&authorization);
 
     client
-        .get(CLOUD_PROVIDERS_URL)
+        .get(valid_profile.profile.endpoint().cloud_regions_url())
         .headers(headers)
         .send()
         .await?

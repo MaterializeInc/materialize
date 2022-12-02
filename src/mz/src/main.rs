@@ -13,7 +13,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate core;
+use std::str::FromStr;
+
+use anyhow::{Context, Result};
+use clap::{Args, Parser, Subcommand};
+use reqwest::Client;
+use serde::Deserialize;
+
+use crate::configuration::{Configuration, Endpoint, WEB_DOCS_URL};
+use crate::login::{generate_api_token, login_with_browser, login_with_console};
+use crate::password::list_passwords;
+use crate::region::{
+    disable_region_environment, enable_region_environment, get_provider_by_region_name,
+    get_provider_region_environment, get_region_environment, list_cloud_providers, list_regions,
+    print_environment_status, print_region_enabled, CloudProviderRegion,
+};
+use crate::shell::{check_environment_health, shell};
+use crate::utils::run_loading_spinner;
 
 mod configuration;
 mod login;
@@ -22,34 +38,14 @@ mod region;
 mod shell;
 mod utils;
 
-use std::str::FromStr;
-
-use anyhow::{Context, Result};
-use configuration::Configuration;
-use login::generate_api_token;
-use password::list_passwords;
-use region::{
-    get_provider_by_region_name, get_provider_region_environment, get_region_environment,
-    print_environment_status, print_region_enabled,
-};
-use serde::Deserialize;
-
-use clap::{Args, Parser, Subcommand};
-use reqwest::Client;
-use shell::check_environment_health;
-use utils::run_loading_spinner;
-
-use crate::login::{login_with_browser, login_with_console};
-use crate::region::{
-    enable_region_environment, list_cloud_providers, list_regions, CloudProviderRegion,
-};
-use crate::shell::shell;
-
 /// Command-line interface for Materialize.
 #[derive(Debug, Parser)]
 #[clap(name = "Materialize CLI")]
 #[clap(about = "Command-line interface for Materialize.", long_about = None)]
 struct Cli {
+    /// The configuration profile to use.
+    #[clap(long)]
+    profile: Option<String>,
     #[clap(subcommand)]
     command: Commands,
 }
@@ -70,9 +66,9 @@ enum Commands {
         #[clap(short, long)]
         force: bool,
 
-        /// The profile to login to
-        #[clap(default_value = "default")]
-        profile: String,
+        /// Override the default API endpoint.
+        #[clap(long, hide = true, default_value_t)]
+        endpoint: Endpoint,
     },
     /// Show commands to interact with regions
     Region {
@@ -107,6 +103,14 @@ enum AppPasswordSubommand {
 enum RegionCommand {
     /// Enable a region.
     Enable {
+        #[clap(possible_values = CloudProviderRegion::variants())]
+        cloud_provider_region: String,
+        #[clap(long, hide = true)]
+        version: Option<String>,
+    },
+    /// Disable a region.
+    #[clap(hide = true)]
+    Disable {
         #[clap(possible_values = CloudProviderRegion::variants())]
         cloud_provider_region: String,
     },
@@ -161,23 +165,10 @@ struct CloudProviderAndRegion {
     region: Option<Region>,
 }
 
-/// Constants
-const CLOUD_PROVIDERS_URL: &str = "https://cloud.materialize.com/_metadata/cloud-regions.json";
-const API_TOKEN_AUTH_URL: &str =
-    "https://admin.cloud.materialize.com/identity/resources/users/api-tokens/v1";
-const API_FRONTEGG_TOKEN_AUTH_URL: &str =
-    "https://admin.cloud.materialize.com/frontegg/identity/resources/users/api-tokens/v1";
-const USER_AUTH_URL: &str =
-    "https://admin.cloud.materialize.com/frontegg/identity/resources/auth/v1/user";
-const MACHINE_AUTH_URL: &str =
-    "https://admin.cloud.materialize.com/identity/resources/auth/v1/api-token";
-const WEB_LOGIN_URL: &str = "https://cloud.materialize.com/account/login?redirectUrl=/access/cli";
-const WEB_DOCS_URL: &str = "https://www.materialize.com/docs";
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Cli::parse();
-    let mut config = Configuration::load()?;
+    let mut config = Configuration::load(args.profile.as_deref())?;
 
     match args.command {
         Commands::AppPassword(password_cmd) => {
@@ -188,9 +179,14 @@ async fn main() -> Result<()> {
 
             match password_cmd.command {
                 AppPasswordSubommand::Create { name } => {
-                    let api_token = generate_api_token(&client, valid_profile.frontegg_auth, &name)
-                        .await
-                        .with_context(|| "failed to create a new app password")?;
+                    let api_token = generate_api_token(
+                        profile.endpoint(),
+                        &client,
+                        valid_profile.frontegg_auth,
+                        &name,
+                    )
+                    .await
+                    .with_context(|| "failed to create a new app password")?;
 
                     println!("{}", api_token)
                 }
@@ -224,14 +220,15 @@ async fn main() -> Result<()> {
         Commands::Login {
             interactive,
             force,
-            profile,
+            endpoint,
         } => {
+            let profile = args.profile.unwrap_or_else(|| "default".into());
             config.update_current_profile(profile.clone());
             if config.get_profile().is_err() || force {
                 if interactive {
-                    login_with_console(&profile, &mut config).await?
+                    login_with_console(endpoint, &profile, &mut config).await?
                 } else {
-                    login_with_browser(&profile, &mut config).await?
+                    login_with_browser(endpoint, &profile, &mut config).await?
                 }
             }
         }
@@ -242,6 +239,7 @@ async fn main() -> Result<()> {
             match command {
                 RegionCommand::Enable {
                     cloud_provider_region,
+                    version,
                 } => {
                     let cloud_provider_region =
                         CloudProviderRegion::from_str(&cloud_provider_region)?;
@@ -258,10 +256,14 @@ async fn main() -> Result<()> {
                     .await
                     .with_context(|| "Retrieving cloud provider.")?;
 
-                    let region =
-                        enable_region_environment(&client, &cloud_provider, &valid_profile)
-                            .await
-                            .with_context(|| "Enabling region.")?;
+                    let region = enable_region_environment(
+                        &client,
+                        &cloud_provider,
+                        version,
+                        &valid_profile,
+                    )
+                    .await
+                    .with_context(|| "Enabling region.")?;
 
                     let environment = get_region_environment(&client, &valid_profile, &region)
                         .await
@@ -275,6 +277,32 @@ async fn main() -> Result<()> {
 
                     loading_spinner.finish_with_message(format!("{cloud_provider_region} enabled"));
                     profile.set_default_region(cloud_provider_region);
+                }
+
+                RegionCommand::Disable {
+                    cloud_provider_region,
+                } => {
+                    let cloud_provider_region =
+                        CloudProviderRegion::from_str(&cloud_provider_region)?;
+                    let profile = config.get_profile()?;
+
+                    let valid_profile = profile.validate(&client).await?;
+
+                    let loading_spinner = run_loading_spinner("Disabling region...".to_string());
+                    let cloud_provider = get_provider_by_region_name(
+                        &client,
+                        &valid_profile,
+                        &cloud_provider_region,
+                    )
+                    .await
+                    .with_context(|| "Retrieving cloud provider.")?;
+
+                    disable_region_environment(&client, &cloud_provider, &valid_profile)
+                        .await
+                        .with_context(|| "Disabling region.")?;
+
+                    loading_spinner
+                        .finish_with_message(format!("{cloud_provider_region} disabled"));
                 }
 
                 RegionCommand::List => {

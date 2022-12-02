@@ -29,4 +29,8 @@ for image in environmentd storaged computed; do
     docker push "$username/$image"
 done
 
-echo "Launch environment with materialized image ref \`$username/environmentd:latest\`"
+echo "Deploy this build to staging by running:"
+echo
+echo "    $ bin/mz --profile=staging login --endpoint=https://staging.cloud.materialize.com"
+echo "    $ bin/mz --profile=staging region enable aws/us-east-1 --version $username:latest"
+echo
