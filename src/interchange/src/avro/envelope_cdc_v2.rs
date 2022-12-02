@@ -282,7 +282,8 @@ mod tests {
             &crate::encode::column_names_and_types(desc),
             "data",
             &HashMap::new(),
-        );
+        )
+        .unwrap();
         let schema = build_schema(row_schema);
 
         let values = vec![

@@ -2072,7 +2072,7 @@ fn kafka_sink_builder(
                     .map(|(desc, _indices)| desc.clone()),
                 value_desc.clone(),
                 matches!(envelope, SinkEnvelope::Debezium),
-            );
+            )?;
             let value_schema = schema_generator.value_writer_schema().to_string();
             let key_schema = schema_generator
                 .key_writer_schema()
