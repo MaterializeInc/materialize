@@ -1326,9 +1326,6 @@ fn plan_set_expr(
                 ShowStatement::ShowDatabases(stmt) => {
                     show::show_databases(qcx.scx, stmt)?.plan_hir(qcx)
                 }
-                ShowStatement::ShowIndexes(stmt) => {
-                    show::show_indexes(qcx.scx, stmt)?.plan_hir(qcx)
-                }
                 ShowStatement::ShowObjects(stmt) => {
                     show::show_objects(qcx.scx, stmt)?.plan_hir(qcx)
                 }

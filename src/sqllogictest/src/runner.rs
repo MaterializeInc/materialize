@@ -919,7 +919,7 @@ impl Runner {
         match statement {
             Statement::CreateView { .. }
             | Statement::Select { .. }
-            | Statement::Show(ShowStatement::ShowIndexes { .. }) => (),
+            | Statement::Show(ShowStatement::ShowObjects(..)) => (),
             _ => {
                 if output.is_err() {
                     // We're not interested in testing our hacky handling of INSERT etc

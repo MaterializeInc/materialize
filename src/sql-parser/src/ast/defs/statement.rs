@@ -1861,7 +1861,6 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
 }
 impl_display_t!(ShowObjectsStatement);
 
-
 /// `SHOW COLUMNS`
 ///
 /// Note: this is a MySQL-specific statement.
@@ -2754,7 +2753,6 @@ impl<T: AstInfo> AstDisplay for ShowStatement<T> {
             ShowStatement::ShowDatabases(stmt) => f.write_node(stmt),
             ShowStatement::ShowSchemas(stmt) => f.write_node(stmt),
             ShowStatement::ShowObjects(stmt) => f.write_node(stmt),
-            // ShowStatement::ShowIndexes(stmt) => f.write_node(stmt),
             ShowStatement::ShowColumns(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateView(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateMaterializedView(stmt) => f.write_node(stmt),
