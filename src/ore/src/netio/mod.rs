@@ -18,7 +18,9 @@
 mod async_ready;
 mod framed;
 mod read_exact;
+mod socket;
 
 pub use self::async_ready::AsyncReady;
 pub use self::framed::{FrameTooBig, MAX_FRAME_SIZE};
 pub use self::read_exact::{read_exact_or_eof, ReadExactOrEof};
+pub use self::socket::{Listener, SocketAddr, SocketAddrType, Stream, UnixSocketAddr};

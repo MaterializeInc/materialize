@@ -245,7 +245,7 @@ impl ClusterClient<PartitionedClient> {
                 .await;
                 match build_timely_result {
                     Err(e) => {
-                        warn!("timely initialization failed: {e}");
+                        warn!("timely initialization failed: {e:#}");
                         return Err(e);
                     }
                     Ok(ok) => ok,

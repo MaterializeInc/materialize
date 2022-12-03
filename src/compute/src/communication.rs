@@ -42,13 +42,13 @@ use anyhow::Context;
 use futures::stream::FuturesUnordered;
 use futures::FutureExt;
 use futures::StreamExt;
-use mz_compute_client::command::ComputeStartupEpoch;
-use mz_ore::cast::CastFrom;
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::allocator::GenericBuilder;
 use tracing::{debug, info, warn};
 
-use mz_compute_client::command::CommunicationConfig;
+use mz_compute_client::command::{CommunicationConfig, ComputeStartupEpoch};
+use mz_ore::cast::CastFrom;
+use mz_ore::netio::{Listener, Stream};
 
 /// Creates communication mesh from cluster config
 pub async fn initialize_networking(
@@ -68,12 +68,44 @@ pub async fn initialize_networking(
     let sockets = create_sockets(addresses.clone(), u64::cast_from(*process), epoch)
         .await
         .context("failed to set up timely sockets")?;
-    let sockets = sockets
-        .into_iter()
-        .map(|s| s.map(|s| s.into_std()).transpose())
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(anyhow::Error::from)
-        .context("failed to get standard sockets from tokio sockets")?;
+
+    if sockets
+        .iter()
+        .filter_map(|s| s.as_ref())
+        .all(|s| s.is_tcp())
+    {
+        let sockets = sockets
+            .into_iter()
+            .map(|s| s.map(|s| s.unwrap_tcp().into_std()).transpose())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(anyhow::Error::from)
+            .context("failed to get standard sockets from tokio sockets")?;
+        initialize_networking_inner(sockets, *process, *workers)
+    } else if sockets
+        .iter()
+        .filter_map(|s| s.as_ref())
+        .all(|s| s.is_unix())
+    {
+        let sockets = sockets
+            .into_iter()
+            .map(|s| s.map(|s| s.unwrap_unix().into_std()).transpose())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(anyhow::Error::from)
+            .context("failed to get standard sockets from tokio sockets")?;
+        initialize_networking_inner(sockets, *process, *workers)
+    } else {
+        anyhow::bail!("cannot mix TCP and Unix streams");
+    }
+}
+
+fn initialize_networking_inner<S>(
+    sockets: Vec<Option<S>>,
+    process: usize,
+    workers: usize,
+) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), anyhow::Error>
+where
+    S: timely::communication::allocator::zero_copy::stream::Stream + 'static,
+{
     for s in &sockets {
         if let Some(s) = s {
             s.set_nonblocking(false)
@@ -81,7 +113,7 @@ pub async fn initialize_networking(
         }
     }
 
-    match initialize_networking_from_sockets(sockets, *process, *workers, Box::new(|_| None)) {
+    match initialize_networking_from_sockets(sockets, process, workers, Box::new(|_| None)) {
         Ok((stuff, guard)) => {
             info!(process = process, "successfully initialized network");
             Ok((
@@ -104,7 +136,7 @@ async fn create_sockets(
     addresses: Vec<String>,
     my_index: u64,
     my_epoch: ComputeStartupEpoch,
-) -> Result<Vec<Option<tokio::net::TcpStream>>, anyhow::Error> {
+) -> Result<Vec<Option<Stream>>, anyhow::Error> {
     let my_index_uz = usize::cast_from(my_index);
     assert!(my_index_uz < addresses.len());
     let n_peers = addresses.len() - 1;
@@ -113,7 +145,7 @@ async fn create_sockets(
     let my_address = &addresses[my_index_uz];
     let listener = loop {
         let mut tries = 0;
-        match tokio::net::TcpListener::bind(&my_address[..]).await {
+        match Listener::bind(my_address.clone()).await {
             Ok(ok) => break ok,
             Err(e) => {
                 warn!("failed to listen on address {my_address}: {e}");
@@ -128,7 +160,7 @@ async fn create_sockets(
 
     struct ConnectionEstablished {
         peer_index: u64,
-        stream: tokio::net::TcpStream,
+        stream: Stream,
     }
 
     let mut futs = FuturesUnordered::new();
@@ -213,16 +245,18 @@ async fn start_connection(
     address: String,
     my_index: u64,
     my_epoch: ComputeStartupEpoch,
-) -> Result<tokio::net::TcpStream, anyhow::Error> {
+) -> Result<Stream, anyhow::Error> {
     loop {
         info!(
             process = my_index,
             "Attempting to connect to process at {address}"
         );
 
-        match tokio::net::TcpStream::connect(&address).await {
+        match Stream::connect(&address).await {
             Ok(mut s) => {
-                s.set_nodelay(true)?;
+                if let Stream::Tcp(tcp) = &s {
+                    tcp.set_nodelay(true)?;
+                }
                 use tokio::io::AsyncWriteExt;
 
                 s.write_all(&my_index.to_be_bytes()).await?;
@@ -264,15 +298,17 @@ async fn start_connection(
 }
 
 async fn await_connection(
-    listener: &tokio::net::TcpListener,
+    listener: &Listener,
     my_index: u64, // only for logging
     my_epoch: ComputeStartupEpoch,
-) -> Result<(tokio::net::TcpStream, u64), anyhow::Error> {
+) -> Result<(Stream, u64), anyhow::Error> {
     loop {
         info!(process = my_index, "awaiting connection from peer");
         let mut s = listener.accept().await?.0;
         info!(process = my_index, "accepted connection from peer");
-        s.set_nodelay(true)?;
+        if let Stream::Tcp(tcp) = &s {
+            tcp.set_nodelay(true)?;
+        }
 
         let mut buffer = [0u8; 16];
         use tokio::io::AsyncReadExt;

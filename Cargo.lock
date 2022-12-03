@@ -4362,6 +4362,7 @@ dependencies = [
  "itertools",
  "mz-orchestrator-kubernetes",
  "mz-orchestrator-process",
+ "mz-ore",
  "mz-proto",
  "mz-secrets",
  "once_cell",
