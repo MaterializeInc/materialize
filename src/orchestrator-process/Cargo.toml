@@ -12,6 +12,7 @@ async-stream = "0.3.3"
 async-trait = "0.1.58"
 chrono = { version = "0.4.23", default_features = false, features = ["clock"] }
 futures = "0.3.25"
+hex = "0.4.3"
 itertools = "0.10.5"
 mz-orchestrator = { path = "../orchestrator" }
 mz-ore = { path = "../ore", features = ["async"] }
@@ -20,6 +21,7 @@ mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
 serde_json = "1.0.88"
 scopeguard = "1.1.0"
+sha1 = "0.10.5"
 sysinfo = "0.26.7"
 tokio = { version = "1.22.0", features = [ "fs", "process", "time" ] }
 tracing = "0.1.37"

@@ -9,6 +9,7 @@
 
 //! Service orchestration for tracing-aware services.
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fmt;
 #[cfg(feature = "tokio-console")]
@@ -29,7 +30,7 @@ use tracing_subscriber::filter::Targets;
 #[cfg(feature = "tokio-console")]
 use mz_orchestrator::ServicePort;
 use mz_orchestrator::{
-    NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
+    NamespacedOrchestrator, Orchestrator, Service, ServiceConfig, ServiceEvent,
     ServiceProcessMetrics,
 };
 use mz_ore::cli::{DefaultTrue, KeyValueArg};
@@ -301,10 +302,10 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
         id: &str,
         mut service_config: ServiceConfig<'_>,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
-        let args_fn = |assigned: &ServiceAssignments| {
+        let args_fn = |listen_addrs: &HashMap<String, String>| {
             #[cfg(feature = "tokio-console")]
-            let tokio_console_port = assigned.ports.get("tokio-console");
-            let mut args = (service_config.args)(assigned);
+            let tokio_console_listen_addr = listen_addrs.get("tokio-console");
+            let mut args = (service_config.args)(listen_addrs);
             let TracingCliArgs {
                 log_filter,
                 log_prefix,
@@ -345,10 +346,10 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 args.push(format!("--opentelemetry-enabled={}", opentelemetry_enabled));
             }
             #[cfg(feature = "tokio-console")]
-            if let Some(port) = tokio_console_port {
+            if let Some(tokio_console_listen_addr) = tokio_console_listen_addr {
                 args.push(format!(
-                    "--tokio-console-listen-addr={}:{}",
-                    assigned.listen_host, port,
+                    "--tokio-console-listen-addr={}",
+                    tokio_console_listen_addr,
                 ));
                 args.push(format!(
                     "--tokio-console-publish-interval={} us",

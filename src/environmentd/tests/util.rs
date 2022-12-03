@@ -34,7 +34,6 @@ use mz_environmentd::TlsMode;
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_orchestrator::Orchestrator;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
-use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
@@ -47,10 +46,6 @@ use mz_storage_client::types::connections::ConnectionContext;
 
 pub static KAFKA_ADDRS: Lazy<String> =
     Lazy::new(|| env::var("KAFKA_ADDRS").unwrap_or_else(|_| "localhost:9092".into()));
-
-// Port 2181 is used by ZooKeeper.
-static PORT_ALLOCATOR: Lazy<Arc<PortAllocator>> =
-    Lazy::new(|| Arc::new(PortAllocator::new_with_filter(2100, 2600, &[2181])));
 
 #[derive(Clone)]
 pub struct Config {
@@ -187,7 +182,6 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
                 .parent()
                 .unwrap()
                 .to_path_buf(),
-            port_allocator: PORT_ALLOCATOR.clone(),
             // NOTE(benesch): would be nice to not have to do this, but
             // the subprocess output wreaks havoc on cargo2junit.
             suppress_output: true,

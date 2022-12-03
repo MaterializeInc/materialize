@@ -9,7 +9,6 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::net::IpAddr;
 use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -171,9 +170,9 @@ pub struct ServiceConfig<'a> {
     /// configure for the pod running the service.
     pub init_container_image: Option<String>,
     /// A function that generates the arguments for each process of the service
-    /// given the assignments that the orchestrator has made.
+    /// given the assigned listen addresses for each named port.
     #[derivative(Debug = "ignore")]
-    pub args: &'a (dyn Fn(&ServiceAssignments) -> Vec<String> + Send + Sync),
+    pub args: &'a (dyn Fn(&HashMap<String, String>) -> Vec<String> + Send + Sync),
     /// Ports to expose.
     pub ports: Vec<ServicePort>,
     /// An optional limit on the memory that the service can use.
@@ -209,25 +208,6 @@ pub struct ServicePort {
     ///
     /// Not all orchestrator backends will make use of the hint.
     pub port_hint: u16,
-}
-
-/// Assignments that the orchestrator has made for a service.
-pub struct ServiceAssignments<'a> {
-    /// The host that the service should bind to.
-    pub listen_host: IpAddr,
-    /// The assigned port for each entry in [`ServiceConfig::ports`].
-    pub ports: &'a HashMap<String, u16>,
-    /// The index of this service in [`peers`](ServiceAssignments::peers), if
-    /// known.
-    ///
-    /// Not all orchestrators are capable of providing this information.
-    pub index: Option<usize>,
-    /// The hostname and port assignments for each peer in the service. The
-    /// order of peers is significant. Each peer is uniquely identified by its
-    /// position in the slice.
-    ///
-    /// The number of peers is determined by [`ServiceConfig::scale`].
-    pub peers: &'a [(String, HashMap<String, u16>)],
 }
 
 /// Describes a limit on memory.

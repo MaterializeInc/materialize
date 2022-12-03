@@ -63,7 +63,6 @@ use uuid::Uuid;
 use mz_controller::ControllerConfig;
 use mz_orchestrator::Orchestrator;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
-use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task;
@@ -646,7 +645,6 @@ impl Runner {
         let orchestrator = Arc::new(
             ProcessOrchestrator::new(ProcessOrchestratorConfig {
                 image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
-                port_allocator: Arc::new(PortAllocator::new(2100, 2200)),
                 suppress_output: false,
                 environment_id: environment_id.clone(),
                 secrets_dir: temp_dir.path().join("secrets"),
