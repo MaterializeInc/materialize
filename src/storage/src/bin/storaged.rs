@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use std::env;
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process;
 
@@ -22,6 +21,7 @@ use mz_build_info::{build_info, BuildInfo};
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::netio::{Listener, SocketAddr};
 use mz_ore::now::SYSTEM_TIME;
 use mz_pid_file::PidFile;
 use mz_service::grpc::GrpcServer;
@@ -150,53 +150,50 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     }
     let timely_config = create_timely_config(&args)?;
 
-    info!("about to bind to {:?}", args.controller_listen_addr);
-
     let metrics_registry = MetricsRegistry::new();
-    {
+
+    mz_ore::task::spawn(|| "storaged_internal_http_server", {
         let metrics_registry = metrics_registry.clone();
         tracing::info!(
             "serving internal HTTP server on {}",
             args.internal_http_listen_addr
         );
-        mz_ore::task::spawn(
-            || "storaged_internal_http_server",
-            axum::Server::bind(&args.internal_http_listen_addr).serve(
-                mz_prof::http::router(&BUILD_INFO)
-                    .route(
-                        "/api/livez",
-                        routing::get(mz_http_util::handle_liveness_check),
-                    )
-                    .route(
-                        "/metrics",
-                        routing::get(move || async move {
-                            mz_http_util::handle_prometheus(&metrics_registry).await
-                        }),
-                    )
-                    .route(
-                        "/api/opentelemetry/config",
-                        routing::put(move |payload| async move {
-                            mz_http_util::handle_modify_filter_target(
-                                tracing_target_callbacks.tracing,
-                                payload,
-                            )
-                            .await
-                        }),
-                    )
-                    .route(
-                        "/api/stderr/config",
-                        routing::put(move |payload| async move {
-                            mz_http_util::handle_modify_filter_target(
-                                tracing_target_callbacks.stderr,
-                                payload,
-                            )
-                            .await
-                        }),
-                    )
-                    .into_make_service(),
-            ),
-        );
-    }
+        let listener = Listener::bind(args.internal_http_listen_addr).await?;
+        axum::Server::builder(listener).serve(
+            mz_prof::http::router(&BUILD_INFO)
+                .route(
+                    "/api/livez",
+                    routing::get(mz_http_util::handle_liveness_check),
+                )
+                .route(
+                    "/metrics",
+                    routing::get(move || async move {
+                        mz_http_util::handle_prometheus(&metrics_registry).await
+                    }),
+                )
+                .route(
+                    "/api/opentelemetry/config",
+                    routing::put(move |payload| async move {
+                        mz_http_util::handle_modify_filter_target(
+                            tracing_target_callbacks.tracing,
+                            payload,
+                        )
+                        .await
+                    }),
+                )
+                .route(
+                    "/api/stderr/config",
+                    routing::put(move |payload| async move {
+                        mz_http_util::handle_modify_filter_target(
+                            tracing_target_callbacks.stderr,
+                            payload,
+                        )
+                        .await
+                    }),
+                )
+                .into_make_service(),
+        )
+    });
 
     let secrets_reader = args
         .secrets
@@ -220,6 +217,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let _failpoint_scenario = fail::FailScenario::setup();
 
     let (_server, client) = mz_storage::serve(config)?;
+
+    info!(
+        "listening for controller connections on {}",
+        args.controller_listen_addr
+    );
     GrpcServer::serve(
         args.controller_listen_addr,
         BUILD_INFO.semver_version(),

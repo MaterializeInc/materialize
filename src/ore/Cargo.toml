@@ -66,7 +66,7 @@ tokio = { version = "1.22.0", features = ["macros", "rt-multi-thread"] }
 
 [features]
 async = ["async-trait", "futures", "openssl", "tokio-openssl", "tokio"]
-network = ["bytes", "smallvec"]
+network = ["async", "bytes", "hyper", "smallvec", "tonic"]
 tracing_ = [
   "anyhow",
   "ansi_term",
