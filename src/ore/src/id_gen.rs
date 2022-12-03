@@ -15,7 +15,7 @@
 
 //! ID generation utilities.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::ops::AddAssign;
 use std::sync::Mutex;
@@ -97,60 +97,6 @@ where
     }
 }
 
-/// Manages allocation of process ports. Similar to `IdAllocator` but specific to
-/// the allocation of ports.
-///
-/// Note that the current implementation is fairly memory inefficient.
-#[derive(Debug)]
-pub struct PortAllocator(Mutex<BTreeSet<u16>>);
-
-impl PortAllocator {
-    /// Creates a new `PortAllocator` that will assign ports between `min` and
-    /// `max`, both inclusive.
-    pub fn new(min: u16, max: u16) -> PortAllocator {
-        PortAllocator(Mutex::new((min..=max).collect()))
-    }
-
-    /// Creates a new `PortAllocator` that will assign ports between `min` and
-    /// `max`, both inclusive.
-    ///
-    /// The ports listed in `banned` will not be assigned.
-    pub fn new_with_filter(min: u16, max: u16, banned: &[u16]) -> PortAllocator {
-        PortAllocator(Mutex::new(
-            (min..=max).filter(|p| !banned.contains(p)).collect(),
-        ))
-    }
-
-    /// Allocates a new port.
-    ///
-    /// Returns `None` if the allocator is exhausted.
-    pub fn alloc(&self) -> Option<u16> {
-        let mut inner = self.0.lock().expect("lock poisoned");
-        let port = inner.iter().next().cloned();
-        if let Some(port) = port {
-            assert!(inner.remove(&port));
-        }
-        port
-    }
-
-    /// Releases a new port back to the pool.
-    ///
-    /// It is undefined behavior to free an port twice, or to free an port that was
-    /// not allocated by this allocator.
-    pub fn free(&self, id: u16) {
-        let mut inner = self.0.lock().expect("lock poisoned");
-        let _ = inner.insert(id);
-    }
-
-    /// Marks a port as already allocated.
-    ///
-    /// Returns false if port was previously allocated and true otherwise.
-    pub fn mark_allocated(&self, port: u16) -> bool {
-        let mut inner = self.0.lock().expect("lock poisoned");
-        inner.remove(&port)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,25 +120,5 @@ mod tests {
             ),
             None => (),
         }
-    }
-
-    #[test]
-    fn test_port_allocator() {
-        let ida = PortAllocator::new(1, 10);
-        assert!(ida.mark_allocated(4));
-
-        while let Some(id) = ida.alloc() {
-            assert_ne!(4, id);
-        }
-
-        ida.free(3);
-        assert_eq!(3, ida.alloc().unwrap());
-        assert!(ida.alloc().is_none());
-
-        ida.free(4);
-        assert_eq!(4, ida.alloc().unwrap());
-        assert!(ida.alloc().is_none());
-
-        assert!(!ida.mark_allocated(9));
     }
 }

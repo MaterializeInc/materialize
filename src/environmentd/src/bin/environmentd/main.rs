@@ -54,7 +54,6 @@ use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
-use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
@@ -292,13 +291,6 @@ pub struct Args {
     /// value.
     #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
     orchestrator_process_wrapper: Option<String>,
-    /// Base port for services spawned by the process orchestrator.
-    #[structopt(
-        long,
-        env = "ORCHESTRATOR_PROCESS_BASE_SERVICE_PORT",
-        default_value = "2100"
-    )]
-    orchestrator_process_base_service_port: u16,
     /// Where the process orchestrator should store secrets.
     #[clap(
         long,
@@ -600,12 +592,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                         // binaries and release binaries look for other release
                         // binaries.
                         image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
-                        port_allocator: Arc::new(PortAllocator::new(
-                            args.orchestrator_process_base_service_port,
-                            args.orchestrator_process_base_service_port
-                                .checked_add(1000)
-                                .expect("Port number overflow, base-service-port too large."),
-                        )),
                         suppress_output: false,
                         environment_id: args.environment_id.clone(),
                         secrets_dir: args

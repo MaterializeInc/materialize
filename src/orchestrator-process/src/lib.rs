@@ -7,41 +7,42 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::env;
-use std::ffi::OsStr;
 use std::fmt::Debug;
 use std::fs::Permissions;
-use std::net::{IpAddr, Ipv4Addr};
+use std::future::Future;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, Context};
+use anyhow::{bail, Context};
+use async_stream::stream;
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
 use itertools::Itertools;
 use scopeguard::defer;
-use sysinfo::{ProcessExt, ProcessStatus, RefreshKind, SystemExt};
+use sha1::{Digest, Sha1};
+use sysinfo::{Pid, PidExt, ProcessExt, ProcessRefreshKind, System, SystemExt};
 use tokio::fs;
 use tokio::process::{Child, Command};
-use tokio::task::JoinHandle;
+use tokio::sync::broadcast::{self, Sender};
 use tokio::time::{self, Duration};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use mz_orchestrator::{
-    NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
+    NamespacedOrchestrator, Orchestrator, Service, ServiceConfig, ServiceEvent, ServicePort,
     ServiceProcessMetrics, ServiceStatus,
 };
 use mz_ore::cast::CastFrom;
-use mz_ore::id_gen::PortAllocator;
+use mz_ore::netio::UnixSocketAddr;
+use mz_ore::result::ResultExt;
+use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_pid_file::PidFile;
 
-use crate::port_metadata_file::PortMetadataFile;
-
-pub mod port_metadata_file;
 pub mod secrets;
 
 /// Configures a [`ProcessOrchestrator`].
@@ -50,8 +51,6 @@ pub struct ProcessOrchestratorConfig {
     /// The directory in which the orchestrator should look for executable
     /// images.
     pub image_dir: PathBuf,
-    /// The ports to allocate.
-    pub port_allocator: Arc<PortAllocator>,
     /// Whether to supress output from spawned subprocesses.
     pub suppress_output: bool,
     /// The ID of the environment under orchestration.
@@ -74,7 +73,6 @@ pub struct ProcessOrchestratorConfig {
 #[derive(Debug)]
 pub struct ProcessOrchestrator {
     image_dir: PathBuf,
-    port_allocator: Arc<PortAllocator>,
     suppress_output: bool,
     namespaces: Mutex<HashMap<String, Arc<dyn NamespacedOrchestrator>>>,
     metadata_dir: PathBuf,
@@ -87,7 +85,6 @@ impl ProcessOrchestrator {
     pub async fn new(
         ProcessOrchestratorConfig {
             image_dir,
-            port_allocator,
             suppress_output,
             environment_id,
             secrets_dir,
@@ -104,9 +101,9 @@ impl ProcessOrchestrator {
         fs::set_permissions(&secrets_dir, Permissions::from_mode(0o700))
             .await
             .context("setting secrets directory permissions")?;
+
         Ok(ProcessOrchestrator {
             image_dir: fs::canonicalize(image_dir).await?,
-            port_allocator,
             suppress_output,
             namespaces: Mutex::new(HashMap::new()),
             metadata_dir: fs::canonicalize(metadata_dir).await?,
@@ -118,17 +115,19 @@ impl ProcessOrchestrator {
 
 impl Orchestrator for ProcessOrchestrator {
     fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator> {
+        let (service_event_tx, _) = broadcast::channel(16384);
         let mut namespaces = self.namespaces.lock().expect("lock poisoned");
         Arc::clone(namespaces.entry(namespace.into()).or_insert_with(|| {
             Arc::new(NamespacedProcessOrchestrator {
                 namespace: namespace.into(),
                 image_dir: self.image_dir.clone(),
-                port_allocator: Arc::clone(&self.port_allocator),
                 suppress_output: self.suppress_output,
-                supervisors: Arc::new(Mutex::new(HashMap::new())),
-                metadata_dir: self.metadata_dir.clone(),
                 secrets_dir: self.secrets_dir.clone(),
+                metadata_dir: self.metadata_dir.clone(),
                 command_wrapper: self.command_wrapper.clone(),
+                services: Arc::new(Mutex::new(HashMap::new())),
+                service_event_tx,
+                system: Mutex::new(System::new()),
             })
         }))
     }
@@ -138,22 +137,52 @@ impl Orchestrator for ProcessOrchestrator {
 struct NamespacedProcessOrchestrator {
     namespace: String,
     image_dir: PathBuf,
-    port_allocator: Arc<PortAllocator>,
     suppress_output: bool,
-    supervisors: Arc<Mutex<HashMap<String, Vec<AbortOnDrop>>>>,
-    metadata_dir: PathBuf,
     secrets_dir: PathBuf,
+    metadata_dir: PathBuf,
     command_wrapper: Vec<String>,
+    services: Arc<Mutex<HashMap<String, Vec<ProcessState>>>>,
+    service_event_tx: Sender<ServiceEvent>,
+    system: Mutex<System>,
 }
 
 #[async_trait]
 impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
     async fn fetch_service_metrics(
         &self,
-        _id: &str,
+        id: &str,
     ) -> Result<Vec<ServiceProcessMetrics>, anyhow::Error> {
-        // Metrics are not currently supported on the process orchestrator
-        futures::future::pending().await
+        let pids: Vec<_> = {
+            let services = self.services.lock().expect("lock poisoned");
+            let Some(service) = services.get(id) else {
+                bail!("unknown service {id}")
+            };
+            service.iter().map(|p| p.pid()).collect()
+        };
+
+        let mut system = self.system.lock().expect("lock poisoned");
+        let mut metrics = vec![];
+        for pid in pids {
+            let (cpu_nano_cores, memory_bytes) = match pid {
+                None => (None, None),
+                Some(pid) => {
+                    system.refresh_process_specifics(pid, ProcessRefreshKind::new().with_cpu());
+                    match system.process(pid) {
+                        None => (None, None),
+                        Some(process) => {
+                            let cpu = (process.cpu_usage() * 10_000_000.0) as u64;
+                            let memory = process.memory();
+                            (Some(cpu), Some(memory))
+                        }
+                    }
+                }
+            };
+            metrics.push(ServiceProcessMetrics {
+                cpu_nano_cores,
+                memory_bytes,
+            });
+        }
+        Ok(metrics)
     }
 
     async fn ensure_service(
@@ -163,284 +192,250 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             image,
             init_container_image: _,
             args,
-            ports: ports_in,
+            ports,
             memory_limit: _,
             cpu_limit: _,
-            scale: scale_in,
+            scale,
             labels: _,
             availability_zone: _,
             anti_affinity: _,
         }: ServiceConfig<'_>,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         let full_id = format!("{}-{}", self.namespace, id);
-        let mut supervisors = self.supervisors.lock().expect("lock poisoned");
-        let handles = supervisors.entry(id.to_string()).or_default();
 
-        // Drop the supervisors for any processes we no longer need.
-        handles.truncate(scale_in.get());
+        let run_dir = self.metadata_dir.join(&full_id);
+        fs::create_dir_all(&run_dir)
+            .await
+            .context("creating run directory")?;
 
-        let path = self.image_dir.join(image);
-        let mut processes = vec![];
+        let mut services = self.services.lock().expect("lock poisoned");
+        let process_states = services.entry(id.to_string()).or_default();
 
-        let mut system = None;
+        // Drop the state for any processes we no longer need.
+        process_states.truncate(scale.get());
 
-        // Decide on port mappings, and detect any non-dead processes that still exist.
-        // Any such processes will be left alone; any others will be (re-)created.
-        let mut processes_exist = vec![true; scale_in.get()];
-        let mut pid_file_locations = vec![None; scale_in.get()];
-        let mut port_metadata_file_locations = vec![None; scale_in.get()];
-        for i in 0..(scale_in.get()) {
-            let process_file_name = format!("{}-{}-{}", self.namespace, id, i);
-            let pid_file_location = self.metadata_dir.join(format!("{}.pid", process_file_name));
-            pid_file_locations[i] = Some(pid_file_location.clone());
-            let port_metadata_file_location = self
-                .metadata_dir
-                .join(format!("{}.ports", process_file_name));
-            port_metadata_file_locations[i] = Some(port_metadata_file_location.clone());
-
-            if let (Ok(pid), Ok(port_metadata)) = (
-                PidFile::read(&pid_file_location),
-                PortMetadataFile::read(&port_metadata_file_location),
-            ) {
-                if i < handles.len() {
-                    // We're already supervising this one!
-                    assert_eq!(
-                        port_metadata.len(),
-                        ports_in.len(),
-                        "can't change the service ports"
-                    );
-                    for port in &ports_in {
-                        assert!(
-                            port_metadata.contains_key(&port.name),
-                            "port file must have port for {}",
-                            &port.name
-                        );
-                    }
-                    processes.push(port_metadata);
-                    continue;
-                }
-
-                let system = system.get_or_insert_with(|| {
-                    sysinfo::System::new_with_specifics(
-                        RefreshKind::new().with_processes(Default::default()),
-                    )
-                });
-                if let Some(process) = system.process(pid.into()) {
-                    if process.exe() == path {
-                        if process.status() == ProcessStatus::Dead
-                            || process.status() == ProcessStatus::Zombie
-                        {
-                            // Existing dead process, so we try and kill it and create a new one later
-                            process.kill();
-                        } else {
-                            // Existing non-dead process, so we don't create a new one
-                            let mut all_ports_allocated = true;
-                            for port in port_metadata.values() {
-                                if !self.port_allocator.mark_allocated(*port) {
-                                    // Somehow we've re-allocated an already used port which
-                                    // is unfortunate. Kill the process and restart it.
-                                    error!("port {port} re-used in process {}; killing (this is a limitation of the process orchestrator that should be fixed)", process.pid());
-                                    all_ports_allocated = false;
-                                    process.kill();
-                                    break;
-                                }
-                            }
-                            if all_ports_allocated {
-                                handles.push(AbortOnDrop(Box::new(ExternalProcess {
-                                    pid,
-                                    _port_metadata_file: PortMetadataFile::open_existing(
-                                        port_metadata_file_location,
-                                    ),
-                                })));
-                                processes.push(port_metadata);
-                                continue;
-                            }
-                        }
-                    }
-                }
-            }
-            // If we got here, we didn't find evidence of a live process, so we must (re-)create it later.
-            processes_exist[i] = false;
-
-            let mut ports = HashMap::new();
-            for port in &ports_in {
-                let p = self
-                    .port_allocator
-                    .alloc()
-                    .ok_or_else(|| anyhow!("port exhaustion"))?;
-                ports.insert(port.name.clone(), p);
-            }
-            processes.push(ports.clone());
+        // Create the state for new processes.
+        for i in process_states.len()..scale.get() {
+            let handle = mz_ore::task::spawn(
+                || format!("process-orchestrator:{full_id}-{i}"),
+                self.supervise_service_process(ServiceProcessConfig {
+                    id: id.to_string(),
+                    run_dir: run_dir.clone(),
+                    i,
+                    image: image.clone(),
+                    args,
+                    ports: ports.clone(),
+                }),
+            );
+            process_states.push(ProcessState {
+                _handle: handle.abort_on_drop(),
+                status: ProcessStatus::NotReady,
+                status_time: Utc::now(),
+            });
         }
 
-        // Now create all the processes that weren't detected as being still alive
-        let peers = processes
-            .iter()
-            .map(|ports| ("127.0.0.1".to_string(), ports.clone()))
-            .collect::<Vec<_>>();
-        for i in 0..scale_in.get() {
-            if !processes_exist[i] {
-                let mut args = args(&ServiceAssignments {
-                    listen_host: IpAddr::V4(Ipv4Addr::LOCALHOST),
-                    ports: &peers[i].1,
-                    index: Some(i),
-                    peers: &peers,
-                });
-                args.push(format!(
-                    "--pid-file-location={}",
-                    pid_file_locations[i].as_ref().unwrap().display()
-                ));
-                args.push("--secrets-reader=process".into());
-                args.push(format!(
-                    "--secrets-reader-process-dir={}",
-                    self.secrets_dir.display()
-                ));
-
-                let command_wrapper = self.command_wrapper.clone();
-                handles.push(AbortOnDrop(Box::new(mz_ore::task::spawn(
-                    || format!("service-supervisor: {full_id}"),
-                    supervise(
-                        full_id.clone(),
-                        path.clone(),
-                        args.clone(),
-                        command_wrapper,
-                        Arc::clone(&self.port_allocator),
-                        processes[i].clone(),
-                        self.suppress_output,
-                        std::mem::take(port_metadata_file_locations[i].as_mut().unwrap()),
-                    ),
-                ))));
-            }
-        }
-        Ok(Box::new(ProcessService { processes }))
+        Ok(Box::new(ProcessService {
+            run_dir,
+            scale: scale.get(),
+        }))
     }
 
     async fn drop_service(&self, id: &str) -> Result<(), anyhow::Error> {
-        let mut supervisors = self.supervisors.lock().expect("lock poisoned");
+        let mut supervisors = self.services.lock().expect("lock poisoned");
         supervisors.remove(id);
         Ok(())
     }
 
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {
-        let supervisors = self.supervisors.lock().expect("lock poisoned");
+        let supervisors = self.services.lock().expect("lock poisoned");
         Ok(supervisors.keys().cloned().collect())
     }
 
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
-        // The process orchestrator currently doesn't provide good support for
-        // tracking service status, so we punt and always return an "ready"
-        // status for each process.
-
-        let supervisors = Arc::clone(&self.supervisors);
-        let stream = async_stream::stream! {
-            let mut events = Vec::new();
-            // Keep track of services we have already seen, so we only emit
-            // events for new services.
-            let mut current_services = HashSet::new();
-            loop {
-                {
-                    let supervisors = supervisors.lock().expect("lock poisoned");
-                    for (service, processes) in supervisors.iter() {
-                        if current_services.contains(service) {
-                            continue;
-                        }
-                        for process_idx in 0..processes.len() {
-                            events.push(ServiceEvent {
-                                service_id: service.clone(),
-                                process_id: u64::cast_from(process_idx),
-                                status: ServiceStatus::Ready,
-                                time: Utc::now(),
-                            });
-                        }
-                    }
-                    current_services = supervisors.keys().cloned().collect();
+        let mut initial_events = vec![];
+        let mut service_event_rx = {
+            let services = self.services.lock().expect("lock poisoned");
+            for (service_id, process_states) in &*services {
+                for (process_id, process_state) in process_states.iter().enumerate() {
+                    initial_events.push(ServiceEvent {
+                        service_id: service_id.clone(),
+                        process_id: u64::cast_from(process_id),
+                        status: process_state.status.into(),
+                        time: process_state.status_time,
+                    });
                 }
-
-                for event in events.drain(..) {
-                    yield Ok(event);
-                }
-
-                time::sleep(Duration::from_secs(5)).await;
             }
+            self.service_event_tx.subscribe()
         };
-        Box::pin(stream)
+        Box::pin(stream! {
+            for event in initial_events {
+                yield Ok(event);
+            }
+            loop {
+                yield service_event_rx.recv().await.err_into();
+            }
+        })
     }
 }
 
-async fn supervise(
-    full_id: String,
-    path: impl AsRef<OsStr>,
-    args: Vec<impl AsRef<OsStr>>,
-    command_wrapper: Vec<String>,
-    port_allocator: Arc<PortAllocator>,
-    ports: HashMap<String, u16>,
-    suppress_output: bool,
-    port_metadata_file_location: PathBuf,
-) {
-    fn interpolate_command(
-        command_part: &str,
-        full_id: &str,
-        ports: &HashMap<String, u16>,
-    ) -> String {
-        let mut command_part = command_part.replace("%N", full_id);
-        for (endpoint, port) in ports {
-            command_part = command_part.replace(&format!("%P:{endpoint}"), &format!("{port}"));
+impl NamespacedProcessOrchestrator {
+    fn supervise_service_process(
+        &self,
+        ServiceProcessConfig {
+            id,
+            run_dir,
+            i,
+            image,
+            args,
+            ports,
+        }: ServiceProcessConfig,
+    ) -> impl Future<Output = ()> {
+        let suppress_output = self.suppress_output;
+        let command_wrapper = self.command_wrapper.clone();
+        let image = self.image_dir.join(image);
+        let pid_file = run_dir.join(format!("{i}.pid"));
+        let full_id = format!("{}-{}", self.namespace, id);
+
+        let state_updater = ProcessStateUpdater {
+            namespace: self.namespace.clone(),
+            id,
+            i,
+            services: Arc::clone(&self.services),
+            service_event_tx: self.service_event_tx.clone(),
+        };
+
+        let listen_addrs = ports
+            .into_iter()
+            .map(|p| {
+                let addr = socket_path(&run_dir, &p.name, i);
+                (p.name, addr)
+            })
+            .collect();
+        let mut args = args(&listen_addrs);
+        args.push(format!("--pid-file-location={}", pid_file.display()));
+        args.push("--secrets-reader=process".into());
+        args.push(format!(
+            "--secrets-reader-process-dir={}",
+            self.secrets_dir.display()
+        ));
+
+        async move {
+            supervise_existing_process(&state_updater, &pid_file).await;
+
+            loop {
+                for path in listen_addrs.values() {
+                    if let Err(e) = fs::remove_file(path).await {
+                        warn!("unable to remove {path} while launching {full_id}-{i}: {e}")
+                    }
+                }
+
+                let mut cmd = if command_wrapper.is_empty() {
+                    let mut cmd = Command::new(&image);
+                    cmd.args(&args);
+                    cmd
+                } else {
+                    let mut cmd = Command::new(&command_wrapper[0]);
+                    cmd.args(
+                        command_wrapper[1..]
+                            .iter()
+                            .map(|part| interpolate_command(part, &full_id, &listen_addrs)),
+                    );
+                    cmd.arg(&image);
+                    cmd.args(&args);
+                    cmd
+                };
+                info!(
+                    "launching {full_id}-{i} via {}...",
+                    cmd.as_std()
+                        .get_args()
+                        .map(|arg| arg.to_string_lossy())
+                        .join(" ")
+                );
+                if suppress_output {
+                    cmd.stdout(Stdio::null());
+                    cmd.stderr(Stdio::null());
+                }
+                match cmd.spawn() {
+                    Ok(process) => {
+                        state_updater.update_state(ProcessStatus::Ready {
+                            pid: Pid::from_u32(process.id().unwrap()),
+                        });
+                        let status = KillOnDropChild(process).0.wait().await;
+                        error!("{full_id}-{i} exited: {:?}; relaunching in 5s", status);
+                    }
+                    Err(e) => {
+                        error!("{full_id}-{i} failed to launch: {}; relaunching in 5s", e);
+                    }
+                };
+                state_updater.update_state(ProcessStatus::NotReady);
+                time::sleep(Duration::from_secs(5)).await;
+            }
         }
-        command_part
+    }
+}
+
+struct ServiceProcessConfig<'a> {
+    id: String,
+    run_dir: PathBuf,
+    i: usize,
+    image: String,
+    args: &'a (dyn Fn(&HashMap<String, String>) -> Vec<String> + Send + Sync),
+    ports: Vec<ServicePort>,
+}
+
+/// Supervises an existing process, if it exists.
+async fn supervise_existing_process(state_updater: &ProcessStateUpdater, pid_file: &Path) {
+    let name = format!(
+        "{}-{}-{}",
+        state_updater.namespace, state_updater.id, state_updater.i
+    );
+
+    let Ok(pid) = PidFile::read(pid_file) else {
+        return;
+    };
+
+    let pid = Pid::from(pid);
+    let mut system = System::new();
+    system.refresh_process_specifics(pid, ProcessRefreshKind::new());
+    let Some(process) = system.process(pid) else {
+        return;
+    };
+
+    info!(%pid, "discovered existing process for {name}");
+    state_updater.update_state(ProcessStatus::Ready { pid });
+
+    // Kill the process if the future is dropped.
+    let need_kill = AtomicBool::new(true);
+    defer! {
+        state_updater.update_state(ProcessStatus::NotReady);
+        if need_kill.load(Ordering::SeqCst) {
+            info!(%pid, "terminating existing process for {name}");
+            process.kill();
+        }
     }
 
-    defer! {
-        for port in ports.values() {
-            port_allocator.free(*port);
-        }
-    }
-    let _port_metadata_file = PortMetadataFile::open(&port_metadata_file_location, &ports)
-        .unwrap_or_else(|_| {
-            panic!(
-                "unable to create port metadata file {}",
-                port_metadata_file_location.as_os_str().to_str().unwrap()
-            )
-        });
-    loop {
-        let mut cmd = if command_wrapper.is_empty() {
-            let mut cmd = Command::new(&path);
-            cmd.args(&args);
-            cmd
-        } else {
-            let mut cmd = Command::new(&command_wrapper[0]);
-            let path = path.as_ref();
-            cmd.args(
-                command_wrapper[1..]
-                    .iter()
-                    .map(|part| interpolate_command(part, &full_id, &ports)),
-            );
-            cmd.arg(path);
-            cmd.args(args.iter().map(AsRef::as_ref));
-            cmd
-        };
-        info!(
-            "Launching {}: {}...",
-            full_id,
-            cmd.as_std()
-                .get_args()
-                .map(|arg| arg.to_string_lossy())
-                .join(" ")
-        );
-        if suppress_output {
-            cmd.stdout(Stdio::null());
-            cmd.stderr(Stdio::null());
-        }
-        match cmd.spawn() {
-            Ok(process) => {
-                let status = KillOnDropChild(process).0.wait().await;
-                error!("{} exited: {:?}; relaunching in 5s", full_id, status);
-            }
-            Err(e) => {
-                error!("{} failed to launch: {}; relaunching in 5s", full_id, e);
-            }
-        };
+    // Periodically check if the process has terminated.
+    let mut system = System::new();
+    while system.refresh_process_specifics(pid, ProcessRefreshKind::new()) {
         time::sleep(Duration::from_secs(5)).await;
     }
+
+    // The process has crashed. Exit the function without attempting to
+    // kill it.
+    warn!(%pid, "process for {name} has crashed; will reboot");
+    need_kill.store(false, Ordering::SeqCst)
+}
+
+fn interpolate_command(
+    command_part: &str,
+    full_id: &str,
+    ports: &HashMap<String, String>,
+) -> String {
+    let mut command_part = command_part.replace("%N", full_id);
+    for (endpoint, port) in ports {
+        command_part = command_part.replace(&format!("%P:{endpoint}"), port);
+    }
+    command_part
 }
 
 struct KillOnDropChild(Child);
@@ -451,57 +446,93 @@ impl Drop for KillOnDropChild {
     }
 }
 
-trait Abortable: Send + Sync + Debug {
-    fn abort_process(&self);
+struct ProcessStateUpdater {
+    namespace: String,
+    id: String,
+    i: usize,
+    services: Arc<Mutex<HashMap<String, Vec<ProcessState>>>>,
+    service_event_tx: Sender<ServiceEvent>,
 }
 
-impl<T: Send + Sync + Debug> Abortable for JoinHandle<T> {
-    fn abort_process(&self) {
-        self.abort();
+impl ProcessStateUpdater {
+    fn update_state(&self, status: ProcessStatus) {
+        let mut services = self.services.lock().expect("lock poisoned");
+        let Some(process_states) = services.get_mut(&self.id) else {
+            return;
+        };
+        let Some(process_state) = process_states.get_mut(self.i) else {
+            return;
+        };
+        let status_time = Utc::now();
+        process_state.status = status;
+        process_state.status_time = status_time;
+        let _ = self.service_event_tx.send(ServiceEvent {
+            service_id: self.id.to_string(),
+            process_id: u64::cast_from(self.i),
+            status: status.into(),
+            time: status_time,
+        });
     }
 }
 
 #[derive(Debug)]
-struct ExternalProcess<P>
-where
-    P: AsRef<Path> + Debug,
-{
-    pid: i32,
-    _port_metadata_file: PortMetadataFile<P>,
+struct ProcessState {
+    _handle: AbortOnDropHandle<()>,
+    status: ProcessStatus,
+    status_time: DateTime<Utc>,
 }
 
-impl<P> Abortable for ExternalProcess<P>
-where
-    P: AsRef<Path> + Debug + Send + Sync,
-{
-    fn abort_process(&self) {
-        let system = sysinfo::System::new_all();
-        if let Some(process) = system.process(self.pid.into()) {
-            process.kill();
+impl ProcessState {
+    fn pid(&self) -> Option<Pid> {
+        match &self.status {
+            ProcessStatus::NotReady => None,
+            ProcessStatus::Ready { pid } => Some(*pid),
         }
     }
 }
 
-#[derive(Debug)]
-struct AbortOnDrop(Box<dyn Abortable>);
+#[derive(Debug, Clone, Copy)]
+enum ProcessStatus {
+    NotReady,
+    Ready { pid: Pid },
+}
 
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort_process();
+impl From<ProcessStatus> for ServiceStatus {
+    fn from(status: ProcessStatus) -> ServiceStatus {
+        match status {
+            ProcessStatus::NotReady => ServiceStatus::NotReady,
+            ProcessStatus::Ready { .. } => ServiceStatus::Ready,
+        }
+    }
+}
+
+fn socket_path(run_dir: &Path, port: &str, process: usize) -> String {
+    let desired = run_dir
+        .join(format!("{port}-{process}"))
+        .to_string_lossy()
+        .into_owned();
+    if UnixSocketAddr::from_pathname(&desired).is_err() {
+        // Unix socket addresses have a very low maximum length of around 100
+        // bytes on most platforms.
+        env::temp_dir()
+            .join(hex::encode(Sha1::digest(desired)))
+            .display()
+            .to_string()
+    } else {
+        desired
     }
 }
 
 #[derive(Debug, Clone)]
 struct ProcessService {
-    /// For each process in order, the allocated ports by name.
-    processes: Vec<HashMap<String, u16>>,
+    run_dir: PathBuf,
+    scale: usize,
 }
 
 impl Service for ProcessService {
     fn addresses(&self, port: &str) -> Vec<String> {
-        self.processes
-            .iter()
-            .map(|p| format!("127.0.0.1:{}", p[port]))
+        (0..self.scale)
+            .map(|i| socket_path(&self.run_dir, port, i))
             .collect()
     }
 }

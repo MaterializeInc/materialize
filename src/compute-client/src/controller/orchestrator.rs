@@ -105,23 +105,12 @@ impl ComputeOrchestrator {
                     image: self.computed_image.clone(),
                     init_container_image: self.init_container_image.clone(),
                     args: &|assigned| {
-                        let mut compute_opts = vec![
-                            format!(
-                                "--controller-listen-addr={}:{}",
-                                assigned.listen_host, assigned.ports["controller"]
-                            ),
-                            format!(
-                                "--internal-http-listen-addr={}:{}",
-                                assigned.listen_host, assigned.ports["internal-http"]
-                            ),
+                        vec![
+                            format!("--controller-listen-addr={}", assigned["controller"]),
+                            format!("--internal-http-listen-addr={}", assigned["internal-http"]),
                             format!("--opentelemetry-resource=instance_id={}", instance_id),
                             format!("--opentelemetry-resource=replica_id={}", replica_id),
-                        ];
-                        if let Some(index) = assigned.index {
-                            compute_opts
-                                .push(format!("--opentelemetry-resource=replica_index={}", index));
-                        }
-                        compute_opts
+                        ]
                     },
                     ports: vec![
                         ServicePort {
