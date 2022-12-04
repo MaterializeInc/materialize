@@ -38,7 +38,7 @@ prost = { version = "0.11.2", features = ["no-recursion-limit"] }
 regex = "1.7.0"
 ryu = "1.0.11"
 serde = { version = "1.0.147", features = ["derive"] }
-serde_json = { version = "1.0.88", features = ["arbitrary_precision"] }
+serde_json = { version = "1.0.89", features = ["arbitrary_precision"] }
 serde_regex = "1.1.0"
 smallvec = { version = "1.10.0", features = ["serde", "union"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
