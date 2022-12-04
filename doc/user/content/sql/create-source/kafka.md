@@ -2,11 +2,6 @@
 title: "CREATE SOURCE: Kafka"
 description: "Connecting Materialize to a Kafka or Redpanda broker"
 pagerank: 40
-menu:
-  main:
-    parent: 'create-source'
-    name: Kafka
-    weight: 10
 aliases:
     - /sql/create-source/avro-kafka
     - /sql/create-source/json-kafka
@@ -16,7 +11,7 @@ aliases:
 ---
 
 {{% create-source/intro %}}
-To connect to a Kafka broker (and optionally a schema registry), you first need to [create a connection](#creating-a-connection) that specifies access and authentication parameters. Once created, a connection is **reusable** across multiple `CREATE SOURCE` statements.
+To connect to a Kafka broker (and optionally a schema registry), you first need to [create a connection](#creating-a-connection) that specifies access and authentication parameters. Once created, a connection is **reusable** across multiple `CREATE SOURCE` and `CREATE SINK` statements.
 {{% /create-source/intro %}}
 
 {{< note >}}
@@ -427,6 +422,8 @@ The smallest source size (`3xsmall`) is a resonable default to get started. For 
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
 - [`CREATE SOURCE`](../)
+- [`SHOW SOURCES`](/sql/show-sources)
+- [`DROP SOURCE`](/sql/drop-source)
 - [Using Debezium](/integrations/debezium/)
 
 [Avro]: /sql/create-source/#avro
