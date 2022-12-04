@@ -47,8 +47,8 @@ use tracing_subscriber::fmt::format::{format, Writer};
 use tracing_subscriber::fmt::{self, FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::layer::{Layer, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::reload;
 use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{reload, Registry};
 
 /// Application tracing configuration.
 ///
@@ -196,28 +196,6 @@ pub struct TokioConsoleConfig {
     pub retention: Duration,
 }
 
-fn stderr_log_layer<S>(stderr_config: StderrLogConfig) -> Box<dyn Layer<S> + Send + Sync>
-where
-    S: Subscriber + for<'a> LookupSpan<'a>,
-{
-    match stderr_config.format {
-        StderrLogFormat::Text { prefix } => {
-            // See: https://no-color.org/
-            let no_color = std::env::var_os("NO_COLOR").unwrap_or_else(|| "".into()) != "";
-            Box::new(
-                fmt::layer()
-                    .with_writer(io::stderr)
-                    .event_format(PrefixFormat {
-                        inner: format(),
-                        prefix,
-                    })
-                    .with_ansi(!no_color && atty::is(atty::Stream::Stderr)),
-            )
-        }
-        StderrLogFormat::Json => Box::new(fmt::layer().with_writer(io::stderr).json()),
-    }
-}
-
 /// Enables application tracing via the [`tracing`] and [`opentelemetry`]
 /// libraries.
 ///
@@ -255,14 +233,31 @@ where
     let service_name = service_name.to_string();
 
     let config = config.into();
-    let (stderr_log_filter, stderr_reloader) = reload::Layer::new(config.stderr_log.filter.clone());
+
+    let stderr_log_layer: Box<dyn Layer<Registry> + Send + Sync> = match config.stderr_log.format {
+        StderrLogFormat::Text { prefix } => {
+            // See: https://no-color.org/
+            let no_color = std::env::var_os("NO_COLOR").unwrap_or_else(|| "".into()) != "";
+            Box::new(
+                fmt::layer()
+                    .with_writer(io::stderr)
+                    .event_format(PrefixFormat {
+                        inner: format(),
+                        prefix,
+                    })
+                    .with_ansi(!no_color && atty::is(atty::Stream::Stderr)),
+            )
+        }
+        StderrLogFormat::Json => Box::new(fmt::layer().with_writer(io::stderr).json()),
+    };
+    let (stderr_log_layer, stderr_reloader) =
+        reload::Layer::new(stderr_log_layer.with_filter(config.stderr_log.filter));
     let stderr_callback = DynamicTargetsCallback {
         callback: Arc::new(move |targets| {
-            stderr_reloader.reload(targets)?;
+            stderr_reloader.modify(|layer| *layer.filter_mut() = targets)?;
             Ok(())
         }),
     };
-    let stderr_log_layer = stderr_log_layer(config.stderr_log).with_filter(stderr_log_filter);
 
     let (otel_layer, otel_reloader) = if let Some(otel_config) = config.opentelemetry {
         // TODO(guswynn): figure out where/how to call
@@ -319,7 +314,7 @@ where
             .with_filter(filter);
         let reloader = DynamicTargetsCallback {
             callback: Arc::new(move |targets| {
-                filter_handle.reload(targets)?;
+                filter_handle.modify(|filter| *filter = targets)?;
                 Ok(())
             }),
         };
