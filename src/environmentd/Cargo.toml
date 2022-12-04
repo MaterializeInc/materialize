@@ -68,7 +68,7 @@ serde = { version = "1.0.147", features = ["derive"] }
 serde_json = "1.0.89"
 shell-words = "1.1.0"
 sysctl = "0.5.2"
-sysinfo = "0.26.7"
+sysinfo = "0.26.8"
 tempfile = "3.2.0"
 thiserror = "1.0.37"
 tokio = { version = "1.22.0", features = ["sync"] }
