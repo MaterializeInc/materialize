@@ -169,9 +169,6 @@ pub fn describe(
         Statement::Show(ShowStatement::ShowDatabases(stmt)) => {
             show::show_databases(&scx, stmt)?.describe()?
         }
-        Statement::Show(ShowStatement::ShowIndexes(stmt)) => {
-            show::show_indexes(&scx, stmt)?.describe()?
-        }
         Statement::Show(ShowStatement::ShowObjects(stmt)) => {
             show::show_objects(&scx, stmt)?.describe()?
         }
@@ -317,7 +314,6 @@ pub fn plan(
         Statement::Show(ShowStatement::ShowDatabases(stmt)) => {
             show::show_databases(scx, stmt)?.plan()
         }
-        Statement::Show(ShowStatement::ShowIndexes(stmt)) => show::show_indexes(scx, stmt)?.plan(),
         Statement::Show(ShowStatement::ShowObjects(stmt)) => show::show_objects(scx, stmt)?.plan(),
         Statement::Show(ShowStatement::ShowSchemas(stmt)) => show::show_schemas(scx, stmt)?.plan(),
 

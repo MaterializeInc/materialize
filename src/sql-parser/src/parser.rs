@@ -4822,11 +4822,20 @@ impl<'a> Parser<'a> {
             VIEWS,
             MATERIALIZED,
             SECRETS,
+            INDEXES,
             CONNECTIONS,
         ]) {
             let object_type = match object_type {
                 OBJECTS => ObjectType::Object,
                 ROLES | USERS => ObjectType::Role,
+                CLUSTERS => ObjectType::Cluster,
+                SINKS => ObjectType::Sink,
+                SOURCES => ObjectType::Source,
+                TABLES => ObjectType::Table,
+                TYPES => ObjectType::Type,
+                VIEWS => ObjectType::View,
+                SECRETS => ObjectType::Secret,
+                CONNECTIONS => ObjectType::Connection,
                 CLUSTER => {
                     if self.parse_keyword(REPLICAS) {
                         ObjectType::ClusterReplica
@@ -4836,64 +4845,62 @@ impl<'a> Parser<'a> {
                         }));
                     }
                 }
-                CLUSTERS => ObjectType::Cluster,
-                SINKS => ObjectType::Sink,
-                SOURCES => ObjectType::Source,
-                TABLES => ObjectType::Table,
-                TYPES => ObjectType::Type,
-                VIEWS => ObjectType::View,
                 MATERIALIZED => {
                     self.expect_keyword(VIEWS)?;
                     ObjectType::MaterializedView
                 }
-                SECRETS => ObjectType::Secret,
-                CONNECTIONS => ObjectType::Connection,
+                INDEXES => ObjectType::Index,
                 _ => unreachable!(),
             };
-
             let from = if self.parse_keywords(&[FROM]) {
                 Some(self.parse_schema_name()?)
             } else {
                 None
             };
 
+            let show_object_type = match object_type {
+                ObjectType::Table => ShowObjectType::Table,
+                ObjectType::View => ShowObjectType::View,
+                ObjectType::Source => ShowObjectType::Source,
+                ObjectType::Sink => ShowObjectType::Sink,
+                ObjectType::Type => ShowObjectType::Type,
+                ObjectType::Role => ShowObjectType::Role,
+                ObjectType::ClusterReplica => ShowObjectType::ClusterReplica,
+                ObjectType::Object => ShowObjectType::Object,
+                ObjectType::Secret => ShowObjectType::Secret,
+                ObjectType::Connection => ShowObjectType::Connection,
+                ObjectType::Cluster => ShowObjectType::Cluster,
+                ObjectType::MaterializedView => {
+                    let in_cluster = self.parse_optional_in_cluster()?;
+                    ShowObjectType::MaterializedView { in_cluster }
+                }
+                ObjectType::Index => {
+                    let on_object = if self.parse_one_of_keywords(&[ON]).is_some() {
+                        Some(self.parse_raw_name()?)
+                    } else {
+                        None
+                    };
+
+                    if from.is_some() && on_object.is_some() {
+                        return parser_err!(
+                            self,
+                            self.peek_prev_pos(),
+                            "Cannot specify both FROM and ON"
+                        );
+                    }
+
+                    let in_cluster = self.parse_optional_in_cluster()?;
+                    ShowObjectType::Index {
+                        in_cluster,
+                        on_object,
+                    }
+                }
+            };
+
             // Only Materialized Views and Indexes (handled separately below) are associated with clusters.
-            let in_cluster = if matches!(object_type, ObjectType::MaterializedView) {
-                self.parse_optional_in_cluster()?
-            } else {
-                None
-            };
-
             Ok(ShowStatement::ShowObjects(ShowObjectsStatement {
-                object_type,
+                object_type: show_object_type,
                 from,
-                in_cluster,
-                filter: self.parse_show_statement_filter()?,
-            }))
-        } else if self.parse_keyword(INDEXES) {
-            let from_schema = if self.parse_keywords(&[FROM]) {
-                Some(self.parse_schema_name()?)
-            } else {
-                None
-            };
-            let on_object = if self.parse_one_of_keywords(&[ON]).is_some() {
-                Some(self.parse_raw_name()?)
-            } else {
-                None
-            };
-            if from_schema.is_some() && on_object.is_some() {
-                return parser_err!(
-                    self,
-                    self.peek_prev_pos(),
-                    "Cannot specify both FROM and ON"
-                );
-            }
-            let in_cluster = self.parse_optional_in_cluster()?;
-
-            Ok(ShowStatement::ShowIndexes(ShowIndexesStatement {
-                on_object,
-                from_schema,
-                in_cluster,
                 filter: self.parse_show_statement_filter()?,
             }))
         } else if self.parse_keywords(&[CREATE, VIEW]) {
