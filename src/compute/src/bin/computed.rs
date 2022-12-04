@@ -104,6 +104,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     )
     .await?;
 
+    use rand::Rng;
+    if rand::thread_rng().gen::<u32>() % 5 != 0 {
+        panic!("injected fault");
+    }
+
     // Keep this _after_ the mz_ore::tracing::configure call so that its panic
     // hook runs _before_ the one that sends things to sentry.
     mz_timely_util::panic::halt_on_timely_communication_panic();

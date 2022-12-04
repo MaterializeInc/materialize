@@ -3498,6 +3498,7 @@ dependencies = [
  "mz-timely-util",
  "once_cell",
  "prometheus",
+ "rand",
  "scopeguard",
  "serde",
  "tikv-jemallocator",
