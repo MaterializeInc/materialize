@@ -74,13 +74,13 @@ pub mod task;
 #[cfg(feature = "test")]
 pub mod test;
 pub mod thread;
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing")))]
-#[cfg(feature = "tracing")]
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing_")))]
+#[cfg(feature = "tracing_")]
 pub mod tracing;
 pub mod vec;
 
 #[doc(hidden)]
 pub mod __private {
-    #[cfg(feature = "tracing")]
+    #[cfg(feature = "tracing_")]
     pub use tracing;
 }

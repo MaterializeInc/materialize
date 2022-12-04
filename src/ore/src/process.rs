@@ -41,8 +41,8 @@ use std::sync::atomic::AtomicBool;
 ///
 /// If you need to write a Rust libtest test that asserts that a call to halt
 /// has occcurred, see [`PANIC_ON_HALT`].
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing")))]
-#[cfg(feature = "tracing")]
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing_")))]
+#[cfg(feature = "tracing_")]
 #[macro_export]
 macro_rules! halt {
     ($($arg:expr),* $(,)?) => {{
