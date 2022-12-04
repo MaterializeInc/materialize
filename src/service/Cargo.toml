@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.66"
 async-stream = "0.3.3"
-async-trait = "0.1.58"
+async-trait = "0.1.59"
 clap = { version = "3.2.20", features = ["env", "derive"] }
 crossbeam-channel = "0.5.6"
 futures = "0.3.25"

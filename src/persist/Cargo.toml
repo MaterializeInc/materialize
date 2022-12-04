@@ -21,7 +21,7 @@ bench = false
 [dependencies]
 anyhow = { version = "1.0.66", features = ["backtrace"] }
 arrow2 = { git = "https://github.com/jorgecarleitao/arrow2.git", features = ["io_ipc", "io_parquet"] }
-async-trait = "0.1.58"
+async-trait = "0.1.59"
 aws-config = { version = "0.51.0", default-features = false, features = ["native-tls"] }
 aws-sdk-s3 = { version = "0.21.0", default-features = false, features = ["native-tls", "rt-tokio"]  }
 aws-smithy-http = "0.51.0"
