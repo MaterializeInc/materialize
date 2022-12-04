@@ -551,54 +551,18 @@ mod differential {
                     .collect::<Vec<_>>()
             };
 
-            let (start, _start_keys, _characteristics) = &order[0];
-            let start = *start;
-            let mut start_keys = None;
-            // Determine an appropriate arrangement to use for `start`.
-            // It must line up with the arrangement of `order[1]`, or be set to `None` to avoid miscommunicating the validity.
-            // One way to do this is to take each of the keys of `order[1]`, globalize them, then attempt to find an equated
-            // expression that can be localized to order[0].0,
-            if let Some((next_index, next_keys, _)) = order.get(1) {
-                // To populate with localized expressions equated to elements of `next_keys`.
-                let mut found_keys = Vec::with_capacity(next_keys.len());
-                for expr in next_keys.iter() {
-                    let global_expr = input_mapper.map_expr_to_global(expr.clone(), *next_index);
-                    // we should find `global_expr` in some `equivalences`.
-                    let equivalence_class = equivalences
-                        .iter()
-                        .find(|c| c.contains(&global_expr))
-                        .unwrap();
-                    if let Some(expr) = equivalence_class
-                        .iter()
-                        .find(|e| input_mapper.single_input(e) == Some(start))
-                    {
-                        found_keys.push(input_mapper.map_expr_to_local(expr.clone()));
-                    }
-                }
-                // Only if we found matches for each key should we announce the keys.
-                if found_keys.len() == next_keys.len() {
-                    start_keys = Some(found_keys.clone());
-                    order[0].1 = found_keys;
-                }
-            }
-
-            // If we found no keys, avoid implementing the empty keyed arrangement.
-            if start_keys.is_none() {
-                order.remove(0);
-            }
+            let (start, start_keys, _characteristics) = order[0].clone();
 
             // Implement arrangements in each of the inputs.
             let lifted_mfp = super::implement_arrangements(inputs, available, order.iter());
 
-            if start_keys.is_some() {
-                // now that the starting arrangement has been implemented,
-                // remove it from `order` so `order` only contains information
-                // about the other inputs
-                order.remove(0);
-            }
+            // now that the starting arrangement has been implemented,
+            // remove it from `order` so `order` only contains information
+            // about the other inputs
+            order.remove(0);
 
             // Install the implementation.
-            *implementation = JoinImplementation::Differential((start, start_keys), order);
+            *implementation = JoinImplementation::Differential((start, Some(start_keys)), order);
 
             super::install_lifted_mfp(&mut new_join, lifted_mfp)?;
 
@@ -865,6 +829,7 @@ impl<'a> Orderer<'a> {
             }
         }
 
+        // Main loop, ordering all the inputs.
         if self.inputs > 1 {
             self.order_input(start);
             while self.order.len() < self.inputs - 1 {
@@ -881,18 +846,19 @@ impl<'a> Orderer<'a> {
             }
         }
 
-        // calculate characteristics of an arrangement, if any on the starting input
-        // by default, there is no arrangement on the starting input
+        // `order` now contains all the inputs except the first. Let's create an item for the first
+        // input. We know which input that is, but we need to compute a key and characteristics.
+        // We start with some default values:
         let mut start_tuple = (
             JoinInputCharacteristics::new(false, 0, false, self.filters[start].clone(), start),
             vec![],
             start,
         );
-        // use an arrangement if there exists one that lines up with the keys of
-        // the second input
+        // The key should line up with the key of the second input (if there is a second input).
+        // (At this point, `order[0]` is what will eventually be `order[1]`, i.e., the second input.)
         if let Some((_, key, second)) = self.order.get(0) {
-            // for each key of the second input, try to find the corresponding key in
-            // the starting input
+            // for each component of the key of the second input, try to find the corresponding key
+            // component in the starting input
             let candidate_start_key = key
                 .iter()
                 .filter_map(|k| {
@@ -903,23 +869,38 @@ impl<'a> Orderer<'a> {
                 })
                 .collect::<Vec<_>>();
             if candidate_start_key.len() == key.len() {
-                if let Some(pos) = self.arrangements[start]
-                    .iter()
-                    .position(|k| k == &candidate_start_key)
-                {
-                    let is_unique = self.unique_arrangement[start][pos];
-                    start_tuple = (
-                        JoinInputCharacteristics::new(
-                            is_unique,
-                            candidate_start_key.len(),
-                            true,
-                            self.filters[start].clone(),
-                            start,
-                        ),
-                        candidate_start_key,
+                let is_unique = self.unique_keys[start].iter().any(|cols| {
+                    cols.iter().all(|c| candidate_start_key.contains(&MirScalarExpr::Column(*c)))
+                });
+                let arranged = self.arrangements[start]
+                     .iter()
+                     .find(|k| k == &&candidate_start_key).is_some();
+                start_tuple = (
+                    JoinInputCharacteristics::new(
+                        is_unique,
+                        candidate_start_key.len(),
+                        arranged,
+                        self.filters[start].clone(),
                         start,
-                    );
-                }
+                    ),
+                    candidate_start_key,
+                    start,
+                );
+            } else {
+                // For the second input's key fields, there is nothing else to equate it with but
+                // the fields of the first input, so we should find a match for each of the fields.
+                // (For a later input, different fields of a key might be equated with fields coming
+                // from various inputs.)
+                // Technically, this happens as follows:
+                // The second input must have been placed in the `priority_queue` either
+                // 1) as a cross join possibility, or
+                // 2) when we called `order_input` on the starting input.
+                // In the 1) case, `key.len()` is 0. In the 2) case, it was the very first call to
+                // `order_input`, which means that `placed` was true only for the
+                // starting input, which means that `fully_supported` was true due to
+                // one of the expressions referring only to the starting input.
+                unreachable!();
+                // (This couldn't be a soft_panic: we would form an arrangement with a wrong key.)
             }
         }
         self.order.insert(0, start_tuple);
