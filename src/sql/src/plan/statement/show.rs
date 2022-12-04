@@ -25,10 +25,10 @@ use query::QueryContext;
 
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
-    SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement,
-    ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
-    ShowCreateViewStatement, ShowDatabasesStatement, ShowObjectsStatement, ShowSchemasStatement,
-    ShowStatementFilter, Statement, Value,
+    SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement, ShowCreateSinkStatement,
+    ShowCreateSourceStatement, ShowCreateTableStatement, ShowCreateViewStatement,
+    ShowDatabasesStatement, ShowObjectsStatement, ShowSchemasStatement, ShowStatementFilter,
+    Statement, Value,
 };
 use crate::catalog::{CatalogItemType, SessionCatalog};
 use crate::names::{
