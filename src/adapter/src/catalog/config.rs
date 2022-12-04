@@ -160,8 +160,8 @@ impl Default for StorageHostSizeMap {
 
 /// Context used to generate an AWS Principal.
 ///
-/// In the case of AWS PrivateLink connections, Materialize will connect as the
-/// AWS Principal generated via this context.
+/// In the case of AWS PrivateLink connections, Materialize will connect to the
+/// VPC endpoint as the AWS Principal generated via this context.
 #[derive(Debug, Clone)]
 pub struct AwsPrincipalContext {
     pub aws_account_id: String,

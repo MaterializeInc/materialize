@@ -83,8 +83,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
     )[0][0]
 
     assert principal == (
-        "arn:aws:iam::123456789000:role/mz_eb5cb59b-e2fe-41f3-87ca-d2176a495345_"
-        + aws_connection_id
+        f"arn:aws:iam::123456789000:role/mz_eb5cb59b-e2fe-41f3-87ca-d2176a495345_{aws_connection_id}"
     )
 
     mz.environmentd.sql(
