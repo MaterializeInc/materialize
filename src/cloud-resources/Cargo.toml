@@ -14,5 +14,5 @@ kube = { version = "0.76.0", features = ["derive", "openssl-tls", "ws"] }
 mz-repr = { path = "../repr" }
 schemars = { version = "0.8", features = ["uuid1"] }
 serde = "1.0.147"
-serde_json = "1.0.88"
+serde_json = "1.0.89"
 uuid = { version = "1.2", features = ["serde", "v4"] }

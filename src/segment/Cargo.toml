@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 mz-ore = { path = "../ore", features = ["async"] }
 segment = { version = "0.2.1", features = ["native-tls-vendored"], default-features = false }
-serde_json = "1.0.88"
+serde_json = "1.0.89"
 tokio = { version = "1.22.0", features = ["sync"] }
 tracing = "0.1.37"
 uuid = "1.2.2"

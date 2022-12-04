@@ -69,7 +69,7 @@ mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-ore = { path = "../ore", features = ["network", "tracing_", "test"] }
 num_cpus = "1.14.0"
 num_enum = "0.5.7"
-serde_json = "1.0.88"
+serde_json = "1.0.89"
 tempfile = "3.2.0"
 
 [build-dependencies]

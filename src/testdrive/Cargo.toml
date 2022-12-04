@@ -57,7 +57,7 @@ rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features
 regex = "1.7.0"
 reqwest = { version = "0.11.13", features = ["native-tls-vendored"] }
 serde = "1.0.147"
-serde_json = { version = "1.0.88", features = ["raw_value"] }
+serde_json = { version = "1.0.89", features = ["raw_value"] }
 similar = "2.2.1"
 tempfile = "3.2.0"
 termcolor = "1.1.3"

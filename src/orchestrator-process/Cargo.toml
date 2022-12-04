@@ -19,7 +19,7 @@ mz-ore = { path = "../ore", features = ["async"] }
 mz-pid-file = { path = "../pid-file" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
-serde_json = "1.0.88"
+serde_json = "1.0.89"
 scopeguard = "1.1.0"
 sha1 = "0.10.5"
 sysinfo = "0.26.7"
