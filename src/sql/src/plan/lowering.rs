@@ -1727,17 +1727,48 @@ impl AggregateExpr {
     }
 }
 
-// TODO: move this to the `mz_expr` crate.
-/// If the on clause of an outer join is an equijoin, figure out the join keys.
+/// Column version of `derive_equijoin_cols`.
 ///
-/// `oa`, `la`, and `ra` are the arities of `outer`, the lhs, and the rhs
-/// respectively.
+/// Maintained for `query_model/mir.rs`.
 pub(crate) fn derive_equijoin_cols(
     oa: usize,
     la: usize,
     ra: usize,
     on: Vec<mz_expr::MirScalarExpr>,
 ) -> Option<(Vec<usize>, Vec<usize>)> {
+    if let Some((l_exprs, r_exprs)) = derive_equijoin_exprs(oa, la, ra, on) {
+        let mut l_cols = Vec::with_capacity(l_exprs.capacity());
+        let mut r_cols = Vec::with_capacity(r_exprs.capacity());
+        for expr in l_exprs.iter() {
+            if let mz_expr::MirScalarExpr::Column(c) = expr {
+                l_cols.push(*c);
+            }
+        }
+        for expr in r_exprs.iter() {
+            if let mz_expr::MirScalarExpr::Column(c) = expr {
+                r_cols.push(*c);
+            }
+        }
+        if l_cols.len() == l_exprs.len() && r_cols.len() == r_exprs.len() {
+            Some((l_cols, r_cols))
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+// TODO: move this to the `mz_expr` crate.
+/// Determine if an `on` clause is a set of equality constraints between two expressions
+/// one of each of which comes from the left and the right inputs.
+///
+/// `oa`, `la`, and `ra` are the arities of `outer`, the lhs, and the rhs respectively.
+pub(crate) fn derive_equijoin_exprs(
+    oa: usize,
+    la: usize,
+    ra: usize,
+    on: Vec<mz_expr::MirScalarExpr>,
+) -> Option<(Vec<mz_expr::MirScalarExpr>, Vec<mz_expr::MirScalarExpr>)> {
     use mz_expr::BinaryFunc;
     use mz_expr::VariadicFunc;
     // TODO: Replace this predicate deconstruction with
@@ -1769,18 +1800,34 @@ pub(crate) fn derive_equijoin_cols(
             func: BinaryFunc::Eq,
         } = predicate
         {
-            if let (mz_expr::MirScalarExpr::Column(c1), mz_expr::MirScalarExpr::Column(c2)) =
-                (&mut **expr1, &mut **expr2)
+            let expr1 = (**expr1).clone();
+            let expr2 = (**expr2).clone();
+
+            let support1 = expr1.support();
+            let support2 = expr2.support();
+
+            if support1.iter().all(|c| oa <= *c && *c < oa + la)
+                && support2.iter().all(|c| oa + la <= *c && *c < oa + la + ra)
             {
-                if *c1 > *c2 {
-                    std::mem::swap(c1, c2);
-                }
-                if (oa <= *c1 && *c1 < oa + la) && (oa + la <= *c2 && *c2 < oa + la + ra) {
-                    l_keys.push(*c1);
-                    r_keys.push(*c2 - la);
-                }
+                l_keys.push(expr1);
+                r_keys.push(expr2);
+            } else if support2.iter().all(|c| oa <= *c && *c < oa + la)
+                && support1.iter().all(|c| oa + la <= *c && *c < oa + la + ra)
+            {
+                l_keys.push(expr2);
+                r_keys.push(expr1);
             }
         }
+    }
+    // Offset columns in right expressions by the columns introduce by the left input.
+    use mz_expr::visit::Visit;
+    for expr in r_keys.iter_mut() {
+        #[allow(deprecated)]
+        expr.visit_mut_post_nolimit(&mut |e| {
+            if let mz_expr::MirScalarExpr::Column(old_i) = e {
+                *old_i -= la;
+            }
+        });
     }
     // If any predicates were not column equivs, give up.
     if l_keys.len() < predicates.len() {
@@ -1823,7 +1870,7 @@ fn attempt_outer_join(
     let rt = output_type.drain(0..ra).collect_vec();
     assert!(output_type.is_empty());
 
-    let equijoin_keys = derive_equijoin_cols(oa, la, ra, vec![on.clone()]);
+    let equijoin_keys = derive_equijoin_exprs(oa, la, ra, vec![on.clone()]);
     if equijoin_keys.is_none() {
         return None;
     }
@@ -1859,7 +1906,12 @@ fn attempt_outer_join(
 
                 // A collection of keys present in both left and right collections.
                 let both_keys = get_join
-                    .project((0..oa).chain(l_keys.clone()).collect::<Vec<_>>())
+                    .map(l_keys.clone())
+                    .project(
+                        (0..oa)
+                            .chain((oa + la + ra)..(oa + la + ra + l_keys.len()))
+                            .collect(),
+                    )
                     .distinct();
 
                 // The plan is now to determine the left and right rows matched in the
@@ -1870,9 +1922,9 @@ fn attempt_outer_join(
                     if let JoinKind::LeftOuter { .. } | JoinKind::FullOuter = kind {
                         // Rows in `left` that are matched in the inner equijoin.
                         let left_present = mz_expr::MirRelationExpr::join(
-                            vec![get_left.clone(), get_both.clone()],
+                            vec![get_left.clone().map(l_keys.clone()), get_both.clone()],
                             (0..oa)
-                                .chain(l_keys.clone())
+                                .chain((oa + la)..(oa + la + l_keys.len()))
                                 .enumerate()
                                 .map(|(i, c)| vec![(0, c), (1, i)])
                                 .collect::<Vec<_>>(),
@@ -1896,9 +1948,9 @@ fn attempt_outer_join(
                     if let JoinKind::RightOuter | JoinKind::FullOuter = kind {
                         // Rows in `right` that are matched in the inner equijoin.
                         let right_present = mz_expr::MirRelationExpr::join(
-                            vec![get_right.clone(), get_both],
+                            vec![get_right.clone().map(r_keys.clone()), get_both],
                             (0..oa)
-                                .chain(r_keys.clone())
+                                .chain((oa + ra)..(oa + ra + r_keys.len()))
                                 .enumerate()
                                 .map(|(i, c)| vec![(0, c), (1, i)])
                                 .collect::<Vec<_>>(),
