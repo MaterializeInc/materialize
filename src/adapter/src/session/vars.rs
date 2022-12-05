@@ -938,6 +938,13 @@ impl SystemVars {
         .into_iter()
     }
 
+    /// Returns an iterator over the configuration parameters and their current
+    /// values on disk.
+    pub fn iter_synced(&self) -> impl Iterator<Item = &dyn Var> {
+        self.iter()
+            .filter(|v| v.name() != CONFIG_HAS_SYNCED_ONCE.name)
+    }
+
     /// Returns a [`Var`] representing the configuration parameter with the
     /// specified name.
     ///
