@@ -65,7 +65,7 @@ These are not likely to be renderable in the foreseeable future, as they cannot 
 
 Much of this is taken from https://github.com/MaterializeInc/materialize/issues/11176. 
 
-We can extend SQL's `WITH` fragment with a new variant, not strictly more generaly, which looks like
+We can extend SQL's `WITH` fragment with a new variant, not strictly more general, which looks like
 ```sql
 WITH MUTUALLY RECURSIVE
     name_1 (col1a type1a, col1b type1b, ... ) AS ( <SELECT STATEMENT 1> ),
@@ -159,13 +159,13 @@ There are several distinctions it has from the proposed `WITH MUTUALLY RECURSIVE
 
 2.  SQL's `WITH RECURSIVE` requires each binding be used only once.
 
-    This is confusing and only enforced syntacticall. 
+    This is confusing and only enforced syntactically. 
     One can introduce a CTE renaming a binding and then use that rebinding multiple times.
     In principle and practice, the requirement does not exist.
 
 3.  SQL's `WITH RECURSIVE` requires each select statement have a "base case" (`UNION`, `UNION ALL`, etc with a non-recursive fragment).
 
-    This is not required for query planning, optimizamion, or execution. 
+    This is not required for query planning, optimization, or execution. 
     This may be helpful from a query admission point of view (should we allow you to run your query).
     We could likely introduce this constraint if we discover what it is valuable for.
 
