@@ -31,6 +31,7 @@ use mz_storage_client::types::sources::Timeline;
 use crate::catalog::{INTERNAL_USER_NAMES, SYSTEM_USER};
 use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
+use crate::coord::timeline::TimelineContext;
 use crate::error::AdapterError;
 use crate::session::vars::IsolationLevel;
 use crate::AdapterNotice;
@@ -273,18 +274,42 @@ impl<T: TimestampManipulation> Session<T> {
                         }
                         *ops = add_ops;
                     }
-                    TransactionOps::Peeks(txn_ts) => match add_ops {
-                        TransactionOps::Peeks(add_ts) => {
-                            match (&txn_ts, add_ts) {
-                                (Some(txn_ts), Some(add_ts)) => assert_eq!(*txn_ts, add_ts),
-                                (None, Some(add_ts)) => *txn_ts = Some(add_ts),
-                                _ => {}
+                    TransactionOps::Peeks(txn_read_context) => match add_ops {
+                        TransactionOps::Peeks(add_read_context) => {
+                            match (&txn_read_context, add_read_context) {
+                                (
+                                    ReadContext::BelongsToTimeline(txn_ts, txn_timeline),
+                                    ReadContext::BelongsToTimeline(add_ts, add_timeline),
+                                ) => {
+                                    assert_eq!(*txn_ts, add_ts);
+                                    assert_eq!(*txn_timeline, add_timeline);
+                                }
+                                (
+                                    ReadContext::BelongsToTimeline(txn_ts, _txn_timeline),
+                                    ReadContext::TimelineDependent(add_ts),
+                                ) => assert_eq!(*txn_ts, add_ts),
+                                (
+                                    ReadContext::TimelineDependent(_txn_ts),
+                                    ReadContext::BelongsToTimeline(_add_ts, _add_timeline),
+                                ) => {
+                                    panic!("cannot adopt a new timeline after executing a timeline dependent query")
+                                }
+                                (
+                                    ReadContext::TimelineDependent(txn_ts),
+                                    ReadContext::TimelineDependent(add_ts),
+                                ) => assert_eq!(*txn_ts, add_ts),
+                                (ReadContext::TimelineIndependent, add_read_context) => {
+                                    *txn_read_context = add_read_context
+                                }
+                                (_, ReadContext::TimelineIndependent) => {}
                             };
                         }
                         // Iff peeks thus far do not have a timestamp (i.e.
                         // they are constant), we can switch to a write
                         // transaction.
-                        writes @ TransactionOps::Writes(..) if txn_ts.is_none() => {
+                        writes @ TransactionOps::Writes(..)
+                            if !txn_read_context.contains_timeline() =>
+                        {
                             *ops = writes;
                         }
                         _ => return Err(AdapterError::ReadOnlyTransaction),
@@ -311,7 +336,8 @@ impl<T: TimestampManipulation> Session<T> {
                         }
                         // Iff peeks do not have a timestamp (i.e. they are
                         // constant), we can permit them.
-                        TransactionOps::Peeks(None) => {}
+                        TransactionOps::Peeks(read_context)
+                            if !read_context.contains_timestamp() => {}
                         _ => {
                             return Err(AdapterError::WriteOnlyTransaction);
                         }
@@ -383,16 +409,17 @@ impl<T: TimestampManipulation> Session<T> {
     }
 
     /// If the current transaction ops belong to a read, then sets the
-    /// transaction timestamp to `None`, returning the old timestamp if
+    /// ops to `None`, returning the old read timestamp if
     /// any existed. Must only be used after verifying that no transaction
     /// anomalies will occur if cleared.
-    pub fn take_transaction_read_ops(&mut self) -> Option<(T, Option<Timeline>)> {
-        if let Some(Transaction {
-            ops: TransactionOps::Peeks(ts),
-            ..
-        }) = self.transaction.inner_mut()
-        {
-            std::mem::take(ts)
+    pub fn take_transaction_read_context(&mut self) -> Option<ReadContext<T>> {
+        if let Some(Transaction { ops, .. }) = self.transaction.inner_mut() {
+            if let TransactionOps::Peeks(_) = ops {
+                let ops = std::mem::take(ops);
+                Some(ops.read_context().expect("checked above"))
+            } else {
+                None
+            }
         } else {
             None
         }
@@ -406,11 +433,14 @@ impl<T: TimestampManipulation> Session<T> {
         match self.transaction.inner() {
             Some(Transaction {
                 pcx: _,
-                ops: TransactionOps::Peeks(ts),
+                ops:
+                    TransactionOps::Peeks(
+                        ReadContext::BelongsToTimeline(ts, _) | ReadContext::TimelineDependent(ts),
+                    ),
                 write_lock_guard: _,
                 access: _,
                 id: _,
-            }) => ts.clone().map(|(ts, _)| ts),
+            }) => Some(ts.clone()),
             _ => None,
         }
     }
@@ -779,6 +809,17 @@ impl<T> TransactionStatus<T> {
             | TransactionStatus::Failed(txn) => txn.grant_write_lock(guard),
         }
     }
+
+    /// The timeline of the transaction, if one exists.
+    pub fn timeline(&self) -> Option<Timeline> {
+        match self {
+            TransactionStatus::Default => None,
+            TransactionStatus::Started(txn)
+            | TransactionStatus::InTransaction(txn)
+            | TransactionStatus::InTransactionImplicit(txn)
+            | TransactionStatus::Failed(txn) => txn.timeline(),
+        }
+    }
 }
 
 /// An abstraction allowing us to identify different transactions.
@@ -813,6 +854,19 @@ impl<T> Transaction<T> {
     fn grant_write_lock(&mut self, guard: OwnedMutexGuard<()>) {
         self.write_lock_guard = Some(guard);
     }
+
+    /// The timeline of the transaction, if one exists.
+    fn timeline(&self) -> Option<Timeline> {
+        match &self.ops {
+            TransactionOps::Peeks(ReadContext::BelongsToTimeline(_, timeline)) => {
+                Some(timeline.clone())
+            }
+            TransactionOps::Peeks(_)
+            | TransactionOps::None
+            | TransactionOps::Subscribe
+            | TransactionOps::Writes(_) => None,
+        }
+    }
 }
 
 /// The type of operation being performed by the transaction.
@@ -829,12 +883,72 @@ pub enum TransactionOps<T> {
     /// is Some, it must only do other peeks. However, if the value is None
     /// (i.e. the values are constants), the transaction can still perform
     /// writes.
-    Peeks(Option<(T, Option<Timeline>)>),
+    Peeks(ReadContext<T>),
     /// This transaction has done a `SUBSCRIBE` and must do nothing else.
     Subscribe,
     /// This transaction has had a write (`INSERT`, `UPDATE`, `DELETE`) and must
     /// only do other writes, or reads whose timestamp is None (i.e. constants).
     Writes(Vec<WriteOp>),
+}
+
+impl<T> TransactionOps<T> {
+    fn read_context(self) -> Option<ReadContext<T>> {
+        match self {
+            TransactionOps::Peeks(read_context) => Some(read_context),
+            TransactionOps::None | TransactionOps::Subscribe | TransactionOps::Writes(_) => None,
+        }
+    }
+}
+
+impl<T> Default for TransactionOps<T> {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+/// TODO(jkosh44)
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReadContext<T> {
+    TimelineIndependent,
+    TimelineDependent(T),
+    BelongsToTimeline(T, Timeline),
+}
+
+impl<T> ReadContext<T> {
+    /// Creates a `ReadContext` from a timestamp and `TimelineContext`.
+    pub fn from_timeline_context(ts: T, timeline_context: TimelineContext) -> ReadContext<T> {
+        match timeline_context {
+            TimelineContext::TimelineIndependent => Self::TimelineIndependent,
+            TimelineContext::TimelineDependent => Self::TimelineDependent(ts),
+            TimelineContext::BelongsToTimeline(timeline) => Self::BelongsToTimeline(ts, timeline),
+        }
+    }
+
+    /// Whether or not the context contains a timeline.
+    pub fn contains_timeline(&self) -> bool {
+        self.timeline().is_some()
+    }
+
+    /// The timeline belonging to this context, if one exists.
+    pub fn timeline(&self) -> Option<&Timeline> {
+        match self {
+            Self::BelongsToTimeline(_, timeline) => Some(timeline),
+            Self::TimelineIndependent | Self::TimelineDependent(_) => None,
+        }
+    }
+
+    /// The timestamp belonging to this context, if one exists.
+    pub fn timestamp(&self) -> Option<&T> {
+        match self {
+            Self::BelongsToTimeline(ts, _) | Self::TimelineDependent(ts) => Some(ts),
+            Self::TimelineIndependent => None,
+        }
+    }
+
+    /// Whether or not the context contains a timestamp.
+    pub fn contains_timestamp(&self) -> bool {
+        self.timestamp().is_some()
+    }
 }
 
 /// An `INSERT` waiting to be committed.

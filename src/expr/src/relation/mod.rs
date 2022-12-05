@@ -1429,9 +1429,9 @@ impl MirRelationExpr {
     }
 
     /// True iff the expression contains a `NullaryFunc::MzLogicalTimestamp`.
-    pub fn contains_temporal(&mut self) -> bool {
+    pub fn contains_temporal(&self) -> bool {
         let mut contains = false;
-        self.visit_scalars_mut(&mut |e| contains = contains || e.contains_temporal());
+        self.visit_scalars(&mut |e| contains = contains || e.contains_temporal());
         contains
     }
 
@@ -1520,6 +1520,93 @@ impl MirRelationExpr {
             Ok::<_, RecursionLimitError>(())
         })
         .expect("Unexpected error in `visit_scalars_mut` call");
+    }
+
+    /// Fallible visitor for the [`MirScalarExpr`]s directly owned by this relation expression.
+    ///
+    /// The `f` visitor should not recursively descend into owned [`MirRelationExpr`]s.
+    pub fn try_visit_scalars_1<F, E>(&self, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&MirScalarExpr) -> Result<(), E>,
+    {
+        use MirRelationExpr::*;
+        match self {
+            Map { scalars, .. } => {
+                for s in scalars {
+                    f(s)?;
+                }
+            }
+            Filter { predicates, .. } => {
+                for p in predicates {
+                    f(p)?;
+                }
+            }
+            FlatMap { exprs, .. } => {
+                for expr in exprs {
+                    f(expr)?;
+                }
+            }
+            Join { equivalences, .. } => {
+                for equivalence in equivalences {
+                    for expr in equivalence {
+                        f(expr)?;
+                    }
+                }
+            }
+            ArrangeBy { keys, .. } => {
+                for key in keys {
+                    for s in key {
+                        f(s)?;
+                    }
+                }
+            }
+            Reduce {
+                group_key,
+                aggregates,
+                ..
+            } => {
+                for s in group_key {
+                    f(s)?;
+                }
+                for agg in aggregates {
+                    f(&agg.expr)?;
+                }
+            }
+            Constant { .. }
+            | Get { .. }
+            | Let { .. }
+            | Project { .. }
+            | TopK { .. }
+            | Negate { .. }
+            | Threshold { .. }
+            | Union { .. } => (),
+        }
+        Ok(())
+    }
+
+    /// Fallible immutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree rooted at `self`.
+    ///
+    /// Note that this does not recurse into [`MirRelationExpr`] subtrees within [`MirScalarExpr`] nodes.
+    pub fn try_visit_scalars<F, E>(&self, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&MirScalarExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
+    {
+        self.try_visit_post(&mut |expr| expr.try_visit_scalars_1(f))
+    }
+
+    /// Infallible immutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree rooted at at `self`.
+    ///
+    /// Note that this does not recurse into [`MirRelationExpr`] subtrees within [`MirScalarExpr`] nodes.
+    pub fn visit_scalars<F>(&self, f: &mut F)
+    where
+        F: FnMut(&MirScalarExpr),
+    {
+        self.try_visit_scalars(&mut |s| {
+            f(s);
+            Ok::<_, RecursionLimitError>(())
+        })
+        .expect("Unexpected error in `visit_scalars` call");
     }
 
     /// Clears the contents of `self` even if it's so deep that simply dropping it would cause a

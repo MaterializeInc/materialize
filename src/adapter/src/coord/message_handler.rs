@@ -34,6 +34,7 @@ use crate::coord::{
     Coordinator, CreateSourceStatementReady, Message, PendingReadTxn, SendDiffs,
     SinkConnectionReady,
 };
+use crate::session::ReadContext;
 
 impl<S: Append + 'static> Coordinator<S> {
     pub(crate) async fn handle_message(&mut self, msg: Message) {
@@ -525,10 +526,10 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut deferred_txns = Vec::new();
 
         for read_txn in pending_read_txns {
-            if let Some((timestamp, Some(timeline))) = &read_txn.timestamp() {
-                let timestamp_oracle = self.get_timestamp_oracle_mut(timeline);
+            if let ReadContext::BelongsToTimeline(timestamp, timeline) = read_txn.read_context() {
+                let timestamp_oracle = self.get_timestamp_oracle_mut(&timeline);
                 let read_ts = timestamp_oracle.read_ts();
-                if timestamp <= &read_ts {
+                if timestamp <= read_ts {
                     ready_txns.push(read_txn);
                 } else {
                     let wait = Duration::from_millis(timestamp.saturating_sub(read_ts).into());

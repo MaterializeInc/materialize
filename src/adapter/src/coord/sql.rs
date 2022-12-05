@@ -152,7 +152,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Release this transaction's compaction hold on collections.
         if let Some(txn_reads) = self.txn_reads.remove(&session.conn_id()) {
-            self.release_read_hold(&txn_reads.read_holds);
+            self.release_read_hold(&txn_reads);
         }
 
         session.clear_transaction()
