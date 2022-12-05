@@ -2184,6 +2184,29 @@ impl AggregateExpr {
             | AggregateFunc::Dummy => self.expr.clone(),
         }
     }
+
+    /// Returns whether the expression is COUNT(*) or not.  Note that
+    /// when we define the count builtin in sql::func, we convert
+    /// COUNT(*) to COUNT(true), making it indistinguishable from
+    /// literal COUNT(true), but we prefer to consider this as the
+    /// former.
+    pub fn is_count_asterisk(&self) -> bool {
+        match self {
+            AggregateExpr {
+                func: AggregateFunc::Count,
+                expr:
+                    MirScalarExpr::Literal(
+                        Ok(row),
+                        mz_repr::ColumnType {
+                            scalar_type: mz_repr::ScalarType::Bool,
+                            nullable: false,
+                        },
+                    ),
+                ..
+            } => row.unpack_first() == mz_repr::Datum::True,
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Display for AggregateExpr {

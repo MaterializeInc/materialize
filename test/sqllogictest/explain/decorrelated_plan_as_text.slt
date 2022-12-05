@@ -421,7 +421,7 @@ With
       Map (error("more than one record produced in subquery"))
         Project (#0)
           Filter (#1 > 1)
-            Reduce group_by=[#0] aggregates=[count(true)]
+            Reduce group_by=[#0] aggregates=[count(*)]
               Get l8
   cte l8 =
     Project (#0, #1)
@@ -442,7 +442,7 @@ With
       Map (error("more than one record produced in subquery"))
         Project (#0)
           Filter (#1 > 1)
-            Reduce group_by=[#0] aggregates=[count(true)]
+            Reduce group_by=[#0] aggregates=[count(*)]
               Get l4
   cte l4 =
     Project (#0, #1)
@@ -903,6 +903,34 @@ With
     CrossJoin
       Get l0
       Get materialize.public.t
+  cte l0 =
+    Constant
+      - ()
+
+EOF
+
+query T multiline
+EXPLAIN DECORRELATED PLAN AS TEXT FOR SELECT COUNT(*);
+----
+Return
+  Union
+    Get l1
+    CrossJoin
+      Project ()
+        CrossJoin
+          Union
+            Negate
+              Distinct
+                Get l1
+            Distinct
+              Get l0
+          Get l0
+      Constant
+        - (0)
+With
+  cte l1 =
+    Reduce aggregates=[count(*)]
+      Get l0
   cte l0 =
     Constant
       - ()

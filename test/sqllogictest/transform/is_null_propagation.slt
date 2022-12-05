@@ -72,7 +72,7 @@ Explained Query:
                     Get l1 // { arity: 1 }
   With
     cte l2 =
-      Reduce group_by=[#0] aggregates=[count(true)] // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
         Project (#1) // { arity: 1 }
           Filter (#2 > #0) // { arity: 3 }
             CrossJoin type=delta // { arity: 3 }

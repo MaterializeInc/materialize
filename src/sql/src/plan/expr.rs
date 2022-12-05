@@ -2853,4 +2853,22 @@ impl AggregateExpr {
     ) -> ColumnType {
         self.func.output_type(self.expr.typ(outers, inner, params))
     }
+
+    pub fn is_count_asterisk(&self) -> bool {
+        // This could be much less cumbersome if box/deref pattern
+        // syntax were stable: <https://github.com/rust-lang/rust/issues/29641>
+        if self.func != AggregateFunc::Count {
+            return false;
+        }
+        match &*self.expr {
+            HirScalarExpr::Literal(
+                row,
+                mz_repr::ColumnType {
+                    scalar_type: mz_repr::ScalarType::Bool,
+                    nullable: false,
+                },
+            ) => row.unpack_first() == mz_repr::Datum::True,
+            _ => false,
+        }
+    }
 }

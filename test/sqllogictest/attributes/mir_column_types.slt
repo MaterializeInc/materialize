@@ -121,7 +121,7 @@ Explained Query:
       Negate // { types: "(boolean?, bigint)" }
         TopK limit=1 monotonic=false // { types: "(boolean?, bigint)" }
           Project (#1, #2) // { types: "(boolean?, bigint)" }
-            Reduce group_by=[#0] aggregates=[min(#1), count(true)] // { types: "(double precision, boolean?, bigint)" }
+            Reduce group_by=[#0] aggregates=[min(#1), count(*)] // { types: "(double precision, boolean?, bigint)" }
               Project (#0, #1) // { types: "(double precision, boolean?)" }
                 Join on=(#0 = #2) type=differential // { types: "(double precision, boolean?, double precision)" }
                   ArrangeBy keys=[[#0]] // { types: "(double precision, boolean?)" }
@@ -136,7 +136,7 @@ Explained Query:
                       Map (error("more than one record produced in subquery")) // { types: "(double precision)" }
                         Project () // { types: "()" }
                           Filter error("more than one record produced in subquery") AND (#0 > 1) // { types: "(bigint)" }
-                            Reduce aggregates=[count(true)] // { types: "(bigint)" }
+                            Reduce aggregates=[count(*)] // { types: "(bigint)" }
                               Project () // { types: "()" }
                                 Get materialize.public.u // { types: "(integer?)" }
       Constant // { types: "(boolean?, bigint)" }

@@ -290,7 +290,7 @@ Explained Query:
         Map (error("more than one record produced in subquery")) // { arity: 1 }
           Project () // { arity: 0 }
             Filter (#0 > 1) // { arity: 1 }
-              Reduce aggregates=[count(true)] // { arity: 1 }
+              Reduce aggregates=[count(*)] // { arity: 1 }
                 Project () // { arity: 0 }
                   Get materialize.public.t1 // { arity: 2 }
 
@@ -389,7 +389,7 @@ Explained Query:
             Get materialize.public.t2 // { arity: 2 }
         Project () // { arity: 0 }
           Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
-            Reduce aggregates=[count(true)] // { arity: 1 }
+            Reduce aggregates=[count(*)] // { arity: 1 }
               Project () // { arity: 0 }
                 Get materialize.public.t2 // { arity: 2 }
 
@@ -412,7 +412,7 @@ Explained Query:
             Get materialize.public.t2 // { arity: 2 }
         Project () // { arity: 0 }
           Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
-            Reduce aggregates=[count(true)] // { arity: 1 }
+            Reduce aggregates=[count(*)] // { arity: 1 }
               Project () // { arity: 0 }
                 Get materialize.public.t2 // { arity: 2 }
 

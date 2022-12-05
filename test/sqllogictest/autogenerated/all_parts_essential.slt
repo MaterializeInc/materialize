@@ -298,7 +298,7 @@ GROUP BY 1,
 ----
 Explained Query:
   Project (#0..=#4, #3) // { arity: 6 }
-    Reduce group_by=[#1, #2] aggregates=[count(true), min(#2), min(#0)] // { arity: 5 }
+    Reduce group_by=[#1, #2] aggregates=[count(*), min(#2), min(#0)] // { arity: 5 }
       Project (#0, #1, #28) // { arity: 3 }
         Filter (#10 <= 1995-11-14) AND (#30 <= 12907776) AND (#10 >= 1995-04-19) AND (#30 >= #5) // { arity: 33 }
           Join on=(#0 = #16 AND #17 = #25) type=delta // { arity: 33 }
@@ -527,7 +527,7 @@ WHERE l_receiptDATE BETWEEN '1992-06-21' AND '1992-11-22'
 GROUP BY 1
 ----
 Explained Query:
-  Reduce group_by=[#0] aggregates=[count(true), count(distinct #1)] // { arity: 3 }
+  Reduce group_by=[#0] aggregates=[count(*), count(distinct #1)] // { arity: 3 }
     Project (#0, #17) // { arity: 2 }
       Filter (#4 <= 30) AND (#12 <= 1998-11-27) AND (#12 <= 1992-11-22) AND (#4 >= 1) AND (#12 >= 1992-06-21) AND (#12 >= 1992-07-13) // { arity: 33 }
         Join on=(#0 = #16 AND #17 = #25) type=delta // { arity: 33 }
@@ -584,7 +584,7 @@ GROUP BY 1,
 ----
 Explained Query:
   Project (#0, #0..=#2) // { arity: 4 }
-    Reduce group_by=[#1] aggregates=[min(#0), count(true)] // { arity: 3 }
+    Reduce group_by=[#1] aggregates=[min(#0), count(*)] // { arity: 3 }
       Project (#2, #3) // { arity: 2 }
         Filter (#1 < #6) AND (#16 > #5) AND (#16 >= #0) // { arity: 19 }
           Join on=(#3 = #11) type=differential // { arity: 19 }
@@ -687,7 +687,7 @@ WHERE l_extendedprice < o_totalprice
 GROUP BY 1
 ----
 Explained Query:
-  Reduce group_by=[#0] aggregates=[count(true), count(distinct #0)] // { arity: 3 }
+  Reduce group_by=[#0] aggregates=[count(*), count(distinct #0)] // { arity: 3 }
     Project (#25) // { arity: 1 }
       Filter (#10 <= 1994-03-17) AND (#0 >= 53) AND (#5 < #19) AND (#26 < #19) // { arity: 27 }
         Join on=(#0 = #16) type=differential // { arity: 27 }
