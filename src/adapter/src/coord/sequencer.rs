@@ -2270,10 +2270,15 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         if in_immediate_multi_stmt_txn {
+            // If there are no `txn_reads`, then this must be the first query in the transaction
+            // and we can skip timedomain validations.
             if let Some(txn_reads) = self.txn_reads.get(&session.conn_id()) {
                 // Verify that the references and indexes for this query are in the
                 // current read transaction.
                 let allowed_id_bundle = txn_reads.read_holds.id_bundle();
+                // If `txn_read` is empty and timestamp independent, then we'll throw out the
+                // current timestamp and get a new one along with new read holds. So we can skip
+                // timedomain validations.
                 if !allowed_id_bundle.is_empty() || !txn_reads.timestamp_independent {
                     // Find the first reference or index (if any) that is not in the transaction. A
                     // reference could be caused by a user specifying an object in a different
