@@ -26,6 +26,3 @@ sha1 = "0.10.5"
 sysinfo = "0.26.8"
 tokio = { version = "1.22.0", features = [ "fs", "process", "time" ] }
 tracing = "0.1.37"
-
-[dev-dependencies]
-tempfile = "3.2.0"
