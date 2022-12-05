@@ -66,8 +66,6 @@ body:
         Please list all non-mandatory issues that complement, extend or enhance the product experience.
         When all required issues are complete we’ll either continue with the discretionary issues or
         move them back into the icebox or a follow on epic and mark this current epic as complete.
-    validations:
-      required: true
   - type: textarea
     id: blockers
     attributes:
