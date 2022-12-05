@@ -515,8 +515,7 @@ mod differential {
                 orders
                     .into_iter()
                     .filter(|o| {
-                        o.iter().map(|(c, _, _)| c).min().unwrap()
-                            == &max_min_characteristics
+                        o.iter().map(|(c, _, _)| c).min().unwrap() == &max_min_characteristics
                     })
                     // It can happen that `orders` has multiple such orders that have the same worst
                     // `Characteristic` as `max_min_characteristics`. In this case, we go beyond the
@@ -554,7 +553,10 @@ mod differential {
             order.remove(0);
 
             // Install the implementation.
-            *implementation = JoinImplementation::Differential((start, Some(start_key), start_characteristics.clone()), order);
+            *implementation = JoinImplementation::Differential(
+                (start, Some(start_key), start_characteristics),
+                order,
+            );
 
             super::install_lifted_mfp(&mut new_join, lifted_mfp)?;
 
@@ -862,11 +864,13 @@ impl<'a> Orderer<'a> {
                 .collect::<Vec<_>>();
             if candidate_start_key.len() == key.len() {
                 let is_unique = self.unique_keys[start].iter().any(|cols| {
-                    cols.iter().all(|c| candidate_start_key.contains(&MirScalarExpr::Column(*c)))
+                    cols.iter()
+                        .all(|c| candidate_start_key.contains(&MirScalarExpr::Column(*c)))
                 });
                 let arranged = self.arrangements[start]
-                     .iter()
-                     .find(|k| k == &&candidate_start_key).is_some();
+                    .iter()
+                    .find(|k| k == &&candidate_start_key)
+                    .is_some();
                 start_tuple = (
                     JoinInputCharacteristics::new(
                         is_unique,

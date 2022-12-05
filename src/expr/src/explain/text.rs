@@ -440,9 +440,9 @@ impl MirRelationExpr {
                                 Some(key) => format!("[{}]", join_key_to_string(key)),
                             },
                             start_characteristics
-                                            .as_ref()
-                                            .map(|c| c.explain())
-                                            .unwrap_or_else(|| "".to_string()),
+                                .as_ref()
+                                .map(|c| c.explain())
+                                .unwrap_or_else(|| "".to_string()),
                             separated(
                                 " » ",
                                 tail.iter().map(|(pos, key, characteristics)| {
@@ -461,7 +461,10 @@ impl MirRelationExpr {
                     };
                     ctx.indented(|ctx| {
                         match implementation {
-                            JoinImplementation::Differential((start_idx, start_key, start_characteristics), tail) => {
+                            JoinImplementation::Differential(
+                                (start_idx, start_key, start_characteristics),
+                                tail,
+                            ) => {
                                 soft_assert!(inputs.len() == tail.len() + 1);
 
                                 writeln!(f, "{}implementation", ctx.indent)?;
@@ -470,7 +473,12 @@ impl MirRelationExpr {
                                         f,
                                         "{}{}",
                                         ctx.indent,
-                                        join_order(*start_idx, start_key, start_characteristics, tail)
+                                        join_order(
+                                            *start_idx,
+                                            start_key,
+                                            start_characteristics,
+                                            tail
+                                        )
                                     )
                                 })?;
                             }

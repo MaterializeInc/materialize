@@ -2470,7 +2470,11 @@ pub enum JoinImplementation {
     /// Each collection index should occur exactly once, either as the starting collection
     /// or somewhere in the list.
     Differential(
-        (usize, Option<Vec<MirScalarExpr>>, Option<JoinInputCharacteristics>),
+        (
+            usize,
+            Option<Vec<MirScalarExpr>>,
+            Option<JoinInputCharacteristics>,
+        ),
         Vec<(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)>,
     ),
     /// Perform independent delta query dataflows for each input.
