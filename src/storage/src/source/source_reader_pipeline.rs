@@ -61,10 +61,9 @@ use mz_storage_client::source::util::async_source;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::SourceError;
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
-use mz_storage_client::types::sources::{AsyncSourceToken, MzOffset, SourceToken};
+use mz_storage_client::types::sources::{MzOffset, SourceToken};
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::operator::StreamExt as _;
-use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 use mz_timely_util::order::Partitioned;
 
 use crate::healthcheck::write_to_persist;
@@ -492,7 +491,7 @@ fn source_reader_operator<G, C>(
     connection_context: ConnectionContext,
     mut reclock_follower: ReclockFollower<Partitioned<PartitionId, MzOffset>, Timestamp>,
     resume_stream: &Stream<G, ()>,
-) -> (SourceConnectionStreams<G, C>, Option<AsyncSourceToken>)
+) -> (SourceConnectionStreams<G, C>, Option<Rc<dyn Any>>)
 where
     G: Scope<Timestamp = Timestamp>,
     C: SourceConnectionBuilder + Clone + 'static,
@@ -867,7 +866,7 @@ where
     let mut healths = vec![HealthStatus::Starting; worker_count];
 
     let operator_name = format!("healthcheck({})", healthcheck_worker_id);
-    let mut health_op = OperatorBuilder::new(operator_name, scope.clone());
+    let mut health_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
 
     let mut input = health_op.new_input(
         &health_stream,
@@ -880,46 +879,37 @@ where
 
     let mut last_reported_status = overall_status(&healths).clone();
 
-    let shutdown_token = Rc::new(());
-    let weak_token = Rc::downgrade(&shutdown_token);
+    let button = health_op.build(move |mut _capabilities| async move {
+        let mut buffer = Vec::new();
 
-    health_op.build_async(
-        scope.clone(),
-        move |mut _capabilities, _frontiers, scheduler| async move {
-            let mut buffer = Vec::new();
+        let persist_client = {
+            let mut persist_clients = persist_clients.lock().await;
+            persist_clients
+                .open(storage_metadata.persist_location.clone())
+                .await
+                .expect("error creating persist client for Healthchecker")
+        };
 
-            let persist_client = {
-                let mut persist_clients = persist_clients.lock().await;
-                persist_clients
-                    .open(storage_metadata.persist_location.clone())
-                    .await
-                    .expect("error creating persist client for Healthchecker")
-            };
-
-            if is_active_worker {
-                if let Some(status_shard) = storage_metadata.status_shard {
-                    info!("Health for source {source_id} being written to {status_shard}");
-                    write_to_persist(source_id, last_reported_status.name(), last_reported_status.error(), now.clone(), &persist_client, status_shard).await;
-                } else {
-                    info!("Health for source {source_id} not being written to status shard");
-                }
-                info!("Health for source {source_id} initialized to: {last_reported_status:?}");
+        if is_active_worker {
+            if let Some(status_shard) = storage_metadata.status_shard {
+                info!("Health for source {source_id} being written to {status_shard}");
+                write_to_persist(source_id, last_reported_status.name(), last_reported_status.error(), now.clone(), &persist_client, status_shard).await;
+            } else {
+                info!("Health for source {source_id} not being written to status shard");
             }
+            info!("Health for source {source_id} initialized to: {last_reported_status:?}");
+        }
 
-            while scheduler.notified().await {
-                if weak_token.upgrade().is_none() {
-                    return;
-                }
 
-                input.for_each(|_cap, rows| {
-                    rows.swap(&mut buffer);
-                    for (worker_id, health_event) in buffer.drain(..) {
-                        if !is_active_worker {
-                            warn!("Health messages for source {source_id} passed to an unexpected worker id: {healthcheck_worker_id}")
-                        }
-                        healths[worker_id] = health_event;
+        while let Some(event) = input.next().await {
+            if let Event::Data(_cap, rows) = event {
+                rows.swap(&mut buffer);
+                for (worker_id, health_event) in buffer.drain(..) {
+                    if !is_active_worker {
+                        warn!("Health messages for source {source_id} passed to an unexpected worker id: {healthcheck_worker_id}")
                     }
-                });
+                    healths[worker_id] = health_event;
+                }
 
                 let new_status = overall_status(&healths);
                 if &last_reported_status != new_status {
@@ -931,10 +921,10 @@ where
                     last_reported_status = new_status.clone();
                 }
             }
-        },
-    );
+        }
+    });
 
-    shutdown_token
+    Rc::new(button.press_on_drop())
 }
 
 struct RemapClock {
@@ -1043,9 +1033,7 @@ where
         vec![Antichain::new()],
     );
 
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-
-    remap_op.build(move |capabilities| async move {
+    let button = remap_op.build(move |capabilities| async move {
         if !active_worker {
             return;
         }
@@ -1114,17 +1102,10 @@ where
         let mut ticker = tokio::time::interval(timestamp_interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-        tokio::pin!(shutdown_rx);
         let mut input_frontier = Antichain::from_elem(Timestamp::default());
         loop {
             // AsyncInputHandle::next is cancel safe
             tokio::select! {
-                biased;
-                // Make sure we don't accidentally mint new updates when this source has
-                // been dropped. This way, we also make sure to not react to spurious
-                // frontier advancements to `[]` that happen when the input source operator
-                // is shutting down.
-                _ = shutdown_rx.as_mut() => return,
                 _ = ticker.tick() => {
                     let mut remap_trace_batch = timestamper.mint_compat(&global_source_upper).await;
 
@@ -1212,7 +1193,7 @@ where
         }
     });
 
-    (remap_stream, Rc::new(shutdown_tx))
+    (remap_stream, Rc::new(button.press_on_drop()))
 }
 
 /// Receives un-timestamped batches from the source reader and updates to the

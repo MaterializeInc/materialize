@@ -66,8 +66,7 @@ where
 
     let mut upper = Antichain::from_elem(Timestamp::minimum());
 
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-    resume_op.build(move |mut capabilities| async move {
+    let button = resume_op.build(move |mut capabilities| async move {
         if !active_worker {
             return;
         }
@@ -88,33 +87,24 @@ where
             calc.initialize_state(&mut persist_clients).await
         };
 
-        tokio::pin!(shutdown_rx);
         while !upper.is_empty() {
-            let tick_fut = interval.tick();
-            tokio::pin!(tick_fut);
-            // `tokio::time::Interval` is documented as cancel-safe and the shutdown future is
-            // not dropped since it is pinned on the stack outside of the while loop and we only
-            // select through a reference to that future.
-            match futures::future::select(tick_fut, shutdown_rx.as_mut()).await {
-                futures::future::Either::Left(_) => {
-                    // Get a new lower bound for the resumption frontier
-                    let new_upper = calc.calculate_resumption_frontier(&mut calc_state).await;
+            interval.tick().await;
 
-                    if PartialOrder::less_than(&upper, &new_upper) {
-                        tracing::info!(
-                            resumption_frontier = ?new_upper,
-                            "resumption({id}) {worker_id}/{worker_count}: calculated \
-                            new resumption frontier",
-                        );
+            // Get a new lower bound for the resumption frontier
+            let new_upper = calc.calculate_resumption_frontier(&mut calc_state).await;
 
-                        cap_set.downgrade(&*new_upper);
-                        upper = new_upper;
-                    }
-                }
-                futures::future::Either::Right(_) => return,
+            if PartialOrder::less_than(&upper, &new_upper) {
+                tracing::info!(
+                    resumption_frontier = ?new_upper,
+                    "resumption({id}) {worker_id}/{worker_count}: calculated \
+                    new resumption frontier",
+                );
+
+                cap_set.downgrade(&*new_upper);
+                upper = new_upper;
             }
         }
     });
 
-    (resume_stream, Rc::new(shutdown_tx))
+    (resume_stream, Rc::new(button.press_on_drop()))
 }
