@@ -81,7 +81,9 @@ use crate::catalog::builtin::{
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::config::{ClusterReplicaSizeMap, Config, StorageHostSizeMap};
+pub use crate::catalog::config::{
+    AwsPrincipalContext, ClusterReplicaSizeMap, Config, StorageHostSizeMap,
+};
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::catalog::storage::{BootstrapArgs, Transaction};
 use crate::client::ConnectionId;
@@ -189,6 +191,7 @@ pub struct CatalogState {
     availability_zones: Vec<String>,
     system_configuration: SystemVars,
     egress_ips: Vec<Ipv4Addr>,
+    aws_principal_context: Option<AwsPrincipalContext>,
 }
 
 impl CatalogState {
@@ -2101,6 +2104,7 @@ impl<S: Append> Catalog<S> {
                 availability_zones: config.availability_zones,
                 system_configuration: SystemVars::default(),
                 egress_ips: config.egress_ips,
+                aws_principal_context: config.aws_principal_context,
             },
             transient_revision: 0,
             storage: Arc::new(Mutex::new(config.storage)),
@@ -3055,6 +3059,7 @@ impl<S: Append> Catalog<S> {
             availability_zones: vec![],
             secrets_reader,
             egress_ips: vec![],
+            aws_principal_context: None,
         })
         .await?;
         Ok(catalog)

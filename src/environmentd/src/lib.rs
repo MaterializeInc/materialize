@@ -120,6 +120,8 @@ pub struct Config {
     pub segment_api_key: Option<String>,
     /// IP Addresses which will be used for egress.
     pub egress_ips: Vec<Ipv4Addr>,
+    /// 12-digit AWS account id, which will be used to generate an AWS Principal.
+    pub aws_account_id: Option<String>,
 
     // === Tracing options. ===
     /// The metrics registry to use.
@@ -309,6 +311,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         egress_ips: config.egress_ips,
         consolidations_tx,
         consolidations_rx,
+        aws_account_id: config.aws_account_id,
     })
     .await?;
 

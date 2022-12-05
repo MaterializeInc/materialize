@@ -251,6 +251,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         storage_usage_collection_interval: config.storage_usage_collection_interval,
         segment_api_key: None,
         egress_ips: vec![],
+        aws_account_id: None,
     }))?;
     let server = Server {
         inner,
