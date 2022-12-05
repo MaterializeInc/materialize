@@ -138,7 +138,18 @@ You can find the topic name and other metadata for each Kafka sink by querying [
 {{% kafka-sink-drop  %}}
 {{</ note >}}
 
-To achieve its exactly-once processing guarantees, Materialize needs to store some internal metadata in an additional *progress topic*. This topic is shared among all sinks that use a particular Kafka connection. The name of this progress topic can be specified when [creating a connection](/sql/create-connection); otherwise, a default is chosen based on the Materialize environment `id` and the connection `id`. In either case, Materialize will attempt to create the topic if it does not exist. The contents of this topic are not user-specified.
+Materialize's sinks use Kafka's transactional producer to ensure that messages [are not duplicated or dropped](https://kafka.apache.org/documentation/#semantics).
+
+To prevent duplicate publishes, Materialize stores some internal metadata in an additional *progress topic*. This topic is shared among all sinks that use a particular [Kafka connection](/sql/create-connection/#kafka). The name of this progress topic can be specified when [creating a connection](/sql/create-connection#general-options); otherwise, a default is chosen based on the Materialize environment `id` and the connection `id`. In either case, Materialize will attempt to create the topic if it does not exist. The contents of this topic are not user-specified.
+
+{{< note >}}
+Exactly-once semantics are an end-to-end property of a system, but Materialize only controls the initial produce step. Users interested in exactly-once message delivery should ensure:
+- The broker is configured with replication factor of three or more, with unclean leader election disabled.
+- All downstream consumers consume in read-committed mode.
+- The consumers' processing is idempotent, and offsets are only committed when processing is complete.
+
+This is not an exhaustive list: for details, see [the Kafka documentation](https://kafka.apache.org/documentation/).
+{{</ note >}}
 
 ## Examples
 
