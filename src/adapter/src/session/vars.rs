@@ -955,6 +955,11 @@ impl SystemVars {
     /// named accessor to access the variable with its true Rust type. For
     /// example, `self.get("max_tables").value()` returns the string
     /// `"25"` or the current value, while `self.max_tables()` returns an i32.
+    ///
+    /// # Errors
+    ///
+    /// The call will return an error:
+    /// 1. If `name` does not refer to a valid [`SystemVars`] field.
     pub fn get(&self, name: &str) -> Result<&dyn Var, AdapterError> {
         if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
             Ok(&self.max_aws_privatelink_connections)
@@ -1047,7 +1052,18 @@ impl SystemVars {
     /// insensitively. If `value` is not valid, as determined by the underlying
     /// configuration parameter, or if the named configuration parameter does
     /// not exist, an error is returned.
-    pub fn set(&mut self, name: &str, value: &str) -> Result<(), AdapterError> {
+    ///
+    /// Return a `bool` value indicating whether the [`Var`] identified by
+    /// `name` was modified by this call (it won't be if it already had the
+    /// given `value`).
+    ///
+    /// # Errors
+    ///
+    /// The call will return an error:
+    /// 1. If `name` does not refer to a valid [`SystemVars`] field.
+    /// 2. If `value` does not represent a valid [`SystemVars`] value for
+    ///    `name`.
+    pub fn set(&mut self, name: &str, value: &str) -> Result<bool, AdapterError> {
         if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
             self.max_aws_privatelink_connections.set(value)
         } else if name == MAX_TABLES.name {
@@ -1090,43 +1106,50 @@ impl SystemVars {
     /// Like with [`SystemVars::get`], configuration parameters are matched case
     /// insensitively. If the named configuration parameter does not exist, an
     /// error is returned.
-    pub fn reset(&mut self, name: &str) -> Result<(), AdapterError> {
+    ///
+    /// Return a `bool` value indicating whether the [`Var`] identified by
+    /// `name` was modified by this call (it won't be if was already reset).
+    ///
+    /// # Errors
+    ///
+    /// The call will return an error:
+    /// 1. If `name` does not refer to a valid [`SystemVars`] field.
+    pub fn reset(&mut self, name: &str) -> Result<bool, AdapterError> {
         if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
-            self.max_aws_privatelink_connections.reset()
+            Ok(self.max_aws_privatelink_connections.reset())
         } else if name == MAX_TABLES.name {
-            self.max_tables.reset()
+            Ok(self.max_tables.reset())
         } else if name == MAX_SOURCES.name {
-            self.max_sources.reset()
+            Ok(self.max_sources.reset())
         } else if name == MAX_SINKS.name {
-            self.max_sinks.reset()
+            Ok(self.max_sinks.reset())
         } else if name == MAX_MATERIALIZED_VIEWS.name {
-            self.max_materialized_views.reset()
+            Ok(self.max_materialized_views.reset())
         } else if name == MAX_CLUSTERS.name {
-            self.max_clusters.reset()
+            Ok(self.max_clusters.reset())
         } else if name == MAX_REPLICAS_PER_CLUSTER.name {
-            self.max_replicas_per_cluster.reset()
+            Ok(self.max_replicas_per_cluster.reset())
         } else if name == MAX_DATABASES.name {
-            self.max_databases.reset()
+            Ok(self.max_databases.reset())
         } else if name == MAX_SCHEMAS_PER_DATABASE.name {
-            self.max_schemas_per_database.reset()
+            Ok(self.max_schemas_per_database.reset())
         } else if name == MAX_OBJECTS_PER_SCHEMA.name {
-            self.max_objects_per_schema.reset()
+            Ok(self.max_objects_per_schema.reset())
         } else if name == MAX_SECRETS.name {
-            self.max_secrets.reset()
+            Ok(self.max_secrets.reset())
         } else if name == MAX_ROLES.name {
-            self.max_roles.reset()
+            Ok(self.max_roles.reset())
         } else if name == MAX_RESULT_SIZE.name {
-            self.max_result_size.reset()
+            Ok(self.max_result_size.reset())
         } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
-            self.allowed_cluster_replica_sizes.reset()
+            Ok(self.allowed_cluster_replica_sizes.reset())
         } else if name == WINDOW_FUNCTIONS.name {
-            self.window_functions.reset()
+            Ok(self.window_functions.reset())
         } else if name == CONFIG_HAS_SYNCED_ONCE.name {
-            self.config_has_synced_once.reset()
+            Ok(self.config_has_synced_once.reset())
         } else {
-            return Err(AdapterError::UnknownParameter(name.into()));
+            Err(AdapterError::UnknownParameter(name.into()))
         }
-        Ok(())
     }
 
     /// Returns the value of the `max_aws_privatelink_connections` configuration parameter.
@@ -1210,7 +1233,7 @@ impl SystemVars {
     }
 
     /// Returns the `config_has_synced_once` configuration parameter.
-    pub fn set_config_has_synced_once(&mut self) -> Result<(), AdapterError> {
+    pub fn set_config_has_synced_once(&mut self) -> Result<bool, AdapterError> {
         self.config_has_synced_once.set("true")
     }
 }
@@ -1289,7 +1312,7 @@ where
 struct SystemVar<V>
 where
     V: Value + fmt::Debug + ?Sized + 'static,
-    V::Owned: fmt::Debug,
+    V::Owned: fmt::Debug + PartialEq + Eq,
 {
     persisted_value: Option<V::Owned>,
     parent: &'static ServerVar<V>,
@@ -1298,7 +1321,7 @@ where
 impl<V> SystemVar<V>
 where
     V: Value + fmt::Debug + PartialEq + Eq + ?Sized + 'static,
-    V::Owned: fmt::Debug + PartialEq + Eq,
+    V::Owned: fmt::Debug + PartialEq + Eq + PartialEq + Eq,
 {
     fn new(parent: &'static ServerVar<V>) -> SystemVar<V> {
         SystemVar {
@@ -1307,18 +1330,27 @@ where
         }
     }
 
-    fn set(&mut self, s: &str) -> Result<(), AdapterError> {
+    fn set(&mut self, s: &str) -> Result<bool, AdapterError> {
         match V::parse(s) {
             Ok(v) => {
-                self.persisted_value = Some(v);
-                Ok(())
+                if self.persisted_value.as_ref() != Some(&v) {
+                    self.persisted_value = Some(v);
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
             }
             Err(()) => Err(AdapterError::InvalidParameterType(self.parent)),
         }
     }
 
-    fn reset(&mut self) {
-        self.persisted_value = None;
+    fn reset(&mut self) -> bool {
+        if self.persisted_value.as_ref() != None {
+            self.persisted_value = None;
+            true
+        } else {
+            false
+        }
     }
 
     fn value(&self) -> &V {
@@ -1339,7 +1371,7 @@ where
 impl<V> Var for SystemVar<V>
 where
     V: Value + ToOwned + fmt::Debug + PartialEq + Eq + ?Sized + 'static,
-    V::Owned: fmt::Debug + PartialEq + Eq,
+    V::Owned: fmt::Debug + PartialEq + Eq + PartialEq + Eq,
 {
     fn name(&self) -> &'static str {
         self.parent.name()

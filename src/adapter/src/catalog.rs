@@ -854,12 +854,22 @@ impl CatalogState {
     }
 
     /// Insert system configuration `name` with `value`.
-    fn insert_system_configuration(&mut self, name: &str, value: &str) -> Result<(), AdapterError> {
+    ///
+    /// Return a `bool` value indicating whether the configuration was modified
+    /// by the call.
+    fn insert_system_configuration(
+        &mut self,
+        name: &str,
+        value: &str,
+    ) -> Result<bool, AdapterError> {
         self.system_configuration.set(name, value)
     }
 
-    /// Remove system configuration `name`.
-    fn remove_system_configuration(&mut self, name: &str) -> Result<(), AdapterError> {
+    /// Reset system configuration `name`.
+    ///
+    /// Return a `bool` value indicating whether the configuration was modified
+    /// by the call.
+    fn remove_system_configuration(&mut self, name: &str) -> Result<bool, AdapterError> {
         self.system_configuration.reset(name)
     }
 
@@ -869,7 +879,7 @@ impl CatalogState {
     }
 
     /// Returns the `config_has_synced_once` configuration parameter.
-    pub fn set_config_has_synced_once(&mut self) -> Result<(), AdapterError> {
+    pub fn set_config_has_synced_once(&mut self) -> Result<bool, AdapterError> {
         self.system_configuration.set_config_has_synced_once()
     }
 
