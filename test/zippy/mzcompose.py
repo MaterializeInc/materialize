@@ -44,6 +44,10 @@ class TransactionIsolation(Enum):
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """A general framework for longevity and stress testing"""
+
+    c.silent = True
+
     parser.add_argument(
         "--scenario",
         metavar="SCENARIO",
