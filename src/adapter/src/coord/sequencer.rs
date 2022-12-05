@@ -2274,7 +2274,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // Verify that the references and indexes for this query are in the
                 // current read transaction.
                 let allowed_id_bundle = txn_reads.read_holds.id_bundle();
-                if !allowed_id_bundle.is_empty() {
+                if !allowed_id_bundle.is_empty() || !txn_reads.timestamp_independent {
                     // Find the first reference or index (if any) that is not in the transaction. A
                     // reference could be caused by a user specifying an object in a different
                     // schema than the first query. An index could be caused by a CREATE INDEX
