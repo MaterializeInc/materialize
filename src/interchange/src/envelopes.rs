@@ -23,7 +23,6 @@ use once_cell::sync::Lazy;
 use timely::dataflow::{channels::pact::Pipeline, operators::Operator, Scope, Stream};
 
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::CollectionExt;
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, Row, RowPacker, ScalarType};
 
 use crate::avro::DiffPair;
@@ -157,15 +156,4 @@ pub fn dbz_format(rp: &mut RowPacker, dp: DiffPair<Row>) {
     } else {
         rp.push(Datum::Null);
     }
-}
-
-pub fn upsert_format(dps: Vec<DiffPair<Row>>, sink_id: GlobalId, from: GlobalId) -> Option<Row> {
-    let dp = dps.expect_element(|| {
-        format!(
-            "primary key error: expected at most one update per key and timestamp \
-          This can happen when the configured sink key is not a primary key of \
-          the sinked relation: sink {sink_id} created from {from}."
-        )
-    });
-    dp.after
 }
