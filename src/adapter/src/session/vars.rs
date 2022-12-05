@@ -993,6 +993,53 @@ impl SystemVars {
         }
     }
 
+    /// Check if the given `value` is the default value for the [`Var`]
+    /// identified by `name`.
+    ///
+    /// # Errors
+    ///
+    /// The call will return an error:
+    /// 1. If `name` does not refer to a valid [`SystemVars`] field.
+    /// 2. If `value` does not represent a valid [`SystemVars`] value for
+    ///    `name`.
+    pub fn is_default(&self, name: &str, value: &str) -> Result<bool, AdapterError> {
+        if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
+            self.max_aws_privatelink_connections.is_default(value)
+        } else if name == MAX_TABLES.name {
+            self.max_tables.is_default(value)
+        } else if name == MAX_SOURCES.name {
+            self.max_sources.is_default(value)
+        } else if name == MAX_SINKS.name {
+            self.max_sinks.is_default(value)
+        } else if name == MAX_MATERIALIZED_VIEWS.name {
+            self.max_materialized_views.is_default(value)
+        } else if name == MAX_CLUSTERS.name {
+            self.max_clusters.is_default(value)
+        } else if name == MAX_REPLICAS_PER_CLUSTER.name {
+            self.max_replicas_per_cluster.is_default(value)
+        } else if name == MAX_DATABASES.name {
+            self.max_databases.is_default(value)
+        } else if name == MAX_SCHEMAS_PER_DATABASE.name {
+            self.max_schemas_per_database.is_default(value)
+        } else if name == MAX_OBJECTS_PER_SCHEMA.name {
+            self.max_objects_per_schema.is_default(value)
+        } else if name == MAX_SECRETS.name {
+            self.max_secrets.is_default(value)
+        } else if name == MAX_ROLES.name {
+            self.max_roles.is_default(value)
+        } else if name == MAX_RESULT_SIZE.name {
+            self.max_result_size.is_default(value)
+        } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
+            self.allowed_cluster_replica_sizes.is_default(value)
+        } else if name == WINDOW_FUNCTIONS.name {
+            self.window_functions.is_default(value)
+        } else if name == CONFIG_HAS_SYNCED_ONCE.name {
+            self.config_has_synced_once.is_default(value)
+        } else {
+            Err(AdapterError::UnknownParameter(name.into()))
+        }
+    }
+
     /// Sets the configuration parameter named `name` to the value represented
     /// by `value`.
     ///
@@ -1250,8 +1297,8 @@ where
 
 impl<V> SystemVar<V>
 where
-    V: Value + fmt::Debug + ?Sized + 'static,
-    V::Owned: fmt::Debug,
+    V: Value + fmt::Debug + PartialEq + Eq + ?Sized + 'static,
+    V::Owned: fmt::Debug + PartialEq + Eq,
 {
     fn new(parent: &'static ServerVar<V>) -> SystemVar<V> {
         SystemVar {
@@ -1280,12 +1327,19 @@ where
             .map(|v| v.borrow())
             .unwrap_or(self.parent.value)
     }
+
+    fn is_default(&self, s: &str) -> Result<bool, AdapterError> {
+        match V::parse(s) {
+            Ok(v) => Ok(self.parent.value == v.borrow()),
+            Err(()) => Err(AdapterError::InvalidParameterType(self.parent)),
+        }
+    }
 }
 
 impl<V> Var for SystemVar<V>
 where
-    V: Value + ToOwned + fmt::Debug + ?Sized + 'static,
-    V::Owned: fmt::Debug,
+    V: Value + ToOwned + fmt::Debug + PartialEq + Eq + ?Sized + 'static,
+    V::Owned: fmt::Debug + PartialEq + Eq,
 {
     fn name(&self) -> &'static str {
         self.parent.name()
