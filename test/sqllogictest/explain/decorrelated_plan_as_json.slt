@@ -5893,35 +5893,44 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                 "input": {
                                   "Project": {
                                     "input": {
-                                      "Get": {
-                                        "id": {
-                                          "Local": 3
-                                        },
-                                        "typ": {
-                                          "column_types": [
-                                            {
-                                              "scalar_type": "Int32",
-                                              "nullable": true
+                                      "Map": {
+                                        "input": {
+                                          "Get": {
+                                            "id": {
+                                              "Local": 3
                                             },
-                                            {
-                                              "scalar_type": "Int32",
-                                              "nullable": false
-                                            },
-                                            {
-                                              "scalar_type": "Int32",
-                                              "nullable": true
-                                            },
-                                            {
-                                              "scalar_type": "Int32",
-                                              "nullable": false
+                                            "typ": {
+                                              "column_types": [
+                                                {
+                                                  "scalar_type": "Int32",
+                                                  "nullable": true
+                                                },
+                                                {
+                                                  "scalar_type": "Int32",
+                                                  "nullable": false
+                                                },
+                                                {
+                                                  "scalar_type": "Int32",
+                                                  "nullable": true
+                                                },
+                                                {
+                                                  "scalar_type": "Int32",
+                                                  "nullable": false
+                                                }
+                                              ],
+                                              "keys": []
                                             }
-                                          ],
-                                          "keys": []
-                                        }
+                                          }
+                                        },
+                                        "scalars": [
+                                          {
+                                            "Column": 1
+                                          }
+                                        ]
                                       }
                                     },
                                     "outputs": [
-                                      1
+                                      4
                                     ]
                                   }
                                 },
@@ -5949,23 +5958,32 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                   "Join": {
                                                     "inputs": [
                                                       {
-                                                        "Get": {
-                                                          "id": {
-                                                            "Local": 1
-                                                          },
-                                                          "typ": {
-                                                            "column_types": [
-                                                              {
-                                                                "scalar_type": "Int32",
-                                                                "nullable": true
+                                                        "Map": {
+                                                          "input": {
+                                                            "Get": {
+                                                              "id": {
+                                                                "Local": 1
                                                               },
-                                                              {
-                                                                "scalar_type": "Int32",
-                                                                "nullable": true
+                                                              "typ": {
+                                                                "column_types": [
+                                                                  {
+                                                                    "scalar_type": "Int32",
+                                                                    "nullable": true
+                                                                  },
+                                                                  {
+                                                                    "scalar_type": "Int32",
+                                                                    "nullable": true
+                                                                  }
+                                                                ],
+                                                                "keys": []
                                                               }
-                                                            ],
-                                                            "keys": []
-                                                          }
+                                                            }
+                                                          },
+                                                          "scalars": [
+                                                            {
+                                                              "Column": 1
+                                                            }
+                                                          ]
                                                         }
                                                       },
                                                       {
@@ -5992,10 +6010,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                     "equivalences": [
                                                       [
                                                         {
-                                                          "Column": 1
+                                                          "Column": 2
                                                         },
                                                         {
-                                                          "Column": 2
+                                                          "Column": 3
                                                         }
                                                       ]
                                                     ],
@@ -6250,43 +6268,52 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                             "input": {
                               "Project": {
                                 "input": {
-                                  "Get": {
-                                    "id": {
-                                      "Local": 7
-                                    },
-                                    "typ": {
-                                      "column_types": [
-                                        {
-                                          "scalar_type": "Int32",
-                                          "nullable": true
+                                  "Map": {
+                                    "input": {
+                                      "Get": {
+                                        "id": {
+                                          "Local": 7
                                         },
-                                        {
-                                          "scalar_type": "Int32",
-                                          "nullable": true
-                                        },
-                                        {
-                                          "scalar_type": "Int32",
-                                          "nullable": true
-                                        },
-                                        {
-                                          "scalar_type": "Int32",
-                                          "nullable": false
-                                        },
-                                        {
-                                          "scalar_type": "Int32",
-                                          "nullable": true
-                                        },
-                                        {
-                                          "scalar_type": "Int32",
-                                          "nullable": false
+                                        "typ": {
+                                          "column_types": [
+                                            {
+                                              "scalar_type": "Int32",
+                                              "nullable": true
+                                            },
+                                            {
+                                              "scalar_type": "Int32",
+                                              "nullable": true
+                                            },
+                                            {
+                                              "scalar_type": "Int32",
+                                              "nullable": true
+                                            },
+                                            {
+                                              "scalar_type": "Int32",
+                                              "nullable": false
+                                            },
+                                            {
+                                              "scalar_type": "Int32",
+                                              "nullable": true
+                                            },
+                                            {
+                                              "scalar_type": "Int32",
+                                              "nullable": false
+                                            }
+                                          ],
+                                          "keys": []
                                         }
-                                      ],
-                                      "keys": []
-                                    }
+                                      }
+                                    },
+                                    "scalars": [
+                                      {
+                                        "Column": 3
+                                      }
+                                    ]
                                   }
                                 },
                                 "outputs": [
-                                  3
+                                  6
                                 ]
                               }
                             },
@@ -6316,23 +6343,32 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                   "Join": {
                                                     "inputs": [
                                                       {
-                                                        "Get": {
-                                                          "id": {
-                                                            "Local": 6
-                                                          },
-                                                          "typ": {
-                                                            "column_types": [
-                                                              {
-                                                                "scalar_type": "Int32",
-                                                                "nullable": true
+                                                        "Map": {
+                                                          "input": {
+                                                            "Get": {
+                                                              "id": {
+                                                                "Local": 6
                                                               },
-                                                              {
-                                                                "scalar_type": "Int32",
-                                                                "nullable": true
+                                                              "typ": {
+                                                                "column_types": [
+                                                                  {
+                                                                    "scalar_type": "Int32",
+                                                                    "nullable": true
+                                                                  },
+                                                                  {
+                                                                    "scalar_type": "Int32",
+                                                                    "nullable": true
+                                                                  }
+                                                                ],
+                                                                "keys": []
                                                               }
-                                                            ],
-                                                            "keys": []
-                                                          }
+                                                            }
+                                                          },
+                                                          "scalars": [
+                                                            {
+                                                              "Column": 1
+                                                            }
+                                                          ]
                                                         }
                                                       },
                                                       {
@@ -6359,10 +6395,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                     "equivalences": [
                                                       [
                                                         {
-                                                          "Column": 1
+                                                          "Column": 2
                                                         },
                                                         {
-                                                          "Column": 2
+                                                          "Column": 3
                                                         }
                                                       ]
                                                     ],

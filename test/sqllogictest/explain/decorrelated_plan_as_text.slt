@@ -632,16 +632,18 @@ Return
           Union
             Negate
               Project (#0, #1)
-                Join on=(#1 = #2)
-                  Get l6
+                Join on=(#2 = #3)
+                  Map (#1)
+                    Get l6
                   Get l8
             Get l6
       Get l7
 With
   cte l8 =
     Distinct group_by=[#0]
-      Project (#3)
-        Get l7
+      Project (#6)
+        Map (#3)
+          Get l7
   cte l7 =
     Filter (#3 = #5)
       Project (#0..=#5)
@@ -658,15 +660,17 @@ With
         Union
           Negate
             Project (#0, #1)
-              Join on=(#1 = #2)
-                Get l1
+              Join on=(#2 = #3)
+                Map (#1)
+                  Get l1
                 Get l4
           Get l1
       Get l3
   cte l4 =
     Distinct group_by=[#0]
-      Project (#1)
-        Get l3
+      Project (#4)
+        Map (#1)
+          Get l3
   cte l3 =
     Filter (#1 = #3)
       Project (#0..=#3)
