@@ -42,7 +42,7 @@ These are not likely to be renderable in the foreseeable future, as they cannot 
 
 1.  Support for SQL's `WITH RECURSIVE`.
 
-    This is a tortured construct with surprising semantics. 
+    This is a tortured construct with surprising semantics.
     Instead `WITH MUTUALLY RECURSIVE` be easier to parse, plan, optimize, and render.
     We should learn from this in ways that may inform whether we want to later support `WITH RECURSIVE`.
 
@@ -51,7 +51,7 @@ These are not likely to be renderable in the foreseeable future, as they cannot 
     There are several optimization patterns that recursive queries benefit from.
     For this design doc, we are only hoping to produce not-incorrect recursive queries.
 
-3.  Nested mutual recursion. 
+3.  Nested mutual recursion.
 
     There should either be at most one `WITH MUTUALLY RECURSIVE`, or appear so after query optimization.
     We are not able to render nested mutually recursive fragements.
@@ -63,7 +63,7 @@ These are not likely to be renderable in the foreseeable future, as they cannot 
 // If applicable, be sure to call out any new testing/validation that will be required
 -->
 
-Much of this is taken from https://github.com/MaterializeInc/materialize/issues/11176. 
+Much of this is taken from https://github.com/MaterializeInc/materialize/issues/11176.
 
 We can extend SQL's `WITH` fragment with a new variant, not strictly more general, which looks like
 ```sql
@@ -86,7 +86,7 @@ for (name, _) in bindings.iter() {
 
 while prev_bindings != next_bindings {
     std::mem::swap(&mut prev_bindings, &mut next_bindings);
-    next_bindings.clear(); 
+    next_bindings.clear();
     for (name, statement) in bindings {
         next_bindings.insert(name, statement.eval(&prev_bindings));
     }
@@ -109,7 +109,7 @@ The sequence of goals have their own design considerations
 3.  SQL planning
 
     SQL planning currently introduces CTE bindings (types mainly) after planning the CTE.
-    We would need to generalize this to introduce the types before planning recursive CTEs. 
+    We would need to generalize this to introduce the types before planning recursive CTEs.
 
 4.  HIR generalization
 
@@ -120,7 +120,7 @@ The sequence of goals have their own design considerations
 
     It is not clear that lowering and decorrelation are complicated.
     As existing single-binding `Let` constructs, the `value` and `body` are each prefixed with correlated columns of the outer scope, and this should continue to be the case.
-    
+
 6.  MIR generalization
 
     MIR also requires a multi-binding `Let`, which could be prototyped as `LetRec` or `MultiLet`.
@@ -159,13 +159,13 @@ There are several distinctions it has from the proposed `WITH MUTUALLY RECURSIVE
 
 2.  SQL's `WITH RECURSIVE` requires each binding be used only once.
 
-    This is confusing and only enforced syntactically. 
+    This is confusing and only enforced syntactically.
     One can introduce a CTE renaming a binding and then use that rebinding multiple times.
     In principle and practice, the requirement does not exist.
 
 3.  SQL's `WITH RECURSIVE` requires each select statement have a "base case" (`UNION`, `UNION ALL`, etc with a non-recursive fragment).
 
-    This is not required for query planning, optimization, or execution. 
+    This is not required for query planning, optimization, or execution.
     This may be helpful from a query admission point of view (should we allow you to run your query).
     We could likely introduce this constraint if we discover what it is valuable for.
 
