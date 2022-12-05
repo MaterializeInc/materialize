@@ -20,10 +20,6 @@ Explained Query:
   Project (#0) // { arity: 1 }
     Get materialize.public.t1 // { arity: 2 }
 
-Source materialize.public.t1
-  project=(#0, #2)
-  map=(dummy)
-
 EOF
 
 query T multiline
@@ -34,10 +30,6 @@ Explained Query:
     Map (row(#0, #0), record_get[1](#2)) // { arity: 4 }
       Get materialize.public.t1 // { arity: 2 }
 
-Source materialize.public.t1
-  project=(#0, #2)
-  map=(dummy)
-
 EOF
 
 query T multiline
@@ -46,10 +38,6 @@ EXPLAIN WITH(arity, join_impls) SELECT (COALESCE(record, ROW(NULL, NULL))).f2 FR
 Explained Query:
   Project (#0) // { arity: 1 }
     Get materialize.public.t1 // { arity: 2 }
-
-Source materialize.public.t1
-  project=(#0, #2)
-  map=(dummy)
 
 EOF
 

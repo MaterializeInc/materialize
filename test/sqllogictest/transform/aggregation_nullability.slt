@@ -60,13 +60,8 @@ Explained Query:
               Filter (#0) IS NOT NULL // { arity: 2 }
                 Get materialize.public.t2 // { arity: 2 }
 
-Source materialize.public.t1
-  project=(#0, #2)
-  map=(dummy)
 Source materialize.public.t2
-  project=(#0, #2)
   filter=((#0) IS NOT NULL)
-  map=(dummy)
 
 EOF
 
@@ -97,13 +92,9 @@ Explained Query:
                 Get materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t1
-  project=(#0, #2)
   filter=((#0) IS NOT NULL)
-  map=(dummy)
 Source materialize.public.t2
-  project=(#0, #2)
   filter=((#0) IS NOT NULL)
-  map=(dummy)
 
 EOF
 
@@ -150,9 +141,7 @@ Explained Query:
                 Get materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t2
-  project=(#0, #2)
   filter=((#0) IS NOT NULL)
-  map=(dummy)
 
 EOF
 
@@ -195,9 +184,7 @@ Explained Query:
                 Get materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t2
-  project=(#0, #2)
   filter=((#0) IS NOT NULL)
-  map=(dummy)
 
 EOF
 
@@ -240,9 +227,7 @@ Explained Query:
                 Get materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t2
-  project=(#0, #2)
   filter=((#0) IS NOT NULL)
-  map=(dummy)
 
 EOF
 
@@ -287,13 +272,9 @@ Explained Query:
                 Get materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t1
-  project=(#0, #2)
   filter=((#0) IS NOT NULL)
-  map=(dummy)
 Source materialize.public.t2
-  project=(#0, #2)
   filter=((#0) IS NOT NULL)
-  map=(dummy)
 
 EOF
 
@@ -318,13 +299,9 @@ Explained Query:
                 Get materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t1
-  project=(#0, #2)
   filter=((#0) IS NOT NULL)
-  map=(dummy)
 Source materialize.public.t2
-  project=(#0, #2)
   filter=((#0) IS NOT NULL)
-  map=(dummy)
 
 EOF
 
@@ -370,9 +347,6 @@ Explained Query:
             Filter (#0) IS NOT NULL // { arity: 2 }
               Get materialize.public.t2 // { arity: 2 }
 
-Source materialize.public.t1
-  project=(#0, #2)
-  map=(dummy)
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
 
@@ -398,9 +372,7 @@ Explained Query:
               Get materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t1
-  project=(#0, #2)
   filter=((#0) IS NOT NULL)
-  map=(dummy)
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
 
@@ -427,13 +399,9 @@ Explained Query:
                 Get materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t1
-  project=(#0, #2)
   filter=((#0) IS NOT NULL)
-  map=(dummy)
 Source materialize.public.t2
-  project=(#0, #2)
   filter=((#0) IS NOT NULL)
-  map=(dummy)
 
 EOF
 
@@ -479,13 +447,8 @@ Explained Query:
               Filter (#0) IS NOT NULL // { arity: 2 }
                 Get materialize.public.t2 // { arity: 2 }
 
-Source materialize.public.t1
-  project=(#0, #2)
-  map=(dummy)
 Source materialize.public.t2
-  project=(#0, #2)
   filter=((#0) IS NOT NULL)
-  map=(dummy)
 
 EOF
 
@@ -529,9 +492,6 @@ Explained Query:
             Filter (#0) IS NOT NULL // { arity: 2 }
               Get materialize.public.t2 // { arity: 2 }
 
-Source materialize.public.t1
-  project=(#0, #2)
-  map=(dummy)
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
 
@@ -577,9 +537,6 @@ Explained Query:
             Filter (#0) IS NOT NULL // { arity: 2 }
               Get materialize.public.t2 // { arity: 2 }
 
-Source materialize.public.t1
-  project=(#0, #2)
-  map=(dummy)
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
 
@@ -605,9 +562,7 @@ Explained Query:
               Get materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t1
-  project=(#0, #2)
   filter=((#0) IS NOT NULL)
-  map=(dummy)
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
 
@@ -893,13 +848,6 @@ Explained Query:
           Project (#0) // { arity: 1 }
             Filter (#1 = 6) // { arity: 2 }
               Get materialize.public.t3 // { arity: 2 }
-
-Source materialize.public.t1
-  project=(#2, #1)
-  map=(dummy)
-Source materialize.public.t2
-  project=(#2, #1)
-  map=(dummy)
 
 EOF
 

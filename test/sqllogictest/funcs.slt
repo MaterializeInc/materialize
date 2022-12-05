@@ -704,10 +704,6 @@ Explained Query:
     Map ((#0) IS NULL) // { arity: 3 }
       Get materialize.public.t // { arity: 2 }
 
-Source materialize.public.t
-  project=(#0, #2)
-  map=(dummy)
-
 EOF
 
 query T multiline
@@ -718,10 +714,6 @@ Explained Query:
     Map ((#0) IS NULL) // { arity: 3 }
       Get materialize.public.t // { arity: 2 }
 
-Source materialize.public.t
-  project=(#0, #2)
-  map=(dummy)
-
 EOF
 
 query T multiline
@@ -731,10 +723,6 @@ Explained Query:
   Project (#2) // { arity: 1 }
     Map ((#0) IS NULL) // { arity: 3 }
       Get materialize.public.t // { arity: 2 }
-
-Source materialize.public.t
-  project=(#0, #2)
-  map=(dummy)
 
 EOF
 

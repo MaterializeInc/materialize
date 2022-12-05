@@ -257,10 +257,6 @@ Explained Query:
         Project () // { arity: 0 }
           Get materialize.public.t2 // { arity: 1 }
 
-Source materialize.public.t2
-  project=(#1)
-  map=(dummy)
-
 EOF
 
 query T multiline
@@ -279,10 +275,6 @@ Explained Query:
         Distinct // { arity: 0 }
           Project () // { arity: 0 }
             Get materialize.public.t2 // { arity: 1 }
-
-Source materialize.public.t2
-  project=(#1)
-  map=(dummy)
 
 EOF
 
@@ -656,12 +648,5 @@ Explained Query:
     Distinct // { arity: 0 }
       Project () // { arity: 0 }
         Get materialize.public.y // { arity: 1 }
-
-Source materialize.public.x
-  project=(#1)
-  map=(dummy)
-Source materialize.public.y
-  project=(#1)
-  map=(dummy)
 
 EOF

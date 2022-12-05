@@ -170,10 +170,6 @@ Explained Query:
     Map (2) // { arity: 3 }
       Get materialize.public.t // { arity: 2 }
 
-Source materialize.public.t
-  project=(#2, #3)
-  map=(dummy, dummy)
-
 EOF
 
 query T multiline
@@ -184,10 +180,6 @@ Explained Query:
   Project (#2) // { arity: 1 }
     Map (2) // { arity: 3 }
       Get materialize.public.t // { arity: 2 }
-
-Source materialize.public.t
-  project=(#2, #3)
-  map=(dummy, dummy)
 
 EOF
 
@@ -208,10 +200,6 @@ Explained Query:
         ArrangeBy keys=[[]] // { arity: 1 }
           Project (#0) // { arity: 1 }
             Get materialize.public.t // { arity: 2 }
-
-Source materialize.public.t
-  project=(#0, #2)
-  map=(dummy)
 
 EOF
 
@@ -244,10 +232,6 @@ Explained Query:
           Project () // { types: "()" }
             Get materialize.public.t // { types: "(integer?, integer?)" }
 
-Source materialize.public.t
-  project=(#2, #3)
-  map=(dummy, dummy)
-
 EOF
 
 query T multiline
@@ -273,10 +257,6 @@ Explained Query:
           Project () // { types: "()" }
             Get materialize.public.t // { types: "(integer?, integer?)" }
 
-Source materialize.public.t
-  project=(#2, #3)
-  map=(dummy, dummy)
-
 EOF
 
 # Permute the literals around the columns added by FlatMap
@@ -289,10 +269,6 @@ Explained Query:
       FlatMap generate_series(2, 4, 1) // { arity: 1 }
         Project () // { arity: 0 }
           Get materialize.public.t // { arity: 2 }
-
-Source materialize.public.t
-  project=(#2, #3)
-  map=(dummy, dummy)
 
 EOF
 
@@ -309,10 +285,6 @@ Explained Query:
     Map (123) // { arity: 3 }
       Get materialize.public.t // { arity: 2 }
 
-Source materialize.public.t
-  project=(#2, #3)
-  map=(dummy, dummy)
-
 EOF
 
 query T multiline
@@ -323,10 +295,6 @@ Explained Query:
     Distinct // { arity: 0 }
       Project () // { arity: 0 }
         Get materialize.public.t // { arity: 2 }
-
-Source materialize.public.t
-  project=(#2, #3)
-  map=(dummy, dummy)
 
 EOF
 
@@ -339,10 +307,6 @@ Explained Query:
       Project () // { arity: 0 }
         Get materialize.public.t // { arity: 2 }
 
-Source materialize.public.t
-  project=(#2, #3)
-  map=(dummy, dummy)
-
 EOF
 
 query T multiline
@@ -353,10 +317,6 @@ Explained Query:
     Distinct // { arity: 0 }
       Project () // { arity: 0 }
         Get materialize.public.t // { arity: 2 }
-
-Source materialize.public.t
-  project=(#2, #3)
-  map=(dummy, dummy)
 
 EOF
 
@@ -371,10 +331,6 @@ Explained Query:
       Project () // { arity: 0 }
         Get materialize.public.t // { arity: 2 }
 
-Source materialize.public.t
-  project=(#2, #3)
-  map=(dummy, dummy)
-
 EOF
 
 query T multiline
@@ -385,10 +341,6 @@ Explained Query:
     Distinct // { arity: 0 }
       Project () // { arity: 0 }
         Get materialize.public.t // { arity: 2 }
-
-Source materialize.public.t
-  project=(#2, #3)
-  map=(dummy, dummy)
 
 EOF
 
@@ -402,10 +354,6 @@ Explained Query:
     Map (123) // { arity: 3 }
       Get materialize.public.t // { arity: 2 }
 
-Source materialize.public.t
-  project=(#2, #3)
-  map=(dummy, dummy)
-
 EOF
 
 query T multiline
@@ -418,10 +366,6 @@ Explained Query:
         Project (#0) // { arity: 1 }
           Get materialize.public.t // { arity: 2 }
 
-Source materialize.public.t
-  project=(#0, #2)
-  map=(dummy)
-
 EOF
 
 query T multiline
@@ -433,10 +377,6 @@ Explained Query:
       Project () // { arity: 0 }
         Get materialize.public.t // { arity: 2 }
 
-Source materialize.public.t
-  project=(#2, #3)
-  map=(dummy, dummy)
-
 EOF
 
 query T multiline
@@ -447,10 +387,6 @@ Explained Query:
     Distinct // { arity: 0 }
       Project () // { arity: 0 }
         Get materialize.public.t // { arity: 2 }
-
-Source materialize.public.t
-  project=(#2, #3)
-  map=(dummy, dummy)
 
 EOF
 
@@ -465,10 +401,6 @@ Explained Query:
       Project (#0) // { arity: 1 }
         Get materialize.public.t // { arity: 2 }
 
-Source materialize.public.t
-  project=(#0, #2)
-  map=(dummy)
-
 EOF
 
 query T multiline
@@ -480,10 +412,6 @@ Explained Query:
       Project (#0) // { arity: 1 }
         Get materialize.public.t // { arity: 2 }
 
-Source materialize.public.t
-  project=(#0, #2)
-  map=(dummy)
-
 EOF
 
 query T multiline
@@ -494,10 +422,6 @@ Explained Query:
     Distinct group_by=[#0] // { arity: 1 }
       Project (#0) // { arity: 1 }
         Get materialize.public.t // { arity: 2 }
-
-Source materialize.public.t
-  project=(#0, #2)
-  map=(dummy)
 
 EOF
 
@@ -509,10 +433,6 @@ Explained Query:
     Distinct group_by=[#0] // { arity: 1 }
       Project (#0) // { arity: 1 }
         Get materialize.public.t // { arity: 2 }
-
-Source materialize.public.t
-  project=(#0, #2)
-  map=(dummy)
 
 EOF
 
@@ -527,10 +447,6 @@ Explained Query:
       Project (#0) // { arity: 1 }
         Get materialize.public.t // { arity: 2 }
 
-Source materialize.public.t
-  project=(#0, #2)
-  map=(dummy)
-
 EOF
 
 query T multiline
@@ -541,10 +457,6 @@ Explained Query:
     Distinct group_by=[#0] // { arity: 1 }
       Project (#0) // { arity: 1 }
         Get materialize.public.t // { arity: 2 }
-
-Source materialize.public.t
-  project=(#0, #2)
-  map=(dummy)
 
 EOF
 
@@ -557,10 +469,6 @@ Explained Query:
     Project (#0) // { arity: 1 }
       Get materialize.public.t // { arity: 2 }
 
-Source materialize.public.t
-  project=(#0, #2)
-  map=(dummy)
-
 EOF
 
 query T multiline
@@ -571,10 +479,6 @@ Explained Query:
     Distinct group_by=[(#0 + 1)] // { arity: 1 }
       Project (#0) // { arity: 1 }
         Get materialize.public.t // { arity: 2 }
-
-Source materialize.public.t
-  project=(#0, #2)
-  map=(dummy)
 
 EOF
 
@@ -587,10 +491,6 @@ Explained Query:
       Project (#0) // { arity: 1 }
         Get materialize.public.t // { arity: 2 }
 
-Source materialize.public.t
-  project=(#0, #2)
-  map=(dummy)
-
 EOF
 
 
@@ -602,10 +502,6 @@ Explained Query:
     Distinct group_by=[#0] // { arity: 1 }
       Project (#0) // { arity: 1 }
         Get materialize.public.t // { arity: 2 }
-
-Source materialize.public.t
-  project=(#0, #2)
-  map=(dummy)
 
 EOF
 
@@ -707,10 +603,6 @@ Explained Query:
         Project () // { arity: 0 }
           Get materialize.public.t // { arity: 2 }
 
-Source materialize.public.t
-  project=(#2, #3)
-  map=(dummy, dummy)
-
 EOF
 
 query T multiline
@@ -732,10 +624,6 @@ Explained Query:
       Distinct // { arity: 0 }
         Project () // { arity: 0 }
           Get materialize.public.t // { arity: 2 }
-
-Source materialize.public.t
-  project=(#2, #3)
-  map=(dummy, dummy)
 
 EOF
 
@@ -779,13 +667,9 @@ Explained Query:
         Get materialize.public.t // { arity: 2 }
 
 Source materialize.public.t
-  project=(#0, #2)
   filter=((#0 = 1308))
-  map=(dummy)
 Source materialize.public.t_pk
-  project=(#0, #2)
   filter=((#0 <= 195) AND (#0 >= 38))
-  map=(dummy)
 
 EOF
 
@@ -827,10 +711,6 @@ Explained Query:
     cte l0 =
       Filter (#0 = 1308) // { arity: 2 }
         Get materialize.public.t // { arity: 2 }
-
-Source materialize.public.t
-  project=(#0, #2)
-  map=(dummy)
 
 EOF
 

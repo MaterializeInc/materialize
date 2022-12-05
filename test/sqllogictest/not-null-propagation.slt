@@ -98,10 +98,6 @@ Explained Query:
     Map ((#0) IS NULL, NOT(#2)) // { types: "(integer?, integer, boolean, boolean)" }
       Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Source materialize.public.int_table
-  project=(#0, #2)
-  map=(dummy)
-
 EOF
 
 query T multiline
@@ -112,10 +108,6 @@ Explained Query:
     Map ((#0) IS TRUE, NOT(#2)) // { types: "(boolean?, boolean, boolean, boolean)" }
       Get materialize.public.bool_table // { types: "(boolean?, boolean)" }
 
-Source materialize.public.bool_table
-  project=(#0, #2)
-  map=(dummy)
-
 EOF
 
 query T multiline
@@ -125,10 +117,6 @@ Explained Query:
   Project (#2, #3) // { types: "(boolean, boolean)" }
     Map ((#0) IS NULL, NOT(#2)) // { types: "(boolean?, boolean, boolean, boolean)" }
       Get materialize.public.bool_table // { types: "(boolean?, boolean)" }
-
-Source materialize.public.bool_table
-  project=(#0, #2)
-  map=(dummy)
 
 EOF
 
@@ -143,10 +131,6 @@ Explained Query:
   Project (#2..=#5) // { types: "(integer, integer, integer, integer)" }
     Map ((#1 + #1), (#1 + 1), (#1 % #1), (#1 % 2)) // { types: "(integer?, integer, integer, integer, integer, integer)" }
       Get materialize.public.int_table // { types: "(integer?, integer)" }
-
-Source materialize.public.int_table
-  project=(#2, #1)
-  map=(dummy)
 
 EOF
 
@@ -211,10 +195,6 @@ Explained Query:
     Map ((#1 = 1)) // { types: "(integer?, integer, boolean)" }
       Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Source materialize.public.int_table
-  project=(#2, #1)
-  map=(dummy)
-
 EOF
 
 query T multiline
@@ -223,10 +203,6 @@ EXPLAIN WITH(types, no_fast_path) SELECT col_not_null AND col_not_null , col_not
 Explained Query:
   Project (#1, #1) // { types: "(boolean, boolean)" }
     Get materialize.public.bool_table // { types: "(boolean?, boolean)" }
-
-Source materialize.public.bool_table
-  project=(#2, #1)
-  map=(dummy)
 
 EOF
 
@@ -262,10 +238,6 @@ Explained Query:
     Map (abs(#1), integer_to_double(#1), log10f64(#3), roundf64(#3), cos(#3), (#1 << #1)) // { types: "(integer?, integer, integer, double precision, double precision, double precision, double precision, integer)" }
       Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Source materialize.public.int_table
-  project=(#2, #1)
-  map=(dummy)
-
 EOF
 
 #
@@ -294,10 +266,6 @@ Explained Query:
         Project (#1) // { types: "(integer)" }
           Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Source materialize.public.int_table
-  project=(#2, #1)
-  map=(dummy)
-
 EOF
 
 #
@@ -323,10 +291,6 @@ Explained Query:
       Reduce aggregates=[count(true), count(distinct #0)] // { types: "(bigint, bigint)" }
         Project (#1) // { types: "(integer)" }
           Get materialize.public.int_table // { types: "(integer?, integer)" }
-
-Source materialize.public.int_table
-  project=(#2, #1)
-  map=(dummy)
 
 EOF
 
@@ -356,10 +320,6 @@ Explained Query:
     Map (regexp_match[aaa](#1), regexp_match("aaa", #1)) // { types: "(text?, text, text[]?, text[]?)" }
       Get materialize.public.str_table // { types: "(text?, text)" }
 
-Source materialize.public.str_table
-  project=(#2, #1)
-  map=(dummy)
-
 EOF
 
 #
@@ -373,10 +333,6 @@ Explained Query:
   Project (#2..=#4) // { types: "(text, text, text)" }
     Map (split_string(#1, "a", 100), split_string("a", #1, 100), split_string("a", "a", integer_to_bigint(text_to_integer(#1)))) // { types: "(text?, text, text, text, text)" }
       Get materialize.public.str_table // { types: "(text?, text)" }
-
-Source materialize.public.str_table
-  project=(#2, #1)
-  map=(dummy)
 
 EOF
 
@@ -392,10 +348,6 @@ Explained Query:
     Map ((#1 = 1), true, null, null, null) // { types: "(integer?, integer, boolean, boolean, boolean?, boolean?, boolean?)" }
       Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Source materialize.public.int_table
-  project=(#2, #1)
-  map=(dummy)
-
 EOF
 
 query T multiline
@@ -405,10 +357,6 @@ Explained Query:
   Project (#2, #2..=#6) // { types: "(boolean, boolean, boolean, boolean?, boolean?, boolean?)" }
     Map ((#1 != 1), false, null, null, null) // { types: "(integer?, integer, boolean, boolean, boolean?, boolean?, boolean?)" }
       Get materialize.public.int_table // { types: "(integer?, integer)" }
-
-Source materialize.public.int_table
-  project=(#2, #1)
-  map=(dummy)
 
 EOF
 
@@ -736,10 +684,6 @@ Explained Query:
       Project (#1) // { types: "(integer)" }
         Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Source materialize.public.int_table
-  project=(#2, #1)
-  map=(dummy)
-
 EOF
 
 #
@@ -779,10 +723,6 @@ Explained Query:
       Project () // { types: "()" }
         Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Source materialize.public.int_table
-  project=(#2, #1)
-  map=(dummy)
-
 EOF
 
 #
@@ -816,10 +756,6 @@ Explained Query:
           Filter (#1 = 1) // { types: "(integer?, integer)" }
             Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Source materialize.public.int_table
-  project=(#2, #1)
-  map=(dummy)
-
 EOF
 
 query T multiline
@@ -848,10 +784,6 @@ Explained Query:
     cte l0 =
       Project () // { types: "()" }
         Get materialize.public.int_table // { types: "(integer?, integer)" }
-
-Source materialize.public.int_table
-  project=(#2, #3)
-  map=(dummy, dummy)
 
 EOF
 
@@ -972,10 +904,6 @@ Explained Query:
         Project (#1) // { types: "(integer)" }
           Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Source materialize.public.int_table
-  project=(#2, #1)
-  map=(dummy)
-
 EOF
 
 #
@@ -1079,10 +1007,6 @@ Explained Query:
       Project (#1) // { types: "(integer)" }
         Get materialize.public.int_table // { types: "(integer?, integer)" }
 
-Source materialize.public.int_table
-  project=(#2, #1)
-  map=(dummy)
-
 EOF
 
 query T multiline
@@ -1108,9 +1032,5 @@ Explained Query:
   Project (#2) // { types: "(integer)" }
     Map (((#1 + 1) + 1)) // { types: "(integer?, integer, integer)" }
       Get materialize.public.int_table // { types: "(integer?, integer)" }
-
-Source materialize.public.int_table
-  project=(#2, #1)
-  map=(dummy)
 
 EOF

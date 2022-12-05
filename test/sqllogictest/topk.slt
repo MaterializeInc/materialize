@@ -132,8 +132,4 @@ Explained Query:
         Project (#1, #2) // { arity: 2 }
           Get materialize.public.cities // { arity: 3 }
 
-Source materialize.public.cities
-  project=(#3, #1, #2)
-  map=(dummy)
-
 EOF

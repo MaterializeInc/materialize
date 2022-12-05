@@ -120,10 +120,6 @@ Explained Query:
               Project (#0) // { arity: 1 }
                 Get materialize.public.t3 // { arity: 2 }
 
-Source materialize.public.t3
-  project=(#0, #2)
-  map=(dummy)
-
 EOF
 
 query II
@@ -166,9 +162,7 @@ Explained Query:
                 Get materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t2
-  project=(#2, #1)
   filter=((#1) IS NOT NULL)
-  map=(dummy)
 
 EOF
 

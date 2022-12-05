@@ -79,10 +79,6 @@ Explained Query:
                 Project () // { arity: 0 }
                   Get materialize.public.t1 // { arity: 1 }
 
-Source materialize.public.t2
-  project=(#1)
-  map=(dummy)
-
 EOF
 
 #

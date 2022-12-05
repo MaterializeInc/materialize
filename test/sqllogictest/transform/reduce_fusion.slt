@@ -27,10 +27,6 @@ Explained Query:
     Project (#1) // { arity: 1 }
       Get materialize.public.t // { arity: 3 }
 
-Source materialize.public.t
-  project=(#3, #1, #4)
-  map=(dummy, dummy)
-
 EOF
 
 query T multiline
@@ -40,10 +36,6 @@ Explained Query:
   Distinct group_by=[#0] // { arity: 1 }
     Project (#1) // { arity: 1 }
       Get materialize.public.t // { arity: 3 }
-
-Source materialize.public.t
-  project=(#3, #1, #4)
-  map=(dummy, dummy)
 
 EOF
 
@@ -55,10 +47,6 @@ Explained Query:
     Project () // { arity: 0 }
       Get materialize.public.t // { arity: 3 }
 
-Source materialize.public.t
-  project=(#3..=#5)
-  map=(dummy, dummy, dummy)
-
 EOF
 
 query T multiline
@@ -68,10 +56,6 @@ Explained Query:
   Distinct // { arity: 0 }
     Project () // { arity: 0 }
       Get materialize.public.t // { arity: 3 }
-
-Source materialize.public.t
-  project=(#3..=#5)
-  map=(dummy, dummy, dummy)
 
 EOF
 
@@ -83,10 +67,6 @@ Explained Query:
     Project (#0) // { arity: 1 }
       Get materialize.public.t // { arity: 3 }
 
-Source materialize.public.t
-  project=(#0, #3, #4)
-  map=(dummy, dummy)
-
 EOF
 
 query T multiline
@@ -96,9 +76,5 @@ Explained Query:
   Distinct group_by=[((#0 / 10) / 20)] // { arity: 1 }
     Project (#0) // { arity: 1 }
       Get materialize.public.t // { arity: 3 }
-
-Source materialize.public.t
-  project=(#0, #3, #4)
-  map=(dummy, dummy)
 
 EOF
