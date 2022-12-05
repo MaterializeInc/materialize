@@ -18,8 +18,9 @@ use std::sync::Arc;
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use timely::dataflow::Scope;
+use tracing::warn;
 
-use mz_interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
+use mz_interchange::envelopes::{combine_at_timestamp, dbz_format};
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistLocation, ShardId};
@@ -154,6 +155,18 @@ where
         collection.map(|row| (None, row))
     };
 
+    fn warn_on_dups<T>(v: &[T], sink_id: GlobalId, from_id: GlobalId) {
+        if v.len() > 1 {
+            warn!(
+                sink_id =? sink_id,
+                from_id =? from_id,
+                "primary key error: expected at most one update per key and timestamp \
+                This can happen when the configured sink key is not a primary key of \
+                the sinked relation."
+            )
+        }
+    }
+
     // Apply the envelope.
     // * "Debezium" consolidates the stream, sorts it by time, and produces DiffPairs from it.
     //   It then renders those as Avro.
@@ -174,7 +187,9 @@ where
 
             // This has to be an `Rc<RefCell<...>>` because the inner closure (passed to `Iterator::map`) references it, and it might outlive the outer closure.
             let row_buf = Rc::new(RefCell::new(Row::default()));
+            let from_id = sink.from;
             let collection = combined.flat_map(move |(mut k, v)| {
+                warn_on_dups(&v, sink_id, from_id);
                 let max_idx = v.len() - 1;
                 let row_buf = Rc::clone(&row_buf);
                 v.into_iter().enumerate().map(move |(idx, dp)| {
@@ -189,10 +204,14 @@ where
         Some(SinkEnvelope::Upsert) => {
             let combined = combine_at_timestamp(keyed.arrange_by_key().stream);
 
-            let from = sink.from;
-            let collection = combined.map(move |(k, v)| {
-                let v = upsert_format(v, sink_id, from);
-                (k, v)
+            let from_id = sink.from;
+            let collection = combined.flat_map(move |(mut k, v)| {
+                warn_on_dups(&v, sink_id, from_id);
+                let max_idx = v.len() - 1;
+                v.into_iter().enumerate().map(move |(idx, dp)| {
+                    let k = if idx == max_idx { k.take() } else { k.clone() };
+                    (k, dp.after)
+                })
             });
             collection
         }
