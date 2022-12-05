@@ -2174,52 +2174,6 @@ impl<S: Append + 'static> Coordinator<S> {
             self.txn_reads.insert(session.conn_id(), txn_reads);
         }
 
-        if in_immediate_multi_stmt_txn {
-            // Verify that the references and indexes for this query are in the
-            // current read transaction.
-            let allowed_id_bundle = &self
-                .txn_reads
-                .get(&session.conn_id())
-                .unwrap()
-                .read_holds
-                .id_bundle();
-            // Find the first reference or index (if any) that is not in the transaction. A
-            // reference could be caused by a user specifying an object in a different
-            // schema than the first query. An index could be caused by a CREATE INDEX
-            // after the transaction started.
-            let outside = peek_plan.id_bundle.difference(allowed_id_bundle);
-            if !outside.is_empty() {
-                let mut names: Vec<_> = allowed_id_bundle
-                    .iter()
-                    // This could filter out a view that has been replaced in another transaction.
-                    .filter_map(|id| self.catalog.try_get_entry(&id))
-                    .map(|item| item.name())
-                    .map(|name| {
-                        self.catalog
-                            .resolve_full_name(name, Some(session.conn_id()))
-                            .to_string()
-                    })
-                    .collect();
-                let mut outside: Vec<_> = outside
-                    .iter()
-                    .filter_map(|id| self.catalog.try_get_entry(&id))
-                    .map(|item| item.name())
-                    .map(|name| {
-                        self.catalog
-                            .resolve_full_name(name, Some(session.conn_id()))
-                            .to_string()
-                    })
-                    .collect();
-                // Sort so error messages are deterministic.
-                names.sort();
-                outside.sort();
-                return Err(AdapterError::RelationOutsideTimeDomain {
-                    relations: outside,
-                    names,
-                });
-            }
-        }
-
         // We only track the peeks in the session if the query doesn't use AS
         // OF or we're inside an explicit transaction. The latter case is
         // necessary to support PG's `BEGIN` semantics, whose behavior can
@@ -2314,6 +2268,56 @@ impl<S: Append + 'static> Coordinator<S> {
             self.determine_timestamp(session, &id_bundle, when, compute_instance, timeline)?
                 .timestamp
         };
+
+        if in_immediate_multi_stmt_txn {
+            // If there are no `txn_reads`, then this must be the first query in the transaction
+            // and we can skip timedomain validations.
+            if let Some(txn_reads) = self.txn_reads.get(&session.conn_id()) {
+                // Verify that the references and indexes for this query are in the
+                // current read transaction.
+                let allowed_id_bundle = txn_reads.read_holds.id_bundle();
+                // If `txn_read` is empty and timestamp independent, then we'll throw out the
+                // current timestamp and get a new one along with new read holds. So we can skip
+                // timedomain validations.
+                if !allowed_id_bundle.is_empty() || !txn_reads.timestamp_independent {
+                    // Find the first reference or index (if any) that is not in the transaction. A
+                    // reference could be caused by a user specifying an object in a different
+                    // schema than the first query. An index could be caused by a CREATE INDEX
+                    // after the transaction started.
+                    let outside = id_bundle.difference(&allowed_id_bundle);
+                    if !outside.is_empty() {
+                        let mut names: Vec<_> = allowed_id_bundle
+                            .iter()
+                            // This could filter out a view that has been replaced in another transaction.
+                            .filter_map(|id| self.catalog.try_get_entry(&id))
+                            .map(|item| item.name())
+                            .map(|name| {
+                                self.catalog
+                                    .resolve_full_name(name, Some(session.conn_id()))
+                                    .to_string()
+                            })
+                            .collect();
+                        let mut outside: Vec<_> = outside
+                            .iter()
+                            .filter_map(|id| self.catalog.try_get_entry(&id))
+                            .map(|item| item.name())
+                            .map(|name| {
+                                self.catalog
+                                    .resolve_full_name(name, Some(session.conn_id()))
+                                    .to_string()
+                            })
+                            .collect();
+                        // Sort so error messages are deterministic.
+                        names.sort();
+                        outside.sort();
+                        return Err(AdapterError::RelationOutsideTimeDomain {
+                            relations: outside,
+                            names,
+                        });
+                    }
+                }
+            }
+        }
 
         // before we have the corrected timestamp ^
         // TODO(guswynn&mjibson): partition `sequence_peek` by the response to
