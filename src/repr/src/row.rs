@@ -2270,7 +2270,6 @@ mod tests {
     #[test]
     fn test_range_errors() {
         fn test_range_errors_inner<'a>(datums: Vec<Vec<Datum<'a>>>) -> Result<(), RangeError> {
-            println!("datums {:?}", datums);
             let mut row = Row::default();
             let row_len = row.byte_len();
             let mut packer = row.packer();
@@ -2319,7 +2318,9 @@ mod tests {
             vec![vec![Datum::Null], vec![Datum::Int32(2)]],
             vec![vec![Datum::Int32(1)], vec![Datum::Null]],
         ] {
-            assert!(std::panic::catch_unwind(|| test_range_errors_inner(panicking_case)).is_err());
+            assert!(
+                mz_ore::panic::catch_unwind(|| test_range_errors_inner(panicking_case)).is_err()
+            );
         }
 
         let e = test_range_errors_inner(vec![vec![Datum::Int32(2)], vec![Datum::Int32(1)]]);
