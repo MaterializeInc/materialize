@@ -1,6 +1,6 @@
 ---
 title: "mz_internal"
-description: "mz_internal is a system catalog that presents metadata about Materialize in an unstable format that is likely to change."
+description: "mz_internal is a system catalog schema which exposes internal metadata about Materialize. This schema is not part of Materialize's stable interface."
 menu:
   main:
     parent: 'system-catalog'
@@ -13,13 +13,11 @@ schema.
 {{< warning >}}
 The objects in the `mz_internal` schema are not part of Materialize's stable interface.
 Backwards-incompatible changes to these tables may be made at any time.
-
-`SELECT` statements may reference these objects, but creating views that
-reference these objects is not allowed.
 {{< /warning >}}
 
 {{< warning >}}
-Not all objects in the `mz_internal` schema are documented.
+`SELECT` statements may reference these objects, but creating views that
+reference these objects is not allowed.
 {{< /warning >}}
 
 ### `mz_arrangement_sharing`
@@ -44,6 +42,20 @@ Field         | Type       | Meaning
 `worker_id`   | [`bigint`] | The ID of the worker thread hosting the arrangement.
 `records`     | [`bigint`] | The number of records in the arrangement.
 `batches`     | [`bigint`] | The number of batches in the arrangement.
+
+### `mz_cluster_replica_metrics`
+
+The `mz_cluster_replica_metrics` table gives the last known CPU and RAM utilization statistics
+for all processes of all extant cluster replicas.
+
+At this time, we do not make any guarantees about the exactness or freshness of these numbers.
+
+Field              | Type       | Meaning
+-------------------|------------|--------
+`replica_id`       | [`bigint`] | The ID of a cluster replica.
+`process_id`       | [`bigint`] | An identifier of a compute process within a replica.
+`cpu_nano_cores`   | [`bigint`] | Approximate CPU usage, in billionths of a vCPU core.
+`memory_bytes`     | [`bigint`] | Approximate RAM usage, in bytes.
 
 ### `mz_cluster_replica_statuses`
 
@@ -369,19 +381,35 @@ Field       | Type       | Meaning
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
 `time`      | [`mz_timestamp`] | The next timestamp at which the dataflow may change.
 
-### `mz_cluster_replica_metrics`
+### `mz_source_status`
 
-The `mz_cluster_replica_metrics` table gives the last known CPU and RAM utilization statistics
-for all processes of all extant cluster replicas.
+The `mz_source_status` view provides the current state for each source in the
+system, including potential error messages and additional metadata helpful for
+debugging.
 
-At this time, we do not make any guarantees about the exactness or freshness of these numbers.
+Field                   | Type                          | Meaning
+------------------------|-------------------------------|--------
+`id`                    | [`text`]                      | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).
+`name`                  | [`text`]                      | The name of the source.
+`type`                  | [`text`]                      | The type of the source.
+`last_status_change_at` | [`timestamp with time zone`]  | Wall-clock timestamp of the source status change.
+`status`                | [`text`]                      | The status of the source: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.
+`error`                 | [`text`]                      | If the source is in an error state, the error message.
+`details`               | [`jsonb`]                     | Additional metadata provided by the source.
 
-Field         | Type       | Meaning
---------------|------------|--------
-`replica_id`  | [`bigint`] | The ID of a cluster replica.
-`process_id`  | [`bigint`] | An identifier of a compute process within a replica.
-`cpu_nano_cores`   | [`bigint`] | Approximate CPU usage, in billionths of a vCPU core.
-`memory_bytes`| [`bigint`] | Approximate RAM usage, in bytes.
+### `mz_source_status_history`
+
+The `mz_source_status_history` table contains a row describing the status of the
+historical state for each source in the system, including potential error
+messages and additional metadata helpful for debugging.
+
+Field         | Type                          | Meaning
+--------------|-------------------------------|--------
+`occurred_at` | [`timestamp with time zone`]  | Wall-clock timestamp of the source status change.
+`source_id`   | [`text`]                      | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).
+`status`      | [`text`]                      | The status of the source: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.
+`error`       | [`text`]                      | If the source is in an error state, the error message.
+`details`     | [`jsonb`]                     | Additional metadata provided by the source.
 
 [`bigint`]: /sql/types/bigint
 [`bigint list`]: /sql/types/list

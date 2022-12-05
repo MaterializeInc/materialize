@@ -164,7 +164,34 @@ $ schema-registry-verify schema-type=avro subject=testdrive-namespace-key-value-
 $ kafka-verify-data format=avro sink=materialize.public.namespace_key_value_sink sort-messages=true
 {"b": 2} {"before": null, "after": {"row": {"a": 1, "b": 2}}}
 
+# Test a sink over a view whose column names are not directly usable as
+# Avro schema names.
+
+> CREATE MATERIALIZED VIEW tricky_names AS SELECT 1 AS "tricky-name", 1 AS "tricky!name", 1 AS "tricky@name", 1 AS "666";
+
+> CREATE SINK tricky_sink FROM tricky_names
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-tricky-sink-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+
+$ schema-registry-verify schema-type=avro subject=testdrive-tricky-sink-${testdrive.seed}-value
+{"type":"record","name":"envelope","fields":[{"name":"before","type":["null",{"type":"record","name":"row","fields":[{"name":"tricky_name","type":"int"},{"name":"tricky_name1","type":"int"},{"name":"tricky_name2","type":"int"},{"name":"_666","type":"int"}]}]},{"name":"after","type":["null","row"]}]}
+
 # Bad Sinks
+
+! CREATE SINK bad_sink FROM namespace_key_value_data
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-bad-sink-${testdrive.seed}')
+  KEY (b)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO KEY FULLNAME = 'bad-name', AVRO VALUE FULLNAME = 'goodname')
+  ENVELOPE DEBEZIUM
+contains:Invalid name. Must start with [A-Za-z_] and subsequently only contain [A-Za-z0-9_]. Found: bad-name
+
+! CREATE SINK bad_sink FROM namespace_key_value_data
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-bad-sink-${testdrive.seed}')
+  KEY (b)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO KEY FULLNAME = 'goodname', AVRO VALUE FULLNAME = 'bad-name')
+  ENVELOPE DEBEZIUM
+contains:Invalid name. Must start with [A-Za-z_] and subsequently only contain [A-Za-z0-9_]. Found: bad-name
 
 > CREATE MATERIALIZED VIEW input (a, b) AS SELECT * FROM (VALUES (1, 2))
 

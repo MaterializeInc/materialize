@@ -259,6 +259,10 @@ impl FronteggAuthentication {
             }
         }))
     }
+
+    pub fn tenant_id(&self) -> Uuid {
+        self.tenant_id
+    }
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]

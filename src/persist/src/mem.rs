@@ -161,13 +161,10 @@ impl MemConsensus {
         store: &HashMap<String, Vec<VersionedData>>,
         key: &str,
         from: SeqNo,
-        limit: usize,
     ) -> Result<Vec<VersionedData>, ExternalError> {
         let results = if let Some(values) = store.get(key) {
             let from_idx = values.partition_point(|x| x.seqno < from);
-            let from_values = &values[from_idx..];
-            let from_values = &from_values[..usize::min(limit, from_values.len())];
-            from_values.to_vec()
+            values[from_idx..].to_vec()
         } else {
             Vec::new()
         };
@@ -218,7 +215,7 @@ impl Consensus for MemConsensus {
 
         if seqno != expected {
             let from = expected.map_or_else(SeqNo::minimum, |x| x.next());
-            return Ok(Err(Self::scan_store(&store, key, from, usize::MAX)?));
+            return Ok(Err(Self::scan_store(&store, key, from)?));
         }
 
         store.entry(key.to_string()).or_default().push(new);
@@ -226,14 +223,9 @@ impl Consensus for MemConsensus {
         Ok(Ok(()))
     }
 
-    async fn scan(
-        &self,
-        key: &str,
-        from: SeqNo,
-        limit: usize,
-    ) -> Result<Vec<VersionedData>, ExternalError> {
+    async fn scan(&self, key: &str, from: SeqNo) -> Result<Vec<VersionedData>, ExternalError> {
         let store = self.data.lock().map_err(Error::from)?;
-        Self::scan_store(&store, key, from, limit)
+        Self::scan_store(&store, key, from)
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {

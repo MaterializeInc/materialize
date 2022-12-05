@@ -201,14 +201,9 @@ impl Consensus for UnreliableConsensus {
             .await
     }
 
-    async fn scan(
-        &self,
-        key: &str,
-        from: SeqNo,
-        limit: usize,
-    ) -> Result<Vec<VersionedData>, ExternalError> {
+    async fn scan(&self, key: &str, from: SeqNo) -> Result<Vec<VersionedData>, ExternalError> {
         self.handle
-            .run_op("scan", || self.consensus.scan(key, from, limit))
+            .run_op("scan", || self.consensus.scan(key, from))
             .await
     }
 

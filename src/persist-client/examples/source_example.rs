@@ -28,7 +28,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
-use mz_build_info::DUMMY_BUILD_INFO;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::async_runtime::CpuHeavyRuntime;
 use tracing::{error, trace};
@@ -37,6 +36,8 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_persist::location::{Blob, Consensus, ExternalError, Indeterminate};
 use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHandle};
 use mz_persist_client::{Metrics, PersistClient, PersistConfig, PersistLocation};
+
+use crate::BUILD_INFO;
 
 use self::impls::ConsensusTimestamper;
 use self::impls::PersistConsensus;
@@ -189,7 +190,7 @@ async fn persist_client(args: Args) -> Result<PersistClient, ExternalError> {
         blob_uri: args.blob_uri,
         consensus_uri: args.consensus_uri,
     };
-    let config = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+    let config = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&config, &MetricsRegistry::new()));
     let (blob, consensus) = location.open_locations(&config, &metrics).await?;
     let unreliable = UnreliableHandle::default();

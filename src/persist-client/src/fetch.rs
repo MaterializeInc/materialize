@@ -335,6 +335,7 @@ where
     pub(crate) metadata: SerdeLeasedBatchPartMetadata,
     pub(crate) desc: Description<T>,
     pub(crate) key: PartialBatchKey,
+    pub(crate) encoded_size_bytes: usize,
     /// The `SeqNo` from which this part originated; we track this value as
     /// long as necessary to ensure the `SeqNo` isn't garbage collected while a
     /// read still depends on it.
@@ -362,6 +363,7 @@ where
             upper: self.desc.upper().iter().map(T::encode).collect(),
             since: self.desc.since().iter().map(T::encode).collect(),
             key: self.key.clone(),
+            encoded_size_bytes: self.encoded_size_bytes,
             leased_seqno: self.leased_seqno,
             reader_id: self.reader_id.clone(),
         };
@@ -386,6 +388,11 @@ where
             "only issuing reader can authorize lease expiration"
         );
         self.leased_seqno.take()
+    }
+
+    /// The encoded size of this part in bytes
+    pub fn encoded_size_bytes(&self) -> usize {
+        self.encoded_size_bytes
     }
 }
 
@@ -566,6 +573,7 @@ pub struct SerdeLeasedBatchPart {
     upper: Vec<[u8; 8]>,
     since: Vec<[u8; 8]>,
     key: PartialBatchKey,
+    encoded_size_bytes: usize,
     leased_seqno: Option<SeqNo>,
     reader_id: LeasedReaderId,
 }
@@ -591,6 +599,7 @@ impl<T: Timestamp + Codec64> LeasedBatchPart<T> {
                 Antichain::from(x.since.into_iter().map(T::decode).collect::<Vec<_>>()),
             ),
             key: x.key,
+            encoded_size_bytes: x.encoded_size_bytes,
             leased_seqno: x.leased_seqno,
             reader_id: x.reader_id,
         }

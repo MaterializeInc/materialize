@@ -37,21 +37,21 @@ SHOW ROLES
 ----
 SHOW ROLES
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: Role, from: None, in_cluster: None, filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Role, from: None, filter: None }))
 
 parse-statement
 SHOW CLUSTERS
 ----
 SHOW CLUSTERS
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: Cluster, from: None, in_cluster: None, filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Cluster, from: None, filter: None }))
 
 parse-statement
 SHOW USERS
 ----
 SHOW ROLES
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: Role, from: None, in_cluster: None, filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Role, from: None, filter: None }))
 
 parse-statement
 SHOW SCHEMAS
@@ -72,70 +72,70 @@ SHOW SOURCES
 ----
 SHOW SOURCES
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: Source, from: None, in_cluster: None, filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Source, from: None, filter: None }))
 
 parse-statement
 SHOW SOURCES FROM foo.bar
 ----
 SHOW SOURCES FROM foo.bar
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: Source, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: None, filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Source, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), filter: None }))
 
 parse-statement
 SHOW VIEWS
 ----
 SHOW VIEWS
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: View, from: None, in_cluster: None, filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: View, from: None, filter: None }))
 
 parse-statement
 SHOW VIEWS FROM foo.bar
 ----
 SHOW VIEWS FROM foo.bar
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: View, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: None, filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: View, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), filter: None }))
 
 parse-statement
 SHOW MATERIALIZED VIEWS
 ----
 SHOW MATERIALIZED VIEWS
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: MaterializedView, from: None, in_cluster: None, filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: MaterializedView { in_cluster: None }, from: None, filter: None }))
 
 parse-statement
 SHOW MATERIALIZED VIEWS FROM foo.bar
 ----
 SHOW MATERIALIZED VIEWS FROM foo.bar
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: MaterializedView, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: None, filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: MaterializedView { in_cluster: None }, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), filter: None }))
 
 parse-statement
 SHOW MATERIALIZED VIEWS FROM foo.bar IN CLUSTER baz
 ----
 SHOW MATERIALIZED VIEWS FROM foo.bar IN CLUSTER baz
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: MaterializedView, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: Some(Unresolved(Ident("baz"))), filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: MaterializedView { in_cluster: Some(Unresolved(Ident("baz"))) }, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), filter: None }))
 
 parse-statement
 SHOW MATERIALIZED VIEWS IN CLUSTER baz
 ----
 SHOW MATERIALIZED VIEWS IN CLUSTER baz
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: MaterializedView, from: None, in_cluster: Some(Unresolved(Ident("baz"))), filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: MaterializedView { in_cluster: Some(Unresolved(Ident("baz"))) }, from: None, filter: None }))
 
 parse-statement
 SHOW TABLES
 ----
 SHOW TABLES
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: Table, from: None, in_cluster: None, filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Table, from: None, filter: None }))
 
 parse-statement
 SHOW TABLES FROM foo.bar
 ----
 SHOW TABLES FROM foo.bar
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: Table, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: None, filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Table, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), filter: None }))
 
 parse-statement
 SHOW TABLES IN CLUSTER baz
@@ -149,14 +149,14 @@ SHOW SINKS
 ----
 SHOW SINKS
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: Sink, from: None, in_cluster: None, filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Sink, from: None, filter: None }))
 
 parse-statement
 SHOW SINKS FROM foo.bar
 ----
 SHOW SINKS FROM foo.bar
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: Sink, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: None, filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Sink, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), filter: None }))
 
 parse-statement
 SHOW SINKS FROM foo.bar IN CLUSTER baz
@@ -170,77 +170,70 @@ SHOW TABLES LIKE '%foo%'
 ----
 SHOW TABLES LIKE '%foo%'
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: Table, from: None, in_cluster: None, filter: Some(Like("%foo%")) }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Table, from: None, filter: Some(Like("%foo%")) }))
 
 parse-statement
 SHOW SOURCES
 ----
 SHOW SOURCES
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: Source, from: None, in_cluster: None, filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Source, from: None, filter: None }))
 
 parse-statement
 SHOW VIEWS FROM foo LIKE '%foo%'
 ----
 SHOW VIEWS FROM foo LIKE '%foo%'
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: View, from: Some(UnresolvedSchemaName([Ident("foo")])), in_cluster: None, filter: Some(Like("%foo%")) }))
+Show(ShowObjects(ShowObjectsStatement { object_type: View, from: Some(UnresolvedSchemaName([Ident("foo")])), filter: Some(Like("%foo%")) }))
 
 parse-statement
 SHOW INDEXES ON foo
 ----
 SHOW INDEXES ON foo
 =>
-Show(ShowIndexes(ShowIndexesStatement { on_object: Some(Name(UnresolvedObjectName([Ident("foo")]))), from_schema: None, in_cluster: None, filter: None }))
-
-parse-statement
-SHOW INDEXES ON foo
-----
-SHOW INDEXES ON foo
-=>
-Show(ShowIndexes(ShowIndexesStatement { on_object: Some(Name(UnresolvedObjectName([Ident("foo")]))), from_schema: None, in_cluster: None, filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Index { in_cluster: None, on_object: Some(Name(UnresolvedObjectName([Ident("foo")]))) }, from: None, filter: None }))
 
 parse-statement
 SHOW INDEXES
 ----
 SHOW INDEXES
 =>
-Show(ShowIndexes(ShowIndexesStatement { on_object: None, from_schema: None, in_cluster: None, filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Index { in_cluster: None, on_object: None }, from: None, filter: None }))
 
 parse-statement
 SHOW INDEXES IN CLUSTER c
 ----
 SHOW INDEXES IN CLUSTER c
 =>
-Show(ShowIndexes(ShowIndexesStatement { on_object: None, from_schema: None, in_cluster: Some(Unresolved(Ident("c"))), filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Index { in_cluster: Some(Unresolved(Ident("c"))), on_object: None }, from: None, filter: None }))
 
 parse-statement
 SHOW INDEXES ON t IN CLUSTER c
 ----
 SHOW INDEXES ON t IN CLUSTER c
 =>
-Show(ShowIndexes(ShowIndexesStatement { on_object: Some(Name(UnresolvedObjectName([Ident("t")]))), from_schema: None, in_cluster: Some(Unresolved(Ident("c"))), filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Index { in_cluster: Some(Unresolved(Ident("c"))), on_object: Some(Name(UnresolvedObjectName([Ident("t")]))) }, from: None, filter: None }))
 
 parse-statement
 SHOW INDEXES FROM s
 ----
 SHOW INDEXES FROM s
 =>
-Show(ShowIndexes(ShowIndexesStatement { on_object: None, from_schema: Some(UnresolvedSchemaName([Ident("s")])), in_cluster: None, filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Index { in_cluster: None, on_object: None }, from: Some(UnresolvedSchemaName([Ident("s")])), filter: None }))
 
 parse-statement
 SHOW INDEXES FROM s IN CLUSTER c
 ----
 SHOW INDEXES FROM s IN CLUSTER c
 =>
-Show(ShowIndexes(ShowIndexesStatement { on_object: None, from_schema: Some(UnresolvedSchemaName([Ident("s")])), in_cluster: Some(Unresolved(Ident("c"))), filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Index { in_cluster: Some(Unresolved(Ident("c"))), on_object: None }, from: Some(UnresolvedSchemaName([Ident("s")])), filter: None }))
 
 parse-statement
 SHOW INDEXES LIKE 'pattern'
 ----
 SHOW INDEXES LIKE 'pattern'
 =>
-Show(ShowIndexes(ShowIndexesStatement { on_object: None, from_schema: None, in_cluster: None, filter: Some(Like("pattern")) }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Index { in_cluster: None, on_object: None }, from: None, filter: Some(Like("pattern")) }))
 
 parse-statement
 SHOW INDEXES FROM s ON t
@@ -338,7 +331,7 @@ SHOW CLUSTERS
 ----
 SHOW CLUSTERS
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: Cluster, from: None, in_cluster: None, filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Cluster, from: None, filter: None }))
 
 # TODO(justin): "all" here should be its own token so that it doesn't get
 # downcased.

@@ -29,8 +29,6 @@ from materialize.checks.mzcompose_actions import (
 from materialize.checks.scenarios import Scenario
 from materialize.mzcompose.services import Materialized
 
-LAST_RELEASED_VERSION = f"v{util.released_materialize_versions()[0]}"
-
 # Older Mz versions are not configured to know SIZE '4-4' clusters by default
 size = Materialized.Size.DEFAULT_SIZE
 environment_extra = [
@@ -38,20 +36,43 @@ environment_extra = [
     f'MZ_CLUSTER_REPLICA_SIZES={{"1":{{"workers":1,"scale":1}},"{size}-{size}":{{"workers":{size},"scale":{size}}}}}',
 ]
 
+released_versions = util.released_materialize_versions()
+
+# Usually, the latest patch version of the current release
+last_version = f"v{released_versions[0]}"
+
+# Usually, the last patch version of the previous release
+previous_version = f"v{released_versions[1]}"
+
 
 class UpgradeEntireMz(Scenario):
-    """Upgrade the entire Mz instance from LAST_RELEASED_VERSION all at once."""
+    """Upgrade the entire Mz instance from the last released version."""
+
+    def tag(self) -> str:
+        return last_version
 
     def actions(self) -> List[Action]:
+        print(f"Upgrading from tag {self.tag()}")
         return [
-            StartMz(tag=LAST_RELEASED_VERSION, environment_extra=environment_extra),
+            StartMz(tag=self.tag(), environment_extra=environment_extra),
             Initialize(self.checks),
             Manipulate(self.checks, phase=1),
             KillMz(),
             StartMz(tag=None),
             Manipulate(self.checks, phase=2),
             Validate(self.checks),
+            # A second restart while already on the new version
+            KillMz(),
+            StartMz(tag=None),
+            Validate(self.checks),
         ]
+
+
+class UpgradeEntireMzPreviousVersion(UpgradeEntireMz):
+    """Upgrade the entire Mz instance from the previous released version."""
+
+    def tag(self) -> str:
+        return previous_version
 
 
 #
@@ -68,8 +89,8 @@ class UpgradeComputedLast(Scenario):
 
     def actions(self) -> List[Action]:
         return [
-            StartMz(tag=LAST_RELEASED_VERSION, environment_extra=environment_extra),
-            StartComputed(tag=LAST_RELEASED_VERSION),
+            StartMz(tag=last_version, environment_extra=environment_extra),
+            StartComputed(tag=last_version),
             UseComputed(),
             Initialize(self.checks),
             Manipulate(self.checks, phase=1),
@@ -85,6 +106,10 @@ class UpgradeComputedLast(Scenario):
             StartComputed(tag=None),
             Manipulate(self.checks, phase=2),
             Validate(self.checks),
+            # A second restart while already on the new version
+            KillMz(),
+            StartMz(tag=None),
+            Validate(self.checks),
         ]
 
 
@@ -93,8 +118,8 @@ class UpgradeComputedFirst(Scenario):
 
     def actions(self) -> List[Action]:
         return [
-            StartMz(tag=LAST_RELEASED_VERSION, environment_extra=environment_extra),
-            StartComputed(tag=LAST_RELEASED_VERSION),
+            StartMz(tag=last_version, environment_extra=environment_extra),
+            StartComputed(tag=last_version),
             UseComputed(),
             Initialize(self.checks),
             Manipulate(self.checks, phase=1),
@@ -109,5 +134,8 @@ class UpgradeComputedFirst(Scenario):
             KillMz(),
             StartMz(tag=None),
             Manipulate(self.checks, phase=2),
+            Validate(self.checks),
+            KillMz(),
+            StartMz(tag=None),
             Validate(self.checks),
         ]

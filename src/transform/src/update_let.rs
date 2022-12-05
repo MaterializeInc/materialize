@@ -67,10 +67,10 @@ impl UpdateLet {
     pub fn transform_without_trace(
         &self,
         relation: &mut MirRelationExpr,
-        args: TransformArgs,
+        _args: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        *args.id_gen = IdGen::default(); // Get a fresh IdGen.
-        self.action(relation, &mut HashMap::new(), args.id_gen)
+        let mut id_gen = IdGen::default(); // Get a fresh IdGen.
+        self.action(relation, &mut HashMap::new(), &mut id_gen)
     }
 
     /// Re-assign type information and identifier to each `Get`.

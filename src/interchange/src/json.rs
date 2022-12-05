@@ -20,6 +20,8 @@ use mz_repr::{ColumnName, ColumnType, Datum, GlobalId, RelationDesc, ScalarType}
 use crate::encode::{column_names_and_types, Encode, TypedDatum};
 use crate::envelopes;
 
+const AVRO_NAMESPACE: &str = "com.materialize.sink";
+
 // Manages encoding of JSON-encoded bytes
 pub struct JsonEncoder {
     key_columns: Option<Vec<(ColumnName, ColumnType)>>,
@@ -213,9 +215,8 @@ impl ToJson for TypedDatum<'_> {
     }
 }
 
-fn build_row_schema_field<F: FnMut() -> String>(
-    namer: &mut F,
-    names_seen: &mut HashSet<String>,
+fn build_row_schema_field(
+    type_namer: &mut Namer,
     custom_names: &HashMap<GlobalId, String>,
     typ: &ColumnType,
 ) -> serde_json::Value {
@@ -229,13 +230,13 @@ fn build_row_schema_field<F: FnMut() -> String>(
             json!("int")
         }
         ScalarType::Int64 => json!("long"),
-        ScalarType::UInt16 => build_unsigned_type(names_seen, 2),
+        ScalarType::UInt16 => type_namer.unsigned_type(2),
         ScalarType::UInt32
         | ScalarType::Oid
         | ScalarType::RegClass
         | ScalarType::RegProc
-        | ScalarType::RegType => build_unsigned_type(names_seen, 4),
-        ScalarType::UInt64 => build_unsigned_type(names_seen, 8),
+        | ScalarType::RegType => type_namer.unsigned_type(4),
+        ScalarType::UInt64 => type_namer.unsigned_type(8),
         ScalarType::Float32 => json!("float"),
         ScalarType::Float64 => json!("double"),
         ScalarType::Date => json!({
@@ -250,19 +251,7 @@ fn build_row_schema_field<F: FnMut() -> String>(
             "type": "long",
             "logicalType": "timestamp-micros"
         }),
-        ScalarType::Interval => {
-            let name = format!("{AVRO_NAMESPACE}.interval");
-            if names_seen.contains(&name) {
-                json!(name)
-            } else {
-                names_seen.insert(name.clone());
-                json!({
-                "type": "fixed",
-                "size": 16,
-                "name": name,
-                })
-            }
-        }
+        ScalarType::Interval => type_namer.interval_type(),
         ScalarType::Bytes => json!("bytes"),
         ScalarType::String | ScalarType::Char { .. } | ScalarType::VarChar { .. } => {
             json!("string")
@@ -277,8 +266,7 @@ fn build_row_schema_field<F: FnMut() -> String>(
         }),
         ty @ (ScalarType::Array(..) | ScalarType::Int2Vector | ScalarType::List { .. }) => {
             let inner = build_row_schema_field(
-                namer,
-                names_seen,
+                type_namer,
                 custom_names,
                 &ColumnType {
                     nullable: true,
@@ -292,8 +280,7 @@ fn build_row_schema_field<F: FnMut() -> String>(
         }
         ScalarType::Map { value_type, .. } => {
             let inner = build_row_schema_field(
-                namer,
-                names_seen,
+                type_namer,
                 custom_names,
                 &ColumnType {
                     nullable: true,
@@ -309,14 +296,14 @@ fn build_row_schema_field<F: FnMut() -> String>(
             fields, custom_id, ..
         } => {
             let (name, name_seen) = match custom_id.as_ref().and_then(|id| custom_names.get(id)) {
-                Some(name) => (name.clone(), !names_seen.insert(name.clone())),
-                None => (namer(), false),
+                Some(name) => type_namer.valid_name(name),
+                None => (type_namer.anonymous_record_name(), false),
             };
             if name_seen {
                 json!(name)
             } else {
                 let fields = fields.to_vec();
-                let json_fields = build_row_schema_fields(&fields, names_seen, namer, custom_names);
+                let json_fields = build_row_schema_fields(&fields, type_namer, custom_names);
                 json!({
                     "type": "record",
                     "name": name,
@@ -344,15 +331,16 @@ fn build_row_schema_field<F: FnMut() -> String>(
     field_type
 }
 
-pub(super) fn build_row_schema_fields<F: FnMut() -> String>(
+fn build_row_schema_fields(
     columns: &[(ColumnName, ColumnType)],
-    names_seen: &mut HashSet<String>,
-    namer: &mut F,
+    type_namer: &mut Namer,
     custom_names: &HashMap<GlobalId, String>,
 ) -> Vec<serde_json::Value> {
     let mut fields = Vec::new();
+    let mut field_namer = Namer::default();
     for (name, typ) in columns.iter() {
-        let field_type = build_row_schema_field(namer, names_seen, custom_names, typ);
+        let (name, _seen) = field_namer.valid_name(name.as_str());
+        let field_type = build_row_schema_field(type_namer, custom_names, typ);
         fields.push(json!({
             "name": name,
             "type": field_type,
@@ -361,42 +349,87 @@ pub(super) fn build_row_schema_fields<F: FnMut() -> String>(
     fields
 }
 
-const AVRO_NAMESPACE: &str = "com.materialize.sink";
-
-fn build_unsigned_type(names_seen: &mut HashSet<String>, width: usize) -> serde_json::Value {
-    let name = format!("{AVRO_NAMESPACE}.uint{width}");
-    if names_seen.contains(&name) {
-        json!(name)
-    } else {
-        names_seen.insert(name.clone());
-        json!({
-            "type": "fixed",
-            "size": width,
-            "name": name,
-        })
-    }
-}
-
 /// Builds the JSON for the row schema, which can be independently useful.
 pub fn build_row_schema_json(
     columns: &[(ColumnName, ColumnType)],
     name: &str,
     custom_names: &HashMap<GlobalId, String>,
-) -> serde_json::Value {
-    let mut name_idx = 0;
-    let fields = build_row_schema_fields(
-        columns,
-        &mut Default::default(),
-        &mut move || {
-            let ret = format!("{AVRO_NAMESPACE}.record{name_idx}");
-            name_idx += 1;
-            ret
-        },
-        custom_names,
-    );
-    json!({
+) -> Result<serde_json::Value, anyhow::Error> {
+    let fields = build_row_schema_fields(columns, &mut Namer::default(), custom_names);
+    let _ = mz_avro::schema::Name::parse_simple(name)?;
+    Ok(json!({
         "type": "record",
         "fields": fields,
         "name": name
-    })
+    }))
+}
+
+/// Naming helper for use when constructing an Avro schema.
+#[derive(Default)]
+struct Namer {
+    record_index: usize,
+    seen_interval: bool,
+    seen_unsigneds: HashSet<usize>,
+    seen_names: HashMap<String, String>,
+    valid_names_count: HashMap<String, usize>,
+}
+
+impl Namer {
+    /// Returns the schema for an interval type.
+    fn interval_type(&mut self) -> serde_json::Value {
+        let name = format!("{AVRO_NAMESPACE}.interval");
+        if self.seen_interval {
+            json!(name)
+        } else {
+            self.seen_interval = true;
+            json!({
+            "type": "fixed",
+            "size": 16,
+            "name": name,
+            })
+        }
+    }
+
+    /// Returns the schema for an unsigned integer with the given width.
+    fn unsigned_type(&mut self, width: usize) -> serde_json::Value {
+        let name = format!("{AVRO_NAMESPACE}.uint{width}");
+        if self.seen_unsigneds.contains(&width) {
+            json!(name)
+        } else {
+            self.seen_unsigneds.insert(width);
+            json!({
+                "type": "fixed",
+                "size": width,
+                "name": name,
+            })
+        }
+    }
+
+    /// Returns a name to use for a new anonymous record.
+    fn anonymous_record_name(&mut self) -> String {
+        let out = format!("{AVRO_NAMESPACE}.record{}", self.record_index);
+        self.record_index += 1;
+        out
+    }
+
+    /// Turns `name` into a valid, unique name for use in the Avro schema.
+    ///
+    /// Returns the valid name and whether `name` has been seen before.
+    fn valid_name(&mut self, name: &str) -> (String, bool) {
+        if let Some(valid_name) = self.seen_names.get(name) {
+            (valid_name.into(), true)
+        } else {
+            let mut valid_name = mz_avro::schema::Name::make_valid(name);
+            let valid_name_count = self
+                .valid_names_count
+                .entry(valid_name.clone())
+                .or_default();
+            if *valid_name_count != 0 {
+                valid_name += &valid_name_count.to_string();
+            }
+            *valid_name_count += 1;
+            self.seen_names.insert(name.into(), valid_name.clone());
+            (valid_name, false)
+        }
+    }
 }

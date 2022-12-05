@@ -87,6 +87,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--most-recent",
         metavar="N",
+        # Usually, the 2 most-recent versions will be:
+        # - the previous patch version of the current release
+        # - the last patch version of the previous release
+        default=2,
         type=int,
         help="limit testing to the N most recent versions",
     )
@@ -181,6 +185,12 @@ def test_upgrade_from_version(
     c.kill("materialized")
     c.rm("materialized", "testdrive")
 
+    c.up("materialized")
+    c.wait_for_materialized("materialized")
+
+    # Restart once more, just in case
+    c.kill("materialized")
+    c.rm("materialized")
     c.up("materialized")
     c.wait_for_materialized("materialized")
 

@@ -746,6 +746,17 @@ impl PendingPeek {
         if upper.less_equal(&self.peek.timestamp) {
             return None;
         }
+
+        let read_frontier = self.trace_bundle.compaction_frontier();
+        if !read_frontier.less_equal(&self.peek.timestamp) {
+            let error = format!(
+                "Arrangement compaction frontier ({:?}) is beyond the time of the attempted read ({})",
+                read_frontier.elements(),
+                self.peek.timestamp,
+            );
+            return Some(PeekResponse::Error(error));
+        }
+
         let response = match self.collect_finished_data(max_result_size) {
             Ok(rows) => PeekResponse::Rows(rows),
             Err(text) => PeekResponse::Error(text),

@@ -70,7 +70,7 @@ pub(crate) enum PendingWriteTxn {
     },
     /// Write to a system table.
     System {
-        update: BuiltinTableUpdate,
+        updates: Vec<BuiltinTableUpdate>,
         source: BuiltinTableUpdateSource,
     },
 }
@@ -265,11 +265,13 @@ impl<S: Append + 'static> Coordinator<S> {
                         action,
                     ));
                 }
-                PendingWriteTxn::System { update, .. } => {
-                    appends
-                        .entry(update.id)
-                        .or_default()
-                        .push((update.row, update.diff));
+                PendingWriteTxn::System { updates, .. } => {
+                    for update in updates {
+                        appends
+                            .entry(update.id)
+                            .or_default()
+                            .push((update.row, update.diff));
+                    }
                 }
             }
         }
@@ -385,10 +387,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // This can cause future queries to block, but will not affect correctness. Since this
         // rate of DDL is unlikely, we allow DDL to explicitly trigger group commit.
         self.pending_writes
-            .extend(updates.into_iter().map(|update| PendingWriteTxn::System {
-                update,
-                source: source.clone(),
-            }));
+            .push(PendingWriteTxn::System { updates, source });
         self.group_commit_initiate(None).await;
     }
 

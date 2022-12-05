@@ -18,19 +18,22 @@ use std::fmt::Write;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{Datum, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement};
+use mz_sql_parser::ast::{
+    ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement, ShowObjectType,
+};
 use query::QueryContext;
 
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
-    ObjectType, SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement,
-    ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
-    ShowCreateViewStatement, ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement,
-    ShowSchemasStatement, ShowStatementFilter, Statement, Value,
+    SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement, ShowCreateSinkStatement,
+    ShowCreateSourceStatement, ShowCreateTableStatement, ShowCreateViewStatement,
+    ShowDatabasesStatement, ShowObjectsStatement, ShowSchemasStatement, ShowStatementFilter,
+    Statement, Value,
 };
 use crate::catalog::{CatalogItemType, SessionCatalog};
 use crate::names::{
-    self, Aug, NameSimplifier, ResolvedClusterName, ResolvedDatabaseName, ResolvedSchemaName,
+    self, Aug, NameSimplifier, ResolvedClusterName, ResolvedDatabaseName, ResolvedObjectName,
+    ResolvedSchemaName,
 };
 use crate::parse;
 use crate::plan::scope::Scope;
@@ -299,24 +302,28 @@ pub fn show_objects<'a>(
     ShowObjectsStatement {
         object_type,
         from,
-        in_cluster,
         filter,
     }: ShowObjectsStatement<Aug>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     match object_type {
-        ObjectType::Table => show_tables(scx, from, filter),
-        ObjectType::Source => show_sources(scx, from, filter),
-        ObjectType::View => show_views(scx, from, filter),
-        ObjectType::MaterializedView => show_materialized_views(scx, from, in_cluster, filter),
-        ObjectType::Sink => show_sinks(scx, from, filter),
-        ObjectType::Type => show_types(scx, from, filter),
-        ObjectType::Object => show_all_objects(scx, from, filter),
-        ObjectType::Role => bail_unsupported!("SHOW ROLES"),
-        ObjectType::Cluster => show_clusters(scx, filter),
-        ObjectType::ClusterReplica => show_cluster_replicas(scx, filter),
-        ObjectType::Secret => show_secrets(scx, from, filter),
-        ObjectType::Index => unreachable!("SHOW INDEX handled separately"),
-        ObjectType::Connection => show_connections(scx, from, filter),
+        ShowObjectType::Table => show_tables(scx, from, filter),
+        ShowObjectType::Source => show_sources(scx, from, filter),
+        ShowObjectType::View => show_views(scx, from, filter),
+        ShowObjectType::Sink => show_sinks(scx, from, filter),
+        ShowObjectType::Type => show_types(scx, from, filter),
+        ShowObjectType::Object => show_all_objects(scx, from, filter),
+        ShowObjectType::Role => bail_unsupported!("SHOW ROLES"),
+        ShowObjectType::Cluster => show_clusters(scx, filter),
+        ShowObjectType::ClusterReplica => show_cluster_replicas(scx, filter),
+        ShowObjectType::Secret => show_secrets(scx, from, filter),
+        ShowObjectType::Connection => show_connections(scx, from, filter),
+        ShowObjectType::MaterializedView { in_cluster } => {
+            show_materialized_views(scx, from, in_cluster, filter)
+        }
+        ShowObjectType::Index {
+            in_cluster,
+            on_object,
+        } => show_indexes(scx, from, on_object, in_cluster, filter),
     }
 }
 
@@ -447,12 +454,10 @@ fn show_all_objects<'a>(
 
 pub fn show_indexes<'a>(
     scx: &'a StatementContext<'a>,
-    ShowIndexesStatement {
-        in_cluster,
-        on_object,
-        from_schema,
-        filter,
-    }: ShowIndexesStatement<Aug>,
+    from_schema: Option<ResolvedSchemaName>,
+    on_object: Option<ResolvedObjectName>,
+    in_cluster: Option<ResolvedClusterName>,
+    filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let mut query_filter = Vec::new();
 
@@ -462,8 +467,8 @@ pub fn show_indexes<'a>(
         query_filter.push(format!("schema_id = {}", schema_spec));
     }
 
-    if let Some(on_object) = on_object {
-        let on_item = scx.get_item_by_resolved_name(&on_object)?;
+    if let Some(on_object) = &on_object {
+        let on_item = scx.get_item_by_resolved_name(on_object)?;
         if on_item.item_type() != CatalogItemType::View
             && on_item.item_type() != CatalogItemType::MaterializedView
             && on_item.item_type() != CatalogItemType::Source

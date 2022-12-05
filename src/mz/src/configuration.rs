@@ -7,16 +7,109 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::fmt;
+use std::str::FromStr;
 use std::{collections::BTreeMap, fmt::Display, fs, path::PathBuf};
 
-use anyhow::{bail, Context, Ok, Result};
+use anyhow::{bail, Context};
 use dirs::home_dir;
+use once_cell::sync::Lazy;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, USER_AGENT};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use url::Url;
 use uuid::Uuid;
 
 use crate::region::CloudProviderRegion;
+
+pub const WEB_DOCS_URL: &str = "https://www.materialize.com/docs";
+
+pub static DEFAULT_ENDPOINT: Lazy<Endpoint> =
+    Lazy::new(|| "https://cloud.materialize.com".parse().unwrap());
+
+/// A Materialize Cloud API endpoint.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(transparent)]
+pub struct Endpoint {
+    url: Url,
+}
+
+impl Endpoint {
+    /// Returns the URL for the cloud regions.
+    pub fn cloud_regions_url(&self) -> Url {
+        self.with_path(&["_metadata", "cloud-regions.json"])
+    }
+
+    /// Returns the URL for the OAuth token exchange.
+    pub fn web_login_url(&self, profile_name: &str) -> Url {
+        let mut url = self.with_path(&["account", "login"]);
+        let mut query_pairs = url.query_pairs_mut();
+        query_pairs.append_pair("redirectUrl", "/access/cli");
+        query_pairs.append_pair("profile", profile_name);
+        drop(query_pairs);
+        url
+    }
+
+    /// Returns the URL for reading API tokens.
+    pub fn api_token_url(&self) -> Url {
+        self.admin_with_path(&["identity", "resources", "users", "api-tokens", "v1"])
+    }
+
+    /// Returns the URL for authenticating with an email and password.
+    pub fn user_auth_url(&self) -> Url {
+        self.admin_with_path(&["identity", "resources", "auth", "v1", "user"])
+    }
+
+    /// Returns the URL for authenticating with an API token.
+    pub fn api_token_auth_url(&self) -> Url {
+        self.admin_with_path(&["identity", "resources", "auth", "v1", "api-token"])
+    }
+
+    /// Reports whether this is the default API endpoint.
+    pub fn is_default(&self) -> bool {
+        *self == *DEFAULT_ENDPOINT
+    }
+
+    fn with_path(&self, path: &[&str]) -> Url {
+        let mut url = self.url.clone();
+        url.path_segments_mut()
+            .expect("constructor validated URL can be a base")
+            .extend(path);
+        url
+    }
+
+    fn admin_with_path(&self, path: &[&str]) -> Url {
+        let mut url = self.with_path(path);
+        let host = url.host().expect("constructor validated URL has host");
+        url.set_host(Some(&format!("admin.{host}"))).unwrap();
+        url
+    }
+}
+
+impl Default for Endpoint {
+    fn default() -> Endpoint {
+        DEFAULT_ENDPOINT.clone()
+    }
+}
+
+impl FromStr for Endpoint {
+    type Err = url::ParseError;
+
+    fn from_str(s: &str) -> Result<Endpoint, url::ParseError> {
+        let url: Url = s.parse()?;
+        if !url.has_host() {
+            Err(url::ParseError::EmptyHost)
+        } else {
+            Ok(Endpoint { url })
+        }
+    }
+}
+
+impl fmt::Display for Endpoint {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.url.fmt(f)
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Profile0 {
@@ -24,6 +117,8 @@ struct Profile0 {
     #[serde(rename(serialize = "app-password", deserialize = "app-password"))]
     app_password: String,
     region: Option<CloudProviderRegion>,
+    #[serde(default, skip_serializing_if = "Endpoint::is_default")]
+    endpoint: Endpoint,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -63,7 +158,7 @@ impl Configuration {
     const PROFILES_FILE_NAME: &str = "profiles.toml";
     const DEFAULT_PROFILE: &str = "default";
 
-    pub(crate) fn load() -> Result<Configuration> {
+    pub(crate) fn load(profile: Option<&str>) -> Result<Configuration, anyhow::Error> {
         fn path_exists(path: &PathBuf) -> bool {
             fs::metadata(path).is_ok()
         }
@@ -77,7 +172,7 @@ impl Configuration {
 
         config_path.push(Self::PROFILES_FILE_NAME);
 
-        path_exists(&config_path)
+        let mut config = path_exists(&config_path)
             .then(|| {
                 let contents = fs::read_to_string(&config_path)
                     .context("failed to read configuration file")?;
@@ -89,16 +184,22 @@ impl Configuration {
                     )
                 })?;
 
-                Ok(config)
+                Ok::<_, anyhow::Error>(config)
             })
-            .unwrap_or_else(|| Ok(Configuration::default()))
+            .unwrap_or_else(|| Ok(Configuration::default()))?;
+
+        if let Some(profile) = profile {
+            config.current_profile = profile.into();
+        }
+
+        Ok(config)
     }
 
     pub(crate) fn current_profile(&self) -> String {
         self.current_profile.to_string()
     }
 
-    pub(crate) fn get_profile(&mut self) -> Result<Profile> {
+    pub(crate) fn get_profile(&mut self) -> Result<Profile, anyhow::Error> {
         let profile = &self.current_profile;
         self.profiles
             .get_mut(profile)
@@ -130,6 +231,7 @@ impl Configuration {
 
     pub(crate) fn create_or_update_profile(
         &mut self,
+        endpoint: Endpoint,
         name: String,
         email: String,
         api_token: FronteggAPIToken,
@@ -141,11 +243,12 @@ impl Configuration {
                 email,
                 app_password: api_token.to_string(),
                 region: None,
+                endpoint,
             },
         );
     }
 
-    pub(crate) fn close(self) -> Result<()> {
+    pub(crate) fn close(self) -> Result<(), anyhow::Error> {
         if !self.modified {
             return Ok(());
         }
@@ -160,7 +263,7 @@ impl Configuration {
     }
 }
 
-fn get_config_path() -> Result<PathBuf> {
+fn get_config_path() -> Result<PathBuf, anyhow::Error> {
     home_dir()
         .map(|mut path| {
             path.push(Configuration::PROFILES_DIR_NAME);
@@ -179,8 +282,11 @@ impl Default for Configuration {
     }
 }
 
-#[allow(dead_code)]
 impl Profile<'_> {
+    pub fn endpoint(&self) -> &Endpoint {
+        &self.profile.endpoint
+    }
+
     pub(crate) fn get_email(&self) -> &str {
         &self.profile.email
     }
@@ -193,22 +299,15 @@ impl Profile<'_> {
         self.profile.region
     }
 
-    pub(crate) fn set_email(&mut self, email: String) {
-        *self._modified = true;
-        self.profile.email = email;
-    }
-
-    pub(crate) fn set_password(&mut self, password: String) {
-        *self._modified = true;
-        self.profile.app_password = password;
-    }
-
     pub(crate) fn set_default_region(&mut self, region: CloudProviderRegion) {
         *self._modified = true;
         self.profile.region = Some(region)
     }
 
-    pub(crate) async fn validate(&self, client: &Client) -> Result<ValidProfile<'_>> {
+    pub(crate) async fn validate(
+        &self,
+        client: &Client,
+    ) -> Result<ValidProfile<'_>, anyhow::Error> {
         let api_token: FronteggAPIToken = self.profile.app_password.as_str().try_into()?;
 
         let mut headers = HeaderMap::new();
@@ -216,7 +315,7 @@ impl Profile<'_> {
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
         let authentication_result = client
-            .post(crate::MACHINE_AUTH_URL)
+            .post(self.endpoint().api_token_auth_url())
             .headers(headers)
             .json(&api_token)
             .send()
@@ -242,7 +341,7 @@ impl Profile<'_> {
 impl TryFrom<&str> for FronteggAPIToken {
     type Error = anyhow::Error;
 
-    fn try_from(value: &str) -> Result<Self> {
+    fn try_from(value: &str) -> Result<Self, anyhow::Error> {
         if value.len() != 68 || !value.starts_with("mzp_") {
             bail!("api tokens must be exactly 68 characters and begin with mzp_")
         }

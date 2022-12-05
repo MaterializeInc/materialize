@@ -36,8 +36,8 @@ pub mod collections;
 pub mod display;
 pub mod env;
 pub mod fmt;
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "network")))]
-#[cfg(feature = "network")]
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
+#[cfg(feature = "async")]
 pub mod future;
 pub mod graph;
 pub mod hash;
@@ -59,28 +59,28 @@ pub mod permutations;
 pub mod process;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "process")))]
 pub mod result;
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "network")))]
-#[cfg(feature = "network")]
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
+#[cfg(feature = "async")]
 pub mod retry;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "stack")))]
 #[cfg(feature = "stack")]
 pub mod stack;
 pub mod stats;
 pub mod str;
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "task")))]
-#[cfg(feature = "task")]
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
+#[cfg(feature = "async")]
 pub mod task;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "test")))]
 #[cfg(feature = "test")]
 pub mod test;
 pub mod thread;
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing")))]
-#[cfg(feature = "tracing")]
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing_")))]
+#[cfg(feature = "tracing_")]
 pub mod tracing;
 pub mod vec;
 
 #[doc(hidden)]
 pub mod __private {
-    #[cfg(feature = "tracing")]
+    #[cfg(feature = "tracing_")]
     pub use tracing;
 }

@@ -56,6 +56,7 @@ class Materialized(Service):
         volumes_extra: Optional[List[str]] = None,
         depends_on: Optional[List[str]] = None,
         allow_host_ports: bool = False,
+        environment_id: Optional[str] = None,
     ) -> None:
         if persist_blob_url is None:
             persist_blob_url = f"file://{data_directory}/persist/blob"
@@ -66,6 +67,10 @@ class Materialized(Service):
                 "MZ_UNSAFE_MODE=1",
                 "MZ_EXPERIMENTAL=1",
                 f"MZ_PERSIST_BLOB_URL={persist_blob_url}",
+                f"MZ_ORCHESTRATOR=process",
+                f"MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY={data_directory}/secrets",
+                # TODO(benesch): remove this legacy environment variable once
+                # the upgrade tests no longer test v0.33.
                 f"MZ_ORCHESTRATOR_PROCESSDATA_DIRECTORY={data_directory}",
                 # Please think twice before forwarding additional environment
                 # variables from the host, as it's easy to write tests that are
@@ -86,6 +91,9 @@ class Materialized(Service):
                 "AWS_SECRET_ACCESS_KEY",
                 "AWS_SESSION_TOKEN",
             ]
+
+        if environment_id:
+            environment += [f"MZ_ENVIRONMENT_ID={environment_id}"]
 
         self.default_storage_size = default_size
         self.default_replica_size = (

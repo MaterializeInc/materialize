@@ -82,6 +82,10 @@ pub enum MirRelationExpr {
     /// A constant relation containing specified rows.
     ///
     /// The runtime memory footprint of this operator is zero.
+    ///
+    /// When you would like to pattern match on this, consider using `MirRelationExpr::as_const`
+    /// instead, which looks behind `ArrangeBy`s. You might want this matching behavior because
+    /// constant folding doesn't remove `ArrangeBy`s.
     Constant {
         /// Rows of the constant collection and their multiplicities.
         rows: Result<Vec<(Row, Diff)>, EvalError>,
@@ -902,13 +906,41 @@ impl MirRelationExpr {
         MirRelationExpr::Constant { rows, typ }
     }
 
+    /// If self is a constant, return the value and the type, otherwise `None`.
+    /// Looks behind `ArrangeBy`s.
+    pub fn as_const(&self) -> Option<(&Result<Vec<(Row, Diff)>, EvalError>, &RelationType)> {
+        match self {
+            MirRelationExpr::Constant { rows, typ } => Some((rows, typ)),
+            MirRelationExpr::ArrangeBy { input, .. } => input.as_const(),
+            _ => None,
+        }
+    }
+
+    /// If self is a constant, mutably return the value and the type, otherwise `None`.
+    /// Looks behind `ArrangeBy`s.
+    pub fn as_const_mut(
+        &mut self,
+    ) -> Option<(&mut Result<Vec<(Row, Diff)>, EvalError>, &mut RelationType)> {
+        match self {
+            MirRelationExpr::Constant { rows, typ } => Some((rows, typ)),
+            MirRelationExpr::ArrangeBy { input, .. } => input.as_const_mut(),
+            _ => None,
+        }
+    }
+
+    /// If self is a constant error, return the error, otherwise `None`.
+    /// Looks behind `ArrangeBy`s.
+    pub fn as_const_err(&self) -> Option<&EvalError> {
+        match self {
+            MirRelationExpr::Constant { rows: Err(e), .. } => Some(e),
+            MirRelationExpr::ArrangeBy { input, .. } => input.as_const_err(),
+            _ => None,
+        }
+    }
+
     /// Checks if `self` is the single element collection with no columns.
     pub fn is_constant_singleton(&self) -> bool {
-        if let MirRelationExpr::Constant {
-            rows: Ok(rows),
-            typ,
-        } = &self
-        {
+        if let Some((Ok(rows), typ)) = self.as_const() {
             rows.len() == 1 && typ.column_types.len() == 0 && rows[0].1 == 1
         } else {
             false
@@ -1229,7 +1261,7 @@ impl MirRelationExpr {
     /// A false value does not mean the collection is known to be non-empty,
     /// only that we cannot currently determine that it is statically empty.
     pub fn is_empty(&self) -> bool {
-        if let MirRelationExpr::Constant { rows: Ok(rows), .. } = self {
+        if let Some((Ok(rows), ..)) = self.as_const() {
             rows.is_empty()
         } else {
             false

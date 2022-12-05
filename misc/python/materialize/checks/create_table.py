@@ -71,6 +71,8 @@ class CreateTable(Check):
                 > SELECT f2 FROM create_table1 WHERE f2 = 1234;
                 1234
 
+                > DELETE FROM create_table1 WHERE f1 = 999;
+
                 > SHOW CREATE TABLE create_table2;
                 materialize.public.create_table2 "CREATE TABLE \\"materialize\\".\\"public\\".\\"create_table2\\" (\\"f1\\" \\"pg_catalog\\".\\"int4\\", \\"f2\\" \\"pg_catalog\\".\\"int4\\" NOT NULL DEFAULT 1234)"
 
@@ -81,6 +83,8 @@ class CreateTable(Check):
                 > SELECT f2 FROM create_table2 WHERE f2 = 1234;
                 1234
 
+                > DELETE FROM create_table2 WHERE f1 = 999;
+
                 > SHOW CREATE TABLE create_table3;
                 materialize.public.create_table3 "CREATE TABLE \\"materialize\\".\\"public\\".\\"create_table3\\" (\\"f1\\" \\"pg_catalog\\".\\"int4\\", \\"f2\\" \\"pg_catalog\\".\\"int4\\" NOT NULL DEFAULT 1234)"
 
@@ -90,6 +94,8 @@ class CreateTable(Check):
                 > INSERT INTO create_table3 (f1) VALUES (999);
                 > SELECT f2 FROM create_table3 WHERE f2 = 1234;
                 1234
+
+                > DELETE FROM create_table3 WHERE f1 = 999;
            """
             )
         )

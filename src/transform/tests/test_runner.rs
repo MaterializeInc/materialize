@@ -123,12 +123,10 @@ mod tests {
         test_type: TestType,
     ) -> Result<String, Error> {
         let mut rel = parse_relation(s, cat, args)?;
-        let mut id_gen = Default::default();
         for t in args.get("apply").cloned().unwrap_or_else(Vec::new).iter() {
             get_transform(t)?.transform(
                 &mut rel,
                 TransformArgs {
-                    id_gen: &mut id_gen,
                     indexes: &EmptyIndexOracle,
                 },
             )?;
@@ -142,7 +140,6 @@ mod tests {
                     transform.transform(
                         &mut rel,
                         TransformArgs {
-                            id_gen: &mut id_gen,
                             indexes: &EmptyIndexOracle,
                         },
                     )?;
@@ -166,7 +163,6 @@ mod tests {
                         transform.transform(
                             &mut rel,
                             TransformArgs {
-                                id_gen: &mut id_gen,
                                 indexes: &EmptyIndexOracle,
                             },
                         )?;
@@ -233,7 +229,7 @@ mod tests {
             )),
             "Demand" => Ok(Box::new(mz_transform::demand::Demand::default())),
             "FilterFusion" => Ok(Box::new(mz_transform::fusion::filter::Filter)),
-            "FoldConstants" => Ok(Box::new(mz_transform::reduction::FoldConstants {
+            "FoldConstants" => Ok(Box::new(mz_transform::fold_constants::FoldConstants {
                 limit: None,
             })),
             "FlatMapToMap" => Ok(Box::new(mz_transform::fusion::flatmap_to_map::FlatMapToMap)),

@@ -46,6 +46,7 @@ use crate::server::ListenerHandle;
 
 mod http;
 mod server;
+mod telemetry;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 
@@ -284,6 +285,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let controller = mz_controller::Controller::new(config.controller, envd_epoch).await;
 
     // Initialize adapter.
+    let segment_client = config.segment_api_key.map(mz_segment::Client::new);
     let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
         dataflow_client: controller,
         storage: adapter_storage,
@@ -303,7 +305,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         connection_context: config.connection_context,
         storage_usage_client,
         storage_usage_collection_interval: config.storage_usage_collection_interval,
-        segment_api_key: config.segment_api_key,
+        segment_client: segment_client.clone(),
         egress_ips: config.egress_ips,
         consolidations_tx,
         consolidations_rx,
@@ -344,12 +346,21 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     task::spawn(|| "http_server", {
         let http_server = HttpServer::new(HttpConfig {
             tls: http_tls,
-            frontegg: config.frontegg,
-            adapter_client,
+            frontegg: config.frontegg.clone(),
+            adapter_client: adapter_client.clone(),
             allowed_origin: config.cors_allowed_origin,
         });
         server::serve(http_conns, http_server)
     });
+
+    // Start telemetry reporting loop.
+    if let (Some(segment_client), Some(frontegg)) = (segment_client, config.frontegg) {
+        telemetry::start_reporting(telemetry::Config {
+            segment_client,
+            adapter_client,
+            organization_id: frontegg.tenant_id(),
+        });
+    }
 
     Ok(Server {
         sql_listener,

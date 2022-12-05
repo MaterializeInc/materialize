@@ -146,6 +146,7 @@ input[type="submit"] {
     cursor: pointer;
     transition: all 0.2s;
     transition-delay: 50ms;
+    white-space: nowrap;
 }
 
 a {

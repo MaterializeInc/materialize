@@ -243,14 +243,8 @@ where
                     args: &|assigned| {
                         vec![
                             format!("--workers={}", allocation.workers),
-                            format!(
-                                "--controller-listen-addr={}:{}",
-                                assigned.listen_host, assigned.ports["controller"]
-                            ),
-                            format!(
-                                "--internal-http-listen-addr={}:{}",
-                                assigned.listen_host, assigned.ports["internal-http"]
-                            ),
+                            format!("--controller-listen-addr={}", assigned["controller"]),
+                            format!("--internal-http-listen-addr={}", assigned["internal-http"]),
                             format!("--opentelemetry-resource=storage_id={}", id),
                         ]
                     },

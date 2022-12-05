@@ -10,7 +10,6 @@
 //! gRPC transport for the [client](crate::client) module.
 
 use std::fmt::{self, Debug};
-use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -20,6 +19,7 @@ use futures::future;
 use futures::stream::{Stream, StreamExt, TryStreamExt};
 use once_cell::sync::Lazy;
 use semver::Version;
+use tokio::net::UnixStream;
 use tokio::select;
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::{oneshot, Mutex};
@@ -33,6 +33,7 @@ use tonic::{Request, Response, Status, Streaming};
 use tower::Service;
 use tracing::{debug, error, info};
 
+use mz_ore::netio::{Listener, SocketAddr, SocketAddrType};
 use mz_proto::{ProtoType, RustType};
 
 use crate::client::{GenericClient, Partitionable, Partitioned};
@@ -74,7 +75,18 @@ where
     /// client version.
     pub async fn connect(addr: String, version: Version) -> Result<Self, anyhow::Error> {
         debug!("GrpcClient {}: Attempt to connect", addr);
-        let channel = Endpoint::new(format!("http://{}", addr))?.connect().await?;
+
+        let channel = match SocketAddrType::guess(&addr) {
+            SocketAddrType::Inet => Endpoint::new(format!("http://{}", addr))?.connect().await?,
+            SocketAddrType::Unix => {
+                let addr = addr.clone();
+                Endpoint::from_static("http://localhost") // URI is ignored
+                    .connect_with_connector(tower::service_fn(move |_| {
+                        UnixStream::connect(addr.clone())
+                    }))
+                    .await?
+            }
+        };
         let service = InterceptedService::new(channel, VersionAttachInterceptor::new(version));
         let mut client = G::new(service);
         let (tx, rx) = mpsc::unbounded_channel();
@@ -208,9 +220,11 @@ where
         );
 
         info!("Starting to listen on {}", listen_addr);
+        let listener = Listener::bind(listen_addr).await?;
+
         Server::builder()
             .add_service(service)
-            .serve(listen_addr)
+            .serve_with_incoming(listener)
             .await?;
         Ok(())
     }

@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.66"
-async-trait = "0.1.58"
+async-trait = "0.1.59"
 axum = "0.5.17"
 bytesize = "1.1.0"
 clap = { version = "3.2.20", features = ["derive", "env"] }
@@ -22,7 +22,7 @@ mz-compute-client = { path = "../compute-client" }
 mz-expr = { path = "../expr" }
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
-mz-ore = { path = "../ore", features = ["task", "tracing_"] }
+mz-ore = { path = "../ore", features = ["async", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }
 mz-pid-file = { path = "../pid-file" }
 mz-prof = { path = "../prof" }

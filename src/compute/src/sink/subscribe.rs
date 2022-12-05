@@ -34,6 +34,7 @@ where
 {
     fn render_continuous_sink(
         &self,
+        _scope: &G,
         compute_state: &mut crate::compute_state::ComputeState,
         sink: &ComputeSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,

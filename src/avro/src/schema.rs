@@ -33,6 +33,7 @@ use std::str::FromStr;
 
 use digest::Digest;
 use itertools::Itertools;
+use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{
     ser::{SerializeMap, SerializeSeq},
@@ -579,18 +580,61 @@ impl fmt::Debug for FullName {
 pub type Documentation = Option<String>;
 
 impl Name {
-    /// Create a new `Name`.
-    /// No `namespace` nor `aliases` will be defined.
-    pub fn new(name: &str) -> Name {
-        Name {
-            name: name.to_owned(),
-            namespace: None,
-            aliases: None,
+    /// Reports whether the given string is a valid Avro name.
+    ///
+    /// See: <https://avro.apache.org/docs/1.11.1/specification/#names>
+    pub fn is_valid(name: &str) -> bool {
+        static MATCHER: Lazy<Regex> =
+            Lazy::new(|| Regex::new(r"(^[A-Za-z_][A-Za-z0-9_]*)$").unwrap());
+        MATCHER.is_match(name)
+    }
+
+    /// Returns an error if the given name is invalid.
+    pub fn validate(name: &str) -> Result<(), AvroError> {
+        match Self::is_valid(name) {
+            true => Ok(()),
+            false => {
+                Err(ParseSchemaError::new(format!(
+                    "Invalid name. Must start with [A-Za-z_] and subsequently only contain [A-Za-z0-9_]. Found: {}",
+                    name
+                )).into())
+            }
         }
     }
 
-    /// Parse a `serde_json::Value` into a `Name`.
-    fn parse(complex: &Map<String, Value>) -> Result<Self, AvroError> {
+    /// Rewrites `name` to be valid.
+    ///
+    /// Any non alphanumeric characters are replaced with underscores. If the
+    /// name begins with a number, it is prefixed with `_`.
+    ///
+    /// `make_valid` is not injective. Multiple invalid names are mapped to the
+    /// the same valid name.
+    pub fn make_valid(name: &str) -> String {
+        let mut out = String::new();
+        let mut chars = name.chars();
+        match chars.next() {
+            Some(ch @ ('a'..='z' | 'A'..='Z')) => out.push(ch),
+            Some(ch @ '0'..='9') => {
+                out.push('_');
+                out.push(ch);
+            }
+            _ => out.push('_'),
+        }
+        for ch in chars {
+            match ch {
+                '0'..='9' | 'a'..='z' | 'A'..='Z' => out.push(ch),
+                _ => out.push('_'),
+            }
+        }
+        debug_assert!(
+            Name::is_valid(&out),
+            "make_valid({name}) produced invalid name: {out}"
+        );
+        out
+    }
+
+    /// Parse a `serde_json::map::Map` into a `Name`.
+    pub fn parse(complex: &Map<String, Value>) -> Result<Self, AvroError> {
         let name = complex
             .name()
             .ok_or_else(|| ParseSchemaError::new("No `name` field"))?;
@@ -618,16 +662,7 @@ impl Name {
             (complex.string("namespace"), name)
         };
 
-        if !Regex::new(r"(^[A-Za-z_][A-Za-z0-9_]*)$")
-            .unwrap()
-            .is_match(&name)
-        {
-            return Err(ParseSchemaError::new(format!(
-                "Invalid name. Must start with [A-Za-z_] and subsequently only contain [A-Za-z0-9_]. Found: {}",
-                name
-            ))
-                .into());
-        }
+        Self::validate(&name)?;
 
         let aliases: Option<Vec<String>> = complex
             .get("aliases")
@@ -645,6 +680,13 @@ impl Name {
             namespace,
             aliases,
         })
+    }
+
+    /// Parses a name from a simple string.
+    pub fn parse_simple(name: &str) -> Result<Self, AvroError> {
+        let mut map = serde_json::map::Map::new();
+        map.insert("name".into(), serde_json::Value::String(name.into()));
+        Self::parse(&map)
     }
 
     /// Return the `fullname` of this `Name`
@@ -986,6 +1028,8 @@ impl SchemaParser {
         let name = field
             .name()
             .ok_or_else(|| ParseSchemaError::new("No `name` in record field"))?;
+
+        Name::validate(&name)?;
 
         let schema = field
             .get("type")
@@ -2938,5 +2982,21 @@ mod tests {
             format!("{}", schema.fingerprint::<Sha256>()),
             expected_fingerprint
         );
+    }
+
+    #[test]
+    fn test_make_valid() {
+        for (input, expected) in [
+            ("foo", "foo"),
+            ("az99", "az99"),
+            ("99az", "_99az"),
+            ("is,bad", "is_bad"),
+            ("@#$%", "____"),
+            ("i-amMisBehaved!", "i_amMisBehaved_"),
+            ("", "_"),
+        ] {
+            let actual = Name::make_valid(input);
+            assert_eq!(expected, actual, "Name::make_valid({input})")
+        }
     }
 }

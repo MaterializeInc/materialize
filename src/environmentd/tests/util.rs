@@ -34,7 +34,6 @@ use mz_environmentd::TlsMode;
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_orchestrator::Orchestrator;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
-use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
@@ -47,10 +46,6 @@ use mz_storage_client::types::connections::ConnectionContext;
 
 pub static KAFKA_ADDRS: Lazy<String> =
     Lazy::new(|| env::var("KAFKA_ADDRS").unwrap_or_else(|_| "localhost:9092".into()));
-
-// Port 2181 is used by ZooKeeper.
-static PORT_ALLOCATOR: Lazy<Arc<PortAllocator>> =
-    Lazy::new(|| Arc::new(PortAllocator::new_with_filter(2100, 2600, &[2181])));
 
 #[derive(Clone)]
 pub struct Config {
@@ -150,6 +145,7 @@ impl Config {
 
 pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     let runtime = Arc::new(Runtime::new()?);
+    let environment_id = format!("environment-{}-0", Uuid::new_v4());
     let (data_directory, temp_dir) = match config.data_directory {
         None => {
             // If no data directory is provided, we create a temporary
@@ -186,11 +182,11 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
                 .parent()
                 .unwrap()
                 .to_path_buf(),
-            port_allocator: PORT_ALLOCATOR.clone(),
             // NOTE(benesch): would be nice to not have to do this, but
             // the subprocess output wreaks havoc on cargo2junit.
             suppress_output: true,
-            data_dir: data_directory.clone(),
+            environment_id: environment_id.clone(),
+            secrets_dir: data_directory.join("secrets"),
             command_wrapper: vec![],
         }))?,
     );
@@ -233,7 +229,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         persisted_introspection: true,
         metrics_registry: metrics_registry.clone(),
         now: config.now,
-        environment_id: format!("environment-{}-0", Uuid::from_u128(0)),
+        environment_id,
         cors_allowed_origin: AllowOrigin::list([]),
         cluster_replica_sizes: Default::default(),
         bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,

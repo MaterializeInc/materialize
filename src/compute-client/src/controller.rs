@@ -41,16 +41,17 @@ use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::BoxStream;
 use futures::{future, FutureExt, StreamExt};
-use mz_ore::{halt, soft_assert};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, Timestamp};
+use tracing::warn;
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
 use mz_expr::RowSetFinishing;
 use mz_orchestrator::{CpuLimit, MemoryLimit, NamespacedOrchestrator, ServiceProcessMetrics};
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::{halt, soft_assert};
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 
@@ -496,7 +497,7 @@ where
                 let metrics = match result {
                     Ok(metrics) => metrics,
                     Err(e) => {
-                        tracing::log::warn!("Failed to get metrics for replica {replica_id}: {e}");
+                        warn!("failed to get metrics for replica {replica_id}: {e}");
                         return;
                     }
                 };
@@ -761,7 +762,7 @@ where
             if let Ok(mut instance) = self.instance(instance_id) {
                 instance.handle_response(response, replica_id)
             } else {
-                tracing::warn!(
+                warn!(
                     ?instance_id,
                     ?response,
                     "processed response from unknown instance"

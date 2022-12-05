@@ -42,6 +42,8 @@ mod util;
 
 pub mod catalog;
 pub mod client;
+pub mod config;
+pub mod metrics;
 pub mod session;
 
 pub use crate::client::{Client, ConnClient, Handle, SessionClient};

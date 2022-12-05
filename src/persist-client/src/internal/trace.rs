@@ -235,6 +235,18 @@ impl<T: Timestamp + Lattice> Trace<T> {
         ApplyMergeResult::NotAppliedNoMatch
     }
 
+    pub(crate) fn all_fueled_merge_reqs(&self) -> Vec<FueledMergeReq<T>> {
+        let mut reqs = Vec::new();
+        self.spine.map_batches(|b| match b {
+            SpineBatch::Merged(_) => {} // No-op.
+            SpineBatch::Fueled { desc, parts, .. } => reqs.push(FueledMergeReq {
+                desc: desc.clone(),
+                inputs: parts.clone(),
+            }),
+        });
+        reqs
+    }
+
     // This is only called with the results of one `insert` and so the length of
     // `merge_reqs` is bounded by the number of levels in the spine (or possibly
     // some small constant multiple?). The number of levels is logarithmic in

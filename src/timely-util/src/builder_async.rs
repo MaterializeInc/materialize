@@ -11,12 +11,14 @@
 
 use std::cell::RefCell;
 use std::future::Future;
+use std::mem::ManuallyDrop;
 use std::pin::Pin;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
+use differential_dataflow::operators::arrange::agent::ShutdownButton;
 use futures_util::task::ArcWake;
 use polonius_the_crab::{polonius, WithLifetime};
 use timely::communication::{message::RefOrMut, Pull};
@@ -28,7 +30,7 @@ use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo, Output
 use timely::dataflow::operators::{Capability, CapabilityRef};
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::{Antichain, Timestamp};
-use timely::scheduling::SyncActivator;
+use timely::scheduling::{Activator, SyncActivator};
 use timely::{Container, PartialOrder};
 
 /// Builds async operators with generic shape.
@@ -39,8 +41,13 @@ pub struct OperatorBuilder<G: Scope> {
     shared_frontiers: Rc<RefCell<Vec<(Antichain<G::Timestamp>, bool)>>>,
     /// Wakers registered by input handles
     registered_wakers: Rc<RefCell<Vec<Waker>>>,
+    /// The activator for this operator
+    activator: Activator,
     /// The waker set up to activate this timely operator when woken
     operator_waker: Arc<TimelyWaker>,
+    /// Holds type erased closures that should drain a handle when called. These handles will be
+    /// automatically drained when the operator is scheduled and the logic future has exited
+    drain_pipe: Rc<RefCell<Vec<Box<dyn FnMut()>>>>,
 }
 
 /// An async Waker that activates a specific operator when woken and marks the task as ready
@@ -61,9 +68,9 @@ impl ArcWake for TimelyWaker {
 }
 
 /// Async handle to an operator's input stream
-pub struct AsyncInputHandle<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> {
+pub struct AsyncInputHandle<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> {
     /// The underying synchronous input handle
-    sync_handle: InputHandleCore<T, D, P>,
+    sync_handle: ManuallyDrop<InputHandleCore<T, D, P>>,
     /// Frontier information of input streams shared with the operator. Each frontier is paired
     /// with a flag indicating whether or not the handle has seen the updated frontier.
     shared_frontiers: Rc<RefCell<Vec<(Antichain<T>, bool)>>>,
@@ -71,9 +78,12 @@ pub struct AsyncInputHandle<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>
     index: usize,
     /// Reference to the reactor queue of this input handle where Wakers can be registered
     reactor_registry: Weak<RefCell<Vec<Waker>>>,
+    /// Holds type erased closures that should drain a handle when called. These handles will be
+    /// automatically drained when the operator is scheduled and the logic future has exited
+    drain_pipe: Rc<RefCell<Vec<Box<dyn FnMut()>>>>,
 }
 
-impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> AsyncInputHandle<T, D, P> {
+impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> AsyncInputHandle<T, D, P> {
     /// Produces a future that will resolve to the next event of this input stream
     ///
     /// # Cancel safety
@@ -84,8 +94,18 @@ impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> AsyncInputHandle<T, 
     }
 }
 
+impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> Drop for AsyncInputHandle<T, D, P> {
+    fn drop(&mut self) {
+        // SAFETY: We're in a Drop impl so this runs only once
+        let mut sync_handle = unsafe { ManuallyDrop::take(&mut self.sync_handle) };
+        self.drain_pipe
+            .borrow_mut()
+            .push(Box::new(move || sync_handle.for_each(|_, _| {})));
+    }
+}
+
 /// The future returned by `AsyncInputHandle::next`
-struct NextFut<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> {
+struct NextFut<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> {
     handle: Option<&'handle mut AsyncInputHandle<T, D, P>>,
 }
 
@@ -153,9 +173,10 @@ impl<G: Scope> OperatorBuilder<G> {
     pub fn new(name: String, scope: G) -> Self {
         let builder = OperatorBuilderRc::new(name, scope.clone());
         let info = builder.operator_info();
-        let activator = scope.sync_activator_for(&info.address);
+        let activator = scope.activator_for(&info.address);
+        let sync_activator = scope.sync_activator_for(&info.address);
         let operator_waker = TimelyWaker {
-            activator,
+            activator: sync_activator,
             active: AtomicBool::new(false),
             task_ready: AtomicBool::new(true),
         };
@@ -164,7 +185,9 @@ impl<G: Scope> OperatorBuilder<G> {
             builder,
             shared_frontiers: Default::default(),
             registered_wakers: Default::default(),
+            activator,
             operator_waker: Arc::new(operator_waker),
+            drain_pipe: Default::default(),
         }
     }
 
@@ -206,11 +229,14 @@ impl<G: Scope> OperatorBuilder<G> {
             .borrow_mut()
             .push((Antichain::from_elem(G::Timestamp::minimum()), false));
 
+        let sync_handle = self.builder.new_input_connection(stream, pact, connection);
+
         AsyncInputHandle {
-            sync_handle: self.builder.new_input_connection(stream, pact, connection),
+            sync_handle: ManuallyDrop::new(sync_handle),
             shared_frontiers: Rc::clone(&self.shared_frontiers),
             reactor_registry: Rc::downgrade(&self.registered_wakers),
             index,
+            drain_pipe: Rc::clone(&self.drain_pipe),
         }
     }
 
@@ -244,8 +270,11 @@ impl<G: Scope> OperatorBuilder<G> {
         self.builder.new_output_connection(connection)
     }
 
-    /// Creates an operator implementation from supplied logic constructor.
-    pub fn build<B, L>(self, constructor: B)
+    /// Creates an operator implementation from supplied logic constructor. It returns a shutdown
+    /// button that when pressed it will cause the logic future to be dropped and input handles to
+    /// be drained. The button can be converted into a token by using
+    /// [`ShutdownButton::press_on_drop`]
+    pub fn build<B, L>(self, constructor: B) -> ShutdownButton<()>
     where
         B: FnOnce(Vec<Capability<G::Timestamp>>) -> L,
         L: Future + 'static,
@@ -253,6 +282,9 @@ impl<G: Scope> OperatorBuilder<G> {
         let operator_waker = self.operator_waker;
         let registered_wakers = self.registered_wakers;
         let shared_frontiers = self.shared_frontiers;
+        let drain_pipe = self.drain_pipe;
+        let token = Rc::new(RefCell::new(Some(())));
+        let button = ShutdownButton::new(Rc::clone(&token), self.activator);
         self.builder.build_reschedule(move |caps| {
             let mut logic_fut = Some(Box::pin(constructor(caps)));
             move |new_frontiers| {
@@ -278,6 +310,13 @@ impl<G: Scope> OperatorBuilder<G> {
                     }
                     operator_waker.active.store(false, Ordering::SeqCst);
                 }
+
+                // If the shutdown button got pressed we should immediately drop the logic future
+                // which will also register all the handles for drainage
+                if token.borrow().is_none() {
+                    logic_fut = None;
+                }
+
                 // Schedule the logic future if any of the wakers above marked the task as ready
                 if let Some(fut) = logic_fut.as_mut() {
                     if operator_waker.task_ready.load(Ordering::SeqCst) {
@@ -291,9 +330,20 @@ impl<G: Scope> OperatorBuilder<G> {
                     }
                 }
                 // The timely operator needs to be kept alive if the task is pending
-                logic_fut.is_some()
+                if logic_fut.is_some() {
+                    true
+                } else {
+                    // Othewise we should drain any dropped handles
+                    let mut drains = drain_pipe.borrow_mut();
+                    for drain in drains.iter_mut() {
+                        (drain)()
+                    }
+                    false
+                }
             }
-        })
+        });
+
+        button
     }
 
     /// Creates operator info for the operator.

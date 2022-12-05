@@ -20,14 +20,14 @@ use std::cell::RefCell;
 use std::panic::{self, UnwindSafe};
 use std::process;
 
-#[cfg(feature = "task")]
+#[cfg(feature = "async")]
 use tokio::task_local;
 
 thread_local! {
     static CATCHING_UNWIND: RefCell<bool> = RefCell::new(false);
 }
 
-#[cfg(feature = "task")]
+#[cfg(feature = "async")]
 task_local! {
     pub(crate) static CATCHING_UNWIND_ASYNC: bool;
 }
@@ -56,9 +56,9 @@ pub fn set_abort_on_panic() {
     panic::set_hook(Box::new(move |panic_info| {
         old_hook(panic_info);
         let catching_unwind = CATCHING_UNWIND.with(|v| *v.borrow());
-        #[cfg(feature = "task")]
+        #[cfg(feature = "async")]
         let catching_unwind_async = CATCHING_UNWIND_ASYNC.try_with(|v| *v).unwrap_or(false);
-        #[cfg(not(feature = "task"))]
+        #[cfg(not(feature = "async"))]
         let catching_unwind_async = false;
         if !catching_unwind && !catching_unwind_async {
             process::abort();
