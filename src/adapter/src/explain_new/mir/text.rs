@@ -81,7 +81,7 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                             )
                         })?;
                     } else {
-                        write!(f, "{}Constant <empty>", ctx.indent)?;
+                        writeln!(f, "{}Constant <empty>", ctx.indent)?;
                     }
                 }
                 Err(err) => {
@@ -670,14 +670,18 @@ impl<'a> DisplayText for Displayable<'a, MirScalarExpr> {
 
 impl<'a> DisplayText for Displayable<'a, AggregateExpr> {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut ()) -> fmt::Result {
-        let func = self.0.func.clone();
-        if self.0.distinct {
-            write!(f, "{}(distinct ", func)?;
-            Displayable::from(&self.0.expr).fmt_text(f, ctx)?;
-        } else {
-            write!(f, "{}(", func)?;
-            Displayable::from(&self.0.expr).fmt_text(f, ctx)?;
+        if self.0.is_count_asterisk() {
+            return write!(f, "count(*)");
         }
+
+        write!(
+            f,
+            "{}({}",
+            self.0.func.clone(),
+            if self.0.distinct { "distinct " } else { "" }
+        )?;
+
+        Displayable::from(&self.0.expr).fmt_text(f, ctx)?;
         write!(f, ")")
     }
 }

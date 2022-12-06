@@ -19,7 +19,6 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use mz_compute_client::command::DataflowDesc;
 use mz_expr::visit::Visit;
 use mz_expr::{CollectionPlan, Id, LocalId, MapFilterProject, MirRelationExpr};
-use mz_ore::id_gen::IdGen;
 
 use crate::{monotonic::MonotonicFlag, IndexOracle, Optimizer, TransformError};
 
@@ -117,21 +116,18 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
 
             // When splicing in the `index` view, we need to create disjoint
             // identifiers for the Let's `body` and `value`, as well as a new
-            // identifier for the binding itself. Following `UpdateLet`, we
+            // identifier for the binding itself. Following `NormalizeLets`, we
             // go with the binding first, then the value, then the body.
-            let update_let = crate::update_let::UpdateLet::default();
             let mut id_gen = crate::IdGen::default();
             let new_local = LocalId::new(id_gen.allocate_id());
             // Use the same `id_gen` to assign new identifiers to `index`.
-            update_let.action(
+            crate::normalize_lets::renumber_bindings(
                 dataflow.objects_to_build[index].plan.as_inner_mut(),
-                &mut HashMap::new(),
                 &mut id_gen,
             )?;
             // Assign new identifiers to the other relation.
-            update_let.action(
+            crate::normalize_lets::renumber_bindings(
                 dataflow.objects_to_build[other].plan.as_inner_mut(),
-                &mut HashMap::new(),
                 &mut id_gen,
             )?;
             // Install the `new_local` name wherever `global_id` was used.
@@ -187,8 +183,6 @@ fn optimize_dataflow_relations(
     // just before we plan to install the dataflow. This would also allow us to not
     // add indexes imperatively to `DataflowDesc`.
     for object in dataflow.objects_to_build.iter_mut() {
-        // Re-name bindings to accommodate other analyses, specifically
-        // `InlineLet` which probably wants a reworking in any case.
         // Re-run all optimizations on the composite views.
         optimizer.transform(object.plan.as_inner_mut(), indexes)?;
     }
@@ -293,13 +287,13 @@ where
         view_refs.push(view);
     }
 
-    let typ_update = crate::update_let::UpdateLet::default();
+    let typ_update = crate::normalize_lets::NormalizeLets::new(false);
     for view in view_refs {
         // Update column references to views where projections were pushed down.
         projection_pushdown.update_projection_around_get(view, &applied_projection)?;
         // Types need to be updated after ProjectionPushdown
         // because the width of each view may have changed.
-        typ_update.action(view, &mut HashMap::new(), &mut IdGen::default())?;
+        typ_update.action(view)?;
     }
 
     Ok(())

@@ -262,7 +262,7 @@ Explained Query:
                 - ()
   With
     cte l0 =
-      Reduce aggregates=[min(#0), max(#0), sum(#0), count(true), sum((integer_to_numeric(#0) * integer_to_numeric(#0))), sum(integer_to_numeric(#0)), count(integer_to_numeric(#0)), list_agg(row(list[#0]))] // { types: "(integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)" }
+      Reduce aggregates=[min(#0), max(#0), sum(#0), count(*), sum((integer_to_numeric(#0) * integer_to_numeric(#0))), sum(integer_to_numeric(#0)), count(integer_to_numeric(#0)), list_agg(row(list[#0]))] // { types: "(integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)" }
         Project (#1) // { types: "(integer)" }
           Get materialize.public.int_table // { types: "(integer?, integer)" }
 
@@ -288,7 +288,7 @@ Explained Query:
             - ()
   With
     cte l0 =
-      Reduce aggregates=[count(true), count(distinct #0)] // { types: "(bigint, bigint)" }
+      Reduce aggregates=[count(*), count(distinct #0)] // { types: "(bigint, bigint)" }
         Project (#1) // { types: "(integer)" }
           Get materialize.public.int_table // { types: "(integer?, integer)" }
 
@@ -717,7 +717,7 @@ Explained Query:
         Map (error("more than one record produced in subquery")) // { types: "(integer)" }
           Project () // { types: "()" }
             Filter (#0 > 1) // { types: "(bigint)" }
-              Reduce aggregates=[count(true)] // { types: "(bigint)" }
+              Reduce aggregates=[count(*)] // { types: "(bigint)" }
                 Get l0 // { types: "()" }
     cte l0 =
       Project () // { types: "()" }

@@ -223,7 +223,7 @@ Explained Query:
             - ()
   With
     cte l1 =
-      Reduce aggregates=[count(true)]
+      Reduce aggregates=[count(*)]
         Project ()
           Union
             Map (null)

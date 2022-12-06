@@ -24,6 +24,7 @@ pub mod datetime;
 pub mod interval;
 pub mod jsonb;
 pub mod numeric;
+pub mod range;
 pub mod regex;
 pub mod system;
 pub mod timestamp;
