@@ -12,9 +12,10 @@ menu:
 {{< diagram "begin.svg" >}}
 
 
+
 Value | Description
 ------|----------
-`isolation_level` | The default isolation level is `STRICT SERIALIZABLE`. You can also use `SERIALIZABLE`. While any isolation level below `SERIALIZABLE` is also accepted as input, the isolation level will always be at least `SERIALIZABLE`.
+`isolation_level` | The default isolation level is `STRICT SERIALIZABLE`. You can also use `SERIALIZABLE`. While any isolation level below `SERIALIZABLE` is also accepted as input, the isolation level will always be at least `SERIALIZABLE`. See [consistency guarantees](/overview/isolation-level) for more details.
 
 ## Details
 
@@ -25,7 +26,7 @@ Transactions in Materialize do not support interleaving arbitrary kinds of state
 
 ### Read-only transactions
 
-A **read-only** transaction starts with a [`SELECT`](/sql/select) statement and allows only `SELECT` statements.
+When you specify `BEGIN READ ONLY`, you initiate  **read-only** transaction. This is a transaction that starts with a [`SELECT`](/sql/select) statement and allows only `SELECT` statements.
 Because Materialize does not know which objects (sources, tables, or views) will be queried during the transaction, the objects in the first `SELECT` and any other object in the same schemas are assumed to be possible query targets.
 Other queries can only reference these same-schema objects.
 During the first query, a timestamp is chosen that is valid for all of those objects.
