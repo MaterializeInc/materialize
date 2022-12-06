@@ -120,8 +120,7 @@ p+p {
         }
 
         .highlight:only-child {
-            display: inline-block;
-            margin-bottom: 1rem;
+            margin: 1rem 0;
 
             pre {
                 margin: 0;
@@ -811,6 +810,8 @@ p+p {
     display: none;
     position: absolute;
     font-size: 1.2rem;
+    font-weight: 300;
+    border: none;
     background-color: $grey-light;
     height: 26px;
     padding: 0 12px;
