@@ -551,10 +551,14 @@ impl<S: Append + 'static> Coordinator<S> {
         // Migrate builtin objects.
         self.controller
             .storage
-            .drop_sources_unvalidated(builtin_migration_metadata.previous_materialized_view_ids);
+            .drop_sources_unvalidated(builtin_migration_metadata.previous_materialized_view_ids)
+            .await
+            .unwrap();
         self.controller
             .storage
-            .drop_sources_unvalidated(builtin_migration_metadata.previous_source_ids);
+            .drop_sources_unvalidated(builtin_migration_metadata.previous_source_ids)
+            .await
+            .unwrap();
         self.controller
             .storage
             .drop_sinks_unvalidated(builtin_migration_metadata.previous_sink_ids);

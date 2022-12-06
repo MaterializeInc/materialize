@@ -239,13 +239,14 @@ impl<S: Append + 'static> Coordinator<S> {
                 .await;
 
             if !sources_to_drop.is_empty() {
-                self.drop_sources(sources_to_drop);
+                self.drop_sources(sources_to_drop).await;
             }
             if !log_sources_to_drop.is_empty() {
-                self.drop_sources(log_sources_to_drop.into_iter().map(|(_, id)| id).collect());
+                self.drop_sources(log_sources_to_drop.into_iter().map(|(_, id)| id).collect())
+                    .await;
             }
             if !tables_to_drop.is_empty() {
-                self.drop_sources(tables_to_drop);
+                self.drop_sources(tables_to_drop).await;
             }
             if !storage_sinks_to_drop.is_empty() {
                 self.drop_storage_sinks(storage_sinks_to_drop);
@@ -254,7 +255,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 self.drop_indexes(indexes_to_drop);
             }
             if !materialized_views_to_drop.is_empty() {
-                self.drop_materialized_views(materialized_views_to_drop);
+                self.drop_materialized_views(materialized_views_to_drop)
+                    .await;
             }
             if !secrets_to_drop.is_empty() {
                 self.drop_secrets(secrets_to_drop).await;
@@ -318,11 +320,11 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(result)
     }
 
-    fn drop_sources(&mut self, sources: Vec<GlobalId>) {
+    async fn drop_sources(&mut self, sources: Vec<GlobalId>) {
         for id in &sources {
             self.drop_storage_read_policy(id);
         }
-        self.controller.storage.drop_sources(sources).unwrap();
+        self.controller.storage.drop_sources(sources).await.unwrap();
     }
 
     pub(crate) fn drop_compute_sinks(&mut self, sinks: Vec<ComputeSinkId>) {
@@ -371,7 +373,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
-    fn drop_materialized_views(&mut self, mviews: Vec<(ComputeInstanceId, GlobalId)>) {
+    async fn drop_materialized_views(&mut self, mviews: Vec<(ComputeInstanceId, GlobalId)>) {
         let mut by_compute_instance: HashMap<_, Vec<_>> = HashMap::new();
         let mut source_ids = Vec::new();
         for (compute_instance, id) in mviews {
@@ -399,7 +401,11 @@ impl<S: Append + 'static> Coordinator<S> {
         for id in &source_ids {
             self.drop_storage_read_policy(id);
         }
-        self.controller.storage.drop_sources(source_ids).unwrap();
+        self.controller
+            .storage
+            .drop_sources(source_ids)
+            .await
+            .unwrap();
     }
 
     async fn drop_secrets(&mut self, secrets: Vec<GlobalId>) {

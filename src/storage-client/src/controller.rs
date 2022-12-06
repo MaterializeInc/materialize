@@ -229,7 +229,7 @@ pub trait StorageController: Debug + Send {
     fn cancel_prepare_export(&mut self, token: CreateExportToken);
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
-    fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
+    async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
     fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
@@ -246,7 +246,7 @@ pub trait StorageController: Debug + Send {
     ///     `drop_sinks`.
     fn drop_sinks_unvalidated(&mut self, identifiers: Vec<GlobalId>);
 
-    /// Drops the read capability for the sources and allows their resources to be reclaimed.
+    /// Drops the read capability and finalizes the sources and allows their resources to be reclaimed.
     ///
     /// TODO(jkosh44): This method does not validate the provided identifiers. Currently when the
     ///     controller starts/restarts it has no durable state. That means that it has no way of
@@ -256,7 +256,13 @@ pub trait StorageController: Debug + Send {
     ///     created, but have been forgotten by the controller due to a restart.
     ///     Once command history becomes durable we can remove this method and use the normal
     ///     `drop_sources`.
-    fn drop_sources_unvalidated(&mut self, identifiers: Vec<GlobalId>);
+    async fn drop_sources_unvalidated(
+        &mut self,
+        identifiers: Vec<GlobalId>,
+    ) -> Result<(), StorageError>;
+
+    /// Finalizes a shard, closing it to new writes.
+    async fn finalize(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
 
     /// Append `updates` into the local input named `id` and advance its upper to `upper`.
     ///
@@ -1212,17 +1218,49 @@ where
         Ok(())
     }
 
-    fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
+    async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
         self.validate_collection_ids(identifiers.iter().cloned())?;
-        self.drop_sources_unvalidated(identifiers);
+        self.drop_sources_unvalidated(identifiers).await?;
         Ok(())
     }
 
-    fn drop_sources_unvalidated(&mut self, identifiers: Vec<GlobalId>) {
-        for id in identifiers {
-            self.update_write_frontiers(&[(id, Antichain::new())]);
-            self.set_read_policy(vec![(id.clone(), ReadPolicy::ValidFrom(Antichain::new()))]);
+    async fn drop_sources_unvalidated(
+        &mut self,
+        identifiers: Vec<GlobalId>,
+    ) -> Result<(), StorageError> {
+        let policies = identifiers
+            .iter()
+            .map(|id| (id.clone(), ReadPolicy::ValidFrom(Antichain::new())))
+            .collect();
+
+        self.set_read_policy(policies);
+        self.finalize(identifiers).await?;
+
+        Ok(())
+    }
+
+    async fn finalize(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
+        loop {
+            let updates = identifiers
+                .iter()
+                .map(|id| (id.clone(), Vec::new(), Antichain::new()))
+                .collect();
+
+            let res = self
+                .append(updates)
+                .expect("[] not beyond upper")
+                .await
+                .expect("one-shot dropped while waiting synchronously");
+
+            if let Err(StorageError::InvalidUppers(_)) = res {
+                continue;
+            }
+
+            let _ = res?;
+            break;
         }
+
+        Ok(())
     }
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
@@ -1265,10 +1303,7 @@ where
         // TODO(petrosagg): validate appends against the expected RelationDesc of the collection
         for (id, updates, batch_upper) in commands.iter() {
             for update in updates.iter() {
-                if !PartialOrder::less_than(
-                    &Antichain::from_elem(update.timestamp.clone()),
-                    batch_upper,
-                ) {
+                if batch_upper.less_equal(&update.timestamp) {
                     return Err(StorageError::UpdateBeyondUpper(*id));
                 }
             }
