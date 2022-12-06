@@ -261,9 +261,6 @@ pub trait StorageController: Debug + Send {
         identifiers: Vec<GlobalId>,
     ) -> Result<(), StorageError>;
 
-    /// Finalizes a shard, closing it to new writes.
-    async fn finalize(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
-
     /// Append `updates` into the local input named `id` and advance its upper to `upper`.
     ///
     /// The method returns a oneshot that can be awaited to indicate completion of the write.
@@ -277,6 +274,9 @@ pub trait StorageController: Debug + Send {
             Antichain<Self::Timestamp>,
         )>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
+
+    /// Finalizes a shard, closing it to new writes.
+    async fn finalize(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
 
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
     async fn snapshot(
@@ -1239,30 +1239,6 @@ where
         Ok(())
     }
 
-    async fn finalize(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
-        loop {
-            let updates = identifiers
-                .iter()
-                .map(|id| (id.clone(), Vec::new(), Antichain::new()))
-                .collect();
-
-            let res = self
-                .append(updates)
-                .expect("[] not beyond upper")
-                .await
-                .expect("one-shot dropped while waiting synchronously");
-
-            if let Err(StorageError::InvalidUppers(_)) = res {
-                continue;
-            }
-
-            let _ = res?;
-            break;
-        }
-
-        Ok(())
-    }
-
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
     fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
         self.validate_export_ids(identifiers.iter().cloned())?;
@@ -1310,6 +1286,30 @@ where
         }
 
         Ok(self.state.persist_write_handles.append(commands))
+    }
+
+    async fn finalize(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
+        loop {
+            let updates = identifiers
+                .iter()
+                .map(|id| (id.clone(), Vec::new(), Antichain::new()))
+                .collect();
+
+            let res = self
+                .append(updates)
+                .expect("[] not beyond upper")
+                .await
+                .expect("one-shot dropped while waiting synchronously");
+
+            if let Err(StorageError::InvalidUppers(_)) = res {
+                continue;
+            }
+
+            let _ = res?;
+            break;
+        }
+
+        Ok(())
     }
 
     // TODO(petrosagg): This signature is not very useful in the context of partially ordered times
