@@ -11,12 +11,10 @@ menu:
 
 {{< diagram "begin.svg" >}}
 
-Supported `transaction_mode` option values:
 
 Value | Description
 ------|----------
-`ISOLATION LEVEL SERIALIZABLE` | A no-op because transactions are always serializable. Lower isolation modes are also accepted, but treated identically to serializable.
-`READ ONLY` | Limits the transaction to read-only operations.
+`isolation_level` | The default isolation level is `STRICT SERIALIZABLE`. You can also use `SERIALIZABLE`. While any isolation level below `SERIALIZABLE` is also accepted as input, the isolation level will always be at least `SERIALIZABLE`.
 
 ## Details
 

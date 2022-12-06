@@ -16,7 +16,7 @@ array_agg ::=
 as_of ::=
   'AS' 'OF' ( 'AT' 'LEAST' )? timestamp_expression
 begin ::=
-  'BEGIN' ( transaction_mode ( ',' transaction_mode )* )?
+  'BEGIN' ( 'ISOLATION LEVEL' ( isolation_level) | ('READ ONLY')?)
 close ::=
   'CLOSE' cursor_name
 col_option ::=
