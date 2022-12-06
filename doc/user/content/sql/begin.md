@@ -15,7 +15,8 @@ menu:
 
 Value | Description
 ------|----------
-`isolation_level` | The default isolation level is `STRICT SERIALIZABLE`. You can also use `SERIALIZABLE`. While any isolation level below `SERIALIZABLE` is also accepted as input, the isolation level will always be at least `SERIALIZABLE`. See [consistency guarantees](/overview/isolation-level) for more details.
+`ISOLATION LEVEL <level>` | Sets the transaction [isolation level](/overview/isolation-level).
+`READ ONLY` | Limits the transaction to read-only operations.
 
 ## Details
 
