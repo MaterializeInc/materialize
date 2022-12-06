@@ -18,6 +18,7 @@ steps:
         key: tests
         options:
           - { value: zippy-kafka-sources-large }
+          - { value: zippy-dataflows-large }
         multiple: true
         required: false
     if: build.source == "ui"
@@ -48,3 +49,14 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: zippy
           args: [--scenario=KafkaSourcesLarge, --actions=50000]
+
+  - id: zippy-dataflows-large
+    label: "Long running Zippy with complex dataflows"
+    # 48h
+    timeout_in_minutes: 2880
+    agents:
+      queue: linux-x86_64-large
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: zippy
+          args: [--scenario=DataflowsLarge, --actions=50000]

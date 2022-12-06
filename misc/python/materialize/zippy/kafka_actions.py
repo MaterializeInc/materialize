@@ -67,8 +67,13 @@ class CreateTopicParameterized(ActionFactory):
     def requires(cls) -> Set[Type[Capability]]:
         return {MzIsRunning, KafkaRunning}
 
-    def __init__(self, max_topics: int = 10) -> None:
+    def __init__(
+        self,
+        max_topics: int = 10,
+        envelopes: List[Envelope] = [Envelope.NONE, Envelope.UPSERT],
+    ) -> None:
         self.max_topics = max_topics
+        self.envelopes = envelopes
 
     def new(self, capabilities: Capabilities) -> List[Action]:
         new_topic_name = capabilities.get_free_capability_name(
@@ -80,7 +85,7 @@ class CreateTopicParameterized(ActionFactory):
                 CreateTopic(
                     topic=TopicExists(
                         name=new_topic_name,
-                        envelope=random.choice([Envelope.NONE, Envelope.UPSERT]),
+                        envelope=random.choice(self.envelopes),
                         partitions=random.randint(1, 10),
                     )
                 )
