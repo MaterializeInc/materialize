@@ -114,11 +114,27 @@ Apache License, Version 2.0. */}}
     </script>
 
     <script>
+      const systemButton = document.querySelector("button.system");
+      const lightButton = document.querySelector("button.light");
+      const darkButton = document.querySelector("button.dark");
+
+      const highlightButton = (theme) => {
+        [systemButton, lightButton, darkButton].forEach((button) => {
+          if ([...button.classList].includes(theme)) {
+            button.classList.add("active");
+          } else {
+            button.classList.remove("active");
+          }
+        });
+      };
+
+      highlightButton(theme);
+
       darkMediaQuery.addEventListener("change", () => {
         const storedTheme = localStorage.getItem("theme");
         if (storedTheme === "system") {
-          console.log("Called.");
-          if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+          highlightButton(storedTheme);
+          if (darkMediaQuery.matches) {
             document.body.classList.replace("light", "dark");
           } else {
             document.body.classList.replace("dark", "light");
@@ -126,27 +142,26 @@ Apache License, Version 2.0. */}}
         }
       });
 
-      const systemButton = document.querySelector("button.system");
-      const lightButton = document.querySelector("button.light");
-      const darkButton = document.querySelector("button.dark");
-
       systemButton.addEventListener("click", () => {
-        if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+        if (darkMediaQuery.matches) {
           document.body.classList.replace("light", "dark");
         } else {
           document.body.classList.replace("dark", "light");
         }
         localStorage.setItem("theme", "system");
+        highlightButton("system");
       });
 
       lightButton.addEventListener("click", () => {
         document.body.classList.replace("dark", "light");
         localStorage.setItem("theme", "light");
+        highlightButton("light");
       });
 
       darkButton.addEventListener("click", () => {
         document.body.classList.replace("light", "dark");
         localStorage.setItem("theme", "dark");
+        highlightButton("dark");
       });
     </script>
   </body>

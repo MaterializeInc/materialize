@@ -326,17 +326,36 @@
     svg {
         height: 2.2rem;
         width: 2.2rem;
-        fill: var(--gray-dark);
+        fill: var(--gray-mid);
     }
-}
 
-body.light .theme-switcher {
-    .sun {
-        fill: orange;
+    .system.active {
+        svg {
+            fill: var(--important);
+        }
+    }
+
+    .light.active {
+        svg {
+            fill: orange;
+        }
+    }
+
+    .dark.active {
+        svg {
+            fill: var(--gray-light);
+        }
     }
 }
 
 body.dark {
+
+    .theme-switcher {
+        svg {
+            fill: var(--gray-dark);
+        }
+    }
+
     li.level-2 {
         ul {
 
@@ -345,12 +364,6 @@ body.dark {
                 content: "";
                 background-image: url("../images/level_three_transition_dark.svg");
             }
-        }
-    }
-
-    .theme-switcher {
-        .moon {
-            fill: var(--gray-light);
         }
     }
 }
