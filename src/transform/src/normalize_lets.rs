@@ -127,7 +127,7 @@ impl NormalizeLets {
         //      as it would be substituted is fixed.
         for (id, mut expr) in let_bindings {
             // Substitute any appropriate prior let bindings.
-            support::inline_gets(&mut expr, &mut to_take, &to_clone);
+            support::inline_gets(&mut expr, &mut to_take, &to_clone)?;
             // Gets for `id` only occur in later expressions, so this should still be correct.
             let num_gets = counts.get(&id).map(|x| *x).unwrap_or(0);
             // Counts of zero or one lead to substitution; other wise certain simple structures
@@ -156,7 +156,7 @@ impl NormalizeLets {
             }
         }
         // Complete the inlining in the base relation.
-        support::inline_gets(relation, &mut to_take, &to_clone);
+        support::inline_gets(relation, &mut to_take, &to_clone)?;
 
         // We should have removed all single-reference bindings.
         // The code is just to confirm this intended invariant.
@@ -290,7 +290,7 @@ mod support {
         expr: &mut MirRelationExpr,
         to_take: &mut BTreeMap<LocalId, Option<MirRelationExpr>>,
         to_clone: &BTreeMap<LocalId, MirRelationExpr>,
-    ) {
+    ) -> Result<(), crate::TransformError> {
         let mut worklist = vec![expr];
         while let Some(expr) = worklist.pop() {
             if let MirRelationExpr::Get {
@@ -302,7 +302,10 @@ mod support {
                         *expr = value;
                         worklist.push(expr);
                     } else {
-                        panic!("Value already taken for {:?}", id);
+                        Err(crate::TransformError::Internal(format!(
+                            "Value already taken for {:?}",
+                            id
+                        )))?;
                     }
                 } else if let Some(value) = to_clone.get(id) {
                     *expr = value.clone();
@@ -312,6 +315,7 @@ mod support {
                 worklist.extend(expr.children_mut());
             }
         }
+        Ok(())
     }
 
     pub(super) fn renumber_bindings_helper(
@@ -331,6 +335,7 @@ mod support {
                     remap.remove(id);
                     if let Some(prev_stuff) = prev {
                         remap.insert(id.clone(), prev_stuff);
+                        tracing::warn!("Shadowing of let binding for {:?}", id);
                     }
                     *id = new_id;
                     Ok(())
