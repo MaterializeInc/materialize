@@ -254,33 +254,20 @@ mod support {
     ///
     /// An equivalent expression can be reconstructed by introducing the bindings atop the resulting `expr`.
     pub(super) fn digest_lets(expr: &mut MirRelationExpr) -> BTreeMap<LocalId, MirRelationExpr> {
-        let mut lets = BTreeMap::new();
-        let mut worklist = Vec::new();
-        digest_lets_helper(expr, &mut worklist);
-        while let Some((id, mut expr)) = worklist.pop() {
-            digest_lets_helper(&mut expr, &mut worklist);
-            lets.insert(id, expr);
-        }
-        lets
-    }
+        use mz_expr::visit::Visit;
 
-    /// Extract all `Let` bindings from `expr`, into `(id, value)` pairs.
-    ///
-    /// Importantly, the `value` pairs may not be `Let`-free, and must be further processed.
-    fn digest_lets_helper(
-        expr: &mut MirRelationExpr,
-        bindings: &mut Vec<(LocalId, MirRelationExpr)>,
-    ) {
-        let mut to_visit = vec![expr];
-        while let Some(expr) = to_visit.pop() {
+        let mut lets = BTreeMap::new();
+        #[allow(deprecated)]
+        expr.visit_mut_post_nolimit(&mut |expr: &mut MirRelationExpr| {
+            // Because we use post-visit (bottom-up) order we know that children will
+            // be visited before their parents, so `value` and `body` are guaranteed
+            // to be let-free.
             if let MirRelationExpr::Let { id, value, body } = expr {
-                bindings.push((*id, value.take_dangerous()));
+                lets.insert(*id, value.take_dangerous());
                 *expr = body.take_dangerous();
-                to_visit.push(expr);
-            } else {
-                to_visit.extend(expr.children_mut());
             }
-        }
+        });
+        lets
     }
 
     /// Substitute `Get{id}` expressions for any proposed expressions.
