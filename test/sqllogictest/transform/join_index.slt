@@ -371,8 +371,7 @@ and bar.b - foo.b = foo.a / bar.a
 statement ok
 DROP INDEX baz_idx
 
-# materialize#8002: it would be nice if this join used the indexes on foo(a)
-# and bar(a+4)
+# materialize#8002: it would be nice if this join used the indexes on bar(a+4)
 
 query T multiline
 EXPLAIN WITH(arity, join_impls)
