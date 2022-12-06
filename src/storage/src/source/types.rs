@@ -556,6 +556,11 @@ impl SourceReaderMetrics {
                 SourceReaderPartitionMetrics::new(&self.base_metrics, self.source_id, pid)
             })
     }
+
+    /// Get metrics struct for offset committing.
+    pub fn offset_commit_metrics(&self) -> OffsetCommitMetrics {
+        OffsetCommitMetrics::new(&self.base_metrics, self.source_id)
+    }
 }
 
 /// Partition-specific metrics, recorded to both Prometheus and a system table
@@ -576,6 +581,24 @@ impl SourceReaderPartitionMetrics {
             source_resume_upper: base
                 .source_resume_upper
                 .get_delete_on_drop_gauge(vec![source_id.to_string(), partition_id.to_string()]),
+        }
+    }
+}
+
+/// Metrics about committing offsets
+pub struct OffsetCommitMetrics {
+    /// The offset-domain resume_upper for a source.
+    pub(crate) offset_commit_failures: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+}
+
+impl OffsetCommitMetrics {
+    /// Initialises partition metrics for a given (source_id, partition_id)
+    pub fn new(base_metrics: &SourceBaseMetrics, source_id: GlobalId) -> OffsetCommitMetrics {
+        let base = &base_metrics.source_specific;
+        OffsetCommitMetrics {
+            offset_commit_failures: base
+                .offset_commit_failures
+                .get_delete_on_drop_counter(vec![source_id.to_string()]),
         }
     }
 }

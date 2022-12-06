@@ -92,6 +92,7 @@ pub(super) struct SourceSpecificMetrics {
     pub(super) error_inserts: IntCounterVec,
     pub(super) error_retractions: IntCounterVec,
     pub(super) persist_sink_processed_batches: IntCounterVec,
+    pub(super) offset_commit_failures: IntCounterVec,
 }
 
 impl SourceSpecificMetrics {
@@ -138,6 +139,11 @@ impl SourceSpecificMetrics {
                 help: "A counter representing the number of persist sink batches with actual data \
                 we have successfully processed.",
                 var_labels: ["source_id", "output", "shard"],
+            )),
+            offset_commit_failures: registry.register(metric!(
+                name: "mz_source_offset_commit_failures",
+                help: "A counter representing how many times we have failed to commit offsets for a source",
+                var_labels: ["source_id"],
             )),
         }
     }
