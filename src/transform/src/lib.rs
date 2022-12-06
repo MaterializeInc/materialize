@@ -38,12 +38,12 @@ pub mod cse;
 pub mod demand;
 pub mod fold_constants;
 pub mod fusion;
-pub mod inline_let;
 pub mod join_implementation;
 pub mod literal_lifting;
 pub mod monotonic;
 pub mod nonnull_requirements;
 pub mod nonnullable;
+pub mod normalize_lets;
 pub mod predicate_pushdown;
 pub mod projection_extraction;
 pub mod projection_lifting;
@@ -55,7 +55,6 @@ pub mod semijoin_idempotence;
 pub mod threshold_elision;
 pub mod topk_elision;
 pub mod union_cancel;
-pub mod update_let;
 
 pub mod dataflow;
 pub use dataflow::optimize_dataflow;
@@ -226,11 +225,8 @@ impl Default for FuseAndCollapse {
         Self {
             // TODO: The relative orders of the transforms have not been
             // determined except where there are comments.
-            // TODO (#6542): All the transforms here except for
-            // `ProjectionLifting`, `InlineLet`, `UpdateLet`, and
-            // `RedundantJoin` can be implemented as free functions. Note that
-            // (#716) proposes the removal of `InlineLet` and `UpdateLet` as a
-            // transforms.
+            // TODO (#6542): All the transforms here except for `ProjectionLifting`
+            //  and `RedundantJoin` can be implemented as free functions.
             transforms: vec![
                 Box::new(crate::projection_extraction::ProjectionExtraction),
                 Box::new(crate::projection_lifting::ProjectionLifting::default()),
@@ -241,7 +237,7 @@ impl Default for FuseAndCollapse {
                 Box::new(crate::fusion::project::Project),
                 Box::new(crate::fusion::join::Join),
                 Box::new(crate::fusion::top_k::TopK),
-                Box::new(crate::inline_let::InlineLet::new(false)),
+                Box::new(crate::normalize_lets::NormalizeLets::new(false)),
                 Box::new(crate::fusion::reduce::Reduce),
                 Box::new(crate::fusion::union::Union),
                 // This goes after union fusion so we can cancel out
@@ -249,7 +245,7 @@ impl Default for FuseAndCollapse {
                 Box::new(crate::union_cancel::UnionBranchCancellation),
                 // This should run before redundant join to ensure that key info
                 // is correct.
-                Box::new(crate::update_let::UpdateLet::default()),
+                Box::new(crate::normalize_lets::NormalizeLets::new(false)),
                 // Removes redundant inputs from joins.
                 // Note that this eliminates one redundant input per join,
                 // so it is necessary to run this section in a loop.
