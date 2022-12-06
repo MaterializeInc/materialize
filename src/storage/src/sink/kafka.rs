@@ -11,6 +11,7 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::cmp;
 use std::collections::{HashMap, VecDeque};
+use std::fmt::Debug;
 use std::future::Future;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -39,7 +40,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
 use tokio::runtime::Handle as TokioHandle;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, warn};
 
 use mz_interchange::avro::{AvroEncoder, AvroSchemaGenerator};
@@ -50,7 +51,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_ore::retry::{Retry, RetryResult};
-use mz_ore::task;
+use mz_ore::{halt, task};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::DataflowError;
@@ -214,19 +215,8 @@ impl KafkaSinkSendRetryManager {
 
 pub struct SinkProducerContext {
     metrics: Arc<SinkMetrics>,
+    status_tx: mpsc::Sender<SinkStatus>,
     retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
-}
-
-impl SinkProducerContext {
-    pub fn new(
-        metrics: Arc<SinkMetrics>,
-        retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
-    ) -> Self {
-        SinkProducerContext {
-            metrics,
-            retry_manager,
-        }
-    }
 }
 
 impl ClientContext for SinkProducerContext {
@@ -235,7 +225,9 @@ impl ClientContext for SinkProducerContext {
     fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
         MzClientContext.log(level, fac, log_message)
     }
-    fn error(&self, error: rdkafka::error::KafkaError, reason: &str) {
+    fn error(&self, error: KafkaError, reason: &str) {
+        let status = SinkStatus::Stalled(error.to_string());
+        let _ = self.status_tx.try_send(status);
         MzClientContext.error(error, reason)
     }
 }
@@ -381,7 +373,7 @@ struct KafkaSinkState {
 
     progress_topic: String,
     progress_key: String,
-    progress_client: Arc<BaseConsumer<BrokerRewritingClientContext<MzClientContext>>>,
+    progress_client: Option<Arc<BaseConsumer<BrokerRewritingClientContext<SinkConsumerContext>>>>,
 
     healthchecker: Arc<Mutex<Option<Healthchecker>>>,
     gate_ts: Rc<Cell<Option<Timestamp>>>,
@@ -399,6 +391,23 @@ struct KafkaSinkState {
     /// exactly-once guarantees.
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
 }
+
+struct SinkConsumerContext {
+    status_tx: mpsc::Sender<SinkStatus>,
+}
+
+impl ClientContext for SinkConsumerContext {
+    fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
+        MzClientContext.log(level, fac, log_message)
+    }
+    fn error(&self, error: KafkaError, reason: &str) {
+        let status = SinkStatus::Stalled(error.to_string());
+        let _ = self.status_tx.try_send(status);
+        MzClientContext.error(error, reason)
+    }
+}
+
+impl ConsumerContext for SinkConsumerContext {}
 
 impl KafkaSinkState {
     fn new(
@@ -420,8 +429,27 @@ impl KafkaSinkState {
 
         let retry_manager = Arc::new(Mutex::new(KafkaSinkSendRetryManager::new()));
 
-        let producer_context =
-            SinkProducerContext::new(Arc::clone(&metrics), Arc::clone(&retry_manager));
+        let (status_tx, mut status_rx) = mpsc::channel(16);
+
+        let producer_context = SinkProducerContext {
+            metrics: Arc::clone(&metrics),
+            status_tx: status_tx.clone(),
+            retry_manager: Arc::clone(&retry_manager),
+        };
+
+        let healthchecker: Arc<Mutex<Option<Healthchecker>>> = Arc::new(Mutex::new(None));
+
+        {
+            let healthchecker = Arc::clone(&healthchecker);
+            task::spawn(|| "producer-error-report", async move {
+                while let Some(status) = status_rx.recv().await {
+                    if let Some(hc) = healthchecker.lock().await.as_mut() {
+                        hc.update_status(status).await;
+                    }
+                }
+            });
+        }
+
         let producer = TokioHandle::current()
             .block_on(connection.connection.create_with_context(
                 connection_context,
@@ -464,7 +492,7 @@ impl KafkaSinkState {
         let progress_client = TokioHandle::current()
             .block_on(connection.connection.create_with_context(
                 connection_context,
-                MzClientContext,
+                SinkConsumerContext { status_tx },
                 &btreemap! {
                     "group.id" => format!("materialize-bootstrap-sink-{sink_id}"),
                     "isolation.level" => "read_committed".into(),
@@ -485,8 +513,8 @@ impl KafkaSinkState {
             retry_manager,
             progress_topic: connection.progress.topic,
             progress_key: format!("mz-sink-{sink_id}"),
-            progress_client: Arc::new(progress_client),
-            healthchecker: Arc::new(Mutex::new(None)),
+            progress_client: Some(Arc::new(progress_client)),
+            healthchecker,
             gate_ts,
             latest_progress_ts: Timestamp::minimum(),
             write_frontier,
@@ -523,11 +551,11 @@ impl KafkaSinkState {
                         continue;
                     } else {
                         // We've received an error that is not transient
-                        Healthchecker::report_stall_and_halt(
-                            self.healthchecker.lock().await.as_mut(),
-                            format!("fatal error while producing message in {}: {e}", self.name),
-                        )
-                        .await;
+                        self.halt_on_err(Err(format!(
+                            "fatal error while producing message in {}: {e}",
+                            self.name
+                        )))
+                        .await
                     }
                 }
             }
@@ -568,7 +596,9 @@ impl KafkaSinkState {
             .expect("Infinite retry cannot fail");
     }
 
-    async fn determine_latest_progress_record(&self) -> Result<Option<Timestamp>, anyhow::Error> {
+    async fn determine_latest_progress_record(
+        &mut self,
+    ) -> Result<Option<Timestamp>, anyhow::Error> {
         // Polls a message from a Kafka Source.  Blocking so should always be called on background
         // thread.
         fn get_next_message<C>(
@@ -695,13 +725,18 @@ impl KafkaSinkState {
             Ok(latest_ts)
         }
 
+        let progress_client = self
+            .progress_client
+            .take()
+            .expect("Claiming just-created progress client");
         // Only actually used for retriable errors.
         Retry::default()
+            .max_tries(3)
             .clamp_backoff(Duration::from_secs(60 * 10))
             .retry_async(|_| async {
                 let progress_topic = self.progress_topic.clone();
                 let progress_key = self.progress_key.clone();
-                let progress_client = Arc::clone(&self.progress_client);
+                let progress_client = Arc::clone(&progress_client);
                 task::spawn_blocking(
                     || format!("get_latest_ts:{}", self.name),
                     move || {
@@ -807,20 +842,12 @@ impl KafkaSinkState {
 
             if min_frontier > self.latest_progress_ts {
                 // record the write frontier in the progress topic.
-                let () = match self
-                    .producer
-                    .retry_on_txn_error(|p| p.begin_transaction())
-                    .await
-                {
-                    Ok(()) => (),
-                    Err(err) => {
-                        Healthchecker::report_stall_and_halt(
-                            self.healthchecker.lock().await.as_mut(),
-                            err,
-                        )
-                        .await
-                    }
-                };
+                self.halt_on_err(
+                    self.producer
+                        .retry_on_txn_error(|p| p.begin_transaction())
+                        .await,
+                )
+                .await;
 
                 info!(
                     "{}: sending progress for gate ts: {:?}",
@@ -828,20 +855,13 @@ impl KafkaSinkState {
                 );
                 self.send_progress_record(min_frontier).await;
 
-                let () = match self
-                    .producer
-                    .retry_on_txn_error(|p| p.commit_transaction())
-                    .await
-                {
-                    Ok(()) => (),
-                    Err(err) => {
-                        Healthchecker::report_stall_and_halt(
-                            self.healthchecker.lock().await.as_mut(),
-                            err,
-                        )
-                        .await
-                    }
-                };
+                self.halt_on_err(
+                    self.producer
+                        .retry_on_txn_error(|p| p.commit_transaction())
+                        .await,
+                )
+                .await;
+
                 progress_emitted = true;
                 self.latest_progress_ts = min_frontier;
             }
@@ -864,6 +884,25 @@ impl KafkaSinkState {
         }
 
         progress_emitted
+    }
+
+    async fn update_status(&self, status: SinkStatus) {
+        let mut locked = self.healthchecker.lock().await;
+        if let Some(hc) = &mut *locked {
+            hc.update_status(status).await;
+        }
+    }
+
+    /// Report a SinkStatus::Stalled and then halt with the same message.
+    pub async fn halt_on_err<T>(&self, result: Result<T, impl ToString + Debug>) -> T {
+        match result {
+            Ok(t) => t,
+            Err(msg) => {
+                self.update_status(SinkStatus::Stalled(msg.to_string()))
+                    .await;
+                halt!("{msg:?}")
+            }
+        }
     }
 }
 
@@ -1012,8 +1051,8 @@ where
             return;
         }
 
-        let mut healthchecker = if let Some(status_shard_id) = healthchecker_args.status_shard_id {
-            let mut hc = Healthchecker::new(
+        if let Some(status_shard_id) = healthchecker_args.status_shard_id {
+            let hc = Healthchecker::new(
                 id,
                 &healthchecker_args.persist_clients,
                 healthchecker_args.persist_location.clone(),
@@ -1022,31 +1061,21 @@ where
             )
             .await
             .expect("error initializing healthchecker");
-            hc.update_status(SinkStatus::Starting).await;
-            Some(hc)
-        } else {
-            None
+            let mut locked = s.healthchecker.lock().await;
+            *locked = Some(hc);
         };
 
-        match s
-            .producer
-            .retry_on_txn_error(|p| p.init_transactions())
-            .await
-        {
-            Ok(()) => (),
-            Err(err) => Healthchecker::report_stall_and_halt(healthchecker.as_mut(), err).await,
-        };
+        s.update_status(SinkStatus::Starting).await;
 
-        let latest_ts = match s.determine_latest_progress_record().await {
-            Ok(latest_ts) => latest_ts,
-            Err(e) => {
-                Healthchecker::report_stall_and_halt(
-                    healthchecker.as_mut(),
-                    format!("determining latest progress record {e:?}"),
-                )
-                .await
-            }
-        };
+        s.halt_on_err(
+            s.producer
+                .retry_on_txn_error(|p| p.init_transactions())
+                .await,
+        )
+        .await;
+
+        let latest_ts = s.determine_latest_progress_record().await;
+        let latest_ts = s.halt_on_err(latest_ts).await;
         info!(
             "{}: initial as_of: {:?}, latest progress record: {:?}",
             s.name, as_of.frontier, latest_ts
@@ -1066,10 +1095,7 @@ where
             s.maybe_update_progress(&gate);
         }
 
-        if let Some(ref mut healthchecker) = healthchecker.as_mut() {
-            healthchecker.update_status(SinkStatus::Running).await;
-        }
-        *s.healthchecker.lock().await = healthchecker;
+        s.update_status(SinkStatus::Running).await;
 
         while let Some(event) = input.next().await {
             match event {
@@ -1129,20 +1155,12 @@ where
                             ts,
                             rows.len()
                         );
-                        let () = match s
-                            .producer
-                            .retry_on_txn_error(|p| p.begin_transaction())
-                            .await
-                        {
-                            Ok(()) => (),
-                            Err(err) => {
-                                Healthchecker::report_stall_and_halt(
-                                    s.healthchecker.lock().await.as_mut(),
-                                    err,
-                                )
-                                .await
-                            }
-                        };
+                        s.halt_on_err(
+                            s.producer
+                                .retry_on_txn_error(|p| p.begin_transaction())
+                                .await,
+                        )
+                        .await;
 
                         let mut repeat_counter = 0;
                         for encoded_row in rows {
@@ -1180,20 +1198,12 @@ where
                         s.send_progress_record(*ts).await;
 
                         info!("Committing transaction for {:?}", ts,);
-                        let () = match s
-                            .producer
-                            .retry_on_txn_error(|p| p.commit_transaction())
-                            .await
-                        {
-                            Ok(()) => (),
-                            Err(err) => {
-                                Healthchecker::report_stall_and_halt(
-                                    s.healthchecker.lock().await.as_mut(),
-                                    err,
-                                )
-                                .await
-                            }
-                        };
+                        s.halt_on_err(
+                            s.producer
+                                .retry_on_txn_error(|p| p.commit_transaction())
+                                .await,
+                        )
+                        .await;
 
                         s.flush().await;
 
