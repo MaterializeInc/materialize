@@ -17,4 +17,4 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
-          run: sqllogictest
+          run: slt-extra

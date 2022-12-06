@@ -307,11 +307,11 @@ impl<'a> fmt::Display for OutcomesDisplay<'a> {
     }
 }
 
-pub(crate) struct Runner {
-    server_addr: SocketAddr,
+pub struct Runner {
+    pub server_addr: SocketAddr,
     internal_server_addr: SocketAddr,
     // Drop order matters for these fields.
-    client: tokio_postgres::Client,
+    pub client: tokio_postgres::Client,
     clients: HashMap<String, tokio_postgres::Client>,
     auto_index_tables: bool,
     _shutdown_trigger: oneshot::Sender<()>,
@@ -749,6 +749,16 @@ impl Runner {
         let internal_server_addr = internal_server_addr_rx.await?;
         let client = connect(server_addr, None).await;
 
+        // Some sqllogic tests require more than the default amount of tables, so we increase the
+        // limit for all tests.
+        {
+            let system_client = connect(internal_server_addr, Some("mz_system")).await;
+            system_client
+                .simple_query("ALTER SYSTEM SET max_tables = 100")
+                .await
+                .unwrap();
+        }
+
         Ok(Runner {
             server_addr,
             internal_server_addr,
@@ -1062,7 +1072,7 @@ impl Runner {
         Ok(Outcome::Success)
     }
 
-    async fn get_conn(
+    pub async fn get_conn(
         &mut self,
         name: Option<&str>,
         user: Option<&str>,
@@ -1126,7 +1136,7 @@ impl Runner {
     }
 }
 
-async fn connect(addr: SocketAddr, user: Option<&str>) -> tokio_postgres::Client {
+pub async fn connect(addr: SocketAddr, user: Option<&str>) -> tokio_postgres::Client {
     let (client, connection) = tokio_postgres::connect(
         &format!(
             "host={} port={} user={}",
@@ -1172,21 +1182,14 @@ fn print_record(config: &RunConfig<'_>, record: &Record) {
 
 pub async fn run_string(
     config: &RunConfig<'_>,
+    runner: &mut Runner,
     source: &str,
     input: &str,
 ) -> Result<Outcomes, anyhow::Error> {
     let mut outcomes = Outcomes::default();
-    let mut state = Runner::start(config).await.unwrap();
     let mut parser = crate::parser::Parser::new(source, input);
+
     writeln!(config.stdout, "==> {}", source);
-    // Some sqllogic tests require more than the default amount of tables, so we increase the
-    // limit for all tests.
-    {
-        let client = state.get_conn(Some("mz_system"), Some("mz_system")).await;
-        client
-            .simple_query("ALTER SYSTEM SET max_tables = 100")
-            .await?;
-    }
     for record in parser.parse_records()? {
         // In maximal-verbosity mode, print the query before attempting to run
         // it. Running the query might panic, so it is important to print out
@@ -1195,7 +1198,7 @@ pub async fn run_string(
             print_record(config, &record);
         }
 
-        let outcome = state
+        let outcome = runner
             .run_record(&record)
             .await
             .map_err(|err| format!("In {}:\n{}", source, err))
@@ -1229,10 +1232,14 @@ pub async fn run_string(
     Ok(outcomes)
 }
 
-pub async fn run_file(config: &RunConfig<'_>, filename: &Path) -> Result<Outcomes, anyhow::Error> {
+pub async fn run_file(
+    config: &RunConfig<'_>,
+    runner: &mut Runner,
+    filename: &Path,
+) -> Result<Outcomes, anyhow::Error> {
     let mut input = String::new();
     File::open(filename)?.read_to_string(&mut input)?;
-    run_string(config, &format!("{}", filename.display()), &input).await
+    run_string(config, runner, &format!("{}", filename.display()), &input).await
 }
 
 pub async fn rewrite_file(config: &RunConfig<'_>, filename: &Path) -> Result<(), anyhow::Error> {

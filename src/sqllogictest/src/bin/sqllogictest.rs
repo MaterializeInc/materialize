@@ -19,7 +19,7 @@ use time::Instant;
 use walkdir::WalkDir;
 
 use mz_ore::cli::{self, CliConfig};
-use mz_sqllogictest::runner::{self, Outcomes, RunConfig, WriteFmt};
+use mz_sqllogictest::runner::{self, Outcomes, RunConfig, Runner, WriteFmt};
 use mz_sqllogictest::util;
 
 /// Runs sqllogictest scripts to verify database engine correctness.
@@ -57,6 +57,9 @@ struct Args {
     /// Inject `CREATE INDEX` after all `CREATE TABLE` statements.
     #[clap(long)]
     auto_index_tables: bool,
+    /// Spawn a new cluster for each test
+    #[clap(long)]
+    isolate_tests: bool,
 }
 
 #[tokio::main]
@@ -92,12 +95,41 @@ async fn main() {
     };
     let mut bad_file = false;
     let mut outcomes = Outcomes::default();
+
+    let mut global_runner: Option<Runner> = None;
     for path in &args.paths {
         for entry in WalkDir::new(path) {
             match entry {
                 Ok(entry) if entry.file_type().is_file() => {
                     let start_time = Instant::now();
-                    match runner::run_file(&config, entry.path()).await {
+                    let mut local_runner: Option<Runner> = None;
+
+                    let mut runner: &mut Runner = match args.isolate_tests {
+                        false => match global_runner {
+                            None => global_runner.insert(Runner::start(&config).await.unwrap()),
+                            Some(ref mut runner) => runner,
+                        },
+                        true => local_runner.insert(Runner::start(&config).await.unwrap()),
+                    };
+
+                    if !args.isolate_tests {
+                        // Even when not run on a dedicated cluster, start each
+                        // test with a fresh SQL client and an empty database
+                        runner.client = runner::connect(runner.server_addr, None).await;
+
+                        runner
+                            .client
+                            .simple_query("DROP DATABASE IF EXISTS materialize CASCADE")
+                            .await
+                            .unwrap();
+                        runner
+                            .client
+                            .simple_query("CREATE DATABASE materialize")
+                            .await
+                            .unwrap();
+                    }
+
+                    match runner::run_file(&config, runner, entry.path()).await {
                         Ok(o) => {
                             if o.any_failed() || config.verbosity >= 1 {
                                 writeln!(
