@@ -21,9 +21,7 @@ use thiserror::Error;
 
 use mz_repr::GlobalId;
 
-use crate::command::ReplicaId;
-
-use super::{instance, ComputeInstanceId};
+use super::{instance, ComputeInstanceId, ReplicaId};
 
 /// Error returned in response to a reference to an unknown compute instance.
 #[derive(Error, Debug)]

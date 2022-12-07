@@ -89,8 +89,7 @@ use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
-use mz_compute_client::command::ReplicaId;
-use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId};
+use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId, ReplicaId};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};

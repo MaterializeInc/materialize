@@ -21,10 +21,11 @@ use mz_orchestrator::{
     ServiceEvent, ServicePort, ServiceProcessMetrics,
 };
 
-use crate::command::{CommunicationConfig, ReplicaId};
+use crate::command::CommunicationConfig;
 
 use super::{
     ComputeInstanceEvent, ComputeInstanceId, ComputeReplicaAllocation, ComputeReplicaLocation,
+    ReplicaId,
 };
 
 #[derive(Clone, Debug)]

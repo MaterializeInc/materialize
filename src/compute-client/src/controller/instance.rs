@@ -27,7 +27,7 @@ use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 
 use crate::command::{
-    ComputeCommand, ComputeCommandHistory, ComputeStartupEpoch, InstanceConfig, Peek, ReplicaId,
+    ComputeCommand, ComputeCommandHistory, ComputeStartupEpoch, InstanceConfig, Peek,
 };
 use crate::logging::{LogVariant, LoggingConfig};
 use crate::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
@@ -41,6 +41,7 @@ use super::orchestrator::ComputeOrchestrator;
 use super::replica::Replica;
 use super::{
     CollectionState, ComputeControllerResponse, ComputeInstanceId, ComputeReplicaLocation,
+    ReplicaId,
 };
 
 #[derive(Error, Debug)]

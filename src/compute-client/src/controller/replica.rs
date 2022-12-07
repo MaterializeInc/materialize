@@ -24,13 +24,13 @@ use mz_build_info::BuildInfo;
 use mz_ore::retry::Retry;
 use mz_service::client::GenericClient;
 
-use crate::command::{CommunicationConfig, ComputeCommand, ComputeStartupEpoch, ReplicaId};
+use crate::command::{CommunicationConfig, ComputeCommand, ComputeStartupEpoch};
 use crate::logging::LoggingConfig;
 use crate::response::ComputeResponse;
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
 use super::orchestrator::ComputeOrchestrator;
-use super::{ComputeInstanceId, ComputeReplicaLocation};
+use super::{ComputeInstanceId, ComputeReplicaLocation, ReplicaId};
 
 /// State for a single replica.
 #[derive(Debug)]
