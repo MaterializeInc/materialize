@@ -11,7 +11,7 @@ menu:
 
 {{< diagram "begin.svg" >}}
 
-
+Supported `transaction_mode` option values:
 
 Value | Description
 ------|----------
