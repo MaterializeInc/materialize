@@ -130,10 +130,6 @@ Explained Query:
           Project (#1)
             Get materialize.public.mv
 
-Source materialize.public.mv
-  project=(#2, #1)
-  map=(dummy)
-
 Used Indexes:
   - materialize.public.t_a_idx
 
@@ -152,10 +148,6 @@ Explained Query:
       Negate
         Project (#1)
           Get materialize.public.mv
-
-Source materialize.public.mv
-  project=(#2, #1)
-  map=(dummy)
 
 Used Indexes:
   - materialize.public.t_a_idx

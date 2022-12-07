@@ -65,8 +65,11 @@ async fn report_rollup_loop(
 ) {
     #[derive(Default)]
     struct Rollup {
+        deletes: u64,
+        inserts: u64,
         selects: u64,
         subscribes: u64,
+        updates: u64,
     }
 
     let mut interval = time::interval(REPORT_INTERVAL);
@@ -80,6 +83,9 @@ async fn report_rollup_loop(
 
         let query_total = &adapter_client.metrics().query_total;
         let current_rollup = Rollup {
+            deletes: query_total.with_label_values(&["user", "delete"]).get(),
+            inserts: query_total.with_label_values(&["user", "insert"]).get(),
+            updates: query_total.with_label_values(&["user", "update"]).get(),
             selects: query_total.with_label_values(&["user", "select"]).get(),
             subscribes: query_total.with_label_values(&["user", "subscribe"]).get(),
         };
@@ -91,6 +97,9 @@ async fn report_rollup_loop(
             "Environment Rolled Up",
             json!({
                 "event_source": "environmentd",
+                "deletes": current_rollup.deletes - last_rollup.deletes,
+                "inserts": current_rollup.inserts - last_rollup.inserts,
+                "updates": current_rollup.updates - last_rollup.updates,
                 "selects": current_rollup.selects - last_rollup.selects,
                 "subscribes": current_rollup.subscribes - last_rollup.subscribes,
             }),

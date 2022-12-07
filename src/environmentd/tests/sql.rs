@@ -1104,7 +1104,7 @@ source materialize.public.t1 (u1, storage):
 // of cancelled (sends a pgwire cancel request on a new connection).
 #[test]
 fn test_github_12546() {
-    let config = util::Config::default();
+    let config = util::Config::default().with_propagate_crashes(false);
     let server = util::start_server(config).unwrap();
 
     server

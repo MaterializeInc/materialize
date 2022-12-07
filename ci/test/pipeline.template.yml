@@ -113,9 +113,8 @@ steps:
 
   - id: cargo-test
     label: Cargo test
-    depends_on: build-x86_64
     timeout_in_minutes: 30
-    artifact_paths: junit_cargo-test_*.xml
+    artifact_paths: target/nextest/ci/junit_cargo-test.xml
     env:
       AWS_DEFAULT_REGION: "us-east-2"
     plugins:
@@ -123,7 +122,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cargo-test
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
 
   - id: miri-test
     label: Miri test

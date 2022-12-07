@@ -15,8 +15,10 @@ use std::sync::Arc;
 use serde::Deserialize;
 
 use mz_build_info::BuildInfo;
+use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_compute_client::controller::ComputeReplicaAllocation;
 use mz_ore::metrics::MetricsRegistry;
+use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 use mz_storage_client::types::hosts::StorageHostResourceAllocation;
 
@@ -56,6 +58,8 @@ pub struct Config<'a, S> {
     pub secrets_reader: Arc<dyn SecretsReader>,
     /// IP Addresses which will be used for egress.
     pub egress_ips: Vec<Ipv4Addr>,
+    /// Context for generating an AWS Principal.
+    pub aws_principal_context: Option<AwsPrincipalContext>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -150,6 +154,25 @@ impl Default for StorageHostSizeMap {
                     )
                 })
                 .collect::<HashMap<_, _>>(),
+        )
+    }
+}
+
+/// Context used to generate an AWS Principal.
+///
+/// In the case of AWS PrivateLink connections, Materialize will connect to the
+/// VPC endpoint as the AWS Principal generated via this context.
+#[derive(Debug, Clone)]
+pub struct AwsPrincipalContext {
+    pub aws_account_id: String,
+    pub aws_external_id_prefix: AwsExternalIdPrefix,
+}
+
+impl AwsPrincipalContext {
+    pub fn to_principal_string(&self, aws_external_id_suffix: GlobalId) -> String {
+        format!(
+            "arn:aws:iam::{}:role/mz_{}_{}",
+            self.aws_account_id, self.aws_external_id_prefix, aws_external_id_suffix
         )
     }
 }

@@ -44,7 +44,8 @@ use crate::catalog::{
     MaterializedView, Role, Sink, StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
 
-use super::{DataSourceDesc, Ingestion};
+use super::builtin::MZ_AWS_PRIVATELINK_CONNECTIONS;
+use super::{AwsPrincipalContext, DataSourceDesc, Ingestion};
 
 /// An update to a built-in table.
 #[derive(Debug)]
@@ -369,7 +370,17 @@ impl CatalogState {
             mz_storage_client::types::connections::Connection::Csr(_)
             | mz_storage_client::types::connections::Connection::Postgres(_)
             | mz_storage_client::types::connections::Connection::Aws(_)
-            | mz_storage_client::types::connections::Connection::AwsPrivatelink(_) => {}
+            | mz_storage_client::types::connections::Connection::AwsPrivatelink(_) => {
+                if let Some(aws_principal_context) = self.aws_principal_context.as_ref() {
+                    updates.extend(self.pack_aws_privatelink_connection_update(
+                        id,
+                        aws_principal_context,
+                        diff,
+                    ));
+                } else {
+                    tracing::error!("Missing AWS principal context, cannot write to mz_aws_privatelink_connections table");
+                }
+            }
         };
         updates
     }
@@ -424,6 +435,20 @@ impl CatalogState {
             row: Row::pack_slice(&[Datum::String(&id.to_string()), brokers, progress_topic]),
             diff,
         }]
+    }
+
+    pub fn pack_aws_privatelink_connection_update(
+        &self,
+        connection_id: GlobalId,
+        aws_principal_context: &AwsPrincipalContext,
+        diff: Diff,
+    ) -> Result<BuiltinTableUpdate, Error> {
+        let id = self.resolve_builtin_table(&MZ_AWS_PRIVATELINK_CONNECTIONS);
+        let row = Row::pack_slice(&[
+            Datum::String(&connection_id.to_string()),
+            Datum::String(&aws_principal_context.to_principal_string(connection_id)),
+        ]);
+        Ok(BuiltinTableUpdate { id, row, diff })
     }
 
     fn pack_view_update(

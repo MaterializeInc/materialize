@@ -194,20 +194,7 @@ SELECT * FROM u
       }
     }
   ],
-  "sources": [
-    {
-      "id": "materialize.public.u",
-      "op": {
-        "expressions": [],
-        "predicates": [],
-        "projection": [
-          0,
-          1
-        ],
-        "input_arity": 2
-      }
-    }
-  ]
+  "sources": []
 }
 EOF
 

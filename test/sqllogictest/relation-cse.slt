@@ -173,7 +173,7 @@ Explained Query:
           Map (error("more than one record produced in subquery")) // { arity: 1 }
             Project () // { arity: 0 }
               Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
-                Reduce aggregates=[count(true)] // { arity: 1 }
+                Reduce aggregates=[count(*)] // { arity: 1 }
                   Project () // { arity: 0 }
                     Get materialize.public.t1 // { arity: 2 }
 
@@ -205,7 +205,7 @@ Explained Query:
           Map (error("more than one record produced in subquery")) // { arity: 1 }
             Project () // { arity: 0 }
               Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
-                Reduce aggregates=[count(true)] // { arity: 1 }
+                Reduce aggregates=[count(*)] // { arity: 1 }
                   Project () // { arity: 0 }
                     Get l0 // { arity: 3 }
     cte l0 =
@@ -234,7 +234,7 @@ Explained Query:
           Map (error("more than one record produced in subquery")) // { arity: 1 }
             Project () // { arity: 0 }
               Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
-                Reduce aggregates=[count(true)] // { arity: 1 }
+                Reduce aggregates=[count(*)] // { arity: 1 }
                   Project () // { arity: 0 }
                     Get materialize.public.t1 // { arity: 2 }
 
@@ -279,7 +279,7 @@ Explained Query:
         Map (error("more than one record produced in subquery")) // { arity: 1 }
           Project () // { arity: 0 }
             Filter (#0 > 1) // { arity: 1 }
-              Reduce aggregates=[count(true)] // { arity: 1 }
+              Reduce aggregates=[count(*)] // { arity: 1 }
                 Project () // { arity: 0 }
                   Get materialize.public.t1 // { arity: 2 }
 
@@ -452,7 +452,7 @@ Explained Query:
         Map (error("more than one record produced in subquery")) // { arity: 1 }
           Project () // { arity: 0 }
             Filter (#0 > 1) // { arity: 1 }
-              Reduce aggregates=[count(true)] // { arity: 1 }
+              Reduce aggregates=[count(*)] // { arity: 1 }
                 Project () // { arity: 0 }
                   Get l0 // { arity: 3 }
     cte l0 =
@@ -509,7 +509,7 @@ Explained Query:
         Map (error("more than one record produced in subquery")) // { arity: 1 }
           Project () // { arity: 0 }
             Filter (#0 > 1) // { arity: 1 }
-              Reduce aggregates=[count(true)] // { arity: 1 }
+              Reduce aggregates=[count(*)] // { arity: 1 }
                 Project () // { arity: 0 }
                   Get l0 // { arity: 3 }
     cte l0 =
@@ -559,7 +559,7 @@ Explained Query:
         Map (error("more than one record produced in subquery")) // { arity: 1 }
           Project () // { arity: 0 }
             Filter (#0 > 1) // { arity: 1 }
-              Reduce aggregates=[count(true)] // { arity: 1 }
+              Reduce aggregates=[count(*)] // { arity: 1 }
                 Get l1 // { arity: 0 }
     cte l1 =
       Project () // { arity: 0 }
@@ -605,7 +605,7 @@ Explained Query:
         Map (error("more than one record produced in subquery")) // { arity: 1 }
           Project () // { arity: 0 }
             Filter (#0 > 1) // { arity: 1 }
-              Reduce aggregates=[count(true)] // { arity: 1 }
+              Reduce aggregates=[count(*)] // { arity: 1 }
                 Project () // { arity: 0 }
                   Get l0 // { arity: 3 }
     cte l1 =
@@ -925,7 +925,7 @@ Explained Query:
               Map (error("more than one record produced in subquery")) // { arity: 1 }
                 Project () // { arity: 0 }
                   Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
-                    Reduce aggregates=[count(true)] // { arity: 1 }
+                    Reduce aggregates=[count(*)] // { arity: 1 }
                       Project () // { arity: 0 }
                         Get l1 // { arity: 3 }
     cte l1 =
@@ -1036,7 +1036,7 @@ Explained Query:
       Get l0 // { arity: 2 }
   With
     cte l0 =
-      Reduce group_by=[#0] aggregates=[count(true)] // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
         Project (#0) // { arity: 1 }
           Get materialize.public.t1 // { arity: 2 }
 

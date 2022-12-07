@@ -77,6 +77,11 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             V1EnvVar(name="AWS_ACCESS_KEY_ID", value="minio"),
             V1EnvVar(name="AWS_SECRET_ACCESS_KEY", value="minio123"),
             V1EnvVar(name="MZ_ANNOUNCE_EGRESS_IP", value="1.2.3.4,88.77.66.55"),
+            V1EnvVar(name="MZ_AWS_ACCOUNT_ID", value="123456789000"),
+            V1EnvVar(
+                name="MZ_AWS_EXTERNAL_ID_PREFIX",
+                value="eb5cb59b-e2fe-41f3-87ca-d2176a495345",
+            ),
         ]
 
         for (k, v) in self.env.items():

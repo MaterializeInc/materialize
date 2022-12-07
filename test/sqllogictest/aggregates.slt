@@ -181,10 +181,6 @@ Explained Query:
     Map (integer_to_bigint(#1)) // { arity: 4 }
       Get materialize.public.agg_pk // { arity: 3 }
 
-Source materialize.public.agg_pk
-  project=(#0, #1, #3)
-  map=(dummy)
-
 EOF
 
 query II
@@ -201,10 +197,6 @@ Explained Query:
   Project (#0, #3) // { arity: 2 }
     Map (bigint_to_numeric(#2)) // { arity: 4 }
       Get materialize.public.agg_pk // { arity: 3 }
-
-Source materialize.public.agg_pk
-  project=(#0, #3, #2)
-  map=(dummy)
 
 EOF
 

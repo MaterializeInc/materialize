@@ -116,8 +116,9 @@ use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
-    self, storage, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
-    ClusterReplicaSizeMap, DataSourceDesc, StorageHostSizeMap, StorageSinkConnectionState,
+    self, storage, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog,
+    CatalogItem, ClusterReplicaSizeMap, DataSourceDesc, StorageHostSizeMap,
+    StorageSinkConnectionState,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
@@ -254,6 +255,7 @@ pub struct Config<S> {
     pub egress_ips: Vec<Ipv4Addr>,
     pub consolidations_tx: mpsc::UnboundedSender<Vec<mz_stash::Id>>,
     pub consolidations_rx: mpsc::UnboundedReceiver<Vec<mz_stash::Id>>,
+    pub aws_account_id: Option<String>,
 }
 
 /// Soft-state metadata about a compute replica
@@ -1034,6 +1036,7 @@ pub async fn serve<S: Append + 'static>(
         egress_ips,
         consolidations_tx,
         consolidations_rx,
+        aws_account_id,
     }: Config<S>,
 ) -> Result<(Handle, Client), AdapterError> {
     info!("coordinator init: beginning");
@@ -1056,6 +1059,16 @@ pub async fn serve<S: Append + 'static>(
     // Coordinator::sequence_create_compute_replica.
     availability_zones.shuffle(&mut rand::thread_rng());
 
+    let aws_principal_context =
+        if aws_account_id.is_some() && connection_context.aws_external_id_prefix.is_some() {
+            Some(AwsPrincipalContext {
+                aws_account_id: aws_account_id.unwrap(),
+                aws_external_id_prefix: connection_context.aws_external_id_prefix.clone().unwrap(),
+            })
+        } else {
+            None
+        };
+
     info!("coordinator init: opening catalog");
     let (mut catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
         Catalog::open(catalog::Config {
@@ -1074,6 +1087,7 @@ pub async fn serve<S: Append + 'static>(
             availability_zones,
             secrets_reader: secrets_controller.reader(),
             egress_ips,
+            aws_principal_context,
         })
         .await?;
     let session_id = catalog.config().session_id;

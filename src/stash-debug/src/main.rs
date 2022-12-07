@@ -339,6 +339,7 @@ impl Usage {
             availability_zones: vec![],
             secrets_reader,
             egress_ips: vec![],
+            aws_principal_context: None,
         })
         .await?;
 

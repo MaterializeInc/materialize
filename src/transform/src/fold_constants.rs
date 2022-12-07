@@ -80,7 +80,7 @@ impl FoldConstants {
         match relation {
             MirRelationExpr::Constant { .. } => { /* handled after match */ }
             MirRelationExpr::Get { .. } => {}
-            MirRelationExpr::Let { .. } => { /* constant prop done in InlineLet */ }
+            MirRelationExpr::Let { .. } => { /* constant prop done in NormalizeLets */ }
             MirRelationExpr::Reduce {
                 input,
                 group_key,

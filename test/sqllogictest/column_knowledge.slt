@@ -203,13 +203,9 @@ Explained Query:
             Get materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t1
-  project=(#0, #2)
   filter=((#0 = 123))
-  map=(dummy)
 Source materialize.public.t2
-  project=(#0, #2)
   filter=((#0 = 123))
-  map=(dummy)
 
 EOF
 
@@ -254,13 +250,9 @@ Explained Query:
           Get materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t1
-  project=(#0, #2)
   filter=((#0 = 123))
-  map=(dummy)
 Source materialize.public.t2
-  project=(#0, #2)
   filter=((#0 = 123))
-  map=(dummy)
 
 EOF
 
@@ -298,17 +290,12 @@ Explained Query:
         Map (error("more than one record produced in subquery")) // { arity: 1 }
           Project () // { arity: 0 }
             Filter (#0 > 1) // { arity: 1 }
-              Reduce aggregates=[count(true)] // { arity: 1 }
+              Reduce aggregates=[count(*)] // { arity: 1 }
                 Project () // { arity: 0 }
                   Get materialize.public.t1 // { arity: 2 }
 
-Source materialize.public.t1
-  project=(#0, #2)
-  map=(dummy)
 Source materialize.public.t2
-  project=(#0, #2)
   filter=((#0 = 123))
-  map=(dummy)
 
 EOF
 
@@ -330,9 +317,7 @@ Explained Query:
 Source materialize.public.t1
   filter=((#0 = 123))
 Source materialize.public.t2
-  project=(#0, #2)
   filter=((#0 = 123))
-  map=(dummy)
 
 EOF
 
@@ -360,13 +345,9 @@ Explained Query:
 Source materialize.public.t1
   filter=((#0 = 123))
 Source materialize.public.t2
-  project=(#0, #2)
   filter=((#0 = 123))
-  map=(dummy)
 Source materialize.public.t3
-  project=(#0, #2)
   filter=((#0 = 123))
-  map=(dummy)
 
 EOF
 
@@ -388,9 +369,7 @@ Explained Query:
 Source materialize.public.t1
   filter=((#0 = 123))
 Source materialize.public.t2
-  project=(#0, #2)
   filter=((#0 = 123))
-  map=(dummy)
 
 EOF
 
@@ -410,13 +389,9 @@ Explained Query:
             Get materialize.public.t2 // { arity: 2 }
         Project () // { arity: 0 }
           Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
-            Reduce aggregates=[count(true)] // { arity: 1 }
+            Reduce aggregates=[count(*)] // { arity: 1 }
               Project () // { arity: 0 }
                 Get materialize.public.t2 // { arity: 2 }
-
-Source materialize.public.t2
-  project=(#0, #2)
-  map=(dummy)
 
 EOF
 
@@ -437,15 +412,12 @@ Explained Query:
             Get materialize.public.t2 // { arity: 2 }
         Project () // { arity: 0 }
           Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
-            Reduce aggregates=[count(true)] // { arity: 1 }
+            Reduce aggregates=[count(*)] // { arity: 1 }
               Project () // { arity: 0 }
                 Get materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t1
   filter=((#0 = 123))
-Source materialize.public.t2
-  project=(#0, #2)
-  map=(dummy)
 
 EOF
 

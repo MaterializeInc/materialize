@@ -247,6 +247,13 @@ They are named different as to avoid clashing with inherent methods.
 These functions require a closure that produces a _name_ for the task, to improve the use of
 [`tokio-console`]
 
+### Test-specific
+
+You should prefer to panic in tests rather than returning an error. Tests that return errors
+do not produce useful backtraces and instead just point to the line in libtest that asserts
+that the test didn't return an error. Panics will produce useful backtraces that include
+the line where the panic occurred. This is especially useful for debugging flaky tests in CI.
+
 [Clippy]: https://github.com/rust-lang/rust-clippy
 [rustfmt]: https://github.com/rust-lang/rustfmt
 [rust-api]: https://rust-lang.github.io/api-guidelines/

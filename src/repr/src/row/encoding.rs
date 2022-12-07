@@ -23,11 +23,12 @@ use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
 use crate::adt::array::ArrayDimension;
 use crate::adt::numeric::Numeric;
+use crate::adt::range::{RangeBoundDesc, RangeBoundDescValue, RangeInner};
 use crate::chrono::ProtoNaiveTime;
 use crate::row::proto_datum::DatumType;
 use crate::row::{
     ProtoArray, ProtoArrayDimension, ProtoDatum, ProtoDatumOther, ProtoDict, ProtoDictElement,
-    ProtoNumeric, ProtoRow,
+    ProtoNumeric, ProtoRange, ProtoRangeInner, ProtoRow,
 };
 use crate::{Datum, Row, RowPacker};
 
@@ -137,6 +138,16 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
             Datum::MzTimestamp(x) => DatumType::MzTimestamp(x.into()),
             Datum::Dummy => DatumType::Other(ProtoDatumOther::Dummy.into()),
             Datum::Null => DatumType::Other(ProtoDatumOther::Null.into()),
+            Datum::Range(super::Range { inner }) => DatumType::Range(Box::new(ProtoRange {
+                inner: inner.map(|RangeInner { lower, upper }| {
+                    Box::new(ProtoRangeInner {
+                        lower_inclusive: lower.inclusive,
+                        lower: lower.bound.map(|bound| Box::new(bound.datum().into())),
+                        upper_inclusive: upper.inclusive,
+                        upper: upper.bound.map(|bound| Box::new(bound.datum().into())),
+                    })
+                }),
+            })),
         };
         ProtoDatum {
             datum_type: Some(datum_type),
@@ -247,6 +258,42 @@ impl RowPacker<'_> {
                 self.push(Datum::from(n))
             }
             Some(DatumType::MzTimestamp(x)) => self.push(Datum::MzTimestamp((*x).into())),
+            Some(DatumType::Range(inner)) => {
+                let ProtoRange { inner } = &**inner;
+                match inner {
+                    None => self.push_empty_range(),
+                    Some(inner) => {
+                        let ProtoRangeInner {
+                            lower_inclusive,
+                            lower,
+                            upper_inclusive,
+                            upper,
+                        } = &**inner;
+
+                        self.push_range_with(
+                            RangeBoundDesc {
+                                inclusive: *lower_inclusive,
+                                value: match lower {
+                                    None => RangeBoundDescValue::Infinite,
+                                    Some(d) => RangeBoundDescValue::Finite {
+                                        value: |row: &mut RowPacker| row.try_push_proto(&*d),
+                                    },
+                                },
+                            },
+                            RangeBoundDesc {
+                                inclusive: *upper_inclusive,
+                                value: match upper {
+                                    None => RangeBoundDescValue::Infinite,
+                                    Some(d) => RangeBoundDescValue::Finite {
+                                        value: |row: &mut RowPacker| row.try_push_proto(&*d),
+                                    },
+                                },
+                            },
+                        )
+                        .expect("decoding ProtoRow must succeed");
+                    }
+                }
+            }
             None => return Err("unknown datum type".into()),
         };
         Ok(())

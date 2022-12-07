@@ -15,7 +15,7 @@ use std::{cmp, time::Duration};
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
-use futures::future::{self, try_join3, try_join4, try_join_all, BoxFuture};
+use futures::future::{self, try_join3, try_join_all, BoxFuture};
 use futures::future::{try_join, TryFutureExt};
 use futures::StreamExt;
 use postgres_openssl::MakeTlsConnector;
@@ -1196,14 +1196,20 @@ impl Append for Postgres {
                         let lower1 = lower.clone();
                         let lower2 = lower.clone();
                         let upper1 = upper.clone();
-                        try_join4(
+                        try_join3(
                             async move {
+                                // Verify the previous upper before compaction.
                                 let current_upper =
                                     Self::upper_tx(stmts, tx, collection_id).await?;
                                 if current_upper != lower1 {
                                     return Err(StashError::from("unexpected lower"));
                                 }
-                                Ok(())
+                                Self::compact_batch_tx(
+                                    stmts,
+                                    tx,
+                                    std::iter::once((collection_id, &compact, Some(upper))),
+                                )
+                                .await
                             },
                             async move {
                                 Self::update_many_tx(
@@ -1220,14 +1226,6 @@ impl Append for Postgres {
                                     stmts,
                                     tx,
                                     std::iter::once((collection_id, &upper1, Some(lower))),
-                                )
-                                .await
-                            },
-                            async move {
-                                Self::compact_batch_tx(
-                                    stmts,
-                                    tx,
-                                    std::iter::once((collection_id, &compact, Some(upper))),
                                 )
                                 .await
                             },

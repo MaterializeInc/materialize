@@ -396,3 +396,12 @@ CrossJoin
         Get materialize.public.t
 
 EOF
+
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR SELECT COUNT(*);
+----
+Reduce aggregates=[count(*)]
+  Constant
+    - ()
+
+EOF

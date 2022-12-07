@@ -110,10 +110,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         tested_versions = tested_versions[: args.most_recent]
     tested_versions.reverse()
 
-    c.start_and_wait_for_tcp(
-        services=["zookeeper", "kafka", "schema-registry", "postgres"]
-    )
-
     if args.tests in ["all", "non-ssl"]:
         for version in tested_versions:
             priors = [f"v{v}" for v in all_versions if v < version]
@@ -124,7 +120,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if args.tests in ["all", "ssl"]:
         kafka, schema_registry, testdrive = ssl_services()
         with c.override(kafka, schema_registry, testdrive):
-            c.start_and_wait_for_tcp(services=["kafka", "schema-registry"])
             for version in tested_versions:
                 priors = [f"v{v}" for v in all_versions if v < version]
                 test_upgrade_from_version(
@@ -141,8 +136,10 @@ def test_upgrade_from_version(
     version_glob = "{" + ",".join(["any_version", *priors, from_version]) + "}"
     print(">>> Version glob pattern: " + version_glob)
 
-    c.rm("materialized", "testdrive", stop=True)
-    c.rm_volumes("mzdata", "pgdata", "tmp")
+    c.down(destroy_volumes=True)
+    c.start_and_wait_for_tcp(
+        services=["zookeeper", "kafka", "schema-registry", "postgres"]
+    )
 
     if from_version != "current_source":
         # Older Mz versions are not configured to know SIZE '4-4' clusters by default

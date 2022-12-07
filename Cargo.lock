@@ -3471,7 +3471,7 @@ dependencies = [
 
 [[package]]
 name = "mz-compute"
-version = "0.34.0-dev"
+version = "0.35.0-dev"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3573,7 +3573,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.34.0-dev"
+version = "0.35.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -3927,6 +3927,7 @@ dependencies = [
  "futures",
  "hex",
  "itertools",
+ "libc",
  "mz-orchestrator",
  "mz-ore",
  "mz-pid-file",
@@ -3936,7 +3937,6 @@ dependencies = [
  "serde_json",
  "sha1",
  "sysinfo",
- "tempfile",
  "tokio",
  "tracing",
 ]
@@ -4063,7 +4063,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.34.0-dev"
+version = "0.35.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4261,6 +4261,7 @@ name = "mz-repr"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "bitflags",
  "bytes",
  "chrono",
  "chrono-tz",
@@ -4548,7 +4549,7 @@ dependencies = [
 
 [[package]]
 name = "mz-storage"
-version = "0.34.0-dev"
+version = "0.35.0-dev"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -4558,6 +4559,7 @@ dependencies = [
  "aws-sdk-s3",
  "aws-sdk-sqs",
  "axum",
+ "bytesize",
  "chrono",
  "clap",
  "crossbeam-channel",

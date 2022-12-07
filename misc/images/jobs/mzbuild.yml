@@ -7,13 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-name: ci-cargo-test
+name: jobs
 pre-image:
   - type: cargo-build
-    bin: testdrive
-    extract:
-      protobuf-src:
-        install: protobuf-install
-  - type: cargo-build
-    bin: [storaged, computed, environmentd]
-  - type: cargo-test
+    example: persistcli
+    strip: false
+publish: true

@@ -188,7 +188,7 @@ With
       Map (error("more than one record produced in subquery")) // { arity: 2 }
         Project (#0) // { arity: 1 }
           Filter (#1 > 1) // { arity: 2 }
-            Reduce group_by=[#0] aggregates=[count(true)] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
               Get l8 // { arity: 2 }
   cte l8 =
     Project (#0, #2) // { arity: 2 }
@@ -363,7 +363,7 @@ With
       Map (error("more than one record produced in subquery")) // { arity: 2 }
         Project (#0) // { arity: 1 }
           Filter (#1 > 1) // { arity: 2 }
-            Reduce group_by=[#0] aggregates=[count(true)] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
               Get l8 // { arity: 2 }
   cte l8 =
     Project (#0, #2) // { arity: 2 }
@@ -478,7 +478,7 @@ With
       Map (error("more than one record produced in subquery")) // { arity: 2 }
         Project (#0) // { arity: 1 }
           Filter (#1 > 1) // { arity: 2 }
-            Reduce group_by=[#0] aggregates=[count(true)] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
               Get l9 // { arity: 2 }
   cte l9 =
     Project (#0, #2) // { arity: 2 }

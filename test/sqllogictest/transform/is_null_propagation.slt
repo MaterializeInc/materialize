@@ -41,9 +41,6 @@ Explained Query:
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
-Source materialize.public.t2
-  project=(#0, #2)
-  map=(dummy)
 
 EOF
 
@@ -75,7 +72,7 @@ Explained Query:
                     Get l1 // { arity: 1 }
   With
     cte l2 =
-      Reduce group_by=[#0] aggregates=[count(true)] // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
         Project (#1) // { arity: 1 }
           Filter (#2 > #0) // { arity: 3 }
             CrossJoin type=delta // { arity: 3 }
@@ -100,12 +97,5 @@ Explained Query:
     cte l0 =
       Project (#1) // { arity: 1 }
         Get materialize.public.t1 // { arity: 2 }
-
-Source materialize.public.t1
-  project=(#2, #1)
-  map=(dummy)
-Source materialize.public.t2
-  project=(#2, #1)
-  map=(dummy)
 
 EOF

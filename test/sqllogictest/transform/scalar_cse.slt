@@ -20,10 +20,6 @@ Explained Query:
     Map ((#1 * #1), (#2 * #1)) // { arity: 4 }
       Get materialize.public.x // { arity: 2 }
 
-Source materialize.public.x
-  project=(#2, #1)
-  map=(dummy)
-
 EOF
 
 query T multiline
@@ -33,10 +29,6 @@ Explained Query:
   Project (#3, #4) // { arity: 2 }
     Map ((#1 * #1), (#2 * #1), (#2 + 1)) // { arity: 5 }
       Get materialize.public.x // { arity: 2 }
-
-Source materialize.public.x
-  project=(#2, #1)
-  map=(dummy)
 
 EOF
 
@@ -51,10 +43,6 @@ Explained Query:
   Project (#3..=#5) // { arity: 3 }
     Map (text_to_jsonb(#0), (#2 -> "Field1"), (#2 -> "Field2"), (#2 -> "Field3")) // { arity: 6 }
       Get materialize.public.x // { arity: 2 }
-
-Source materialize.public.x
-  project=(#0, #2)
-  map=(dummy)
 
 EOF
 
@@ -71,10 +59,6 @@ Explained Query:
     Map (text_to_jsonb(#0), (#2 -> "Field1"), (#3 -> "Foo"), (#3 -> "Bar"), (#2 -> "Field2"), (#6 -> "Baz"), ((#6 -> "Quux") -> "Zorb")) // { arity: 9 }
       Get materialize.public.x // { arity: 2 }
 
-Source materialize.public.x
-  project=(#0, #2)
-  map=(dummy)
-
 EOF
 
 
@@ -89,10 +73,6 @@ Explained Query:
   Project (#2, #3) // { arity: 2 }
     Map (case when (#1 = 0) then 0 else (1 / #1) end, case when (#1 != 0) then (1 / #1) else 0 end) // { arity: 4 }
       Get materialize.public.x // { arity: 2 }
-
-Source materialize.public.x
-  project=(#2, #1)
-  map=(dummy)
 
 EOF
 
@@ -111,9 +91,5 @@ Explained Query:
   Project (#3, #4) // { arity: 2 }
     Map ((#1 / 2), case when (#2 = 0) then 0 else (1 / #2) end, case when (#2 != 0) then (1 / #2) else 0 end) // { arity: 5 }
       Get materialize.public.x // { arity: 2 }
-
-Source materialize.public.x
-  project=(#2, #1)
-  map=(dummy)
 
 EOF

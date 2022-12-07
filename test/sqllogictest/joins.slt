@@ -531,7 +531,7 @@ Explained Query:
             Map (error("more than one record produced in subquery")) // { arity: 1 }
               Project () // { arity: 0 }
                 Filter (#0 > 1) // { arity: 1 }
-                  Reduce aggregates=[count(true)] // { arity: 1 }
+                  Reduce aggregates=[count(*)] // { arity: 1 }
                     Project () // { arity: 0 }
                       Get l0 // { arity: 2 }
   With

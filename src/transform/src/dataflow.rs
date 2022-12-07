@@ -18,8 +18,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use mz_compute_client::command::DataflowDesc;
 use mz_expr::visit::Visit;
-use mz_expr::{CollectionPlan, Id, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr};
-use mz_ore::id_gen::IdGen;
+use mz_expr::{CollectionPlan, Id, LocalId, MapFilterProject, MirRelationExpr};
 
 use crate::{monotonic::MonotonicFlag, IndexOracle, Optimizer, TransformError};
 
@@ -117,21 +116,18 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
 
             // When splicing in the `index` view, we need to create disjoint
             // identifiers for the Let's `body` and `value`, as well as a new
-            // identifier for the binding itself. Following `UpdateLet`, we
+            // identifier for the binding itself. Following `NormalizeLets`, we
             // go with the binding first, then the value, then the body.
-            let update_let = crate::update_let::UpdateLet::default();
             let mut id_gen = crate::IdGen::default();
             let new_local = LocalId::new(id_gen.allocate_id());
             // Use the same `id_gen` to assign new identifiers to `index`.
-            update_let.action(
+            crate::normalize_lets::renumber_bindings(
                 dataflow.objects_to_build[index].plan.as_inner_mut(),
-                &mut HashMap::new(),
                 &mut id_gen,
             )?;
             // Assign new identifiers to the other relation.
-            update_let.action(
+            crate::normalize_lets::renumber_bindings(
                 dataflow.objects_to_build[other].plan.as_inner_mut(),
-                &mut HashMap::new(),
                 &mut id_gen,
             )?;
             // Install the `new_local` name wherever `global_id` was used.
@@ -187,8 +183,6 @@ fn optimize_dataflow_relations(
     // just before we plan to install the dataflow. This would also allow us to not
     // add indexes imperatively to `DataflowDesc`.
     for object in dataflow.objects_to_build.iter_mut() {
-        // Re-name bindings to accommodate other analyses, specifically
-        // `InlineLet` which probably wants a reworking in any case.
         // Re-run all optimizations on the composite views.
         optimizer.transform(object.plan.as_inner_mut(), indexes)?;
     }
@@ -258,38 +252,6 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) -> Result<(), Transform
         &mut demand,
     )?;
 
-    // Push demand information into the SourceDesc.
-    for (source_id, (source, _monotonic)) in dataflow.source_imports.iter_mut() {
-        if let Some(columns) = demand.get(&Id::Global(*source_id)).clone() {
-            // Install no-op demand information if none exists.
-            if source.arguments.operators.is_none() {
-                source.arguments.operators = Some(MapFilterProject::new(source.typ.arity()));
-            }
-            // Restrict required columns by those identified as demanded.
-            if let Some(operator) = source.arguments.operators.take() {
-                // Assemble a transform that replaces some columns with dummy values.
-                let arity = source.typ.arity();
-                let mut dummies = Vec::new();
-                let mut demand_projection = Vec::new();
-                for (column, typ) in source.typ.column_types.iter().enumerate() {
-                    if columns.contains(&column) {
-                        demand_projection.push(column);
-                    } else {
-                        demand_projection.push(arity + dummies.len());
-                        dummies.push(MirScalarExpr::literal_ok(
-                            mz_repr::Datum::Dummy,
-                            typ.scalar_type.clone(),
-                        ));
-                    }
-                }
-
-                // Introduce and reposition `Datum::Dummy` values.
-                source.arguments.operators = Some(operator.map(dummies).project(demand_projection));
-                source.arguments.operators.as_mut().map(|x| x.optimize());
-            }
-        }
-    }
-
     mz_repr::explain_new::trace_plan(dataflow);
 
     Ok(())
@@ -325,13 +287,13 @@ where
         view_refs.push(view);
     }
 
-    let typ_update = crate::update_let::UpdateLet::default();
+    let typ_update = crate::normalize_lets::NormalizeLets::new(false);
     for view in view_refs {
         // Update column references to views where projections were pushed down.
         projection_pushdown.update_projection_around_get(view, &applied_projection)?;
         // Types need to be updated after ProjectionPushdown
         // because the width of each view may have changed.
-        typ_update.action(view, &mut HashMap::new(), &mut IdGen::default())?;
+        typ_update.action(view)?;
     }
 
     Ok(())
@@ -362,17 +324,19 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), Transfor
     // Push predicate information into the SourceDesc.
     for (source_id, (source, _monotonic)) in dataflow.source_imports.iter_mut() {
         if let Some(list) = predicates.remove(&Id::Global(*source_id)) {
-            // Canonicalize the order of predicates, for stable plans.
-            let mut list = list.into_iter().collect::<Vec<_>>();
-            list.sort();
-            // Install no-op predicate information if none exists.
-            if source.arguments.operators.is_none() {
-                source.arguments.operators = Some(MapFilterProject::new(source.typ.arity()));
-            }
-            // Add any predicates that can be pushed to the source.
-            if let Some(operator) = source.arguments.operators.take() {
-                source.arguments.operators = Some(operator.filter(list));
-                source.arguments.operators.as_mut().map(|x| x.optimize());
+            if !list.is_empty() {
+                // Canonicalize the order of predicates, for stable plans.
+                let mut list = list.into_iter().collect::<Vec<_>>();
+                list.sort();
+                // Install no-op predicate information if none exists.
+                if source.arguments.operators.is_none() {
+                    source.arguments.operators = Some(MapFilterProject::new(source.typ.arity()));
+                }
+                // Add any predicates that can be pushed to the source.
+                if let Some(operator) = source.arguments.operators.take() {
+                    source.arguments.operators = Some(operator.filter(list));
+                    source.arguments.operators.as_mut().map(|x| x.optimize());
+                }
             }
         }
     }

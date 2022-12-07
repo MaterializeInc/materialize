@@ -13,14 +13,65 @@ from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
 
 
-class CheckDatabases(Check):
+class CheckDatabaseCreate(Check):
     def manipulate(self) -> List[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE DATABASE to_be_created;
+                > CREATE DATABASE to_be_created1;
+                > SET DATABASE=to_be_created1;
+                > CREATE TABLE t1 (f1 INTEGER);
+                > INSERT INTO t1 VALUES (1);
+                """,
+                """
+                > CREATE DATABASE to_be_created2;
+                > SET DATABASE=to_be_created2;
+                > CREATE TABLE t1 (f1 INTEGER);
+                > INSERT INTO t1 VALUES (2);
+                """,
+            ]
+        ]
 
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                > SHOW DATABASES;
+                materialize
+                to_be_created1
+                to_be_created2
+
+                > SET DATABASE=to_be_created1;
+                > SELECT * FROM t1;
+                1
+
+                > CREATE TABLE t2 (f1 INTEGER);
+                > INSERT INTO t2 VALUES (1);
+                > SELECT * FROM t2;
+                1
+                > DROP TABLE t2;
+
+                > SET DATABASE=to_be_created2;
+                > SELECT * FROM t1;
+                2
+
+                > CREATE TABLE t2 (f1 INTEGER);
+                > INSERT INTO t2 VALUES (1);
+                > SELECT * FROM t2;
+                1
+                > DROP TABLE t2;
+                """
+            )
+        )
+
+
+class CheckDatabaseDrop(Check):
+    def manipulate(self) -> List[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
                 > CREATE DATABASE to_be_dropped;
                 > SET DATABASE=to_be_dropped;
                 > CREATE TABLE t1 (f1 INTEGER);
@@ -35,17 +86,10 @@ class CheckDatabases(Check):
         return Testdrive(
             dedent(
                 """
-                > SHOW DATABASES;
-                materialize
-                to_be_created
-
                 > SET DATABASE=to_be_dropped;
 
-                > SET DATABASE=to_be_created;
-
-                > CREATE TABLE t1 (f1 INTEGER);
-
-                > DROP DATABASE to_be_created CASCADE;
+                ! SELECT * FROM t1;
+                contains: unknown catalog item
                 """
             )
         )

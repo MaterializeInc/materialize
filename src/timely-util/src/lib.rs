@@ -19,7 +19,6 @@ pub mod activator;
 pub mod builder_async;
 pub mod event;
 pub mod operator;
-pub mod operators_async_ext;
 pub mod order;
 pub mod panic;
 pub mod progress;

@@ -299,6 +299,10 @@ pub struct Args {
         required_if_eq("orchestrator", "process")
     )]
     orchestrator_process_secrets_directory: Option<PathBuf>,
+    /// Whether the process orchestrator should handle crashes in child
+    /// processes by crashing the parent process.
+    #[clap(long, env = "ORCHESTRATOR_PROCESS_PROPAGATE_CRASHES")]
+    orchestrator_process_propagate_crashes: bool,
 
     /// The init container to use for computed and storaged when using the
     /// kubernetes orchestrator.
@@ -410,6 +414,10 @@ pub struct Args {
         use_delimiter = true
     )]
     announce_egress_ip: Vec<Ipv4Addr>,
+
+    /// The 12-digit AWS account id, which is used to generate an AWS Principal.
+    #[clap(long, env = "AWS_ACCOUNT_ID")]
+    aws_account_id: Option<String>,
 
     // === Tracing options. ===
     #[clap(flatten)]
@@ -600,6 +608,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                         command_wrapper: args
                             .orchestrator_process_wrapper
                             .map_or(Ok(vec![]), |s| shell_words::split(&s))?,
+                        propagate_crashes: args.orchestrator_process_propagate_crashes,
                     }))
                     .context("creating process orchestrator")?,
             );
@@ -757,6 +766,7 @@ max log level: {max_log_level}",
         storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
         segment_api_key: args.segment_api_key,
         egress_ips: args.announce_egress_ip,
+        aws_account_id: args.aws_account_id,
     }))?;
 
     metrics.start_time_environmentd.set(
