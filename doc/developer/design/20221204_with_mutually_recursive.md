@@ -75,23 +75,54 @@ WITH MUTUALLY RECURSIVE
 ```
 This fragment binds multiple identifiers, *must* specify all column names and types, and all bound names are available in each `SELECT` statement.
 
-The value of each bound name in the following `SELECT` block (as for a standard `WITH`) is as if each were initially empty, and then all were repeatedly updated to equal their indicated definitions using the prior values of each binding.
+The value of each bound name in the following `SELECT` block (as for a standard `WITH`) is as if each were initially empty, and then each are updated in sequence using the most recent contents of each binding.
 Mechanically, one could evaluate this as:
 ```rust
-let mut prev_bindings = HashMap::new();
-let mut next_bindings = HashMap::new();
+let mut bindings = HashMap::new();
 for (name, _) in bindings.iter() {
-    prev_bindings.insert(name, empty());
+    bindings.insert(name, empty());
 }
 
-while prev_bindings != next_bindings {
-    std::mem::swap(&mut prev_bindings, &mut next_bindings);
-    next_bindings.clear();
+let mut changed = true;
+while changed {
+    changed = false;
     for (name, statement) in bindings {
-        next_bindings.insert(name, statement.eval(&prev_bindings));
+        let new_binding = statement.eval(&bindings);
+        if new_binding != binding[name] {
+            binding.insert(name, new_binding);
+            changed = true;
+        }
     }
 }
 ```
+
+As an example, one can write "standard" `WITH RECURSIVE` queries
+```sql
+WITH MUTUALLY RECURSIVE
+    reach (a int, b int) AS (
+        SELECT * FROM edges
+        UNION
+        SELECT edges.a, reach.b FROM edges, reach WHERE edges.b = reach.a
+    ),
+SELECT * FROM reach;
+```
+One can also write more complex non-linear, non-monotonic, mutual recursion
+```sql
+WITH MUTUALLY RECURSIVE
+    odd_path (a int, b int) AS (
+        SELECT * FROM edges
+        UNION
+        SELECT edges.a, even_path.b FROM edges, even_path WHERE edges.b = even_path.a
+    ),
+    even_path (a int, b int) AS (
+        SELECT edges.a, odd_path.b FROM edges, odd_path WHERE edges.b = odd_path.a
+        UNION
+        -- This is optional, but demonstrates non-linear queries and reduces the "depth" of derivations.
+        SELECT path1.a, path2.b FROM odd_path path1, odd_path path2 WHERE path1.b = path2.b
+    ),
+SELECT * FROM reach;
+```
+The `SELECT` blocks can be anything we support, except we are unlikely to support additional `WITH MUTUALLY RECURSIVE` blocks in them for some time.
 
 The sequence of goals have their own design considerations
 
@@ -141,6 +172,9 @@ The sequence of goals have their own design considerations
     The main change is having each bindings result in a differential dataflow `Variable` which is then used instead of the collection itself.
     Once the definition of each object is complete, it is bound to its variable.
 
+    We have not previously prototyped sequenced recursion, where there are two recursive blocks in sequence.
+    We can support this in the dataflow layer, but we would likely need to change our dataflow descriptions to accommodate it.
+
 ## Alternatives
 
 <!--
@@ -169,6 +203,10 @@ There are several distinctions it has from the proposed `WITH MUTUALLY RECURSIVE
     This may be helpful from a query admission point of view (should we allow you to run your query).
     We could likely introduce this constraint if we discover what it is valuable for.
 
+There is an alternate evaluation order that updates all collections *concurrently*, rather than in sequence.
+This would mean that it takes "one step" for each value to propogate to each other binding, rather than be immediately available.
+This results in a different semantics, especially in the case of non-monotonic expressions (e.g. aggregation, retraction).
+However, it can always be "faked" in the sequential update model, by introducing "mirroring" collections at the end of the block and only using these in other bindings.
 
 ## Open questions
 
@@ -177,7 +215,3 @@ There are several distinctions it has from the proposed `WITH MUTUALLY RECURSIVE
 // other unknowns are pointed out.
 // These questions may be technical, product, or anything in-between.
 -->
-
-One design alternative is to have the bindings update in sequence, rather than concurrently.
-That is, rather than update each rule with the previous values of all bindings, we could use the previous values of *subsequent* bindings, and the current values prior bindings.
-Either option can be efficiently rendered, and it may be valuable to determine if one is more general than the other.
