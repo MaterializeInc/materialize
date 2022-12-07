@@ -3285,6 +3285,7 @@ dependencies = [
  "toml",
  "url",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3350,6 +3351,7 @@ dependencies = [
  "tracing-subscriber",
  "uncased",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3361,6 +3363,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_plain",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3384,6 +3387,7 @@ dependencies = [
  "snap",
  "tracing",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3392,6 +3396,7 @@ version = "0.0.0"
 dependencies = [
  "quote",
  "syn",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3415,6 +3420,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3424,6 +3430,7 @@ dependencies = [
  "anyhow",
  "libc",
  "mz-ore",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3432,6 +3439,7 @@ version = "0.0.0"
 dependencies = [
  "compile-time-run",
  "semver",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3452,6 +3460,7 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3467,6 +3476,7 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3505,6 +3515,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3546,6 +3557,7 @@ dependencies = [
  "tonic-build",
  "tracing",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3569,6 +3581,7 @@ dependencies = [
  "timely",
  "tokio",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3659,6 +3672,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3709,6 +3723,7 @@ dependencies = [
  "sha2",
  "uncased",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3724,6 +3739,7 @@ dependencies = [
  "proc-macro2",
  "serde",
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3741,6 +3757,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3757,6 +3774,7 @@ dependencies = [
  "serde_json",
  "tracing",
  "tracing-subscriber",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3786,6 +3804,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3811,6 +3830,7 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3818,6 +3838,7 @@ name = "mz-kinesis-util"
 version = "0.0.0"
 dependencies = [
  "aws-sdk-kinesis",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3831,6 +3852,7 @@ dependencies = [
  "proc-macro2",
  "serde",
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3840,6 +3862,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3848,6 +3871,7 @@ version = "0.0.0"
 dependencies = [
  "reqwest",
  "serde",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3861,6 +3885,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3875,6 +3900,7 @@ dependencies = [
  "sha2",
  "tar",
  "walkdir",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3893,6 +3919,7 @@ dependencies = [
  "protobuf-src",
  "serde",
  "tonic-build",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3916,6 +3943,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3941,6 +3969,7 @@ dependencies = [
  "sysinfo",
  "tokio",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3958,6 +3987,7 @@ dependencies = [
  "mz-repr",
  "opentelemetry",
  "tracing-subscriber",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3999,6 +4029,7 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4020,6 +4051,7 @@ dependencies = [
  "tokio-postgres",
  "tracing",
  "tracing-subscriber",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4061,6 +4093,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4104,6 +4137,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4111,6 +4145,7 @@ name = "mz-persist-types"
 version = "0.0.0"
 dependencies = [
  "bytes",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4121,6 +4156,7 @@ dependencies = [
  "csv",
  "mz-pgrepr",
  "mz-repr",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4135,6 +4171,7 @@ dependencies = [
  "once_cell",
  "postgres-types",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4150,6 +4187,7 @@ dependencies = [
  "postgres-protocol",
  "serde",
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4176,6 +4214,7 @@ dependencies = [
  "tokio-openssl",
  "tokio-util",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4186,6 +4225,7 @@ dependencies = [
  "libc",
  "mz-ore",
  "tempfile",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4210,6 +4250,7 @@ dependencies = [
  "tokio-postgres",
  "tonic-build",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4237,6 +4278,7 @@ dependencies = [
  "tikv-jemalloc-ctl",
  "tokio",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4256,6 +4298,7 @@ dependencies = [
  "tokio-postgres",
  "url",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4300,6 +4343,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4312,6 +4356,7 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "proc-macro2",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4329,6 +4374,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4338,6 +4384,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "mz-repr",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4350,6 +4397,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4378,6 +4426,7 @@ dependencies = [
  "tonic",
  "tower",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4428,6 +4477,7 @@ dependencies = [
  "typemap_rev",
  "uncased",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4446,6 +4496,7 @@ dependencies = [
  "tracing",
  "uncased",
  "unicode-width",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4487,6 +4538,7 @@ dependencies = [
  "tower-http",
  "uuid",
  "walkdir",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4502,6 +4554,7 @@ dependencies = [
  "ssh-key",
  "tempfile",
  "tracing",
+ "workspace-hack",
  "zeroize",
 ]
 
@@ -4526,6 +4579,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4546,6 +4600,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-postgres",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4618,6 +4673,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4674,6 +4730,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4689,6 +4746,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4760,6 +4818,7 @@ dependencies = [
  "url",
  "uuid",
  "walkdir",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4775,6 +4834,7 @@ dependencies = [
  "timely",
  "timely_communication",
  "tokio",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4797,6 +4857,7 @@ dependencies = [
  "serde_json",
  "tracing",
  "typemap_rev",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4810,6 +4871,7 @@ dependencies = [
  "quote",
  "syn",
  "tempfile",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7871,6 +7933,113 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "80d0f4e272c85def139476380b12f9ac60926689dd2e01d4923222f40580869d"
 dependencies = [
  "winapi",
+]
+
+[[package]]
+name = "workspace-hack"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "aws-sdk-sts",
+ "aws-sig-auth",
+ "aws-sigv4",
+ "aws-smithy-http",
+ "aws-types",
+ "axum",
+ "base64",
+ "bstr",
+ "byteorder",
+ "bytes",
+ "cc",
+ "chrono",
+ "clap",
+ "criterion",
+ "crossbeam-channel",
+ "crossbeam-deque",
+ "crossbeam-epoch",
+ "crossbeam-utils",
+ "crypto-common",
+ "dec",
+ "digest",
+ "either",
+ "flate2",
+ "frunk_core",
+ "futures",
+ "futures-channel",
+ "futures-core",
+ "futures-executor",
+ "futures-io",
+ "futures-sink",
+ "futures-task",
+ "futures-util",
+ "globset",
+ "hashbrown",
+ "hyper",
+ "indexmap",
+ "k8s-openapi",
+ "kube",
+ "kube-client",
+ "kube-core",
+ "libc",
+ "log",
+ "lru",
+ "memchr",
+ "native-tls",
+ "nix",
+ "nom",
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+ "once_cell",
+ "openssl",
+ "openssl-sys",
+ "ordered-float",
+ "parking_lot",
+ "phf",
+ "phf_shared",
+ "postgres",
+ "postgres-types",
+ "proc-macro2",
+ "prometheus",
+ "prost",
+ "prost-reflect",
+ "prost-types",
+ "quote",
+ "rand",
+ "rdkafka-sys",
+ "regex",
+ "regex-syntax",
+ "reqwest",
+ "ring",
+ "schemars",
+ "scopeguard",
+ "security-framework",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "smallvec",
+ "socket2",
+ "syn",
+ "textwrap",
+ "tikv-jemalloc-sys",
+ "time",
+ "time-macros",
+ "timely",
+ "timely_communication",
+ "tokio",
+ "tokio-postgres",
+ "tokio-stream",
+ "tokio-util",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber",
+ "uncased",
+ "url",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]

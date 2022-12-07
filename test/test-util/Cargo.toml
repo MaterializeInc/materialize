@@ -16,3 +16,4 @@ rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features
 tokio = "1.23.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tracing = "0.1.37"
+workspace-hack = { version = "0.0.0", path = "../../src/workspace-hack" }

@@ -1,0 +1,238 @@
+[package]
+name = "workspace-hack"
+description = "workspace-hack package, managed by hakari"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# The parts of the file between the BEGIN HAKARI SECTION and END HAKARI SECTION
+# comments are managed by hakari.
+#
+# To regenerate, run:
+#     cargo hakari generate
+
+### BEGIN HAKARI SECTION
+[dependencies]
+anyhow = { version = "1.0.66", features = ["backtrace", "std"] }
+aws-sdk-sts = { version = "0.21.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sig-auth = { version = "0.51.0", default-features = false, features = ["aws-smithy-eventstream", "sign-eventstream"] }
+aws-sigv4 = { version = "0.51.0", features = ["aws-smithy-eventstream", "bytes", "form_urlencoded", "http", "percent-encoding", "sign-eventstream", "sign-http"] }
+aws-smithy-http = { version = "0.51.0", default-features = false, features = ["aws-smithy-eventstream", "event-stream", "rt-tokio", "tokio", "tokio-util"] }
+aws-types = { version = "0.51.0", default-features = false, features = ["hardcoded-credentials"] }
+axum = { version = "0.5.17", features = ["form", "headers", "http1", "json", "matched-path", "original-uri", "query", "serde_json", "serde_urlencoded", "tower-log"] }
+base64 = { version = "0.13.1", features = ["alloc", "std"] }
+bstr = { version = "0.2.14", features = ["lazy_static", "regex-automata", "serde", "serde1", "serde1-nostd", "std", "unicode"] }
+byteorder = { version = "1.4.3", features = ["std"] }
+bytes = { version = "1.3.0", features = ["std"] }
+chrono = { version = "0.4.23", default-features = false, features = ["alloc", "clock", "iana-time-zone", "serde", "std", "winapi"] }
+clap = { version = "3.2.20", features = ["atty", "clap_derive", "color", "derive", "env", "once_cell", "std", "strsim", "suggestions", "termcolor", "terminal_size", "wrap_help"] }
+criterion = { version = "0.4.0", features = ["async", "async_tokio", "cargo_bench_support", "futures", "html_reports", "plotters", "rayon", "tokio"] }
+crossbeam-channel = { version = "0.5.6", features = ["crossbeam-utils", "std"] }
+crossbeam-deque = { version = "0.8.1", features = ["crossbeam-epoch", "crossbeam-utils", "std"] }
+crossbeam-epoch = { version = "0.9.13", features = ["alloc", "std"] }
+crossbeam-utils = { version = "0.8.7", features = ["lazy_static", "std"] }
+crypto-common = { version = "0.1.3", default-features = false, features = ["std"] }
+dec = { version = "0.4.8", default-features = false, features = ["serde"] }
+digest = { version = "0.10.6", features = ["alloc", "block-buffer", "core-api", "mac", "std", "subtle"] }
+either = { version = "1.8.0", features = ["use_std"] }
+flate2 = { version = "1.0.24", features = ["any_zlib", "libz-sys", "miniz_oxide", "rust_backend", "zlib"] }
+frunk_core = { version = "0.4.0", default-features = false, features = ["std"] }
+futures = { version = "0.3.25", features = ["alloc", "async-await", "executor", "futures-executor", "std"] }
+futures-channel = { version = "0.3.25", features = ["alloc", "futures-sink", "sink", "std"] }
+futures-core = { version = "0.3.25", features = ["alloc", "std"] }
+futures-executor = { version = "0.3.25", features = ["std"] }
+futures-io = { version = "0.3.25", features = ["std"] }
+futures-sink = { version = "0.3.25", features = ["alloc", "std"] }
+futures-task = { version = "0.3.25", features = ["alloc", "std"] }
+futures-util = { version = "0.3.25", features = ["alloc", "async-await", "async-await-macro", "channel", "futures-channel", "futures-io", "futures-macro", "futures-sink", "io", "memchr", "sink", "slab", "std"] }
+globset = { version = "0.4.9", features = ["log", "serde", "serde1"] }
+hashbrown = { git = "https://github.com/MaterializeInc/hashbrown.git", features = ["ahash", "inline-more", "raw"] }
+hyper = { version = "0.14.23", features = ["client", "full", "h2", "http1", "http2", "runtime", "server", "socket2", "stream", "tcp"] }
+indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
+k8s-openapi = { version = "0.16.0", features = ["api", "http", "percent-encoding", "url", "v1_22"] }
+kube = { version = "0.76.0", features = ["client", "config", "derive", "kube-client", "kube-derive", "kube-runtime", "openssl-tls", "runtime", "ws"] }
+kube-client = { version = "0.76.0", default-features = false, features = ["__non_core", "base64", "bytes", "chrono", "client", "config", "dirs", "either", "futures", "http-body", "hyper", "hyper-openssl", "hyper-timeout", "jsonpatch", "jsonpath_lib", "openssl", "openssl-tls", "pem", "pin-project", "rand", "serde_yaml", "tokio", "tokio-tungstenite", "tokio-util", "tower", "tower-http", "tracing", "ws"] }
+kube-core = { version = "0.76.0", default-features = false, features = ["json-patch", "jsonpatch", "schema", "schemars", "ws"] }
+libc = { version = "0.2.137", features = ["extra_traits", "std"] }
+log = { version = "0.4.17", default-features = false, features = ["std"] }
+lru = { version = "0.8.1", features = ["hashbrown"] }
+memchr = { version = "2.4.1", features = ["std", "use_std"] }
+native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
+nix = { version = "0.26.1", features = ["acct", "aio", "dir", "env", "event", "feature", "fs", "hostname", "inotify", "ioctl", "kmod", "memoffset", "mman", "mount", "mqueue", "net", "personality", "pin-utils", "poll", "process", "pthread", "ptrace", "quota", "reboot", "resource", "sched", "signal", "socket", "term", "time", "ucontext", "uio", "user", "zerocopy"] }
+nom = { version = "7.1.0", features = ["alloc", "std"] }
+num-bigint = { version = "0.4.2", features = ["std"] }
+num-integer = { version = "0.1.44", features = ["i128", "std"] }
+num-traits = { version = "0.2.15", features = ["i128", "libm", "std"] }
+openssl = { version = "0.10.43", features = ["vendored"] }
+openssl-sys = { version = "0.9.79", default-features = false, features = ["openssl-src", "vendored"] }
+ordered-float = { version = "3.4.0", features = ["serde", "std"] }
+parking_lot = { version = "0.12.0", features = ["send_guard"] }
+phf = { version = "0.11.1", features = ["std", "uncased"] }
+phf_shared = { version = "0.11.1", features = ["std", "uncased"] }
+postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["chrono-04", "serde-1", "serde_json-1", "uuid-1", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
+proc-macro2 = { version = "1.0.47", features = ["proc-macro", "span-locations"] }
+prometheus = { version = "0.13.3", default-features = false, features = ["libc", "process", "procfs"] }
+prost = { version = "0.11.3", features = ["no-recursion-limit", "prost-derive", "std"] }
+prost-reflect = { version = "0.9.2", default-features = false, features = ["base64", "serde", "serde-value", "serde1"] }
+prost-types = { version = "0.11.2", features = ["std"] }
+quote = { version = "1.0.21", features = ["proc-macro"] }
+rand = { version = "0.8.5", features = ["alloc", "getrandom", "libc", "rand_chacha", "small_rng", "std", "std_rng"] }
+rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake", "cmake-build", "libz", "libz-static", "libz-sys", "openssl-sys", "ssl", "ssl-vendored", "zstd", "zstd-sys"] }
+regex = { version = "1.7.0", features = ["aho-corasick", "memchr", "perf", "perf-cache", "perf-dfa", "perf-inline", "perf-literal", "std", "unicode", "unicode-age", "unicode-bool", "unicode-case", "unicode-gencat", "unicode-perl", "unicode-script", "unicode-segment"] }
+regex-syntax = { version = "0.6.28", features = ["unicode", "unicode-age", "unicode-bool", "unicode-case", "unicode-gencat", "unicode-perl", "unicode-script", "unicode-segment"] }
+reqwest = { version = "0.11.13", features = ["__tls", "blocking", "default-tls", "hyper-tls", "json", "native-tls", "native-tls-crate", "native-tls-vendored", "serde_json", "tokio-native-tls"] }
+ring = { version = "0.16.20", features = ["alloc", "dev_urandom_fallback", "once_cell", "std"] }
+schemars = { version = "0.8.11", features = ["derive", "schemars_derive", "uuid1"] }
+scopeguard = { version = "1.1.0", features = ["use_std"] }
+semver = { version = "1.0.14", features = ["serde", "std"] }
+serde = { version = "1.0.147", features = ["alloc", "derive", "serde_derive", "std"] }
+serde_json = { version = "1.0.89", features = ["alloc", "arbitrary_precision", "float_roundtrip", "indexmap", "preserve_order", "raw_value", "std"] }
+sha2 = { version = "0.10.6", features = ["std"] }
+smallvec = { version = "1.10.0", default-features = false, features = ["serde", "union", "write"] }
+socket2 = { version = "0.4.7", default-features = false, features = ["all"] }
+syn = { version = "1.0.103", features = ["clone-impls", "derive", "extra-traits", "full", "parsing", "printing", "proc-macro", "quote", "visit", "visit-mut"] }
+textwrap = { version = "0.15.0", default-features = false, features = ["terminal_size"] }
+time = { version = "0.3.17", features = ["alloc", "formatting", "macros", "parsing", "quickcheck", "serde", "serde-well-known", "std"] }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode", "getopts", "getopts-dep"] }
+timely_communication = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode", "getopts"] }
+tokio = { version = "1.23.0", features = ["bytes", "fs", "full", "io-std", "io-util", "libc", "macros", "memchr", "mio", "net", "num_cpus", "parking_lot", "process", "rt", "rt-multi-thread", "signal", "signal-hook-registry", "socket2", "sync", "test-util", "time", "tokio-macros", "tracing"] }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["runtime", "serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
+tokio-stream = { version = "0.1.11", features = ["net", "sync", "time", "tokio-util"] }
+tokio-util = { version = "0.7.4", features = ["codec", "compat", "futures-io", "io", "slab", "time", "tracing"] }
+tower = { version = "0.4.13", features = ["__common", "balance", "buffer", "discover", "filter", "futures-core", "futures-util", "indexmap", "limit", "load", "log", "make", "pin-project", "pin-project-lite", "rand", "ready-cache", "retry", "slab", "timeout", "tokio", "tokio-util", "tracing", "util"] }
+tower-http = { version = "0.3.4", features = ["auth", "base64", "cors", "map-response-body", "tower", "trace", "tracing", "util"] }
+tracing = { version = "0.1.37", features = ["attributes", "log", "std", "tracing-attributes"] }
+tracing-core = { version = "0.1.30", features = ["once_cell", "std"] }
+tracing-subscriber = { version = "0.3.16", features = ["alloc", "ansi", "env-filter", "fmt", "json", "matchers", "nu-ansi-term", "once_cell", "regex", "registry", "serde", "serde_json", "sharded-slab", "smallvec", "std", "thread_local", "tracing", "tracing-log", "tracing-serde"] }
+uncased = { version = "0.9.7", features = ["alloc"] }
+url = { version = "2.3.1", features = ["serde"] }
+uuid = { version = "1.2.2", features = ["getrandom", "rng", "serde", "std", "v4"] }
+zeroize = { version = "1.5.7", features = ["alloc", "serde"] }
+
+[build-dependencies]
+anyhow = { version = "1.0.66", features = ["backtrace", "std"] }
+aws-sdk-sts = { version = "0.21.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sig-auth = { version = "0.51.0", default-features = false, features = ["aws-smithy-eventstream", "sign-eventstream"] }
+aws-sigv4 = { version = "0.51.0", features = ["aws-smithy-eventstream", "bytes", "form_urlencoded", "http", "percent-encoding", "sign-eventstream", "sign-http"] }
+aws-smithy-http = { version = "0.51.0", default-features = false, features = ["aws-smithy-eventstream", "event-stream", "rt-tokio", "tokio", "tokio-util"] }
+aws-types = { version = "0.51.0", default-features = false, features = ["hardcoded-credentials"] }
+axum = { version = "0.5.17", features = ["form", "headers", "http1", "json", "matched-path", "original-uri", "query", "serde_json", "serde_urlencoded", "tower-log"] }
+base64 = { version = "0.13.1", features = ["alloc", "std"] }
+bstr = { version = "0.2.14", features = ["lazy_static", "regex-automata", "serde", "serde1", "serde1-nostd", "std", "unicode"] }
+byteorder = { version = "1.4.3", features = ["std"] }
+bytes = { version = "1.3.0", features = ["std"] }
+cc = { version = "1.0.77", default-features = false, features = ["jobserver", "parallel"] }
+chrono = { version = "0.4.23", default-features = false, features = ["alloc", "clock", "iana-time-zone", "serde", "std", "winapi"] }
+clap = { version = "3.2.20", features = ["atty", "clap_derive", "color", "derive", "env", "once_cell", "std", "strsim", "suggestions", "termcolor", "terminal_size", "wrap_help"] }
+criterion = { version = "0.4.0", features = ["async", "async_tokio", "cargo_bench_support", "futures", "html_reports", "plotters", "rayon", "tokio"] }
+crossbeam-channel = { version = "0.5.6", features = ["crossbeam-utils", "std"] }
+crossbeam-deque = { version = "0.8.1", features = ["crossbeam-epoch", "crossbeam-utils", "std"] }
+crossbeam-epoch = { version = "0.9.13", features = ["alloc", "std"] }
+crossbeam-utils = { version = "0.8.7", features = ["lazy_static", "std"] }
+crypto-common = { version = "0.1.3", default-features = false, features = ["std"] }
+dec = { version = "0.4.8", default-features = false, features = ["serde"] }
+digest = { version = "0.10.6", features = ["alloc", "block-buffer", "core-api", "mac", "std", "subtle"] }
+either = { version = "1.8.0", features = ["use_std"] }
+flate2 = { version = "1.0.24", features = ["any_zlib", "libz-sys", "miniz_oxide", "rust_backend", "zlib"] }
+frunk_core = { version = "0.4.0", default-features = false, features = ["std"] }
+futures = { version = "0.3.25", features = ["alloc", "async-await", "executor", "futures-executor", "std"] }
+futures-channel = { version = "0.3.25", features = ["alloc", "futures-sink", "sink", "std"] }
+futures-core = { version = "0.3.25", features = ["alloc", "std"] }
+futures-executor = { version = "0.3.25", features = ["std"] }
+futures-io = { version = "0.3.25", features = ["std"] }
+futures-sink = { version = "0.3.25", features = ["alloc", "std"] }
+futures-task = { version = "0.3.25", features = ["alloc", "std"] }
+futures-util = { version = "0.3.25", features = ["alloc", "async-await", "async-await-macro", "channel", "futures-channel", "futures-io", "futures-macro", "futures-sink", "io", "memchr", "sink", "slab", "std"] }
+globset = { version = "0.4.9", features = ["log", "serde", "serde1"] }
+hashbrown = { git = "https://github.com/MaterializeInc/hashbrown.git", features = ["ahash", "inline-more", "raw"] }
+hyper = { version = "0.14.23", features = ["client", "full", "h2", "http1", "http2", "runtime", "server", "socket2", "stream", "tcp"] }
+indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
+k8s-openapi = { version = "0.16.0", features = ["api", "http", "percent-encoding", "url", "v1_22"] }
+kube = { version = "0.76.0", features = ["client", "config", "derive", "kube-client", "kube-derive", "kube-runtime", "openssl-tls", "runtime", "ws"] }
+kube-client = { version = "0.76.0", default-features = false, features = ["__non_core", "base64", "bytes", "chrono", "client", "config", "dirs", "either", "futures", "http-body", "hyper", "hyper-openssl", "hyper-timeout", "jsonpatch", "jsonpath_lib", "openssl", "openssl-tls", "pem", "pin-project", "rand", "serde_yaml", "tokio", "tokio-tungstenite", "tokio-util", "tower", "tower-http", "tracing", "ws"] }
+kube-core = { version = "0.76.0", default-features = false, features = ["json-patch", "jsonpatch", "schema", "schemars", "ws"] }
+libc = { version = "0.2.137", features = ["extra_traits", "std"] }
+log = { version = "0.4.17", default-features = false, features = ["std"] }
+lru = { version = "0.8.1", features = ["hashbrown"] }
+memchr = { version = "2.4.1", features = ["std", "use_std"] }
+native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
+nix = { version = "0.26.1", features = ["acct", "aio", "dir", "env", "event", "feature", "fs", "hostname", "inotify", "ioctl", "kmod", "memoffset", "mman", "mount", "mqueue", "net", "personality", "pin-utils", "poll", "process", "pthread", "ptrace", "quota", "reboot", "resource", "sched", "signal", "socket", "term", "time", "ucontext", "uio", "user", "zerocopy"] }
+nom = { version = "7.1.0", features = ["alloc", "std"] }
+num-bigint = { version = "0.4.2", features = ["std"] }
+num-integer = { version = "0.1.44", features = ["i128", "std"] }
+num-traits = { version = "0.2.15", features = ["i128", "libm", "std"] }
+openssl = { version = "0.10.43", features = ["vendored"] }
+openssl-sys = { version = "0.9.79", default-features = false, features = ["openssl-src", "vendored"] }
+ordered-float = { version = "3.4.0", features = ["serde", "std"] }
+parking_lot = { version = "0.12.0", features = ["send_guard"] }
+phf = { version = "0.11.1", features = ["std", "uncased"] }
+phf_shared = { version = "0.11.1", features = ["std", "uncased"] }
+postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["chrono-04", "serde-1", "serde_json-1", "uuid-1", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
+proc-macro2 = { version = "1.0.47", features = ["proc-macro", "span-locations"] }
+prometheus = { version = "0.13.3", default-features = false, features = ["libc", "process", "procfs"] }
+prost = { version = "0.11.3", features = ["no-recursion-limit", "prost-derive", "std"] }
+prost-reflect = { version = "0.9.2", default-features = false, features = ["base64", "serde", "serde-value", "serde1"] }
+prost-types = { version = "0.11.2", features = ["std"] }
+quote = { version = "1.0.21", features = ["proc-macro"] }
+rand = { version = "0.8.5", features = ["alloc", "getrandom", "libc", "rand_chacha", "small_rng", "std", "std_rng"] }
+rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake", "cmake-build", "libz", "libz-static", "libz-sys", "openssl-sys", "ssl", "ssl-vendored", "zstd", "zstd-sys"] }
+regex = { version = "1.7.0", features = ["aho-corasick", "memchr", "perf", "perf-cache", "perf-dfa", "perf-inline", "perf-literal", "std", "unicode", "unicode-age", "unicode-bool", "unicode-case", "unicode-gencat", "unicode-perl", "unicode-script", "unicode-segment"] }
+regex-syntax = { version = "0.6.28", features = ["unicode", "unicode-age", "unicode-bool", "unicode-case", "unicode-gencat", "unicode-perl", "unicode-script", "unicode-segment"] }
+reqwest = { version = "0.11.13", features = ["__tls", "blocking", "default-tls", "hyper-tls", "json", "native-tls", "native-tls-crate", "native-tls-vendored", "serde_json", "tokio-native-tls"] }
+ring = { version = "0.16.20", features = ["alloc", "dev_urandom_fallback", "once_cell", "std"] }
+schemars = { version = "0.8.11", features = ["derive", "schemars_derive", "uuid1"] }
+scopeguard = { version = "1.1.0", features = ["use_std"] }
+semver = { version = "1.0.14", features = ["serde", "std"] }
+serde = { version = "1.0.147", features = ["alloc", "derive", "serde_derive", "std"] }
+serde_json = { version = "1.0.89", features = ["alloc", "arbitrary_precision", "float_roundtrip", "indexmap", "preserve_order", "raw_value", "std"] }
+sha2 = { version = "0.10.6", features = ["std"] }
+smallvec = { version = "1.10.0", default-features = false, features = ["serde", "union", "write"] }
+socket2 = { version = "0.4.7", default-features = false, features = ["all"] }
+syn = { version = "1.0.103", features = ["clone-impls", "derive", "extra-traits", "full", "parsing", "printing", "proc-macro", "quote", "visit", "visit-mut"] }
+textwrap = { version = "0.15.0", default-features = false, features = ["terminal_size"] }
+time = { version = "0.3.17", features = ["alloc", "formatting", "macros", "parsing", "quickcheck", "serde", "serde-well-known", "std"] }
+time-macros = { version = "0.2.6", default-features = false, features = ["formatting", "parsing", "serde"] }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode", "getopts", "getopts-dep"] }
+timely_communication = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode", "getopts"] }
+tokio = { version = "1.23.0", features = ["bytes", "fs", "full", "io-std", "io-util", "libc", "macros", "memchr", "mio", "net", "num_cpus", "parking_lot", "process", "rt", "rt-multi-thread", "signal", "signal-hook-registry", "socket2", "sync", "test-util", "time", "tokio-macros", "tracing"] }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["runtime", "serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
+tokio-stream = { version = "0.1.11", features = ["net", "sync", "time", "tokio-util"] }
+tokio-util = { version = "0.7.4", features = ["codec", "compat", "futures-io", "io", "slab", "time", "tracing"] }
+tower = { version = "0.4.13", features = ["__common", "balance", "buffer", "discover", "filter", "futures-core", "futures-util", "indexmap", "limit", "load", "log", "make", "pin-project", "pin-project-lite", "rand", "ready-cache", "retry", "slab", "timeout", "tokio", "tokio-util", "tracing", "util"] }
+tower-http = { version = "0.3.4", features = ["auth", "base64", "cors", "map-response-body", "tower", "trace", "tracing", "util"] }
+tracing = { version = "0.1.37", features = ["attributes", "log", "std", "tracing-attributes"] }
+tracing-core = { version = "0.1.30", features = ["once_cell", "std"] }
+tracing-subscriber = { version = "0.3.16", features = ["alloc", "ansi", "env-filter", "fmt", "json", "matchers", "nu-ansi-term", "once_cell", "regex", "registry", "serde", "serde_json", "sharded-slab", "smallvec", "std", "thread_local", "tracing", "tracing-log", "tracing-serde"] }
+uncased = { version = "0.9.7", features = ["alloc"] }
+url = { version = "2.3.1", features = ["serde"] }
+uuid = { version = "1.2.2", features = ["getrandom", "rng", "serde", "std", "v4"] }
+zeroize = { version = "1.5.7", features = ["alloc", "serde"] }
+
+[target.x86_64-unknown-linux-gnu.dependencies]
+byteorder = { version = "1.4.3", default-features = false, features = ["i128"] }
+libc = { version = "0.2.137", default-features = false, features = ["use_std"] }
+native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
+once_cell = { version = "1.16.0", features = ["alloc", "race", "std", "unstable"] }
+tikv-jemalloc-sys = { version = "0.4.2+5.2.1-patched.2", features = ["background_threads", "background_threads_runtime_support", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
+
+[target.x86_64-unknown-linux-gnu.build-dependencies]
+byteorder = { version = "1.4.3", default-features = false, features = ["i128"] }
+libc = { version = "0.2.137", default-features = false, features = ["use_std"] }
+native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
+once_cell = { version = "1.16.0", features = ["alloc", "race", "std", "unstable"] }
+tikv-jemalloc-sys = { version = "0.4.2+5.2.1-patched.2", features = ["background_threads", "background_threads_runtime_support", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
+
+[target.x86_64-apple-darwin.dependencies]
+native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
+once_cell = { version = "1.16.0", features = ["alloc", "race", "std", "unstable"] }
+security-framework = { version = "2.0.0", features = ["OSX_10_9", "alpn"] }
+
+[target.x86_64-apple-darwin.build-dependencies]
+native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
+once_cell = { version = "1.16.0", features = ["alloc", "race", "std", "unstable"] }
+security-framework = { version = "2.0.0", features = ["OSX_10_9", "alpn"] }
+
+### END HAKARI SECTION

@@ -48,6 +48,7 @@ tracing = "0.1.37"
 typemap_rev = "0.3.0"
 uncased = "0.9.7"
 uuid = { version = "1.2.2", features = ["serde", "v4"] }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
 datadriven = "0.6.0"

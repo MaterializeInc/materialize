@@ -320,6 +320,25 @@ specifying the `--roots` flag with a comma separated list of crates:
 bin/crate-diagram --roots mz-sql,mz-dataflow
 ```
 
+#### `workspace-hack`
+
+The [`workspace-hack`](../../src/workspace-hack/) crate speeds up rebuilds by
+ensuring that all crates use the same features of all transitive dependencies in
+the graph. This prevents Cargo from recompiling huge chunks of the dependency
+graph when you move between crates in the worksapce. For details, see the
+[hakari documentation].
+
+If you add or remove dependencies on crates, you will likely need to regenerate
+the `workspace-hack` crate. You can do this by running:
+
+```
+cargo install cargo-hakari
+cargo hakari generate
+cargo hakari manage-deps
+```
+
+CI will enforce that the `workspace-hack` crate is kept up to date.
+
 ## Other repositories
 
 Where possible, we prefer to keep things in the main repository (a "monorepo"
@@ -458,6 +477,7 @@ source /path/to/materialize/misc/completions/zsh/*
 [demos]: https://github.com/MaterializeInc/demos
 [Docker Compose]: https://docs.docker.com/compose/
 [github-https]: https://help.github.com/en/github/authenticating-to-github/creating-a-personal-access-token-for-the-command-line
+[hakari documentation]: https://docs.rs/cargo-hakari/latest/cargo_hakari/about/index.html
 [Homebrew]: https://brew.sh
 [Kubernetes]: https://kubernetes.io
 [materialize-dbt-utils]: https://github.com/MaterializeInc/materialize-dbt-utils

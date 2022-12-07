@@ -24,3 +24,4 @@ serde = { version = "1.0.147", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = "1.23.0"
 uuid = { version = "1.2.2" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }

@@ -1,0 +1,8 @@
+hakari-package = "workspace-hack"
+dep-format-version = "2"
+resolver = "2"
+platforms = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+]
+exact-versions = true
