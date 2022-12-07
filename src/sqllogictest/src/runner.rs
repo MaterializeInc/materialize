@@ -838,7 +838,8 @@ impl RunnerInner {
             segment_api_key: None,
             egress_ips: vec![],
             aws_account_id: None,
-            system_parameter_frontend: None,
+            launchdarkly_sdk_key: None,
+            config_sync_loop_interval: Duration::ZERO,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned

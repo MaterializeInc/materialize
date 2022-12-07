@@ -323,7 +323,7 @@ static WINDOW_FUNCTIONS: ServerVar<bool> = ServerVar {
 
 /// Boolean flag indicating that the remote configuration was synchronized at
 /// least once with the persistent [SessionVars].
-static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
+pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("config_has_synced_once"),
     value: &false,
     description: "Boolean flag indicating that the remote configuration was synchronized at least once (Materialize).",
@@ -1230,11 +1230,6 @@ impl SystemVars {
     /// Returns the `config_has_synced_once` configuration parameter.
     pub fn config_has_synced_once(&self) -> bool {
         *self.config_has_synced_once.value()
-    }
-
-    /// Returns the `config_has_synced_once` configuration parameter.
-    pub fn set_config_has_synced_once(&mut self) -> Result<bool, AdapterError> {
-        self.config_has_synced_once.set("true")
     }
 }
 

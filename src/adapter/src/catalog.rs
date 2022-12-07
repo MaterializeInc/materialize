@@ -88,7 +88,7 @@ pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::catalog::storage::{BootstrapArgs, Transaction};
 use crate::client::ConnectionId;
 use crate::config::SynchronizedParameters;
-use crate::session::vars::SystemVars;
+use crate::session::vars::{SystemVars, Var, CONFIG_HAS_SYNCED_ONCE};
 use crate::session::{PreparedStatement, Session, User, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
 use crate::{AdapterError, DUMMY_AVAILABILITY_ZONE};
@@ -877,11 +877,6 @@ impl CatalogState {
     /// Remove all system configurations.
     fn clear_system_configuration(&mut self) {
         self.system_configuration = SystemVars::default();
-    }
-
-    /// Returns the `config_has_synced_once` configuration parameter.
-    pub fn set_config_has_synced_once(&mut self) -> Result<bool, AdapterError> {
-        self.system_configuration.set_config_has_synced_once()
     }
 
     /// Gets the schema map for the database matching `database_spec`.
@@ -2485,26 +2480,34 @@ impl<S: Append> Catalog<S> {
         for (name, value) in system_config {
             catalog.state.insert_system_configuration(&name, &value)?;
         }
-        if !catalog.state.system_config().config_has_synced_once() {
-            if let Some(system_parameter_frontend) = config.system_parameter_frontend {
-                let system_config = catalog.state.system_config();
-                let mut params = SynchronizedParameters::new(
-                    system_config.window_functions(),
-                    system_config.allowed_cluster_replica_sizes().to_vec(),
-                    system_config.max_result_size(),
-                );
+        if let Some(system_parameter_frontend) = config.system_parameter_frontend {
+            if !catalog.state.system_config().config_has_synced_once() {
+                tracing::info!("parameter sync on boot: start sync");
+                system_parameter_frontend.ensure_initialized().await;
 
-                if system_parameter_frontend.start_and_initialize().await {
-                    system_parameter_frontend.pull(&mut params);
+                let mut params = SynchronizedParameters::new(catalog.state.system_config().clone());
+                system_parameter_frontend.pull(&mut params);
+                let ops = params
+                    .modified()
+                    .into_iter()
+                    .map(|param| {
+                        let name = param.name;
+                        let value = param.value;
+                        tracing::debug!(name, value, "sync parameter");
+                        Op::UpdateSystemConfiguration { name, value }
+                    })
+                    .chain(std::iter::once({
+                        let name = CONFIG_HAS_SYNCED_ONCE.name().to_string();
+                        let value = true.to_string();
+                        tracing::debug!(name, value, "sync parameter");
+                        Op::UpdateSystemConfiguration { name, value }
+                    }))
+                    .collect::<Vec<_>>();
 
-                    for (name, value) in params.iter_modified() {
-                        catalog
-                            .state
-                            .insert_system_configuration(name.as_str(), value.as_str())?;
-                    }
-
-                    catalog.state.set_config_has_synced_once()?;
-                }
+                catalog.transact(None, ops, |_| Ok(())).await.unwrap();
+                tracing::info!("parameter sync on boot: end sync");
+            } else {
+                tracing::info!("parameter sync on boot: skipping sync as config has synced once");
             }
         }
 
