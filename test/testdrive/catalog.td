@@ -528,6 +528,7 @@ name
 ----
 mz_cluster_replica_heartbeats
 mz_cluster_replica_metrics
+mz_cluster_replica_sizes
 mz_cluster_replica_statuses
 mz_storage_usage_by_shard
 mz_view_foreign_keys
