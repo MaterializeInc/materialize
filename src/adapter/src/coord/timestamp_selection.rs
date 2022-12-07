@@ -88,7 +88,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         if let Some(timeline) = timeline {
-            let timestamp_oracle = self.get_timestamp_oracle(&timeline);
+            let timestamp_oracle = self.get_timestamp_oracle(timeline);
             oracle_read_ts = Some(timestamp_oracle.read_ts());
             candidate.join_assign(&oracle_read_ts.unwrap());
         } else if when.advance_to_upper() {
