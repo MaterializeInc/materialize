@@ -17,6 +17,7 @@ mz-ore = { path = "../ore"}
 mz-proto = { path = "../proto" }
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 serde = "1.0"
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [build-dependencies]
 protobuf-src = "1.1.0"

@@ -51,6 +51,7 @@ thiserror = "1.0.37"
 # for the tracing_ feature
 tracing = { version = "0.1.37", optional = true }
 tracing-subscriber = { version = "0.3.16", default-features = false, optional = true }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
 criterion = { version = "0.4.0" }

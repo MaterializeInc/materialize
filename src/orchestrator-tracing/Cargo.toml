@@ -18,6 +18,7 @@ mz-ore = { path = "../ore", features = ["tracing_", "cli"] }
 mz-repr = { path = "../repr", optional = true }
 tracing-subscriber = { version = "0.3.16", default-features = false }
 opentelemetry = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git", features = ["rt-tokio", "trace"] }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [features]
 tokio-console = ["mz-ore/tokio-console", "mz-repr", "humantime"]

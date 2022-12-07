@@ -40,6 +40,7 @@ tokio-stream = "0.1.11"
 tonic = "0.8.2"
 tracing = "0.1.37"
 uuid = { version = "1.2.2", features = ["serde", "v4"] }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [build-dependencies]
 protobuf-src = "1.1.0"

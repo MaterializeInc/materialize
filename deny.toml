@@ -62,6 +62,7 @@ wrappers = [
     "ureq",
     "want",
     "wasm-bindgen-backend",
+    "workspace-hack",
 ]
 
 # We prefer the system's native TLS or OpenSSL to Rustls, since they are more
