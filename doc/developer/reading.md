@@ -35,8 +35,8 @@ Materialize:
 
 * How NOT to Measure Latency [[web](https://www.youtube.com/watch?v=lJ8ydIuPFeU)]
 
-A youtube talk by Gil Tene about common pitfalls encountered in measuring
-latency and response time behavior.
+  A YouTube talk by Gil Tene about common pitfalls encountered in measuring
+  latency and response time behavior.
 
 * [Developer guide: submitting and reviewing changes](guide-changes.md)
 
