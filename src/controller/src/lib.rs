@@ -153,6 +153,13 @@ impl<T> Controller<T> {
         self.storage.remove_orphans(next_storage_host_id).await?;
         Ok(())
     }
+
+    /// Produces a timestamp that reflects all data available in
+    /// `source_ids` at the time of the function call.
+    #[allow(unused)]
+    pub async fn recent_timestamp(&self, source_ids: Vec<GlobalId>) -> mz_repr::Timestamp {
+        mz_repr::Timestamp::MIN
+    }
 }
 
 impl<T> Controller<T>
