@@ -3294,6 +3294,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "bytesize",
  "chrono",
  "const_format",
  "criterion",
