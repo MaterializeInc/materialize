@@ -9,15 +9,16 @@
 
 use std::net::Ipv4Addr;
 
+use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::{
-    ComputeInstanceId, ComputeInstanceStatus, ComputeReplicaLocation,
+    ComputeInstanceId, ComputeInstanceStatus, ComputeReplicaAllocation, ComputeReplicaLocation,
 };
 use mz_expr::MirScalarExpr;
-use mz_orchestrator::ServiceProcessMetrics;
+use mz_orchestrator::{MemoryLimit, ServiceProcessMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
@@ -44,7 +45,7 @@ use crate::catalog::{
     MaterializedView, Role, Sink, StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
 
-use super::builtin::MZ_AWS_PRIVATELINK_CONNECTIONS;
+use super::builtin::{MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_CLUSTER_REPLICA_SIZES};
 use super::{AwsPrincipalContext, DataSourceDesc, Ingestion};
 
 /// An update to a built-in table.
@@ -125,27 +126,41 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_compute_replica_update(
+    pub(super) fn pack_compute_replica_updates(
         &self,
         compute_instance_id: ComputeInstanceId,
         name: &str,
         diff: Diff,
-    ) -> BuiltinTableUpdate {
+    ) -> Vec<BuiltinTableUpdate> {
         let instance = &self.compute_instances_by_id[&compute_instance_id];
         let id = instance.replica_id_by_name[name];
         let replica = &instance.replicas_by_id[&id];
 
-        let (size, az) = match &replica.config.location {
+        let (size, az, allocation) = match &replica.config.location {
             ComputeReplicaLocation::Managed {
                 size,
                 availability_zone,
                 az_user_specified: _,
-                allocation: _,
-            } => (Some(&**size), Some(availability_zone.as_str())),
-            ComputeReplicaLocation::Remote { .. } => (None, None),
+                allocation,
+            } => (
+                Some(&**size),
+                Some(availability_zone.as_str()),
+                Some(*allocation),
+            ),
+            ComputeReplicaLocation::Remote { .. } => (None, None, None),
         };
 
-        BuiltinTableUpdate {
+        let (processes, cpu, memory) = match allocation {
+            Some(ComputeReplicaAllocation {
+                memory_limit,
+                cpu_limit,
+                scale,
+                ..
+            }) => (Some(scale), cpu_limit, memory_limit),
+            None => (None, None, None),
+        };
+
+        let mut updates = vec![BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS),
             row: Row::pack_slice(&[
                 Datum::UInt64(id),
@@ -155,7 +170,23 @@ impl CatalogState {
                 Datum::from(az),
             ]),
             diff,
+        }];
+
+        if let (Some(processes), Some(cpu), Some(MemoryLimit(ByteSize(memory)))) =
+            (processes, cpu, memory)
+        {
+            updates.push(BuiltinTableUpdate {
+                id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_SIZES),
+                row: Row::pack_slice(&[
+                    Datum::UInt64(id),
+                    Datum::UInt64(u64::cast_from(processes.get())),
+                    Datum::UInt64(u64::cast_from(cpu.as_millicpus()) * 1_000_000),
+                    Datum::UInt64(memory),
+                ]),
+                diff,
+            })
         }
+        updates
     }
 
     pub(super) fn pack_compute_replica_status_update(

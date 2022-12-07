@@ -270,6 +270,10 @@ mz_cluster_replica_metrics
 BASE TABLE
 materialize
 mz_internal
+mz_cluster_replica_sizes
+BASE TABLE
+materialize
+mz_internal
 mz_cluster_replica_statuses
 BASE TABLE
 materialize
