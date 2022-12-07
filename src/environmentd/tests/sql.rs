@@ -14,7 +14,6 @@
 //! in testdrive, e.g., because they depend on the current time.
 
 use std::error::Error;
-use std::future::Future;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -30,6 +29,7 @@ use postgres::Row;
 use regex::Regex;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
+use tokio_postgres::error::SqlState;
 use tracing::info;
 
 use mz_adapter::catalog::{INTERNAL_USER_NAMES, INTROSPECTION_USER, SYSTEM_USER};
@@ -1904,14 +1904,21 @@ fn test_cancel_on_dropped_cluster() {
     read_client.batch_execute("CREATE TABLE t ()").unwrap();
 
     let handle = thread::spawn(move || {
-        read_client
-            .query_one("SELECT * FROM t AS OF 18446744073709551615", &[])
-            .unwrap();
+        // Run query asynchronously that will hang forever.
+        let res = read_client.query_one("SELECT * FROM t AS OF 18446744073709551615", &[]);
+        assert!(res.is_err(), "cancelled query should return error");
+        let err = res.unwrap_err().unwrap_db_error();
+        assert_eq!(
+            err.code(),
+            &SqlState::QUERY_CANCELED,
+            "error code should match QUERY_CANCELED"
+        );
     });
 
+    // Wait for asynchronous query to start.
     let mut client = server.connect(postgres::NoTls).unwrap();
     Retry::default()
-        .max_duration(Duration::from_secs(1))
+        .max_duration(Duration::from_secs(10))
         .retry(|_| {
             let count: i64 = client
                 .query_one("SELECT COUNT(*) FROM mz_internal.mz_active_peeks", &[])
@@ -1925,6 +1932,7 @@ fn test_cancel_on_dropped_cluster() {
         })
         .unwrap();
 
+    // Drop cluster that query is running on.
     let mut drop_client = server.connect(postgres::NoTls).unwrap();
     drop_client.batch_execute("DROP CLUSTER default").unwrap();
     read_client_cancel.cancel_query(postgres::NoTls).unwrap();
