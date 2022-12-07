@@ -19,6 +19,7 @@ steps:
         options:
           - { value: zippy-kafka-sources-large }
           - { value: zippy-dataflows-large }
+          - { value: zippy-pg-cdc-large }
         multiple: true
         required: false
     if: build.source == "ui"
@@ -60,3 +61,13 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: zippy
           args: [--scenario=DataflowsLarge, --actions=50000]
+
+  - id: zippy-pg-cdc-large
+    label: "Longer Zippy PogresCdc test"
+    timeout_in_minutes: 2880
+    agents:
+      queue: linux-x86_64-large
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: zippy
+          args: [--scenario=PostgresCdc, --actions=50000]
