@@ -512,8 +512,8 @@ fn test_auth_expiry() {
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
 
-    const EXPIRES_IN_SECS: u64 = 5;
-    const REFRESH_BEFORE_SECS: u64 = 4;
+    const EXPIRES_IN_SECS: u64 = 10;
+    const REFRESH_BEFORE_SECS: u64 = 9;
     let frontegg_server = start_mzcloud(
         encoding_key,
         tenant_id,
