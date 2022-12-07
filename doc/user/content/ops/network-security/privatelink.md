@@ -90,13 +90,14 @@ Before moving on, double-check that you have:
 
 1. #### Allow Access to the VPC Endpoint Service
 
-    After you create the endpoint service, you must [configure the permissions of your AWS PrivateLink service](https://docs.aws.amazon.com/vpc/latest/privatelink/add-endpoint-service-permissions.html) to accept connections from the following AWS principal: **`arn:aws:iam::664411391173:role/mz_<EXTERNAL-ID>_<CONNECTION-ID>`**
+    After you create the endpoint service, you must [configure the permissions of your AWS PrivateLink service](https://docs.aws.amazon.com/vpc/latest/privatelink/add-endpoint-service-permissions.html) to accept connections from the connection object's AWS principal. Get the AWS principal from the `mz_aws_privatelink_connections` table.
 
-    Fill in the values as follows:
-
-    a. **`EXTERNAL-ID`**: A unique ID associated with your Materialize region. You must **[contact support](https://materialize.com/docs/support/)** to determine this ID.
-
-    b. **`CONNECTION-ID`**: The ID of the AWS PrivateLink connection in your Materialize region. You can determine this ID by [`mz_connections`](https://github.com/MaterializeInc/materialize/blob/6aa1bf9ee6db3c3c73a617c9c863df5734233dbf/sql/system-catalog/mz_catalog/#mz_connections).
+     ```sql
+    SELECT principal
+        FROM mz_aws_privatelink_connections plc
+        JOIN mz_connections c ON plc.id = c.id
+        WHERE c.name = '<pl_conn_name>';
+    ```
 
 1. #### Accept the Endpoint Service Connection
 
