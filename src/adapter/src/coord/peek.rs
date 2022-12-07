@@ -490,10 +490,14 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 inverse.entry(*compute_instance).or_default().insert(*uuid);
             }
             for (compute_instance, uuids) in inverse {
-                self.controller
+                // It's possible that this compute instance no longer exists because it was dropped
+                // while the peek was in progress. In this case we ignore the error and move on
+                // because the dataflow no longer exists.
+                // TODO(jkosh44) Dropping a cluster should actively cancel all pending queries.
+                let _ = self
+                    .controller
                     .active_compute()
-                    .cancel_peeks(compute_instance, uuids)
-                    .unwrap();
+                    .cancel_peeks(compute_instance, uuids);
             }
 
             uuids
