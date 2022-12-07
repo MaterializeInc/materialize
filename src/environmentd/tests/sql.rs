@@ -1899,35 +1899,11 @@ fn test_cancel_on_dropped_cluster() {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
 
-    server
-        .runtime
-        .block_on(async {
-            let (read_client, _read_conn_task) =
-                server.connect_async(tokio_postgres::NoTls).await.unwrap();
-            let read_client_cancel = read_client.cancel_token();
-
-            read_client
-                .batch_execute("CREATE TABLE t ()")
-                .await
-                .unwrap();
-            let handle = task::spawn(|| "read_client", async move {
-                read_client
-                    .query_one("SELECT * FROM t AS OF 18446744073709551615", &[])
-                    .await
-                    .unwrap();
-            });
-
-            let (drop_client, _drop_conn_task) =
-                server.connect_async(tokio_postgres::NoTls).await.unwrap();
-            handle.poll()
-        })
-        .unwrap();
-
     let mut read_client = server.connect(postgres::NoTls).unwrap();
     let read_client_cancel = read_client.cancel_token();
+    read_client.batch_execute("CREATE TABLE t ()").unwrap();
 
     let handle = thread::spawn(move || {
-        read_client.batch_execute("CREATE TABLE t ()").unwrap();
         read_client
             .query_one("SELECT * FROM t AS OF 18446744073709551615", &[])
             .unwrap();
@@ -1944,7 +1920,7 @@ fn test_cancel_on_dropped_cluster() {
             if count == 1 {
                 Ok(())
             } else {
-                Err(format!("query should return X rows, instead saw {count}"))
+                Err(format!("query should return 1 rows, instead saw {count}"))
             }
         })
         .unwrap();
