@@ -105,7 +105,7 @@ where
             .expect("could not open persist client")
             .open_writer::<SourceData, (), Timestamp, Diff>(
                 metadata.data_shard,
-                &format!("persist_sink::storage {}", src_id),
+                &format!("storage::persist_sink {}", src_id),
             )
             .await
             .expect("could not open persist shard");
