@@ -571,6 +571,7 @@ where
                     id,
                     worker_id,
                     worker_count,
+                    source_metrics.offset_commit_metrics(),
                 );
 
                 let mut source_reader = build_source_reader_stream(

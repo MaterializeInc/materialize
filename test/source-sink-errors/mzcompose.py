@@ -54,8 +54,14 @@ class Disruption:
         c.testdrive(
             dedent(
                 """
+                # We specify the progress topic explicitly so we can delete it in a test later,
+                # and confirm that the sink stalls. (Deleting the output topic is not enough if
+                # we're not actively publishing new messages to the sink.)
                 > CREATE CONNECTION kafka_conn
-                  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+                  TO KAFKA (
+                    BROKER '${testdrive.kafka-addr}',
+                    PROGRESS TOPIC 'testdrive-progress-topic-${testdrive.seed}'
+                  );
 
                 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
                   URL '${testdrive.schema-registry-url}'
@@ -82,7 +88,6 @@ class Disruption:
         )
 
     def assert_error(self, c: Composition, error: str) -> None:
-        # Validate that cluster2 continues to operate
         c.testdrive(
             dedent(
                 f"""
@@ -91,11 +96,15 @@ class Disruption:
                   WHERE name = 'source1'
                 stalled true
 
-                # TODO(bkirwi) https://github.com/MaterializeInc/materialize/pull/16232
-                #> SELECT status, error ~* '{error}'
-                #  FROM mz_internal.mz_sink_status
-                #  WHERE name = 'sink1'
-                # stalled true
+                # Sinks generally halt after receiving an error, which means that they may alternate
+                # between `stalled` and `starting`. Instead of relying on the current status, we
+                # check that the latest stall has the error we expect.
+                > SELECT status, error ~* '{error}'
+                  FROM mz_internal.mz_sink_status_history
+                  JOIN mz_sinks ON mz_sinks.id = sink_id
+                  WHERE name = 'sink1' and status = 'stalled'
+                  ORDER BY occurred_at DESC LIMIT 1
+                stalled true
                 """
             )
         )
@@ -115,10 +124,10 @@ class Disruption:
                   WHERE name = 'source1'
                 running <null>
 
-                #> SELECT status, error
-                #  FROM mz_internal.mz_sink_status
-                #  WHERE name = 'sink1'
-                #running <null>
+                > SELECT status, error
+                  FROM mz_internal.mz_sink_status
+                  WHERE name = 'sink1'
+                running <null>
                 """
             )
         )
@@ -128,7 +137,7 @@ disruptions = [
     Disruption(
         name="delete-topic",
         breakage=lambda c, seed: redpanda_topics(c, "delete", seed),
-        expected_error="UnknownTopicOrPartition",
+        expected_error="UnknownTopicOrPartition|topic",
         fixage=None
         # Re-creating the topic does not restart the source
         # fixage=lambda c,seed: redpanda_topics(c, "create", seed),
@@ -136,7 +145,7 @@ disruptions = [
     Disruption(
         name="pause-redpanda",
         breakage=lambda c, _: c.pause("redpanda"),
-        expected_error="OperationTimedOut",
+        expected_error="OperationTimedOut|BrokerTransportFailure|transaction",
         fixage=lambda c, _: c.unpause("redpanda"),
     ),
     Disruption(
@@ -165,5 +174,5 @@ def workflow_default(c: Composition) -> None:
 
 
 def redpanda_topics(c: Composition, action: str, seed: int) -> None:
-    for topic in ["source", "sink"]:
+    for topic in ["source", "sink", "progress"]:
         c.exec("redpanda", "rpk", "topic", action, f"testdrive-{topic}-topic-{seed}")

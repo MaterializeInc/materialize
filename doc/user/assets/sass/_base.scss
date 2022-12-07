@@ -63,7 +63,6 @@
     --gray-lightest: #eeeeee;
 
     --shadow-default: 0 0.625rem 1.5rem 0rem rgba(0, 0, 0, 0.08);
-    --note: #fffad4;
 }
 
 body.dark {
@@ -89,6 +88,7 @@ body.dark {
     --highlight: #e0a5fb;
 
     --shadow-default: 0 0.625rem 1.5rem 0 rgba(0, 0, 0, 0.4);
+    --note: #ffd185;
 }
 
 body.light {
@@ -112,6 +112,8 @@ body.light {
     --sub: var(--black-lighter);
     --body: var(--black-light);
     --highlight: var(--purple-dark);
+
+    --note: #fffad4;
 }
 
 *,

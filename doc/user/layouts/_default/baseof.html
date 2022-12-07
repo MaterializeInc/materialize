@@ -72,10 +72,10 @@ Apache License, Version 2.0. */}}
       /* Add "Click to Copy" button to code blocks */
       $(document).ready(function () {
         $("pre.chroma").append(
-          '<span class="default_button copy_button" title="Copy code to clipboard">Copy</span>'
+          '<button class="default_button copy_button" title="Copy code to clipboard">Copy</button>'
         );
 
-        $("pre.chroma span.copy_button").click(function (e) {
+        $("pre.chroma button.copy_button").click(function (e) {
           var _this = $(this),
             copyHex = document.createElement("textarea");
           copyHex.value = _this.parent().find("code").text().trim();
