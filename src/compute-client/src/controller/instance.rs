@@ -27,13 +27,14 @@ use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 
 use crate::command::{
-    ComputeCommand, ComputeCommandHistory, ComputeStartupEpoch, DataflowDescription,
-    InstanceConfig, Peek, ReplicaId, SourceInstanceDesc,
+    ComputeCommand, ComputeCommandHistory, ComputeStartupEpoch, InstanceConfig, Peek, ReplicaId,
 };
 use crate::logging::{LogVariant, LoggingConfig};
 use crate::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
-use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
+use crate::types::dataflows::DataflowDescription;
+use crate::types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
+use crate::types::sources::SourceInstanceDesc;
 
 use super::error::CollectionMissing;
 use super::orchestrator::ComputeOrchestrator;

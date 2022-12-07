@@ -46,7 +46,9 @@ fn main() {
                 "compute-client/src/plan/top_k.proto",
                 "compute-client/src/response.proto",
                 "compute-client/src/service.proto",
-                "compute-client/src/sinks.proto",
+                "compute-client/src/types/dataflows.proto",
+                "compute-client/src/types/sinks.proto",
+                "compute-client/src/types/sources.proto",
             ],
             &[".."],
         )

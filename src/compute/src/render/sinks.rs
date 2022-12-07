@@ -16,7 +16,7 @@ use std::rc::Rc;
 use differential_dataflow::Collection;
 use timely::dataflow::Scope;
 
-use mz_compute_client::sinks::{ComputeSinkConnection, ComputeSinkDesc};
+use mz_compute_client::types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use mz_expr::{permutation_for_arrangement, MapFilterProject};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;

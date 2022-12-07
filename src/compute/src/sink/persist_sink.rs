@@ -28,7 +28,7 @@ use timely::PartialOrder;
 use tokio::sync::Mutex;
 use tracing::trace;
 
-use mz_compute_client::sinks::{ComputeSinkDesc, PersistSinkConnection};
+use mz_compute_client::types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_persist_client::batch::Batch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriterEnrichedHollowBatch;

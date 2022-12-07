@@ -20,11 +20,12 @@ use tokio::sync::{mpsc, OwnedMutexGuard};
 use tracing::{event, warn, Level};
 
 use mz_cloud_resources::VpcEndpointConfig;
-use mz_compute_client::command::{BuildDesc, DataflowDesc, IndexDesc, ReplicaId};
+use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::{
     ComputeInstanceId, ComputeReplicaConfig, ComputeReplicaLogging,
 };
-use mz_compute_client::sinks::{
+use mz_compute_client::types::dataflows::{BuildDesc, DataflowDesc, IndexDesc};
+use mz_compute_client::types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, SubscribeSinkConnection,
 };
 use mz_expr::{

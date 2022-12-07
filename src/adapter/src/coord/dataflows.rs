@@ -20,9 +20,11 @@ use timely::progress::Antichain;
 use timely::PartialOrder;
 use tracing::warn;
 
-use mz_compute_client::command::{BuildDesc, DataflowDesc, DataflowDescription, IndexDesc};
 use mz_compute_client::controller::{ComputeInstanceId, ComputeInstanceRef};
-use mz_compute_client::sinks::{
+use mz_compute_client::types::dataflows::{
+    BuildDesc, DataflowDesc, DataflowDescription, IndexDesc,
+};
+use mz_compute_client::types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection, SinkAsOf,
 };
 use mz_expr::visit::Visit;
@@ -311,7 +313,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
             prep_relation_expr(self.catalog, plan, ExprPrepStyle::Index)?;
         }
-        let mut index_description = mz_compute_client::command::IndexDesc {
+        let mut index_description = IndexDesc {
             on_id: index.on,
             key: index.keys.clone(),
         };

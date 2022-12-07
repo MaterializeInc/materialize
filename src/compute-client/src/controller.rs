@@ -55,10 +55,11 @@ use mz_ore::{halt, soft_assert};
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 
-use crate::command::{DataflowDescription, ProcessId, ReplicaId};
+use crate::command::{ProcessId, ReplicaId};
 use crate::logging::{LogVariant, LogView, LoggingConfig};
 use crate::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
+use crate::types::dataflows::DataflowDescription;
 
 use self::error::{
     CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,

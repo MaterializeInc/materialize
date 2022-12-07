@@ -11,7 +11,7 @@
 
 use std::fmt::Debug;
 
-use mz_compute_client::{command::DataflowDescription, plan::Plan};
+use mz_compute_client::{plan::Plan, types::dataflows::DataflowDescription};
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_repr::{
     explain_new::{

@@ -28,11 +28,11 @@ use mz_ore::soft_panic_or_log;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
 
-use crate::command::{BuildDesc, DataflowDescription};
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
+use crate::types::dataflows::{BuildDesc, DataflowDescription};
 
 pub mod join;
 pub mod reduce;
