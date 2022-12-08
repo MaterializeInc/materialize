@@ -152,11 +152,12 @@ interface Notice {
 
 type SqlResult =
   | {
+	tag: string;
 	rows: any[][];
 	col_names: string[];
 	notices: Notice[];
 } | {
-	ok?: string;
+	ok: string;
 	notices: Notice[];
 } | {
 	error: string;
@@ -219,11 +220,13 @@ Response:
 {
   "results": [
     {
+        "tag": "SELECT 4",
         "rows": [[null],[null],[109],[209]],
         "col_names": ["cross_add"],
         "notices": []
     },
     {
+        "tag": "SELECT 2",
         "rows":[[100],[200]],
         "col_names":["a"],
         "notices": []

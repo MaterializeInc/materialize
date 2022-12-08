@@ -7,20 +7,29 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::time::Duration;
+
 use anyhow::anyhow;
+use async_trait::async_trait;
+use axum::extract::ws::{Message, WebSocket};
+use axum::extract::WebSocketUpgrade;
 use axum::response::IntoResponse;
 use axum::Json;
+use futures::Future;
 use http::StatusCode;
 use itertools::izip;
+use mz_ore::iter::IteratorExt;
 use serde::{Deserialize, Serialize};
 
-use mz_adapter::session::{EndTransactionAction, TransactionStatus};
+use mz_adapter::session::{EndTransactionAction, RowBatchStream, TransactionStatus};
 use mz_adapter::{ExecuteResponse, ExecuteResponseKind, PeekResponseUnary, SessionClient};
+use mz_ore::result::ResultExt;
 use mz_pgwire::Severity;
 use mz_repr::{Datum, RowArena};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, StatementKind};
 use mz_sql::plan::Plan;
+use tokio::time;
 
 use crate::http::AuthedClient;
 
@@ -28,10 +37,92 @@ pub async fn handle_sql(
     mut client: AuthedClient,
     Json(request): Json<SqlRequest>,
 ) -> impl IntoResponse {
-    match execute_request(&mut client.0, request).await {
-        Ok(res) => Ok(Json(res)),
+    let mut res = SqlResponse {
+        results: Vec::new(),
+    };
+    match execute_request(&mut client, request, &mut res).await {
+        Ok(()) => Ok(Json(res)),
         Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
     }
+}
+
+#[derive(Serialize)]
+struct ErrorResponse {
+    error: String,
+}
+
+pub async fn handle_sql_ws(client: AuthedClient, ws: WebSocketUpgrade) -> impl IntoResponse {
+    ws.on_upgrade(|ws| async move { run_ws(client, ws).await })
+}
+
+async fn run_ws(mut client: AuthedClient, mut ws: WebSocket) {
+    loop {
+        let msg = match ws.recv().await {
+            Some(Ok(msg)) => msg,
+            _ => {
+                // client disconnected
+                return;
+            }
+        };
+
+        let req: Result<SqlRequest, anyhow::Error> = match msg {
+            Message::Text(data) => serde_json::from_str(&data).err_into(),
+            Message::Binary(data) => serde_json::from_slice(&data).err_into(),
+            // Handled automatically by the server.
+            Message::Ping(_) => {
+                continue;
+            }
+            Message::Pong(_) => {
+                continue;
+            }
+            Message::Close(_) => {
+                return;
+            }
+        };
+
+        // Figure out if we need to send an error, any notices, but always the ready message.
+        let err = match run_ws_request(req, &mut client, &mut ws).await {
+            Ok(()) => None,
+            Err(err) => Some(WebSocketResponse::Error(err.to_string())),
+        };
+        let notices = client
+            .0
+            .session()
+            .drain_notices()
+            .into_iter()
+            .map(|notice| {
+                WebSocketResponse::Notice(Notice {
+                    message: notice.to_string(),
+                    severity: Severity::for_adapter_notice(&notice)
+                        .as_str()
+                        .to_lowercase(),
+                })
+            });
+
+        for msg in err
+            .into_iter()
+            .chain(notices)
+            .chain_one(WebSocketResponse::ReadyForQuery(
+                client.0.session().transaction_code().into(),
+            ))
+        {
+            let msg = serde_json::to_string(&msg).unwrap();
+            let msg = Message::Text(msg);
+            if ws.send(msg).await.is_err() {
+                // client disconnected
+                return;
+            }
+        }
+    }
+}
+
+async fn run_ws_request(
+    req: Result<SqlRequest, anyhow::Error>,
+    client: &mut AuthedClient,
+    ws: &mut WebSocket,
+) -> Result<(), anyhow::Error> {
+    let req = req?;
+    execute_request(client, req, ws).await
 }
 
 /// A request to execute SQL over HTTP.
@@ -61,29 +152,47 @@ pub struct ExtendedRequest {
     params: Vec<Option<String>>,
 }
 
-/// The response to a [`SqlRequest`].
-#[derive(Debug, Serialize)]
-struct SqlResponse {
+/// The response to a `SqlRequest`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SqlResponse {
     /// The results for each query in the request.
     results: Vec<SqlResult>,
 }
 
+enum StatementResult {
+    SqlResult(SqlResult),
+    Subscribe {
+        col_names: Vec<String>,
+        tag: String,
+        rx: RowBatchStream,
+    },
+}
+
+impl From<SqlResult> for StatementResult {
+    fn from(inner: SqlResult) -> Self {
+        Self::SqlResult(inner)
+    }
+}
+
 /// The result of a single query in a [`SqlResponse`].
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
-enum SqlResult {
+pub enum SqlResult {
     /// The query returned rows.
     Rows {
+        /// The command complete tag.
+        tag: String,
         /// The result rows.
         rows: Vec<Vec<serde_json::Value>>,
         /// The name of the columns in the row.
         col_names: Vec<String>,
-        /// Any notices generated during execution of the query.
+        // Any notices generated during execution of the query.
         notices: Vec<Notice>,
     },
     /// The query executed successfully but did not return rows.
     Ok {
-        ok: Option<String>,
+        /// The command complete tag.
+        ok: String,
         /// Any notices generated during execution of the query.
         notices: Vec<Notice>,
     },
@@ -91,7 +200,7 @@ enum SqlResult {
     Err {
         /// The error message.
         error: String,
-        /// Any notices generated during execution of the query.
+        // Any notices generated during execution of the query.
         notices: Vec<Notice>,
     },
 }
@@ -99,10 +208,12 @@ enum SqlResult {
 impl SqlResult {
     fn rows(
         client: &mut SessionClient,
+        tag: String,
         rows: Vec<Vec<serde_json::Value>>,
         col_names: Vec<String>,
     ) -> SqlResult {
         SqlResult::Rows {
+            tag,
             rows,
             col_names,
             notices: make_notices(client),
@@ -116,31 +227,258 @@ impl SqlResult {
         }
     }
 
-    fn ok(client: &mut SessionClient, res: ExecuteResponse) -> SqlResult {
+    fn ok(client: &mut SessionClient, tag: String) -> SqlResult {
         SqlResult::Ok {
-            ok: res.tag(),
+            ok: tag,
             notices: make_notices(client),
         }
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(tag = "type", content = "payload")]
+pub enum WebSocketResponse {
+    ReadyForQuery(String),
+    Notice(Notice),
+    Rows(Vec<String>),
+    Row(Vec<serde_json::Value>),
+    CommandComplete(String),
+    Error(String),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Notice {
     message: String,
     severity: String,
+}
+
+/// Trait describing how to transmit a response to a client. HTTP clients
+/// accumulate into a Vec and send all at once. WebSocket clients send each
+/// message as they occur.
+#[async_trait]
+trait ResultSender {
+    /// Adds a result to the client. Returns Err if sending to the client
+    /// produced an error and the server should disconnect. Returns Ok(Err) if
+    /// the statement produced an error and should error the transaction, but
+    /// remain connected. Returns Ok(Ok(())) if the statement succeeded.
+    async fn add_result(&mut self, res: StatementResult) -> Result<Result<(), ()>, anyhow::Error>;
+    /// Awaits a future while also able to check the status of the client
+    /// connection. Should return an error if the client connection has gone
+    /// away.
+    async fn await_rows<F, R>(&mut self, f: F) -> Result<R, anyhow::Error>
+    where
+        F: Future<Output = R> + Send;
+    /// Reports whether the client supports streaming SUBSCRIBE results.
+    fn allow_subscribe(&self) -> bool;
+}
+
+#[async_trait]
+impl ResultSender for SqlResponse {
+    async fn add_result(&mut self, res: StatementResult) -> Result<Result<(), ()>, anyhow::Error> {
+        Ok(match res {
+            StatementResult::SqlResult(res) => {
+                let is_err = matches!(res, SqlResult::Err { .. });
+                self.results.push(res);
+                if is_err {
+                    Err(())
+                } else {
+                    Ok(())
+                }
+            }
+            StatementResult::Subscribe { .. } => {
+                self.results.push(SqlResult::Err {
+                    error: "SUBSCRIBE only supported over websocket".into(),
+                    notices: Vec::new(),
+                });
+                Err(())
+            }
+        })
+    }
+
+    async fn await_rows<F, R>(&mut self, f: F) -> Result<R, anyhow::Error>
+    where
+        F: Future<Output = R> + Send,
+    {
+        Ok(f.await)
+    }
+
+    fn allow_subscribe(&self) -> bool {
+        false
+    }
+}
+
+#[async_trait]
+impl ResultSender for WebSocket {
+    async fn add_result(&mut self, res: StatementResult) -> Result<Result<(), ()>, anyhow::Error> {
+        async fn send(ws: &mut WebSocket, msg: WebSocketResponse) -> Result<(), anyhow::Error> {
+            let msg = serde_json::to_string(&msg).expect("must serialize");
+            Ok(ws.send(Message::Text(msg)).await?)
+        }
+
+        let (is_err, msgs) = match res {
+            StatementResult::SqlResult(SqlResult::Rows {
+                tag,
+                rows,
+                col_names,
+                notices,
+            }) => {
+                let mut msgs = vec![WebSocketResponse::Rows(col_names)];
+                msgs.extend(rows.into_iter().map(WebSocketResponse::Row));
+                msgs.push(WebSocketResponse::CommandComplete(tag));
+                msgs.extend(notices.into_iter().map(WebSocketResponse::Notice));
+                (false, msgs)
+            }
+            StatementResult::SqlResult(SqlResult::Ok { ok, notices }) => {
+                let mut msgs = vec![WebSocketResponse::CommandComplete(ok)];
+                msgs.extend(notices.into_iter().map(WebSocketResponse::Notice));
+                (false, msgs)
+            }
+            StatementResult::SqlResult(SqlResult::Err { error, notices }) => {
+                let mut msgs = vec![WebSocketResponse::Error(error)];
+                msgs.extend(notices.into_iter().map(WebSocketResponse::Notice));
+                (true, msgs)
+            }
+            StatementResult::Subscribe {
+                col_names,
+                tag,
+                mut rx,
+            } => {
+                send(self, WebSocketResponse::Rows(col_names)).await?;
+
+                let mut datum_vec = mz_repr::DatumVec::new();
+                loop {
+                    match self.await_rows(rx.recv()).await? {
+                        Some(PeekResponseUnary::Rows(rows)) => {
+                            for row in rows {
+                                let datums = datum_vec.borrow_with(&row);
+                                send(
+                                    self,
+                                    WebSocketResponse::Row(datums.iter().map(From::from).collect()),
+                                )
+                                .await?;
+                            }
+                        }
+                        Some(PeekResponseUnary::Error(err)) => {
+                            break (true, vec![WebSocketResponse::Error(err)])
+                        }
+                        Some(PeekResponseUnary::Canceled) => {
+                            break (
+                                true,
+                                vec![WebSocketResponse::Error("query canceled".into())],
+                            )
+                        }
+                        None => break (false, vec![WebSocketResponse::CommandComplete(tag)]),
+                    }
+                }
+            }
+        };
+        for msg in msgs {
+            send(self, msg).await?;
+        }
+        Ok(if is_err { Err(()) } else { Ok(()) })
+    }
+
+    // Send a websocket Ping every second to verify the client is still
+    // connected.
+    async fn await_rows<F, R>(&mut self, f: F) -> Result<R, anyhow::Error>
+    where
+        F: Future<Output = R> + Send,
+    {
+        let pinger = async {
+            let mut tick = time::interval(Duration::from_secs(1));
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                if let Err(err) = self.send(Message::Ping(Vec::new())).await {
+                    return err;
+                }
+            }
+        };
+
+        tokio::select! {
+            err = pinger => Err(err.into()),
+            data = f => Ok(data),
+        }
+    }
+
+    fn allow_subscribe(&self) -> bool {
+        true
+    }
+}
+
+/// Returns Ok(Err) if any statement error'd during execution.
+async fn execute_stmt_group<S: ResultSender>(
+    client: &mut SessionClient,
+    sender: &mut S,
+    stmt_group: Vec<(Statement<Raw>, Vec<Option<String>>)>,
+) -> Result<Result<(), ()>, anyhow::Error> {
+    let num_stmts = stmt_group.len();
+    for (stmt, params) in stmt_group {
+        assert!(num_stmts <= 1 || params.is_empty(),
+            "statement groups contain more than 1 statement iff Simple request, which does not support parameters"
+        );
+
+        let is_aborted_txn = matches!(client.session().transaction(), TransactionStatus::Failed(_));
+        if is_aborted_txn && !is_txn_exit_stmt(&stmt) {
+            let _ = sender.add_result(SqlResult::err(
+                client,
+                "current transaction is aborted, commands ignored until end of transaction block",
+            ).into()).await?;
+            return Ok(Err(()));
+        }
+
+        // Mirror the behavior of the PostgreSQL simple query protocol.
+        // See the pgwire::protocol::StateMachine::query method for details.
+        if let Err(e) = client.start_transaction(Some(num_stmts)).await {
+            let _ = sender.add_result(SqlResult::err(client, e).into()).await?;
+            return Ok(Err(()));
+        }
+        let res = execute_stmt(client, sender, stmt, params).await?;
+        let is_err = sender.add_result(res).await?;
+        if is_err.is_err() {
+            // Mirror StateMachine::error, which sometimes will clean up the
+            // transaction state instead of always leaving it in Failed.
+            let txn = client.session().transaction();
+            match txn {
+                // Error can be called from describe and parse and so might not be in an active
+                // transaction.
+                TransactionStatus::Default | TransactionStatus::Failed(_) => {}
+                // In Started (i.e., a single statement) and implicit transactions cleanup themselves.
+                TransactionStatus::Started(_) | TransactionStatus::InTransactionImplicit(_) => {
+                    if let Err(err) = client.end_transaction(EndTransactionAction::Rollback).await {
+                        let _ = sender
+                            .add_result(SqlResult::err(client, err.to_string()).into())
+                            .await?;
+                    }
+                }
+                // Explicit transactions move to failed.
+                TransactionStatus::InTransaction(_) => {
+                    client.fail_transaction();
+                }
+            }
+            return Ok(Err(()));
+        }
+    }
+    Ok(Ok(()))
 }
 
 /// Executes an entire [`SqlRequest`].
 ///
 /// See the user-facing documentation about the HTTP API for a description of
 /// the semantics of this function.
-async fn execute_request(
-    client: &mut SessionClient,
+async fn execute_request<S: ResultSender>(
+    client: &mut AuthedClient,
     request: SqlRequest,
-) -> Result<SqlResponse, anyhow::Error> {
+    sender: &mut S,
+) -> Result<(), anyhow::Error> {
+    let client = &mut client.0;
+
     // This API prohibits executing statements with responses whose
     // semantics are at odds with an HTTP response.
-    fn check_prohibited_stmts(stmt: &Statement<Raw>) -> Result<(), anyhow::Error> {
+    fn check_prohibited_stmts<S: ResultSender>(
+        sender: &S,
+        stmt: &Statement<Raw>,
+    ) -> Result<(), anyhow::Error> {
         let kind: StatementKind = stmt.into();
         let execute_responses = Plan::generated_from(kind)
             .into_iter()
@@ -151,6 +489,7 @@ async fn execute_request(
         if execute_responses.iter().any(|execute_response| {
             // Returns true if a statement or execute response are unsupported.
             match execute_response {
+                ExecuteResponseKind::Subscribing if sender.allow_subscribe() => false,
                 ExecuteResponseKind::Fetch
                 | ExecuteResponseKind::Subscribing
                 | ExecuteResponseKind::CopyFrom
@@ -170,14 +509,13 @@ async fn execute_request(
     }
 
     let mut stmt_groups = vec![];
-    let mut results = vec![];
 
     match request {
         SqlRequest::Simple { query } => {
             let stmts = mz_sql::parse::parse(&query).map_err(|e| anyhow!(e))?;
             let mut stmt_group = Vec::with_capacity(stmts.len());
             for stmt in stmts {
-                check_prohibited_stmts(&stmt)?;
+                check_prohibited_stmts(sender, &stmt)?;
                 stmt_group.push((stmt, vec![]));
             }
             stmt_groups.push(stmt_group);
@@ -194,7 +532,7 @@ async fn execute_request(
                 }
 
                 let stmt = stmts.pop().unwrap();
-                check_prohibited_stmts(&stmt)?;
+                check_prohibited_stmts(sender, &stmt)?;
 
                 stmt_groups.push(vec![(stmt, params)]);
             }
@@ -202,26 +540,11 @@ async fn execute_request(
     }
 
     for stmt_group in stmt_groups {
-        let num_stmts = stmt_group.len();
-        for (stmt, params) in stmt_group {
-            assert!(num_stmts <= 1 || params.is_empty(),
-                "statement groups contain more than 1 statement iff Simple request, which does not support parameters"
-            );
-
-            if matches!(client.session().transaction(), TransactionStatus::Failed(_)) {
-                break;
-            }
-            // Mirror the behavior of the PostgreSQL simple query protocol.
-            // See the pgwire::protocol::StateMachine::query method for details.
-            if let Err(e) = client.start_transaction(Some(num_stmts)).await {
-                results.push(SqlResult::err(client, e));
-                break;
-            }
-            let res = execute_stmt(client, stmt, params).await;
-            if matches!(res, SqlResult::Err { .. }) {
-                client.fail_transaction();
-            }
-            results.push(res);
+        if execute_stmt_group(client, sender, stmt_group)
+            .await?
+            .is_err()
+        {
+            break;
         }
     }
 
@@ -229,27 +552,28 @@ async fn execute_request(
         client.end_transaction(EndTransactionAction::Commit).await?;
     }
 
-    Ok(SqlResponse { results })
+    Ok(())
 }
 
 /// Executes a single statement in a [`SqlRequest`].
-async fn execute_stmt(
+async fn execute_stmt<S: ResultSender>(
     client: &mut SessionClient,
+    sender: &mut S,
     stmt: Statement<Raw>,
     raw_params: Vec<Option<String>>,
-) -> SqlResult {
+) -> Result<StatementResult, anyhow::Error> {
     const EMPTY_PORTAL: &str = "";
     if let Err(e) = client
         .describe(EMPTY_PORTAL.into(), Some(stmt.clone()), vec![])
         .await
     {
-        return SqlResult::err(client, e);
+        return Ok(SqlResult::err(client, e).into());
     }
 
     let prep_stmt = match client.get_prepared_statement(EMPTY_PORTAL).await {
         Ok(stmt) => stmt,
         Err(err) => {
-            return SqlResult::err(client, err);
+            return Ok(SqlResult::err(client, err).into());
         }
     };
 
@@ -262,7 +586,7 @@ async fn execute_stmt(
             actual = raw_params.len(),
             expected = param_types.len()
         );
-        return SqlResult::err(client, message);
+        return Ok(SqlResult::err(client, message).into());
     }
 
     let buf = RowArena::new();
@@ -280,7 +604,7 @@ async fn execute_stmt(
                     Ok(param) => param.into_datum(&buf, &pg_typ),
                     Err(err) => {
                         let msg = format!("unable to decode parameter: {}", err);
-                        return SqlResult::err(client, msg);
+                        return Ok(SqlResult::err(client, msg).into());
                     }
                 }
             }
@@ -309,7 +633,7 @@ async fn execute_stmt(
         result_formats,
         revision,
     ) {
-        return SqlResult::err(client, err.to_string());
+        return Ok(SqlResult::err(client, err.to_string()).into());
     }
 
     let desc = client
@@ -322,15 +646,20 @@ async fn execute_stmt(
     let res = match client.execute(EMPTY_PORTAL.into()).await {
         Ok(res) => res,
         Err(e) => {
-            return SqlResult::err(client, e);
+            return Ok(SqlResult::err(client, e).into());
         }
     };
+    let col_names = match desc.relation_desc {
+        Some(desc) => desc.iter_names().map(|name| name.to_string()).collect(),
+        None => vec![],
+    };
+    let tag = res.tag();
 
-    match res {
+    Ok(match res {
         ExecuteResponse::Canceled => {
-            SqlResult::err(client, "statement canceled due to user request")
+            SqlResult::err(client, "statement canceled due to user request").into()
         }
-        res @ (ExecuteResponse::CreatedConnection { .. }
+        ExecuteResponse::CreatedConnection { .. }
         | ExecuteResponse::CreatedDatabase { .. }
         | ExecuteResponse::CreatedSchema { .. }
         | ExecuteResponse::CreatedRole
@@ -375,34 +704,33 @@ async fn execute_stmt(
         | ExecuteResponse::AlteredIndexLogicalCompaction
         | ExecuteResponse::AlteredSystemConfiguration
         | ExecuteResponse::Deallocate { .. }
-        | ExecuteResponse::Prepare) => SqlResult::ok(client, res),
+        | ExecuteResponse::Prepare => SqlResult::ok(client, tag.expect("ok only called on tag-generating results")).into(),
         ExecuteResponse::SendingRows {
             future: rows,
             span: _,
         } => {
-            let rows = match rows.await {
+            let rows = match sender.await_rows(rows).await? {
                 PeekResponseUnary::Rows(rows) => rows,
                 PeekResponseUnary::Error(e) => {
-                    return SqlResult::err(client, e);
+                    return Ok(SqlResult::err(client, e).into());
                 }
                 PeekResponseUnary::Canceled => {
-                    return SqlResult::err(client, "statement canceled due to user request");
+                    return Ok(SqlResult::err(client, "statement canceled due to user request").into());
                 }
             };
             let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
-            let col_names = match desc.relation_desc {
-                Some(desc) => desc.iter_names().map(|name| name.to_string()).collect(),
-                None => vec![],
-            };
             let mut datum_vec = mz_repr::DatumVec::new();
             for row in rows {
                 let datums = datum_vec.borrow_with(&row);
                 sql_rows.push(datums.iter().map(From::from).collect());
             }
-            SqlResult::rows(client, sql_rows, col_names)
+            let tag = format!("SELECT {}", sql_rows.len());
+            SqlResult::rows(client, tag, sql_rows, col_names).into()
         }
+        ExecuteResponse::Subscribing { rx }  => {
+            StatementResult::Subscribe { tag:"SUBSCRIBE".into(), col_names, rx }
+        },
         res @ (ExecuteResponse::Fetch { .. }
-        | ExecuteResponse::Subscribing { .. }
         | ExecuteResponse::CopyTo { .. }
         | ExecuteResponse::CopyFrom { .. }
         | ExecuteResponse::DeclaredCursor
@@ -412,9 +740,9 @@ async fn execute_stmt(
                 format!("internal error: encountered prohibited ExecuteResponse {:?}.\n\n
 This is a bug. Can you please file an issue letting us know?\n
 https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=C-bug%2CC-triage&template=01-bug.yml",
-            ExecuteResponseKind::from(res)))
+            ExecuteResponseKind::from(res))).into()
         }
-    }
+    })
 }
 
 fn make_notices(client: &mut SessionClient) -> Vec<Notice> {
@@ -429,4 +757,13 @@ fn make_notices(client: &mut SessionClient) -> Vec<Notice> {
                 .to_lowercase(),
         })
         .collect()
+}
+
+// Duplicated from protocol.rs.
+// See postgres' backend/tcop/postgres.c IsTransactionExitStmt.
+fn is_txn_exit_stmt(stmt: &Statement<Raw>) -> bool {
+    matches!(
+        stmt,
+        Statement::Commit(_) | Statement::Rollback(_) | Statement::Prepare(_)
+    )
 }

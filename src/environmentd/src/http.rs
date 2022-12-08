@@ -52,6 +52,8 @@ use mz_ore::tracing::TracingTargetCallbacks;
 use crate::server::{ConnectionHandler, Server};
 use crate::BUILD_INFO;
 
+pub use sql::{SqlResponse, WebSocketResponse};
+
 mod catalog;
 mod memory;
 mod root;
@@ -149,7 +151,10 @@ impl Server for HttpServer {
             };
             let svc = router.layer(Extension(conn_protocol));
             let http = hyper::server::conn::Http::new();
-            http.serve_connection(conn, svc).err_into().await
+            http.serve_connection(conn, svc)
+                .with_upgrades()
+                .err_into()
+                .await
         })
     }
 }
@@ -428,6 +433,7 @@ fn base_router(BaseRouterConfig { profiling }: BaseRouterConfig) -> Router {
             "/",
             routing::get(move || async move { root::handle_home(profiling).await }),
         )
+        .route("/api/experimental/sql", routing::get(sql::handle_sql_ws))
         .route("/api/sql", routing::post(sql::handle_sql))
         .route("/memory", routing::get(memory::handle_memory))
         .route(
