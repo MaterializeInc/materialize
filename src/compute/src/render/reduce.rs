@@ -300,7 +300,7 @@ where
         .arrange_named::<RowSpine<_, _, _, _>>("Arrange ReduceCollation")
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceCollation", {
             let mut row_buf = Row::default();
-            move |_key, input, output| {
+            move |key, input, output| {
                 // The inputs are pairs of a reduction type, and a row consisting of densely packed fused
                 // aggregate values.
                 // We need to reconstitute the final value by:
@@ -308,7 +308,6 @@ where
                 // 2. For each aggregate, figure out what type it is, and grab the relevant value
                 //    from the corresponding fused row.
                 // 3. Stitch all the values together into one row.
-
                 let mut accumulable = DatumList::empty().iter();
                 let mut hierarchical = DatumList::empty().iter();
                 let mut basic = DatumList::empty().iter();
@@ -340,16 +339,15 @@ where
                 // Merge results into the order they were asked for.
                 let mut row_packer = row_buf.packer();
                 for typ in aggregate_types.iter() {
-                    match typ {
-                        ReductionType::Accumulable => {
-                            row_packer.push(accumulable.next().unwrap())
-                        }
-                        ReductionType::Hierarchical => {
-                            row_packer.push(hierarchical.next().unwrap())
-                        }
-                        ReductionType::Basic => {
-                            row_packer.push(basic.next().unwrap())
-                        }
+                    let datum = match typ {
+                        ReductionType::Accumulable => accumulable.next(),
+                        ReductionType::Hierarchical => hierarchical.next(),
+                        ReductionType::Basic => basic.next(),
+                    };
+                    if let Some(datum) = datum {
+                        row_packer.push(datum);
+                    } else {
+                        panic!("[customer-data] Missing {typ:?} value for key: {key}");
                     }
                 }
                 output.push((row_buf.clone(), 1));
