@@ -13,9 +13,15 @@ from textwrap import dedent
 from typing import Callable, Optional
 
 from materialize.mzcompose import Composition
-from materialize.mzcompose.services import Materialized, Redpanda, Storaged, Testdrive
+from materialize.mzcompose.services import (
+    Materialized,
+    Postgres,
+    Redpanda,
+    Storaged,
+    Testdrive,
+)
 
-SERVICES = [Redpanda(), Materialized(), Testdrive(), Storaged()]
+SERVICES = [Redpanda(), Materialized(), Testdrive(), Storaged(), Postgres()]
 
 
 @dataclass
@@ -133,6 +139,104 @@ class Disruption:
         )
 
 
+@dataclass
+class PgDisruption:
+    name: str
+    breakage: Callable
+    expected_error: str
+    fixage: Optional[Callable]
+
+    def run_test(self, c: Composition) -> None:
+        print(f"+++ Running disruption scenario {self.name}")
+        seed = random.randint(0, 256**4)
+
+        c.down(destroy_volumes=True)
+        c.up("testdrive", persistent=True)
+        c.start_and_wait_for_tcp(services=["postgres", "materialized", "storaged"])
+        c.wait_for_materialized()
+
+        with c.override(
+            Testdrive(
+                no_reset=True,
+                seed=seed,
+                entrypoint_extra=["--initial-backoff=1s", "--backoff-factor=0"],
+            )
+        ):
+            self.populate(c)
+            self.breakage(c, seed)
+            self.assert_error(c, self.expected_error)
+
+            if self.fixage:
+                self.fixage(c, seed)
+                self.assert_recovery(c)
+
+    def populate(self, c: Composition) -> None:
+        # Create a source and a sink
+        c.testdrive(
+            dedent(
+                """
+                > CREATE SECRET pgpass AS 'postgres'
+                > CREATE CONNECTION pg TO POSTGRES (
+                    HOST postgres,
+                    DATABASE postgres,
+                    USER postgres,
+                    PASSWORD SECRET pgpass
+                  )
+
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                ALTER USER postgres WITH replication;
+                DROP SCHEMA IF EXISTS public CASCADE;
+                CREATE SCHEMA public;
+
+                DROP PUBLICATION IF EXISTS mz_source;
+                CREATE PUBLICATION mz_source FOR ALL TABLES;
+
+                CREATE TABLE pk_table (pk INTEGER PRIMARY KEY, f2 TEXT);
+                INSERT INTO pk_table VALUES (1, 'one');
+                ALTER TABLE pk_table REPLICA IDENTITY FULL;
+                INSERT INTO pk_table VALUES (2, 'two');
+                INSERT INTO pk_table VALUES (3, 'three');
+
+                > CREATE SOURCE "source1"
+                  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+                  FOR TABLES ("pk_table");
+
+                > SELECT * FROM pk_table ORDER BY pk ASC;
+                1 one
+                2 two
+                3 three
+                """
+            )
+        )
+
+    def assert_error(self, c: Composition, error: str) -> None:
+        c.testdrive(
+            dedent(
+                f"""
+                > SELECT status, error ~* '{error}'
+                  FROM mz_internal.mz_source_status
+                  WHERE name = 'source1'
+                stalled true
+                """
+            )
+        )
+
+    def assert_recovery(self, c: Composition) -> None:
+        c.testdrive(
+            dedent(
+                """
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                INSERT INTO pk_table VALUES (4, 'four');
+
+                > SELECT status, error
+                  FROM mz_internal.mz_source_status
+                  WHERE name = 'source1'
+                running <null>
+                """
+            )
+        )
+
+
 disruptions = [
     Disruption(
         name="delete-topic",
@@ -161,6 +265,27 @@ disruptions = [
     #     expected_error="???",
     #     fixage=lambda c, _: c.up("redpanda", "storaged"),
     # ),
+    PgDisruption(
+        name="kill-postgres",
+        breakage=lambda c, _: c.kill("postgres"),
+        expected_error="error connecting to server",
+        fixage=lambda c, _: c.start_and_wait_for_tcp(["postgres"]),
+    ),
+    PgDisruption(
+        name="drop-publication-postgres",
+        breakage=lambda c, _: c.testdrive(
+            dedent(
+                """
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                DROP PUBLICATION mz_source;
+                INSERT INTO pk_table VALUES (100, 'advance the LSN');
+                """
+            )
+        ),
+        expected_error="publication .+ does not exist",
+        # Can't recover when publication state is deleted.
+        fixage=None,
+    ),
 ]
 
 
