@@ -10,7 +10,7 @@
 import random
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import Callable, Optional
+from typing import Callable, List, Optional, Protocol
 
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
@@ -24,8 +24,13 @@ from materialize.mzcompose.services import (
 SERVICES = [Redpanda(), Materialized(), Testdrive(), Storaged(), Postgres()]
 
 
+class Disruption(Protocol):
+    def run_test(self, c: Composition) -> None:
+        ...
+
+
 @dataclass
-class Disruption:
+class KafkaDisruption:
     name: str
     breakage: Callable
     expected_error: str
@@ -237,8 +242,8 @@ class PgDisruption:
         )
 
 
-disruptions = [
-    Disruption(
+disruptions: List[Disruption] = [
+    KafkaDisruption(
         name="delete-topic",
         breakage=lambda c, seed: redpanda_topics(c, "delete", seed),
         expected_error="UnknownTopicOrPartition|topic",
@@ -246,13 +251,13 @@ disruptions = [
         # Re-creating the topic does not restart the source
         # fixage=lambda c,seed: redpanda_topics(c, "create", seed),
     ),
-    Disruption(
+    KafkaDisruption(
         name="pause-redpanda",
         breakage=lambda c, _: c.pause("redpanda"),
         expected_error="OperationTimedOut|BrokerTransportFailure|transaction",
         fixage=lambda c, _: c.unpause("redpanda"),
     ),
-    Disruption(
+    KafkaDisruption(
         name="kill-redpanda",
         breakage=lambda c, _: c.kill("redpanda"),
         expected_error="BrokerTransportFailure|Resolve",
