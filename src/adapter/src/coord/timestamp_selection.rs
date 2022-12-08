@@ -349,7 +349,7 @@ pub trait DisplayableInTimeline {
 
 impl DisplayableInTimeline for mz_repr::Timestamp {
     fn fmt(&self, timeline_context: &TimelineContext, f: &mut fmt::Formatter) -> fmt::Result {
-        if let TimelineContext::BelongsToTimeline(Timeline::EpochMilliseconds) = timeline_context {
+        if let TimelineContext::TimelineDependent(Timeline::EpochMilliseconds) = timeline_context {
             let ts_ms: u64 = self.into();
             let ts = ts_ms / 1000;
             let nanos = ((ts_ms % 1000) as u32) * 1000000;

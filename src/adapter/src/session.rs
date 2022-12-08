@@ -278,30 +278,16 @@ impl<T: TimestampManipulation> Session<T> {
                         TransactionOps::Peeks(add_read_context) => {
                             match (&txn_read_context, add_read_context) {
                                 (
-                                    ReadContext::BelongsToTimeline(txn_ts, txn_timeline),
-                                    ReadContext::BelongsToTimeline(add_ts, add_timeline),
+                                    ReadContext::TimelineTimestamp(txn_timeline, txn_ts),
+                                    ReadContext::TimelineTimestamp(add_timeline, add_ts),
                                 ) => {
-                                    assert_eq!(*txn_ts, add_ts);
                                     assert_eq!(*txn_timeline, add_timeline);
+                                    assert_eq!(*txn_ts, add_ts);
                                 }
-                                (
-                                    ReadContext::BelongsToTimeline(txn_ts, _txn_timeline),
-                                    ReadContext::TimelineDependent(add_ts),
-                                ) => assert_eq!(*txn_ts, add_ts),
-                                (
-                                    ReadContext::TimelineDependent(_txn_ts),
-                                    ReadContext::BelongsToTimeline(_add_ts, _add_timeline),
-                                ) => {
-                                    panic!("cannot adopt a new timeline after executing a timeline dependent query")
-                                }
-                                (
-                                    ReadContext::TimelineDependent(txn_ts),
-                                    ReadContext::TimelineDependent(add_ts),
-                                ) => assert_eq!(*txn_ts, add_ts),
-                                (ReadContext::TimelineIndependent, add_read_context) => {
+                                (ReadContext::NoTimestamp, add_read_context) => {
                                     *txn_read_context = add_read_context
                                 }
-                                (_, ReadContext::TimelineIndependent) => {}
+                                (_, ReadContext::NoTimestamp) => {}
                             };
                         }
                         // Iff peeks thus far do not have a timestamp (i.e.
@@ -433,14 +419,28 @@ impl<T: TimestampManipulation> Session<T> {
         match self.transaction.inner() {
             Some(Transaction {
                 pcx: _,
-                ops:
-                    TransactionOps::Peeks(
-                        ReadContext::BelongsToTimeline(ts, _) | ReadContext::TimelineDependent(ts),
-                    ),
+                ops: TransactionOps::Peeks(ReadContext::TimelineTimestamp(_, ts)),
                 write_lock_guard: _,
                 access: _,
                 id: _,
             }) => Some(ts.clone()),
+            _ => None,
+        }
+    }
+
+    /// Returns the transaction's read timeline, if set.
+    ///
+    /// Returns `None` if there is no active transaction, or if the active
+    /// transaction is not a read transaction.
+    pub fn get_transaction_timeline(&self) -> Option<Timeline> {
+        match self.transaction.inner() {
+            Some(Transaction {
+                pcx: _,
+                ops: TransactionOps::Peeks(ReadContext::TimelineTimestamp(timeline, _)),
+                write_lock_guard: _,
+                access: _,
+                id: _,
+            }) => Some(timeline.clone()),
             _ => None,
         }
     }
@@ -858,7 +858,7 @@ impl<T> Transaction<T> {
     /// The timeline of the transaction, if one exists.
     fn timeline(&self) -> Option<Timeline> {
         match &self.ops {
-            TransactionOps::Peeks(ReadContext::BelongsToTimeline(_, timeline)) => {
+            TransactionOps::Peeks(ReadContext::TimelineTimestamp(timeline, _)) => {
                 Some(timeline.clone())
             }
             TransactionOps::Peeks(_)
@@ -906,21 +906,29 @@ impl<T> Default for TransactionOps<T> {
     }
 }
 
-/// TODO(jkosh44)
+/// The timeline and timestamp context of a read.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReadContext<T> {
-    TimelineIndependent,
-    TimelineDependent(T),
-    BelongsToTimeline(T, Timeline),
+    /// Read is executed in a specific timeline with a specific timestamp.
+    TimelineTimestamp(Timeline, T),
+    /// Read is execute without a timeline or timestamp.
+    NoTimestamp,
 }
 
 impl<T> ReadContext<T> {
     /// Creates a `ReadContext` from a timestamp and `TimelineContext`.
-    pub fn from_timeline_context(ts: T, timeline_context: TimelineContext) -> ReadContext<T> {
+    pub fn from_timeline_context(
+        ts: T,
+        timeline: Option<Timeline>,
+        timeline_context: TimelineContext,
+    ) -> ReadContext<T> {
         match timeline_context {
-            TimelineContext::TimelineIndependent => Self::TimelineIndependent,
-            TimelineContext::TimelineDependent => Self::TimelineDependent(ts),
-            TimelineContext::BelongsToTimeline(timeline) => Self::BelongsToTimeline(ts, timeline),
+            TimelineContext::TimelineDependent(timeline) => Self::TimelineTimestamp(timeline, ts),
+            TimelineContext::TimestampDependent => {
+                // We default to the `Timeline::EpochMilliseconds` timeline if one doesn't exist.
+                Self::TimelineTimestamp(timeline.unwrap_or(Timeline::EpochMilliseconds), ts)
+            }
+            TimelineContext::TimestampIndependent => Self::NoTimestamp,
         }
     }
 
@@ -932,16 +940,16 @@ impl<T> ReadContext<T> {
     /// The timeline belonging to this context, if one exists.
     pub fn timeline(&self) -> Option<&Timeline> {
         match self {
-            Self::BelongsToTimeline(_, timeline) => Some(timeline),
-            Self::TimelineIndependent | Self::TimelineDependent(_) => None,
+            Self::TimelineTimestamp(timeline, _) => Some(timeline),
+            Self::NoTimestamp => None,
         }
     }
 
     /// The timestamp belonging to this context, if one exists.
     pub fn timestamp(&self) -> Option<&T> {
         match self {
-            Self::BelongsToTimeline(ts, _) | Self::TimelineDependent(ts) => Some(ts),
-            Self::TimelineIndependent => None,
+            Self::TimelineTimestamp(_, ts) => Some(ts),
+            Self::NoTimestamp => None,
         }
     }
 

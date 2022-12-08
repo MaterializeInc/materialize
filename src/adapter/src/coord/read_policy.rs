@@ -238,7 +238,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         // Update the Coordinator's timeline read hold state and organize all id bundles by time.
         for (timeline_context, id_bundle) in self.partition_ids_by_timeline_context(id_bundle) {
             match timeline_context {
-                TimelineContext::BelongsToTimeline(timeline) => {
+                TimelineContext::TimelineDependent(timeline) => {
                     let TimelineState { oracle, .. } = self.ensure_timeline_state(&timeline).await;
                     let read_ts = oracle.read_ts();
                     let new_read_holds = self.initialize_read_holds(read_ts, &id_bundle);
@@ -249,7 +249,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                     }
                     read_holds.extend(new_read_holds);
                 }
-                TimelineContext::TimelineIndependent | TimelineContext::TimelineDependent => {
+                TimelineContext::TimestampIndependent | TimelineContext::TimestampDependent => {
                     id_bundles.insert(None, id_bundle);
                 }
             }

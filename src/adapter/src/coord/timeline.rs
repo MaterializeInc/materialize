@@ -37,12 +37,17 @@ use crate::coord::{timeline, Coordinator};
 use crate::util::ResultExt;
 use crate::AdapterError;
 
-/// TODO(jkosh44)
+/// An enum describing the timeline context of a query.
 #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub enum TimelineContext {
-    TimelineIndependent,
-    TimelineDependent,
-    BelongsToTimeline(Timeline),
+    /// Can only ever belong to a single specific timeline. The answer will depend on a timestamp
+    /// chosen from that specific timeline.
+    TimelineDependent(Timeline),
+    /// Can belong to any timeline. The answer will depend on a timestamp chosen from some
+    /// timeline.
+    TimestampDependent,
+    /// The answer does not depend on a chosen timestamp.
+    TimestampIndependent,
 }
 
 impl TimelineContext {
@@ -54,8 +59,8 @@ impl TimelineContext {
     /// The timeline belonging to this context, if one exists.
     pub fn timeline(&self) -> Option<&Timeline> {
         match self {
-            Self::BelongsToTimeline(timeline) => Some(timeline),
-            Self::TimelineIndependent | Self::TimelineDependent => None,
+            Self::TimelineDependent(timeline) => Some(timeline),
+            Self::TimestampIndependent | Self::TimestampDependent => None,
         }
     }
 }
@@ -455,7 +460,7 @@ impl<S: Append + 'static> Coordinator<S> {
     {
         let mut empty_timelines = Vec::new();
         for id in ids {
-            if let TimelineContext::BelongsToTimeline(timeline) = self.get_timeline_context(id) {
+            if let TimelineContext::TimelineDependent(timeline) = self.get_timeline_context(id) {
                 let TimelineState { read_holds, .. } = self
                     .global_timelines
                     .get_mut(&timeline)
@@ -476,7 +481,7 @@ impl<S: Append + 'static> Coordinator<S> {
     {
         let mut empty_timelines = Vec::new();
         for (compute_instance, id) in ids {
-            if let TimelineContext::BelongsToTimeline(timeline) = self.get_timeline_context(id) {
+            if let TimelineContext::TimelineDependent(timeline) = self.get_timeline_context(id) {
                 let TimelineState { read_holds, .. } = self
                     .global_timelines
                     .get_mut(&timeline)
@@ -513,7 +518,7 @@ impl<S: Append + 'static> Coordinator<S> {
     pub(crate) fn ids_in_timeline(&self, timeline: &Timeline) -> CollectionIdBundle {
         let mut id_bundle = CollectionIdBundle::default();
         for entry in self.catalog.entries() {
-            if let TimelineContext::BelongsToTimeline(entry_timeline) =
+            if let TimelineContext::TimelineDependent(entry_timeline) =
                 self.get_timeline_context(entry.id())
             {
                 if timeline == &entry_timeline {
@@ -587,11 +592,11 @@ impl<S: Append + 'static> Coordinator<S> {
             Ok(timelines.into_element())
         } else if timeline_contexts
             .iter()
-            .contains(&TimelineContext::TimelineDependent)
+            .contains(&TimelineContext::TimestampDependent)
         {
-            Ok(TimelineContext::TimelineDependent)
+            Ok(TimelineContext::TimestampDependent)
         } else {
-            Ok(TimelineContext::TimelineIndependent)
+            Ok(TimelineContext::TimestampIndependent)
         }
     }
 
@@ -621,9 +626,9 @@ impl<S: Append + 'static> Coordinator<S> {
             let depends_on = optimized_expr.depends_on();
             if depends_on.is_empty() {
                 if optimized_expr.contains_temporal() {
-                    timelines.insert(id, TimelineContext::TimelineDependent);
+                    timelines.insert(id, TimelineContext::TimestampDependent);
                 } else {
-                    timelines.insert(id, TimelineContext::TimelineIndependent);
+                    timelines.insert(id, TimelineContext::TimestampIndependent);
                 }
             } else {
                 ids.extend(depends_on);
@@ -640,7 +645,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     CatalogItem::Source(source) => {
                         timelines.insert(
                             id,
-                            TimelineContext::BelongsToTimeline(source.timeline.clone()),
+                            TimelineContext::TimelineDependent(source.timeline.clone()),
                         );
                     }
                     CatalogItem::Index(index) => {
@@ -653,12 +658,12 @@ impl<S: Append + 'static> Coordinator<S> {
                         visit_view_expr(id, &mview.optimized_expr, &mut ids, &mut timelines);
                     }
                     CatalogItem::Table(table) => {
-                        timelines.insert(id, TimelineContext::BelongsToTimeline(table.timeline()));
+                        timelines.insert(id, TimelineContext::TimelineDependent(table.timeline()));
                     }
                     CatalogItem::Log(_) => {
                         timelines.insert(
                             id,
-                            TimelineContext::BelongsToTimeline(Timeline::EpochMilliseconds),
+                            TimelineContext::TimelineDependent(Timeline::EpochMilliseconds),
                         );
                     }
                     CatalogItem::Sink(_)
@@ -777,20 +782,20 @@ impl<S: Append + 'static> Coordinator<S> {
                 match (&id_timeline_context, &timeline_context) {
                     // If this id doesn't have a timeline, we can keep it.
                     (
-                        TimelineContext::TimelineIndependent | TimelineContext::TimelineDependent,
+                        TimelineContext::TimestampIndependent | TimelineContext::TimestampDependent,
                         _,
                     ) => true,
                     // If there's no source timeline, we have the option to opt into a timeline,
                     // so optimistically choose epoch ms. This is useful when the first query in a
                     // transaction is on a static view.
                     (
-                        TimelineContext::BelongsToTimeline(id_timeline),
-                        TimelineContext::TimelineIndependent | TimelineContext::TimelineDependent,
+                        TimelineContext::TimelineDependent(id_timeline),
+                        TimelineContext::TimestampIndependent | TimelineContext::TimestampDependent,
                     ) => id_timeline == &Timeline::EpochMilliseconds,
                     // Otherwise check if timelines are the same.
                     (
-                        TimelineContext::BelongsToTimeline(id_timeline),
-                        TimelineContext::BelongsToTimeline(source_timeline),
+                        TimelineContext::TimelineDependent(id_timeline),
+                        TimelineContext::TimelineDependent(source_timeline),
                     ) => id_timeline == source_timeline,
                 }
             });

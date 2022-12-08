@@ -328,7 +328,7 @@ impl PendingReadTxn {
             PendingReadTxn::ReadThenWrite {
                 timestamp: (timestamp, timeline),
                 ..
-            } => ReadContext::BelongsToTimeline(timestamp.clone(), timeline.clone()),
+            } => ReadContext::TimelineTimestamp(timeline.clone(), timestamp.clone()),
         }
     }
 

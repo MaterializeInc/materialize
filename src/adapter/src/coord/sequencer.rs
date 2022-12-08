@@ -2135,12 +2135,12 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let source_ids = source.depends_on();
         let mut timeline_context = self.validate_timeline_context(source_ids.clone())?;
-        if matches!(timeline_context, TimelineContext::TimelineIndependent)
+        if matches!(timeline_context, TimelineContext::TimestampIndependent)
             && source.contains_temporal()
         {
             // If the source IDs are timeline independent but the query contains temporal functions,
             // then the timeline context needs to be upgraded to timeline dependent.
-            timeline_context = TimelineContext::TimelineDependent;
+            timeline_context = TimelineContext::TimestampDependent;
         }
         let in_immediate_multi_stmt_txn = session.transaction().is_in_multi_statement_transaction()
             && when == QueryWhen::Immediately;
@@ -2172,8 +2172,9 @@ impl<S: Append + 'static> Coordinator<S> {
         if matches!(session.transaction(), &TransactionStatus::InTransaction(_))
             || when == QueryWhen::Immediately
         {
+            let timeline = session.get_transaction_timeline();
             let read_context =
-                ReadContext::from_timeline_context(peek_plan.timestamp, timeline_context);
+                ReadContext::from_timeline_context(peek_plan.timestamp, timeline, timeline_context);
             session.add_transaction_ops(TransactionOps::Peeks(read_context))?;
         }
 
@@ -2247,8 +2248,8 @@ impl<S: Append + 'static> Coordinator<S> {
                         timeline_context,
                     )?;
                     // We only need read holds if the depends on a timeline.
-                    if let TimelineContext::BelongsToTimeline(_)
-                    | TimelineContext::TimelineDependent = timeline_context
+                    if let TimelineContext::TimelineDependent(_)
+                    | TimelineContext::TimestampDependent = timeline_context
                     {
                         read_holds = Some(id_bundle);
                     }
@@ -3242,7 +3243,7 @@ impl<S: Append + 'static> Coordinator<S> {
             // Note: It's only OK for the write to have a greater timestamp than the read
             // because the write lock prevents any other writes from happening in between
             // the read and write.
-            if let Some(ReadContext::BelongsToTimeline(read_ts, timeline)) = read_context {
+            if let Some(ReadContext::TimelineTimestamp(timeline, read_ts)) = read_context {
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 let result = strict_serializable_reads_tx.send(PendingReadTxn::ReadThenWrite {
                     tx,
