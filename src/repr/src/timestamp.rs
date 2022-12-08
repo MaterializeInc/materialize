@@ -15,8 +15,6 @@ use dec::TryFromDecimalError;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};
 
-use mz_avro::{define_unexpected, error::DecodeError, types::Scalar, AvroRead};
-
 use crate::adt::numeric::Numeric;
 
 /// System-wide timestamp type.
@@ -343,38 +341,5 @@ impl TryFrom<Numeric> for Timestamp {
         Ok(Self {
             internal: value.try_into()?,
         })
-    }
-}
-
-#[derive(Debug)]
-pub struct TimestampDecoder {}
-
-impl mz_avro::AvroDecode for TimestampDecoder {
-    type Out = Timestamp;
-
-    define_unexpected! {
-        array, record, union_branch, map, enum_variant, decimal, bytes, string, json, uuid, fixed
-    }
-
-    fn scalar(self, scalar: mz_avro::types::Scalar) -> Result<Self::Out, mz_avro::error::Error> {
-        let out = match scalar {
-            Scalar::Int(inner) => i64::from(inner).try_into()?,
-            Scalar::Long(inner) => inner.try_into()?,
-            other => {
-                return Err(mz_avro::error::Error::Decode(
-                    DecodeError::UnexpectedScalarKind(other.into()),
-                ))
-            }
-        };
-        Ok(out)
-    }
-}
-
-impl mz_avro::StatefulAvroDecodable for Timestamp {
-    type Decoder = TimestampDecoder;
-    type State = ();
-
-    fn new_decoder(_state: Self::State) -> Self::Decoder {
-        Self::Decoder {}
     }
 }
