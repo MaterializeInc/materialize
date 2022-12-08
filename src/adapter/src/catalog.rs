@@ -1487,6 +1487,23 @@ impl Source {
             DataSourceDesc::Source | DataSourceDesc::Introspection(_) => false,
         }
     }
+
+    /// Type of the source.
+    pub fn source_type(&self) -> &str {
+        match &self.data_source {
+            DataSourceDesc::Ingestion(ingestion) => ingestion.desc.name(),
+            DataSourceDesc::Source => "subsource",
+            DataSourceDesc::Introspection(_) => "source",
+        }
+    }
+
+    /// Connection ID of the source, if one exists.
+    pub fn connection_id(&self) -> Option<GlobalId> {
+        match &self.data_source {
+            DataSourceDesc::Ingestion(ingestion) => ingestion.desc.connection.connection_id(),
+            DataSourceDesc::Source | DataSourceDesc::Introspection(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1525,6 +1542,13 @@ pub struct Sink {
 }
 
 impl Sink {
+    pub fn sink_type(&self) -> &str {
+        match &self.connection {
+            StorageSinkConnectionState::Pending(pending) => pending.name(),
+            StorageSinkConnectionState::Ready(ready) => ready.name(),
+        }
+    }
+
     pub fn connection_id(&self) -> Option<GlobalId> {
         match &self.connection {
             StorageSinkConnectionState::Pending(pending) => pending.connection_id(),
@@ -4283,17 +4307,19 @@ impl<S: Append> Catalog<S> {
                         );
                         let details = match &item {
                             CatalogItem::Source(s) => {
-                                EventDetails::CreateSourceSinkV1(mz_audit_log::CreateSourceSinkV1 {
+                                EventDetails::CreateSourceSinkV2(mz_audit_log::CreateSourceSinkV2 {
                                     id,
                                     name,
                                     size: s.size().map(|s| s.to_string()),
+                                    external_type: s.source_type().to_string(),
                                 })
                             }
                             CatalogItem::Sink(s) => {
-                                EventDetails::CreateSourceSinkV1(mz_audit_log::CreateSourceSinkV1 {
+                                EventDetails::CreateSourceSinkV2(mz_audit_log::CreateSourceSinkV2 {
                                     id: id.to_string(),
                                     name,
                                     size: s.host_config.size().map(|x| x.to_string()),
+                                    external_type: s.sink_type().to_string(),
                                 })
                             }
                             _ => EventDetails::IdFullNameV1(IdFullNameV1 { id, name }),
