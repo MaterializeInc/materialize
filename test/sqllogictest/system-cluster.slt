@@ -9,6 +9,9 @@
 
 mode cockroach
 
+# Start from a pristine server
+reset-server
+
 statement ok
 SET CLUSTER TO mz_introspection
 

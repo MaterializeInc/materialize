@@ -1523,7 +1523,7 @@ SELECT mz_internal.mz_error_if_null(1, '')
 ----
 1
 
-query I
-SELECT pg_backend_pid()
+query B
+SELECT pg_backend_pid() > 0
 ----
-1
+true

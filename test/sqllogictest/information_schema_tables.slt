@@ -9,6 +9,9 @@
 
 mode cockroach
 
+# Start from a pristine server
+reset-server
+
 statement ok
 CREATE DATABASE other
 
@@ -904,3 +907,6 @@ materialize
 public
 v
 VIEW
+
+statement ok
+DROP DATABASE other CASCADE

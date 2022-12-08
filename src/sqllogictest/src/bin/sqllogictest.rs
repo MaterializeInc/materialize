@@ -19,7 +19,7 @@ use time::Instant;
 use walkdir::WalkDir;
 
 use mz_ore::cli::{self, CliConfig};
-use mz_sqllogictest::runner::{self, Outcomes, RunConfig, WriteFmt};
+use mz_sqllogictest::runner::{self, Outcomes, RunConfig, Runner, WriteFmt};
 use mz_sqllogictest::util;
 
 /// Runs sqllogictest scripts to verify database engine correctness.
@@ -92,12 +92,14 @@ async fn main() {
     };
     let mut bad_file = false;
     let mut outcomes = Outcomes::default();
+    let mut runner = Runner::start(&config).await.unwrap();
+
     for path in &args.paths {
         for entry in WalkDir::new(path) {
             match entry {
                 Ok(entry) if entry.file_type().is_file() => {
                     let start_time = Instant::now();
-                    match runner::run_file(&config, entry.path()).await {
+                    match runner::run_file(&mut runner, entry.path()).await {
                         Ok(o) => {
                             if o.any_failed() || config.verbosity >= 1 {
                                 writeln!(
@@ -182,12 +184,14 @@ async fn rewrite(config: &RunConfig<'_>, args: Args) {
     }
 
     let mut bad_file = false;
+    let mut runner = Runner::start(config).await.unwrap();
+
     for path in args.paths {
         for entry in WalkDir::new(path) {
             match entry {
                 Ok(entry) => {
                     if entry.file_type().is_file() {
-                        if let Err(err) = runner::rewrite_file(config, entry.path()).await {
+                        if let Err(err) = runner::rewrite_file(&mut runner, entry.path()).await {
                             writeln!(config.stderr, "error: rewriting file: {}", err);
                             bad_file = true;
                         }

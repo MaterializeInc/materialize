@@ -90,6 +90,20 @@ CREATE TABLE bar (
 
 ## Materialize-specific behavior in sqllogictest
 
+
+### Server resets
+
+
+By default, sqllogictest will create a single Mz instance and run
+all the SLT tests against it. For tests that require special treatment,
+the `reset-server` can be used to bring about a new, pristine Mz instance.
+
+
+For tests that involve object Ids (such as certain `EXPLAIN` tests and
+those that consult the introspection tables), `reset-server` should
+be used at the start of the .slt file. For tests that manipulate clusters,
+`reset-server` should be used at the end of the .slt file.
+
 ### `simple` extension
 
 In addition to `statement` and `query`, we have added our own directive

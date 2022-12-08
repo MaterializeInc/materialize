@@ -307,7 +307,26 @@ impl<'a> fmt::Display for OutcomesDisplay<'a> {
     }
 }
 
-pub(crate) struct Runner {
+pub struct Runner<'a> {
+    config: &'a RunConfig<'a>,
+    inner: Option<RunnerInner>,
+}
+
+impl std::ops::Deref for Runner<'_> {
+    type Target = RunnerInner;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.as_ref().unwrap()
+    }
+}
+
+impl std::ops::DerefMut for Runner<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.inner.as_mut().unwrap()
+    }
+}
+
+pub struct RunnerInner {
     server_addr: SocketAddr,
     internal_server_addr: SocketAddr,
     // Drop order matters for these fields.
@@ -614,8 +633,105 @@ fn format_row(row: &Row, types: &[Type], mode: Mode, sort: &Sort) -> Vec<String>
     }
 }
 
-impl Runner {
-    pub async fn start(config: &RunConfig<'_>) -> Result<Self, anyhow::Error> {
+impl<'a> Runner<'a> {
+    pub async fn start(config: &'a RunConfig<'a>) -> Result<Runner<'a>, anyhow::Error> {
+        let mut runner = Self {
+            config,
+            inner: None,
+        };
+        runner.reset().await?;
+        Ok(runner)
+    }
+
+    async fn run_record<'r>(
+        &mut self,
+        record: &'r Record<'r>,
+    ) -> Result<Outcome<'r>, anyhow::Error> {
+        match &record {
+            Record::Statement {
+                expected_error,
+                rows_affected,
+                sql,
+                location,
+            } => {
+                match self
+                    .run_statement(*expected_error, *rows_affected, sql, location.clone())
+                    .await?
+                {
+                    Outcome::Success => {
+                        if self.auto_index_tables {
+                            let additional = mutate(sql);
+                            for stmt in additional {
+                                self.client.execute(&stmt, &[]).await?;
+                            }
+                        }
+                        Ok(Outcome::Success)
+                    }
+                    other => {
+                        if expected_error.is_some() {
+                            Ok(other)
+                        } else {
+                            // If we failed to execute a statement that was supposed to succeed,
+                            // running the rest of the tests in this file will probably cause
+                            // false positives, so just give up on the file entirely.
+                            Ok(Outcome::Bail {
+                                cause: Box::new(other),
+                                location: location.clone(),
+                            })
+                        }
+                    }
+                }
+            }
+            Record::Query {
+                sql,
+                output,
+                location,
+            } => self.run_query(sql, output, location.clone()).await,
+            Record::Simple {
+                conn,
+                user,
+                sql,
+                output,
+                location,
+                ..
+            } => {
+                self.run_simple(*conn, *user, sql, output, location.clone())
+                    .await
+            }
+            Record::Copy {
+                table_name,
+                tsv_path,
+            } => {
+                let tsv = tokio::fs::read(tsv_path).await?;
+                let copy = self
+                    .client
+                    .copy_in(&*format!("COPY {} FROM STDIN", table_name))
+                    .await?;
+                tokio::pin!(copy);
+                copy.send(bytes::Bytes::from(tsv)).await?;
+                copy.finish().await?;
+                Ok(Outcome::Success)
+            }
+            Record::ResetServer => {
+                self.reset().await?;
+                Ok(Outcome::Success)
+            }
+            _ => Ok(Outcome::Success),
+        }
+    }
+
+    pub async fn reset(&mut self) -> Result<(), anyhow::Error> {
+        // Explicitly drop the old runner here to ensure that we wait for threads to terminate
+        // before starting a new runner
+        drop(self.inner.take());
+        self.inner = Some(RunnerInner::start(self.config).await?);
+
+        Ok(())
+    }
+}
+
+impl RunnerInner {
+    pub async fn start(config: &RunConfig<'_>) -> Result<RunnerInner, anyhow::Error> {
         let temp_dir = tempfile::tempdir()?;
         let environment_id = format!("environment-{}-0", Uuid::new_v4());
         let (consensus_uri, adapter_stash_url, storage_stash_url) = {
@@ -642,6 +758,7 @@ impl Runner {
                 format!("{postgres_url}?options=--search_path=sqllogictest_storage"),
             )
         };
+
         let orchestrator = Arc::new(
             ProcessOrchestrator::new(ProcessOrchestratorConfig {
                 image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
@@ -747,9 +864,20 @@ impl Runner {
         });
         let server_addr = server_addr_rx.await??;
         let internal_server_addr = internal_server_addr_rx.await?;
+
         let client = connect(server_addr, None).await;
 
-        Ok(Runner {
+        // Some sqllogic tests require more than the default amount of tables, so we increase the
+        // limit for all tests.
+        {
+            let system_client = connect(internal_server_addr, Some("mz_system")).await;
+            system_client
+                .simple_query("ALTER SYSTEM SET max_tables = 100")
+                .await
+                .unwrap();
+        }
+
+        Ok(RunnerInner {
             server_addr,
             internal_server_addr,
             _shutdown_trigger: shutdown_trigger,
@@ -759,79 +887,6 @@ impl Runner {
             clients: HashMap::new(),
             auto_index_tables: config.auto_index_tables,
         })
-    }
-
-    async fn run_record<'a>(
-        &mut self,
-        record: &'a Record<'a>,
-    ) -> Result<Outcome<'a>, anyhow::Error> {
-        match &record {
-            Record::Statement {
-                expected_error,
-                rows_affected,
-                sql,
-                location,
-            } => {
-                match self
-                    .run_statement(*expected_error, *rows_affected, sql, location.clone())
-                    .await?
-                {
-                    Outcome::Success => {
-                        if self.auto_index_tables {
-                            let additional = mutate(sql);
-                            for stmt in additional {
-                                self.client.execute(&stmt, &[]).await?;
-                            }
-                        }
-                        Ok(Outcome::Success)
-                    }
-                    other => {
-                        if expected_error.is_some() {
-                            Ok(other)
-                        } else {
-                            // If we failed to execute a statement that was supposed to succeed,
-                            // running the rest of the tests in this file will probably cause
-                            // false positives, so just give up on the file entirely.
-                            Ok(Outcome::Bail {
-                                cause: Box::new(other),
-                                location: location.clone(),
-                            })
-                        }
-                    }
-                }
-            }
-            Record::Query {
-                sql,
-                output,
-                location,
-            } => self.run_query(sql, output, location.clone()).await,
-            Record::Simple {
-                conn,
-                user,
-                sql,
-                output,
-                location,
-                ..
-            } => {
-                self.run_simple(*conn, *user, sql, output, location.clone())
-                    .await
-            }
-            Record::Copy {
-                table_name,
-                tsv_path,
-            } => {
-                let tsv = tokio::fs::read(tsv_path).await?;
-                let copy = self
-                    .client
-                    .copy_in(&*format!("COPY {} FROM STDIN", table_name))
-                    .await?;
-                tokio::pin!(copy);
-                copy.send(bytes::Bytes::from(tsv)).await?;
-                copy.finish().await?;
-                Ok(Outcome::Success)
-            }
-            _ => Ok(Outcome::Success),
-        }
     }
 
     async fn run_statement<'a>(
@@ -1171,49 +1226,47 @@ fn print_record(config: &RunConfig<'_>, record: &Record) {
 }
 
 pub async fn run_string(
-    config: &RunConfig<'_>,
+    runner: &mut Runner<'_>,
     source: &str,
     input: &str,
 ) -> Result<Outcomes, anyhow::Error> {
+    reset_database(runner).await?;
+
     let mut outcomes = Outcomes::default();
-    let mut state = Runner::start(config).await.unwrap();
     let mut parser = crate::parser::Parser::new(source, input);
-    writeln!(config.stdout, "==> {}", source);
-    // Some sqllogic tests require more than the default amount of tables, so we increase the
-    // limit for all tests.
-    {
-        let client = state.get_conn(Some("mz_system"), Some("mz_system")).await;
-        client
-            .simple_query("ALTER SYSTEM SET max_tables = 100")
-            .await?;
-    }
+    writeln!(runner.config.stdout, "==> {}", source);
+
     for record in parser.parse_records()? {
         // In maximal-verbosity mode, print the query before attempting to run
         // it. Running the query might panic, so it is important to print out
         // what query we are trying to run *before* we panic.
-        if config.verbosity >= 2 {
-            print_record(config, &record);
+        if runner.config.verbosity >= 2 {
+            print_record(runner.config, &record);
         }
 
-        let outcome = state
+        let outcome = runner
             .run_record(&record)
             .await
             .map_err(|err| format!("In {}:\n{}", source, err))
             .unwrap();
 
         // Print failures in verbose mode.
-        if config.verbosity >= 1 && !outcome.success() {
-            if config.verbosity < 2 {
+        if runner.config.verbosity >= 1 && !outcome.success() {
+            if runner.config.verbosity < 2 {
                 // If `verbosity >= 2`, we'll already have printed the record,
                 // so don't print it again. Yes, this is an ugly bit of logic.
                 // Please don't try to consolidate it with the `print_record`
                 // call above, as it's important to have a mode in which records
                 // are printed before they are run, so that if running the
                 // record panics, you can tell which record caused it.
-                print_record(config, &record);
+                print_record(runner.config, &record);
             }
-            writeln!(config.stdout, "{}", util::indent(&outcome.to_string(), 4));
-            writeln!(config.stdout, "{}", util::indent("----", 4));
+            writeln!(
+                runner.config.stdout,
+                "{}",
+                util::indent(&outcome.to_string(), 4)
+            );
+            writeln!(runner.config.stdout, "{}", util::indent("----", 4));
         }
 
         outcomes.0[outcome.code()] += 1;
@@ -1222,20 +1275,37 @@ pub async fn run_string(
             break;
         }
 
-        if config.fail_fast && !outcome.success() {
+        if runner.config.fail_fast && !outcome.success() {
             break;
         }
     }
     Ok(outcomes)
 }
 
-pub async fn run_file(config: &RunConfig<'_>, filename: &Path) -> Result<Outcomes, anyhow::Error> {
-    let mut input = String::new();
-    File::open(filename)?.read_to_string(&mut input)?;
-    run_string(config, &format!("{}", filename.display()), &input).await
+pub async fn reset_database(runner: &mut Runner<'_>) -> Result<(), anyhow::Error> {
+    for reset_query in &[
+        "ROLLBACK",
+        "DROP DATABASE IF EXISTS materialize CASCADE",
+        "CREATE DATABASE materialize",
+    ] {
+        runner.client.simple_query(reset_query).await?;
+    }
+
+    runner.client = connect(runner.server_addr, None).await;
+    runner.clients = HashMap::new();
+
+    Ok(())
 }
 
-pub async fn rewrite_file(config: &RunConfig<'_>, filename: &Path) -> Result<(), anyhow::Error> {
+pub async fn run_file(runner: &mut Runner<'_>, filename: &Path) -> Result<Outcomes, anyhow::Error> {
+    let mut input = String::new();
+    File::open(filename)?.read_to_string(&mut input)?;
+    run_string(runner, &format!("{}", filename.display()), &input).await
+}
+
+pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<(), anyhow::Error> {
+    reset_database(runner).await?;
+
     let mut file = OpenOptions::new().read(true).write(true).open(filename)?;
 
     let mut input = String::new();
@@ -1243,12 +1313,11 @@ pub async fn rewrite_file(config: &RunConfig<'_>, filename: &Path) -> Result<(),
 
     let mut buf = RewriteBuffer::new(&input);
 
-    let mut state = Runner::start(config).await?;
     let mut parser = crate::parser::Parser::new(filename.to_str().unwrap_or(""), &input);
-    writeln!(config.stdout, "==> {}", filename.display());
+    writeln!(runner.config.stdout, "==> {}", filename.display());
     for record in parser.parse_records()? {
         let record = record;
-        let outcome = state.run_record(&record).await?;
+        let outcome = runner.run_record(&record).await?;
 
         // If we see an output failure for a query, rewrite the expected output
         // to match the observed output.

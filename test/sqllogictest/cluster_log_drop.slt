@@ -11,6 +11,8 @@
 
 mode cockroach
 
+# Start from a pristine server state
+reset-server
 
 # This test checks if the sources in mz_catalog are also present in a postfixed way.
 # If this test fails and you added new introspection source and if the new

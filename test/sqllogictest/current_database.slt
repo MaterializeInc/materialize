@@ -24,3 +24,9 @@ query T
 SELECT current_database()
 ----
 otherdb
+
+statement ok
+DROP DATABASE otherdb CASCADE
+
+statement ok
+SET database TO materialize

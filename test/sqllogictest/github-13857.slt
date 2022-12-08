@@ -25,3 +25,6 @@ SELECT mz_internal.mz_sleep(2)
 
 statement ok
 DROP CLUSTER test CASCADE
+
+# Restore pristine state
+reset-server
