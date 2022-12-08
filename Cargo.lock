@@ -4273,7 +4273,6 @@ dependencies = [
  "fast-float",
  "hex",
  "itertools",
- "mz-avro",
  "mz-lowertest",
  "mz-ore",
  "mz-persist-types",
