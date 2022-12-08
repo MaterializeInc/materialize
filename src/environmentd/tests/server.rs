@@ -392,6 +392,11 @@ fn test_http_sql() {
             status: StatusCode::OK,
             body: r#"{"results":[{"rows":[["v"]],"col_names":["name"],"notices":[]}]}"#,
         },
+        TestCaseSimple {
+            query: "SET cluster = default",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"SET","notices":[]}]}"#,
+        },
     ];
 
     for tc in simple_test_cases {
