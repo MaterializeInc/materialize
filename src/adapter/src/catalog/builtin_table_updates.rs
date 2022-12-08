@@ -234,14 +234,7 @@ impl CatalogState {
             CatalogItem::Index(index) => self.pack_index_update(id, oid, name, index, diff),
             CatalogItem::Table(_) => self.pack_table_update(id, oid, schema_id, name, diff),
             CatalogItem::Source(source) => {
-                let (source_type, connection_id) = match &source.data_source {
-                    DataSourceDesc::Ingestion(ingestion) => (
-                        ingestion.desc.name(),
-                        ingestion.desc.connection.connection_id(),
-                    ),
-                    DataSourceDesc::Source => ("subsource", None),
-                    DataSourceDesc::Introspection(_) => ("source", None),
-                };
+                let (source_type, connection_id) = (source.source_type(), source.connection_id());
 
                 self.pack_source_update(
                     id,
