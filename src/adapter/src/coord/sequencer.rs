@@ -3504,7 +3504,7 @@ impl<S: Append + 'static> Coordinator<S> {
         if update_max_result_size {
             self.update_max_result_size();
         }
-        Ok(ExecuteResponse::AlteredSystemConfiguraion)
+        Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
     async fn sequence_alter_system_reset(
@@ -3519,7 +3519,7 @@ impl<S: Append + 'static> Coordinator<S> {
         if update_max_result_size {
             self.update_max_result_size();
         }
-        Ok(ExecuteResponse::AlteredSystemConfiguraion)
+        Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
     async fn sequence_alter_system_reset_all(
@@ -3531,7 +3531,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let op = catalog::Op::ResetAllSystemConfiguration {};
         self.catalog_transact(Some(session), vec![op]).await?;
         self.update_max_result_size();
-        Ok(ExecuteResponse::AlteredSystemConfiguraion)
+        Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
     fn is_user_allowed_to_alter_system(&self, session: &Session) -> Result<(), AdapterError> {
