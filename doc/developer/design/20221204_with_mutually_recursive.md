@@ -208,6 +208,20 @@ This would mean that it takes "one step" for each value to propogate to each oth
 This results in a different semantics, especially in the case of non-monotonic expressions (e.g. aggregation, retraction).
 However, it can always be "faked" in the sequential update model, by introducing "mirroring" collections at the end of the block and only using these in other bindings.
 
+The concurrent update pattern also makes life unneccesarily hard for the optimization team.
+Ideally, all existing optimizations would apply now without changes, which is the case for sequential evaluation.
+However, with concurrent evaluation it would be incorrect to apply certain transformations:
+```sql
+WITH MUTUALLY RECURSIVE (CONCURRENT)
+    A (x int) as ... ,
+    B (x int) as SELECT * FROM A,
+    C (x int) as SELECT * FROM A EXCEPT ALL SELECT * FROM B
+...
+```
+Ideally one could reason that `C` is empty, which is the case in sequential evaluation but not in concurrent evaluation.
+In concurrent evaluation, `C` would contain version of `A` minus the prior iterate of `A`.
+Despite working on a system that manages changing data, we've avoided until now the issue that the same name can be used for different versions of data.
+
 ## Open questions
 
 <!--
