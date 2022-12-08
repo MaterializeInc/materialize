@@ -213,6 +213,14 @@ where
             }
         }
     }
+
+    /// Produces a timestamp that reflects all data available in
+    /// `source_ids` at the time of the function call.
+    #[allow(unused)]
+    #[allow(clippy::unused_async)]
+    pub async fn recent_timestamp(&self, source_ids: &[GlobalId]) -> T {
+        T::minimum()
+    }
 }
 
 impl<T> Controller<T>
