@@ -921,14 +921,16 @@ impl<T> ReadContext<T> {
         ts: T,
         timeline: Option<Timeline>,
         timeline_context: TimelineContext,
-    ) -> ReadContext<T> {
+    ) -> Result<ReadContext<T>, AdapterError> {
         match timeline_context {
-            TimelineContext::TimelineDependent(timeline) => Self::TimelineTimestamp(timeline, ts),
-            TimelineContext::TimestampDependent => {
-                // We default to the `Timeline::EpochMilliseconds` timeline if one doesn't exist.
-                Self::TimelineTimestamp(timeline.unwrap_or(Timeline::EpochMilliseconds), ts)
+            TimelineContext::TimelineDependent(timeline) => {
+                Ok(Self::TimelineTimestamp(timeline, ts))
             }
-            TimelineContext::TimestampIndependent => Self::NoTimestamp,
+            TimelineContext::TimestampDependent => match timeline {
+                Some(timeline) => Ok(Self::TimelineTimestamp(timeline, ts)),
+                None => Err(AdapterError::UnspecifiedTimeline),
+            },
+            TimelineContext::TimestampIndependent => Ok(Self::NoTimestamp),
         }
     }
 

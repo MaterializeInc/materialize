@@ -768,10 +768,8 @@ CREATE VIEW logical_timestamp_view AS SELECT mz_now()
 # confusing output when there are no dependencies on any views. If there are
 # other objects in the same time domain as the view, they will dictate what is
 # returned.
-query T
+query error Temporal functions can only be called in the context of an existing timeline
 SELECT * FROM logical_timestamp_view
-----
-18446744073709551615
 
 statement ok
 CREATE VIEW now_view AS SELECT now() AS ts

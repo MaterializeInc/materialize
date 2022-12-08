@@ -120,6 +120,8 @@ pub enum AdapterError {
         relations: Vec<String>,
         names: Vec<String>,
     },
+    /// The query can only be execute in the context of a timeline, and no timeline was specified.
+    UnspecifiedTimeline,
     /// A query tried to create more resources than is allowed in the system configuration.
     ResourceExhaustion {
         resource_type: String,
@@ -411,6 +413,12 @@ impl fmt::Display for AdapterError {
                     f,
                     "Transactions can only reference objects in the same timedomain. \
                      See https://materialize.com/docs/sql/begin/#same-timedomain-error",
+                )
+            }
+            AdapterError::UnspecifiedTimeline => {
+                write!(
+                    f,
+                    "Temporal functions can only be called in the context of an existing timeline",
                 )
             }
             AdapterError::ResourceExhaustion {
