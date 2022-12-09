@@ -206,6 +206,9 @@ class PgDisruption:
                   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
                   FOR TABLES ("pk_table");
 
+                # Currently, we don't correctly capture or report errors that happen during the initial postgres
+                # snapshot. (The source will go directly from `running` to `starting`.) Wait for the initial
+                # snapshot to complete to get more interesting errors.
                 > SELECT * FROM pk_table ORDER BY pk ASC;
                 1 one
                 2 two
