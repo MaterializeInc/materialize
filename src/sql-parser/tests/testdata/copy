@@ -32,7 +32,7 @@ COPY (select 1) TO STDOUT
 ----
 COPY (SELECT 1) TO STDOUT
 =>
-Copy(CopyStatement { relation: Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }), direction: To, target: Stdout, options: [] })
+Copy(CopyStatement { relation: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }), direction: To, target: Stdout, options: [] })
 
 parse-statement
 COPY t(a, b) TO STDOUT
