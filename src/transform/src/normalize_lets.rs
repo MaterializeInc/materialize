@@ -14,9 +14,9 @@
 //! and both is more complex than a `Get` or a `Constant` and occurs at
 //! least twice in the `body` of its binding.
 //!
-//! No effort is yet made to choose among the topological ordors of the
+//! No effort is yet made to choose among the topological orders of the
 //! bindings in some canonical way; this could be future work if we are
-//! excited amount it (I think we don't expect CSE to discover matches
+//! excited about it (I think we don't expect CSE to discover matches
 //! involving `Let` operator as they are all at the roots).
 //!
 //! The transform may remove some `Let` and `Get` operators, and does not
@@ -43,8 +43,8 @@ pub struct NormalizeLets {
     ///
     /// We want this value to be true for the NormalizeLets call that comes right
     /// before [crate::join_implementation::JoinImplementation] runs because
-    /// [crate::join_implementation::JoinImplementation] cannot lift MFPs
-    /// through a Let.
+    /// - JoinImplementation cannot lift MFPs through a Let.
+    /// - JoinImplementation can't extract FilterCharacteristics through a Let.
     ///
     /// Generally, though, we prefer to be more conservative in our inlining in
     /// order to be able to better detect CSEs.
@@ -122,7 +122,7 @@ impl NormalizeLets {
         // It is important that we do the substitution in-order and before reasoning
         // about the inlineability of each binding, to ensure that our conclusion about
         // the inlineability of a binding stays put. Specifically,
-        //   1. by going in order no substitition will increase the `Get`-count of an
+        //   1. by going in order no substitution will increase the `Get`-count of an
         //      identifier beyond one, as all in values with strictly greater identifiers.
         //   2. by performing the substitution before reasoning, the structure of the value
         //      as it would be substituted is fixed.

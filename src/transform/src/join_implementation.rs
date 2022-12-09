@@ -142,7 +142,7 @@ impl JoinImplementation {
                 // Here we conservatively use the rule that if sufficient arrangements exist we will
                 // use a delta query (except for 2-input joins).
                 // An arrangement is considered available for an input
-                // - if it is a global `Get` with columns present in `indexes`,
+                // - if it is a `Get` with columns present in `indexes`,
                 //   - or the same wrapped by an IndexedFilter,
                 // - if it is an `ArrangeBy` with the columns present (note that the ArrangeBy might
                 //   have been inserted by a previous run of JoinImplementation),
@@ -194,6 +194,7 @@ impl JoinImplementation {
                     // - From filters that could be pushed down from above the join to this input.
                     //   (In LIR, these will be executed right after the join path executes the join
                     //   for this input.)
+                    // - (No need to look behind Gets, see the inline_mfp argument of RelationCSE.)
                     let mut characteristics =
                         FilterCharacteristics::filter_characteristics(&filter)?;
                     if matches!(

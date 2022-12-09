@@ -393,12 +393,17 @@ impl Optimizer {
     pub fn physical_optimizer() -> Self {
         // Implementation transformations
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
-            // It's important that there is a run of CanonicalizeMfp before JoinImplementation lifts
-            // away the Filters from the Gets.
+            // It's important that
+            // - there is a run of CanonicalizeMfp before JoinImplementation lifts away the Filters
+            //   from the Gets;
+            // - there is no RelationCSE between this CanonicalizeMfp and JoinImplementation,
+            //   because that could move an IndexedFilter behind a Get.
             Box::new(crate::canonicalize_mfp::CanonicalizeMfp),
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![
+                    // The last RelationCSE before JoinImplementation should be with
+                    // inline_mfp = true.
                     Box::new(crate::join_implementation::JoinImplementation::default()),
                     Box::new(crate::column_knowledge::ColumnKnowledge::default()),
                     Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
@@ -444,6 +449,8 @@ impl Optimizer {
                     // This goes after union fusion so we can cancel out
                     // more branches at a time.
                     Box::new(crate::union_cancel::UnionBranchCancellation),
+                    // The last RelationCSE before JoinImplementation should be with
+                    // inline_mfp = true.
                     Box::new(crate::cse::relation_cse::RelationCSE::new(true)),
                     Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
                 ],
