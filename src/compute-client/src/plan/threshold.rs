@@ -23,9 +23,6 @@
 //!     is beneficial to use this operator if the number of retractions is expected to be small, and
 //!     if a potential downstream operator does not expect its input to be arranged.
 
-// https://github.com/tokio-rs/prost/issues/237
-#![allow(missing_docs)]
-
 use std::collections::HashMap;
 
 use crate::plan::any_arranged_thin;

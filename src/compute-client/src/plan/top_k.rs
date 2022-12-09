@@ -17,8 +17,6 @@
 //! * A [MonotonicTopKPlan] maintains up to K rows per key and is suitable for monotonic inputs.
 //! * A [BasicTopKPlan] maintains up to K rows per key and can handle retractions.
 
-#![allow(missing_docs)]
-
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
