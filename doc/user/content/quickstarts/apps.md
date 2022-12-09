@@ -71,6 +71,10 @@ Sources are the first step in most of the Materialize projects. For this quickst
         created_at TIMESTAMP,
         updated_at TIMESTAMP
     );
+
+    INSERT INTO shop.users VALUES (1, 'random@email.com', true, current_timestamp(), current_timestamp());
+    INSERT INTO shop.items VALUES (1, 'Random Random', 'Category', 230, 3, current_timestamp(), current_timestamp(), current_timestamp());
+    INSERT INTO shop.purchases VALUES (1, 1, 1, 1, 3, 10, current_timestamp(), current_timestamp());
     ```
 
     <!-- ```sql
@@ -104,14 +108,14 @@ Reuse your `psql` session and set up multiple eCommerce insights:
 1. Calculate the total purchases:
     ```sql
     CREATE MATERIALIZED VIEW shop.total_purchases AS
-    SELECT SUM(purchase_price * quantity) AS total_sales
+    SELECT SUM(purchase_price * quantity) AS total_purchases
     FROM shop.purchases;
     ```
 
  1. Count the number of purchases:
     ```sql
     CREATE MATERIALIZED VIEW shop.count_purchases AS
-    SELECT COUNT(1) AS count_sales
+    SELECT COUNT(1) AS count_purchases
     FROM shop.purchases;
     ```
 
