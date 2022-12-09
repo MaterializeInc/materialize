@@ -258,7 +258,7 @@ where
 
     // Only the "active" operator will mint batches. All other workers have an
     // empty frontier. It's necessary to insert all of these into
-    // `compute_state. sink_write_frontier` below so we properly clear out
+    // `compute_state.sink_write_frontier` below so we properly clear out
     // default frontiers of non-active workers.
     let shared_frontier = Rc::new(RefCell::new(if active_worker {
         Antichain::from_elem(TimelyTimestamp::minimum())
@@ -280,13 +280,11 @@ where
         mint_op.new_input_connection(persist_feedback_stream, Pipeline, vec![Antichain::new()]);
 
     let shutdown_button = mint_op.build(move |mut capabilities| async move {
-        let mut cap_set = if active_worker {
-            CapabilitySet::from_elem(capabilities.pop().expect("missing capability"))
-        } else {
-            // We have to eagerly drop unneeded capabilities!
-            capabilities.pop();
-            CapabilitySet::new()
-        };
+        if !active_worker {
+            return;
+        }
+
+        let mut cap_set = CapabilitySet::from_elem(capabilities.pop().expect("missing capability"));
 
         // TODO(aljoscha): We need to figure out what to do with error
         // results from these calls.
@@ -383,15 +381,6 @@ where
                     return;
                 }
             };
-
-            if !active_worker {
-                // SUBTLE: We must not simply return, because this will
-                // de-schedule the operator. Even if we're not active we
-                // must still remain and pump away input updates, otherwise
-                // the one active operator will not have its frontiers
-                // advanced.
-                continue;
-            }
 
             if PartialOrder::less_than(&*shared_frontier.borrow(), &persist_frontier) {
                 if sink_id.is_user() {
@@ -865,14 +854,6 @@ where
 
     let shutdown_button = append_op.build(move |mut capabilities| async move {
         if !active_worker {
-            // SUBTLE: This is different from `mint_batch_description`
-            // where the non-active workers have to stay alive and keep
-            // pumping input, to ensure that the one active worker sees
-            // its frontiers advancing.
-            //
-            // In this here operator only the active worker will ever
-            // get messages, so the inactive ones don't have anything
-            // that needs pumping away.
             return;
         }
 
