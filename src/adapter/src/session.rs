@@ -17,6 +17,7 @@ use std::mem;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
+use timely::progress::Antichain;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::OwnedMutexGuard;
 use uuid::Uuid;
@@ -274,27 +275,27 @@ impl<T: TimestampManipulation> Session<T> {
                         }
                         *ops = add_ops;
                     }
-                    TransactionOps::Peeks(txn_read_context) => match add_ops {
-                        TransactionOps::Peeks(add_read_context) => {
-                            match (&txn_read_context, add_read_context) {
+                    TransactionOps::Peeks(txn_timestamp_context) => match add_ops {
+                        TransactionOps::Peeks(add_timestamp_context) => {
+                            match (&txn_timestamp_context, add_timestamp_context) {
                                 (
-                                    ReadContext::TimelineTimestamp(txn_timeline, txn_ts),
-                                    ReadContext::TimelineTimestamp(add_timeline, add_ts),
+                                    TimestampContext::TimelineTimestamp(txn_timeline, txn_ts),
+                                    TimestampContext::TimelineTimestamp(add_timeline, add_ts),
                                 ) => {
                                     assert_eq!(*txn_timeline, add_timeline);
                                     assert_eq!(*txn_ts, add_ts);
                                 }
-                                (ReadContext::NoTimestamp, add_read_context) => {
-                                    *txn_read_context = add_read_context
+                                (TimestampContext::NoTimestamp, add_timestamp_context) => {
+                                    *txn_timestamp_context = add_timestamp_context
                                 }
-                                (_, ReadContext::NoTimestamp) => {}
+                                (_, TimestampContext::NoTimestamp) => {}
                             };
                         }
                         // Iff peeks thus far do not have a timestamp (i.e.
                         // they are constant), we can switch to a write
                         // transaction.
                         writes @ TransactionOps::Writes(..)
-                            if !txn_read_context.contains_timeline() =>
+                            if !txn_timestamp_context.contains_timestamp() =>
                         {
                             *ops = writes;
                         }
@@ -322,8 +323,8 @@ impl<T: TimestampManipulation> Session<T> {
                         }
                         // Iff peeks do not have a timestamp (i.e. they are
                         // constant), we can permit them.
-                        TransactionOps::Peeks(read_context)
-                            if !read_context.contains_timestamp() => {}
+                        TransactionOps::Peeks(timestamp_context)
+                            if !timestamp_context.contains_timestamp() => {}
                         _ => {
                             return Err(AdapterError::WriteOnlyTransaction);
                         }
@@ -395,14 +396,14 @@ impl<T: TimestampManipulation> Session<T> {
     }
 
     /// If the current transaction ops belong to a read, then sets the
-    /// ops to `None`, returning the old read timestamp if
+    /// ops to `None`, returning the old read timestamp context if
     /// any existed. Must only be used after verifying that no transaction
     /// anomalies will occur if cleared.
-    pub fn take_transaction_read_context(&mut self) -> Option<ReadContext<T>> {
+    pub fn take_transaction_timestamp_context(&mut self) -> Option<TimestampContext<T>> {
         if let Some(Transaction { ops, .. }) = self.transaction.inner_mut() {
             if let TransactionOps::Peeks(_) = ops {
                 let ops = std::mem::take(ops);
-                Some(ops.read_context().expect("checked above"))
+                Some(ops.timestamp_context().expect("checked above"))
             } else {
                 None
             }
@@ -411,36 +412,19 @@ impl<T: TimestampManipulation> Session<T> {
         }
     }
 
-    /// Returns the transaction's read timestamp, if set.
+    /// Returns the transaction's read timestamp context, if set.
     ///
     /// Returns `None` if there is no active transaction, or if the active
     /// transaction is not a read transaction.
-    pub fn get_transaction_timestamp(&self) -> Option<T> {
+    pub fn get_transaction_timestamp_context(&self) -> Option<TimestampContext<T>> {
         match self.transaction.inner() {
             Some(Transaction {
                 pcx: _,
-                ops: TransactionOps::Peeks(ReadContext::TimelineTimestamp(_, ts)),
+                ops: TransactionOps::Peeks(timestamp_context),
                 write_lock_guard: _,
                 access: _,
                 id: _,
-            }) => Some(ts.clone()),
-            _ => None,
-        }
-    }
-
-    /// Returns the transaction's read timeline, if set.
-    ///
-    /// Returns `None` if there is no active transaction, or if the active
-    /// transaction is not a read transaction.
-    pub fn get_transaction_timeline(&self) -> Option<Timeline> {
-        match self.transaction.inner() {
-            Some(Transaction {
-                pcx: _,
-                ops: TransactionOps::Peeks(ReadContext::TimelineTimestamp(timeline, _)),
-                write_lock_guard: _,
-                access: _,
-                id: _,
-            }) => Some(timeline.clone()),
+            }) => Some(timestamp_context.clone()),
             _ => None,
         }
     }
@@ -858,7 +842,7 @@ impl<T> Transaction<T> {
     /// The timeline of the transaction, if one exists.
     fn timeline(&self) -> Option<Timeline> {
         match &self.ops {
-            TransactionOps::Peeks(ReadContext::TimelineTimestamp(timeline, _)) => {
+            TransactionOps::Peeks(TimestampContext::TimelineTimestamp(timeline, _)) => {
                 Some(timeline.clone())
             }
             TransactionOps::Peeks(_)
@@ -883,7 +867,7 @@ pub enum TransactionOps<T> {
     /// is Some, it must only do other peeks. However, if the value is None
     /// (i.e. the values are constants), the transaction can still perform
     /// writes.
-    Peeks(ReadContext<T>),
+    Peeks(TimestampContext<T>),
     /// This transaction has done a `SUBSCRIBE` and must do nothing else.
     Subscribe,
     /// This transaction has had a write (`INSERT`, `UPDATE`, `DELETE`) and must
@@ -892,9 +876,9 @@ pub enum TransactionOps<T> {
 }
 
 impl<T> TransactionOps<T> {
-    fn read_context(self) -> Option<ReadContext<T>> {
+    fn timestamp_context(self) -> Option<TimestampContext<T>> {
         match self {
-            TransactionOps::Peeks(read_context) => Some(read_context),
+            TransactionOps::Peeks(timestamp_context) => Some(timestamp_context),
             TransactionOps::None | TransactionOps::Subscribe | TransactionOps::Writes(_) => None,
         }
     }
@@ -908,20 +892,20 @@ impl<T> Default for TransactionOps<T> {
 
 /// The timeline and timestamp context of a read.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ReadContext<T> {
+pub enum TimestampContext<T> {
     /// Read is executed in a specific timeline with a specific timestamp.
     TimelineTimestamp(Timeline, T),
     /// Read is execute without a timeline or timestamp.
     NoTimestamp,
 }
 
-impl<T> ReadContext<T> {
-    /// Creates a `ReadContext` from a timestamp and `TimelineContext`.
+impl<T: TimestampManipulation> TimestampContext<T> {
+    /// Creates a `TimestampContext` from a timestamp and `TimelineContext`.
     pub fn from_timeline_context(
         ts: T,
         timeline: Option<Timeline>,
         timeline_context: TimelineContext,
-    ) -> ReadContext<T> {
+    ) -> TimestampContext<T> {
         match timeline_context {
             TimelineContext::TimelineDependent(timeline) => Self::TimelineTimestamp(timeline, ts),
             TimelineContext::TimestampDependent => {
@@ -930,11 +914,6 @@ impl<T> ReadContext<T> {
             }
             TimelineContext::TimestampIndependent => Self::NoTimestamp,
         }
-    }
-
-    /// Whether or not the context contains a timeline.
-    pub fn contains_timeline(&self) -> bool {
-        self.timeline().is_some()
     }
 
     /// The timeline belonging to this context, if one exists.
@@ -956,6 +935,14 @@ impl<T> ReadContext<T> {
     /// Whether or not the context contains a timestamp.
     pub fn contains_timestamp(&self) -> bool {
         self.timestamp().is_some()
+    }
+
+    /// Converts this `TimestampContext` to an `Antichain`.
+    pub fn antichain(&self) -> Antichain<T> {
+        self.timestamp()
+            .cloned()
+            .map(|timestamp| Antichain::from_elem(timestamp))
+            .unwrap_or_else(|| Antichain::new())
     }
 }
 

@@ -28,7 +28,7 @@ use crate::coord::dataflows::{prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::TimelineContext;
 use crate::coord::Coordinator;
-use crate::session::{vars, Session};
+use crate::session::{vars, Session, TimestampContext};
 use crate::AdapterError;
 
 impl<S: Append + 'static> Coordinator<S> {
@@ -45,7 +45,7 @@ impl<S: Append + 'static> Coordinator<S> {
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
         compute_instance: ComputeInstanceId,
-        timeline_context: &TimelineContext,
+        timeline_context: TimelineContext,
     ) -> Result<TimestampDetermination<mz_repr::Timestamp>, AdapterError> {
         // Each involved trace has a validity interval `[since, upper)`.
         // The contents of a trace are only guaranteed to be correct when
@@ -69,16 +69,6 @@ impl<S: Append + 'static> Coordinator<S> {
             candidate.join_assign(&ts);
         }
 
-        let isolation_level = session.vars().transaction_isolation();
-        // We only care about timelines for Strict Serializable and non AS OF queries.
-        let timeline = if isolation_level == &vars::IsolationLevel::StrictSerializable
-            && when.advance_to_global_ts()
-        {
-            timeline_context.timeline()
-        } else {
-            None
-        };
-
         let upper = self.least_valid_write(id_bundle);
         let largest_not_in_advance_of_upper = self.largest_not_in_advance_of_upper(&upper);
         let mut oracle_read_ts = None;
@@ -87,7 +77,21 @@ impl<S: Append + 'static> Coordinator<S> {
             candidate.advance_by(since.borrow());
         }
 
-        if let Some(timeline) = timeline {
+        let isolation_level = session.vars().transaction_isolation();
+        // We only care about timelines for Strict Serializable and non AS OF queries.
+        let timeline = match &timeline_context {
+            TimelineContext::TimelineDependent(timeline) => Some(timeline.clone()),
+            TimelineContext::TimestampDependent => Some(Timeline::EpochMilliseconds),
+            TimelineContext::TimestampIndependent => None,
+        };
+        let use_timestamp_oracle = isolation_level == &vars::IsolationLevel::StrictSerializable
+            && when.advance_to_global_ts()
+            && timeline.is_some();
+
+        if use_timestamp_oracle {
+            let timeline = timeline
+                .as_ref()
+                .expect("timeline is always present when using the timestamp oracle");
             let timestamp_oracle = self.get_timestamp_oracle(timeline);
             oracle_read_ts = Some(timestamp_oracle.read_ts());
             candidate.join_assign(&oracle_read_ts.unwrap());
@@ -114,8 +118,10 @@ impl<S: Append + 'static> Coordinator<S> {
             ));
         };
 
+        let timestamp_context =
+            TimestampContext::from_timeline_context(timestamp, timeline, timeline_context);
         let det = TimestampDetermination {
-            timestamp,
+            timestamp_context,
             since,
             upper,
             largest_not_in_advance_of_upper,
@@ -303,8 +309,8 @@ impl<S: Append + 'static> Coordinator<S> {
 
 /// Information used when determining the timestamp for a query.
 pub struct TimestampDetermination<T> {
-    /// The chosen timestamp from `determine_timestamp`.
-    pub timestamp: T,
+    /// The chosen timestamp and timeline context from `determine_timestamp`.
+    pub timestamp_context: TimestampContext<T>,
     /// The read frontier of all involved sources.
     pub since: Antichain<T>,
     /// The write frontier of all involved sources.
@@ -317,7 +323,10 @@ pub struct TimestampDetermination<T> {
 
 impl<T: TimestampManipulation> TimestampDetermination<T> {
     pub fn respond_immediately(&self) -> bool {
-        !self.upper.less_equal(&self.timestamp)
+        match &self.timestamp_context {
+            TimestampContext::TimelineTimestamp(_, timestamp) => !self.upper.less_equal(timestamp),
+            TimestampContext::NoTimestamp => true,
+        }
     }
 }
 
@@ -325,8 +334,6 @@ impl<T: TimestampManipulation> TimestampDetermination<T> {
 pub struct TimestampExplanation<T> {
     /// The chosen timestamp from `determine_timestamp`.
     pub determination: TimestampDetermination<T>,
-    /// The timeline context that the timestamp corresponds to.
-    pub timeline_context: TimelineContext,
     /// Details about each source.
     pub sources: Vec<TimestampSource<T>>,
 }
@@ -338,18 +345,15 @@ pub struct TimestampSource<T> {
 }
 
 pub trait DisplayableInTimeline {
-    fn fmt(&self, timeline_context: &TimelineContext, f: &mut fmt::Formatter) -> fmt::Result;
-    fn display<'a>(&'a self, timeline_context: &'a TimelineContext) -> DisplayInTimeline<'a, Self> {
-        DisplayInTimeline {
-            t: self,
-            timeline_context,
-        }
+    fn fmt(&self, timeline: &Timeline, f: &mut fmt::Formatter) -> fmt::Result;
+    fn display<'a>(&'a self, timeline: &'a Timeline) -> DisplayInTimeline<'a, Self> {
+        DisplayInTimeline { t: self, timeline }
     }
 }
 
 impl DisplayableInTimeline for mz_repr::Timestamp {
-    fn fmt(&self, timeline_context: &TimelineContext, f: &mut fmt::Formatter) -> fmt::Result {
-        if let TimelineContext::TimelineDependent(Timeline::EpochMilliseconds) = timeline_context {
+    fn fmt(&self, timeline: &Timeline, f: &mut fmt::Formatter) -> fmt::Result {
+        if let Timeline::EpochMilliseconds = timeline {
             let ts_ms: u64 = self.into();
             let ts = ts_ms / 1000;
             let nanos = ((ts_ms % 1000) as u32) * 1000000;
@@ -364,14 +368,14 @@ impl DisplayableInTimeline for mz_repr::Timestamp {
 
 pub struct DisplayInTimeline<'a, T: ?Sized> {
     t: &'a T,
-    timeline_context: &'a TimelineContext,
+    timeline: &'a Timeline,
 }
 impl<'a, T> fmt::Display for DisplayInTimeline<'a, T>
 where
     T: DisplayableInTimeline,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.t.fmt(self.timeline_context, f)
+        self.t.fmt(self.timeline, f)
     }
 }
 
@@ -388,44 +392,6 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
     for TimestampExplanation<T>
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let timeline_context = &self.timeline_context;
-        writeln!(
-            f,
-            "                query timestamp: {}",
-            self.determination.timestamp.display(timeline_context)
-        )?;
-        if let Some(oracle_read_ts) = &self.determination.oracle_read_ts {
-            writeln!(
-                f,
-                "          oracle read timestamp: {}",
-                oracle_read_ts.display(timeline_context)
-            )?;
-        }
-        writeln!(
-            f,
-            "largest not in advance of upper: {}",
-            self.determination
-                .largest_not_in_advance_of_upper
-                .display(timeline_context),
-        )?;
-        writeln!(
-            f,
-            "                          upper:{:?}",
-            self.determination
-                .upper
-                .iter()
-                .map(|t| t.display(timeline_context))
-                .collect::<Vec<_>>()
-        )?;
-        writeln!(
-            f,
-            "                          since:{:?}",
-            self.determination
-                .since
-                .iter()
-                .map(|t| t.display(timeline_context))
-                .collect::<Vec<_>>()
-        )?;
         writeln!(
             f,
             "        can respond immediately: {}",
@@ -434,29 +400,71 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
         writeln!(
             f,
             "                       timeline: {:?}",
-            &self.timeline_context.timeline().cloned()
+            &self.determination.timestamp_context.timeline().cloned()
         )?;
-        for source in &self.sources {
-            writeln!(f, "")?;
-            writeln!(f, "source {}:", source.name)?;
+        if let TimestampContext::TimelineTimestamp(timeline, timestamp) =
+            &self.determination.timestamp_context
+        {
             writeln!(
                 f,
-                "                  read frontier:{:?}",
-                source
-                    .read_frontier
+                "                query timestamp: {}",
+                timestamp.display(timeline)
+            )?;
+            if let Some(oracle_read_ts) = &self.determination.oracle_read_ts {
+                writeln!(
+                    f,
+                    "          oracle read timestamp: {}",
+                    oracle_read_ts.display(timeline)
+                )?;
+            }
+            writeln!(
+                f,
+                "largest not in advance of upper: {}",
+                self.determination
+                    .largest_not_in_advance_of_upper
+                    .display(timeline),
+            )?;
+            writeln!(
+                f,
+                "                          upper:{:?}",
+                self.determination
+                    .upper
                     .iter()
-                    .map(|t| t.display(timeline_context))
+                    .map(|t| t.display(timeline))
                     .collect::<Vec<_>>()
             )?;
             writeln!(
                 f,
-                "                 write frontier:{:?}",
-                source
-                    .write_frontier
+                "                          since:{:?}",
+                self.determination
+                    .since
                     .iter()
-                    .map(|t| t.display(timeline_context))
+                    .map(|t| t.display(timeline))
                     .collect::<Vec<_>>()
             )?;
+
+            for source in &self.sources {
+                writeln!(f, "")?;
+                writeln!(f, "source {}:", source.name)?;
+                writeln!(
+                    f,
+                    "                  read frontier:{:?}",
+                    source
+                        .read_frontier
+                        .iter()
+                        .map(|t| t.display(timeline))
+                        .collect::<Vec<_>>()
+                )?;
+                writeln!(
+                    f,
+                    "                 write frontier:{:?}",
+                    source
+                        .write_frontier
+                        .iter()
+                        .map(|t| t.display(timeline))
+                        .collect::<Vec<_>>()
+                )?;
+            }
         }
         Ok(())
     }

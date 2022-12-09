@@ -80,7 +80,7 @@ use crate::metrics;
 use crate::notice::AdapterNotice;
 use crate::session::vars::{IsolationLevel, CLUSTER_VAR_NAME, DATABASE_VAR_NAME};
 use crate::session::{
-    EndTransactionAction, PreparedStatement, ReadContext, Session, TransactionOps,
+    EndTransactionAction, PreparedStatement, Session, TimestampContext, TransactionOps,
     TransactionStatus, Var, WriteOp,
 };
 use crate::subscribe::PendingSubscribe;
@@ -2029,7 +2029,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 });
                 return;
             }
-            Ok((Some(TransactionOps::Peeks(read_context)), _))
+            Ok((Some(TransactionOps::Peeks(timestamp_context)), _))
                 if session.vars().transaction_isolation()
                     == &IsolationLevel::StrictSerializable =>
             {
@@ -2041,7 +2041,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             session,
                             action,
                         },
-                        read_context,
+                        timestamp_context,
                     })
                     .expect("sending to strict_serializable_reads_tx cannot fail");
                 return;
@@ -2153,7 +2153,7 @@ impl<S: Append + 'static> Coordinator<S> {
             &mut target_replica,
             view_id,
             index_id,
-            &timeline_context,
+            timeline_context,
             &source_ids,
             in_immediate_multi_stmt_txn,
         )?;
@@ -2161,8 +2161,10 @@ impl<S: Append + 'static> Coordinator<S> {
         let compute_instance = compute_instance.id;
 
         if let Some(id_bundle) = peek_plan.read_holds.take() {
-            let read_holds = self.acquire_read_holds(peek_plan.timestamp, &id_bundle);
-            self.txn_reads.insert(session.conn_id(), read_holds);
+            if let TimestampContext::TimelineTimestamp(_, timestamp) = peek_plan.timestamp_context {
+                let read_holds = self.acquire_read_holds(timestamp, &id_bundle);
+                self.txn_reads.insert(session.conn_id(), read_holds);
+            }
         }
 
         // We only track the peeks in the session if the query doesn't use AS
@@ -2172,10 +2174,8 @@ impl<S: Append + 'static> Coordinator<S> {
         if matches!(session.transaction(), &TransactionStatus::InTransaction(_))
             || when == QueryWhen::Immediately
         {
-            let timeline = session.get_transaction_timeline();
-            let read_context =
-                ReadContext::from_timeline_context(peek_plan.timestamp, timeline, timeline_context);
-            session.add_transaction_ops(TransactionOps::Peeks(read_context))?;
+            session
+                .add_transaction_ops(TransactionOps::Peeks(peek_plan.timestamp_context.clone()))?;
         }
 
         // Implement the peek, and capture the response.
@@ -2201,7 +2201,7 @@ impl<S: Append + 'static> Coordinator<S> {
         target_replica: &mut Option<u64>,
         view_id: GlobalId,
         index_id: GlobalId,
-        timeline_context: &TimelineContext,
+        timeline_context: TimelineContext,
         source_ids: &BTreeSet<GlobalId>,
         in_immediate_multi_stmt_txn: bool,
     ) -> Result<PlannedPeek, AdapterError> {
@@ -2225,15 +2225,15 @@ impl<S: Append + 'static> Coordinator<S> {
         // single-statement transaction (TransactionStatus::Started), we don't
         // need to worry about preventing compaction or choosing a valid
         // timestamp for future queries.
-        let timestamp = if in_immediate_multi_stmt_txn {
-            match session.get_transaction_timestamp() {
-                Some(ts) => ts,
-                _ => {
+        let timestamp_context = if in_immediate_multi_stmt_txn {
+            match session.get_transaction_timestamp_context() {
+                Some(ts_context) => ts_context,
+                None => {
                     // Determine a timestamp that will be valid for anything in any schema
                     // referenced by the first query.
                     let id_bundle = self.timedomain_for(
                         source_ids,
-                        timeline_context,
+                        &timeline_context,
                         conn_id,
                         compute_instance,
                     )?;
@@ -2248,12 +2248,10 @@ impl<S: Append + 'static> Coordinator<S> {
                         timeline_context,
                     )?;
                     // We only need read holds if the depends on a timeline.
-                    if let TimelineContext::TimelineDependent(_)
-                    | TimelineContext::TimestampDependent = timeline_context
-                    {
+                    if timestamp.timestamp_context.contains_timestamp() {
                         read_holds = Some(id_bundle);
                     }
-                    timestamp.timestamp
+                    timestamp.timestamp_context
                 }
             }
         } else {
@@ -2264,15 +2262,15 @@ impl<S: Append + 'static> Coordinator<S> {
                 compute_instance,
                 timeline_context,
             )?
-            .timestamp
+            .timestamp_context
         };
 
         if in_immediate_multi_stmt_txn {
             // If there are no `txn_reads`, then this must be the first query in the transaction
             // and we can skip timedomain validations.
             if let Some(txn_reads) = self.txn_reads.get(&session.conn_id()) {
-                // queries without a timeline can belong to any existing timedomain.
-                if timeline_context.contains_timeline() {
+                // queries without a timestamp and timeline can belong to any existing timedomain.
+                if let TimestampContext::TimelineTimestamp(_, _) = &timestamp_context {
                     // Verify that the references and indexes for this query are in the
                     // current read transaction.
                     let allowed_id_bundle = txn_reads.id_bundle();
@@ -2335,7 +2333,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let (permutation, thinning) = permutation_for_arrangement(&key, typ.arity());
         // The assembled dataflow contains a view and an index of that view.
         let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
-        dataflow.set_as_of(Antichain::from_elem(timestamp));
+        dataflow.set_as_of(timestamp_context.antichain());
         let mut builder = self.dataflow_builder(compute_instance);
         builder.import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
@@ -2343,7 +2341,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 self.catalog.state(),
                 plan,
                 ExprPrepStyle::OneShot {
-                    logical_time: Some(timestamp),
+                    logical_time: timestamp_context.timestamp().cloned(),
                     session,
                 },
             )?;
@@ -2375,7 +2373,7 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(PlannedPeek {
             plan: peek_plan,
             read_holds,
-            timestamp,
+            timestamp_context,
             conn_id,
             source_arity: source.arity(),
             id_bundle,
@@ -2415,16 +2413,17 @@ impl<S: Append + 'static> Coordinator<S> {
                 .sufficient_collections(uses);
             let timeline = coord.validate_timeline_context(id_bundle.iter())?;
             // If a timestamp was explicitly requested, use that.
-            let timestamp = coord
-                .determine_timestamp(session, &id_bundle, &when, compute_instance_id, &timeline)?
-                .timestamp;
+            let frontier = coord
+                .determine_timestamp(session, &id_bundle, &when, compute_instance_id, timeline)?
+                .timestamp_context
+                .antichain();
 
             Ok::<_, AdapterError>(ComputeSinkDesc {
                 from,
                 from_desc,
                 connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection::default()),
                 as_of: SinkAsOf {
-                    frontier: Antichain::from_elem(timestamp),
+                    frontier,
                     strict: !with_snapshot,
                 },
             })
@@ -2719,7 +2718,7 @@ impl<S: Append + 'static> Coordinator<S> {
             window_functions: window_functions || explainee_is_view,
         })?;
         let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
-        let timeline = self.validate_timeline_context(optimized_plan.depends_on())?;
+        let timeline_context = self.validate_timeline_context(optimized_plan.depends_on())?;
         let source_ids = optimized_plan.depends_on();
         let id_bundle = self
             .index_oracle(compute_instance)
@@ -2732,7 +2731,7 @@ impl<S: Append + 'static> Coordinator<S> {
             &id_bundle,
             &QueryWhen::Immediately,
             compute_instance,
-            &timeline,
+            timeline_context,
         )?;
         let mut sources = Vec::new();
         {
@@ -2784,7 +2783,6 @@ impl<S: Append + 'static> Coordinator<S> {
         let explanation = TimestampExplanation {
             determination,
             sources,
-            timeline_context: timeline,
         };
         let rows = vec![Row::pack_slice(&[Datum::from(&*explanation.to_string())])];
         Ok(send_immediate_rows(rows))
@@ -3234,7 +3232,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
             // We need to clear out the read ops so the write doesn't fail due to a
             // read only transaction.
-            let read_context = session.take_transaction_read_context();
+            let timestamp_context = session.take_transaction_timestamp_context();
             // No matter what isolation level the client is using, we must linearize this
             // read. The write will be performed right after this, as part of a single
             // transaction, so the write must have a timestamp greater than or equal to the
@@ -3243,7 +3241,8 @@ impl<S: Append + 'static> Coordinator<S> {
             // Note: It's only OK for the write to have a greater timestamp than the read
             // because the write lock prevents any other writes from happening in between
             // the read and write.
-            if let Some(ReadContext::TimelineTimestamp(timeline, read_ts)) = read_context {
+            if let Some(TimestampContext::TimelineTimestamp(timeline, read_ts)) = timestamp_context
+            {
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 let result = strict_serializable_reads_tx.send(PendingReadTxn::ReadThenWrite {
                     tx,

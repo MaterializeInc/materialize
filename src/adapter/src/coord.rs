@@ -131,7 +131,7 @@ use crate::coord::timeline::{
 };
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
-use crate::session::{EndTransactionAction, ReadContext, Session};
+use crate::session::{EndTransactionAction, Session, TimestampContext};
 use crate::subscribe::PendingSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId};
 use crate::AdapterNotice;
@@ -310,7 +310,7 @@ pub enum PendingReadTxn {
         /// The inner transaction.
         txn: PendingTxn,
         /// The timestamp of the transaction, if one exists.
-        read_context: ReadContext<mz_repr::Timestamp>,
+        timestamp_context: TimestampContext<mz_repr::Timestamp>,
     },
     ReadThenWrite {
         /// Channel used to alert the transaction that the read has been linearized.
@@ -322,13 +322,15 @@ pub enum PendingReadTxn {
 
 impl PendingReadTxn {
     /// Return the timestamp and timeline context of the pending read transaction.
-    pub fn read_context(&self) -> ReadContext<mz_repr::Timestamp> {
+    pub fn timestamp_context(&self) -> TimestampContext<mz_repr::Timestamp> {
         match &self {
-            PendingReadTxn::Read { read_context, .. } => read_context.clone(),
+            PendingReadTxn::Read {
+                timestamp_context, ..
+            } => timestamp_context.clone(),
             PendingReadTxn::ReadThenWrite {
                 timestamp: (timestamp, timeline),
                 ..
-            } => ReadContext::TimelineTimestamp(timeline.clone(), timestamp.clone()),
+            } => TimestampContext::TimelineTimestamp(timeline.clone(), timestamp.clone()),
         }
     }
 
