@@ -612,6 +612,7 @@ impl<S: Append + 'static> Coordinator<S> {
         I: IntoIterator<Item = GlobalId>,
     {
         let mut timelines: HashMap<GlobalId, TimelineContext> = HashMap::new();
+        let mut contains_temporal = false;
 
         // Recurse through IDs to find all sources and tables, adding new ones to
         // the set until we reach the bottom.
@@ -622,10 +623,14 @@ impl<S: Append + 'static> Coordinator<S> {
             optimized_expr: &OptimizedMirRelationExpr,
             ids: &mut Vec<GlobalId>,
             timelines: &mut HashMap<GlobalId, TimelineContext>,
+            contains_temporal: &mut bool,
         ) {
+            if !*contains_temporal && optimized_expr.contains_temporal() {
+                *contains_temporal = true;
+            }
             let depends_on = optimized_expr.depends_on();
             if depends_on.is_empty() {
-                if optimized_expr.contains_temporal() {
+                if *contains_temporal {
                     timelines.insert(id, TimelineContext::TimestampDependent);
                 } else {
                     timelines.insert(id, TimelineContext::TimestampIndependent);
@@ -652,10 +657,22 @@ impl<S: Append + 'static> Coordinator<S> {
                         ids.push(index.on);
                     }
                     CatalogItem::View(view) => {
-                        visit_view_expr(id, &view.optimized_expr, &mut ids, &mut timelines);
+                        visit_view_expr(
+                            id,
+                            &view.optimized_expr,
+                            &mut ids,
+                            &mut timelines,
+                            &mut contains_temporal,
+                        );
                     }
                     CatalogItem::MaterializedView(mview) => {
-                        visit_view_expr(id, &mview.optimized_expr, &mut ids, &mut timelines);
+                        visit_view_expr(
+                            id,
+                            &mview.optimized_expr,
+                            &mut ids,
+                            &mut timelines,
+                            &mut contains_temporal,
+                        );
                     }
                     CatalogItem::Table(table) => {
                         timelines.insert(id, TimelineContext::TimelineDependent(table.timeline()));
